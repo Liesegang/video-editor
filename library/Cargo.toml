@@ -1,0 +1,12 @@
+[package]
+name = "library"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ffmpeg-next = "7.1.0"
+image = "0.25.5"
+skia-safe = { version = "0.82.0", features = ["gpu", "vulkan"] }
+#opencv = "0.94.2"
