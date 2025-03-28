@@ -21,7 +21,7 @@ jobs:
         uses: jurplel/install-qt-action@c6c7281365daef91a238e1c2ddce4eaa94a2991d
         with:
           version: 6.8.2
-          host: ${{ matrix.os == 'windows-latest' && 'windows' || matrix.os == 'macos-latest' && 'macos' || 'linux' }}
+          host: ${{ matrix.os == 'windows-latest' && 'windows' || matrix.os == 'macos-latest' && 'mac' || 'linux' }}
           target: 'desktop'
 
       - name: Build Release
