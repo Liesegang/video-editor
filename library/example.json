@@ -1,0 +1,144 @@
+{
+  "width": 960,
+  "height": 540,
+  "background_color": {
+    "r": 10,
+    "g": 20,
+    "b": 30,
+    "a": 255
+  },
+  "color_profile": "sRGB",
+  "objects": [
+    {
+      "type": "Video",
+      "file_path": "dummy.psd",
+      "frame_number": 0,
+      "position": {
+        "x": 480,
+        "y": 270
+      },
+      "scale": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "rotation": 0,
+      "anchor": {
+        "x": 600,
+        "y": 1712
+      }
+    },
+    {
+      "type": "Video",
+      "file_path": "dummy.mp4",
+      "frame_number": 1000,
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1
+      },
+      "rotation": 0,
+      "anchor": {
+        "x": 0.0,
+        "y": 0.0
+      }
+    },
+    {
+      "type": "Text",
+      "text": "Hello, world!",
+      "font": "Arial",
+      "size": 100,
+      "color": {
+        "r": 255,
+        "g": 255,
+        "b": 0,
+        "a": 255
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": {
+        "x": 1.0,
+        "y": 1.0
+      },
+      "anchor": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "rotation": 0.0
+    },
+    {
+      "type": "Shape",
+      "path": "M140 20C73 20 20 74 20 140c0 135 136 170 228 303 88-132 229-173 229-303 0-66-54-120-120-120-48 0-90 28-109 69-19-41-60-69-108-69z",
+      "path_effects": [
+        {
+          "type": "Discrete",
+          "seg_length": 10.0,
+          "deviation": 10.0,
+          "seed": 41413
+        },
+        {
+          "type": "Dash",
+          "intervals": [
+            40.0,
+            20.0
+          ],
+          "phase": 0.0
+        }
+      ],
+      "styles": [
+        {
+          "type": "Fill",
+          "color": {
+            "r": 255,
+            "g": 255,
+            "b": 255,
+            "a": 255
+          }
+        },
+        {
+          "type": "Stroke",
+          "color": {
+            "r": 0,
+            "g": 0,
+            "b": 255,
+            "a": 255
+          },
+          "width": 20,
+          "cap": "Square",
+          "join": "Round",
+          "miter": 4
+        },
+        {
+          "type": "Stroke",
+          "color": {
+            "r": 0,
+            "g": 255,
+            "b": 0,
+            "a": 255
+          },
+          "width": 10,
+          "cap": "Square",
+          "join": "Round",
+          "miter": 4
+        }
+      ],
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": {
+        "x": 1.0,
+        "y": 1.0
+      },
+      "anchor": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "rotation": 0.0
+    }
+  ]
+}
