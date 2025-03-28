@@ -1,0 +1,42 @@
+name: Build and Package Rust cx-qt App for Linux
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@fcf085fcb4b4b8f63f96906cd713eb52181b5ea4
+
+      - name: Setup Qt
+        uses: jurplel/install-qt-action@c6c7281365daef91a238e1c2ddce4eaa94a2991d
+        with:
+          version: 6.8.2
+          host: linux
+          target: 'desktop'
+
+      - name: Install FFmpeg dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libavutil-dev
+
+      - name: Build Release
+        run: cargo build -p app --release
+
+      - name: Package
+        run: |
+          cargo install cargo-deb --version 1.45.0 || true
+          cargo deb --no-strip
+          mkdir -p installer
+          cp target/debian/*.deb installer/
+
+      - name: Upload Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-linux
+          path: installer/ 
