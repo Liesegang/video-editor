@@ -15,10 +15,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Set up Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@fcf085fcb4b4b8f63f96906cd713eb52181b5ea4
 
       - name: Setup Qt
         uses: jurplel/install-qt-action@c6c7281365daef91a238e1c2ddce4eaa94a2991d
@@ -53,7 +50,7 @@ jobs:
           powershell Compress-Archive -Path target\release\*.exe -DestinationPath installer\app.zip
 
       - name: Upload Installer Artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: installer-${{ runner.os }}
           path: installer/
