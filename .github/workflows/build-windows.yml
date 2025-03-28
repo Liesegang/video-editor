@@ -1,0 +1,39 @@
+name: Build and Package Rust cx-qt App for Windows
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@fcf085fcb4b4b8f63f96906cd713eb52181b5ea4
+
+      - name: Setup Qt
+        uses: jurplel/install-qt-action@c6c7281365daef91a238e1c2ddce4eaa94a2991d
+        with:
+          version: 6.8.2
+          host: windows
+          target: 'desktop'
+
+      - name: Install FFmpeg dependencies
+        run: |
+          choco install ffmpeg
+
+      - name: Build Release
+        run: cargo build -p app --release
+
+      - name: Package
+        run: |
+          mkdir installer
+          powershell Compress-Archive -Path target\release\*.exe -DestinationPath installer\app.zip
+
+      - name: Upload Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-windows
+          path: installer/ 
