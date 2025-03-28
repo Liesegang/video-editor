@@ -20,9 +20,23 @@ jobs:
           host: windows
           target: 'desktop'
 
-      - name: Install FFmpeg dependencies
+      - name: Install vcpkg
         run: |
-          choco install ffmpeg
+          git clone https://github.com/Microsoft/vcpkg.git
+          cd vcpkg
+          .\bootstrap-vcpkg.bat
+          .\vcpkg integrate install
+          .\vcpkg install ffmpeg:x64-windows
+          cd ..
+
+      - name: Set up environment variables
+        run: |
+          echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $env:GITHUB_ENV
+          echo "VCPKG_DEFAULT_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+
+      - name: Install dependencies
+        run: |
+          choco install vulkan-sdk
 
       - name: Build Release
         run: cargo build -p app --release
@@ -36,4 +50,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: installer-windows
-          path: installer/ 
+          path: installer/

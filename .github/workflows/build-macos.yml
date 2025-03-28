@@ -20,9 +20,11 @@ jobs:
           host: mac
           target: 'desktop'
 
-      - name: Install FFmpeg dependencies
+      - name: Install dependencies
         run: |
           brew install ffmpeg
+          brew install vulkan-headers
+          brew install vulkan-validationlayers
 
       - name: Build Release
         run: cargo build -p app --release
@@ -38,4 +40,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: installer-macos
-          path: installer/ 
+          path: installer/
