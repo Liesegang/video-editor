@@ -10,7 +10,7 @@ fn main() {
     .qt_module("Network")
     .qml_module(QmlModule {
       uri: "com.kdab.cxx_qt.demo",
-      rust_files: &["src/cxxqt_object.rs"],
+      rust_files: &["src/track_list.rs"],
       qml_files: &[
         "qml/main.qml",
         "qml/CanvasPanel.qml",

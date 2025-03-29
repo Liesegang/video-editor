@@ -13,7 +13,7 @@ pub trait Renderer {
     fn draw_text(
         &mut self,
         text: &str,
-        size: f32,
+        size: f64,
         font_name: &String,
         color: &Color,
         transform: &Transform,
@@ -30,10 +30,10 @@ pub trait Renderer {
         path_data: &str,
         color: &Color,
         path_effects: &Vec<PathEffect>,
-        width: f32,
+        width: f64,
         cap: CapType,
         join: JoinType,
-        miter: f32,
+        miter: f64,
         transform: &Transform,
     ) -> Result<(), Box<dyn Error>>;
     fn finalize(&mut self) -> Result<Image, Box<dyn Error>>;

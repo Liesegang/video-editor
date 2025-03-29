@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import com.kdab.cxx_qt.demo 1.0
 
 Rectangle {
   id: timelineContainer
@@ -31,6 +32,10 @@ Rectangle {
     { name: "オーバーレイ", height: 40 },
     { name: "エフェクト", height: 35 }
   ]
+
+  TrackList {
+    id: trackList
+  }
 
   ColumnLayout {
     anchors.fill: parent

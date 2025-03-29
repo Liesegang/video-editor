@@ -42,14 +42,14 @@ impl SkiaRenderer {
 }
 
 fn build_transform_matrix(transform: &Transform) -> Matrix {
-    let anchor = Point::new(transform.anchor.x, transform.anchor.y);
+    let anchor = Point::new(transform.anchor.x as f32, transform.anchor.y as f32);
     let mut matrix = Matrix::new_identity();
     matrix.pre_translate((
-        transform.position.x - anchor.x,
-        transform.position.y - anchor.y,
+        transform.position.x as f32 - anchor.x,
+        transform.position.y as f32 - anchor.y,
     ));
-    matrix.pre_rotate(transform.rotation, anchor);
-    matrix.pre_scale((transform.scale.x, transform.scale.y), anchor);
+    matrix.pre_rotate(transform.rotation as f32, anchor);
+    matrix.pre_scale((transform.scale.x as f32, transform.scale.y as f32), anchor);
     matrix
 }
 
@@ -57,19 +57,19 @@ fn convert_path_effect(path_effect: &PathEffect) -> Result<skia_safe::PathEffect
     match path_effect {
         PathEffect::Dash { intervals, phase } => {
             let intervals: Vec<f32> = intervals.iter().map(|&x| x as f32).collect();
-            Ok(SkPathEffect::dash(&intervals, *phase).ok_or("Failed to create PathEffect")?)
+            Ok(SkPathEffect::dash(&intervals, *phase as f32).ok_or("Failed to create PathEffect")?)
         }
         PathEffect::Corner { radius } => {
-            Ok(SkPathEffect::corner_path(*radius).ok_or("Failed to create PathEffect")?)
+            Ok(SkPathEffect::corner_path(*radius as f32).ok_or("Failed to create PathEffect")?)
         }
         PathEffect::Discrete {
             seg_length,
             deviation,
             seed,
-        } => Ok(SkPathEffect::discrete(*seg_length, *deviation, *seed)
+        } => Ok(SkPathEffect::discrete(*seg_length as f32, *deviation as f32, *seed as u32)
             .ok_or("Failed to create PathEffect")?),
         PathEffect::Trim { start, end } => {
-            Ok(SkPathEffect::trim(*start, *end, Mode::Normal)
+            Ok(SkPathEffect::trim(*start as f32, *end as f32, Mode::Normal)
                 .ok_or("Failed to create PathEffect")?)
         }
     }
@@ -131,7 +131,7 @@ impl Renderer for SkiaRenderer {
     fn draw_text(
         &mut self,
         text: &str,
-        size: f32,
+        size: f64,
         font_name: &String,
         color: &Color,
         transform: &Transform,
@@ -143,7 +143,7 @@ impl Renderer for SkiaRenderer {
             .ok_or("Failed to match typeface")?;
         let mut font = Font::default();
         font.set_typeface(typeface);
-        font.set_size(size);
+        font.set_size(size as f32);
 
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
@@ -194,10 +194,10 @@ impl Renderer for SkiaRenderer {
         path_data: &str,
         color: &Color,
         path_effects: &Vec<PathEffect>,
-        width: f32,
+        width: f64,
         cap: CapType,
         join: JoinType,
-        miter: f32,
+        miter: f64,
         transform: &Transform,
     ) -> Result<(), Box<dyn Error>> {
         let canvas: &Canvas = self.surface.canvas();
@@ -213,7 +213,7 @@ impl Renderer for SkiaRenderer {
         stroke_paint.set_color(skia_safe::Color::from_argb(
             color.a, color.r, color.g, color.b,
         ));
-        stroke_paint.set_stroke_width(width);
+        stroke_paint.set_stroke_width(width as f32);
         stroke_paint.set_stroke_cap(match cap {
             CapType::Round => skia_safe::paint::Cap::Round,
             CapType::Square => skia_safe::paint::Cap::Square,
@@ -224,7 +224,7 @@ impl Renderer for SkiaRenderer {
             JoinType::Bevel => skia_safe::paint::Join::Bevel,
             JoinType::Miter => skia_safe::paint::Join::Miter,
         });
-        stroke_paint.set_stroke_miter(miter);
+        stroke_paint.set_stroke_miter(miter as f32);
         apply_path_effects(path_effects, &mut stroke_paint)?;
         canvas.draw_path(&path, &stroke_paint);
 
