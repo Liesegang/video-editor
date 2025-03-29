@@ -5,7 +5,7 @@ import com.kdab.cxx_qt.demo 1.0
 
 Rectangle {
   id: timelineContainer
-  color: "#2d2d30"
+  color: theme.backgroundColor
   clip: true
 
   // Timeline state

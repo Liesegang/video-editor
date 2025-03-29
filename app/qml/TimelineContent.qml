@@ -32,7 +32,7 @@ Item {
             anchors.left: parent.left
             anchors.leftMargin: 10
             text: model.name
-            color: "#ffffff"
+            color: theme.textColor
             font.pixelSize: 12
           }
         }
@@ -134,7 +134,7 @@ Item {
             anchors.left: parent.left
             anchors.leftMargin: 10
             text: modelData.name
-            color: "#ffffff"
+            color: theme.textColor
             font.pixelSize: 11
             elide: Text.ElideRight
             width: parent.width - 15
@@ -167,16 +167,6 @@ Item {
             NumberAnimation { duration: 100 }
           }
         }
-      }
-
-      // Current position bar (within content)
-      Rectangle {
-        id: contentPositionBar
-        x: timelineContainer.timePosition * timelineContainer.pixelsPerSecond
-        height: parent.height
-        width: 2
-        color: "#ff5500"
-        z: 10
       }
     }
 

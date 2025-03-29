@@ -1,11 +1,7 @@
-// Theme.qml
-pragma Singleton
 import QtQuick 2.15
 import Qt.labs.settings 1.0
 
 QtObject {
-  id: theme
-
   // Theme types
   readonly property int light_theme: 0
   readonly property int dark_theme: 1
@@ -14,20 +10,20 @@ QtObject {
   // Current theme
   property int currentTheme: dark_theme
 
-  // Settings for persistent storage
-  property Settings themeSettings: Settings {
-    id: settings
-    category: "theme"
-    property int currentTheme: light_theme
-    property var customPrimary: "#4a86e8"
-    property var customSecondary: "#6aa84f"
-    property var customBackground: "#ffffff"
-    property var customSurface: "#f5f5f5"
-    property var customText: "#333333"
-    property var customBorder: "#cccccc"
-    property var customHighlight: "#e0e0ff"
-    property var customHover: "#f0f0f0"
-  }
+  // // Settings for persistent storage
+  // property Settings themeSettings: Settings {
+  //   id: settings
+  //   category: "theme"
+  //   property int currentTheme: light_theme
+  //   property var customPrimary: "#4a86e8"
+  //   property var customSecondary: "#6aa84f"
+  //   property var customBackground: "#ffffff"
+  //   property var customSurface: "#f5f5f5"
+  //   property var customText: "#333333"
+  //   property var customBorder: "#cccccc"
+  //   property var customHighlight: "#e0e0ff"
+  //   property var customHover: "#f0f0f0"
+  // }
 
   // Custom theme colors
   property var customColors: ({
@@ -55,24 +51,24 @@ QtObject {
 
   // Dark theme colors
   readonly property var darkColors: ({
-    primary: "#2979ff",
-    secondary: "#4caf50",
-    background: "#121212",
+    primary: "#4285F4",
+    secondary: "#EA4335",
+    background: "#2d2d30",
     surface: "#1e1e1e",
     text: "#e0e0e0",
     border: "#555555",
-    highlight: "#2d2d60",
-    hover: "#2a2a2a"
+    highlight: "#293e61",
+    hover: "#434347"
   })
 
   // Change theme
-  function setTheme(themeId) {
-    if (themeId >= 0 && themeId <= 2) {
-      currentTheme = themeId;
-      themeSettings.currentTheme = themeId;
-      themeChanged();
-    }
-  }
+  // function setTheme(themeId) {
+  //   if (themeId >= 0 && themeId <= 2) {
+  //     currentTheme = themeId;
+  //     themeSettings.currentTheme = themeId;
+  //     themeChanged();
+  //   }
+  // }
 
   // Update custom color
   function setCustomColor(colorKey, colorValue) {
@@ -84,17 +80,23 @@ QtObject {
   }
 
   // Get color based on current theme
-  function _getCurrentColor(colorKey) {
+  function getColor(colorKey) {
+    var color;
     switch(currentTheme) {
       case light_theme:
-        return lightColors[colorKey];
+        color = lightColors[colorKey];
+        break;
       case dark_theme:
-        return darkColors[colorKey];
+        color = darkColors[colorKey];
+        break;
       case custom_theme:
-        return customColors[colorKey];
+        color = customColors[colorKey];
+        break;
       default:
-        return lightColors[colorKey];
+        color = lightColors[colorKey];
     }
+
+    return color || lightColors[colorKey];
   }
 
   // Initialize theme (load from settings)
@@ -116,16 +118,19 @@ QtObject {
     themeChanged();
   }
 
-  // Theme colors - properties for components to reference
-  readonly property color primaryColor: _getCurrentColor("primary")
-  readonly property color secondaryColor: _getCurrentColor("secondary")
-  readonly property color backgroundColor: _getCurrentColor("background")
-  readonly property color surfaceColor: _getCurrentColor("surface")
-  readonly property color textColor: _getCurrentColor("text")
-  readonly property color borderColor: _getCurrentColor("border")
-  readonly property color highlightColor: _getCurrentColor("highlight")
-  readonly property color hoverColor: _getCurrentColor("hover")
+  // Direct color getters
+  readonly property color primaryColor: getColor("primary")
+  readonly property color secondaryColor: getColor("secondary")
+  readonly property color backgroundColor: getColor("background")
+  readonly property color surfaceColor: getColor("surface")
+  readonly property color textColor: getColor("text")
+  readonly property color borderColor: getColor("border")
+  readonly property color highlightColor: getColor("highlight")
+  readonly property color hoverColor: getColor("hover")
 
   // Theme change signal
   signal themeChanged()
+
+  // テーマ変更時に自動的に色が更新されるように
+  onCurrentThemeChanged: themeChanged()
 }

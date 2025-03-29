@@ -50,7 +50,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             text: index + "s"
             font.pixelSize: 10
-            color: "#bbbbbb"
+            color: theme.textColor
           }
 
           // Small scale (0.5 second interval)
@@ -59,7 +59,7 @@ Item {
             width: 1
             height: parent.height / 2
             anchors.bottom: parent.bottom
-            color: "#3f3f3f"
+            color:  theme.textColor
             visible: timelineContainer.zoomLevel > 0.5
           }
         }

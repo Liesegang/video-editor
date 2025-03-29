@@ -12,6 +12,8 @@
         "a": 255
       },
       "color_profile": "srgb",
+      "fps": 30,
+      "duration": 100,
       "tracks": [
         {
           "name": "My Track",
