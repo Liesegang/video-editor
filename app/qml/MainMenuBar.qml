@@ -1,5 +1,5 @@
-import QtQuick 2.15
-import QtQuick.Controls 2.15
+import QtQuick 6.8
+import QtQuick.Controls.Basic 6.8
 
 MenuBar {
   id: menuBar
@@ -39,50 +39,45 @@ MenuBar {
     palette.highlightedText: theme.textColor
     palette.highlight: theme.highlightColor
 
-    contentWidth: 160
-    contentHeight: implicitContentHeight
-
     background: Rectangle {
-      implicitWidth: 240
-      implicitHeight: 40
       color: theme.surfaceColor
-      border.color: theme.borderColor
       radius: 2
+      implicitWidth: 160
     }
 
     delegate: MenuItem {
-      id: menuItem
+      id: fileMenuItem
       implicitHeight: 28
       height: 28
-
-      background: Rectangle {
-        implicitWidth: 240
-        implicitHeight: 40
-        opacity: enabled ? 1 : 0.3
-        color: menuItem.highlighted ? theme.highlightColor : "transparent"
-      }
 
       palette.highlight: theme.highlightColor
       palette.highlightedText: theme.textColor
       palette.windowText: Qt.darker(theme.textColor, 1.2)
 
+      background: Rectangle {
+        implicitWidth: 240
+        implicitHeight: 40
+        opacity: enabled ? 1 : 0.3
+        color: fileMenuItem.highlighted ? theme.highlightColor : "transparent"
+      }
+
       contentItem: Row {
         anchors.fill: parent
 
         Text {
-          id: menuText
-          text: menuItem.text
+          id: fileMenuText
+          text: fileMenuItem.text
           font.pixelSize: 13
           font.family: "Helvetica"
-          color: menuItem.highlighted ? theme.textColor : Qt.darker(theme.textColor, 1.2)
+          color: fileMenuItem.highlighted ? theme.textColor : Qt.darker(theme.textColor, 1.2)
           anchors.verticalCenter: parent.verticalCenter
           elide: Text.ElideRight
-          width: parent.width - shortcutText.width - parent.spacing
+          width: parent.width - fileShortcutText.width - parent.spacing
         }
 
         Text {
-          id: shortcutText
-          text: menuItem.action && menuItem.action.shortcut ? menuItem.action.shortcut : ""
+          id: fileShortcutText
+          text: fileMenuItem.action && fileMenuItem.action.shortcut ? fileMenuItem.action.shortcut : ""
           font.pixelSize: 12
           font.family: "Helvetica"
           color: Qt.darker(theme.textColor, 1.5)
@@ -121,19 +116,14 @@ MenuBar {
     palette.highlightedText: theme.textColor
     palette.highlight: theme.highlightColor
 
-    contentWidth: 160
-    contentHeight: implicitContentHeight
-
     background: Rectangle {
-      implicitWidth: 240
-      implicitHeight: 40
       color: theme.surfaceColor
-      border.color: theme.borderColor
       radius: 2
+      implicitWidth: 160
     }
 
     delegate: MenuItem {
-      id: menuItem
+      id: editMenuItem
       implicitHeight: 28
       height: 28
 
@@ -141,26 +131,34 @@ MenuBar {
       palette.highlightedText: theme.textColor
       palette.windowText: Qt.darker(theme.textColor, 1.2)
 
+      anchors.leftMargin: 50
+      anchors.rightMargin: 100
+
+      background: Rectangle {
+        implicitWidth: 240
+        implicitHeight: 40
+        opacity: enabled ? 1 : 0.3
+        color: fileMenuItem.highlighted ? theme.highlightColor : "transparent"
+      }
+
       contentItem: Row {
-        spacing: 2
+        spacing: 4
         anchors.fill: parent
-        anchors.leftMargin: 2
-        anchors.rightMargin: 2
 
         Text {
-          id: menuText
-          text: menuItem.text
+          id: editMenuText
+          text: editMenuItem.text
           font.pixelSize: 13
           font.family: "Helvetica"
-          color: menuItem.highlighted ? theme.textColor : Qt.darker(theme.textColor, 1.2)
+          color: editMenuItem.highlighted ? theme.textColor : Qt.darker(theme.textColor, 1.2)
           anchors.verticalCenter: parent.verticalCenter
           elide: Text.ElideRight
-          width: parent.width - shortcutText.width - parent.spacing
+          width: parent.width - editShortcutText.width - parent.spacing
         }
 
         Text {
-          id: shortcutText
-          text: menuItem.action && menuItem.action.shortcut ? menuItem.action.shortcut : ""
+          id: editShortcutText
+          text: editMenuItem.action && editMenuItem.action.shortcut ? editMenuItem.action.shortcut : ""
           font.pixelSize: 12
           font.family: "Helvetica"
           color: Qt.darker(theme.textColor, 1.5)

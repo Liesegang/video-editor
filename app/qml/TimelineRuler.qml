@@ -1,4 +1,4 @@
-import QtQuick 2.15
+import QtQuick 6.8
 
 Item {
   clip: true
