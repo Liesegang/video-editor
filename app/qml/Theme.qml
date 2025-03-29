@@ -1,11 +1,7 @@
-// Theme.qml
-pragma Singleton
 import QtQuick 2.15
 import Qt.labs.settings 1.0
 
 QtObject {
-  id: theme
-
   // Theme types
   readonly property int light_theme: 0
   readonly property int dark_theme: 1
@@ -14,118 +10,92 @@ QtObject {
   // Current theme
   property int currentTheme: dark_theme
 
-  // Settings for persistent storage
-  property Settings themeSettings: Settings {
-    id: settings
-    category: "theme"
-    property int currentTheme: light_theme
-    property var customPrimary: "#4a86e8"
-    property var customSecondary: "#6aa84f"
-    property var customBackground: "#ffffff"
-    property var customSurface: "#f5f5f5"
-    property var customText: "#333333"
-    property var customBorder: "#cccccc"
-    property var customHighlight: "#e0e0ff"
-    property var customHover: "#f0f0f0"
+  // Base colors - ライトテーマのベースカラー
+  readonly property var lightBase: ({
+    primary: "#4a86e8",       // メインカラー (青系の色)
+    secondary: "#a84f4f",     // アクセントカラー (赤系の色)
+    background: "#ffffff",    // 背景色
+    surface: "#f5f5f5",       // 表面色
+    text: "#333333",          // テキスト色
+    border: "#cccccc"         // 境界線
+  })
+
+  // Base colors - ダークテーマのベースカラー
+  readonly property var darkBase: ({
+    primary: "#4285F4",       // メインカラー (青系の色)
+    secondary: "#dd2d27",     // アクセントカラー (赤系の色)
+    background: "#2d2d30",    // 背景色
+    surface: "#1e1e1e",       // 表面色
+    text: "#e0e0e0",          // テキスト色
+    border: "#555555"         // 境界線
+  })
+
+  // Custom colors
+  property var customBase: ({
+    primary: "#4a86e8",
+    secondary: "#6aa84f",
+    background: "#ffffff",
+    surface: "#f5f5f5",
+    text: "#333333",
+    border: "#cccccc"
+  })
+
+  // Get base color based on current theme
+  function getBaseColor(colorKey) {
+    var color;
+    switch(currentTheme) {
+      case light_theme:
+        color = lightBase[colorKey];
+        break;
+      case dark_theme:
+        color = darkBase[colorKey];
+        break;
+      case custom_theme:
+        color = customBase[colorKey];
+        break;
+      default:
+        color = lightBase[colorKey];
+    }
+    return color || lightBase[colorKey];
   }
 
-  // Custom theme colors
-  property var customColors: ({
-    primary: "#4a86e8",
-    secondary: "#6aa84f",
-    background: "#ffffff",
-    surface: "#f5f5f5",
-    text: "#333333",
-    border: "#cccccc",
-    highlight: "#e0e0ff",
-    hover: "#f0f0f0"
-  })
+  // セマンティックカラー - ベースカラーから派生
+  readonly property color primaryColor: getBaseColor("primary")
+  readonly property color secondaryColor: getBaseColor("secondary")
+  readonly property color backgroundColor: getBaseColor("background")
+  readonly property color surfaceColor: getBaseColor("surface") 
+  readonly property color textColor: getBaseColor("text")
+  readonly property color borderColor: getBaseColor("border")
+  
+  // UI要素のセマンティックカラー
+  readonly property color statusBarColor: getBaseColor("surface")
+  readonly property color toolbarBackgroundColor: getBaseColor("surface")
+  readonly property color panelBackgroundColor: Qt.darker(getBaseColor("surface"), 1.05)
+  readonly property color timelineBackgroundColor: getBaseColor("surface")
+  
+  // 状態を表すセマンティックカラー
+  readonly property color highlightColor: Qt.alpha(getBaseColor("primary"), 0.3)
+  readonly property color hoverColor: Qt.lighter(getBaseColor("surface"), 1.1)
+  readonly property color activeColor: Qt.darker(getBaseColor("primary"), 1.1)
+  readonly property color inactiveColor: Qt.lighter(getBaseColor("surface"), 1.05)
 
-  // Light theme colors
-  readonly property var lightColors: ({
-    primary: "#4a86e8",
-    secondary: "#6aa84f",
-    background: "#ffffff",
-    surface: "#f5f5f5",
-    text: "#333333",
-    border: "#cccccc",
-    highlight: "#e0e0ff",
-    hover: "#f0f0f0"
-  })
-
-  // Dark theme colors
-  readonly property var darkColors: ({
-    primary: "#2979ff",
-    secondary: "#4caf50",
-    background: "#121212",
-    surface: "#1e1e1e",
-    text: "#e0e0e0",
-    border: "#555555",
-    highlight: "#2d2d60",
-    hover: "#2a2a2a"
-  })
+  // Initialize theme
+  function initialize() {
+    console.log("Theme initialized with theme:", currentTheme);
+    themeChanged();
+  }
 
   // Change theme
   function setTheme(themeId) {
     if (themeId >= 0 && themeId <= 2) {
       currentTheme = themeId;
-      themeSettings.currentTheme = themeId;
       themeChanged();
     }
   }
-
-  // Update custom color
-  function setCustomColor(colorKey, colorValue) {
-    if (customColors.hasOwnProperty(colorKey)) {
-      customColors[colorKey] = colorValue;
-      themeSettings["custom" + colorKey.charAt(0).toUpperCase() + colorKey.slice(1)] = colorValue;
-      themeChanged();
-    }
-  }
-
-  // Get color based on current theme
-  function _getCurrentColor(colorKey) {
-    switch(currentTheme) {
-      case light_theme:
-        return lightColors[colorKey];
-      case dark_theme:
-        return darkColors[colorKey];
-      case custom_theme:
-        return customColors[colorKey];
-      default:
-        return lightColors[colorKey];
-    }
-  }
-
-  // Initialize theme (load from settings)
-  function initialize() {
-    currentTheme = themeSettings.currentTheme;
-
-    if (currentTheme === custom_theme) {
-      customColors.primary = themeSettings.customPrimary;
-      customColors.secondary = themeSettings.customSecondary;
-      customColors.background = themeSettings.customBackground;
-      customColors.surface = themeSettings.customSurface;
-      customColors.text = themeSettings.customText;
-      customColors.border = themeSettings.customBorder;
-      customColors.highlight = themeSettings.customHighlight;
-      customColors.hover = themeSettings.customHover;
-    }
-
-    console.log("Theme initialized with theme:", currentTheme);
-    themeChanged();
-  }
-
-  // Theme colors - properties for components to reference
-  readonly property color primaryColor: _getCurrentColor("primary")
-  readonly property color secondaryColor: _getCurrentColor("secondary")
-  readonly property color backgroundColor: _getCurrentColor("background")
-  readonly property color surfaceColor: _getCurrentColor("surface")
-  readonly property color textColor: _getCurrentColor("text")
-  readonly property color borderColor: _getCurrentColor("border")
-  readonly property color highlightColor: _getCurrentColor("highlight")
-  readonly property color hoverColor: _getCurrentColor("hover")
 
   // Theme change signal
   signal themeChanged()
+
+  // テーマ変更時に自動的に色が更新されるように
+  onCurrentThemeChanged: themeChanged()
 }

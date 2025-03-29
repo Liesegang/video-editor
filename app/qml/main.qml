@@ -9,18 +9,15 @@ ApplicationWindow {
   height: 1080
   title: "Motion Graphics Editor"
 
-  QtObject {
-    Component.onCompleted: {
-      // Try one of these styles
-      // Controls.ApplicationWindow.style = "Material"
-      // or
-      QtQuick.Controls.ApplicationWindow.style = "Material"
-    }
+  Theme {
+    id: theme
   }
 
-  // Set the application style to one that supports customization
   Component.onCompleted: {
-    Theme.initialize();
+    if (typeof style !== "undefined") {
+      style = "Material"
+    }
+    theme.initialize()
   }
 
   // Import the menu bar component
@@ -53,10 +50,14 @@ ApplicationWindow {
     anchors.right: parent.right
     anchors.bottom: parent.bottom
     height: 30
-    color: "#bbbbbb"
+    color: theme.statusBarColor
+    border.color: theme.borderColor
+    border.width: 1
+
     Text {
       anchors.centerIn: parent
       text: "Status Bar"
+      color: theme.textColor
     }
   }
 }

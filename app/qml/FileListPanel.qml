@@ -5,7 +5,7 @@ import Qt.labs.folderlistmodel 2.15
 
 Rectangle {
   id: fileListPanel
-  color: Theme.backgroundColor
+  color: theme.backgroundColor
 
   // Properties
   property string currentFolder: "C:/"
@@ -16,12 +16,12 @@ Rectangle {
   // Signals
   signal fileSelected(string filePath)
 
-  // Theme change連携
   Connections {
-    target: Theme
+    target: theme
     function onThemeChanged() {
-      // テーマ変更時に更新が必要な場合
-      listView.forceLayout();
+      if (listView) {
+        listView.forceLayout();
+      }
     }
   }
 
@@ -88,8 +88,8 @@ Rectangle {
     Rectangle {
       Layout.fillWidth: true
       height: 30
-      color: Theme.surfaceColor
-      border.color: Theme.borderColor
+      color: theme.surfaceColor
+      border.color: theme.borderColor
       border.width: 1
 
       RowLayout {
@@ -100,7 +100,7 @@ Rectangle {
         Image {
           Layout.preferredWidth: 16
           Layout.preferredHeight: 16
-          source: "qrc:///icons/folder_icon.png"
+          source: "qrc:/qt/qml/com/kdab/cxx_qt/demo/qml/icons/folder_icon.png"
         }
 
         TextField {
@@ -108,10 +108,9 @@ Rectangle {
           Layout.fillWidth: true
           text: currentFolder
           selectByMouse: true
-
           background: Rectangle {
-            color: "white"
-            border.color: Theme.borderColor
+            color: theme.surfaceColor
+            border.color: theme.borderColor
           }
 
           onAccepted: {
@@ -152,8 +151,8 @@ Rectangle {
     Rectangle {
       Layout.fillWidth: true
       height: 25
-      color: Theme.surfaceColor
-      border.color: Theme.borderColor
+      color: theme.surfaceColor
+      border.color: theme.borderColor
       border.width: 1
 
       RowLayout {
@@ -165,7 +164,7 @@ Rectangle {
           Layout.preferredWidth: fileListPanel.width * 0.4
           Layout.fillHeight: true
           color: "transparent"
-          border.color: Theme.borderColor
+          border.color: theme.borderColor
           border.width: 0
 
           Text {
@@ -174,7 +173,7 @@ Rectangle {
             anchors.leftMargin: 10
             text: "Name"
             font.bold: sortColumn === "fileName"
-            color: Theme.textColor
+            color: theme.textColor
           }
 
           Text {
@@ -183,7 +182,7 @@ Rectangle {
             anchors.right: parent.right
             anchors.rightMargin: 5
             text: sortAscending ? "▲" : "▼"
-            color: Theme.textColor
+            color: theme.textColor
           }
 
           MouseArea {
@@ -208,8 +207,8 @@ Rectangle {
     Rectangle {
       Layout.fillWidth: true
       Layout.fillHeight: true
-      color: Theme.backgroundColor
-      border.color: Theme.borderColor
+      color: theme.backgroundColor
+      border.color: theme.borderColor
       border.width: 1
 
       ListView {
@@ -225,8 +224,7 @@ Rectangle {
           id: fileItem
           width: listView.width
           height: 24
-          color: ListView.isCurrentItem ? Theme.highlightColor :
-            (mouseArea.containsMouse ? Theme.hoverColor : Theme.backgroundColor)
+          color: ListView.isCurrentItem ? theme.highlightColor : (mouseArea.containsMouse ? theme.hoverColor : theme.backgroundColor)
 
           RowLayout {
             anchors.fill: parent
@@ -246,27 +244,14 @@ Rectangle {
                 Image {
                   Layout.preferredWidth: 16
                   Layout.preferredHeight: 16
-                  source: {
-                    if (folderModel.isFolder(index))
-                      return "qrc:///icons/folder_icon.png";
-
-                    var extension = fileName.substr(fileName.lastIndexOf('.') + 1).toLowerCase();
-                    if (["jpg", "jpeg", "png", "gif"].indexOf(extension) >= 0)
-                      return "qrc:///icons/image_icon.png";
-                    else if (["doc", "docx", "txt"].indexOf(extension) >= 0)
-                      return "qrc:///icons/document_icon.png";
-                    else if (extension === "qml")
-                      return "qrc:///icons/qml_icon.png";
-                    else
-                      return "qrc:///icons/file_icon.png";
-                  }
+                  source: "qrc:/qt/qml/com/kdab/cxx_qt/demo/qml/icons/folder_icon.png"
                 }
 
                 Text {
                   Layout.fillWidth: true
                   text: fileName
                   elide: Text.ElideRight
-                  color: Theme.textColor
+                  color: theme.textColor
                   clip: true
                 }
               }
@@ -286,7 +271,7 @@ Rectangle {
                 horizontalAlignment: Text.AlignRight
                 text: folderModel.isFolder(index) ? "" : formatFileSize(fileSize)
                 elide: Text.ElideRight
-                color: Theme.textColor
+                color: theme.textColor
               }
             }
 
@@ -336,8 +321,8 @@ Rectangle {
     Rectangle {
       Layout.fillWidth: true
       height: 24
-      color: Theme.surfaceColor
-      border.color: Theme.borderColor
+      color: theme.surfaceColor
+      border.color: theme.borderColor
       border.width: 1
 
       RowLayout {
@@ -347,7 +332,7 @@ Rectangle {
 
         Text {
           text: folderModel.count + " items"
-          color: Theme.textColor
+          color: theme.textColor
         }
 
         Item { Layout.fillWidth: true }
@@ -355,7 +340,7 @@ Rectangle {
         Text {
           id: selectionInfo
           text: selectedFile ? "Selected: " + selectedFile : ""
-          color: Theme.textColor
+          color: theme.textColor
         }
       }
     }

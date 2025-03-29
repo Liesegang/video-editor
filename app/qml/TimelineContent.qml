@@ -9,7 +9,7 @@ Item {
     id: trackSidebar
     width: 100
     height: parent.height
-    color: "#252526"
+    color: Qt.darker(theme.timelineBackgroundColor, 1.1)
     z: 10
 
     Column {
@@ -23,16 +23,18 @@ Item {
         Rectangle {
           width: parent.width
           height: model.height
-          color: index % 2 === 0 ? "#252526" : "#2a2a2a"
+          color: index % 2 === 0 ? 
+            Qt.darker(theme.timelineBackgroundColor, 1.1) :
+            Qt.darker(theme.timelineBackgroundColor, 1.05)
           border.width: 1
-          border.color: "#1e1e1e"
+          border.color: theme.borderColor
 
           Text {
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
             anchors.leftMargin: 10
             text: model.name
-            color: "#ffffff"
+            color: theme.textColor
             font.pixelSize: 12
           }
         }
@@ -75,7 +77,7 @@ Item {
           x: index * timelineContainer.pixelsPerSecond
           width: 1
           height: parent.height
-          color: "#3f3f3f"
+          color: theme.borderColor
         }
       }
 
@@ -90,9 +92,11 @@ Item {
           Rectangle {
             width: parent.width
             height: modelData.height
-            color: index % 2 === 0 ? "#2d2d30" : "#333336"
+            color: index % 2 === 0 ? 
+              theme.timelineBackgroundColor : 
+              Qt.lighter(theme.timelineBackgroundColor, 1.05)
             border.width: 1
-            border.color: "#1e1e1e"
+            border.color: theme.borderColor
           }
         }
       }
@@ -134,7 +138,7 @@ Item {
             anchors.left: parent.left
             anchors.leftMargin: 10
             text: modelData.name
-            color: "#ffffff"
+            color: theme.textColor
             font.pixelSize: 11
             elide: Text.ElideRight
             width: parent.width - 15
@@ -167,16 +171,6 @@ Item {
             NumberAnimation { duration: 100 }
           }
         }
-      }
-
-      // Current position bar (within content)
-      Rectangle {
-        id: contentPositionBar
-        x: timelineContainer.timePosition * timelineContainer.pixelsPerSecond
-        height: parent.height
-        width: 2
-        color: "#ff5500"
-        z: 10
       }
     }
 
@@ -236,7 +230,7 @@ Item {
     anchors.left: trackSidebar.right
     anchors.leftMargin: (timelineContainer.timePosition - timelineContainer.timelineStart) * timelineContainer.pixelsPerSecond
     width: 2
-    color: "#ff5500"
+    color: theme.secondaryColor
     visible: anchors.leftMargin >= 0 && anchors.leftMargin <= timelineFlickable.width
     z: 100
 
@@ -245,7 +239,7 @@ Item {
       width: 14
       height: 14
       radius: 7
-      color: "#ff5500"
+      color: theme.secondaryColor
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.top: parent.top
       anchors.topMargin: -7

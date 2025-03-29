@@ -2,11 +2,11 @@ import QtQuick 2.15
 import QtQuick.Layouts 1.15
 
 Rectangle {
-  color: "#1e1e1e"
+  color: theme.toolbarBackgroundColor
 
   RowLayout {
     anchors.fill: parent
-    anchors.margins: 8
+    anchors.margins: 5
     spacing: 10
 
     // Play button
@@ -14,12 +14,12 @@ Rectangle {
       width: 30
       height: 30
       radius: 15
-      color: "#4285F4"
+      color: theme.primaryColor
 
       Text {
         anchors.centerIn: parent
         text: "▶"
-        color: "#ffffff"
+        color: theme.textColor
         font.pixelSize: 14
       }
 
@@ -42,7 +42,7 @@ Rectangle {
           seconds.toString().padStart(2, '0') + "." +
           ms.toString().padStart(2, '0');
       }
-      color: "#ffffff"
+      color: theme.textColor
       font.pixelSize: 14
       font.family: "Monospace"
     }
@@ -53,7 +53,7 @@ Rectangle {
     Text {
       text: "ズーム: " + timelineContainer.zoomLevel.toFixed(1) + "x / " +
         "横ズーム: " + timelineContainer.horizontalZoom.toFixed(1) + "x"
-      color: "#bbbbbb"
+      color: theme.textColor
       font.pixelSize: 11
     }
 
@@ -62,12 +62,12 @@ Rectangle {
       width: 24
       height: 24
       radius: 3
-      color: "#3e3e42"
+      color: theme.activeColor
 
       Text {
         anchors.centerIn: parent
         text: "1:1"
-        color: "#ffffff"
+        color: theme.textColor
         font.pixelSize: 10
       }
 

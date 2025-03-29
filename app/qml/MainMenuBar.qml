@@ -4,13 +4,11 @@ import QtQuick.Controls 2.15
 MenuBar {
   id: menuBar
 
-  // メニューバー全体のスタイル
   background: Rectangle {
-    color: "#2c3e50"
+    color: theme.surfaceColor
     radius: 2
   }
 
-  // メニュー項目のスタイル（共通）
   delegate: MenuBarItem {
     id: menuBarItem
 
@@ -20,14 +18,14 @@ MenuBar {
       font.family: "Helvetica"
       font.weight: Font.Medium
       opacity: enabled ? 1.0 : 0.3
-      color: menuBarItem.highlighted ? "#ecf0f1" : "#bdc3c7"
+      color: menuBarItem.highlighted ? theme.textColor : Qt.darker(theme.textColor, 1.2)
       horizontalAlignment: Text.AlignLeft
       verticalAlignment: Text.AlignVCenter
       elide: Text.ElideRight
     }
 
     background: Rectangle {
-      color: menuBarItem.highlighted ? "#34495e" : "transparent"
+      color: menuBarItem.highlighted ? theme.highlightColor : "transparent"
       radius: 2
     }
   }
@@ -36,32 +34,47 @@ MenuBar {
     id: fileMenu
     title: "File"
 
-    // メニュードロップダウン部分のスタイル（共通）
+    palette.base: theme.surfaceColor
+    palette.text: theme.textColor
+    palette.highlightedText: theme.textColor
+    palette.highlight: theme.highlightColor
+
+    contentWidth: 160
+    contentHeight: implicitContentHeight
+
     background: Rectangle {
-      implicitWidth: 160  // 幅を少し狭く
-      color: "#2c3e50"
-      border.color: "#34495e"
-      radius: 3
-      border.width: 1
+      implicitWidth: 240
+      implicitHeight: 40
+      color: theme.surfaceColor
+      border.color: theme.borderColor
+      radius: 2
     }
 
-    // マージンを小さくしたデリゲート
     delegate: MenuItem {
       id: menuItem
-      implicitHeight: 28  // 高さを小さく
+      implicitHeight: 28
+      height: 28
+
+      background: Rectangle {
+        implicitWidth: 240
+        implicitHeight: 40
+        opacity: enabled ? 1 : 0.3
+        color: menuItem.highlighted ? theme.highlightColor : "transparent"
+      }
+
+      palette.highlight: theme.highlightColor
+      palette.highlightedText: theme.textColor
+      palette.windowText: Qt.darker(theme.textColor, 1.2)
 
       contentItem: Row {
-        spacing: 4  // スペースを小さく
         anchors.fill: parent
-        anchors.leftMargin: 6  // 左マージンを小さく
-        anchors.rightMargin: 6  // 右マージンを小さく
 
         Text {
           id: menuText
           text: menuItem.text
           font.pixelSize: 13
           font.family: "Helvetica"
-          color: menuItem.highlighted ? "#ecf0f1" : "#bdc3c7"
+          color: menuItem.highlighted ? theme.textColor : Qt.darker(theme.textColor, 1.2)
           anchors.verticalCenter: parent.verticalCenter
           elide: Text.ElideRight
           width: parent.width - shortcutText.width - parent.spacing
@@ -72,46 +85,29 @@ MenuBar {
           text: menuItem.action && menuItem.action.shortcut ? menuItem.action.shortcut : ""
           font.pixelSize: 12
           font.family: "Helvetica"
-          color: "#7f8c8d"
+          color: Qt.darker(theme.textColor, 1.5)
           anchors.verticalCenter: parent.verticalCenter
           horizontalAlignment: Text.AlignRight
         }
       }
-
-      background: Rectangle {
-        color: menuItem.highlighted ? "#34495e" : "transparent"
-        radius: 2
-      }
     }
-
-    // 項目間のパディングを調整
-    padding: 2
 
     Action { text: "Open"; shortcut: "Ctrl+O" }
     MenuSeparator {
-      contentItem: Rectangle {
-        implicitHeight: 1
-        color: "#34495e"
-      }
-      padding: 0  // セパレーターのパディングを削除
+      height: 1
+      palette.light: theme.borderColor
     }
     Action { text: "Close"; shortcut: "Ctrl+W" }
     Action { text: "Save"; shortcut: "Ctrl+S" }
     Action { text: "Save as"; shortcut: "Shift+Ctrl+S" }
     MenuSeparator {
-      contentItem: Rectangle {
-        implicitHeight: 1
-        color: "#34495e"
-      }
-      padding: 0  // セパレーターのパディングを削除
+      height: 1
+      palette.light: theme.borderColor
     }
     Action { text: "Export"; shortcut: "Ctrl+E" }
     MenuSeparator {
-      contentItem: Rectangle {
-        implicitHeight: 1
-        color: "#34495e"
-      }
-      padding: 0  // セパレーターのパディングを削除
+      height: 1
+      palette.light: theme.borderColor
     }
     Action { text: "Exit"; shortcut: "Ctrl+Q" }
   }
@@ -120,32 +116,43 @@ MenuBar {
     id: editMenu
     title: "Edit"
 
-    // fileMenuと同じバックグラウンドを使用
+    palette.base: theme.surfaceColor
+    palette.text: theme.textColor
+    palette.highlightedText: theme.textColor
+    palette.highlight: theme.highlightColor
+
+    contentWidth: 160
+    contentHeight: implicitContentHeight
+
     background: Rectangle {
-      implicitWidth: 160  // 幅を少し狭く
-      color: "#2c3e50"
-      border.color: "#34495e"
-      radius: 3
-      border.width: 1
+      implicitWidth: 240
+      implicitHeight: 40
+      color: theme.surfaceColor
+      border.color: theme.borderColor
+      radius: 2
     }
 
-    // マージンを小さくしたデリゲート (fileMenuと同じ)
     delegate: MenuItem {
       id: menuItem
-      implicitHeight: 28  // 高さを小さく
+      implicitHeight: 28
+      height: 28
+
+      palette.highlight: theme.highlightColor
+      palette.highlightedText: theme.textColor
+      palette.windowText: Qt.darker(theme.textColor, 1.2)
 
       contentItem: Row {
-        spacing: 4  // スペースを小さく
+        spacing: 2
         anchors.fill: parent
-        anchors.leftMargin: 6  // 左マージンを小さく
-        anchors.rightMargin: 6  // 右マージンを小さく
+        anchors.leftMargin: 2
+        anchors.rightMargin: 2
 
         Text {
           id: menuText
           text: menuItem.text
           font.pixelSize: 13
           font.family: "Helvetica"
-          color: menuItem.highlighted ? "#ecf0f1" : "#bdc3c7"
+          color: menuItem.highlighted ? theme.textColor : Qt.darker(theme.textColor, 1.2)
           anchors.verticalCenter: parent.verticalCenter
           elide: Text.ElideRight
           width: parent.width - shortcutText.width - parent.spacing
@@ -156,30 +163,19 @@ MenuBar {
           text: menuItem.action && menuItem.action.shortcut ? menuItem.action.shortcut : ""
           font.pixelSize: 12
           font.family: "Helvetica"
-          color: "#7f8c8d"
+          color: Qt.darker(theme.textColor, 1.5)
           anchors.verticalCenter: parent.verticalCenter
           horizontalAlignment: Text.AlignRight
         }
       }
-
-      background: Rectangle {
-        color: menuItem.highlighted ? "#34495e" : "transparent"
-        radius: 2
-      }
     }
-
-    // 項目間のパディングを調整
-    padding: 2
 
     Action { text: "Copy"; shortcut: "Ctrl+C" }
     Action { text: "Cut"; shortcut: "Ctrl+X" }
     Action { text: "Paste"; shortcut: "Ctrl+V" }
     MenuSeparator {
-      contentItem: Rectangle {
-        implicitHeight: 1
-        color: "#34495e"
-      }
-      padding: 0  // セパレーターのパディングを削除
+      height: 1
+      palette.light: theme.borderColor
     }
     Action { text: "Settings"; shortcut: "Ctrl+," }
   }

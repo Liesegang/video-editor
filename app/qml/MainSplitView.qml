@@ -25,7 +25,9 @@ SplitView {
 
   // Right panel
   Rectangle {
-    color: "#f0f0f0"
+    color: theme.panelBackgroundColor
+    border.color: theme.borderColor
+    border.width: 1
     SplitView.preferredWidth: parent.width * 0.2
     clip: true
 
@@ -33,6 +35,7 @@ SplitView {
       anchors.centerIn: parent
       text: "Property Panel"
       font.pixelSize: 24
+      color: theme.textColor
     }
   }
 }
