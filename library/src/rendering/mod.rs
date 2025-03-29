@@ -13,8 +13,8 @@ use crate::model::frame::frame::FrameInfo;
 
 pub fn render_frame(frame_info: FrameInfo) -> Result<Image, Box<dyn Error>> {
   let mut renderer: Box<dyn Renderer> = Box::new(SkiaRenderer::new(
-    frame_info.width,
-    frame_info.height,
+    frame_info.width as u32,
+    frame_info.height as u32,
     frame_info.background_color,
   ));
 

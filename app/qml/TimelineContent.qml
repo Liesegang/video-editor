@@ -18,11 +18,11 @@ Item {
       spacing: 0
 
       Repeater {
-        model: timelineContainer.tracks
+        model: trackList
 
         Rectangle {
           width: parent.width
-          height: modelData.height
+          height: model.height
           color: index % 2 === 0 ? "#252526" : "#2a2a2a"
           border.width: 1
           border.color: "#1e1e1e"
@@ -31,7 +31,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
             anchors.leftMargin: 10
-            text: modelData.name
+            text: model.name
             color: "#ffffff"
             font.pixelSize: 12
           }

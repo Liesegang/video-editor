@@ -37,13 +37,13 @@ pub enum DrawStyle {
         #[serde(default)]
         color: Color,
         #[serde(default)]
-        width: f32,
+        width: f64,
         #[serde(default)]
         cap: CapType,
         #[serde(default)]
         join: JoinType,
         #[serde(default)]
-        miter: f32,
+        miter: f64,
     }
 }
 
@@ -59,19 +59,19 @@ impl Default for DrawStyle {
 #[serde(tag = "type")]
 pub enum PathEffect {
     Dash {
-        intervals: Vec<f32>,
-        phase: f32,
+        intervals: Vec<f64>,
+        phase: f64,
     },
     Corner {
-        radius: f32,
+        radius: f64,
     },
     Discrete {
-        seg_length: f32,
-        deviation: f32,
-        seed: u32,
+        seg_length: f64,
+        deviation: f64,
+        seed: u64,
     },
     Trim {
-        start: f32,
-        end: f32,
+        start: f64,
+        end: f64,
     },
 }

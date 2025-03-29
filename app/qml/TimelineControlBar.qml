@@ -27,6 +27,7 @@ Rectangle {
         anchors.fill: parent
         onClicked: {
           console.log("Play/Pause")
+          trackList.loadTracks()
         }
       }
     }

@@ -1,4 +1,4 @@
-pub mod cxxqt_object;
+pub mod track_list;
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
 
 fn main() {

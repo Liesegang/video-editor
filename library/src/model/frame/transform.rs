@@ -24,8 +24,8 @@ impl Default for Transform {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Position {
-    pub x: f32,
-    pub y: f32,
+    pub x: f64,
+    pub y: f64,
 }
 
 impl Default for Position {
@@ -36,8 +36,8 @@ impl Default for Position {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Scale {
-    pub x: f32,
-    pub y: f32,
+    pub x: f64,
+    pub y: f64,
 }
 
 impl Default for Scale {

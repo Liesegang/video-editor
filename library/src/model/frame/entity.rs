@@ -20,7 +20,7 @@ pub enum FrameEntity {
     Text {
         text: String,
         font: String,
-        size: f32,
+        size: f64,
         color: Color,
         #[serde(flatten)]
         transform: Transform,
