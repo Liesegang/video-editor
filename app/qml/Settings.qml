@@ -1,6 +1,6 @@
 pragma Singleton
-import QtQuick 2.15
-import Qt.labs.settings 1.0
+import QtQuick 6.8
+import Qt.labs.settings 6.8
 
 QtObject {
   id: settingsManager
