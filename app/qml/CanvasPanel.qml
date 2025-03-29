@@ -2,7 +2,9 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 
 Rectangle {
-  color: "#cccccc"
+  color: theme.panelBackgroundColor
+  border.color: theme.borderColor
+  border.width: 1
   clip: true
 
   Flickable {
@@ -32,8 +34,8 @@ Rectangle {
 
     Rectangle {
       id: canvas
-      color: "#ffffff"
-      border.color: "#000000"
+      color: theme.backgroundColor
+      border.color: theme.borderColor
       border.width: 1
       scale: 1.0
       width: 800
