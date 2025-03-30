@@ -32,3 +32,17 @@ Video Editorの開発に参加したい方は、IssueやPull Requestを歓迎し
 ## ライセンス
 
 このプロジェクトは[MITライセンス](LICENSE)のもとで提供されています。
+
+## 謝辞
+
+サンプル画像、動画は以下のクリエイター様の作品を使用させていただきました。
+
+- **SDx3 様**
+  「カートゥーンな海と空」
+  ライセンス: CC0
+  https://www.pixiv.net/artworks/83263525
+
+- **Blender Foundation**
+  「Big Buck Bunny」
+  ライセンス: CC BY 3.0
+  https://peach.blender.org/
