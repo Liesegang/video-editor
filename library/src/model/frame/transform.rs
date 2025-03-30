@@ -8,7 +8,7 @@ pub struct Transform {
     #[serde(default)]
     pub anchor: Position,
     #[serde(default)]
-    pub rotation: f32,
+    pub rotation: f64,
 }
 
 impl Default for Transform {
