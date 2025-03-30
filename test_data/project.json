@@ -1,0 +1,118 @@
+{
+  "name": "My Project",
+  "compositions": [
+    {
+      "name": "My Composition",
+      "width": 1920,
+      "height": 1080,
+      "background_color": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "a": 255
+      },
+      "color_profile": "srgb",
+      "fps": 30,
+      "duration": 50,
+      "tracks": [
+        {
+          "name": "My Track",
+          "entities": [
+            {
+              "type": "Video",
+              "file_path": "test_data/test.mp4",
+              "start": 0,
+              "end": 50,
+              "fps": 30,
+              "zero": 1000,
+              "position": {
+                "x": {
+                  "type": "Constant",
+                  "value": 0
+                },
+                "y": {
+                  "type": "Constant",
+                  "value": 0
+                }
+              },
+              "scale": {
+                "x": {
+                  "type": "Constant",
+                  "value": 6
+                },
+                "y": {
+                  "type": "Constant",
+                  "value": 6
+                }
+              },
+              "anchor": {
+                "x": {
+                  "type": "Constant",
+                  "value": 0
+                },
+                "y": {
+                  "type": "Constant",
+                  "value": 0
+                }
+              },
+              "rotation": {
+                "type": "Constant",
+                "value": 0
+              }
+            },
+            {
+              "type": "Image",
+              "file_path": "test_data/test.png",
+              "start": 0,
+              "end": 50,
+              "fps": 30,
+              "position": {
+                "x": {
+                  "type": "Keyframe",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": 0
+                    },
+                    {
+                      "time": 50,
+                      "value": 500
+                    }
+                  ]
+                },
+                "y": {
+                  "type": "Constant",
+                  "value": 0
+                }
+              },
+              "scale": {
+                "x": {
+                  "type": "Constant",
+                  "value": 0.1
+                },
+                "y": {
+                  "type": "Constant",
+                  "value": 0.1
+                }
+              },
+              "anchor": {
+                "x": {
+                  "type": "Constant",
+                  "value": 0
+                },
+                "y": {
+                  "type": "Constant",
+                  "value": 0
+                }
+              },
+              "rotation": {
+                "type": "Constant",
+                "value": 0
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

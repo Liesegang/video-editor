@@ -1,24 +1,16 @@
 pub mod renderer;
-mod skia_renderer;
+pub mod skia_renderer;
 
 use crate::loader::image::load_image;
 use crate::loader::image::Image;
 use crate::loader::video;
 use crate::rendering::renderer::Renderer;
-use crate::rendering::skia_renderer::SkiaRenderer;
 use std::error::Error;
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::FrameEntity;
 use crate::model::frame::frame::FrameInfo;
 
-pub fn render_frame(frame_info: FrameInfo) -> Result<Image, Box<dyn Error>> {
-  let mut renderer: Box<dyn Renderer> = Box::new(SkiaRenderer::new(
-    frame_info.width as u32,
-    frame_info.height as u32,
-    frame_info.background_color,
-  ));
-
-  // Process each SceneObject
+pub fn render_frame<T: Renderer>(frame_info: FrameInfo, renderer: &mut T) -> Result<Image, Box<dyn Error>> {
   for object in frame_info.objects {
     match object {
       FrameEntity::Video {

@@ -263,4 +263,10 @@ impl Renderer for SkiaRenderer {
             data: buffer,
         })
     }
+
+    fn clear(&mut self) -> Result<(), Box<dyn Error>> {
+        let canvas: &Canvas = self.surface.canvas();
+        canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
+        Ok(())
+    }
 }

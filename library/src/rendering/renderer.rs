@@ -37,4 +37,5 @@ pub trait Renderer {
         transform: &Transform,
     ) -> Result<(), Box<dyn Error>>;
     fn finalize(&mut self) -> Result<Image, Box<dyn Error>>;
+    fn clear(&mut self) -> Result<(), Box<dyn Error>>;
 }
