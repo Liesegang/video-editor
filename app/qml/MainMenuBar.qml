@@ -138,7 +138,7 @@ MenuBar {
         implicitWidth: 240
         implicitHeight: 40
         opacity: enabled ? 1 : 0.3
-        color: fileMenuItem.highlighted ? theme.highlightColor : "transparent"
+        color: editMenuItem.highlighted ? theme.highlightColor : "transparent"
       }
 
       contentItem: Row {
