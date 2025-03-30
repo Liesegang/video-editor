@@ -1,6 +1,8 @@
-use serde::{Deserialize, Serialize};
 use crate::model::frame::color::Color;
 use crate::model::frame::transform::{Position, Scale, Transform};
+use serde::{Deserialize, Serialize};
+
+use super::frame::draw_type::{DrawStyle, PathEffect};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Project {
@@ -42,28 +44,29 @@ pub struct TimeRange {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 pub enum Property<T> {
-  Constant {
-    value: T,
-  },
-  Keyframe {
-    keyframes: Vec<Keyframe<T>>,
-  },
-  Expression {
-    expression: String,
-  },
+  Constant { value: T },
+  Keyframe { keyframes: Vec<Keyframe<T>> },
+  Expression { expression: String },
 }
 
-impl<T: Default + Clone + std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<f64, Output = T>> Property<T> {
+impl<
+  T: Default
+    + Clone
+    + std::ops::Add<Output = T>
+    + std::ops::Sub<Output = T>
+    + std::ops::Mul<f64, Output = T>,
+> Property<T>
+{
   pub fn get_value(&self, time: f64) -> T {
     match self {
       Property::Constant { value } => value.clone(),
       Property::Keyframe { keyframes } => {
         if keyframes.is_empty() {
-            return T::default();
+          return T::default();
         } else if time <= keyframes[0].time {
-            return keyframes[0].value.clone();
+          return keyframes[0].value.clone();
         } else if time >= keyframes.last().unwrap().time {
-            return keyframes.last().unwrap().value.clone()
+          return keyframes.last().unwrap().value.clone();
         }
 
         let keyframe = keyframes.iter().rev().find(|k| k.time <= time).unwrap();
@@ -71,10 +74,8 @@ impl<T: Default + Clone + std::ops::Add<Output = T> + std::ops::Sub<Output = T> 
 
         let t = (time - keyframe.time) / (next_keyframe.time - keyframe.time);
         keyframe.value.clone() + (next_keyframe.value.clone() - keyframe.value.clone()) * t
-      },
-      Property::Expression { expression } => {
-        eval(expression)
-      },
+      }
+      Property::Expression { expression } => eval(expression),
     }
   }
 }
@@ -156,19 +157,23 @@ pub enum TrackEntity {
     #[serde(flatten)]
     transform: TransformProperty,
   },
-  // Text {
-  //   text: String,
-  //   font: String,
-  //   #[serde(flatten)]
-  //   time_range: TimeRange,
-  // #[serde(flatten)]
-  // transform: Transform,
-  // },
-  // Shape {
-  //   path: String,
-  //   styles: Vec<DrawStyle>,
-  //   path_effects: Vec<PathEffect>,
-  // #[serde(flatten)]
-  // transform: Transform,
-  // },
+  Text {
+    text: String,
+    font: String,
+    size: Property<f64>,
+    color: Color,
+    #[serde(flatten)]
+    time_range: TimeRange,
+    #[serde(flatten)]
+    transform: TransformProperty,
+  },
+  Shape {
+    path: String,
+    styles: Vec<DrawStyle>,
+    path_effects: Vec<PathEffect>,
+    #[serde(flatten)]
+    time_range: TimeRange,
+    #[serde(flatten)]
+    transform: TransformProperty,
+  },
 }
