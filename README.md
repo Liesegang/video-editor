@@ -31,7 +31,9 @@ Video Editorの開発に参加したい方は、IssueやPull Requestを歓迎し
 
 ## ライセンス
 
-このプロジェクトは[MITライセンス](LICENSE)のもとで提供されています。
+このプロジェクトは主に[MITライセンス](LICENSE)の下で公開されていますが、サードパーティコンポーネント（Qt、Skia、FFmpegなど）はそれぞれのプロジェクトのライセンスに従います。
+
+詳細は[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)を参照してください。
 
 ## 謝辞
 
