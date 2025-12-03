@@ -19,259 +19,164 @@
           "name": "My Track",
           "entities": [
             {
-              "type": "Video",
-              "file_path": "test_data/test.mp4",
-              "start": 0,
-              "end": 50,
-              "fps": 30,
-              "zero": 1000,
-              "position": {
-                "x": {
-                  "type": "Constant",
-                  "value": 0
+              "type": "video",
+              "properties": {
+                "__start_time": { "type": "Constant", "value": 0.0 },
+                "__end_time": { "type": "Constant", "value": 1.6666667 },
+                "__fps": { "type": "Constant", "value": 30.0 },
+                "file_path": { "type": "Constant", "value": "test_data/test.mp4" },
+                "frame": {
+                  "type": "Keyframe",
+                  "keyframes": [
+                    { "time": 0.0, "value": 1000.0, "easing": "Linear" },
+                    { "time": 1.6666667, "value": 1050.0, "easing": "Linear" }
+                  ]
                 },
-                "y": {
+                "position": {
                   "type": "Constant",
-                  "value": 0
-                }
-              },
-              "scale": {
-                "x": {
-                  "type": "Constant",
-                  "value": 6
+                  "value": { "x": 0.0, "y": 0.0 }
                 },
-                "y": {
+                "scale": {
                   "type": "Constant",
-                  "value": 6
-                }
-              },
-              "anchor": {
-                "x": {
-                  "type": "Constant",
-                  "value": 0
+                  "value": { "x": 6.0, "y": 6.0 }
                 },
-                "y": {
+                "anchor": {
                   "type": "Constant",
-                  "value": 0
-                }
-              },
-              "rotation": {
-                "type": "Constant",
-                "value": 0
+                  "value": { "x": 0.0, "y": 0.0 }
+                },
+                "rotation": { "type": "Constant", "value": 0.0 }
               }
             },
             {
-              "type": "Image",
-              "file_path": "test_data/test.png",
-              "start": 0,
-              "end": 50,
-              "fps": 30,
-              "position": {
-                "x": {
+              "type": "image",
+              "properties": {
+                "__start_time": { "type": "Constant", "value": 0.0 },
+                "__end_time": { "type": "Constant", "value": 1.6666667 },
+                "__fps": { "type": "Constant", "value": 30.0 },
+                "file_path": { "type": "Constant", "value": "test_data/test.png" },
+                "position": {
                   "type": "Keyframe",
                   "keyframes": [
+                    { "time": 0.0, "value": { "x": 0.0, "y": 0.0 }, "easing": "Linear" },
                     {
-                      "time": 0,
-                      "value": 0
-                    },
-                    {
-                      "time": 50,
-                      "value": 500
+                      "time": 1.6666667,
+                      "value": { "x": 500.0, "y": 0.0 },
+                      "easing": "Linear"
                     }
                   ]
                 },
-                "y": {
+                "scale": {
                   "type": "Constant",
-                  "value": 0
-                }
-              },
-              "scale": {
-                "x": {
-                  "type": "Constant",
-                  "value": 0.2
+                  "value": { "x": 0.2, "y": 0.2 }
                 },
-                "y": {
+                "anchor": {
                   "type": "Constant",
-                  "value": 0.2
-                }
-              },
-              "anchor": {
-                "x": {
-                  "type": "Constant",
-                  "value": 0
+                  "value": { "x": 0.0, "y": 0.0 }
                 },
-                "y": {
-                  "type": "Constant",
-                  "value": 0
-                }
-              },
-              "rotation": {
-                "type": "Constant",
-                "value": 0
+                "rotation": { "type": "Constant", "value": 0.0 }
               }
             },
             {
-              "type": "Text",
-              "text": "Hello, world!",
-              "font": "Arial",
-              "size": {
-                "type": "Constant",
-                "value": 100
-              },
-              "color": {
-                "r": 255,
-                "g": 255,
-                "b": 0,
-                "a": 255
-              },
-              "start": 0,
-              "end": 50,
-              "fps": 30,
-              "position": {
-                "x": {
+              "type": "text",
+              "properties": {
+                "__start_time": { "type": "Constant", "value": 0.0 },
+                "__end_time": { "type": "Constant", "value": 1.6666667 },
+                "__fps": { "type": "Constant", "value": 30.0 },
+                "text": { "type": "Constant", "value": "Hello, world!" },
+                "font": { "type": "Constant", "value": "Arial" },
+                "size": { "type": "Constant", "value": 100.0 },
+                "color": {
+                  "type": "Constant",
+                  "value": { "r": 255, "g": 255, "b": 0, "a": 255 }
+                },
+                "position": {
                   "type": "Keyframe",
                   "keyframes": [
+                    { "time": 0.0, "value": { "x": 0.0, "y": 0.0 }, "easing": "Linear" },
                     {
-                      "time": 0,
-                      "value": 0
-                    },
-                    {
-                      "time": 50,
-                      "value": 500
+                      "time": 1.6666667,
+                      "value": { "x": 500.0, "y": 0.0 },
+                      "easing": "Linear"
                     }
                   ]
                 },
-                "y": {
+                "scale": {
                   "type": "Constant",
-                  "value": 0
-                }
-              },
-              "scale": {
-                "x": {
-                  "type": "Constant",
-                  "value": 1
+                  "value": { "x": 1.0, "y": 1.0 }
                 },
-                "y": {
+                "anchor": {
                   "type": "Constant",
-                  "value": 1
-                }
-              },
-              "anchor": {
-                "x": {
-                  "type": "Constant",
-                  "value": 0
+                  "value": { "x": 0.0, "y": 0.0 }
                 },
-                "y": {
-                  "type": "Constant",
-                  "value": 0
-                }
-              },
-              "rotation": {
-                "type": "Constant",
-                "value": 0
+                "rotation": { "type": "Constant", "value": 0.0 }
               }
             },
             {
-              "type": "Shape",
-              "path": "M140 20C73 20 20 74 20 140c0 135 136 170 228 303 88-132 229-173 229-303 0-66-54-120-120-120-48 0-90 28-109 69-19-41-60-69-108-69z",
-              "path_effects": [
-                {
-                  "type": "Discrete",
-                  "seg_length": 10.0,
-                  "deviation": 10.0,
-                  "seed": 41413
+              "type": "shape",
+              "properties": {
+                "__start_time": { "type": "Constant", "value": 0.0 },
+                "__end_time": { "type": "Constant", "value": 1.6666667 },
+                "__fps": { "type": "Constant", "value": 30.0 },
+                "path": {
+                  "type": "Constant",
+                  "value": "M140 20C73 20 20 74 20 140c0 135 136 170 228 303 88-132 229-173 229-303 0-66-54-120-120-120-48 0-90 28-109 69-19-41-60-69-108-69z"
                 },
-                {
-                  "type": "Dash",
-                  "intervals": [
-                    40.0,
-                    20.0
-                  ],
-                  "phase": 0.0
-                }
-              ],
-              "styles": [
-                {
-                  "type": "Fill",
-                  "color": {
-                    "r": 255,
-                    "g": 255,
-                    "b": 255,
-                    "a": 255
-                  }
-                },
-                {
-                  "type": "Stroke",
-                  "color": {
-                    "r": 0,
-                    "g": 0,
-                    "b": 255,
-                    "a": 255
-                  },
-                  "width": 20,
-                  "cap": "Square",
-                  "join": "Round",
-                  "miter": 4
-                },
-                {
-                  "type": "Stroke",
-                  "color": {
-                    "r": 0,
-                    "g": 255,
-                    "b": 0,
-                    "a": 255
-                  },
-                  "width": 10,
-                  "cap": "Square",
-                  "join": "Round",
-                  "miter": 4
-                }
-              ],
-              "start": 0,
-              "end": 50,
-              "fps": 30,
-              "position": {
-                "x": {
-                  "type": "Keyframe",
-                  "keyframes": [
+                "path_effects": {
+                  "type": "Constant",
+                  "value": [
+                    { "type": "Discrete", "seg_length": 10.0, "deviation": 10.0, "seed": 41413 },
                     {
-                      "time": 0,
-                      "value": 0
-                    },
-                    {
-                      "time": 50,
-                      "value": 500
+                      "type": "Dash",
+                      "intervals": [40.0, 20.0],
+                      "phase": 0.0
                     }
                   ]
                 },
-                "y": {
+                "styles": {
                   "type": "Constant",
-                  "value": 0
-                }
-              },
-              "scale": {
-                "x": {
-                  "type": "Constant",
-                  "value": 1
+                  "value": [
+                    {
+                      "type": "Fill",
+                      "color": { "r": 255, "g": 255, "b": 255, "a": 255 }
+                    },
+                    {
+                      "type": "Stroke",
+                      "color": { "r": 0, "g": 0, "b": 255, "a": 255 },
+                      "width": 20,
+                      "cap": "Square",
+                      "join": "Round",
+                      "miter": 4
+                    },
+                    {
+                      "type": "Stroke",
+                      "color": { "r": 0, "g": 255, "b": 0, "a": 255 },
+                      "width": 10,
+                      "cap": "Square",
+                      "join": "Round",
+                      "miter": 4
+                    }
+                  ]
                 },
-                "y": {
-                  "type": "Constant",
-                  "value": 1
-                }
-              },
-              "anchor": {
-                "x": {
-                  "type": "Constant",
-                  "value": 0
+                "position": {
+                  "type": "Keyframe",
+                  "keyframes": [
+                    { "time": 0.0, "value": { "x": 0.0, "y": 0.0 }, "easing": "Linear" },
+                    {
+                      "time": 1.6666667,
+                      "value": { "x": 500.0, "y": 0.0 },
+                      "easing": "Linear"
+                    }
+                  ]
                 },
-                "y": {
+                "scale": {
                   "type": "Constant",
-                  "value": 0
-                }
-              },
-              "rotation": {
-                "type": "Constant",
-                "value": 0
+                  "value": { "x": 1.0, "y": 1.0 }
+                },
+                "anchor": {
+                  "type": "Constant",
+                  "value": { "x": 0.0, "y": 0.0 }
+                },
+                "rotation": { "type": "Constant", "value": 0.0 }
               }
             }
           ]
