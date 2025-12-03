@@ -2,26 +2,25 @@ pub mod renderer;
 pub mod skia_renderer;
 
 use crate::loader::image::Image;
-use crate::loader::image::load_image;
-use crate::loader::video::VideoReader;
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::FrameEntity;
 use crate::model::frame::frame::FrameInfo;
+use crate::plugin::{LoadRequest, LoadResponse, PluginManager};
 use crate::rendering::renderer::Renderer;
 use crate::util::timing::{ScopedTimer, measure_debug};
-use std::collections::HashMap;
 use std::error::Error;
+use std::sync::Arc;
 
 pub struct RenderContext<T: Renderer> {
   pub renderer: T,
-  video_readers: HashMap<String, VideoReader>,
+  plugin_manager: Arc<PluginManager>,
 }
 
 impl<T: Renderer> RenderContext<T> {
-  pub fn new(renderer: T) -> Self {
+  pub fn new(renderer: T, plugin_manager: Arc<PluginManager>) -> Self {
     RenderContext {
       renderer,
-      video_readers: HashMap::new(),
+      plugin_manager,
     }
   }
 
@@ -39,13 +38,17 @@ impl<T: Renderer> RenderContext<T> {
           frame_number,
           transform,
         } => {
-          let reader = self
-            .video_readers
-            .entry(file_path.clone())
-            .or_insert_with(|| VideoReader::new(&file_path).unwrap());
+          let request = LoadRequest::VideoFrame {
+            path: file_path.clone(),
+            frame_number,
+          };
           let video_frame = measure_debug(
             format!("Decode video {} frame {}", file_path, frame_number),
-            || reader.decode_frame(frame_number),
+            || -> Result<Image, Box<dyn Error>> {
+              match self.plugin_manager.load_resource(&request)? {
+                LoadResponse::Image(img) => Ok(img),
+              }
+            },
           )?;
           measure_debug(format!("Draw video {}", file_path), || {
             self.renderer.draw_image(&video_frame, &transform)
@@ -55,9 +58,17 @@ impl<T: Renderer> RenderContext<T> {
           file_path,
           transform,
         } => {
-          let image_frame = measure_debug(format!("Load image {}", file_path), || {
-            load_image(&file_path)
-          })?;
+          let request = LoadRequest::Image {
+            path: file_path.clone(),
+          };
+          let image_frame = measure_debug(
+            format!("Load image {}", file_path),
+            || -> Result<Image, Box<dyn Error>> {
+              match self.plugin_manager.load_resource(&request)? {
+                LoadResponse::Image(img) => Ok(img),
+              }
+            },
+          )?;
           measure_debug(format!("Draw image {}", file_path), || {
             self.renderer.draw_image(&image_frame, &transform)
           })?;

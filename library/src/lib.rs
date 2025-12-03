@@ -1,4 +1,5 @@
 pub mod animation;
+pub mod cache;
 pub mod framing;
 mod loader;
 pub mod model;
@@ -8,6 +9,7 @@ pub mod util;
 
 use crate::loader::image::Image;
 use crate::model::project::project::Project;
+use crate::plugin::load_plugins;
 use crate::rendering::RenderContext;
 use crate::rendering::skia_renderer::SkiaRenderer;
 use model::frame::parse_frame_info;
@@ -20,7 +22,8 @@ pub fn render_frame_from_json(json_str: &str) -> Result<Image, Box<dyn std::erro
     frame_info.height as u32,
     frame_info.background_color.clone(),
   );
-  let mut context = RenderContext::new(renderer);
+  let plugin_manager = load_plugins();
+  let mut context = RenderContext::new(renderer, plugin_manager);
   context.render_frame(frame_info)
 }
 
@@ -30,7 +33,8 @@ pub fn create_render_context(
   background_color: model::frame::color::Color,
 ) -> RenderContext<SkiaRenderer> {
   let renderer = SkiaRenderer::new(width, height, background_color);
-  RenderContext::new(renderer)
+  let plugin_manager = load_plugins();
+  RenderContext::new(renderer, plugin_manager)
 }
 
 pub fn create_render_context_from_json(
@@ -42,7 +46,8 @@ pub fn create_render_context_from_json(
     frame_info.height as u32,
     frame_info.background_color.clone(),
   );
-  Ok(RenderContext::new(renderer))
+  let plugin_manager = load_plugins();
+  Ok(RenderContext::new(renderer, plugin_manager))
 }
 
 pub fn render_frame_with_context(
