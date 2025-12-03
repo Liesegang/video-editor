@@ -7,15 +7,18 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::time::Instant;
+use log::{info, error};
 
 fn main() -> Result<(), Box<dyn Error>> {
+  env_logger::init();
+
   let args: Vec<String> = env::args().collect();
   if args.len() < 2 {
     return Err("Please provide the path to a project JSON file.".into());
   }
 
   if !fs::metadata("./rendered").is_ok() {
-    println!("Creating ./rendered directory...");
+    info!("Creating ./rendered directory...");
     fs::create_dir("./rendered")?;
   }
 
@@ -23,6 +26,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
   let json_str = fs::read_to_string(file_path)?;
   let proj = load_project(&json_str)?;
+  
+  if proj.compositions.is_empty() {
+      error!("No compositions found in the project.");
+      return Err("No compositions found".into());
+  }
+
   let composition = proj.compositions.get(0).unwrap();
 
   let mut render_context = RenderContext::new(SkiaRenderer::new(
@@ -31,8 +40,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     composition.background_color.clone(),
   ));
 
-  for frame_index in 0..composition.duration {
-    println!("Render frame {}:", frame_index);
+  for frame_index in 0..composition.duration as u64 {
+    info!("Render frame {}:", frame_index);
     let start_time = Instant::now();
 
     render_context.clear()?;
@@ -47,13 +56,13 @@ fn main() -> Result<(), Box<dyn Error>> {
       img.height,
       ColorType::Rgba8,
     )?;
-    println!(
+    info!(
       "Frame {} rendered in {} ms.",
       frame_index,
       start_time.elapsed().as_millis()
     );
   }
-  println!("All frames rendered.");
+  info!("All frames rendered.");
 
   Ok(())
 }
