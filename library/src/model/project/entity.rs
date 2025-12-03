@@ -1,10 +1,10 @@
+use log::warn;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use log::{warn};
 
 use crate::model::frame::entity::FrameEntity;
 use crate::model::frame::transform::Transform;
-use crate::model::property::{Property, PropertyMap, PropertyValue};
+use crate::model::project::property::{Property, PropertyMap, PropertyValue};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Entity {
@@ -170,36 +170,48 @@ impl Entity {
           rotation,
         };
 
-        let styles_prop = self.properties.get_value("styles", time).unwrap_or(PropertyValue::Array(vec![]));
+        let styles_prop = self
+          .properties
+          .get_value("styles", time)
+          .unwrap_or(PropertyValue::Array(vec![]));
         let styles = if let PropertyValue::Array(arr) = styles_prop {
-             arr.iter().filter_map(|v| {
-                 let json_val: serde_json::Value = v.into();
-                 match serde_json::from_value(json_val) {
-                    Ok(s) => Some(s),
-                    Err(e) => {
-                        warn!("Failed to parse style: {}", e);
-                        None
-                    }
-                 }
-             }).collect()
+          arr
+            .iter()
+            .filter_map(|v| {
+              let json_val: serde_json::Value = v.into();
+              match serde_json::from_value(json_val) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                  warn!("Failed to parse style: {}", e);
+                  None
+                }
+              }
+            })
+            .collect()
         } else {
-            vec![]
+          vec![]
         };
 
-        let effects_prop = self.properties.get_value("path_effects", time).unwrap_or(PropertyValue::Array(vec![]));
+        let effects_prop = self
+          .properties
+          .get_value("path_effects", time)
+          .unwrap_or(PropertyValue::Array(vec![]));
         let path_effects = if let PropertyValue::Array(arr) = effects_prop {
-             arr.iter().filter_map(|v| {
-                 let json_val: serde_json::Value = v.into();
-                 match serde_json::from_value(json_val) {
-                    Ok(e) => Some(e),
-                    Err(err) => {
-                        warn!("Failed to parse path effect: {}", err);
-                        None
-                    }
-                 }
-             }).collect()
+          arr
+            .iter()
+            .filter_map(|v| {
+              let json_val: serde_json::Value = v.into();
+              match serde_json::from_value(json_val) {
+                Ok(e) => Some(e),
+                Err(err) => {
+                  warn!("Failed to parse path effect: {}", err);
+                  None
+                }
+              }
+            })
+            .collect()
         } else {
-            vec![]
+          vec![]
         };
 
         Some(FrameEntity::Shape {

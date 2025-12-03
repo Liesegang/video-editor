@@ -1,7 +1,8 @@
-use crate::model::frame::color::Color;
-use crate::model::frame::entity::FrameEntity::{Image, Shape, Text, Video};
-use crate::model::frame::frame::FrameInfo;
 use serde::{Deserialize, Serialize};
+
+use crate::model::frame::color::Color;
+use crate::model::frame::frame::FrameInfo;
+use crate::model::project::entity::Entity;
 
 use super::{
   PositionProperty, Property, ScaleProperty, TimeRange, Track, TrackEntity, TransformProperty,
@@ -22,7 +23,11 @@ impl Project {
   }
 
   pub fn load(json_str: &str) -> Result<Self, serde_json::Error> {
-    serde_json::from_str(json_str)
+    let mut project: Project = serde_json::from_str(json_str)?;
+    for composition in project.compositions.iter_mut() {
+      composition.rebuild_entity_cache();
+    }
+    Ok(project)
   }
 
   pub fn save(&self) -> Result<String, serde_json::Error> {
@@ -30,6 +35,8 @@ impl Project {
   }
 
   pub fn add_composition(&mut self, composition: Composition) {
+    let mut composition = composition;
+    composition.rebuild_entity_cache();
     self.compositions.push(composition);
   }
 }
@@ -45,6 +52,9 @@ pub struct Composition {
   pub color_profile: String,
 
   pub tracks: Vec<Track>,
+
+  #[serde(skip)]
+  cached_entities: Vec<Entity>,
 }
 
 impl Composition {
@@ -63,11 +73,13 @@ impl Composition {
       },
       color_profile: "sRGB".to_string(),
       tracks: Vec::new(),
+      cached_entities: Vec::new(),
     }
   }
 
   pub fn add_track(&mut self, track: Track) {
     self.tracks.push(track);
+    self.rebuild_entity_cache();
   }
 
   pub fn render_frame(&self, time: f64) -> FrameInfo {
@@ -79,78 +91,24 @@ impl Composition {
       objects: Vec::new(),
     };
 
-    for track in self.tracks.iter() {
-      for entity in track.entities.iter() {
-        match entity {
-          TrackEntity::Video {
-            file_path,
-            time_range,
-            transform,
-            zero,
-          } => {
-            if time_range.start <= time && time_range.end >= time {
-              let video = Video {
-                file_path: file_path.clone(),
-                frame_number: (zero + time - time_range.start) as u64,
-                transform: transform.get_value(time),
-              };
-              frame.objects.push(video);
-            }
-          }
-          TrackEntity::Image {
-            file_path,
-            time_range,
-            transform,
-          } => {
-            if time_range.start <= time && time_range.end >= time {
-              let image = Image {
-                file_path: file_path.clone(),
-                transform: transform.get_value(time),
-              };
-              frame.objects.push(image);
-            }
-          }
-          TrackEntity::Text {
-            text,
-            font,
-            size,
-            color,
-            time_range,
-            transform,
-          } => {
-            if time_range.start <= time && time_range.end >= time {
-              let text_entity = Text {
-                text: text.clone(),
-                font: font.clone(),
-                size: size.get_value(time),
-                color: color.clone(),
-                transform: transform.get_value(time),
-              };
-              frame.objects.push(text_entity);
-            }
-          }
-          TrackEntity::Shape {
-            path,
-            styles,
-            path_effects,
-            time_range,
-            transform,
-          } => {
-            if time_range.start <= time && time_range.end >= time {
-              let shape = Shape {
-                path: path.clone(),
-                styles: styles.clone(),
-                path_effects: path_effects.clone(),
-                transform: transform.get_value(time),
-              };
-              frame.objects.push(shape);
-            }
-          }
+    for entity in &self.cached_entities {
+      if entity.start_time <= time && entity.end_time >= time {
+        if let Some(frame_entity) = entity.to_frame_entity(time) {
+          frame.objects.push(frame_entity);
         }
       }
     }
 
     frame
+  }
+
+  pub fn rebuild_entity_cache(&mut self) {
+    self.cached_entities = self
+      .tracks
+      .iter()
+      .flat_map(|track| track.entities.iter())
+      .map(|track_entity| track_entity.into())
+      .collect();
   }
 }
 

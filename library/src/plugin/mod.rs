@@ -1,10 +1,11 @@
-use crate::cache::{CacheManager, SharedCacheManager};
-use crate::loader::image::Image;
-use crate::model::entity::Entity;
-use crate::model::property::PropertyValue;
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
+
+use crate::cache::{CacheManager, SharedCacheManager};
+use crate::loader::image::Image;
+use crate::model::project::entity::Entity;
+use crate::model::project::property::PropertyValue;
 
 mod exporters;
 mod loaders;
