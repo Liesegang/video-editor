@@ -3,6 +3,7 @@ use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, JoinType, PathEffect};
 use crate::model::frame::transform::Transform;
 use crate::rendering::renderer::Renderer;
+use crate::util::timing::ScopedTimer;
 use log::{debug, trace};
 use skia_safe::image::CachingHint;
 use skia_safe::images::raster_from_data;
@@ -104,6 +105,10 @@ impl Renderer for SkiaRenderer {
     video_frame: &Image,
     transform: &Transform,
   ) -> Result<(), Box<dyn Error>> {
+    let _timer = ScopedTimer::debug(format!(
+      "SkiaRenderer::draw_image {}x{}",
+      video_frame.width, video_frame.height
+    ));
     let canvas: &Canvas = self.surface.canvas();
 
     let info = ImageInfo::new(
@@ -140,6 +145,11 @@ impl Renderer for SkiaRenderer {
     color: &Color,
     transform: &Transform,
   ) -> Result<(), Box<dyn Error>> {
+    let _timer = ScopedTimer::debug(format!(
+      "SkiaRenderer::draw_text len={} size={}",
+      text.len(),
+      size
+    ));
     let canvas: &Canvas = self.surface.canvas();
     let font_mgr = FontMgr::default();
     let typeface = font_mgr
@@ -173,9 +183,17 @@ impl Renderer for SkiaRenderer {
     path_effects: &Vec<PathEffect>,
     transform: &Transform,
   ) -> Result<(), Box<dyn Error>> {
+    let _timer = ScopedTimer::debug(format!(
+      "SkiaRenderer::draw_shape_fill effects={}",
+      path_effects.len()
+    ));
     debug!(
       "Drawing shape fill color rgba({}, {}, {}, {}), effects={}",
-      color.r, color.g, color.b, color.a, path_effects.len()
+      color.r,
+      color.g,
+      color.b,
+      color.a,
+      path_effects.len()
     );
     let canvas: &Canvas = self.surface.canvas();
     let matrix = build_transform_matrix(transform);
@@ -209,9 +227,19 @@ impl Renderer for SkiaRenderer {
     miter: f64,
     transform: &Transform,
   ) -> Result<(), Box<dyn Error>> {
+    let _timer = ScopedTimer::debug(format!(
+      "SkiaRenderer::draw_shape_stroke width={} effects={}",
+      width,
+      path_effects.len()
+    ));
     debug!(
       "Drawing shape stroke color rgba({}, {}, {}, {}), width={}, effects={}",
-      color.r, color.g, color.b, color.a, width, path_effects.len()
+      color.r,
+      color.g,
+      color.b,
+      color.a,
+      width,
+      path_effects.len()
     );
     let canvas: &Canvas = self.surface.canvas();
     let matrix = build_transform_matrix(transform);
@@ -247,6 +275,10 @@ impl Renderer for SkiaRenderer {
   }
 
   fn finalize(&mut self) -> Result<Image, Box<dyn Error>> {
+    let _timer = ScopedTimer::debug(format!(
+      "SkiaRenderer::finalize {}x{}",
+      self.width, self.height
+    ));
     let snapshot = self.surface.image_snapshot();
 
     let width = self.width;
@@ -279,6 +311,7 @@ impl Renderer for SkiaRenderer {
   }
 
   fn clear(&mut self) -> Result<(), Box<dyn Error>> {
+    let _timer = ScopedTimer::debug("SkiaRenderer::clear");
     let canvas: &Canvas = self.surface.canvas();
     canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
     Ok(())

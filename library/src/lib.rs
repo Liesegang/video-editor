@@ -4,6 +4,7 @@ mod loader;
 pub mod model;
 pub mod plugin;
 pub mod rendering;
+pub mod util;
 
 use crate::loader::image::Image;
 use crate::model::project::project::Project;

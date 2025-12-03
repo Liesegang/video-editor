@@ -1,11 +1,16 @@
 use crate::loader::image::Image;
 use ffmpeg_next as ffmpeg;
+use lru::LruCache;
 use std::error::Error;
+use std::num::NonZeroUsize;
+
+const DEFAULT_CACHE_SIZE: usize = 16;
 
 pub struct VideoReader {
   input_context: ffmpeg::format::context::Input,
   video_stream_index: usize,
   decoder: ffmpeg::decoder::Video,
+  frame_cache: LruCache<u64, Image>,
 }
 
 impl VideoReader {
@@ -22,14 +27,22 @@ impl VideoReader {
     let context_decoder = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
     let decoder = context_decoder.decoder().video()?;
 
+    let cache_capacity =
+      NonZeroUsize::new(DEFAULT_CACHE_SIZE).expect("DEFAULT_CACHE_SIZE must be > 0");
+
     Ok(Self {
       input_context,
       video_stream_index,
       decoder,
+      frame_cache: LruCache::new(cache_capacity),
     })
   }
 
   pub fn decode_frame(&mut self, frame_number: u64) -> Result<Image, Box<dyn Error>> {
+    if let Some(image) = self.frame_cache.get(&frame_number) {
+      return Ok(image.clone());
+    }
+
     // Seek to the approximate position
     // Note: Seeking in ffmpeg is complex and might not land on the exact frame.
     // For simplicity, we might need to seek and then decode forward, or just decode from start if performance isn't an issue yet.
@@ -138,11 +151,14 @@ impl VideoReader {
       data.extend_from_slice(&plane[start..end]);
     }
 
-    Ok(Image {
+    let image = Image {
       width,
       height,
       data,
-    })
+    };
+
+    self.frame_cache.put(frame_number, image.clone());
+    Ok(image)
   }
 }
 
