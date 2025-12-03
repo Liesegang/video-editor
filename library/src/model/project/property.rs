@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::collections::HashMap;
 
 use crate::animation::EasingFunction;
@@ -121,15 +122,7 @@ pub struct Property {
   #[serde(default = "default_constant_evaluator", rename = "type")]
   pub evaluator: String,
   #[serde(default)]
-  pub value: Option<PropertyValue>,
-  #[serde(default)]
-  pub keyframes: Vec<Keyframe>,
-  #[serde(default)]
-  pub expression: Option<String>,
-  #[serde(default)]
-  pub handler: Option<PropertyHandler>,
-  #[serde(default)]
-  pub metadata: HashMap<String, PropertyValue>,
+  pub properties: HashMap<String, PropertyValue>,
 }
 
 fn default_constant_evaluator() -> String {
@@ -141,28 +134,27 @@ pub struct Keyframe {
   pub time: f64,
   pub value: PropertyValue,
   #[serde(default)]
-  easing: EasingFunction,
-}
-
-impl Keyframe {
-  pub fn easing(&self) -> &EasingFunction {
-    &self.easing
-  }
+  pub easing: EasingFunction,
 }
 
 impl Property {
   pub fn constant(value: PropertyValue) -> Self {
     Self {
       evaluator: "constant".to_string(),
-      value: Some(value),
+      properties: HashMap::from([("value".to_string(), value)]),
       ..Default::default()
     }
   }
 
   pub fn keyframe(keyframes: Vec<Keyframe>) -> Self {
+    let list = keyframes
+      .into_iter()
+      .filter_map(|kf| serde_json::to_value(kf).ok())
+      .map(PropertyValue::from)
+      .collect();
     Self {
       evaluator: "keyframe".to_string(),
-      keyframes,
+      properties: HashMap::from([("keyframes".to_string(), PropertyValue::Array(list))]),
       ..Default::default()
     }
   }
@@ -170,29 +162,34 @@ impl Property {
   pub fn expression(expression: String) -> Self {
     Self {
       evaluator: "expression".to_string(),
-      expression: Some(expression),
+      properties: HashMap::from([("expression".to_string(), PropertyValue::String(expression))]),
       ..Default::default()
     }
   }
 
-  pub fn dynamic(handler: PropertyHandler) -> Self {
-    Self {
-      evaluator: "dynamic".to_string(),
-      handler: Some(handler),
-      ..Default::default()
+  pub fn keyframes(&self) -> Vec<Keyframe> {
+    match self.properties.get("keyframes") {
+      Some(PropertyValue::Array(items)) => items
+        .iter()
+        .filter_map(|item| serde_json::from_value(serde_json::Value::from(item)).ok())
+        .collect(),
+      _ => Vec::new(),
     }
   }
 
-  pub fn keyframes(&self) -> &[Keyframe] {
-    &self.keyframes
+  pub fn value(&self) -> Option<&PropertyValue> {
+    self.properties.get("value")
   }
-}
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PropertyHandler {
-  pub plugin_id: String,
-  pub handler_id: String,
-  pub config: HashMap<String, PropertyValue>,
+  pub fn expression_text(&self) -> Option<&str> {
+    self
+      .properties
+      .get("expression")
+      .and_then(|value| match value {
+        PropertyValue::String(expr) => Some(expr.as_str()),
+        _ => None,
+      })
+  }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -220,7 +217,7 @@ impl PropertyMap {
     self
       .get(key)
       .and_then(|property| match property.evaluator.as_str() {
-        "constant" => property.value.as_ref(),
+        "constant" => property.value(),
         _ => None,
       })
   }

@@ -11,6 +11,8 @@ pub struct Entity {
   pub start_time: f64,
   #[serde(default)]
   pub end_time: f64,
+  #[serde(default)]
+  pub fps: f64,
 
   #[serde(default)]
   pub properties: PropertyMap,
@@ -25,6 +27,7 @@ impl Entity {
       entity_type: entity_type.to_string(),
       start_time: 0.0,
       end_time: 0.0,
+      fps: 0.0,
       properties: PropertyMap::new(),
       custom_data: HashMap::new(),
     }

@@ -17,9 +17,15 @@ pub struct TrackEntity {
   #[serde(rename = "type")]
   pub entity_type: String,
   #[serde(default)]
+  pub start_time: f64,
+  #[serde(default)]
+  pub end_time: f64,
+  #[serde(default = "default_fps")]
+  pub fps: f64,
+  #[serde(default)]
   pub properties: PropertyMap,
 }
 
-pub const START_TIME_KEY: &str = "__start_time";
-pub const END_TIME_KEY: &str = "__end_time";
-pub const FPS_KEY: &str = "__fps";
+const fn default_fps() -> f64 {
+  0.0
+}

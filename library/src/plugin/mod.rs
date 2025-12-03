@@ -127,12 +127,6 @@ impl PluginManager {
   }
 }
 
-// Legacy property handler trait retained for compatibility
-pub trait PropertyHandler: Send + Sync {
-  fn handle(&self, time: f64, params: &HashMap<String, PropertyValue>) -> PropertyValue;
-  fn get_description(&self) -> &str;
-}
-
 pub struct BasicTextEffectFactory;
 
 impl Plugin for BasicTextEffectFactory {

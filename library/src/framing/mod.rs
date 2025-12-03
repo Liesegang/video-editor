@@ -27,7 +27,6 @@ impl PropertyEvaluatorRegistry {
     registry.register("constant", Box::new(ConstantEvaluator));
     registry.register("keyframe", Box::new(KeyframeEvaluator));
     registry.register("expression", Box::new(ExpressionEvaluator));
-    registry.register("dynamic", Box::new(DynamicEvaluator));
     registry
   }
 
@@ -54,14 +53,12 @@ pub trait PropertyEvaluator: Send + Sync {
 struct ConstantEvaluator;
 struct KeyframeEvaluator;
 struct ExpressionEvaluator;
-struct DynamicEvaluator;
-
 impl PropertyEvaluator for ConstantEvaluator {
   fn evaluate(&self, property: &Property, _time: f64, _ctx: &EvaluationContext) -> PropertyValue {
-    property
-      .value
-      .clone()
-      .unwrap_or_else(|| PropertyValue::Number(0.0))
+    property.value().cloned().unwrap_or_else(|| {
+      warn!("Constant evaluator missing 'value'; using 0");
+      PropertyValue::Number(0.0)
+    })
   }
 }
 
@@ -72,14 +69,12 @@ impl PropertyEvaluator for KeyframeEvaluator {
 }
 
 impl PropertyEvaluator for ExpressionEvaluator {
-  fn evaluate(&self, _property: &Property, _time: f64, _ctx: &EvaluationContext) -> PropertyValue {
-    todo!("Expression evaluator not implemented")
-  }
-}
-
-impl PropertyEvaluator for DynamicEvaluator {
-  fn evaluate(&self, _property: &Property, _time: f64, _ctx: &EvaluationContext) -> PropertyValue {
-    todo!("Dynamic evaluator not implemented")
+  fn evaluate(&self, property: &Property, time: f64, _ctx: &EvaluationContext) -> PropertyValue {
+    warn!(
+      "Expression evaluator not implemented for property '{}' at time {}",
+      property.evaluator, time
+    );
+    PropertyValue::Number(0.0)
   }
 }
 
@@ -416,7 +411,7 @@ fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
   let current = keyframes.iter().rev().find(|k| k.time <= time).unwrap();
   let next = keyframes.iter().find(|k| k.time > time).unwrap();
   let t = (time - current.time) / (next.time - current.time);
-  interpolate_property_values(&current.value, &next.value, t, current.easing())
+  interpolate_property_values(&current.value, &next.value, t, &current.easing)
 }
 
 fn interpolate_property_values(
