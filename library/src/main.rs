@@ -46,7 +46,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     plugin_manager.clone(),
   );
 
-  for frame_index in 0..composition.duration as u64 {
+  let total_frames = composition.duration.ceil().max(0.0) as u64;
+
+  for frame_index in 0..total_frames {
     info!("Render frame {}:", frame_index);
     let _frame_scope = ScopedTimer::info(format!("Frame {} total", frame_index));
 
@@ -55,9 +57,10 @@ fn main() -> Result<(), Box<dyn Error>> {
       || render_context.clear(),
     )?;
 
+    let frame_time = frame_index as f64 / composition.fps;
     let frame = measure_debug(
       format!("Frame {}: assemble frame graph", frame_index),
-      || get_frame_from_project(&proj, 0, frame_index as f64),
+      || get_frame_from_project(&proj, 0, frame_time),
     );
 
     let img = measure_info(format!("Frame {}: renderer pass", frame_index), || {
@@ -73,4 +76,3 @@ fn main() -> Result<(), Box<dyn Error>> {
 
   Ok(())
 }
-

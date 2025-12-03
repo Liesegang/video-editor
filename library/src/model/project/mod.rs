@@ -1,5 +1,7 @@
-pub mod project;
+pub mod entity;
 pub mod conversion;
+pub mod project;
+pub mod property;
 
 use crate::model::frame::color::Color;
 use crate::model::frame::transform::{Position, Scale, Transform};
