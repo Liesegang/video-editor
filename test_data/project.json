@@ -21,41 +21,41 @@
             {
               "type": "video",
               "properties": {
-                "__start_time": { "type": "Constant", "value": 0.0 },
-                "__end_time": { "type": "Constant", "value": 1.6666667 },
-                "__fps": { "type": "Constant", "value": 30.0 },
-                "file_path": { "type": "Constant", "value": "test_data/test.mp4" },
+                "__start_time": { "type": "constant", "value": 0.0 },
+                "__end_time": { "type": "constant", "value": 1.6666667 },
+                "__fps": { "type": "constant", "value": 30.0 },
+                "file_path": { "type": "constant", "value": "test_data/test.mp4" },
                 "frame": {
-                  "type": "Keyframe",
+                  "type": "keyframe",
                   "keyframes": [
                     { "time": 0.0, "value": 1000.0, "easing": "Linear" },
                     { "time": 1.6666667, "value": 1050.0, "easing": "Linear" }
                   ]
                 },
                 "position": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": { "x": 0.0, "y": 0.0 }
                 },
                 "scale": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": { "x": 6.0, "y": 6.0 }
                 },
                 "anchor": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": { "x": 0.0, "y": 0.0 }
                 },
-                "rotation": { "type": "Constant", "value": 0.0 }
+                "rotation": { "type": "constant", "value": 0.0 }
               }
             },
             {
               "type": "image",
               "properties": {
-                "__start_time": { "type": "Constant", "value": 0.0 },
-                "__end_time": { "type": "Constant", "value": 1.6666667 },
-                "__fps": { "type": "Constant", "value": 30.0 },
-                "file_path": { "type": "Constant", "value": "test_data/test.png" },
+                "__start_time": { "type": "constant", "value": 0.0 },
+                "__end_time": { "type": "constant", "value": 1.6666667 },
+                "__fps": { "type": "constant", "value": 30.0 },
+                "file_path": { "type": "constant", "value": "test_data/test.png" },
                 "position": {
-                  "type": "Keyframe",
+                  "type": "keyframe",
                   "keyframes": [
                     { "time": 0.0, "value": { "x": 0.0, "y": 0.0 }, "easing": "Linear" },
                     {
@@ -66,31 +66,31 @@
                   ]
                 },
                 "scale": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": { "x": 0.2, "y": 0.2 }
                 },
                 "anchor": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": { "x": 0.0, "y": 0.0 }
                 },
-                "rotation": { "type": "Constant", "value": 0.0 }
+                "rotation": { "type": "constant", "value": 0.0 }
               }
             },
             {
               "type": "text",
               "properties": {
-                "__start_time": { "type": "Constant", "value": 0.0 },
-                "__end_time": { "type": "Constant", "value": 1.6666667 },
-                "__fps": { "type": "Constant", "value": 30.0 },
-                "text": { "type": "Constant", "value": "Hello, world!" },
-                "font": { "type": "Constant", "value": "Arial" },
-                "size": { "type": "Constant", "value": 100.0 },
+                "__start_time": { "type": "constant", "value": 0.0 },
+                "__end_time": { "type": "constant", "value": 1.6666667 },
+                "__fps": { "type": "constant", "value": 30.0 },
+                "text": { "type": "constant", "value": "Hello, world!" },
+                "font": { "type": "constant", "value": "Arial" },
+                "size": { "type": "constant", "value": 100.0 },
                 "color": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": { "r": 255, "g": 255, "b": 0, "a": 255 }
                 },
                 "position": {
-                  "type": "Keyframe",
+                  "type": "keyframe",
                   "keyframes": [
                     { "time": 0.0, "value": { "x": 0.0, "y": 0.0 }, "easing": "Linear" },
                     {
@@ -101,28 +101,28 @@
                   ]
                 },
                 "scale": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": { "x": 1.0, "y": 1.0 }
                 },
                 "anchor": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": { "x": 0.0, "y": 0.0 }
                 },
-                "rotation": { "type": "Constant", "value": 0.0 }
+                "rotation": { "type": "constant", "value": 0.0 }
               }
             },
             {
               "type": "shape",
               "properties": {
-                "__start_time": { "type": "Constant", "value": 0.0 },
-                "__end_time": { "type": "Constant", "value": 1.6666667 },
-                "__fps": { "type": "Constant", "value": 30.0 },
+                "__start_time": { "type": "constant", "value": 0.0 },
+                "__end_time": { "type": "constant", "value": 1.6666667 },
+                "__fps": { "type": "constant", "value": 30.0 },
                 "path": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": "M140 20C73 20 20 74 20 140c0 135 136 170 228 303 88-132 229-173 229-303 0-66-54-120-120-120-48 0-90 28-109 69-19-41-60-69-108-69z"
                 },
                 "path_effects": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": [
                     { "type": "Discrete", "seg_length": 10.0, "deviation": 10.0, "seed": 41413 },
                     {
@@ -133,7 +133,7 @@
                   ]
                 },
                 "styles": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": [
                     {
                       "type": "Fill",
@@ -158,7 +158,7 @@
                   ]
                 },
                 "position": {
-                  "type": "Keyframe",
+                  "type": "keyframe",
                   "keyframes": [
                     { "time": 0.0, "value": { "x": 0.0, "y": 0.0 }, "easing": "Linear" },
                     {
@@ -169,14 +169,14 @@
                   ]
                 },
                 "scale": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": { "x": 1.0, "y": 1.0 }
                 },
                 "anchor": {
-                  "type": "Constant",
+                  "type": "constant",
                   "value": { "x": 0.0, "y": 0.0 }
                 },
-                "rotation": { "type": "Constant", "value": 0.0 }
+                "rotation": { "type": "constant", "value": 0.0 }
               }
             }
           ]

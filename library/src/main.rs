@@ -1,4 +1,4 @@
-use library::framing::get_frame_from_project;
+use library::framing::{PropertyEvaluatorRegistry, get_frame_from_project};
 use library::load_project;
 use library::plugin::{ExportFormat, load_plugins};
 use library::rendering::RenderContext;
@@ -8,6 +8,7 @@ use log::{error, info};
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn Error>> {
   env_logger::init();
@@ -37,6 +38,7 @@ fn main() -> Result<(), Box<dyn Error>> {
   let composition = proj.compositions.get(0).unwrap();
 
   let plugin_manager = load_plugins();
+  let property_evaluators = Arc::new(PropertyEvaluatorRegistry::default());
   let mut render_context = RenderContext::new(
     SkiaRenderer::new(
       composition.width as u32,
@@ -44,6 +46,7 @@ fn main() -> Result<(), Box<dyn Error>> {
       composition.background_color.clone(),
     ),
     plugin_manager.clone(),
+    Arc::clone(&property_evaluators),
   );
 
   let total_frames = composition.duration.ceil().max(0.0) as u64;
@@ -60,7 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let frame_time = frame_index as f64 / composition.fps;
     let frame = measure_debug(
       format!("Frame {}: assemble frame graph", frame_index),
-      || get_frame_from_project(&proj, 0, frame_time),
+      || get_frame_from_project(&proj, 0, frame_time, &property_evaluators),
     );
 
     let img = measure_info(format!("Frame {}: renderer pass", frame_index), || {

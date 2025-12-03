@@ -92,10 +92,16 @@ impl From<serde_json::Value> for PropertyValue {
 impl From<&PropertyValue> for serde_json::Value {
   fn from(value: &PropertyValue) -> Self {
     match value {
-      PropertyValue::Number(n) => serde_json::Value::Number(
-        serde_json::Number::from_f64(*n)
-          .unwrap_or_else(|| serde_json::Number::from_f64(0.0).unwrap()),
-      ),
+      PropertyValue::Number(n) => {
+        if n.fract().abs() < f64::EPSILON && n.abs() <= (i64::MAX as f64) {
+          serde_json::Value::Number(serde_json::Number::from(*n as i64))
+        } else {
+          serde_json::Value::Number(
+            serde_json::Number::from_f64(*n)
+              .unwrap_or_else(|| serde_json::Number::from_f64(0.0).unwrap()),
+          )
+        }
+      }
       PropertyValue::Integer(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
       PropertyValue::String(s) => serde_json::Value::String(s.clone()),
       PropertyValue::Boolean(b) => serde_json::Value::Bool(*b),
@@ -110,20 +116,24 @@ impl From<&PropertyValue> for serde_json::Value {
   }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type")]
-pub enum Property {
-  Constant { value: PropertyValue },
-  Keyframe { keyframes: Vec<Keyframe> },
-  Expression { expression: String },
-  Dynamic { handler: PropertyHandler },
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct Property {
+  #[serde(default = "default_constant_evaluator", rename = "type")]
+  pub evaluator: String,
+  #[serde(default)]
+  pub value: Option<PropertyValue>,
+  #[serde(default)]
+  pub keyframes: Vec<Keyframe>,
+  #[serde(default)]
+  pub expression: Option<String>,
+  #[serde(default)]
+  pub handler: Option<PropertyHandler>,
+  #[serde(default)]
+  pub metadata: HashMap<String, PropertyValue>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PropertyHandler {
-  pub plugin_id: String,
-  pub handler_id: String,
-  pub config: HashMap<String, PropertyValue>,
+fn default_constant_evaluator() -> String {
+  "constant".to_string()
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -131,110 +141,58 @@ pub struct Keyframe {
   pub time: f64,
   pub value: PropertyValue,
   #[serde(default)]
-  pub easing: EasingFunction,
+  easing: EasingFunction,
+}
+
+impl Keyframe {
+  pub fn easing(&self) -> &EasingFunction {
+    &self.easing
+  }
 }
 
 impl Property {
-  pub fn get_value(&self, time: f64) -> PropertyValue {
-    match self {
-      Property::Constant { value } => value.clone(),
-      Property::Keyframe { keyframes } => {
-        if keyframes.is_empty() {
-          return PropertyValue::Number(0.0);
-        } else if time <= keyframes[0].time {
-          return keyframes[0].value.clone();
-        } else if time >= keyframes.last().unwrap().time {
-          return keyframes.last().unwrap().value.clone();
-        }
-
-        let keyframe = keyframes.iter().rev().find(|k| k.time <= time).unwrap();
-        let next_keyframe = keyframes.iter().find(|k| k.time > time).unwrap();
-
-        interpolate_values(
-          &keyframe.value,
-          &next_keyframe.value,
-          (time - keyframe.time) / (next_keyframe.time - keyframe.time),
-          &keyframe.easing,
-        )
-      }
-      Property::Expression { expression: _ } => {
-        todo!()
-      }
-      Property::Dynamic { handler: _ } => {
-        todo!()
-      }
+  pub fn constant(value: PropertyValue) -> Self {
+    Self {
+      evaluator: "constant".to_string(),
+      value: Some(value),
+      ..Default::default()
     }
+  }
+
+  pub fn keyframe(keyframes: Vec<Keyframe>) -> Self {
+    Self {
+      evaluator: "keyframe".to_string(),
+      keyframes,
+      ..Default::default()
+    }
+  }
+
+  pub fn expression(expression: String) -> Self {
+    Self {
+      evaluator: "expression".to_string(),
+      expression: Some(expression),
+      ..Default::default()
+    }
+  }
+
+  pub fn dynamic(handler: PropertyHandler) -> Self {
+    Self {
+      evaluator: "dynamic".to_string(),
+      handler: Some(handler),
+      ..Default::default()
+    }
+  }
+
+  pub fn keyframes(&self) -> &[Keyframe] {
+    &self.keyframes
   }
 }
 
-fn interpolate_values(
-  start: &PropertyValue,
-  end: &PropertyValue,
-  t: f64,
-  easing: &EasingFunction,
-) -> PropertyValue {
-  let t = easing.apply(t);
-
-  match (start, end) {
-    (PropertyValue::Number(s), PropertyValue::Number(e)) => PropertyValue::Number(s + (e - s) * t),
-    (PropertyValue::Integer(s), PropertyValue::Integer(e)) => {
-      PropertyValue::Number(*s as f64 + (*e as f64 - *s as f64) * t)
-    }
-    (PropertyValue::Vec2 { x: sx, y: sy }, PropertyValue::Vec2 { x: ex, y: ey }) => {
-      PropertyValue::Vec2 {
-        x: sx + (ex - sx) * t,
-        y: sy + (ey - sy) * t,
-      }
-    }
-    (
-      PropertyValue::Vec3 {
-        x: sx,
-        y: sy,
-        z: sz,
-      },
-      PropertyValue::Vec3 {
-        x: ex,
-        y: ey,
-        z: ez,
-      },
-    ) => PropertyValue::Vec3 {
-      x: sx + (ex - sx) * t,
-      y: sy + (ey - sy) * t,
-      z: sz + (ez - sz) * t,
-    },
-    (
-      PropertyValue::Color {
-        r: sr,
-        g: sg,
-        b: sb,
-        a: sa,
-      },
-      PropertyValue::Color {
-        r: er,
-        g: eg,
-        b: eb,
-        a: ea,
-      },
-    ) => PropertyValue::Color {
-      r: (sr + ((er - sr) as f64 * t) as u8),
-      g: (sg + ((eg - sg) as f64 * t) as u8),
-      b: (sb + ((eb - sb) as f64 * t) as u8),
-      a: (sa + ((ea - sa) as f64 * t) as u8),
-    },
-    (PropertyValue::Array(s), PropertyValue::Array(e)) => PropertyValue::Array(
-      s.iter()
-        .zip(e.iter())
-        .map(|(s, e)| interpolate_values(s, e, t, easing))
-        .collect(),
-    ),
-    (PropertyValue::Map(s), PropertyValue::Map(e)) => PropertyValue::Map(
-      s.iter()
-        .zip(e.iter())
-        .map(|((k, sv), (_, ev))| (k.clone(), interpolate_values(sv, ev, t, easing)))
-        .collect(),
-    ),
-    _ => start.clone(),
-  }
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PropertyHandler {
+  pub plugin_id: String,
+  pub handler_id: String,
+  pub config: HashMap<String, PropertyValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -258,55 +216,19 @@ impl PropertyMap {
     self.properties.insert(key, property);
   }
 
-  pub fn get_value(&self, key: &str, time: f64) -> Option<PropertyValue> {
-    self.properties.get(key).map(|prop| prop.get_value(time))
+  pub fn get_constant_value(&self, key: &str) -> Option<&PropertyValue> {
+    self
+      .get(key)
+      .and_then(|property| match property.evaluator.as_str() {
+        "constant" => property.value.as_ref(),
+        _ => None,
+      })
   }
 
-  pub fn get_number(&self, key: &str, time: f64, default: f64) -> f64 {
-    match self.get_value(key, time) {
-      Some(PropertyValue::Number(val)) => val,
-      Some(PropertyValue::Integer(val)) => val as f64,
-      _ => default,
-    }
-  }
-
-  pub fn get_vec2(&self, key: &str, time: f64, default_x: f64, default_y: f64) -> (f64, f64) {
-    match self.get_value(key, time) {
-      Some(PropertyValue::Vec2 { x, y }) => (x, y),
-      _ => (default_x, default_y),
-    }
-  }
-
-  pub fn get_color(
-    &self,
-    key: &str,
-    time: f64,
-    default_r: u8,
-    default_g: u8,
-    default_b: u8,
-    default_a: u8,
-  ) -> (u8, u8, u8, u8) {
-    match self.get_value(key, time) {
-      Some(PropertyValue::Color { r, g, b, a }) => (r, g, b, a),
-      _ => (default_r, default_g, default_b, default_a),
-    }
-  }
-
-  pub fn get_array(&self, key: &str, time: f64, default: Vec<PropertyValue>) -> Vec<PropertyValue> {
-    match self.get_value(key, time) {
-      Some(PropertyValue::Array(val)) => val,
-      _ => default,
-    }
-  }
-
-  pub fn get_map(
-    &self,
-    key: &str,
-    time: f64,
-    default: HashMap<String, PropertyValue>,
-  ) -> HashMap<String, PropertyValue> {
-    match self.get_value(key, time) {
-      Some(PropertyValue::Map(val)) => val,
+  pub fn get_constant_number(&self, key: &str, default: f64) -> f64 {
+    match self.get_constant_value(key) {
+      Some(PropertyValue::Number(val)) => *val,
+      Some(PropertyValue::Integer(val)) => *val as f64,
       _ => default,
     }
   }
