@@ -1,6 +1,7 @@
 pub mod renderer;
 pub mod skia_renderer;
 
+use crate::framing::PropertyEvaluatorRegistry;
 use crate::loader::image::Image;
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::{FrameEntity, FrameObject};
@@ -14,13 +15,19 @@ use std::sync::Arc;
 pub struct RenderContext<T: Renderer> {
   pub renderer: T,
   plugin_manager: Arc<PluginManager>,
+  property_evaluators: Arc<PropertyEvaluatorRegistry>,
 }
 
 impl<T: Renderer> RenderContext<T> {
-  pub fn new(renderer: T, plugin_manager: Arc<PluginManager>) -> Self {
+  pub fn new(
+    renderer: T,
+    plugin_manager: Arc<PluginManager>,
+    property_evaluators: Arc<PropertyEvaluatorRegistry>,
+  ) -> Self {
     RenderContext {
       renderer,
       plugin_manager,
+      property_evaluators,
     }
   }
 
@@ -144,5 +151,9 @@ impl<T: Renderer> RenderContext<T> {
 
   pub fn clear(&mut self) -> Result<(), Box<dyn Error>> {
     measure_debug("RenderContext::clear", || self.renderer.clear())
+  }
+
+  pub fn property_evaluators(&self) -> Arc<PropertyEvaluatorRegistry> {
+    Arc::clone(&self.property_evaluators)
   }
 }
