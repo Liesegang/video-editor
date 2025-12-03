@@ -12,7 +12,6 @@ skia-safe = { version = "0.82.0", features = ["gpu", "vulkan"] }
 log = "0.4.29"
 env_logger = "0.11.8"
 lru = "0.12.3"
-once_cell = "1.19.0"
 #opencv = "0.94.2"
 
 [profile.release]

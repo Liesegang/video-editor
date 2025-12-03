@@ -1,69 +1,153 @@
+use crate::cache::{CacheManager, SharedCacheManager};
+use crate::loader::image::Image;
 use crate::model::entity::Entity;
 use crate::model::property::PropertyValue;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::error::Error;
+use std::sync::Arc;
 
-pub trait EntityFactory: Send + Sync {
+mod exporters;
+mod loaders;
+
+use exporters::PngExportPlugin;
+use loaders::{FfmpegVideoLoader, NativeImageLoader};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginCategory {
+  Effect,
+  Load,
+  Export,
+}
+
+pub trait Plugin: Send + Sync {
+  fn id(&self) -> &'static str;
+  fn category(&self) -> PluginCategory;
+}
+
+pub trait EffectPlugin: Plugin {
   fn create(&self, params: HashMap<String, PropertyValue>) -> Entity;
 }
 
-pub trait PluginSystem {
-  fn register_entity_type(&mut self, entity_type: &str, factory: Box<dyn EntityFactory>);
-  fn create_entity(
+#[derive(Debug, Clone)]
+pub enum LoadRequest {
+  Image { path: String },
+  VideoFrame { path: String, frame_number: u64 },
+}
+
+pub enum LoadResponse {
+  Image(Image),
+}
+
+pub trait LoadPlugin: Plugin {
+  fn supports(&self, request: &LoadRequest) -> bool;
+  fn load(
     &self,
-    entity_type: &str,
-    params: HashMap<String, PropertyValue>,
-  ) -> Option<Entity>;
+    request: &LoadRequest,
+    cache: &CacheManager,
+  ) -> Result<LoadResponse, Box<dyn Error>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+  Png,
+}
+
+pub trait ExportPlugin: Plugin {
+  fn supports(&self, format: ExportFormat) -> bool;
+  fn export_image(
+    &self,
+    format: ExportFormat,
+    path: &str,
+    image: &Image,
+  ) -> Result<(), Box<dyn Error>>;
 }
 
 pub struct PluginManager {
-  entity_factories: HashMap<String, Box<dyn EntityFactory>>,
-  property_handlers: HashMap<String, Box<dyn PropertyHandler>>,
+  effect_plugins: HashMap<String, Box<dyn EffectPlugin>>,
+  load_plugins: Vec<Box<dyn LoadPlugin>>,
+  export_plugins: Vec<Box<dyn ExportPlugin>>,
+  cache_manager: SharedCacheManager,
 }
 
 impl PluginManager {
   pub fn new() -> Self {
     Self {
-      entity_factories: HashMap::new(),
-      property_handlers: HashMap::new(),
+      effect_plugins: HashMap::new(),
+      load_plugins: Vec::new(),
+      export_plugins: Vec::new(),
+      cache_manager: Arc::new(CacheManager::new()),
     }
   }
-}
 
-impl PluginSystem for PluginManager {
-  fn register_entity_type(&mut self, entity_type: &str, factory: Box<dyn EntityFactory>) {
+  pub fn cache_manager(&self) -> SharedCacheManager {
+    Arc::clone(&self.cache_manager)
+  }
+
+  pub fn register_effect(&mut self, key: &str, plugin: Box<dyn EffectPlugin>) {
+    self.effect_plugins.insert(key.to_string(), plugin);
+  }
+
+  pub fn register_load_plugin(&mut self, plugin: Box<dyn LoadPlugin>) {
+    self.load_plugins.push(plugin);
+  }
+
+  pub fn register_export_plugin(&mut self, plugin: Box<dyn ExportPlugin>) {
+    self.export_plugins.push(plugin);
+  }
+
+  pub fn create_entity(&self, key: &str, params: HashMap<String, PropertyValue>) -> Option<Entity> {
     self
-      .entity_factories
-      .insert(entity_type.to_string(), factory);
+      .effect_plugins
+      .get(key)
+      .map(|plugin| plugin.create(params))
   }
 
-  fn create_entity(
-    &self,
-    entity_type: &str,
-    params: HashMap<String, PropertyValue>,
-  ) -> Option<Entity> {
-    if let Some(factory) = self.entity_factories.get(entity_type) {
-      Some(factory.create(params))
-    } else {
-      None
+  pub fn load_resource(&self, request: &LoadRequest) -> Result<LoadResponse, Box<dyn Error>> {
+    for plugin in &self.load_plugins {
+      if plugin.supports(request) {
+        return plugin.load(request, &self.cache_manager);
+      }
     }
+    Err(format!("No load plugin registered for request {:?}", request).into())
+  }
+
+  pub fn export_image(
+    &self,
+    format: ExportFormat,
+    path: &str,
+    image: &Image,
+  ) -> Result<(), Box<dyn Error>> {
+    for plugin in &self.export_plugins {
+      if plugin.supports(format) {
+        return plugin.export_image(format, path, image);
+      }
+    }
+    Err("No export plugin registered for requested format".into())
   }
 }
 
-// カスタムプロパティハンドラのためのトレイト
+// Legacy property handler trait retained for compatibility
 pub trait PropertyHandler: Send + Sync {
   fn handle(&self, time: f64, params: &HashMap<String, PropertyValue>) -> PropertyValue;
   fn get_description(&self) -> &str;
 }
 
-// 簡単なプラグイン例
 pub struct BasicTextEffectFactory;
 
-impl EntityFactory for BasicTextEffectFactory {
+impl Plugin for BasicTextEffectFactory {
+  fn id(&self) -> &'static str {
+    "basic_text_effect"
+  }
+
+  fn category(&self) -> PluginCategory {
+    PluginCategory::Effect
+  }
+}
+
+impl EffectPlugin for BasicTextEffectFactory {
   fn create(&self, params: HashMap<String, PropertyValue>) -> Entity {
     let mut text_entity = Entity::new("text");
 
-    // パラメータから必要な情報を抽出
     if let Some(PropertyValue::String(text)) = params.get("text") {
       text_entity.set_constant_property("text", PropertyValue::String(text.clone()));
     }
@@ -76,7 +160,6 @@ impl EntityFactory for BasicTextEffectFactory {
       text_entity.end_time = *end;
     }
 
-    // デフォルトのスタイル設定
     text_entity.set_constant_property("size", PropertyValue::Number(24.0));
     text_entity.set_constant_property("font", PropertyValue::String("Arial".to_string()));
 
@@ -84,17 +167,11 @@ impl EntityFactory for BasicTextEffectFactory {
   }
 }
 
-// プラグインの読み込みと登録
-pub fn load_plugins() -> Arc<Mutex<PluginManager>> {
-  let manager = Arc::new(Mutex::new(PluginManager::new()));
-
-  // 基本的なプラグインを登録
-  {
-    let mut lock = manager.lock().unwrap();
-    lock.register_entity_type("basic_text", Box::new(BasicTextEffectFactory));
-  }
-
-  // 将来的には外部プラグインの動的読み込みをここに実装
-
-  manager
+pub fn load_plugins() -> Arc<PluginManager> {
+  let mut manager = PluginManager::new();
+  manager.register_effect("basic_text", Box::new(BasicTextEffectFactory));
+  manager.register_load_plugin(Box::new(NativeImageLoader::new()));
+  manager.register_load_plugin(Box::new(FfmpegVideoLoader::new()));
+  manager.register_export_plugin(Box::new(PngExportPlugin::new()));
+  Arc::new(manager)
 }

@@ -1,7 +1,6 @@
-use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use image::{ExtendedColorType, ImageEncoder};
 use library::framing::get_frame_from_project;
 use library::load_project;
+use library::plugin::{ExportFormat, load_plugins};
 use library::rendering::RenderContext;
 use library::rendering::skia_renderer::SkiaRenderer;
 use library::util::timing::{ScopedTimer, measure_debug, measure_info};
@@ -9,7 +8,6 @@ use log::{error, info};
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::io::BufWriter;
 
 fn main() -> Result<(), Box<dyn Error>> {
   env_logger::init();
@@ -38,11 +36,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
   let composition = proj.compositions.get(0).unwrap();
 
-  let mut render_context = RenderContext::new(SkiaRenderer::new(
-    composition.width as u32,
-    composition.height as u32,
-    composition.background_color.clone(),
-  ));
+  let plugin_manager = load_plugins();
+  let mut render_context = RenderContext::new(
+    SkiaRenderer::new(
+      composition.width as u32,
+      composition.height as u32,
+      composition.background_color.clone(),
+    ),
+    plugin_manager.clone(),
+  );
 
   for frame_index in 0..composition.duration as u64 {
     info!("Render frame {}:", frame_index);
@@ -64,7 +66,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let output_path = format!("./rendered/{}_{:03}.png", composition.name, frame_index);
     measure_info(format!("Frame {}: save image", frame_index), || {
-      save_frame_png(&output_path, &img.data, img.width, img.height)
+      plugin_manager.export_image(ExportFormat::Png, &output_path, &img)
     })?;
   }
   info!("All frames rendered.");
@@ -72,14 +74,3 @@ fn main() -> Result<(), Box<dyn Error>> {
   Ok(())
 }
 
-fn save_frame_png(
-  path: &str,
-  data: &[u8],
-  width: u32,
-  height: u32,
-) -> Result<(), image::ImageError> {
-  let file = std::fs::File::create(path)?;
-  let writer = BufWriter::new(file);
-  let encoder = PngEncoder::new_with_quality(writer, CompressionType::Fast, FilterType::NoFilter);
-  encoder.write_image(data, width, height, ExtendedColorType::Rgba8)
-}
