@@ -2,7 +2,7 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::model::frame::entity::FrameEntity;
+use crate::model::frame::entity::{FrameEntity, FrameObject};
 use crate::model::frame::transform::Transform;
 use crate::model::project::property::{Property, PropertyMap, PropertyValue};
 
@@ -33,12 +33,18 @@ impl Entity {
     }
   }
 
-  pub fn to_frame_entity(&self, time: f64) -> Option<FrameEntity> {
+  pub fn to_frame_object(&self, time: f64) -> Option<FrameObject> {
     match self.entity_type.as_str() {
       "video" => {
         let file_path = match self.properties.get_value("file_path", time) {
           Some(PropertyValue::String(path)) => path,
-          _ => return None,
+          other => {
+            warn!(
+              "Entity[video]: invalid or missing 'file_path' ({:?}); skipping",
+              other
+            );
+            return None;
+          }
         };
 
         let frame_number = self.properties.get_number("frame", time, 0.0) as u64;
@@ -60,16 +66,25 @@ impl Entity {
           rotation,
         };
 
-        Some(FrameEntity::Video {
-          file_path,
-          frame_number,
-          transform,
+        Some(FrameObject {
+          entity: FrameEntity::Video {
+            file_path,
+            frame_number,
+            transform,
+          },
+          properties: self.properties.clone(),
         })
       }
       "image" => {
         let file_path = match self.properties.get_value("file_path", time) {
           Some(PropertyValue::String(path)) => path,
-          _ => return None,
+          other => {
+            warn!(
+              "Entity[image]: invalid or missing 'file_path' ({:?}); skipping",
+              other
+            );
+            return None;
+          }
         };
 
         let (pos_x, pos_y) = self.properties.get_vec2("position", time, 0.0, 0.0);
@@ -90,15 +105,24 @@ impl Entity {
           rotation,
         };
 
-        Some(FrameEntity::Image {
-          file_path,
-          transform,
+        Some(FrameObject {
+          entity: FrameEntity::Image {
+            file_path,
+            transform,
+          },
+          properties: self.properties.clone(),
         })
       }
       "text" => {
         let text = match self.properties.get_value("text", time) {
           Some(PropertyValue::String(text)) => text,
-          _ => return None,
+          other => {
+            warn!(
+              "Entity[text]: invalid or missing 'text' ({:?}); skipping",
+              other
+            );
+            return None;
+          }
         };
 
         let font = match self.properties.get_value("font", time) {
@@ -138,18 +162,27 @@ impl Entity {
           rotation,
         };
 
-        Some(FrameEntity::Text {
-          text,
-          font,
-          size,
-          color,
-          transform,
+        Some(FrameObject {
+          entity: FrameEntity::Text {
+            text,
+            font,
+            size,
+            color,
+            transform,
+          },
+          properties: self.properties.clone(),
         })
       }
       "shape" => {
         let path = match self.properties.get_value("path", time) {
           Some(PropertyValue::String(path)) => path,
-          _ => return None,
+          other => {
+            warn!(
+              "Entity[shape]: invalid or missing 'path' ({:?}); skipping",
+              other
+            );
+            return None;
+          }
         };
 
         let (pos_x, pos_y) = self.properties.get_vec2("position", time, 0.0, 0.0);
@@ -214,14 +247,20 @@ impl Entity {
           vec![]
         };
 
-        Some(FrameEntity::Shape {
-          path,
-          transform,
-          styles,
-          path_effects,
+        Some(FrameObject {
+          entity: FrameEntity::Shape {
+            path,
+            transform,
+            styles,
+            path_effects,
+          },
+          properties: self.properties.clone(),
         })
       }
-      _ => None,
+      other => {
+        warn!("Entity type '{}' is not supported; skipping", other);
+        None
+      }
     }
   }
 

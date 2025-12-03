@@ -3,7 +3,7 @@ pub mod skia_renderer;
 
 use crate::loader::image::Image;
 use crate::model::frame::draw_type::DrawStyle;
-use crate::model::frame::entity::FrameEntity;
+use crate::model::frame::entity::{FrameEntity, FrameObject};
 use crate::model::frame::frame::FrameInfo;
 use crate::plugin::{LoadRequest, LoadResponse, PluginManager};
 use crate::rendering::renderer::Renderer;
@@ -31,8 +31,12 @@ impl<T: Renderer> RenderContext<T> {
       object_count
     ));
 
-    for object in frame_info.objects {
-      match object {
+    for frame_object in frame_info.objects {
+      let FrameObject {
+        entity,
+        properties: _properties,
+      } = frame_object;
+      match entity {
         FrameEntity::Video {
           file_path,
           frame_number,

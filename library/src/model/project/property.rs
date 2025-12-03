@@ -238,6 +238,7 @@ fn interpolate_values(
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(transparent)]
 pub struct PropertyMap {
   properties: HashMap<String, Property>,
 }

@@ -1,12 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::frame::color::Color;
-use crate::model::frame::frame::FrameInfo;
 use crate::model::project::entity::Entity;
 
-use super::{
-  PositionProperty, Property, ScaleProperty, TimeRange, Track, TrackEntity, TransformProperty,
-};
+use super::Track;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Project {
@@ -82,24 +79,8 @@ impl Composition {
     self.rebuild_entity_cache();
   }
 
-  pub fn render_frame(&self, time: f64) -> FrameInfo {
-    let mut frame = FrameInfo {
-      width: self.width,
-      height: self.height,
-      background_color: self.background_color.clone(),
-      color_profile: self.color_profile.clone(),
-      objects: Vec::new(),
-    };
-
-    for entity in &self.cached_entities {
-      if entity.start_time <= time && entity.end_time >= time {
-        if let Some(frame_entity) = entity.to_frame_entity(time) {
-          frame.objects.push(frame_entity);
-        }
-      }
-    }
-
-    frame
+  pub(crate) fn cached_entities(&self) -> &[Entity] {
+    &self.cached_entities
   }
 
   pub fn rebuild_entity_cache(&mut self) {
@@ -109,79 +90,5 @@ impl Composition {
       .flat_map(|track| track.entities.iter())
       .map(|track_entity| track_entity.into())
       .collect();
-  }
-}
-
-impl Project {
-  pub fn create_sample() -> Self {
-    let mut project = Project::new("サンプルプロジェクト");
-
-    let mut composition = Composition::new("メイン", 1920, 1080, 30.0, 10.0);
-
-    let text_entity = TrackEntity::Text {
-      text: "サンプルテキスト".to_string(),
-      font: "sans-serif".to_string(),
-      size: Property::Constant { value: 48.0 },
-      color: Color {
-        r: 255,
-        g: 255,
-        b: 255,
-        a: 255,
-      },
-      time_range: TimeRange {
-        start: 0.0,
-        end: 5.0,
-        fps: 30.0,
-      },
-      transform: TransformProperty {
-        position: PositionProperty {
-          x: Property::Constant { value: 960.0 },
-          y: Property::Constant { value: 540.0 },
-        },
-        scale: ScaleProperty {
-          x: Property::Constant { value: 1.0 },
-          y: Property::Constant { value: 1.0 },
-        },
-        anchor: PositionProperty {
-          x: Property::Constant { value: 0.0 },
-          y: Property::Constant { value: 0.0 },
-        },
-        rotation: Property::Constant { value: 0.0 },
-      },
-    };
-
-    let image_entity = TrackEntity::Image {
-      file_path: "sample.png".to_string(),
-      time_range: TimeRange {
-        start: 1.0,
-        end: 8.0,
-        fps: 30.0,
-      },
-      transform: TransformProperty {
-        position: PositionProperty {
-          x: Property::Constant { value: 960.0 },
-          y: Property::Constant { value: 540.0 },
-        },
-        scale: ScaleProperty {
-          x: Property::Constant { value: 1.0 },
-          y: Property::Constant { value: 1.0 },
-        },
-        anchor: PositionProperty {
-          x: Property::Constant { value: 0.0 },
-          y: Property::Constant { value: 0.0 },
-        },
-        rotation: Property::Constant { value: 0.0 },
-      },
-    };
-
-    let track = Track {
-      name: "トラック 1".to_string(),
-      entities: vec![text_entity, image_entity],
-    };
-
-    composition.add_track(track);
-
-    project.add_composition(composition);
-    project
   }
 }
