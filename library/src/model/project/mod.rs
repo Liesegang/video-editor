@@ -1,32 +1,11 @@
+pub mod project;
+pub mod conversion;
+
 use crate::model::frame::color::Color;
 use crate::model::frame::transform::{Position, Scale, Transform};
 use serde::{Deserialize, Serialize};
 
 use super::frame::draw_type::{DrawStyle, PathEffect};
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Project {
-  pub name: String,
-  pub compositions: Vec<Composition>,
-}
-
-impl Project {
-  pub fn load(json_str: &str) -> Result<Project, serde_json::Error> {
-    serde_json::from_str(json_str)
-  }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Composition {
-  pub name: String,
-  pub width: u64,
-  pub height: u64,
-  pub fps: f64,
-  pub duration: u64,
-  pub background_color: Color,
-  pub color_profile: String,
-  pub tracks: Vec<Track>,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Track {
@@ -80,7 +59,7 @@ impl<
   }
 }
 
-fn eval<T>(expression: &str) -> T {
+fn eval<T>(_expression: &str) -> T {
   unimplemented!()
 }
 

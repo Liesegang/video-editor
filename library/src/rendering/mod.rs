@@ -3,20 +3,25 @@ pub mod skia_renderer;
 
 use crate::loader::image::Image;
 use crate::loader::image::load_image;
-use crate::loader::video;
+use crate::loader::video::VideoReader;
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::FrameEntity;
 use crate::model::frame::frame::FrameInfo;
 use crate::rendering::renderer::Renderer;
+use std::collections::HashMap;
 use std::error::Error;
 
 pub struct RenderContext<T: Renderer> {
   pub renderer: T,
+  video_readers: HashMap<String, VideoReader>,
 }
 
 impl<T: Renderer> RenderContext<T> {
   pub fn new(renderer: T) -> Self {
-    RenderContext { renderer }
+    RenderContext {
+      renderer,
+      video_readers: HashMap::new(),
+    }
   }
 
   pub fn render_frame(&mut self, frame_info: FrameInfo) -> Result<Image, Box<dyn Error>> {
@@ -27,7 +32,11 @@ impl<T: Renderer> RenderContext<T> {
           frame_number,
           transform,
         } => {
-          let video_frame = video::decode_video_frame(&file_path, frame_number)?;
+          let reader = self
+            .video_readers
+            .entry(file_path.clone())
+            .or_insert_with(|| VideoReader::new(&file_path).unwrap());
+          let video_frame = reader.decode_frame(frame_number)?;
           self.renderer.draw_image(&video_frame, &transform)?;
         }
         FrameEntity::Image {

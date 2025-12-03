@@ -5,6 +5,7 @@ use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use library::load_project;
 use qobject::TrackRoles;
+use log::{debug, error, info};
 
 #[cxx_qt::bridge]
 mod qobject {
@@ -80,7 +81,7 @@ impl Default for TrackListRust {
 use qobject::*;
 
 impl qobject::TrackList {
-  fn row_count(&self, parent: &QModelIndex) -> i32 {
+  fn row_count(&self, _parent: &QModelIndex) -> i32 {
     self.tracks.len() as i32
   }
 
@@ -108,27 +109,30 @@ impl qobject::TrackList {
   fn load_tracks(mut self: Pin<&mut Self>) {
     let file = File::open("project.json");
     if let Err(e) = file {
-      println!("Error opening file: {}", e);
+      error!("Error opening file: {}", e);
       return;
     }
     let mut file = file.unwrap();
 
     let mut project_string = String::new();
     if let Err(e) = file.read_to_string(&mut project_string) {
-      println!("Error reading file: {}", e);
+      error!("Error reading file: {}", e);
       return;
     }
 
     let project = load_project(&project_string);
     if let Err(e) = project {
-      println!("Error loading project: {}", e);
+      error!("Error loading project: {}", e);
       return;
     }
     let project = project.unwrap();
 
     let tracks = project.compositions[0].tracks.clone();
     self.as_mut().begin_reset_model();
-    self.as_mut().rust_mut().tracks = tracks.into_iter().map(|track| (track.name.into(), 30)).collect();
+    let new_tracks: Vec<(QString, u32)> = tracks.into_iter().map(|track| (track.name.into(), 30)).collect();
+    info!("Loaded {} tracks from project.json", new_tracks.len());
+    self.as_mut().rust_mut().tracks = new_tracks;
     self.as_mut().end_reset_model();
+    debug!("Track list model reset complete");
   }
 }

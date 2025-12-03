@@ -2,70 +2,130 @@ use crate::loader::image::Image;
 use ffmpeg_next as ffmpeg;
 use std::error::Error;
 
-pub fn decode_video_frame(file_path: &str, frame_number: u64) -> Result<Image, Box<dyn Error>> {
-    // ffmpeg を初期化
+pub struct VideoReader {
+  input_context: ffmpeg::format::context::Input,
+  video_stream_index: usize,
+  decoder: ffmpeg::decoder::Video,
+}
+
+impl VideoReader {
+  pub fn new(file_path: &str) -> Result<Self, Box<dyn Error>> {
     ffmpeg::init()?;
 
-    // 動画ファイルをオープン
-    let mut ictx = ffmpeg::format::input(&file_path)?;
-
-    // 最適な動画ストリームを取得
-    let input = ictx
-        .streams()
-        .best(ffmpeg::media::Type::Video)
-        .ok_or("動画ストリームが見つかりません")?;
+    let input_context = ffmpeg::format::input(&file_path)?;
+    let input = input_context
+      .streams()
+      .best(ffmpeg::media::Type::Video)
+      .ok_or("動画ストリームが見つかりません")?;
     let video_stream_index = input.index();
 
-    // ストリームのパラメータからデコーダコンテキストを作成
     let context_decoder = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
-    let mut decoder = context_decoder.decoder().video()?;
+    let decoder = context_decoder.decoder().video()?;
 
-    // 指定フレームを探すため、パケットを順次処理
+    Ok(Self {
+      input_context,
+      video_stream_index,
+      decoder,
+    })
+  }
+
+  pub fn decode_frame(&mut self, frame_number: u64) -> Result<Image, Box<dyn Error>> {
+    // Seek to the approximate position
+    // Note: Seeking in ffmpeg is complex and might not land on the exact frame.
+    // For simplicity, we might need to seek and then decode forward, or just decode from start if performance isn't an issue yet.
+    // Given the previous implementation was linear scan from start for a single frame call (which is slow but correct),
+    // we'll stick to a simple seek + decode loop, or just loop if seek is tricky.
+    // But since this is a Reader struct now, we can optimize state later.
+    // For now, let's re-implement the logic to find the frame.
+    // CAUTION: Persistent state like `decoder` and `input_context` means we can't just seek casually without flushing buffers.
+
+    // To properly seek, we should use self.input_context.seek().
+    // However, exact frame seeking is hard. Let's try a naive seek to timestamp.
+
+    let stream = self
+      .input_context
+      .stream(self.video_stream_index)
+      .ok_or("ストリームが見つかりません")?;
+    let time_base = stream.time_base();
+    // rough timestamp for the frame number. This assumes constant frame rate which might not be true.
+    // But we don't have fps info easily here without more parsing.
+    // Let's assume 30fps for calculation or use the stream info if available.
+    let avg_frame_rate = stream.avg_frame_rate();
+    let fps = if avg_frame_rate.denominator() > 0 {
+      avg_frame_rate.numerator() as f64 / avg_frame_rate.denominator() as f64
+    } else {
+      30.0
+    };
+
+    let timestamp = (frame_number as f64 / fps / f64::from(time_base.numerator())
+      * f64::from(time_base.denominator())) as i64;
+
+    // Seek keyframe before the target
+    self.input_context.seek(timestamp, ..timestamp)?;
+    self.decoder.flush();
+
     let mut decoded_frame = None;
-    let mut current_frame: u64 = 0;
-    for (stream, packet) in ictx.packets() {
-        if stream.index() == video_stream_index {
-            decoder.send_packet(&packet)?;
-            let mut frame = ffmpeg::util::frame::Video::empty();
-            // 受信可能なフレームをすべて受け取る
-            while decoder.receive_frame(&mut frame).is_ok() {
-                if current_frame == frame_number {
-                    decoded_frame = Some(frame.clone());
-                    break;
-                }
-                current_frame += 1;
-            }
-            if decoded_frame.is_some() {
-                break;
-            }
-        }
-    }
-    // c
-    decoder.send_eof()?;
-    let mut frame = ffmpeg::util::frame::Video::empty();
-    while decoder.receive_frame(&mut frame).is_ok() {
-        if current_frame == frame_number {
+    // Removed unused current_frame_pts
+
+    // We need to decode packets until we hit the right PTS.
+    // This logic is simplified and might need robustness improvements for variable framerate.
+    // For now, let's just decode next frames and check PTS.
+
+    for (stream, packet) in self.input_context.packets() {
+      if stream.index() == self.video_stream_index {
+        self.decoder.send_packet(&packet)?;
+        let mut frame = ffmpeg::util::frame::Video::empty();
+        while self.decoder.receive_frame(&mut frame).is_ok() {
+          // Calculate frame number from PTS
+          let pts = frame.pts().unwrap_or(0);
+          let frame_num = (pts as f64 * f64::from(time_base.numerator())
+            / f64::from(time_base.denominator())
+            * fps)
+            .round() as u64;
+
+          if frame_num >= frame_number {
             decoded_frame = Some(frame.clone());
             break;
+          }
         }
-        current_frame += 1;
+        if decoded_frame.is_some() {
+          break;
+        }
+      }
     }
+
+    // If we still don't have a frame, try EOF
+    if decoded_frame.is_none() {
+      self.decoder.send_eof()?;
+      let mut frame = ffmpeg::util::frame::Video::empty();
+      while self.decoder.receive_frame(&mut frame).is_ok() {
+        let pts = frame.pts().unwrap_or(0);
+        let frame_num = (pts as f64 * f64::from(time_base.numerator())
+          / f64::from(time_base.denominator())
+          * fps)
+          .round() as u64;
+        if frame_num >= frame_number {
+          decoded_frame = Some(frame.clone());
+          break;
+        }
+      }
+    }
+
     let frame = decoded_frame.ok_or("指定したフレームをデコードできませんでした")?;
 
-    // スケーラーを用いてフレームを RGBA 形式に変換
+    // Scaler setup
     let mut scaler = ffmpeg::software::scaling::context::Context::get(
-        decoder.format(),
-        decoder.width(),
-        decoder.height(),
-        ffmpeg::format::Pixel::RGBA,
-        decoder.width(),
-        decoder.height(),
-        ffmpeg::software::scaling::flag::Flags::BILINEAR,
+      self.decoder.format(),
+      self.decoder.width(),
+      self.decoder.height(),
+      ffmpeg::format::Pixel::RGBA,
+      self.decoder.width(),
+      self.decoder.height(),
+      ffmpeg::software::scaling::flag::Flags::BILINEAR,
     )?;
     let mut rgba_frame = ffmpeg::util::frame::Video::empty();
     scaler.run(&frame, &mut rgba_frame)?;
 
-    // フレームから画像データをコピー（stride に対応）
     let width = rgba_frame.width();
     let height = rgba_frame.height();
     let row_bytes = (width * 4) as usize;
@@ -73,14 +133,21 @@ pub fn decode_video_frame(file_path: &str, frame_number: u64) -> Result<Image, B
     let stride = rgba_frame.stride(0) as usize;
     let plane = rgba_frame.data(0);
     for y in 0..(height as usize) {
-        let start = y * stride;
-        let end = start + row_bytes;
-        data.extend_from_slice(&plane[start..end]);
+      let start = y * stride;
+      let end = start + row_bytes;
+      data.extend_from_slice(&plane[start..end]);
     }
 
     Ok(Image {
-        width,
-        height,
-        data,
+      width,
+      height,
+      data,
     })
+  }
+}
+
+#[allow(dead_code)]
+pub fn decode_video_frame(file_path: &str, frame_number: u64) -> Result<Image, Box<dyn Error>> {
+  let mut reader = VideoReader::new(file_path)?;
+  reader.decode_frame(frame_number)
 }

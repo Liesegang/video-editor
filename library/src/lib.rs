@@ -1,10 +1,12 @@
+pub mod animation;
 pub mod framing;
 mod loader;
 pub mod model;
+pub mod plugin;
 pub mod rendering;
 
 use crate::loader::image::Image;
-use crate::model::project::Project;
+use crate::model::project::project::Project;
 use crate::rendering::RenderContext;
 use crate::rendering::skia_renderer::SkiaRenderer;
 use model::frame::parse_frame_info;
@@ -12,7 +14,7 @@ use std::error::Error;
 
 pub fn render_frame_from_json(json_str: &str) -> Result<Image, Box<dyn std::error::Error>> {
   let frame_info = parse_frame_info(json_str)?;
-  let mut renderer = SkiaRenderer::new(
+  let renderer = SkiaRenderer::new(
     frame_info.width as u32,
     frame_info.height as u32,
     frame_info.background_color.clone(),
