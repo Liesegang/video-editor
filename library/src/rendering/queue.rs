@@ -2,7 +2,7 @@ use crate::service::{ProjectModel, RenderService};
 use crate::Image;
 use crate::model::project::project::{Composition, Project};
 use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
-use crate::rendering::effects::EffectRegistry;
+// use crate::rendering::effects::EffectRegistry; // Removed
 use crate::rendering::skia_renderer::SkiaRenderer;
 use crate::util::timing::{measure_info, ScopedTimer};
 use log::{error, info};
@@ -45,7 +45,7 @@ pub struct RenderQueueConfig {
     pub composition_index: usize,
     pub plugin_manager: Arc<PluginManager>,
     pub property_evaluators: Arc<PropertyEvaluatorRegistry>,
-    pub effect_registry: Arc<EffectRegistry>,
+    // pub effect_registry: Arc<EffectRegistry>, // Removed
     pub export_format: ExportFormat,
     pub export_settings: Arc<ExportSettings>,
     pub entity_converter_registry: Arc<EntityConverterRegistry>,
@@ -203,7 +203,6 @@ impl RenderQueue {
         for worker_id in 0..worker_count {
             let plugin_manager = Arc::clone(&config.plugin_manager);
             let property_evaluators = Arc::clone(&config.property_evaluators);
-            let effect_registry = Arc::clone(&config.effect_registry);
             let project = Arc::clone(&config.project);
             let render_rx = Arc::clone(&render_rx);
             let save_tx = save_tx.clone();
@@ -221,7 +220,6 @@ impl RenderQueue {
                     ),
                     plugin_manager,
                     Arc::clone(&property_evaluators),
-                    effect_registry,
                     entity_converter_registry_clone,
                 );
 
