@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::error::Error;
-use std::sync::Arc;
+use std::path::Path;
+use std::sync::{Arc, RwLock};
 
 use crate::cache::{CacheManager, SharedCacheManager};
 use crate::framing::property::PropertyEvaluatorRegistry;
 use crate::loader::image::Image;
 use crate::model::project::entity::Entity;
 use crate::model::project::property::PropertyValue;
+use libloading::{Library, Symbol};
 
 mod exporters;
 mod loaders;
@@ -71,21 +73,29 @@ pub trait ExportPlugin: Plugin {
   ) -> Result<(), Box<dyn Error>>;
 }
 
-pub struct PluginManager {
+struct PluginRepository {
   effect_plugins: HashMap<String, Box<dyn EffectPlugin>>,
   load_plugins: Vec<Box<dyn LoadPlugin>>,
   export_plugins: Vec<Box<dyn ExportPlugin>>,
   property_plugins: Vec<Box<dyn PropertyPlugin>>,
+  dynamic_libraries: Vec<Library>,
+}
+
+pub struct PluginManager {
+  inner: RwLock<PluginRepository>,
   cache_manager: SharedCacheManager,
 }
 
 impl PluginManager {
   pub fn new() -> Self {
     Self {
-      effect_plugins: HashMap::new(),
-      load_plugins: Vec::new(),
-      export_plugins: Vec::new(),
-      property_plugins: Vec::new(),
+      inner: RwLock::new(PluginRepository {
+        effect_plugins: HashMap::new(),
+        load_plugins: Vec::new(),
+        export_plugins: Vec::new(),
+        property_plugins: Vec::new(),
+        dynamic_libraries: Vec::new(),
+      }),
       cache_manager: Arc::new(CacheManager::new()),
     }
   }
@@ -94,31 +104,37 @@ impl PluginManager {
     Arc::clone(&self.cache_manager)
   }
 
-  pub fn register_effect(&mut self, key: &str, plugin: Box<dyn EffectPlugin>) {
-    self.effect_plugins.insert(key.to_string(), plugin);
+  pub fn register_effect(&self, key: &str, plugin: Box<dyn EffectPlugin>) {
+    let mut inner = self.inner.write().unwrap();
+    inner.effect_plugins.insert(key.to_string(), plugin);
   }
 
-  pub fn register_load_plugin(&mut self, plugin: Box<dyn LoadPlugin>) {
-    self.load_plugins.push(plugin);
+  pub fn register_load_plugin(&self, plugin: Box<dyn LoadPlugin>) {
+    let mut inner = self.inner.write().unwrap();
+    inner.load_plugins.push(plugin);
   }
 
-  pub fn register_export_plugin(&mut self, plugin: Box<dyn ExportPlugin>) {
-    self.export_plugins.push(plugin);
+  pub fn register_export_plugin(&self, plugin: Box<dyn ExportPlugin>) {
+    let mut inner = self.inner.write().unwrap();
+    inner.export_plugins.push(plugin);
   }
 
-  pub fn register_property_plugin(&mut self, plugin: Box<dyn PropertyPlugin>) {
-    self.property_plugins.push(plugin);
+  pub fn register_property_plugin(&self, plugin: Box<dyn PropertyPlugin>) {
+    let mut inner = self.inner.write().unwrap();
+    inner.property_plugins.push(plugin);
   }
 
   pub fn create_entity(&self, key: &str, params: HashMap<String, PropertyValue>) -> Option<Entity> {
-    self
+    let inner = self.inner.read().unwrap();
+    inner
       .effect_plugins
       .get(key)
       .map(|plugin| plugin.create(params))
   }
 
   pub fn load_resource(&self, request: &LoadRequest) -> Result<LoadResponse, Box<dyn Error>> {
-    for plugin in &self.load_plugins {
+    let inner = self.inner.read().unwrap();
+    for plugin in &inner.load_plugins {
       if plugin.supports(request) {
         return plugin.load(request, &self.cache_manager);
       }
@@ -132,7 +148,8 @@ impl PluginManager {
     path: &str,
     image: &Image,
   ) -> Result<(), Box<dyn Error>> {
-    for plugin in &self.export_plugins {
+    let inner = self.inner.read().unwrap();
+    for plugin in &inner.export_plugins {
       if plugin.supports(format) {
         return plugin.export_image(format, path, image);
       }
@@ -142,12 +159,35 @@ impl PluginManager {
 
   pub fn build_property_registry(&self) -> PropertyEvaluatorRegistry {
     let mut registry = PropertyEvaluatorRegistry::new();
-    for plugin in &self.property_plugins {
+    let inner = self.inner.read().unwrap();
+    for plugin in &inner.property_plugins {
       plugin.register(&mut registry);
     }
     registry
   }
+
+  pub fn load_property_plugin_from_file<P: AsRef<Path>>(
+    &self,
+    path: P,
+  ) -> Result<(), Box<dyn Error>> {
+    unsafe {
+      let library = Library::new(path.as_ref())?;
+      let constructor: Symbol<PropertyPluginCreateFn> = library.get(b"create_property_plugin")?;
+      let raw = constructor();
+      if raw.is_null() {
+        return Err("create_property_plugin returned null".into());
+      }
+      let plugin = Box::from_raw(raw);
+      let mut inner = self.inner.write().unwrap();
+      inner.property_plugins.push(plugin);
+      inner.dynamic_libraries.push(library);
+    }
+    Ok(())
+  }
 }
+
+#[allow(improper_ctypes_definitions)]
+type PropertyPluginCreateFn = unsafe extern "C" fn() -> *mut dyn PropertyPlugin;
 
 pub struct BasicTextEffectFactory;
 
@@ -185,11 +225,11 @@ impl EffectPlugin for BasicTextEffectFactory {
 }
 
 pub fn load_plugins() -> Arc<PluginManager> {
-  let mut manager = PluginManager::new();
+  let manager = Arc::new(PluginManager::new());
   manager.register_effect("basic_text", Box::new(BasicTextEffectFactory));
   manager.register_load_plugin(Box::new(NativeImageLoader::new()));
   manager.register_load_plugin(Box::new(FfmpegVideoLoader::new()));
   manager.register_export_plugin(Box::new(PngExportPlugin::new()));
   manager.register_property_plugin(Box::new(BuiltinPropertyPlugin));
-  Arc::new(manager)
+  manager
 }

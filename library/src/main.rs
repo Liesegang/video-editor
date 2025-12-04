@@ -21,6 +21,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let file_path = &args[1];
 
     let mut render_service = ProjectService::from_project_path(file_path, 0, 4)?;
+
+    for plugin_path in &args[2..] {
+        info!("Loading property plugin {}", plugin_path);
+        render_service.load_property_plugin(plugin_path)?;
+    }
     let composition = render_service.composition().clone();
     let total_frames = composition.duration.ceil().max(0.0) as u64;
     let output_stem = format!("./rendered/{}", composition.name);

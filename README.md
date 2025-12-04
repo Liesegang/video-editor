@@ -22,6 +22,26 @@ cd video-editor
 cargo run
 ```
 
+### プラグインのビルドと読み込み
+
+プロパティ用プラグインを DLL/so として後からロードできます。サンプルとしてランダムに値を揺らす `random_noise` プロパティプラグインを用意しています。
+
+1. プラグインをビルドする
+
+```bash
+cargo build -p random_property_plugin
+```
+
+Windows の場合は `target\debug\random_property_plugin.dll`、Linux の場合は `target/debug/librandom_property_plugin.so` が生成されます。
+
+2. `library` バイナリ起動時に DLL を渡してロードする
+
+```bash
+cargo run -p library -- test_data/project.json target/debug/random_property_plugin.dll
+```
+
+`test_data/project.json` では `random_noise` プロパティを使用しており、プラグインを読み込むと回転に揺らぎが加わります。
+
 ## 開発への貢献
 
 Video Editorの開発に参加したい方は、IssueやPull Requestを歓迎しています。
