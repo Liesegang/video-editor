@@ -53,7 +53,7 @@ fn blur_effect(
 ) -> Result<Image, Box<dyn Error>> {
     let radius = props
         .get("blur_radius")
-        .and_then(PropertyValue::as_number)
+        .and_then(|pv| pv.get_as::<f64>())
         .unwrap_or(0.0);
     if radius <= 0.0 {
         return Ok(image.clone());

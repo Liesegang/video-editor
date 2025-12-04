@@ -18,6 +18,16 @@ pub enum LibraryError {
     Project(String),
     #[error("Rendering error: {0}")]
     Render(String),
+    #[error("Invalid composition index: {0}")]
+    InvalidCompositionIndex(usize),
+    #[error("Render queue closed")]
+    RenderQueueClosed,
+    #[error("Failed to submit job to render queue")]
+    RenderSubmitFailed,
+    #[error("Render worker thread panicked")]
+    RenderWorkerPanicked,
+    #[error("Save worker thread panicked")]
+    RenderSaverPanicked,
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
     #[error("Runtime error: {0}")]

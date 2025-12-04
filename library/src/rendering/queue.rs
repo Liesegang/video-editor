@@ -10,6 +10,7 @@ use std::cmp;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use crate::framing::PropertyEvaluatorRegistry;
+use crate::error::LibraryError;
 
 #[derive(Debug)]
 struct SaveTask {
@@ -19,15 +20,7 @@ struct SaveTask {
     export_settings: Arc<ExportSettings>,
 }
 
-#[derive(Debug)]
-struct RenderWorkerContext {
-    composition_index: usize,
-    surface_width: u32,
-    surface_height: u32,
-    background_color: crate::model::frame::color::Color,
-    export_format: ExportFormat,
-    export_settings: Arc<ExportSettings>,
-}
+
 
 #[derive(Debug)]
 pub struct FrameRenderJob {
@@ -82,22 +75,25 @@ pub struct RenderQueue {
 }
 
 impl RenderQueue {
-    pub fn new(config: RenderQueueConfig, total_frames: u64) -> Result<Self, RenderQueueError> {
+    pub fn new(config: RenderQueueConfig, total_frames: u64) -> Result<Self, LibraryError> {
         let composition = Self::composition_for(&config)?;
-        let worker_context = Arc::new(RenderWorkerContext::from_composition(
-            &composition,
-            config.composition_index,
-            config.export_format,
-            Arc::clone(&config.export_settings),
-        ));
-
         let (save_tx, saver_handle) = Self::spawn_saver(
             Arc::clone(&config.plugin_manager),
-            Arc::clone(&worker_context),
+            config.export_format,
+            Arc::clone(&config.export_settings),
             config.save_queue_bound(),
         );
-        let (render_tx, workers) =
-            Self::spawn_workers(&config, total_frames, Arc::clone(&worker_context), &save_tx);
+        let (render_tx, workers) = Self::spawn_workers(
+            &config,
+            total_frames,
+            config.composition_index,
+            composition.width as u32,
+            composition.height as u32,
+            composition.background_color.clone(),
+            config.export_format,
+            Arc::clone(&config.export_settings),
+            &save_tx,
+        );
 
         Ok(Self {
             render_tx: Some(render_tx),
@@ -107,19 +103,19 @@ impl RenderQueue {
         })
     }
 
-    pub fn submit(&self, job: FrameRenderJob) -> Result<(), RenderQueueError> {
+    pub fn submit(&self, job: FrameRenderJob) -> Result<(), LibraryError> {
         let sender = self
             .render_tx
             .as_ref()
-            .ok_or(RenderQueueError::QueueClosed)?;
-        sender.send(job).map_err(|_| RenderQueueError::SubmitFailed)
+            .ok_or(LibraryError::RenderQueueClosed)?;
+        sender.send(job).map_err(|_| LibraryError::RenderSubmitFailed)
     }
 
-    pub fn finish(mut self) -> Result<(), RenderQueueError> {
+    pub fn finish(mut self) -> Result<(), LibraryError> {
         self.shutdown()
     }
 
-    fn shutdown(&mut self) -> Result<(), RenderQueueError> {
+    fn shutdown(&mut self) -> Result<(), LibraryError> {
         if let Some(sender) = self.render_tx.take() {
             drop(sender);
         }
@@ -127,7 +123,7 @@ impl RenderQueue {
         for handle in self.workers.drain(..) {
             handle
                 .join()
-                .map_err(|_| RenderQueueError::WorkerPanicked)?;
+                .map_err(|_| LibraryError::RenderWorkerPanicked)?;
         }
 
         if let Some(sender) = self.save_tx.take() {
@@ -135,26 +131,27 @@ impl RenderQueue {
         }
 
         if let Some(handle) = self.saver_handle.take() {
-            handle.join().map_err(|_| RenderQueueError::SaverPanicked)?;
+            handle.join().map_err(|_| LibraryError::RenderSaverPanicked)?;
         }
 
         Ok(())
     }
 
-    fn composition_for(config: &RenderQueueConfig) -> Result<Composition, RenderQueueError> {
+    fn composition_for(config: &RenderQueueConfig) -> Result<Composition, LibraryError> {
         config
             .project
             .compositions
             .get(config.composition_index)
             .cloned()
-            .ok_or(RenderQueueError::InvalidCompositionIndex(
+            .ok_or(LibraryError::InvalidCompositionIndex(
                 config.composition_index,
             ))
     }
 
     fn spawn_saver(
         plugin_manager: Arc<PluginManager>,
-        worker_ctx: Arc<RenderWorkerContext>,
+        export_format: ExportFormat,
+        export_settings: Arc<ExportSettings>,
         queue_bound: usize,
     ) -> (mpsc::SyncSender<SaveTask>, JoinHandle<()>) {
         let (save_tx, save_rx) = mpsc::sync_channel::<SaveTask>(cmp::max(1, queue_bound));
@@ -163,10 +160,10 @@ impl RenderQueue {
                 if let Err(err) =
                     measure_info(format!("Frame {}: save image", task.frame_index), || {
                         plugin_manager.export_image(
-                            worker_ctx.export_format,
+                            export_format,
                             &task.output_path,
                             &task.image,
-                            &task.export_settings,
+                            &export_settings,
                         )
                     })
                 {
@@ -181,7 +178,12 @@ impl RenderQueue {
     fn spawn_workers(
         config: &RenderQueueConfig,
         total_frames: u64,
-        worker_context: Arc<RenderWorkerContext>,
+        composition_index: usize,
+        surface_width: u32,
+        surface_height: u32,
+        background_color: crate::model::frame::color::Color,
+        export_format: ExportFormat,
+        export_settings: Arc<ExportSettings>,
         save_tx: &mpsc::SyncSender<SaveTask>,
     ) -> (mpsc::Sender<FrameRenderJob>, Vec<JoinHandle<()>>) {
         let (render_tx, render_rx) = mpsc::channel::<FrameRenderJob>();
@@ -201,21 +203,23 @@ impl RenderQueue {
             let project = Arc::clone(&config.project);
             let render_rx = Arc::clone(&render_rx);
             let save_tx = save_tx.clone();
-            let ctx = Arc::clone(&worker_context);
+            // Moved ctx fields into individual captures
+            let background_color_clone = background_color.clone();
+            let export_settings_clone = Arc::clone(&export_settings);
 
             let handle = thread::spawn(move || {
                 let mut render_service = RenderService::new(
                     SkiaRenderer::new(
-                        ctx.surface_width,
-                        ctx.surface_height,
-                        ctx.background_color.clone(),
+                        surface_width,
+                        surface_height,
+                        background_color_clone,
                     ),
                     plugin_manager,
                     Arc::clone(&property_evaluators),
                     effect_registry,
                 );
 
-                let project_model = ProjectModel::new(project, ctx.composition_index)
+                let project_model = ProjectModel::new(project, composition_index)
                     .expect("Failed to create project model in worker thread");
 
                 loop {
@@ -258,7 +262,7 @@ impl RenderQueue {
                         frame_index: job.frame_index,
                         output_path: job.output_path,
                         image,
-                        export_settings: Arc::clone(&ctx.export_settings),
+                        export_settings: export_settings_clone.clone(),
                     }) {
                         error!(
                             "Worker {} failed to queue save task for frame {}: {}",
@@ -279,48 +283,5 @@ impl RenderQueue {
 impl Drop for RenderQueue {
     fn drop(&mut self) {
         let _ = self.shutdown();
-    }
-}
-
-#[derive(Debug)]
-pub enum RenderQueueError {
-    InvalidCompositionIndex(usize),
-    QueueClosed,
-    SubmitFailed,
-    WorkerPanicked,
-    SaverPanicked,
-}
-
-impl std::fmt::Display for RenderQueueError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RenderQueueError::InvalidCompositionIndex(idx) => {
-                write!(f, "invalid composition index {}", idx)
-            }
-            RenderQueueError::QueueClosed => write!(f, "render queue already closed"),
-            RenderQueueError::SubmitFailed => write!(f, "failed to submit job to render queue"),
-            RenderQueueError::WorkerPanicked => write!(f, "render worker thread panicked"),
-            RenderQueueError::SaverPanicked => write!(f, "save worker thread panicked"),
-        }
-    }
-}
-
-impl std::error::Error for RenderQueueError {}
-
-impl RenderWorkerContext {
-    fn from_composition(
-        composition: &Composition,
-        composition_index: usize,
-        export_format: ExportFormat,
-        export_settings: Arc<ExportSettings>,
-    ) -> Self {
-        Self {
-            composition_index,
-            surface_width: composition.width as u32,
-            surface_height: composition.height as u32,
-            background_color: composition.background_color.clone(),
-            export_format,
-            export_settings,
-        }
     }
 }
