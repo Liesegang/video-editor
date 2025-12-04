@@ -1,5 +1,15 @@
 {
   "name": "My Project",
+  "export": {
+    "container": "mp4",
+    "codec": "libx264",
+    "pixel_format": "yuv420p",
+    "parameters": {
+      "bitrate": 8000,
+      "crf": 23.0,
+      "preset": "slow"
+    }
+  },
   "compositions": [
     {
       "name": "My Composition",
@@ -33,7 +43,7 @@
                   "properties": {
                     "keyframes": [
                       { "time": 0.0, "value": 1000.0, "easing": "Linear" },
-                      { "time": 1.6666667, "value": 1050.0, "easing": "Linear" }
+                      { "time": 1.6666667, "value": 1005.0, "easing": "Linear" }
                     ]
                   }
                 },

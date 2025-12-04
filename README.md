@@ -42,6 +42,28 @@ cargo run -p library -- test_data/project.json target/debug/random_property_plug
 
 `test_data/project.json` では `random_noise` プロパティを使用しており、プラグインを読み込むと回転に揺らぎが加わります。
 
+### FFmpeg エクスポーター
+
+`export` ブロックをプロジェクト JSON に追加すると、動画を書き出すフォーマットをプロパティで指定できます。例えば:
+
+```json
+"export": {
+  "container": { "type": "constant", "properties": { "value": "mp4" } },
+  "codec": { "type": "constant", "properties": { "value": "libx264" } },
+  "pixel_format": { "type": "constant", "properties": { "value": "yuv420p" } },
+  "bitrate": { "type": "constant", "properties": { "value": 8000.0 } },
+  "quality": { "type": "constant", "properties": { "value": 23.0 } }
+}
+```
+
+- `container`: 出力コンテナ (`mp4`, `mkv` など)。`png` を指定すると従来通り連番画像を書き出します。
+- `codec`: FFmpeg のコーデック名 (`libx264`, `libx265` など)。
+- `pixel_format`: 出力ピクセルフォーマット (`yuv420p`, `rgba` 等)。
+- `bitrate`: kbps 単位の映像ビットレート (任意)。
+- `quality`: H.264 の CRF など品質値 (任意)。
+
+設定を `mp4` などにした場合、`cargo run -p library -- ...` を実行すると `./rendered/<composition>.mp4` が生成されます。FFmpeg バイナリはシステム PATH 上にある前提です (必要に応じて `ffmpeg_path` プロパティで明示できます)。
+
 ## 開発への貢献
 
 Video Editorの開発に参加したい方は、IssueやPull Requestを歓迎しています。
