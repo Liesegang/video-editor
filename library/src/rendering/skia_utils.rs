@@ -1,11 +1,50 @@
 use crate::loader::image::Image;
+use skia_safe::gpu::{self, DirectContext, SurfaceOrigin};
 use skia_safe::image::CachingHint;
 use skia_safe::images::raster_from_data;
 use skia_safe::surfaces;
 use skia_safe::{AlphaType, ColorType, Data, ISize, Image as SkImage, ImageInfo, Surface};
 use std::error::Error;
 
-pub fn create_surface(width: u32, height: u32) -> Result<Surface, Box<dyn Error>> {
+#[cfg(feature = "gl")]
+fn create_gl_context() -> Option<DirectContext> {
+    use skia_safe::gpu::gl;
+    unsafe { gl::Interface::new_native() }
+        .and_then(|interface| gpu::DirectContext::new_gl(interface, None))
+}
+
+#[cfg(not(feature = "gl"))]
+fn create_gl_context() -> Option<DirectContext> {
+    None
+}
+
+pub fn create_gpu_context() -> Option<DirectContext> {
+    create_gl_context()
+}
+
+pub fn create_surface(
+    width: u32,
+    height: u32,
+    context: Option<&mut DirectContext>,
+) -> Result<Surface, Box<dyn Error>> {
+    if let Some(ctx) = context {
+        if let Some(surface) = gpu::surfaces::render_target(
+            ctx,
+            gpu::Budgeted::Yes,
+            &ImageInfo::new_n32_premul((width as i32, height as i32), None),
+            None,
+            SurfaceOrigin::TopLeft,
+            None,
+            false,
+            false,
+        ) {
+            return Ok(surface);
+        }
+    }
+    create_raster_surface(width, height)
+}
+
+pub fn create_raster_surface(width: u32, height: u32) -> Result<Surface, Box<dyn Error>> {
     let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
     surfaces::raster(&info, None, None).ok_or_else(|| "Cannot create Skia surface".into())
 }

@@ -8,12 +8,11 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ffmpeg-next = "7.1.0"
 image = "0.25.5"
-skia-safe = { version = "0.82.0", features = ["gpu", "vulkan"] }
+skia-safe = { version = "0.82.0", features = ["gpu", "gl"] }
 log = "0.4.29"
 env_logger = "0.11.8"
 lru = "0.12.3"
 ordered-float = "4.2.1"
-# Dynamic plugin loading support
 libloading = "0.8"
 #opencv = "0.94.2"
 

@@ -1,7 +1,7 @@
 use crate::loader::image::Image;
 use crate::model::frame::effect::ImageEffect;
 use crate::model::project::property::PropertyValue;
-use crate::rendering::skia_utils::{create_surface, image_to_skia, surface_to_image};
+use crate::rendering::skia_utils::{create_raster_surface, image_to_skia, surface_to_image};
 use log::warn;
 use skia_safe::{Paint, TileMode, image_filters};
 use std::collections::HashMap;
@@ -60,7 +60,7 @@ fn blur_effect(
     }
 
     let sk_image = image_to_skia(image)?;
-    let mut surface = create_surface(image.width, image.height)?;
+    let mut surface = create_raster_surface(image.width, image.height)?;
     let canvas = surface.canvas();
     canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
 
