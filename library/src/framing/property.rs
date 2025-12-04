@@ -160,3 +160,53 @@ fn interpolate_property_values(
     _ => start.clone(),
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::model::project::property::Keyframe;
+
+  #[test]
+  fn constant_evaluator_returns_value() {
+    let mut map = PropertyMap::new();
+    map.set(
+      "value_prop".into(),
+      Property::constant(PropertyValue::Number(42.0)),
+    );
+
+    let registry = PropertyEvaluatorRegistry::default();
+    let property = map.get("value_prop").unwrap();
+    let ctx = EvaluationContext { property_map: &map };
+
+    let result = registry.evaluate(property, 0.0, &ctx);
+    assert!(matches!(result, PropertyValue::Number(v) if (v - 42.0).abs() < f64::EPSILON));
+  }
+
+  #[test]
+  fn keyframe_evaluator_interpolates_linearly() {
+    let keyframes = vec![
+      Keyframe {
+        time: 0.0,
+        value: PropertyValue::Number(0.0),
+        easing: EasingFunction::Linear,
+      },
+      Keyframe {
+        time: 10.0,
+        value: PropertyValue::Number(10.0),
+        easing: EasingFunction::Linear,
+      },
+    ];
+    let mut map = PropertyMap::new();
+    map.set("anim".into(), Property::keyframe(keyframes));
+
+    let registry = PropertyEvaluatorRegistry::default();
+    let property = map.get("anim").unwrap();
+    let ctx = EvaluationContext { property_map: &map };
+
+    let result = registry.evaluate(property, 5.0, &ctx);
+    match result {
+      PropertyValue::Number(v) => assert!((v - 5.0).abs() < f64::EPSILON),
+      other => panic!("Expected number, got {:?}", other),
+    }
+  }
+}
