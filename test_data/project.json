@@ -1,9 +1,10 @@
 {
   "name": "My Project",
   "export": {
-    "container": "mp4",
-    "codec": "libx264",
-    "pixel_format": "yuv420p",
+    "container": "png",
+    "codec": "png",
+    "pixel_format": "rgba",
+    "ffmpegPath": "C:\\lib\\ffmpeg\\bin\\ffmpeg.exe",
     "parameters": {
       "bitrate": 8000,
       "crf": 23.0,
@@ -247,8 +248,8 @@
                   "properties": { "value": { "x": 0.0, "y": 0.0 } }
                 },
                 "rotation": {
-                  "type": "constant",
-                  "properties": { "value": 0.0 }
+                  "type": "expression",
+                  "properties": { "value": "time * 90" }
                 }
               },
               "effects": [
@@ -271,6 +272,60 @@
                   }
                 }
               ]
+            },
+            {
+              "type": "shape",
+              "start_time": 0.0,
+              "end_time": 1.6666667,
+              "fps": 30.0,
+              "properties": {
+                "path": {
+                  "type": "constant",
+                  "properties": { "value": "M 100 100 L 300 100 L 300 300 L 100 300 Z" }
+                },
+                "path_effects": {
+                  "type": "constant",
+                  "properties": {
+                    "value": [ { "type": "Corner", "radius": 50.0 } ]
+                  }
+                },
+                "styles": {
+                  "type": "constant",
+                  "properties": {
+                    "value": [
+                      { "type": "Fill", "color": { "r": 255, "g": 0, "b": 0, "a": 128 } }
+                    ]
+                  }
+                },
+                "position": { "type": "constant", "properties": { "value": { "x": 200, "y": 200 } } }
+              }
+            },
+            {
+              "type": "shape",
+              "start_time": 0.0,
+              "end_time": 1.6666667,
+              "fps": 30.0,
+              "properties": {
+                "path": {
+                  "type": "constant",
+                  "properties": { "value": "M 500 500 C 550 450, 650 450, 700 500 S 750 550, 700 600" }
+                },
+                "path_effects": {
+                  "type": "constant",
+                  "properties": {
+                    "value": [ { "type": "Trim", "start": 0.25, "end": 0.75 } ]
+                  }
+                },
+                "styles": {
+                  "type": "constant",
+                  "properties": {
+                    "value": [
+                      { "type": "Stroke", "color": { "r": 0, "g": 255, "b": 255, "a": 255 }, "width": 10 }
+                    ]
+                  }
+                },
+                "position": { "type": "constant", "properties": { "value": { "x": 300, "y": 300 } } }
+              }
             }
           ]
         }

@@ -1,0 +1,70 @@
+{
+  "name": "My Project",
+  "export": {
+    "container": "png"
+  },
+  "compositions": [
+    {
+      "name": "My Composition",
+      "width": 1920,
+      "height": 1080,
+      "background_color": { "r": 0, "g": 0, "b": 0, "a": 255 },
+      "color_profile": "srgb",
+      "fps": 30,
+      "duration": 1,
+      "tracks": [
+        {
+          "name": "My Track",
+          "entities": [
+            {
+              "type": "image",
+              "start_time": 0.0,
+              "end_time": 1.0,
+              "properties": {
+                "file_path": {
+                  "type": "constant",
+                  "properties": { "value": "test_data/test.png" }
+                },
+                "position": {
+                  "type": "constant",
+                  "properties": { "value": { "x": 100.0, "y": 100.0 } }
+                },
+                "scale": {
+                  "type": "constant",
+                  "properties": { "value": { "x": 0.5, "y": 0.5 } }
+                }
+              }
+            },
+            {
+              "type": "text",
+              "start_time": 0.0,
+              "end_time": 1.0,
+              "properties": {
+                "text": {
+                  "type": "constant",
+                  "properties": { "value": "Test Frame" }
+                },
+                "font": {
+                  "type": "constant",
+                  "properties": { "value": "Arial" }
+                },
+                "size": {
+                  "type": "constant",
+                  "properties": { "value": 120.0 }
+                },
+                "color": {
+                  "type": "constant",
+                  "properties": { "value": { "r": 0, "g": 255, "b": 0, "a": 255 } }
+                },
+                "position": {
+                  "type": "constant",
+                  "properties": { "value": { "x": 500.0, "y": 500.0 } }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
-use library::load_project;
+use library::model::project::project::Project;
 use log::{debug, error, info};
 use qobject::TrackRoles;
 use std::fs::File;
@@ -120,7 +120,7 @@ impl qobject::TrackList {
             return;
         }
 
-        let project = load_project(&project_string);
+        let project = Project::load(&project_string);
         if let Err(e) = project {
             error!("Error loading project: {}", e);
             return;
