@@ -1,9 +1,9 @@
 {
   "name": "My Project",
   "export": {
-    "container": "png",
-    "codec": "png",
-    "pixel_format": "rgba",
+    "container": "mp4",
+    "codec": "h264",
+    "pixel_format": "yuv420p",
     "ffmpegPath": "C:\\lib\\ffmpeg\\bin\\ffmpeg.exe",
     "parameters": {
       "bitrate": 8000,
