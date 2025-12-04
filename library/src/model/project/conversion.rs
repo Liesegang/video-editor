@@ -9,6 +9,7 @@ impl From<&TrackEntity> for Entity {
         entity.end_time = track_entity.end_time;
         entity.fps = track_entity.fps;
         entity.properties = track_entity.properties.clone();
+        entity.effects = track_entity.effects.clone();
         entity
     }
 }

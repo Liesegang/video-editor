@@ -3,6 +3,7 @@ pub mod entity;
 pub mod project;
 pub mod property;
 
+use crate::model::project::entity::EffectConfig;
 use crate::model::project::property::PropertyMap;
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +25,8 @@ pub struct TrackEntity {
     pub fps: f64,
     #[serde(default)]
     pub properties: PropertyMap,
+    #[serde(default)]
+    pub effects: Vec<EffectConfig>,
 }
 
 const fn default_fps() -> f64 {

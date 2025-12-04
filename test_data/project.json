@@ -160,8 +160,7 @@
                 "path": {
                   "type": "constant",
                   "properties": {
-                    "value":
-                      "M140 20C73 20 20 74 20 140c0 135 136 170 228 303 88-132 229-173 229-303 0-66-54-120-120-120-48 0-90 28-109 69-19-41-60-69-108-69z"
+                    "value": "M140 20C73 20 20 74 20 140c0 135 136 170 228 303 88-132 229-173 229-303 0-66-54-120-120-120-48 0-90 28-109 69-19-41-60-69-108-69z"
                   }
                 },
                 "path_effects": {
@@ -238,7 +237,27 @@
                   "type": "constant",
                   "properties": { "value": 0.0 }
                 }
-              }
+              },
+              "effects": [
+                {
+                  "type": "blur",
+                  "properties": {
+                    "blur_radius": {
+                      "type": "keyframe",
+                      "properties": {
+                        "keyframes": [
+                          { "time": 0.0, "value": 0.0, "easing": "Linear" },
+                          {
+                            "time": 1.6666667,
+                            "value": 100.0,
+                            "easing": "Linear"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
             }
           ]
         }
