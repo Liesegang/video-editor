@@ -12,7 +12,7 @@ use crate::model::frame::{
 };
 use crate::model::project::entity::Entity;
 use crate::model::project::project::{Composition, Project};
-use crate::model::project::property::{Property, PropertyMap, PropertyValue};
+use crate::model::project::property::{PropertyMap, PropertyValue};
 use crate::util::timing::ScopedTimer;
 
 use super::property::{EvaluationContext, PropertyEvaluatorRegistry};
@@ -329,4 +329,128 @@ pub fn get_frame_from_project(
     frame.objects.len()
   );
   frame
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::model::project::property::{Property, PropertyValue};
+  use crate::model::project::{Track, TrackEntity};
+  use std::sync::Arc;
+
+  fn make_vec2(x: f64, y: f64) -> PropertyValue {
+    PropertyValue::Vec2 { x, y }
+  }
+
+  fn constant(value: PropertyValue) -> Property {
+    Property::constant(value)
+  }
+
+  #[test]
+  fn frame_evaluator_builds_text_object() {
+    let mut composition = Composition::new("comp", 1920, 1080, 30.0, 10.0);
+
+    let mut text_props = PropertyMap::new();
+    text_props.set(
+      "text".into(),
+      constant(PropertyValue::String("Hello".into())),
+    );
+    text_props.set(
+      "font".into(),
+      constant(PropertyValue::String("Roboto".into())),
+    );
+    text_props.set("size".into(), constant(PropertyValue::Number(48.0)));
+    text_props.set(
+      "color".into(),
+      constant(PropertyValue::Color {
+        r: 255,
+        g: 255,
+        b: 0,
+        a: 255,
+      }),
+    );
+    text_props.set("position".into(), constant(make_vec2(10.0, 20.0)));
+    text_props.set("scale".into(), constant(make_vec2(1.0, 1.0)));
+    text_props.set("anchor".into(), constant(make_vec2(0.0, 0.0)));
+    text_props.set("rotation".into(), constant(PropertyValue::Number(0.0)));
+
+    let track_entity = TrackEntity {
+      entity_type: "text".into(),
+      start_time: 0.0,
+      end_time: 5.0,
+      fps: 30.0,
+      properties: text_props,
+    };
+    let track = Track {
+      name: "track".into(),
+      entities: vec![track_entity],
+    };
+    composition.add_track(track);
+
+    let evaluator =
+      FrameEvaluator::new(&composition, Arc::new(PropertyEvaluatorRegistry::default()));
+    let frame = evaluator.evaluate(1.0);
+
+    assert_eq!(frame.objects.len(), 1);
+    match &frame.objects[0].entity {
+      FrameEntity::Text {
+        text, font, size, ..
+      } => {
+        assert_eq!(text, "Hello");
+        assert_eq!(font, "Roboto");
+        assert!((*size - 48.0).abs() < f64::EPSILON);
+      }
+      other => panic!("Expected text entity, got {:?}", other),
+    }
+  }
+
+  #[test]
+  fn frame_evaluator_filters_inactive_entities() {
+    let mut composition = Composition::new("comp", 1920, 1080, 30.0, 10.0);
+
+    let mut props = PropertyMap::new();
+    props.set(
+      "file_path".into(),
+      constant(PropertyValue::String("foo.png".into())),
+    );
+    props.set("position".into(), constant(make_vec2(0.0, 0.0)));
+    props.set("scale".into(), constant(make_vec2(1.0, 1.0)));
+    props.set("anchor".into(), constant(make_vec2(0.0, 0.0)));
+    props.set("rotation".into(), constant(PropertyValue::Number(0.0)));
+
+    let early = TrackEntity {
+      entity_type: "image".into(),
+      start_time: 0.0,
+      end_time: 1.0,
+      fps: 30.0,
+      properties: props.clone(),
+    };
+
+    let late = TrackEntity {
+      entity_type: "image".into(),
+      start_time: 5.0,
+      end_time: 6.0,
+      fps: 30.0,
+      properties: props,
+    };
+
+    let track = Track {
+      name: "track".into(),
+      entities: vec![early, late],
+    };
+    composition.add_track(track);
+
+    let evaluator =
+      FrameEvaluator::new(&composition, Arc::new(PropertyEvaluatorRegistry::default()));
+
+    let frame = evaluator.evaluate(0.5);
+    assert_eq!(frame.objects.len(), 1, "Only early entity should render");
+
+    let frame_late = evaluator.evaluate(5.5);
+    assert_eq!(
+      frame_late.objects.len(),
+      1,
+      "Only late entity should render"
+    );
+  }
 }
