@@ -50,8 +50,11 @@
                   "properties": { "value": { "x": 0.0, "y": 0.0 } }
                 },
                 "rotation": {
-                  "type": "constant",
-                  "properties": { "value": 0.0 }
+                  "type": "random_noise",
+                  "properties": {
+                    "amplitude": 5.0,
+                    "seed": 42.0
+                  }
                 }
               }
             },

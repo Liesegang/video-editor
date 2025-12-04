@@ -143,6 +143,10 @@ impl<T: Renderer> RenderContext<T> {
         Arc::clone(&self.property_evaluators)
     }
 
+    pub fn set_property_evaluators(&mut self, evaluators: Arc<PropertyEvaluatorRegistry>) {
+        self.property_evaluators = evaluators;
+    }
+
     fn apply_effects(
         &self,
         image: Image,

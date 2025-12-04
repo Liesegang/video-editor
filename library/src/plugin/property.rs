@@ -4,17 +4,17 @@ use crate::framing::property::{PropertyEvaluatorRegistry, register_builtin_evalu
 pub struct BuiltinPropertyPlugin;
 
 impl Plugin for BuiltinPropertyPlugin {
-  fn id(&self) -> &'static str {
-    "builtin_property_evaluators"
-  }
+    fn id(&self) -> &'static str {
+        "builtin_property_evaluators"
+    }
 
-  fn category(&self) -> PluginCategory {
-    PluginCategory::Property
-  }
+    fn category(&self) -> PluginCategory {
+        PluginCategory::Property
+    }
 }
 
 impl PropertyPlugin for BuiltinPropertyPlugin {
-  fn register(&self, registry: &mut PropertyEvaluatorRegistry) {
-    register_builtin_evaluators(registry);
-  }
+    fn register(&self, registry: &mut PropertyEvaluatorRegistry) {
+        register_builtin_evaluators(registry);
+    }
 }
