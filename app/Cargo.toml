@@ -8,6 +8,8 @@ cxx = "1.0.95"
 cxx-qt = "0.7"
 cxx-qt-lib = { version="0.7", features = ["qt_full"] }
 library = { path = "../library" }
+log = "0.4"
+env_logger = "0.11"
 
 [build-dependencies]
 cxx-qt-build = { version = "0.7" }

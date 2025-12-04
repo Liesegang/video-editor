@@ -1,0 +1,289 @@
+{
+  "name": "My Project",
+  "export": {
+    "container": "png",
+    "codec": "png",
+    "pixel_format": "rgba"
+  },
+  "compositions": [
+    {
+      "name": "My Composition",
+      "width": 1920,
+      "height": 1080,
+      "background_color": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "a": 255
+      },
+      "color_profile": "srgb",
+      "fps": 30,
+      "duration": 50,
+      "tracks": [
+        {
+          "name": "My Track",
+          "entities": [
+            {
+              "type": "image",
+              "start_time": 0.0,
+              "end_time": 1.6666667,
+              "fps": 30.0,
+              "properties": {
+                "file_path": {
+                  "type": "constant",
+                  "properties": { "value": "test_data/test.png" }
+                },
+                "position": {
+                  "type": "keyframe",
+                  "properties": {
+                    "keyframes": [
+                      {
+                        "time": 0.0,
+                        "value": { "x": 0.0, "y": 0.0 },
+                        "easing": "Linear"
+                      },
+                      {
+                        "time": 1.6666667,
+                        "value": { "x": 500.0, "y": 0.0 },
+                        "easing": "Linear"
+                      }
+                    ]
+                  }
+                },
+                "scale": {
+                  "type": "constant",
+                  "properties": { "value": { "x": 0.2, "y": 0.2 } }
+                },
+                "anchor": {
+                  "type": "constant",
+                  "properties": { "value": { "x": 0.0, "y": 0.0 } }
+                },
+                "rotation": {
+                  "type": "constant",
+                  "properties": { "value": 0.0 }
+                }
+              }
+            },
+            {
+              "type": "text",
+              "start_time": 0.0,
+              "end_time": 1.6666667,
+              "fps": 30.0,
+              "properties": {
+                "text": {
+                  "type": "constant",
+                  "properties": { "value": "Hello, world!" }
+                },
+                "font": {
+                  "type": "constant",
+                  "properties": { "value": "Arial" }
+                },
+                "size": {
+                  "type": "constant",
+                  "properties": { "value": 100.0 }
+                },
+                "color": {
+                  "type": "constant",
+                  "properties": {
+                    "value": { "r": 255, "g": 255, "b": 0, "a": 255 }
+                  }
+                },
+                "position": {
+                  "type": "keyframe",
+                  "properties": {
+                    "keyframes": [
+                      {
+                        "time": 0.0,
+                        "value": { "x": 0.0, "y": 0.0 },
+                        "easing": "Linear"
+                      },
+                      {
+                        "time": 1.6666667,
+                        "value": { "x": 500.0, "y": 0.0 },
+                        "easing": "Linear"
+                      }
+                    ]
+                  }
+                },
+                "scale": {
+                  "type": "constant",
+                  "properties": { "value": { "x": 1.0, "y": 1.0 } }
+                },
+                "anchor": {
+                  "type": "constant",
+                  "properties": { "value": { "x": 0.0, "y": 0.0 } }
+                },
+                "rotation": {
+                  "type": "constant",
+                  "properties": { "value": 0.0 }
+                }
+              }
+            },
+            {
+              "type": "shape",
+              "start_time": 0.0,
+              "end_time": 1.6666667,
+              "fps": 30.0,
+              "properties": {
+                "path": {
+                  "type": "constant",
+                  "properties": {
+                    "value": "M140 20C73 20 20 74 20 140c0 135 136 170 228 303 88-132 229-173 229-303 0-66-54-120-120-120-48 0-90 28-109 69-19-41-60-69-108-69z"
+                  }
+                },
+                "path_effects": {
+                  "type": "constant",
+                  "properties": {
+                    "value": [
+                      {
+                        "type": "Discrete",
+                        "seg_length": 10.0,
+                        "deviation": 10.0,
+                        "seed": 41413
+                      },
+                      {
+                        "type": "Dash",
+                        "intervals": [40.0, 20.0],
+                        "phase": 0.0
+                      }
+                    ]
+                  }
+                },
+                "styles": {
+                  "type": "constant",
+                  "properties": {
+                    "value": [
+                      {
+                        "type": "Fill",
+                        "color": { "r": 255, "g": 255, "b": 255, "a": 255 }
+                      },
+                      {
+                        "type": "Stroke",
+                        "color": { "r": 0, "g": 0, "b": 255, "a": 255 },
+                        "width": 20,
+                        "cap": "Square",
+                        "join": "Round",
+                        "miter": 4
+                      },
+                      {
+                        "type": "Stroke",
+                        "color": { "r": 0, "g": 255, "b": 0, "a": 255 },
+                        "width": 10,
+                        "cap": "Square",
+                        "join": "Round",
+                        "miter": 4
+                      }
+                    ]
+                  }
+                },
+                "position": {
+                  "type": "keyframe",
+                  "properties": {
+                    "keyframes": [
+                      {
+                        "time": 0.0,
+                        "value": { "x": 0.0, "y": 0.0 },
+                        "easing": "Linear"
+                      },
+                      {
+                        "time": 1.6666667,
+                        "value": { "x": 500.0, "y": 0.0 },
+                        "easing": "Linear"
+                      }
+                    ]
+                  }
+                },
+                "scale": {
+                  "type": "constant",
+                  "properties": { "value": { "x": 1.0, "y": 1.0 } }
+                },
+                "anchor": {
+                  "type": "constant",
+                  "properties": { "value": { "x": 0.0, "y": 0.0 } }
+                },
+                "rotation": {
+                  "type": "expression",
+                  "properties": { "value": "time * 90" }
+                }
+              },
+              "effects": [
+                {
+                  "type": "blur",
+                  "properties": {
+                    "blur_radius": {
+                      "type": "keyframe",
+                      "properties": {
+                        "keyframes": [
+                          { "time": 0.0, "value": 0.0, "easing": "Linear" },
+                          {
+                            "time": 1.6666667,
+                            "value": 100.0,
+                            "easing": "Linear"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "shape",
+              "start_time": 0.0,
+              "end_time": 1.6666667,
+              "fps": 30.0,
+              "properties": {
+                "path": {
+                  "type": "constant",
+                  "properties": { "value": "M 100 100 L 300 100 L 300 300 L 100 300 Z" }
+                },
+                "path_effects": {
+                  "type": "constant",
+                  "properties": {
+                    "value": [ { "type": "Corner", "radius": 50.0 } ]
+                  }
+                },
+                "styles": {
+                  "type": "constant",
+                  "properties": {
+                    "value": [
+                      { "type": "Fill", "color": { "r": 255, "g": 0, "b": 0, "a": 128 } }
+                    ]
+                  }
+                },
+                "position": { "type": "constant", "properties": { "value": { "x": 200, "y": 200 } } }
+              }
+            },
+            {
+              "type": "shape",
+              "start_time": 0.0,
+              "end_time": 1.6666667,
+              "fps": 30.0,
+              "properties": {
+                "path": {
+                  "type": "constant",
+                  "properties": { "value": "M 500 500 C 550 450, 650 450, 700 500 S 750 550, 700 600" }
+                },
+                "path_effects": {
+                  "type": "constant",
+                  "properties": {
+                    "value": [ { "type": "Trim", "start": 0.25, "end": 0.75 } ]
+                  }
+                },
+                "styles": {
+                  "type": "constant",
+                  "properties": {
+                    "value": [
+                      { "type": "Stroke", "color": { "r": 0, "g": 255, "b": 255, "a": 255 }, "width": 10 }
+                    ]
+                  }
+                },
+                "position": { "type": "constant", "properties": { "value": { "x": 300, "y": 300 } } }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
