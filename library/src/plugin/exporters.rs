@@ -4,7 +4,7 @@ use image::ImageEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use log::{info, warn};
 use std::collections::HashMap;
-use std::error::Error;
+use crate::error::LibraryError;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -39,7 +39,7 @@ impl ExportPlugin for PngExportPlugin {
         path: &str,
         image: &Image,
         _settings: &ExportSettings,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), LibraryError> {
         let file = File::create(path)?;
         let writer = BufWriter::new(file);
         let encoder =
@@ -87,7 +87,7 @@ impl ExportPlugin for FfmpegExportPlugin {
         path: &str,
         image: &Image,
         settings: &ExportSettings,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), LibraryError> {
         if image.width != settings.width {
             warn!(
                 "FFmpeg exporter: frame width {} does not match expected {}; resizing is not supported",
@@ -113,7 +113,7 @@ impl ExportPlugin for FfmpegExportPlugin {
         if let Some(session) = sessions.get_mut(path) {
             session.write_frame(&image.data)
         } else {
-            Err("Failed to start ffmpeg session".into())
+            Err(LibraryError::Render("Failed to start ffmpeg session".to_string()))
         }
     }
 }
@@ -124,7 +124,7 @@ struct FfmpegSession {
 }
 
 impl FfmpegSession {
-    fn spawn(path: &str, settings: &ExportSettings) -> Result<Self, Box<dyn Error>> {
+    fn spawn(path: &str, settings: &ExportSettings) -> Result<Self, LibraryError> {
         let binary = settings
             .ffmpeg_path
             .as_deref()
@@ -176,20 +176,20 @@ impl FfmpegSession {
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| "Failed to capture ffmpeg stdin".to_string())?;
+            .ok_or_else(|| LibraryError::Render("Failed to capture ffmpeg stdin".to_string()))?;
         Ok(Self {
             child,
             stdin: Some(stdin),
         })
     }
 
-    fn write_frame(&mut self, data: &[u8]) -> Result<(), Box<dyn Error>> {
+    fn write_frame(&mut self, data: &[u8]) -> Result<(), LibraryError> {
         if let Some(stdin) = self.stdin.as_mut() {
             stdin.write_all(data)?;
             stdin.flush()?;
             Ok(())
         } else {
-            Err("FFmpeg stdin is closed".into())
+            Err(LibraryError::Render("FFmpeg stdin is closed".to_string()))
         }
     }
 }

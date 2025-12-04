@@ -7,6 +7,9 @@ pub mod plugin;
 pub mod rendering;
 pub mod service;
 pub mod util;
+pub mod error;
+
+pub use error::LibraryError;
 
 pub use crate::loader::image::Image;
 // Re-export the services and models that the app will need.
@@ -16,16 +19,15 @@ pub use rendering::skia_renderer::SkiaRenderer;
 use crate::plugin::{load_plugins, ExportSettings};
 use crate::rendering::effects::EffectRegistry;
 use log::info;
-use std::error::Error;
 use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
 
-pub fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
+pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
     env_logger::init();
 
     if args.len() < 2 {
-        return Err("Please provide the path to a project JSON file.".into());
+        return Err(LibraryError::InvalidArgument("Please provide the path to a project JSON file.".to_string()));
     }
 
     if !fs::metadata("./rendered").is_ok() {
@@ -78,7 +80,7 @@ pub fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
     let export_settings = Arc::new(ExportSettings::from_project(
         project_model.project().as_ref(),
         project_model.composition(),
-    ));
+    )?);
 
     let mut export_service = ExportService::new(plugin_manager, export_settings, 4);
 
