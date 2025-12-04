@@ -2,6 +2,7 @@ use crate::model::frame::frame::FrameInfo;
 
 pub mod color;
 pub mod draw_type;
+pub mod effect;
 pub mod entity;
 pub mod frame;
 pub mod transform;

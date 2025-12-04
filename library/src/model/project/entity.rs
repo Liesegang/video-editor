@@ -3,6 +3,14 @@ use std::collections::HashMap;
 
 use crate::model::project::property::{Property, PropertyMap, PropertyValue};
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct EffectConfig {
+    #[serde(rename = "type")]
+    pub effect_type: String,
+    #[serde(default)]
+    pub properties: PropertyMap,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Entity {
     pub entity_type: String,
@@ -18,6 +26,9 @@ pub struct Entity {
     pub properties: PropertyMap,
 
     #[serde(default)]
+    pub effects: Vec<EffectConfig>,
+
+    #[serde(default)]
     pub custom_data: HashMap<String, PropertyValue>,
 }
 
@@ -29,6 +40,7 @@ impl Entity {
             end_time: 0.0,
             fps: 0.0,
             properties: PropertyMap::new(),
+            effects: Vec::new(),
             custom_data: HashMap::new(),
         }
     }

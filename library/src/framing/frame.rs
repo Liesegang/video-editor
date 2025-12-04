@@ -6,11 +6,12 @@ use serde_json;
 use crate::model::frame::{
     color::Color,
     draw_type::{DrawStyle, PathEffect},
-    entity::{FrameEntity, FrameObject},
+    effect::ImageEffect,
+    entity::{FrameEntity, FrameObject, ImageSurface},
     frame::FrameInfo,
     transform::{Position, Scale, Transform},
 };
-use crate::model::project::entity::Entity;
+use crate::model::project::entity::{EffectConfig, Entity};
 use crate::model::project::project::{Composition, Project};
 use crate::model::project::property::{PropertyMap, PropertyValue};
 use crate::util::timing::ScopedTimer;
@@ -78,12 +79,17 @@ impl<'a> FrameEvaluator<'a> {
         let file_path = self.require_string(props, "file_path", time, "video")?;
         let frame_number = self.evaluate_number(props, "frame", time, 0.0).max(0.0) as u64;
         let transform = self.build_transform(props, time);
+        let effects = self.build_image_effects(&entity.effects, time);
+        let surface = ImageSurface {
+            file_path,
+            effects,
+            transform,
+        };
 
         Some(FrameObject {
             entity: FrameEntity::Video {
-                file_path,
+                surface,
                 frame_number,
-                transform,
             },
             properties: props.clone(),
         })
@@ -93,14 +99,73 @@ impl<'a> FrameEvaluator<'a> {
         let props = &entity.properties;
         let file_path = self.require_string(props, "file_path", time, "image")?;
         let transform = self.build_transform(props, time);
+        let effects = self.build_image_effects(&entity.effects, time);
+        let surface = ImageSurface {
+            file_path,
+            effects,
+            transform,
+        };
 
         Some(FrameObject {
-            entity: FrameEntity::Image {
-                file_path,
-                transform,
-            },
+            entity: FrameEntity::Image { surface },
             properties: props.clone(),
         })
+    }
+
+    fn build_image_effects(&self, configs: &[EffectConfig], time: f64) -> Vec<ImageEffect> {
+        configs
+            .iter()
+            .filter_map(|config| self.evaluate_image_effect(config, time))
+            .collect()
+    }
+
+    fn evaluate_image_effect(&self, config: &EffectConfig, time: f64) -> Option<ImageEffect> {
+        match config.effect_type.as_str() {
+            "blur" => {
+                let radius = self
+                    .evaluate_effect_number(&config.properties, "blur_radius", time)
+                    .unwrap_or(0.0);
+                if radius <= 0.0 {
+                    warn!(
+                        "Image effect[blur]: invalid 'blur_radius' ({}); skipping",
+                        radius
+                    );
+                    None
+                } else {
+                    Some(ImageEffect::Blur {
+                        radius: radius as f32,
+                    })
+                }
+            }
+            other => {
+                warn!("Image effect '{}' is not supported; skipping", other);
+                None
+            }
+        }
+    }
+
+    fn evaluate_effect_number(
+        &self,
+        properties: &PropertyMap,
+        key: &str,
+        time: f64,
+    ) -> Option<f64> {
+        let property = properties.get(key)?;
+        let ctx = EvaluationContext {
+            property_map: properties,
+        };
+        let value = self.property_evaluators.evaluate(property, time, &ctx);
+        match value {
+            PropertyValue::Number(v) => Some(v),
+            PropertyValue::Integer(v) => Some(v as f64),
+            other => {
+                warn!(
+                    "Image effect property '{}' expected number, got {:?}; skipping",
+                    key, other
+                );
+                None
+            }
+        }
     }
 
     fn build_text(&self, entity: &Entity, time: f64) -> Option<FrameObject> {
@@ -122,6 +187,7 @@ impl<'a> FrameEvaluator<'a> {
             },
         );
         let transform = self.build_transform(props, time);
+        let effects = self.build_image_effects(&entity.effects, time);
 
         Some(FrameObject {
             entity: FrameEntity::Text {
@@ -129,6 +195,7 @@ impl<'a> FrameEvaluator<'a> {
                 font,
                 size,
                 color,
+                effects,
                 transform,
             },
             properties: props.clone(),
@@ -149,6 +216,7 @@ impl<'a> FrameEvaluator<'a> {
             .evaluate_property_value(props, "path_effects", time)
             .unwrap_or(PropertyValue::Array(vec![]));
         let path_effects = self.parse_path_effects(effects_value);
+        let effects = self.build_image_effects(&entity.effects, time);
 
         Some(FrameObject {
             entity: FrameEntity::Shape {
@@ -156,6 +224,7 @@ impl<'a> FrameEvaluator<'a> {
                 transform,
                 styles,
                 path_effects,
+                effects,
             },
             properties: props.clone(),
         })
@@ -379,6 +448,7 @@ mod tests {
             end_time: 5.0,
             fps: 30.0,
             properties: text_props,
+            effects: Vec::new(),
         };
         let track = Track {
             name: "track".into(),
@@ -423,6 +493,7 @@ mod tests {
             end_time: 1.0,
             fps: 30.0,
             properties: props.clone(),
+            effects: Vec::new(),
         };
 
         let late = TrackEntity {
@@ -431,6 +502,7 @@ mod tests {
             end_time: 6.0,
             fps: 30.0,
             properties: props,
+            effects: Vec::new(),
         };
 
         let track = Track {
