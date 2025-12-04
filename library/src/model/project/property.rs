@@ -3,6 +3,20 @@ use serde_json;
 use std::collections::HashMap;
 
 use crate::animation::EasingFunction;
+use crate::model::frame::color::Color;
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct Vec2 {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct Vec3 {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
@@ -11,9 +25,9 @@ pub enum PropertyValue {
     Integer(i64),
     String(String),
     Boolean(bool),
-    Vec2 { x: f64, y: f64 },
-    Vec3 { x: f64, y: f64, z: f64 },
-    Color { r: u8, g: u8, b: u8, a: u8 },
+    Vec2(Vec2),
+    Vec3(Vec3),
+    Color(Color),
     Array(Vec<PropertyValue>),
     Map(HashMap<String, PropertyValue>),
 }
@@ -45,7 +59,7 @@ impl From<serde_json::Value> for PropertyValue {
                         o.get("x").and_then(|v| v.as_f64()),
                         o.get("y").and_then(|v| v.as_f64()),
                     ) {
-                        return PropertyValue::Vec2 { x: x_val, y: y_val };
+                        return PropertyValue::Vec2(Vec2 { x: x_val, y: y_val });
                     }
                 }
 
@@ -56,11 +70,11 @@ impl From<serde_json::Value> for PropertyValue {
                         o.get("y").and_then(|v| v.as_f64()),
                         o.get("z").and_then(|v| v.as_f64()),
                     ) {
-                        return PropertyValue::Vec3 {
+                        return PropertyValue::Vec3(Vec3 {
                             x: x_val,
                             y: y_val,
                             z: z_val,
-                        };
+                        });
                     }
                 }
 
@@ -76,12 +90,12 @@ impl From<serde_json::Value> for PropertyValue {
                         o.get("b").and_then(|v| v.as_u64()),
                         o.get("a").and_then(|v| v.as_u64()),
                     ) {
-                        return PropertyValue::Color {
+                        return PropertyValue::Color(Color {
                             r: r as u8,
                             g: g as u8,
                             b: b as u8,
                             a: a as u8,
-                        };
+                        });
                     }
                 }
 
@@ -107,10 +121,10 @@ impl From<&PropertyValue> for serde_json::Value {
             PropertyValue::Integer(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
             PropertyValue::String(s) => serde_json::Value::String(s.clone()),
             PropertyValue::Boolean(b) => serde_json::Value::Bool(*b),
-            PropertyValue::Vec2 { x, y } => serde_json::json!({ "x": x, "y": y }),
-            PropertyValue::Vec3 { x, y, z } => serde_json::json!({ "x": x, "y": y, "z": z }),
-            PropertyValue::Color { r, g, b, a } => {
-                serde_json::json!({ "r": r, "g": g, "b": b, "a": a })
+            PropertyValue::Vec2(v) => serde_json::json!({ "x": v.x, "y": v.y }),
+            PropertyValue::Vec3(v) => serde_json::json!({ "x": v.x, "y": v.y, "z": v.z }),
+            PropertyValue::Color(c) => {
+                serde_json::json!({ "r": c.r, "g": c.g, "b": c.b, "a": c.a })
             }
             PropertyValue::Array(arr) => {
                 serde_json::Value::Array(arr.iter().map(|v| v.into()).collect())
@@ -122,13 +136,113 @@ impl From<&PropertyValue> for serde_json::Value {
     }
 }
 
-impl PropertyValue {
-    pub fn as_number(&self) -> Option<f64> {
-        match self {
+// Define a trait for type-safe extraction from PropertyValue
+pub trait TryGetProperty<T> {
+    fn try_get(p: &PropertyValue) -> Option<T>;
+}
+
+// Implement for f64
+impl TryGetProperty<f64> for f64 {
+    fn try_get(p: &PropertyValue) -> Option<f64> {
+        match p {
             PropertyValue::Number(v) => Some(*v),
             PropertyValue::Integer(v) => Some(*v as f64),
             _ => None,
         }
+    }
+}
+
+// Implement for i64
+impl TryGetProperty<i64> for i64 {
+    fn try_get(p: &PropertyValue) -> Option<i64> {
+        match p {
+            PropertyValue::Integer(v) => Some(*v),
+            PropertyValue::Number(v) => {
+                // Only convert if it's a whole number and fits in i64
+                if v.fract().abs() < f64::EPSILON && *v >= i64::MIN as f64 && *v <= i64::MAX as f64 {
+                    Some(*v as i64)
+                } else {
+                    None
+                }
+            },
+            _ => None,
+        }
+    }
+}
+
+// Implement for String
+impl TryGetProperty<String> for String {
+    fn try_get(p: &PropertyValue) -> Option<String> {
+        match p {
+            PropertyValue::String(v) => Some(v.clone()),
+            _ => None,
+        }
+    }
+}
+
+// Implement for bool
+impl TryGetProperty<bool> for bool {
+    fn try_get(p: &PropertyValue) -> Option<bool> {
+        match p {
+            PropertyValue::Boolean(v) => Some(*v),
+            _ => None,
+        }
+    }
+}
+
+// Implement for Vec<PropertyValue>
+impl TryGetProperty<Vec<PropertyValue>> for Vec<PropertyValue> {
+    fn try_get(p: &PropertyValue) -> Option<Vec<PropertyValue>> {
+        match p {
+            PropertyValue::Array(v) => Some(v.clone()),
+            _ => None,
+        }
+    }
+}
+
+// Implement for HashMap<String, PropertyValue>
+impl TryGetProperty<HashMap<String, PropertyValue>> for HashMap<String, PropertyValue> {
+    fn try_get(p: &PropertyValue) -> Option<HashMap<String, PropertyValue>> {
+        match p {
+            PropertyValue::Map(v) => Some(v.clone()),
+            _ => None,
+        }
+    }
+}
+
+// Implement for Vec2
+impl TryGetProperty<Vec2> for Vec2 {
+    fn try_get(p: &PropertyValue) -> Option<Vec2> {
+        match p {
+            PropertyValue::Vec2(v) => Some(*v),
+            _ => None,
+        }
+    }
+}
+
+// Implement for Vec3
+impl TryGetProperty<Vec3> for Vec3 {
+    fn try_get(p: &PropertyValue) -> Option<Vec3> {
+        match p {
+            PropertyValue::Vec3(v) => Some(*v),
+            _ => None,
+        }
+    }
+}
+
+// Implement for Color
+impl TryGetProperty<Color> for Color {
+    fn try_get(p: &PropertyValue) -> Option<Color> {
+        match p {
+            PropertyValue::Color(v) => Some(v.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl PropertyValue {
+    pub fn get_as<T: TryGetProperty<T>>(&self) -> Option<T> {
+        T::try_get(self)
     }
 }
 
@@ -243,10 +357,12 @@ impl PropertyMap {
     }
 
     pub fn get_constant_number(&self, key: &str, default: f64) -> f64 {
-        match self.get_constant_value(key) {
-            Some(PropertyValue::Number(val)) => *val,
-            Some(PropertyValue::Integer(val)) => *val as f64,
-            _ => default,
-        }
+        self.get(key)
+            .and_then(|property| match property.evaluator.as_str() {
+                "constant" => property.value(),
+                _ => None,
+            })
+            .and_then(|pv| pv.get_as::<f64>())
+            .unwrap_or(default)
     }
 }

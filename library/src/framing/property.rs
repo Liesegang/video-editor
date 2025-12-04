@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use log::warn;
 
 use crate::animation::EasingFunction;
-use crate::model::project::property::{Property, PropertyMap, PropertyValue};
+use crate::model::project::property::{Property, PropertyMap, PropertyValue, Vec2, Vec3};
+use crate::model::frame::color::Color;
 
 pub struct PropertyEvaluatorRegistry {
     evaluators: HashMap<&'static str, Box<dyn PropertyEvaluator>>,
@@ -113,47 +114,29 @@ fn interpolate_property_values(
         (PropertyValue::Integer(s), PropertyValue::Integer(e)) => {
             PropertyValue::Number(*s as f64 + (*e as f64 - *s as f64) * t)
         }
-        (PropertyValue::Vec2 { x: sx, y: sy }, PropertyValue::Vec2 { x: ex, y: ey }) => {
-            PropertyValue::Vec2 {
+        (PropertyValue::Vec2(Vec2 { x: sx, y: sy }), PropertyValue::Vec2(Vec2 { x: ex, y: ey })) => {
+            PropertyValue::Vec2(Vec2 {
                 x: sx + (ex - sx) * t,
                 y: sy + (ey - sy) * t,
-            }
+            })
         }
         (
-            PropertyValue::Vec3 {
-                x: sx,
-                y: sy,
-                z: sz,
-            },
-            PropertyValue::Vec3 {
-                x: ex,
-                y: ey,
-                z: ez,
-            },
-        ) => PropertyValue::Vec3 {
+            PropertyValue::Vec3(Vec3 { x: sx, y: sy, z: sz }),
+            PropertyValue::Vec3(Vec3 { x: ex, y: ey, z: ez }),
+        ) => PropertyValue::Vec3(Vec3 {
             x: sx + (ex - sx) * t,
             y: sy + (ey - sy) * t,
             z: sz + (ez - sz) * t,
-        },
+        }),
         (
-            PropertyValue::Color {
-                r: sr,
-                g: sg,
-                b: sb,
-                a: sa,
-            },
-            PropertyValue::Color {
-                r: er,
-                g: eg,
-                b: eb,
-                a: ea,
-            },
-        ) => PropertyValue::Color {
-            r: (sr + ((er - sr) as f64 * t) as u8),
-            g: (sg + ((eg - sg) as f64 * t) as u8),
-            b: (sb + ((eb - sb) as f64 * t) as u8),
-            a: (sa + ((ea - sa) as f64 * t) as u8),
-        },
+            PropertyValue::Color(Color { r: sr, g: sg, b: sb, a: sa }),
+            PropertyValue::Color(Color { r: er, g: eg, b: eb, a: ea }),
+        ) => PropertyValue::Color(Color {
+            r: ((*sr as f64) + (*er as f64 - *sr as f64) * t).round() as u8,
+            g: ((*sg as f64) + (*eg as f64 - *sg as f64) * t).round() as u8,
+            b: ((*sb as f64) + (*eb as f64 - *sb as f64) * t).round() as u8,
+            a: ((*sa as f64) + (*ea as f64 - *sa as f64) * t).round() as u8,
+        }),
         (PropertyValue::Array(s), PropertyValue::Array(e)) => PropertyValue::Array(
             s.iter()
                 .zip(e.iter())

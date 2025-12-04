@@ -279,7 +279,7 @@ impl<'a> FrameEvaluator<'a> {
         default_y: f64,
     ) -> (f64, f64) {
         match self.evaluate_property_value(properties, key, time) {
-            Some(PropertyValue::Vec2 { x, y }) => (x, y),
+            Some(PropertyValue::Vec2(v)) => (v.x, v.y),
             _ => (default_x, default_y),
         }
     }
@@ -292,7 +292,7 @@ impl<'a> FrameEvaluator<'a> {
         default: Color,
     ) -> Color {
         match self.evaluate_property_value(properties, key, time) {
-            Some(PropertyValue::Color { r, g, b, a }) => Color { r, g, b, a },
+            Some(PropertyValue::Color(c)) => c,
             _ => default,
         }
     }
@@ -370,12 +370,13 @@ pub fn get_frame_from_project(
 mod tests {
     use super::*;
     use crate::framing::property::register_builtin_evaluators;
-    use crate::model::project::property::{Property, PropertyValue};
+    use crate::model::project::property::{Property, PropertyValue, Vec2};
+    use crate::model::frame::color::Color;
     use crate::model::project::{Track, TrackEntity};
     use std::sync::Arc;
 
     fn make_vec2(x: f64, y: f64) -> PropertyValue {
-        PropertyValue::Vec2 { x, y }
+        PropertyValue::Vec2(Vec2 { x, y })
     }
 
     fn constant(value: PropertyValue) -> Property {
@@ -398,12 +399,12 @@ mod tests {
         text_props.set("size".into(), constant(PropertyValue::Number(48.0)));
         text_props.set(
             "color".into(),
-            constant(PropertyValue::Color {
+            constant(PropertyValue::Color(Color {
                 r: 255,
                 g: 255,
                 b: 0,
                 a: 255,
-            }),
+            })),
         );
         text_props.set("position".into(), constant(make_vec2(10.0, 20.0)));
         text_props.set("scale".into(), constant(make_vec2(1.0, 1.0)));

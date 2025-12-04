@@ -29,14 +29,14 @@ impl PropertyEvaluator for RandomNoiseEvaluator {
         let amplitude = property
             .properties
             .get("amplitude")
-            .and_then(|value| value.as_number())
+            .and_then(|value| value.get_as::<f64>())
             .unwrap_or(1.0)
             .abs();
 
         let seed = property
             .properties
             .get("seed")
-            .and_then(|value| value.as_number())
+            .and_then(|value| value.get_as::<f64>())
             .unwrap_or(0.0) as u64;
 
         let time_bucket = (time * 1000.0).round() as u64;
