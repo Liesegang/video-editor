@@ -1,4 +1,5 @@
 use thiserror::Error;
+use ffmpeg_next as ffmpeg;
 
 #[derive(Error, Debug)]
 pub enum LibraryError {
@@ -13,7 +14,9 @@ pub enum LibraryError {
     #[error("Image error: {0}")]
     Image(#[from] image::ImageError),
     #[error("FFmpeg error: {0}")]
-    Ffmpeg(String),
+    Ffmpeg(#[from] ffmpeg::Error),
+    #[error("Other FFmpeg error: {0}")]
+    FfmpegOther(String),
     #[error("Project error: {0}")]
     Project(String),
     #[error("Rendering error: {0}")]

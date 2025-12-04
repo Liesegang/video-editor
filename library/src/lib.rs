@@ -22,6 +22,7 @@ use log::info;
 use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
+use crate::framing::entity_converters::{EntityConverterRegistry, register_builtin_entity_converters};
 
 pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
     env_logger::init();
@@ -69,11 +70,17 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
     );
     let mut render_service = {
         let property_evaluators = Arc::new(plugin_manager.build_property_registry());
+
+        let mut entity_converter_registry = EntityConverterRegistry::new();
+        register_builtin_entity_converters(&mut entity_converter_registry);
+        let entity_converter_registry = Arc::new(entity_converter_registry);
+
         RenderService::new(
             renderer,
             plugin_manager.clone(),
             property_evaluators,
             effect_registry,
+            entity_converter_registry,
         )
     };
 

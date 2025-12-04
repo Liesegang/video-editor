@@ -2,10 +2,10 @@ use crate::loader::image::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::transform::Transform;
-use std::error::Error;
+use crate::error::LibraryError;
 
 pub trait Renderer {
-    fn draw_image(&mut self, image: &Image, transform: &Transform) -> Result<(), Box<dyn Error>>;
+    fn draw_image(&mut self, image: &Image, transform: &Transform) -> Result<(), LibraryError>;
 
     fn rasterize_text_layer(
         &mut self,
@@ -14,7 +14,7 @@ pub trait Renderer {
         font_name: &String,
         color: &Color,
         transform: &Transform,
-    ) -> Result<Image, Box<dyn Error>>;
+    ) -> Result<Image, LibraryError>;
 
     fn rasterize_shape_layer(
         &mut self,
@@ -22,8 +22,8 @@ pub trait Renderer {
         styles: &[DrawStyle],
         path_effects: &Vec<PathEffect>,
         transform: &Transform,
-    ) -> Result<Image, Box<dyn Error>>;
+    ) -> Result<Image, LibraryError>;
 
-    fn finalize(&mut self) -> Result<Image, Box<dyn Error>>;
-    fn clear(&mut self) -> Result<(), Box<dyn Error>>;
+    fn finalize(&mut self) -> Result<Image, LibraryError>;
+    fn clear(&mut self) -> Result<(), LibraryError>;
 }

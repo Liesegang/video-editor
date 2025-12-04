@@ -10,7 +10,9 @@ use std::cmp;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use crate::framing::PropertyEvaluatorRegistry;
+use crate::framing::entity_converters::EntityConverterRegistry;
 use crate::error::LibraryError;
+use tokio::task; // Corrected tokio::task import
 
 #[derive(Debug)]
 struct SaveTask {
@@ -19,7 +21,6 @@ struct SaveTask {
     image: Image,
     export_settings: Arc<ExportSettings>,
 }
-
 
 
 #[derive(Debug)]
@@ -47,6 +48,7 @@ pub struct RenderQueueConfig {
     pub effect_registry: Arc<EffectRegistry>,
     pub export_format: ExportFormat,
     pub export_settings: Arc<ExportSettings>,
+    pub entity_converter_registry: Arc<EntityConverterRegistry>,
     pub worker_count: Option<usize>,
     pub save_queue_bound: usize,
 }
@@ -92,6 +94,7 @@ impl RenderQueue {
             composition.background_color.clone(),
             config.export_format,
             Arc::clone(&config.export_settings),
+            Arc::clone(&config.entity_converter_registry),
             &save_tx,
         );
 
@@ -111,27 +114,27 @@ impl RenderQueue {
         sender.send(job).map_err(|_| LibraryError::RenderSubmitFailed)
     }
 
-    pub fn finish(mut self) -> Result<(), LibraryError> {
-        self.shutdown()
+    pub async fn finish(mut self) -> Result<(), LibraryError> { // Made async
+        self.shutdown().await
     }
 
-    fn shutdown(&mut self) -> Result<(), LibraryError> {
+    async fn shutdown(&mut self) -> Result<(), LibraryError> { // Made async
         if let Some(sender) = self.render_tx.take() {
             drop(sender);
         }
 
         for handle in self.workers.drain(..) {
-            handle
-                .join()
-                .map_err(|_| LibraryError::RenderWorkerPanicked)?;
-        }
-
-        if let Some(sender) = self.save_tx.take() {
-            drop(sender);
+            task::spawn_blocking(move || handle.join())
+                .await
+                .map_err(|_| LibraryError::RenderWorkerPanicked)? // Error from spawn_blocking
+                .map_err(|_| LibraryError::RenderWorkerPanicked)?; // Error from join()
         }
 
         if let Some(handle) = self.saver_handle.take() {
-            handle.join().map_err(|_| LibraryError::RenderSaverPanicked)?;
+            task::spawn_blocking(move || handle.join())
+                .await
+                .map_err(|_| LibraryError::RenderSaverPanicked)? // Error from spawn_blocking
+                .map_err(|_| LibraryError::RenderSaverPanicked)?; // Error from join()
         }
 
         Ok(())
@@ -182,8 +185,9 @@ impl RenderQueue {
         surface_width: u32,
         surface_height: u32,
         background_color: crate::model::frame::color::Color,
-        export_format: ExportFormat,
+        _export_format: ExportFormat,
         export_settings: Arc<ExportSettings>,
+        _entity_converter_registry: Arc<EntityConverterRegistry>,
         save_tx: &mpsc::SyncSender<SaveTask>,
     ) -> (mpsc::Sender<FrameRenderJob>, Vec<JoinHandle<()>>) {
         let (render_tx, render_rx) = mpsc::channel::<FrameRenderJob>();
@@ -206,6 +210,7 @@ impl RenderQueue {
             // Moved ctx fields into individual captures
             let background_color_clone = background_color.clone();
             let export_settings_clone = Arc::clone(&export_settings);
+            let entity_converter_registry_clone = Arc::clone(&config.entity_converter_registry);
 
             let handle = thread::spawn(move || {
                 let mut render_service = RenderService::new(
@@ -217,10 +222,16 @@ impl RenderQueue {
                     plugin_manager,
                     Arc::clone(&property_evaluators),
                     effect_registry,
+                    entity_converter_registry_clone,
                 );
 
-                let project_model = ProjectModel::new(project, composition_index)
-                    .expect("Failed to create project model in worker thread");
+                let project_model = match ProjectModel::new(project, composition_index) {
+                    Ok(model) => model,
+                    Err(err) => {
+                        error!("Worker {} failed to create project model: {}", worker_id, err);
+                        return; // Exit worker thread
+                    }
+                };
 
                 loop {
                     let job = {
@@ -282,6 +293,10 @@ impl RenderQueue {
 
 impl Drop for RenderQueue {
     fn drop(&mut self) {
-        let _ = self.shutdown();
+        let _ = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(self.shutdown()); // Changed to use async shutdown
     }
 }
