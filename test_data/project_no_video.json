@@ -3,13 +3,7 @@
   "export": {
     "container": "png",
     "codec": "png",
-    "pixel_format": "rgba",
-    "ffmpegPath": "C:\\lib\\ffmpeg\\bin\\ffmpeg.exe",
-    "parameters": {
-      "bitrate": 8000,
-      "crf": 23.0,
-      "preset": "slow"
-    }
+    "pixel_format": "rgba"
   },
   "compositions": [
     {
@@ -29,46 +23,6 @@
         {
           "name": "My Track",
           "entities": [
-            {
-              "type": "video",
-              "start_time": 0.0,
-              "end_time": 1.6666667,
-              "fps": 30.0,
-              "properties": {
-                "file_path": {
-                  "type": "constant",
-                  "properties": { "value": "test_data/test.mp4" }
-                },
-                "frame": {
-                  "type": "keyframe",
-                  "properties": {
-                    "keyframes": [
-                      { "time": 0.0, "value": 1000.0, "easing": "Linear" },
-                      { "time": 1.6666667, "value": 1005.0, "easing": "Linear" }
-                    ]
-                  }
-                },
-                "position": {
-                  "type": "constant",
-                  "properties": { "value": { "x": 960.0, "y": 540.0 } }
-                },
-                "scale": {
-                  "type": "constant",
-                  "properties": { "value": { "x": 6.5, "y": 6.5 } }
-                },
-                "anchor": {
-                  "type": "constant",
-                  "properties": { "value": { "x": 160.0, "y": 90.0 } }
-                },
-                "rotation": {
-                  "type": "random_noise",
-                  "properties": {
-                    "amplitude": 1.0,
-                    "seed": 42.0
-                  }
-                }
-              }
-            },
             {
               "type": "image",
               "start_time": 0.0,
