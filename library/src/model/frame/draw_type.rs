@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::model::frame::color::Color;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum JoinType {
@@ -44,13 +44,18 @@ pub enum DrawStyle {
         join: JoinType,
         #[serde(default)]
         miter: f64,
-    }
+    },
 }
 
 impl Default for DrawStyle {
     fn default() -> Self {
         Self::Fill {
-            color: Color { r: 255, g: 255, b: 255, a: 255 }
+            color: Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            },
         }
     }
 }

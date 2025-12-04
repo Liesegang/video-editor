@@ -1,56 +1,102 @@
+pub mod animation;
+pub mod cache;
 pub mod framing;
-mod loader;
+pub mod loader;
 pub mod model;
+pub mod plugin;
 pub mod rendering;
+pub mod service;
+pub mod util;
+pub mod error;
 
-use crate::loader::image::Image;
-use crate::model::project::Project;
-use crate::rendering::RenderContext;
-use crate::rendering::skia_renderer::SkiaRenderer;
-use model::frame::parse_frame_info;
-use std::error::Error;
+pub use error::LibraryError;
 
-pub fn render_frame_from_json(json_str: &str) -> Result<Image, Box<dyn std::error::Error>> {
-  let frame_info = parse_frame_info(json_str)?;
-  let mut renderer = SkiaRenderer::new(
-    frame_info.width as u32,
-    frame_info.height as u32,
-    frame_info.background_color.clone(),
-  );
-  let mut context = RenderContext::new(renderer);
-  context.render_frame(frame_info)
-}
+pub use crate::loader::image::Image;
+// Re-export the services and models that the app will need.
+pub use service::{ExportService, ProjectModel, RenderService};
+pub use rendering::skia_renderer::SkiaRenderer;
 
-pub fn create_render_context(
-  width: u32,
-  height: u32,
-  background_color: model::frame::color::Color,
-) -> RenderContext<SkiaRenderer> {
-  let renderer = SkiaRenderer::new(width, height, background_color);
-  RenderContext::new(renderer)
-}
+use crate::plugin::{load_plugins, ExportSettings};
+use crate::rendering::effects::EffectRegistry;
+use log::info;
+use std::fs;
+use std::ops::Range;
+use std::sync::Arc;
 
-pub fn create_render_context_from_json(
-  json_str: &str,
-) -> Result<RenderContext<SkiaRenderer>, Box<dyn Error>> {
-  let frame_info = parse_frame_info(json_str)?;
-  let renderer = SkiaRenderer::new(
-    frame_info.width as u32,
-    frame_info.height as u32,
-    frame_info.background_color.clone(),
-  );
-  Ok(RenderContext::new(renderer))
-}
+pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
+    env_logger::init();
 
-pub fn render_frame_with_context(
-  context: &mut RenderContext<SkiaRenderer>,
-  json_str: &str,
-) -> Result<Image, Box<dyn Error>> {
-  let frame_info = parse_frame_info(json_str)?;
-  context.render_frame(frame_info)
-}
+    if args.len() < 2 {
+        return Err(LibraryError::InvalidArgument("Please provide the path to a project JSON file.".to_string()));
+    }
 
-pub fn load_project(project_path: &str) -> Result<Project, Box<dyn std::error::Error>> {
-  let project = Project::load(project_path)?;
-  Ok(project)
+    if !fs::metadata("./rendered").is_ok() {
+        info!("Creating ./rendered directory...");
+        fs::create_dir("./rendered")?;
+    }
+
+    let file_path = &args[1];
+    let project_model = ProjectModel::from_project_path(file_path, 0)?;
+
+    let plugin_paths: Vec<_> = args.iter().skip(2).filter(|s| !s.starts_with("--")).collect();
+    let plugin_manager = load_plugins();
+    for plugin_path in plugin_paths {
+        info!("Loading property plugin {}", plugin_path);
+        plugin_manager.load_property_plugin_from_file(plugin_path)?;
+    }
+
+    let mut frame_range: Option<Range<u64>> = None;
+    if let Some(frames_arg_pos) = args.iter().position(|s| s == "--frames") {
+        if let Some(range_str) = args.get(frames_arg_pos + 1) {
+            if let Some(separator_pos) = range_str.find('-') {
+                let start_str = &range_str[..separator_pos];
+                let end_str = &range_str[separator_pos + 1..];
+                if let (Ok(start), Ok(end)) = (start_str.parse::<u64>(), end_str.parse::<u64>()) {
+                    frame_range = Some(start..end + 1);
+                }
+            } else if let Ok(single_frame) = range_str.parse::<u64>() {
+                frame_range = Some(single_frame..single_frame + 1);
+            }
+        }
+    }
+
+    let effect_registry = Arc::new(EffectRegistry::new_with_defaults());
+    let composition = project_model.composition();
+    let renderer = SkiaRenderer::new(
+        composition.width as u32,
+        composition.height as u32,
+        composition.background_color.clone(),
+    );
+    let mut render_service = {
+        let property_evaluators = Arc::new(plugin_manager.build_property_registry());
+        RenderService::new(
+            renderer,
+            plugin_manager.clone(),
+            property_evaluators,
+            effect_registry,
+        )
+    };
+
+    let export_settings = Arc::new(ExportSettings::from_project(
+        project_model.project().as_ref(),
+        project_model.composition(),
+    )?);
+
+    let mut export_service = ExportService::new(plugin_manager, export_settings, 4);
+
+    let total_frames = composition.duration.ceil().max(0.0) as u64;
+    let final_frame_range = frame_range.unwrap_or(0..total_frames);
+    let output_stem = format!("./rendered/{}", composition.name);
+
+    export_service.render_range(
+        &mut render_service,
+        &project_model,
+        final_frame_range,
+        &output_stem,
+    )?;
+    info!("All frames rendered.");
+
+    export_service.shutdown()?;
+
+    Ok(())
 }

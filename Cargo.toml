@@ -2,4 +2,5 @@
 members = [
     "library",
     "app",
+    "plugins/random_property",
 ]
