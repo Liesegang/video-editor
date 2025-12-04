@@ -3,40 +3,62 @@ use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
 use crate::model::frame::transform::Transform;
 use crate::rendering::renderer::Renderer;
-use crate::rendering::skia_utils::{create_surface, image_to_skia, surface_to_image};
+use crate::rendering::skia_utils::{
+    create_gpu_context, create_surface, image_to_skia, surface_to_image,
+};
 use crate::util::timing::ScopedTimer;
-use log::trace;
+use log::{debug, trace};
 use skia_safe::path_effect::PathEffect as SkPathEffect;
 use skia_safe::trim_path_effect::Mode;
 use skia_safe::utils::parse_path::from_svg;
 use skia_safe::{
     Canvas, Color as SkColor, CubicResampler, Font, FontMgr, FontStyle, Matrix, Paint, PaintStyle,
-    Point, SamplingOptions, Surface,
+    Point, SamplingOptions, Surface, gpu,
 };
 use std::error::Error;
 
 pub struct SkiaRenderer {
     width: u32,
     height: u32,
+    background_color: Color,
     surface: Surface,
+    gpu_context: Option<gpu::DirectContext>,
 }
 
 impl SkiaRenderer {
     pub fn new(width: u32, height: u32, background_color: Color) -> Self {
-        let mut surface = create_surface(width, height).expect("Cannot create Skia Surface");
-        let bg = SkColor::from_argb(
-            background_color.a,
-            background_color.r,
-            background_color.g,
-            background_color.b,
-        );
-        // Clear with background color.
-        surface.canvas().clear(bg);
-        SkiaRenderer {
+        let mut gpu_context = create_gpu_context();
+        if gpu_context.is_some() {
+            debug!("SkiaRenderer: GPU context enabled");
+        } else {
+            debug!("SkiaRenderer: GPU context unavailable, using CPU raster surfaces");
+        }
+
+        let surface = create_surface(width, height, gpu_context.as_mut())
+            .expect("Cannot create Skia Surface");
+
+        let mut renderer = SkiaRenderer {
             width,
             height,
+            background_color,
             surface,
-        }
+            gpu_context,
+        };
+        renderer.clear().expect("Failed to clear render target");
+        renderer
+    }
+
+    fn background_sk_color(&self) -> SkColor {
+        SkColor::from_argb(
+            self.background_color.a,
+            self.background_color.r,
+            self.background_color.g,
+            self.background_color.b,
+        )
+    }
+
+    fn create_layer_surface(&mut self) -> Result<Surface, Box<dyn Error>> {
+        create_surface(self.width, self.height, self.gpu_context.as_mut())
     }
 
     fn draw_shape_fill_on_canvas(
@@ -192,7 +214,7 @@ impl Renderer for SkiaRenderer {
             text.len(),
             size
         ));
-        let mut layer = create_surface(self.width, self.height)?;
+        let mut layer = self.create_layer_surface()?;
         {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
@@ -230,7 +252,7 @@ impl Renderer for SkiaRenderer {
         transform: &Transform,
     ) -> Result<Image, Box<dyn Error>> {
         let _timer = ScopedTimer::debug("SkiaRenderer::rasterize_shape_layer");
-        let mut layer = create_surface(self.width, self.height)?;
+        let mut layer = self.create_layer_surface()?;
         {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
@@ -273,6 +295,9 @@ impl Renderer for SkiaRenderer {
             "SkiaRenderer::finalize {}x{}",
             self.width, self.height
         ));
+        if let Some(context) = self.gpu_context.as_mut() {
+            context.flush_and_submit();
+        }
         let width = self.width;
         let height = self.height;
         surface_to_image(&mut self.surface, width, height)
@@ -280,8 +305,9 @@ impl Renderer for SkiaRenderer {
 
     fn clear(&mut self) -> Result<(), Box<dyn Error>> {
         let _timer = ScopedTimer::debug("SkiaRenderer::clear");
+        let color = self.background_sk_color();
         let canvas: &Canvas = self.surface.canvas();
-        canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
+        canvas.clear(color);
         Ok(())
     }
 }
