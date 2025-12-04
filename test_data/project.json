@@ -39,20 +39,20 @@
                 },
                 "position": {
                   "type": "constant",
-                  "properties": { "value": { "x": 0.0, "y": 0.0 } }
+                  "properties": { "value": { "x": 960.0, "y": 540.0 } }
                 },
                 "scale": {
                   "type": "constant",
-                  "properties": { "value": { "x": 6.0, "y": 6.0 } }
+                  "properties": { "value": { "x": 6.5, "y": 6.5 } }
                 },
                 "anchor": {
                   "type": "constant",
-                  "properties": { "value": { "x": 0.0, "y": 0.0 } }
+                  "properties": { "value": { "x": 160.0, "y": 90.0 } }
                 },
                 "rotation": {
                   "type": "random_noise",
                   "properties": {
-                    "amplitude": 5.0,
+                    "amplitude": 1.0,
                     "seed": 42.0
                   }
                 }
