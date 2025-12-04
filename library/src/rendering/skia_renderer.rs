@@ -4,7 +4,7 @@ use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
 use crate::model::frame::transform::Transform;
 use crate::rendering::renderer::Renderer;
 use crate::rendering::skia_utils::{
-    create_gpu_context, create_surface, image_to_skia, surface_to_image,
+    create_gpu_context, create_surface, image_to_skia, surface_to_image, GpuContext,
 };
 use crate::util::timing::ScopedTimer;
 use log::{debug, trace};
@@ -13,7 +13,7 @@ use skia_safe::trim_path_effect::Mode;
 use skia_safe::utils::parse_path::from_svg;
 use skia_safe::{
     Canvas, Color as SkColor, CubicResampler, Font, FontMgr, FontStyle, Matrix, Paint, PaintStyle,
-    Point, SamplingOptions, Surface, gpu,
+    Point, SamplingOptions, Surface,
 };
 use std::error::Error;
 
@@ -22,7 +22,7 @@ pub struct SkiaRenderer {
     height: u32,
     background_color: Color,
     surface: Surface,
-    gpu_context: Option<gpu::DirectContext>,
+    gpu_context: Option<GpuContext>,
 }
 
 impl SkiaRenderer {
@@ -34,8 +34,14 @@ impl SkiaRenderer {
             debug!("SkiaRenderer: GPU context unavailable, using CPU raster surfaces");
         }
 
-        let surface = create_surface(width, height, gpu_context.as_mut())
-            .expect("Cannot create Skia Surface");
+        let surface = create_surface(
+            width,
+            height,
+            gpu_context
+                .as_mut()
+                .map(|ctx| &mut ctx.direct_context),
+        )
+        .expect("Cannot create Skia Surface");
 
         let mut renderer = SkiaRenderer {
             width,
@@ -58,7 +64,13 @@ impl SkiaRenderer {
     }
 
     fn create_layer_surface(&mut self) -> Result<Surface, Box<dyn Error>> {
-        create_surface(self.width, self.height, self.gpu_context.as_mut())
+        create_surface(
+            self.width,
+            self.height,
+            self.gpu_context
+                .as_mut()
+                .map(|ctx| &mut ctx.direct_context),
+        )
     }
 
     fn draw_shape_fill_on_canvas(
@@ -296,7 +308,7 @@ impl Renderer for SkiaRenderer {
             self.width, self.height
         ));
         if let Some(context) = self.gpu_context.as_mut() {
-            context.flush_and_submit();
+            context.direct_context.flush_and_submit();
         }
         let width = self.width;
         let height = self.height;
