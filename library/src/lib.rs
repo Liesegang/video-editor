@@ -12,12 +12,13 @@ pub mod error;
 pub use error::LibraryError;
 
 pub use crate::loader::image::Image;
+pub use crate::plugin::ExportSettings; // Added
 // Re-export the services and models that the app will need.
 pub use service::{ExportService, ProjectModel, RenderService};
 pub use rendering::skia_renderer::SkiaRenderer;
 
-use crate::plugin::{load_plugins, ExportSettings};
-use crate::rendering::effects::EffectRegistry;
+use crate::plugin::load_plugins; // Added
+// use crate::rendering::effects::EffectRegistry; // Removed
 use log::info;
 use std::fs;
 use std::ops::Range;
@@ -61,7 +62,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         }
     }
 
-    let effect_registry = Arc::new(EffectRegistry::new_with_defaults());
+    // Removed effect_registry instantiation
     let composition = project_model.composition();
     let renderer = SkiaRenderer::new(
         composition.width as u32,
@@ -79,8 +80,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
             renderer,
             plugin_manager.clone(),
             property_evaluators,
-            effect_registry,
-            entity_converter_registry,
+            entity_converter_registry, // Removed effect_registry
         )
     };
 

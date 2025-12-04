@@ -5,7 +5,7 @@ use crate::model::frame::entity::{FrameEntity, FrameObject};
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
 use crate::plugin::{LoadRequest, LoadResponse, PluginManager};
-use crate::rendering::effects::EffectRegistry;
+// use crate::rendering::effects::EffectRegistry; // Removed
 use crate::rendering::renderer::Renderer;
 use crate::service::project_model::ProjectModel;
 use crate::util::timing::{measure_debug, ScopedTimer};
@@ -15,7 +15,7 @@ use std::sync::Arc;
 pub struct RenderService<T: Renderer> {
     pub renderer: T,
     property_evaluators: Arc<PropertyEvaluatorRegistry>,
-    effect_registry: Arc<EffectRegistry>,
+    // effect_registry: Arc<EffectRegistry>, // Removed
     plugin_manager: Arc<PluginManager>,
     entity_converter_registry: Arc<EntityConverterRegistry>,
 }
@@ -25,13 +25,13 @@ impl<T: Renderer> RenderService<T> {
         renderer: T,
         plugin_manager: Arc<PluginManager>,
         property_evaluators: Arc<PropertyEvaluatorRegistry>,
-        effect_registry: Arc<EffectRegistry>,
+        // effect_registry: Arc<EffectRegistry>, // Removed
         entity_converter_registry: Arc<EntityConverterRegistry>,
     ) -> Self {
         Self {
             renderer,
             property_evaluators,
-            effect_registry,
+            // effect_registry, // Removed
             plugin_manager,
             entity_converter_registry,
         }
@@ -161,13 +161,16 @@ impl<T: Renderer> RenderService<T> {
 
     fn apply_effects(
         &self,
-        image: Image,
+        mut image: Image,
         effects: &[crate::model::frame::effect::ImageEffect],
     ) -> Result<Image, LibraryError> {
         if effects.is_empty() {
             Ok(image)
         } else {
-            self.effect_registry.apply(image, effects)
+            for effect in effects {
+                image = self.plugin_manager.apply_effect(effect.effect_type.as_str(), &image, &effect.properties)?;
+            }
+            Ok(image)
         }
     }
-}
+} // Added closing brace for impl RenderService

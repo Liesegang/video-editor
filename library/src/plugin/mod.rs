@@ -5,21 +5,27 @@ use std::sync::{Arc, RwLock};
 use crate::cache::{CacheManager, SharedCacheManager};
 use crate::framing::property::PropertyEvaluatorRegistry;
 use crate::loader::image::Image;
-use crate::model::project::entity::Entity;
+// use crate::model::project::entity::Entity; // Removed - This line was there from previous step, but should be removed
 use crate::model::project::property::PropertyValue;
 use libloading::{Library, Symbol};
 use crate::model::project::project::{Composition, Project};
 use serde_json::Value;
 use crate::error::LibraryError;
 
-mod exporters;
-mod loaders;
-mod property;
+pub mod exporters;
+pub mod loaders;
+pub mod properties;
+pub mod effects;
 
 
-use exporters::{FfmpegExportPlugin, PngExportPlugin};
-use loaders::{FfmpegVideoLoader, NativeImageLoader};
-use property::BuiltinPropertyPlugin;
+// Publicly re-export plugin types from their sub-modules
+pub use crate::plugin::effects::blur::BlurEffectPlugin; // Corrected path
+pub use crate::plugin::loaders::ffmpeg_video::FfmpegVideoLoader;
+pub use crate::plugin::loaders::native_image::NativeImageLoader;
+pub use crate::plugin::exporters::ffmpeg_export::FfmpegExportPlugin;
+pub use crate::plugin::exporters::png_export::PngExportPlugin;
+pub use crate::plugin::properties::builtin::BuiltinPropertyPlugin;
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginCategory {
@@ -35,7 +41,7 @@ pub trait Plugin: Send + Sync {
 }
 
 pub trait EffectPlugin: Plugin {
-    fn create(&self, params: HashMap<String, PropertyValue>) -> Entity;
+    fn apply(&self, image: &Image, params: &HashMap<String, PropertyValue>) -> Result<Image, LibraryError>;
 }
 
 pub trait PropertyPlugin: Plugin {
@@ -241,16 +247,15 @@ impl PluginManager {
         inner.property_plugins.push(plugin);
     }
 
-    pub fn create_entity(
-        &self,
-        key: &str,
-        params: HashMap<String, PropertyValue>,
-    ) -> Option<Entity> {
+    pub fn apply_effect(&self, key: &str, image: &Image, params: &HashMap<String, PropertyValue>) -> Result<Image, LibraryError> {
         let inner = self.inner.read().unwrap();
-        inner
-            .effect_plugins
-            .get(key)
-            .map(|plugin| plugin.create(params))
+        if let Some(plugin) = inner.effect_plugins.get(key) {
+            plugin.apply(image, params)
+        } else {
+            // 未登録のエフェクト指定は、警告しつつ元画像をそのまま返すのが安全
+            // log::warn!("Effect '{}' not found", key); 
+            Ok(image.clone()) 
+        }
     }
 
     pub fn load_resource(&self, request: &LoadRequest) -> Result<LoadResponse, LibraryError> {
@@ -307,53 +312,18 @@ impl PluginManager {
         }
         Ok(())
     }
-}
+} // Correct closing brace for impl PluginManager
 
 #[allow(improper_ctypes_definitions)]
 type PropertyPluginCreateFn = unsafe extern "C" fn() -> *mut dyn PropertyPlugin;
 
-pub struct BasicTextEffectFactory;
-
-impl Plugin for BasicTextEffectFactory {
-    fn id(&self) -> &'static str {
-        "basic_text_effect"
-    }
-
-    fn category(&self) -> PluginCategory {
-        PluginCategory::Effect
-    }
-}
-
-impl EffectPlugin for BasicTextEffectFactory {
-    fn create(&self, params: HashMap<String, PropertyValue>) -> Entity {
-        let mut text_entity = Entity::new("text");
-
-        if let Some(PropertyValue::String(text)) = params.get("text") {
-            text_entity.set_constant_property("text", PropertyValue::String(text.clone()));
-        }
-
-        if let Some(PropertyValue::Number(start)) = params.get("start_time") {
-            text_entity.start_time = *start;
-        }
-
-        if let Some(PropertyValue::Number(end)) = params.get("end_time") {
-            text_entity.end_time = *end;
-        }
-
-        text_entity.set_constant_property("size", PropertyValue::Number(24.0));
-        text_entity.set_constant_property("font", PropertyValue::String("Arial".to_string()));
-
-        text_entity
-    }
-}
-
 pub fn load_plugins() -> Arc<PluginManager> {
     let manager = Arc::new(PluginManager::new());
-    manager.register_effect("basic_text", Box::new(BasicTextEffectFactory));
-    manager.register_load_plugin(Box::new(NativeImageLoader::new()));
-    manager.register_load_plugin(Box::new(FfmpegVideoLoader::new()));
-    manager.register_export_plugin(Box::new(PngExportPlugin::new()));
-    manager.register_export_plugin(Box::new(FfmpegExportPlugin::new()));
-    manager.register_property_plugin(Box::new(BuiltinPropertyPlugin));
+    manager.register_effect("blur", Box::new(self::effects::blur::BlurEffectPlugin::new())); // Registered Blur
+    manager.register_load_plugin(Box::new(self::loaders::native_image::NativeImageLoader::new()));
+    manager.register_load_plugin(Box::new(self::loaders::ffmpeg_video::FfmpegVideoLoader::new()));
+    manager.register_export_plugin(Box::new(self::exporters::png_export::PngExportPlugin::new()));
+    manager.register_export_plugin(Box::new(self::exporters::ffmpeg_export::FfmpegExportPlugin::new()));
+    manager.register_property_plugin(Box::new(self::properties::builtin::BuiltinPropertyPlugin::new()));
     manager
 }
