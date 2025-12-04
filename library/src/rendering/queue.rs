@@ -1,17 +1,15 @@
-use std::cmp;
-use std::sync::{Arc, Mutex, mpsc};
-use std::thread::{self, JoinHandle};
-
-use log::{error, info};
-
+use crate::service::{ProjectModel, RenderService};
 use crate::Image;
-use crate::framing::{PropertyEvaluatorRegistry, get_frame_from_project};
 use crate::model::project::project::{Composition, Project};
 use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
-use crate::rendering::RenderContext;
 use crate::rendering::effects::EffectRegistry;
 use crate::rendering::skia_renderer::SkiaRenderer;
-use crate::util::timing::{ScopedTimer, measure_debug, measure_info};
+use crate::util::timing::{measure_info, ScopedTimer};
+use log::{error, info};
+use std::cmp;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use crate::framing::PropertyEvaluatorRegistry;
 
 #[derive(Debug)]
 struct SaveTask {
@@ -206,7 +204,7 @@ impl RenderQueue {
             let ctx = Arc::clone(&worker_context);
 
             let handle = thread::spawn(move || {
-                let mut render_context = RenderContext::new(
+                let mut render_service = RenderService::new(
                     SkiaRenderer::new(
                         ctx.surface_width,
                         ctx.surface_height,
@@ -216,6 +214,9 @@ impl RenderQueue {
                     Arc::clone(&property_evaluators),
                     effect_registry,
                 );
+
+                let project_model = ProjectModel::new(project, ctx.composition_index)
+                    .expect("Failed to create project model in worker thread");
 
                 loop {
                     let job = {
@@ -234,35 +235,12 @@ impl RenderQueue {
                         job.frame_index, worker_id
                     ));
 
-                    if let Err(err) = measure_debug(
-                        format!("Frame {}: clear render target", job.frame_index),
-                        || render_context.clear(),
-                    ) {
-                        error!(
-                            "Worker {} failed to clear render target for frame {}: {}",
-                            worker_id, job.frame_index, err
-                        );
-                        continue;
-                    }
-
-                    let frame = measure_debug(
-                        format!("Frame {}: assemble frame graph", job.frame_index),
-                        || {
-                            get_frame_from_project(
-                                project.as_ref(),
-                                ctx.composition_index,
-                                job.frame_time,
-                                &property_evaluators,
-                            )
-                        },
-                    );
-
                     let render_result = measure_info(
                         format!(
                             "Frame {}: renderer pass (worker {})",
                             job.frame_index, worker_id
                         ),
-                        || render_context.render_frame(frame),
+                        || render_service.render_frame(&project_model, job.frame_time),
                     );
 
                     let image = match render_result {
@@ -296,6 +274,7 @@ impl RenderQueue {
         (render_tx, workers)
     }
 }
+
 
 impl Drop for RenderQueue {
     fn drop(&mut self) {

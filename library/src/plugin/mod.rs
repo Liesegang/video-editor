@@ -9,11 +9,13 @@ use crate::loader::image::Image;
 use crate::model::project::entity::Entity;
 use crate::model::project::property::PropertyValue;
 use libloading::{Library, Symbol};
+use crate::model::project::project::{Composition, Project};
 use serde_json::Value;
 
 mod exporters;
 mod loaders;
 mod property;
+
 
 use exporters::{FfmpegExportPlugin, PngExportPlugin};
 use loaders::{FfmpegVideoLoader, NativeImageLoader};
@@ -89,6 +91,49 @@ pub struct ExportSettings {
 }
 
 impl ExportSettings {
+    pub fn from_project(project: &Project, composition: &Composition) -> Self {
+        let mut settings = ExportSettings::for_dimensions(
+            composition.width as u32,
+            composition.height as u32,
+            composition.fps,
+        );
+
+        let config = &project.export;
+        if config.container.is_none()
+            && config.codec.is_none()
+            && config.pixel_format.is_none()
+            && config.ffmpeg_path.is_none()
+            && config.parameters.is_empty()
+        {
+            return settings;
+        }
+
+        if let Some(value) = &config.container {
+            settings.container = value.clone();
+        }
+        if let Some(value) = &config.codec {
+            settings.codec = value.clone();
+        }
+        if let Some(value) = &config.pixel_format {
+            settings.pixel_format = value.clone();
+        }
+        if let Some(value) = &config.ffmpeg_path {
+            settings.ffmpeg_path = Some(value.clone());
+        }
+        settings.parameters = config.parameters.clone();
+
+        if matches!(settings.export_format(), ExportFormat::Video) {
+            if settings.codec == "png" {
+                settings.codec = "libx264".into();
+            }
+            if settings.pixel_format == "rgba" {
+                settings.pixel_format = "yuv420p".into();
+            }
+        }
+
+        settings
+    }
+
     pub fn for_dimensions(width: u32, height: u32, fps: f64) -> Self {
         Self {
             container: "png".into(),
