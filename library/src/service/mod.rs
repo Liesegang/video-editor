@@ -61,7 +61,7 @@ impl ProjectService {
       composition.background_color.clone(),
     );
     let plugin_manager = load_plugins();
-    let property_evaluators = Arc::new(PropertyEvaluatorRegistry::default());
+    let property_evaluators = Arc::new(plugin_manager.build_property_registry());
     let effect_registry = Arc::new(EffectRegistry::new_with_defaults());
 
     let queue_bound = save_queue_bound.max(1);
