@@ -19,56 +19,56 @@ use std::error::Error;
 use std::sync::Arc;
 
 pub fn render_frame_from_json(json_str: &str) -> Result<Image, Box<dyn std::error::Error>> {
-  let frame_info = parse_frame_info(json_str)?;
-  let renderer = SkiaRenderer::new(
-    frame_info.width as u32,
-    frame_info.height as u32,
-    frame_info.background_color.clone(),
-  );
-  let plugin_manager = load_plugins();
-  let property_evaluators = Arc::new(PropertyEvaluatorRegistry::default());
-  let mut context = RenderContext::new(renderer, plugin_manager, property_evaluators);
-  context.render_frame(frame_info)
+    let frame_info = parse_frame_info(json_str)?;
+    let renderer = SkiaRenderer::new(
+        frame_info.width as u32,
+        frame_info.height as u32,
+        frame_info.background_color.clone(),
+    );
+    let plugin_manager = load_plugins();
+    let property_evaluators = Arc::new(PropertyEvaluatorRegistry::default());
+    let mut context = RenderContext::new(renderer, plugin_manager, property_evaluators);
+    context.render_frame(frame_info)
 }
 
 pub fn create_render_context(
-  width: u32,
-  height: u32,
-  background_color: model::frame::color::Color,
+    width: u32,
+    height: u32,
+    background_color: model::frame::color::Color,
 ) -> RenderContext<SkiaRenderer> {
-  let renderer = SkiaRenderer::new(width, height, background_color);
-  let plugin_manager = load_plugins();
-  let property_evaluators = Arc::new(PropertyEvaluatorRegistry::default());
-  RenderContext::new(renderer, plugin_manager, property_evaluators)
+    let renderer = SkiaRenderer::new(width, height, background_color);
+    let plugin_manager = load_plugins();
+    let property_evaluators = Arc::new(PropertyEvaluatorRegistry::default());
+    RenderContext::new(renderer, plugin_manager, property_evaluators)
 }
 
 pub fn create_render_context_from_json(
-  json_str: &str,
+    json_str: &str,
 ) -> Result<RenderContext<SkiaRenderer>, Box<dyn Error>> {
-  let frame_info = parse_frame_info(json_str)?;
-  let renderer = SkiaRenderer::new(
-    frame_info.width as u32,
-    frame_info.height as u32,
-    frame_info.background_color.clone(),
-  );
-  let plugin_manager = load_plugins();
-  let property_evaluators = Arc::new(PropertyEvaluatorRegistry::default());
-  Ok(RenderContext::new(
-    renderer,
-    plugin_manager,
-    property_evaluators,
-  ))
+    let frame_info = parse_frame_info(json_str)?;
+    let renderer = SkiaRenderer::new(
+        frame_info.width as u32,
+        frame_info.height as u32,
+        frame_info.background_color.clone(),
+    );
+    let plugin_manager = load_plugins();
+    let property_evaluators = Arc::new(PropertyEvaluatorRegistry::default());
+    Ok(RenderContext::new(
+        renderer,
+        plugin_manager,
+        property_evaluators,
+    ))
 }
 
 pub fn render_frame_with_context(
-  context: &mut RenderContext<SkiaRenderer>,
-  json_str: &str,
+    context: &mut RenderContext<SkiaRenderer>,
+    json_str: &str,
 ) -> Result<Image, Box<dyn Error>> {
-  let frame_info = parse_frame_info(json_str)?;
-  context.render_frame(frame_info)
+    let frame_info = parse_frame_info(json_str)?;
+    context.render_frame(frame_info)
 }
 
 pub fn load_project(project_path: &str) -> Result<Project, Box<dyn std::error::Error>> {
-  let project = Project::load(project_path)?;
-  Ok(project)
+    let project = Project::load(project_path)?;
+    Ok(project)
 }

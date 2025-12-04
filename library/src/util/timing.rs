@@ -4,54 +4,54 @@ use std::time::Instant;
 use log::{self, Level};
 
 pub struct ScopedTimer {
-  label: Cow<'static, str>,
-  level: Level,
-  start: Instant,
+    label: Cow<'static, str>,
+    level: Level,
+    start: Instant,
 }
 
 impl ScopedTimer {
-  pub fn with_level(label: impl Into<Cow<'static, str>>, level: Level) -> Self {
-    Self {
-      label: label.into(),
-      level,
-      start: Instant::now(),
+    pub fn with_level(label: impl Into<Cow<'static, str>>, level: Level) -> Self {
+        Self {
+            label: label.into(),
+            level,
+            start: Instant::now(),
+        }
     }
-  }
 
-  pub fn info(label: impl Into<Cow<'static, str>>) -> Self {
-    Self::with_level(label, Level::Info)
-  }
+    pub fn info(label: impl Into<Cow<'static, str>>) -> Self {
+        Self::with_level(label, Level::Info)
+    }
 
-  pub fn debug(label: impl Into<Cow<'static, str>>) -> Self {
-    Self::with_level(label, Level::Debug)
-  }
+    pub fn debug(label: impl Into<Cow<'static, str>>) -> Self {
+        Self::with_level(label, Level::Debug)
+    }
 }
 
 impl Drop for ScopedTimer {
-  fn drop(&mut self) {
-    let duration = self.start.elapsed().as_millis();
-    log::log!(self.level, "{} took {} ms", self.label, duration);
-  }
+    fn drop(&mut self) {
+        let duration = self.start.elapsed().as_millis();
+        log::log!(self.level, "{} took {} ms", self.label, duration);
+    }
 }
 
 pub fn measure<T, F>(label: impl Into<Cow<'static, str>>, level: Level, f: F) -> T
 where
-  F: FnOnce() -> T,
+    F: FnOnce() -> T,
 {
-  let _timer = ScopedTimer::with_level(label, level);
-  f()
+    let _timer = ScopedTimer::with_level(label, level);
+    f()
 }
 
 pub fn measure_info<T, F>(label: impl Into<Cow<'static, str>>, f: F) -> T
 where
-  F: FnOnce() -> T,
+    F: FnOnce() -> T,
 {
-  measure(label, Level::Info, f)
+    measure(label, Level::Info, f)
 }
 
 pub fn measure_debug<T, F>(label: impl Into<Cow<'static, str>>, f: F) -> T
 where
-  F: FnOnce() -> T,
+    F: FnOnce() -> T,
 {
-  measure(label, Level::Debug, f)
+    measure(label, Level::Debug, f)
 }

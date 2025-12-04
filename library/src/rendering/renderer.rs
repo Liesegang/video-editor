@@ -1,8 +1,8 @@
 use crate::loader::image::Image;
-use std::error::Error;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, JoinType, PathEffect};
 use crate::model::frame::transform::Transform;
+use std::error::Error;
 
 pub trait Renderer {
     fn draw_image(

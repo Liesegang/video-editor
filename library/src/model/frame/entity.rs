@@ -37,6 +37,6 @@ pub enum FrameEntity {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FrameObject {
-  pub entity: FrameEntity,
-  pub properties: PropertyMap,
+    pub entity: FrameEntity,
+    pub properties: PropertyMap,
 }
