@@ -7,7 +7,7 @@ use log::{error, info};
 use crate::Image;
 use crate::framing::{PropertyEvaluatorRegistry, get_frame_from_project};
 use crate::model::project::project::{Composition, Project};
-use crate::plugin::{ExportFormat, PluginManager};
+use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
 use crate::rendering::RenderContext;
 use crate::rendering::effects::EffectRegistry;
 use crate::rendering::skia_renderer::SkiaRenderer;
@@ -18,6 +18,7 @@ struct SaveTask {
     frame_index: u64,
     output_path: String,
     image: Image,
+    export_settings: Arc<ExportSettings>,
 }
 
 #[derive(Debug)]
@@ -27,6 +28,7 @@ struct RenderWorkerContext {
     surface_height: u32,
     background_color: crate::model::frame::color::Color,
     export_format: ExportFormat,
+    export_settings: Arc<ExportSettings>,
 }
 
 #[derive(Debug)]
@@ -53,6 +55,7 @@ pub struct RenderQueueConfig {
     pub property_evaluators: Arc<PropertyEvaluatorRegistry>,
     pub effect_registry: Arc<EffectRegistry>,
     pub export_format: ExportFormat,
+    pub export_settings: Arc<ExportSettings>,
     pub worker_count: Option<usize>,
     pub save_queue_bound: usize,
 }
@@ -87,6 +90,7 @@ impl RenderQueue {
             &composition,
             config.composition_index,
             config.export_format,
+            Arc::clone(&config.export_settings),
         ));
 
         let (save_tx, saver_handle) = Self::spawn_saver(
@@ -164,6 +168,7 @@ impl RenderQueue {
                             worker_ctx.export_format,
                             &task.output_path,
                             &task.image,
+                            &task.export_settings,
                         )
                     })
                 {
@@ -275,6 +280,7 @@ impl RenderQueue {
                         frame_index: job.frame_index,
                         output_path: job.output_path,
                         image,
+                        export_settings: Arc::clone(&ctx.export_settings),
                     }) {
                         error!(
                             "Worker {} failed to queue save task for frame {}: {}",
@@ -327,6 +333,7 @@ impl RenderWorkerContext {
         composition: &Composition,
         composition_index: usize,
         export_format: ExportFormat,
+        export_settings: Arc<ExportSettings>,
     ) -> Self {
         Self {
             composition_index,
@@ -334,6 +341,7 @@ impl RenderWorkerContext {
             surface_height: composition.height as u32,
             background_color: composition.background_color.clone(),
             export_format,
+            export_settings,
         }
     }
 }

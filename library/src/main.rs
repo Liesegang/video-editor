@@ -1,4 +1,3 @@
-use library::plugin::ExportFormat;
 use library::service::ProjectService;
 use log::info;
 use std::env;
@@ -30,7 +29,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let total_frames = composition.duration.ceil().max(0.0) as u64;
     let output_stem = format!("./rendered/{}", composition.name);
 
-    render_service.render_range(0..total_frames, &output_stem, ExportFormat::Png)?;
+    render_service.render_range(0..total_frames, &output_stem)?;
     info!("All frames rendered.");
 
     render_service.shutdown()?;

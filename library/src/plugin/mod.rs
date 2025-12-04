@@ -9,12 +9,13 @@ use crate::loader::image::Image;
 use crate::model::project::entity::Entity;
 use crate::model::project::property::PropertyValue;
 use libloading::{Library, Symbol};
+use serde_json::Value;
 
 mod exporters;
 mod loaders;
 mod property;
 
-use exporters::PngExportPlugin;
+use exporters::{FfmpegExportPlugin, PngExportPlugin};
 use loaders::{FfmpegVideoLoader, NativeImageLoader};
 use property::BuiltinPropertyPlugin;
 
@@ -58,11 +59,6 @@ pub trait LoadPlugin: Plugin {
     ) -> Result<LoadResponse, Box<dyn Error>>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExportFormat {
-    Png,
-}
-
 pub trait ExportPlugin: Plugin {
     fn supports(&self, format: ExportFormat) -> bool;
     fn export_image(
@@ -70,7 +66,83 @@ pub trait ExportPlugin: Plugin {
         format: ExportFormat,
         path: &str,
         image: &Image,
+        settings: &ExportSettings,
     ) -> Result<(), Box<dyn Error>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    Png,
+    Video,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExportSettings {
+    pub container: String,
+    pub codec: String,
+    pub pixel_format: String,
+    pub ffmpeg_path: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+    pub parameters: HashMap<String, Value>,
+}
+
+impl ExportSettings {
+    pub fn for_dimensions(width: u32, height: u32, fps: f64) -> Self {
+        Self {
+            container: "png".into(),
+            codec: "png".into(),
+            pixel_format: "rgba".into(),
+            ffmpeg_path: None,
+            width,
+            height,
+            fps,
+            parameters: HashMap::new(),
+        }
+    }
+
+    pub fn export_format(&self) -> ExportFormat {
+        match self.container.as_str() {
+            "png" | "apng" => ExportFormat::Png,
+            _ => ExportFormat::Video,
+        }
+    }
+
+    pub fn parameter_string(&self, key: &str) -> Option<String> {
+        match self.parameters.get(key)? {
+            Value::String(value) => Some(value.clone()),
+            Value::Number(value) => Some(value.to_string()),
+            Value::Bool(value) => Some(value.to_string()),
+            _ => None,
+        }
+    }
+
+    pub fn parameter_u64(&self, key: &str) -> Option<u64> {
+        match self.parameters.get(key)? {
+            Value::Number(value) => {
+                if value.is_u64() {
+                    value.as_u64()
+                } else if value.is_i64() {
+                    value
+                        .as_i64()
+                        .and_then(|v| if v >= 0 { Some(v as u64) } else { None })
+                } else {
+                    value.as_f64().map(|v| v.max(0.0).round() as u64)
+                }
+            }
+            Value::String(value) => value.parse::<u64>().ok(),
+            _ => None,
+        }
+    }
+
+    pub fn parameter_f64(&self, key: &str) -> Option<f64> {
+        match self.parameters.get(key)? {
+            Value::Number(value) => value.as_f64(),
+            Value::String(value) => value.parse::<f64>().ok(),
+            _ => None,
+        }
+    }
 }
 
 struct PluginRepository {
@@ -151,11 +223,12 @@ impl PluginManager {
         format: ExportFormat,
         path: &str,
         image: &Image,
+        settings: &ExportSettings,
     ) -> Result<(), Box<dyn Error>> {
         let inner = self.inner.read().unwrap();
         for plugin in &inner.export_plugins {
             if plugin.supports(format) {
-                return plugin.export_image(format, path, image);
+                return plugin.export_image(format, path, image, settings);
             }
         }
         Err("No export plugin registered for requested format".into())
@@ -235,6 +308,7 @@ pub fn load_plugins() -> Arc<PluginManager> {
     manager.register_load_plugin(Box::new(NativeImageLoader::new()));
     manager.register_load_plugin(Box::new(FfmpegVideoLoader::new()));
     manager.register_export_plugin(Box::new(PngExportPlugin::new()));
+    manager.register_export_plugin(Box::new(FfmpegExportPlugin::new()));
     manager.register_property_plugin(Box::new(BuiltinPropertyPlugin));
     manager
 }
