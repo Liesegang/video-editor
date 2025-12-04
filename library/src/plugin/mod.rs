@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::error::Error;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
@@ -11,6 +10,7 @@ use crate::model::project::property::PropertyValue;
 use libloading::{Library, Symbol};
 use crate::model::project::project::{Composition, Project};
 use serde_json::Value;
+use crate::error::LibraryError;
 
 mod exporters;
 mod loaders;
@@ -58,7 +58,7 @@ pub trait LoadPlugin: Plugin {
         &self,
         request: &LoadRequest,
         cache: &CacheManager,
-    ) -> Result<LoadResponse, Box<dyn Error>>;
+    ) -> Result<LoadResponse, LibraryError>;
 }
 
 pub trait ExportPlugin: Plugin {
@@ -69,7 +69,7 @@ pub trait ExportPlugin: Plugin {
         path: &str,
         image: &Image,
         settings: &ExportSettings,
-    ) -> Result<(), Box<dyn Error>>;
+    ) -> Result<(), LibraryError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +91,7 @@ pub struct ExportSettings {
 }
 
 impl ExportSettings {
-    pub fn from_project(project: &Project, composition: &Composition) -> Self {
+    pub fn from_project(project: &Project, composition: &Composition) -> Result<Self, LibraryError> {
         let mut settings = ExportSettings::for_dimensions(
             composition.width as u32,
             composition.height as u32,
@@ -105,7 +105,7 @@ impl ExportSettings {
             && config.ffmpeg_path.is_none()
             && config.parameters.is_empty()
         {
-            return settings;
+            return Ok(settings);
         }
 
         if let Some(value) = &config.container {
@@ -131,7 +131,7 @@ impl ExportSettings {
             }
         }
 
-        settings
+        Ok(settings)
     }
 
     pub fn for_dimensions(width: u32, height: u32, fps: f64) -> Self {
@@ -253,14 +253,14 @@ impl PluginManager {
             .map(|plugin| plugin.create(params))
     }
 
-    pub fn load_resource(&self, request: &LoadRequest) -> Result<LoadResponse, Box<dyn Error>> {
+    pub fn load_resource(&self, request: &LoadRequest) -> Result<LoadResponse, LibraryError> {
         let inner = self.inner.read().unwrap();
         for plugin in &inner.load_plugins {
             if plugin.supports(request) {
                 return plugin.load(request, &self.cache_manager);
             }
         }
-        Err(format!("No load plugin registered for request {:?}", request).into())
+        Err(LibraryError::Plugin(format!("No load plugin registered for request {:?}", request)))
     }
 
     pub fn export_image(
@@ -269,14 +269,14 @@ impl PluginManager {
         path: &str,
         image: &Image,
         settings: &ExportSettings,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), LibraryError> {
         let inner = self.inner.read().unwrap();
         for plugin in &inner.export_plugins {
             if plugin.supports(format) {
                 return plugin.export_image(format, path, image, settings);
             }
         }
-        Err("No export plugin registered for requested format".into())
+        Err(LibraryError::Plugin("No export plugin registered for requested format".to_string()))
     }
 
     pub fn build_property_registry(&self) -> PropertyEvaluatorRegistry {
@@ -291,14 +291,14 @@ impl PluginManager {
     pub fn load_property_plugin_from_file<P: AsRef<Path>>(
         &self,
         path: P,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), LibraryError> {
         unsafe {
             let library = Library::new(path.as_ref())?;
             let constructor: Symbol<PropertyPluginCreateFn> =
                 library.get(b"create_property_plugin")?;
             let raw = constructor();
             if raw.is_null() {
-                return Err("create_property_plugin returned null".into());
+                return Err(LibraryError::Plugin("create_property_plugin returned null".to_string()));
             }
             let plugin = Box::from_raw(raw);
             let mut inner = self.inner.write().unwrap();

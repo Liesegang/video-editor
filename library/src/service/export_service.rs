@@ -4,8 +4,8 @@ use crate::rendering::renderer::Renderer;
 use crate::service::project_model::ProjectModel;
 use crate::service::render_service::RenderService;
 use crate::util::timing::{measure_info, ScopedTimer};
+use crate::error::LibraryError;
 use log::{error, info};
-use std::error::Error;
 use std::ops::Range;
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::Arc;
@@ -63,13 +63,13 @@ impl ExportService {
         project_model: &ProjectModel,
         frame_range: Range<u64>,
         output_stem: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), LibraryError> {
         let composition = project_model.composition();
         let (fps, total_frames) = (composition.fps, composition.duration.ceil().max(0.0) as u64);
         let sender = self
             .save_tx
             .as_ref()
-            .ok_or("Save queue is already closed")?;
+            .ok_or(LibraryError::Render("Save queue is already closed".to_string()))?;
         let export_format = self.export_settings.export_format();
         let video_output = if matches!(export_format, ExportFormat::Video) {
             Some(format!(
@@ -107,18 +107,18 @@ impl ExportService {
                     format: export_format,
                     export_settings: Arc::clone(&self.export_settings),
                 })
-                .map_err(|_| "Save queue disconnected")?;
+                .map_err(|_| LibraryError::Render("Save queue disconnected".to_string()))?;
         }
 
         Ok(())
     }
 
-    pub fn shutdown(mut self) -> Result<(), Box<dyn Error>> {
+    pub fn shutdown(mut self) -> Result<(), LibraryError> {
         self.save_tx.take();
         if let Some(handle) = self.saver_handle.take() {
             handle
                 .join()
-                .map_err(|_| -> Box<dyn Error> { "Failed to join save worker".into() })?;
+                .map_err(|_| LibraryError::Render("Failed to join save worker".to_string()))?;
         }
         Ok(())
     }

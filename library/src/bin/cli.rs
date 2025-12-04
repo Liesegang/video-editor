@@ -1,6 +1,6 @@
-use std::error::Error;
 use library::run;
+use library::LibraryError;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), LibraryError> {
     run(std::env::args().collect())
 }
