@@ -5,7 +5,7 @@ use skia_safe::gpu::{self, direct_contexts, DirectContext, SurfaceOrigin};
 use skia_safe::images::raster_from_data;
 use skia_safe::surfaces;
 use skia_safe::{AlphaType, ColorType, Data, ISize, Image as SkImage, ImageInfo, Surface};
-use std::error::Error;
+use crate::error::LibraryError;
 
 #[cfg(feature = "gl")]
 use glutin::PossiblyCurrent;
@@ -70,7 +70,7 @@ pub fn create_surface(
     width: u32,
     height: u32,
     context: Option<&mut DirectContext>,
-) -> Result<Surface, Box<dyn Error>> {
+) -> Result<Surface, LibraryError> {
     if let Some(ctx) = context {
         if let Some(surface) = gpu::surfaces::render_target(
             ctx,
@@ -88,12 +88,12 @@ pub fn create_surface(
     create_raster_surface(width, height)
 }
 
-pub fn create_raster_surface(width: u32, height: u32) -> Result<Surface, Box<dyn Error>> {
+pub fn create_raster_surface(width: u32, height: u32) -> Result<Surface, LibraryError> {
     let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
-    surfaces::raster(&info, None, None).ok_or_else(|| "Cannot create Skia surface".into())
+    surfaces::raster(&info, None, None).ok_or_else(|| LibraryError::Render("Cannot create Skia surface".to_string()))
 }
 
-pub fn image_to_skia(image: &Image) -> Result<SkImage, Box<dyn Error>> {
+pub fn image_to_skia(image: &Image) -> Result<SkImage, LibraryError> {
     let info = ImageInfo::new(
         ISize::new(image.width as i32, image.height as i32),
         ColorType::RGBA8888,
@@ -102,14 +102,14 @@ pub fn image_to_skia(image: &Image) -> Result<SkImage, Box<dyn Error>> {
     );
     let sk_data = Data::new_copy(image.data.as_slice());
     raster_from_data(&info, sk_data, (image.width * 4) as usize)
-        .ok_or_else(|| "Failed to create Skia image".into())
+        .ok_or_else(|| LibraryError::Render("Failed to create Skia image".to_string()))
 }
 
 pub fn surface_to_image(
     surface: &mut Surface,
     width: u32,
     height: u32,
-) -> Result<Image, Box<dyn Error>> {
+) -> Result<Image, LibraryError> {
     let row_bytes = (width * 4) as usize;
     let mut buffer = vec![0u8; (height as usize) * row_bytes];
     let image_info = ImageInfo::new(
@@ -119,7 +119,7 @@ pub fn surface_to_image(
         None,
     );
     if !surface.read_pixels(&image_info, &mut buffer, row_bytes, (0, 0)) {
-        return Err("Failed to read surface pixels".into());
+        return Err(LibraryError::Render("Failed to read surface pixels".to_string()));
     }
     Ok(Image {
         width,

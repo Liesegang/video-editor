@@ -1,4 +1,5 @@
 use crate::framing::{get_frame_from_project, PropertyEvaluatorRegistry};
+use crate::framing::entity_converters::EntityConverterRegistry;
 use crate::loader::image::Image;
 use crate::model::frame::entity::{FrameEntity, FrameObject};
 use crate::model::frame::frame::FrameInfo;
@@ -8,7 +9,7 @@ use crate::rendering::effects::EffectRegistry;
 use crate::rendering::renderer::Renderer;
 use crate::service::project_model::ProjectModel;
 use crate::util::timing::{measure_debug, ScopedTimer};
-use std::error::Error;
+use crate::error::LibraryError;
 use std::sync::Arc;
 
 pub struct RenderService<T: Renderer> {
@@ -16,6 +17,7 @@ pub struct RenderService<T: Renderer> {
     property_evaluators: Arc<PropertyEvaluatorRegistry>,
     effect_registry: Arc<EffectRegistry>,
     plugin_manager: Arc<PluginManager>,
+    entity_converter_registry: Arc<EntityConverterRegistry>,
 }
 
 impl<T: Renderer> RenderService<T> {
@@ -24,12 +26,14 @@ impl<T: Renderer> RenderService<T> {
         plugin_manager: Arc<PluginManager>,
         property_evaluators: Arc<PropertyEvaluatorRegistry>,
         effect_registry: Arc<EffectRegistry>,
+        entity_converter_registry: Arc<EntityConverterRegistry>,
     ) -> Self {
         Self {
             renderer,
             property_evaluators,
             effect_registry,
             plugin_manager,
+            entity_converter_registry,
         }
     }
 
@@ -37,7 +41,7 @@ impl<T: Renderer> RenderService<T> {
         &mut self,
         project_model: &ProjectModel,
         time: f64,
-    ) -> Result<Image, Box<dyn Error>> {
+    ) -> Result<Image, LibraryError> {
         self.clear()?;
         let frame_info = self.get_frame(project_model, time);
         let object_count = frame_info.objects.len();
@@ -59,7 +63,7 @@ impl<T: Renderer> RenderService<T> {
                     };
                     let video_frame = measure_debug(
                         format!("Decode video {} frame {}", surface.file_path, frame_number),
-                        || -> Result<Image, Box<dyn Error>> {
+                        || -> Result<Image, LibraryError> {
                             match self.plugin_manager.load_resource(&request)? {
                                 LoadResponse::Image(img) => Ok(img),
                             }
@@ -76,7 +80,7 @@ impl<T: Renderer> RenderService<T> {
                     };
                     let image_frame = measure_debug(
                         format!("Load image {}", surface.file_path),
-                        || -> Result<Image, Box<dyn Error>> {
+                        || -> Result<Image, LibraryError> {
                             match self.plugin_manager.load_resource(&request)? {
                                 LoadResponse::Image(img) => Ok(img),
                             }
@@ -133,7 +137,7 @@ impl<T: Renderer> RenderService<T> {
         measure_debug("RenderService::finalize", || self.renderer.finalize())
     }
 
-    pub fn clear(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn clear(&mut self) -> Result<(), LibraryError> {
         measure_debug("RenderService::clear", || self.renderer.clear())
     }
     
@@ -143,6 +147,7 @@ impl<T: Renderer> RenderService<T> {
             project_model.composition_index(),
             time,
             &self.property_evaluators,
+            &self.entity_converter_registry,
         )
     }
 
@@ -158,7 +163,7 @@ impl<T: Renderer> RenderService<T> {
         &self,
         image: Image,
         effects: &[crate::model::frame::effect::ImageEffect],
-    ) -> Result<Image, Box<dyn Error>> {
+    ) -> Result<Image, LibraryError> {
         if effects.is_empty() {
             Ok(image)
         } else {

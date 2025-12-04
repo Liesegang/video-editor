@@ -1,6 +1,6 @@
 use crate::loader::image::Image;
 use ffmpeg_next as ffmpeg;
-use std::error::Error;
+use crate::error::LibraryError;
 
 pub struct VideoReader {
     input_context: ffmpeg::format::context::Input,
@@ -9,14 +9,14 @@ pub struct VideoReader {
 }
 
 impl VideoReader {
-    pub fn new(file_path: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn new(file_path: &str) -> Result<Self, LibraryError> {
         ffmpeg::init()?;
 
         let input_context = ffmpeg::format::input(&file_path)?;
         let input = input_context
             .streams()
             .best(ffmpeg::media::Type::Video)
-            .ok_or("動画ストリームが見つかりません")?;
+            .ok_or(LibraryError::FfmpegOther("動画ストリームが見つかりません".to_string()))?;
         let video_stream_index = input.index();
 
         let context_decoder = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
@@ -29,7 +29,7 @@ impl VideoReader {
         })
     }
 
-    pub fn decode_frame(&mut self, frame_number: u64) -> Result<Image, Box<dyn Error>> {
+    pub fn decode_frame(&mut self, frame_number: u64) -> Result<Image, LibraryError> {
         // Seek to the approximate position
         // Note: Seeking in ffmpeg is complex and might not land on the exact frame.
         // For simplicity, we might need to seek and then decode forward, or just decode from start if performance isn't an issue yet.
@@ -45,7 +45,7 @@ impl VideoReader {
         let stream = self
             .input_context
             .stream(self.video_stream_index)
-            .ok_or("ストリームが見つかりません")?;
+            .ok_or(LibraryError::FfmpegOther("ストリームが見つかりません".to_string()))?;
         let time_base = stream.time_base();
         // rough timestamp for the frame number. This assumes constant frame rate which might not be true.
         // But we don't have fps info easily here without more parsing.
@@ -111,7 +111,7 @@ impl VideoReader {
             }
         }
 
-        let frame = decoded_frame.ok_or("指定したフレームをデコードできませんでした")?;
+        let frame = decoded_frame.ok_or(LibraryError::FfmpegOther("指定したフレームをデコードできませんでした".to_string()))?;
 
         // Scaler setup
         let mut scaler = ffmpeg::software::scaling::context::Context::get(
@@ -147,7 +147,7 @@ impl VideoReader {
 }
 
 #[allow(dead_code)]
-pub fn decode_video_frame(file_path: &str, frame_number: u64) -> Result<Image, Box<dyn Error>> {
+pub fn decode_video_frame(file_path: &str, frame_number: u64) -> Result<Image, LibraryError> {
     let mut reader = VideoReader::new(file_path)?;
     reader.decode_frame(frame_number)
 }

@@ -5,11 +5,11 @@ use crate::rendering::skia_utils::{create_raster_surface, image_to_skia, surface
 use log::warn;
 use skia_safe::{Paint, TileMode, image_filters};
 use std::collections::HashMap;
-use std::error::Error;
 use std::sync::Arc;
+use crate::error::LibraryError;
 
 type EffectFn =
-    dyn Fn(&Image, &HashMap<String, PropertyValue>) -> Result<Image, Box<dyn Error>> + Send + Sync;
+    dyn Fn(&Image, &HashMap<String, PropertyValue>) -> Result<Image, LibraryError> + Send + Sync;
 
 pub struct EffectRegistry {
     handlers: HashMap<String, Arc<EffectFn>>,
@@ -32,7 +32,7 @@ impl EffectRegistry {
         &self,
         mut image: Image,
         effects: &[ImageEffect],
-    ) -> Result<Image, Box<dyn Error>> {
+    ) -> Result<Image, LibraryError> {
         for effect in effects {
             if let Some(handler) = self.handlers.get(effect.effect_type.as_str()) {
                 image = handler(&image, &effect.properties)?;
@@ -50,7 +50,7 @@ impl EffectRegistry {
 fn blur_effect(
     image: &Image,
     props: &HashMap<String, PropertyValue>,
-) -> Result<Image, Box<dyn Error>> {
+) -> Result<Image, LibraryError> {
     let radius = props
         .get("blur_radius")
         .and_then(|pv| pv.get_as::<f64>())
@@ -66,7 +66,7 @@ fn blur_effect(
 
     let mut paint = Paint::default();
     let filter = image_filters::blur((radius as f32, radius as f32), None::<TileMode>, None, None)
-        .ok_or("Failed to create blur filter")?;
+        .ok_or(LibraryError::Render("Failed to create blur filter".to_string()))?;
     paint.set_image_filter(filter);
     canvas.draw_image(&sk_image, (0, 0), Some(&paint));
 
