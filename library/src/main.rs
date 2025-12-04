@@ -1,5 +1,6 @@
 use library::framing::{PropertyEvaluatorRegistry, get_frame_from_project};
 use library::load_project;
+use library::Image;
 use library::plugin::{ExportFormat, load_plugins};
 use library::rendering::RenderContext;
 use library::rendering::skia_renderer::SkiaRenderer;
@@ -8,7 +9,14 @@ use log::{error, info};
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
+use std::thread;
+
+struct SaveTask {
+  frame_index: u64,
+  output_path: String,
+  image: Image,
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
   env_logger::init();
@@ -39,6 +47,25 @@ fn main() -> Result<(), Box<dyn Error>> {
 
   let plugin_manager = load_plugins();
   let property_evaluators = Arc::new(PropertyEvaluatorRegistry::default());
+
+  let (save_tx, save_rx) = mpsc::sync_channel::<SaveTask>(4);
+  let writer_manager = plugin_manager.clone();
+  let writer_handle = thread::spawn(move || {
+    while let Ok(task) = save_rx.recv() {
+      let SaveTask {
+        frame_index,
+        output_path,
+        image,
+      } = task;
+      if let Err(err) = measure_info(format!("Frame {}: save image", frame_index), || {
+        writer_manager.export_image(ExportFormat::Png, &output_path, &image)
+      }) {
+        error!("Failed to save frame {}: {}", frame_index, err);
+        break;
+      }
+    }
+  });
+
   let mut render_context = RenderContext::new(
     SkiaRenderer::new(
       composition.width as u32,
@@ -71,11 +98,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     })?;
 
     let output_path = format!("./rendered/{}_{:03}.png", composition.name, frame_index);
-    measure_info(format!("Frame {}: save image", frame_index), || {
-      plugin_manager.export_image(ExportFormat::Png, &output_path, &img)
-    })?;
+    save_tx
+      .send(SaveTask {
+        frame_index,
+        output_path,
+        image: img,
+      })
+      .expect("save thread disconnected");
   }
   info!("All frames rendered.");
+
+  drop(save_tx);
+  writer_handle
+    .join()
+    .expect("Failed to join save thread");
 
   Ok(())
 }
