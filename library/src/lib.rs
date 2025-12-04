@@ -7,8 +7,9 @@ pub mod plugin;
 pub mod rendering;
 pub mod util;
 
+pub use crate::loader::image::Image;
+
 use crate::framing::PropertyEvaluatorRegistry;
-use crate::loader::image::Image;
 use crate::model::project::project::Project;
 use crate::plugin::load_plugins;
 use crate::rendering::RenderContext;
