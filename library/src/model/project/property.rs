@@ -122,6 +122,16 @@ impl From<&PropertyValue> for serde_json::Value {
     }
 }
 
+impl PropertyValue {
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            PropertyValue::Number(v) => Some(*v),
+            PropertyValue::Integer(v) => Some(*v as f64),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Property {
     #[serde(default = "default_constant_evaluator", rename = "type")]
@@ -218,6 +228,10 @@ impl PropertyMap {
 
     pub fn set(&mut self, key: String, property: Property) {
         self.properties.insert(key, property);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Property)> {
+        self.properties.iter()
     }
 
     pub fn get_constant_value(&self, key: &str) -> Option<&PropertyValue> {

@@ -9,6 +9,7 @@ use crate::framing::{PropertyEvaluatorRegistry, get_frame_from_project};
 use crate::model::project::project::{Composition, Project};
 use crate::plugin::{ExportFormat, PluginManager};
 use crate::rendering::RenderContext;
+use crate::rendering::effects::EffectRegistry;
 use crate::rendering::skia_renderer::SkiaRenderer;
 use crate::util::timing::{ScopedTimer, measure_debug, measure_info};
 
@@ -50,6 +51,7 @@ pub struct RenderQueueConfig {
     pub composition_index: usize,
     pub plugin_manager: Arc<PluginManager>,
     pub property_evaluators: Arc<PropertyEvaluatorRegistry>,
+    pub effect_registry: Arc<EffectRegistry>,
     pub export_format: ExportFormat,
     pub worker_count: Option<usize>,
     pub save_queue_bound: usize,
@@ -192,6 +194,7 @@ impl RenderQueue {
         for worker_id in 0..worker_count {
             let plugin_manager = Arc::clone(&config.plugin_manager);
             let property_evaluators = Arc::clone(&config.property_evaluators);
+            let effect_registry = Arc::clone(&config.effect_registry);
             let project = Arc::clone(&config.project);
             let render_rx = Arc::clone(&render_rx);
             let save_tx = save_tx.clone();
@@ -206,6 +209,7 @@ impl RenderQueue {
                     ),
                     plugin_manager,
                     Arc::clone(&property_evaluators),
+                    effect_registry,
                 );
 
                 loop {

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use log::{debug, warn};
@@ -120,52 +121,18 @@ impl<'a> FrameEvaluator<'a> {
     }
 
     fn evaluate_image_effect(&self, config: &EffectConfig, time: f64) -> Option<ImageEffect> {
-        match config.effect_type.as_str() {
-            "blur" => {
-                let radius = self
-                    .evaluate_effect_number(&config.properties, "blur_radius", time)
-                    .unwrap_or(0.0);
-                if radius <= 0.0 {
-                    warn!(
-                        "Image effect[blur]: invalid 'blur_radius' ({}); skipping",
-                        radius
-                    );
-                    None
-                } else {
-                    Some(ImageEffect::Blur {
-                        radius: radius as f32,
-                    })
-                }
-            }
-            other => {
-                warn!("Image effect '{}' is not supported; skipping", other);
-                None
-            }
+        let mut evaluated = HashMap::new();
+        for (key, property) in config.properties.iter() {
+            let ctx = EvaluationContext {
+                property_map: &config.properties,
+            };
+            let value = self.property_evaluators.evaluate(property, time, &ctx);
+            evaluated.insert(key.clone(), value);
         }
-    }
-
-    fn evaluate_effect_number(
-        &self,
-        properties: &PropertyMap,
-        key: &str,
-        time: f64,
-    ) -> Option<f64> {
-        let property = properties.get(key)?;
-        let ctx = EvaluationContext {
-            property_map: properties,
-        };
-        let value = self.property_evaluators.evaluate(property, time, &ctx);
-        match value {
-            PropertyValue::Number(v) => Some(v),
-            PropertyValue::Integer(v) => Some(v as f64),
-            other => {
-                warn!(
-                    "Image effect property '{}' expected number, got {:?}; skipping",
-                    key, other
-                );
-                None
-            }
-        }
+        Some(ImageEffect {
+            effect_type: config.effect_type.clone(),
+            properties: evaluated,
+        })
     }
 
     fn build_text(&self, entity: &Entity, time: f64) -> Option<FrameObject> {
