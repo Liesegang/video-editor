@@ -3,6 +3,10 @@ name = "library"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["gl"]
+gl = []
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -14,6 +18,7 @@ env_logger = "0.11.8"
 lru = "0.12.3"
 ordered-float = "4.2.1"
 libloading = "0.8"
+glutin = "0.28"
 #opencv = "0.94.2"
 
 [profile.release]
