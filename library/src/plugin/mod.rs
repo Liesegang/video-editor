@@ -39,6 +39,7 @@ pub enum PluginCategory {
 pub trait Plugin: Send + Sync {
     fn id(&self) -> &'static str;
     fn category(&self) -> PluginCategory;
+    fn version(&self) -> (u32, u32, u32);
 }
 
 pub trait EffectPlugin: Plugin {

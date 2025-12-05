@@ -19,6 +19,10 @@ impl Plugin for NativeImageLoader {
     fn category(&self) -> PluginCategory {
         PluginCategory::Load
     }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 1, 0)
+    }
 }
 
 impl LoadPlugin for NativeImageLoader {

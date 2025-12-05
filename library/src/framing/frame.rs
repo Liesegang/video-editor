@@ -116,13 +116,13 @@ pub fn get_frame_from_project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framing::property::register_builtin_evaluators;
     use crate::framing::entity_converters::register_builtin_entity_converters;
     use crate::model::project::property::{Property, PropertyValue, Vec2, PropertyMap};
     use crate::model::frame::color::Color;
     use crate::model::frame::entity::FrameEntity;
     use crate::model::project::{Track, TrackEntity};
     use std::sync::Arc;
+    use crate::plugin::properties::builtin::register_builtin_evaluators;
 
     fn make_vec2(x: f64, y: f64) -> PropertyValue {
         PropertyValue::Vec2(Vec2 { x, y })
