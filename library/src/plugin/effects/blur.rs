@@ -22,6 +22,10 @@ impl Plugin for BlurEffectPlugin {
     fn category(&self) -> PluginCategory {
         PluginCategory::Effect
     }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 1, 0)
+    }
 }
 
 impl EffectPlugin for BlurEffectPlugin {

@@ -16,11 +16,15 @@ impl PngExportPlugin {
 
 impl Plugin for PngExportPlugin {
     fn id(&self) -> &'static str {
-        "png_export_plugin"
+        "png_export"
     }
 
     fn category(&self) -> PluginCategory {
         PluginCategory::Export
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 1, 0)
     }
 }
 

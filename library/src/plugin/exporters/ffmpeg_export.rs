@@ -22,11 +22,15 @@ impl FfmpegExportPlugin {
 
 impl Plugin for FfmpegExportPlugin {
     fn id(&self) -> &'static str {
-        "ffmpeg_export_plugin"
+        "ffmpeg_export"
     }
 
     fn category(&self) -> PluginCategory {
         PluginCategory::Export
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 1, 0)
     }
 }
 

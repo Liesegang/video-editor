@@ -2,6 +2,7 @@
 name = "library"
 version = "0.1.0"
 edition = "2024"
+description = "Core library for video editor."
 
 [features]
 default = ["gl"]

@@ -1,6 +1,6 @@
 use log::debug;
 use std::collections::HashMap;
-use image::{ImageBuffer, Rgba};
+use image::{Rgba};
 use crate::loader::image::Image;
 use crate::error::LibraryError;
 use crate::plugin::{Plugin, PluginCategory, EffectPlugin};
@@ -22,6 +22,10 @@ impl Plugin for PixelSorterPlugin {
 
     fn category(&self) -> PluginCategory {
         PluginCategory::Effect
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 1, 0)
     }
 }
 

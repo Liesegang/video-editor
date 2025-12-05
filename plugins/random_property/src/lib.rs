@@ -8,11 +8,15 @@ pub struct RandomPropertyPlugin;
 
 impl Plugin for RandomPropertyPlugin {
     fn id(&self) -> &'static str {
-        "random_property_plugin"
+        "random_property"
     }
 
     fn category(&self) -> PluginCategory {
         PluginCategory::Property
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 1, 0)
     }
 }
 
