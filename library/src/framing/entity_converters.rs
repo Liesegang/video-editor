@@ -1,6 +1,6 @@
+use log::{debug, warn}; // Ensure debug is imported
 use std::collections::HashMap;
 use std::sync::Arc;
-use log::warn;
 use serde_json;
 
 use crate::model::frame::{
@@ -87,7 +87,9 @@ impl<'a> FrameEvaluationContext<'a> {
         let ctx = EvaluationContext {
             property_map: properties,
         };
-        Some(self.property_evaluators.evaluate(property, time, &ctx))
+        let evaluated_value = self.property_evaluators.evaluate(property, time, &ctx);
+        debug!("Evaluated property '{}' at time {} to {:?}", key, time, evaluated_value); // Added debug log
+        Some(evaluated_value)
     }
 
     fn require_string(

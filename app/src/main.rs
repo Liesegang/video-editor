@@ -1,10 +1,10 @@
 pub mod track_list;
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
-use log::{debug, info};
+use log::{debug, info, LevelFilter}; // Added LevelFilter
 
 fn main() {
     // Initialize env_logger only once
-    let _ = env_logger::builder().format_timestamp_millis().try_init();
+    let _ = env_logger::builder().filter_level(LevelFilter::Debug).format_timestamp_millis().try_init(); // Set filter level to Debug
     info!("Starting Qt application");
 
     // Create the application and engine

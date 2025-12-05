@@ -26,7 +26,9 @@ use std::sync::Arc;
 use crate::framing::entity_converters::{EntityConverterRegistry, register_builtin_entity_converters};
 
 pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
-    env_logger::init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
 
     if args.len() < 2 {
         return Err(LibraryError::InvalidArgument("Please provide the path to a project JSON file.".to_string()));

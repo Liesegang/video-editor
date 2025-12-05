@@ -5,17 +5,16 @@ use crate::model::frame::entity::{FrameEntity, FrameObject};
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
 use crate::plugin::{LoadRequest, LoadResponse, PluginManager};
-// use crate::rendering::effects::EffectRegistry; // Removed
 use crate::rendering::renderer::Renderer;
 use crate::service::project_model::ProjectModel;
 use crate::util::timing::{measure_debug, ScopedTimer};
 use crate::error::LibraryError;
+// Removed HashMap and EvaluationContext imports
 use std::sync::Arc;
 
 pub struct RenderService<T: Renderer> {
     pub renderer: T,
     property_evaluators: Arc<PropertyEvaluatorRegistry>,
-    // effect_registry: Arc<EffectRegistry>, // Removed
     plugin_manager: Arc<PluginManager>,
     entity_converter_registry: Arc<EntityConverterRegistry>,
 }
@@ -25,13 +24,11 @@ impl<T: Renderer> RenderService<T> {
         renderer: T,
         plugin_manager: Arc<PluginManager>,
         property_evaluators: Arc<PropertyEvaluatorRegistry>,
-        // effect_registry: Arc<EffectRegistry>, // Removed
         entity_converter_registry: Arc<EntityConverterRegistry>,
     ) -> Self {
         Self {
             renderer,
             property_evaluators,
-            // effect_registry, // Removed
             plugin_manager,
             entity_converter_registry,
         }
@@ -69,12 +66,14 @@ impl<T: Renderer> RenderService<T> {
                             }
                         },
                     )?;
-                    let final_image = self.apply_effects(video_frame, &surface.effects)?;
+                    let final_image = self.apply_effects(video_frame, &surface.effects, time)?;
                     measure_debug(format!("Draw video {}", surface.file_path), || {
                         self.renderer.draw_image(&final_image, &surface.transform)
                     })?;
                 }
-                FrameEntity::Image { surface } => {
+                FrameEntity::Image {
+                    surface
+                } => {
                     let request = LoadRequest::Image {
                         path: surface.file_path.clone(),
                     };
@@ -86,7 +85,7 @@ impl<T: Renderer> RenderService<T> {
                             }
                         },
                     )?;
-                    let final_image = self.apply_effects(image_frame, &surface.effects)?;
+                    let final_image = self.apply_effects(image_frame, &surface.effects, time)?;
                     measure_debug(format!("Draw image {}", surface.file_path), || {
                         self.renderer.draw_image(&final_image, &surface.transform)
                     })?;
@@ -104,7 +103,7 @@ impl<T: Renderer> RenderService<T> {
                             self.renderer
                                 .rasterize_text_layer(&text, size, &font, &color, &transform)
                         })?;
-                    let final_image = self.apply_effects(text_layer, &effects)?;
+                    let final_image = self.apply_effects(text_layer, &effects, time)?;
                     measure_debug(format!("Composite text '{}'", text), || {
                         self.renderer
                             .draw_image(&final_image, &Transform::default())
@@ -126,7 +125,7 @@ impl<T: Renderer> RenderService<T> {
                                 &transform,
                             )
                         })?;
-                    let final_image = self.apply_effects(shape_layer, &effects)?;
+                    let final_image = self.apply_effects(shape_layer, &effects, time)?;
                     measure_debug(format!("Composite shape {}", path), || {
                         self.renderer
                             .draw_image(&final_image, &Transform::default())
@@ -163,14 +162,21 @@ impl<T: Renderer> RenderService<T> {
         &self,
         mut image: Image,
         effects: &[crate::model::frame::effect::ImageEffect],
+        _current_time: f64, // Not prefixed with _ anymore
     ) -> Result<Image, LibraryError> {
         if effects.is_empty() {
             Ok(image)
         } else {
             for effect in effects {
-                image = self.plugin_manager.apply_effect(effect.effect_type.as_str(), &image, &effect.properties)?;
+                // The 'ImageEffect' struct already holds evaluated 'PropertyValue's.
+                // We just need to pass them to the plugin manager.
+                image = measure_debug(
+                    format!("Apply effect '{}'", effect.effect_type),
+                    || self.plugin_manager.apply_effect(effect.effect_type.as_str(), &image, &effect.properties),
+                )?;
             }
             Ok(image)
         }
     }
 } // Added closing brace for impl RenderService
+
