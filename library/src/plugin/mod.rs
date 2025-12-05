@@ -2,16 +2,23 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
-use crate::cache::{CacheManager, SharedCacheManager};
-use crate::framing::property::PropertyEvaluatorRegistry;
+use crate::cache::CacheManager;
+
 use crate::loader::image::Image;
 // use crate::model::project::entity::Entity; // Removed - This line was there from previous step, but should be removed
-use crate::model::project::property::PropertyValue;
 use libloading::{Library, Symbol};
 use log::debug;
 use crate::model::project::project::{Composition, Project};
 use serde_json::Value;
 use crate::error::LibraryError;
+
+use crate::framing::entity_converters::{EntityConverterPlugin, EntityConverterRegistry}; // Added this line
+
+pub type PropertyPluginCreateFn = unsafe extern "C" fn() -> *mut dyn PropertyPlugin;
+pub type EffectPluginCreateFn = unsafe extern "C" fn() -> *mut dyn EffectPlugin;
+pub type LoadPluginCreateFn = unsafe extern "C" fn() -> *mut dyn LoadPlugin;
+pub type ExportPluginCreateFn = unsafe extern "C" fn() -> *mut dyn ExportPlugin;
+pub type EntityConverterPluginCreateFn = unsafe extern "C" fn() -> *mut dyn EntityConverterPlugin;
 
 pub mod exporters;
 pub mod loaders;
@@ -25,7 +32,7 @@ pub use crate::plugin::loaders::ffmpeg_video::FfmpegVideoLoader;
 pub use crate::plugin::loaders::native_image::NativeImageLoader;
 pub use crate::plugin::exporters::ffmpeg_export::FfmpegExportPlugin;
 pub use crate::plugin::exporters::png_export::PngExportPlugin;
-pub use crate::plugin::properties::builtin::BuiltinPropertyPlugin;
+pub use crate::plugin::properties::{ConstantPropertyPlugin, KeyframePropertyPlugin, ExpressionPropertyPlugin};
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +41,7 @@ pub enum PluginCategory {
     Load,
     Export,
     Property,
+    EntityConverter, // Added
 }
 
 pub trait Plugin: Send + Sync {
@@ -47,9 +55,8 @@ pub trait EffectPlugin: Plugin {
 }
 
 pub trait PropertyPlugin: Plugin {
-    fn register(&self, registry: &mut PropertyEvaluatorRegistry);
+    fn get_evaluator_instance(&self) -> Arc<dyn PropertyEvaluator>;
 }
-
 #[derive(Debug, Clone)]
 pub enum LoadRequest {
     Image { path: String },
@@ -70,10 +77,8 @@ pub trait LoadPlugin: Plugin {
 }
 
 pub trait ExportPlugin: Plugin {
-    fn supports(&self, format: ExportFormat) -> bool;
     fn export_image(
         &self,
-        format: ExportFormat,
         path: &str,
         image: &Image,
         settings: &ExportSettings,
@@ -198,55 +203,140 @@ impl ExportSettings {
     }
 }
 
-struct PluginRepository {
-    effect_plugins: HashMap<String, Box<dyn EffectPlugin>>,
-    load_plugins: Vec<Box<dyn LoadPlugin>>,
-    export_plugins: Vec<Box<dyn ExportPlugin>>,
-    property_plugins: Vec<Box<dyn PropertyPlugin>>,
-    dynamic_libraries: Vec<Library>,
+pub struct EffectRepository {
+    plugins: HashMap<String, Arc<dyn EffectPlugin>>,
 }
+
+impl EffectRepository {
+    pub fn new() -> Self {
+        Self {
+            plugins: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, plugin: Arc<dyn EffectPlugin>) {
+        self.plugins.insert(plugin.id().to_string(), plugin);
+    }
+
+    pub fn get(&self, id: &str) -> Option<&Arc<dyn EffectPlugin>> {
+        self.plugins.get(id)
+    }
+}
+
+pub struct LoadRepository {
+    plugins: HashMap<String, Arc<dyn LoadPlugin>>,
+}
+
+impl LoadRepository {
+    pub fn new() -> Self {
+        Self {
+            plugins: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, plugin: Arc<dyn LoadPlugin>) {
+        self.plugins.insert(plugin.id().to_string(), plugin);
+    }
+
+    pub fn get(&self, id: &str) -> Option<&Arc<dyn LoadPlugin>> {
+        self.plugins.get(id)
+    }
+}
+
+pub struct ExportRepository {
+    plugins: HashMap<String, Arc<dyn ExportPlugin>>,
+}
+
+impl ExportRepository {
+    pub fn new() -> Self {
+        Self {
+            plugins: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, plugin: Arc<dyn ExportPlugin>) {
+        self.plugins.insert(plugin.id().to_string(), plugin);
+    }
+
+    pub fn get(&self, id: &str) -> Option<&Arc<dyn ExportPlugin>> {
+        self.plugins.get(id)
+    }
+}
+
+pub struct EntityConverterRepository {
+    plugins: HashMap<String, Arc<dyn EntityConverterPlugin>>,
+}
+
+impl EntityConverterRepository {
+    pub fn new() -> Self {
+        Self {
+            plugins: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, plugin: Arc<dyn EntityConverterPlugin>) {
+        self.plugins.insert(plugin.id().to_string(), plugin);
+    }
+
+    pub fn get(&self, id: &str) -> Option<&Arc<dyn EntityConverterPlugin>> {
+        self.plugins.get(id)
+    }
+}
+
+struct PluginRepository {
+    effect_plugins: EffectRepository,
+    load_plugins: LoadRepository,
+    export_plugins: ExportRepository,
+    entity_converter_plugins: EntityConverterRepository, // Added
+    property_evaluators: PropertyEvaluatorRegistry, // Direct ownership
+    dynamic_libraries: Vec<Library>, // Moved here
+}
+
+
 
 pub struct PluginManager {
     inner: RwLock<PluginRepository>,
-    cache_manager: SharedCacheManager,
 }
 
 impl PluginManager {
     pub fn new() -> Self {
         Self {
             inner: RwLock::new(PluginRepository {
-                effect_plugins: HashMap::new(),
-                load_plugins: Vec::new(),
-                export_plugins: Vec::new(),
-                property_plugins: Vec::new(),
-                dynamic_libraries: Vec::new(),
+                effect_plugins: EffectRepository::new(),
+                load_plugins: LoadRepository::new(),
+                export_plugins: ExportRepository::new(),
+                entity_converter_plugins: EntityConverterRepository::new(), // Initialized
+                property_evaluators: PropertyEvaluatorRegistry::new(),
+                dynamic_libraries: Vec::new(), // Initialized here
             }),
-            cache_manager: Arc::new(CacheManager::new()),
         }
     }
 
-    pub fn cache_manager(&self) -> SharedCacheManager {
-        Arc::clone(&self.cache_manager)
+    pub fn register_effect(&self, plugin: Arc<dyn EffectPlugin>) {
+        let mut inner = self.inner.write().unwrap();
+        inner.effect_plugins.register(plugin);
     }
 
-    pub fn register_effect(&self, key: &str, plugin: Box<dyn EffectPlugin>) {
+    pub fn register_load_plugin(&self, plugin: Arc<dyn LoadPlugin>) {
         let mut inner = self.inner.write().unwrap();
-        inner.effect_plugins.insert(key.to_string(), plugin);
+        inner.load_plugins.register(plugin);
     }
 
-    pub fn register_load_plugin(&self, plugin: Box<dyn LoadPlugin>) {
+    pub fn register_export_plugin(&self, plugin: Arc<dyn ExportPlugin>) {
         let mut inner = self.inner.write().unwrap();
-        inner.load_plugins.push(plugin);
+        inner.export_plugins.register(plugin);
     }
 
-    pub fn register_export_plugin(&self, plugin: Box<dyn ExportPlugin>) {
+    pub fn register_entity_converter_plugin(&self, plugin: Arc<dyn EntityConverterPlugin>) {
         let mut inner = self.inner.write().unwrap();
-        inner.export_plugins.push(plugin);
+        inner.entity_converter_plugins.register(plugin);
     }
 
-    pub fn register_property_plugin(&self, plugin: Box<dyn PropertyPlugin>) {
+    pub fn register_property_plugin(&self, plugin: Arc<dyn PropertyPlugin>) {
         let mut inner = self.inner.write().unwrap();
-        inner.property_plugins.push(plugin);
+        let evaluator_id = plugin.id();
+        let evaluator_instance = plugin.get_evaluator_instance();
+        inner.property_evaluators.register(evaluator_id, evaluator_instance);
     }
 
     pub fn apply_effect(&self, key: &str, image: &Image, params: &HashMap<String, PropertyValue>) -> Result<Image, LibraryError> {
@@ -260,11 +350,11 @@ impl PluginManager {
         }
     }
 
-    pub fn load_resource(&self, request: &LoadRequest) -> Result<LoadResponse, LibraryError> {
+    pub fn load_resource(&self, request: &LoadRequest, cache: &CacheManager) -> Result<LoadResponse, LibraryError> {
         let inner = self.inner.read().unwrap();
-        for plugin in &inner.load_plugins {
+        for plugin in inner.load_plugins.plugins.values() {
             if plugin.supports(request) {
-                return plugin.load(request, &self.cache_manager);
+                return plugin.load(request, cache);
             }
         }
         Err(LibraryError::Plugin(format!("No load plugin registered for request {:?}", request)))
@@ -272,28 +362,19 @@ impl PluginManager {
 
     pub fn export_image(
         &self,
-        format: ExportFormat,
+        exporter_id: &str, // Changed from format: ExportFormat
         path: &str,
         image: &Image,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError> {
         let inner = self.inner.read().unwrap();
-        for plugin in &inner.export_plugins {
-            if plugin.supports(format) {
-                return plugin.export_image(format, path, image, settings);
-            }
+        if let Some(plugin) = inner.export_plugins.get(exporter_id) {
+            return plugin.export_image(path, image, settings);
         }
-        Err(LibraryError::Plugin("No export plugin registered for requested format".to_string()))
+        Err(LibraryError::Plugin(format!("Exporter '{}' not found", exporter_id)))
     }
 
-    pub fn build_property_registry(&self) -> PropertyEvaluatorRegistry {
-        let mut registry = PropertyEvaluatorRegistry::new();
-        let inner = self.inner.read().unwrap();
-        for plugin in &inner.property_plugins {
-            plugin.register(&mut registry);
-        }
-        registry
-    }
+
 
     pub fn load_property_plugin_from_file<P: AsRef<Path>>(
         &self,
@@ -301,32 +382,226 @@ impl PluginManager {
     ) -> Result<(), LibraryError> {
         unsafe {
             let library = Library::new(path.as_ref())?;
-            let constructor: Symbol<PropertyPluginCreateFn> =
+            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn PropertyPlugin> =
                 library.get(b"create_property_plugin")?;
             let raw = constructor();
             if raw.is_null() {
                 return Err(LibraryError::Plugin("create_property_plugin returned null".to_string()));
             }
-            let plugin = Box::from_raw(raw);
+            let plugin_box = Box::from_raw(raw);
+            let plugin_arc: Arc<dyn PropertyPlugin> = Arc::from(plugin_box); // Convert Box to Arc
+
             let mut inner = self.inner.write().unwrap();
-            inner.property_plugins.push(plugin);
+            let evaluator_id = plugin_arc.id();
+            let evaluator_instance = plugin_arc.get_evaluator_instance();
+            inner.property_evaluators.register(evaluator_id, evaluator_instance);
             inner.dynamic_libraries.push(library);
         }
         Ok(())
     }
+
+    pub fn load_effect_plugin_from_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), LibraryError> {
+        unsafe {
+            let library = Library::new(path.as_ref())?;
+            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn EffectPlugin> =
+                library.get(b"create_effect_plugin")?;
+            let raw = constructor();
+            if raw.is_null() {
+                return Err(LibraryError::Plugin("create_effect_plugin returned null".to_string()));
+            }
+            let plugin_box = Box::from_raw(raw);
+            let plugin_arc: Arc<dyn EffectPlugin> = Arc::from(plugin_box); // Convert Box to Arc
+
+            let mut inner = self.inner.write().unwrap();
+            inner.effect_plugins.register(plugin_arc);
+            inner.dynamic_libraries.push(library);
+        }
+        Ok(())
+    }
+
+    pub fn load_load_plugin_from_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), LibraryError> {
+        unsafe {
+            let library = Library::new(path.as_ref())?;
+            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn LoadPlugin> =
+                library.get(b"create_load_plugin")?;
+            let raw = constructor();
+            if raw.is_null() {
+                return Err(LibraryError::Plugin("create_load_plugin returned null".to_string()));
+            }
+            let plugin_box = Box::from_raw(raw);
+            let plugin_arc: Arc<dyn LoadPlugin> = Arc::from(plugin_box); // Convert Box to Arc
+
+            let mut inner = self.inner.write().unwrap();
+            inner.load_plugins.register(plugin_arc);
+            inner.dynamic_libraries.push(library);
+        }
+        Ok(())
+    }
+
+    pub fn load_export_plugin_from_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), LibraryError> {
+        unsafe {
+            let library = Library::new(path.as_ref())?;
+            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn ExportPlugin> =
+                library.get(b"create_export_plugin")?;
+            let raw = constructor();
+            if raw.is_null() {
+                return Err(LibraryError::Plugin("create_export_plugin returned null".to_string()));
+            }
+            let plugin_box = Box::from_raw(raw);
+            let plugin_arc: Arc<dyn ExportPlugin> = Arc::from(plugin_box); // Convert Box to Arc
+
+            let mut inner = self.inner.write().unwrap();
+            inner.export_plugins.register(plugin_arc);
+            inner.dynamic_libraries.push(library);
+        }
+        Ok(())
+    }
+
+    pub fn load_entity_converter_plugin_from_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), LibraryError> {
+        unsafe {
+            let library = Library::new(path.as_ref())?;
+            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn EntityConverterPlugin> =
+                library.get(b"create_entity_converter_plugin")?;
+            let raw = constructor();
+            if raw.is_null() {
+                return Err(LibraryError::Plugin("create_entity_converter_plugin returned null".to_string()));
+            }
+            let plugin_box = Box::from_raw(raw);
+            let plugin_arc: Arc<dyn EntityConverterPlugin> = Arc::from(plugin_box); // Convert Box to Arc
+
+            let mut inner = self.inner.write().unwrap();
+            inner.entity_converter_plugins.register(plugin_arc);
+            inner.dynamic_libraries.push(library);
+        }
+        Ok(())
+    }
+
+    pub fn load_plugins_from_directory<P: AsRef<Path>>(
+        &self,
+        dir_path: P,
+    ) -> Result<(), LibraryError> {
+        let dir = dir_path.as_ref();
+        if !dir.is_dir() {
+            log::warn!("Plugin directory not found: {}", dir.display());
+            return Ok(());
+        }
+
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() {
+                let extension = path.extension().and_then(|s| s.to_str());
+                if matches!(extension, Some("dll") | Some("so")) {
+                    log::info!("Attempting to load plugin from: {}", path.display());
+                    // Try to load as each type of plugin
+                    if let Err(e) = self.load_property_plugin_from_file(&path) {
+                        log::debug!("Not a property plugin: {}", e);
+                    } else {
+                        continue;
+                    }
+                    if let Err(e) = self.load_effect_plugin_from_file(&path) {
+                        log::debug!("Not an effect plugin: {}", e);
+                    } else {
+                        continue;
+                    }
+                    if let Err(e) = self.load_load_plugin_from_file(&path) {
+                        log::debug!("Not a load plugin: {}", e);
+                    } else {
+                        continue;
+                    }
+                    if let Err(e) = self.load_export_plugin_from_file(&path) {
+                        log::debug!("Not an export plugin: {}", e);
+                    } else {
+                        continue;
+                    }
+                    if let Err(e) = self.load_entity_converter_plugin_from_file(&path) {
+                        log::debug!("Not an entity converter plugin: {}", e);
+                    } else {
+                        continue;
+                    }
+                    log::warn!("File is not a recognized plugin type: {}", path.display());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get_property_evaluators(&self) -> Arc<PropertyEvaluatorRegistry> {
+        let inner = self.inner.read().unwrap();
+        Arc::new(inner.property_evaluators.clone())
+    }
+
+    pub fn get_entity_converter_registry(&self) -> Arc<EntityConverterRegistry> {
+        let inner = self.inner.read().unwrap();
+        let mut registry = EntityConverterRegistry::new();
+        for plugin in inner.entity_converter_plugins.plugins.values() {
+            plugin.register_converters(&mut registry);
+        }
+        Arc::new(registry) // EntityConverterRegistry will need to be Clone
+    }
 } // Correct closing brace for impl PluginManager
 
-#[allow(improper_ctypes_definitions)]
-type PropertyPluginCreateFn = unsafe extern "C" fn() -> *mut dyn PropertyPlugin;
 
-pub fn load_plugins() -> Arc<PluginManager> {
-    let manager = Arc::new(PluginManager::new());
-    manager.register_effect("blur", Box::new(self::effects::blur::BlurEffectPlugin::new())); // Registered Blur
-    manager.register_effect("pixel_sorter", Box::new(self::effects::pixel_sorter::PixelSorterPlugin::new())); // Registered PixelSorter
-    manager.register_load_plugin(Box::new(self::loaders::native_image::NativeImageLoader::new()));
-    manager.register_load_plugin(Box::new(self::loaders::ffmpeg_video::FfmpegVideoLoader::new()));
-    manager.register_export_plugin(Box::new(self::exporters::png_export::PngExportPlugin::new()));
-    manager.register_export_plugin(Box::new(self::exporters::ffmpeg_export::FfmpegExportPlugin::new()));
-    manager.register_property_plugin(Box::new(self::properties::builtin::BuiltinPropertyPlugin::new()));
-    manager
+// Trait and structs moved from framing/property.rs
+use log::warn;
+use crate::model::project::property::{Property, PropertyMap, PropertyValue};
+
+pub struct PropertyEvaluatorRegistry {
+    evaluators: HashMap<&'static str, Arc<dyn PropertyEvaluator>>,
+}
+
+impl Clone for PropertyEvaluatorRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            evaluators: self.evaluators.clone(),
+        }
+    }
+}
+
+impl PropertyEvaluatorRegistry {
+    pub fn new() -> Self {
+        Self {
+            evaluators: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, key: &'static str, evaluator: Arc<dyn PropertyEvaluator>) {
+        self.evaluators.insert(key, evaluator);
+    }
+
+    pub fn evaluate(
+        &self,
+        property: &Property,
+        time: f64,
+        ctx: &EvaluationContext,
+    ) -> PropertyValue {
+        let key = property.evaluator.as_str();
+        match self.evaluators.get(key) {
+            Some(evaluator) => evaluator.evaluate(property, time, ctx),
+            None => {
+                warn!("Unknown property evaluator '{}'", key);
+                PropertyValue::Number(0.0)
+            }
+        }
+    }
+}
+
+pub trait PropertyEvaluator: Send + Sync {
+    fn evaluate(&self, property: &Property, time: f64, ctx: &EvaluationContext) -> PropertyValue;
+}
+
+pub struct EvaluationContext<'a> {
+    pub property_map: &'a PropertyMap,
 }

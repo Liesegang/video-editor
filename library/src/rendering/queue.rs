@@ -9,7 +9,7 @@ use log::{error, info};
 use std::cmp;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use crate::framing::PropertyEvaluatorRegistry;
+use crate::plugin::PropertyEvaluatorRegistry;
 use crate::framing::entity_converters::EntityConverterRegistry;
 use crate::error::LibraryError;
 use tokio::task; // Corrected tokio::task import
@@ -45,6 +45,7 @@ pub struct RenderQueueConfig {
     pub composition_index: usize,
     pub plugin_manager: Arc<PluginManager>,
     pub property_evaluators: Arc<PropertyEvaluatorRegistry>,
+    pub cache_manager: Arc<crate::cache::CacheManager>, // Added this line
     // pub effect_registry: Arc<EffectRegistry>, // Removed
     pub export_format: ExportFormat,
     pub export_settings: Arc<ExportSettings>,
@@ -94,6 +95,7 @@ impl RenderQueue {
             composition.background_color.clone(),
             config.export_format,
             Arc::clone(&config.export_settings),
+            Arc::clone(&config.cache_manager),
             Arc::clone(&config.entity_converter_registry),
             &save_tx,
         );
@@ -153,7 +155,7 @@ impl RenderQueue {
 
     fn spawn_saver(
         plugin_manager: Arc<PluginManager>,
-        export_format: ExportFormat,
+        _export_format: ExportFormat,
         export_settings: Arc<ExportSettings>,
         queue_bound: usize,
     ) -> (mpsc::SyncSender<SaveTask>, JoinHandle<()>) {
@@ -163,7 +165,7 @@ impl RenderQueue {
                 if let Err(err) =
                     measure_info(format!("Frame {}: save image", task.frame_index), || {
                         plugin_manager.export_image(
-                            export_format,
+                            "png_export", // Hardcoded exporter_id
                             &task.output_path,
                             &task.image,
                             &export_settings,
@@ -187,6 +189,7 @@ impl RenderQueue {
         background_color: crate::model::frame::color::Color,
         _export_format: ExportFormat,
         export_settings: Arc<ExportSettings>,
+        cache_manager: Arc<crate::cache::CacheManager>, // Added this line
         _entity_converter_registry: Arc<EntityConverterRegistry>,
         save_tx: &mpsc::SyncSender<SaveTask>,
     ) -> (mpsc::Sender<FrameRenderJob>, Vec<JoinHandle<()>>) {
@@ -202,7 +205,7 @@ impl RenderQueue {
         let mut workers = Vec::with_capacity(worker_count);
         for worker_id in 0..worker_count {
             let plugin_manager = Arc::clone(&config.plugin_manager);
-            let property_evaluators = Arc::clone(&config.property_evaluators);
+            let _property_evaluators = Arc::clone(&config.property_evaluators);
             let project = Arc::clone(&config.project);
             let render_rx = Arc::clone(&render_rx);
             let save_tx = save_tx.clone();
@@ -210,6 +213,8 @@ impl RenderQueue {
             let background_color_clone = background_color.clone();
             let export_settings_clone = Arc::clone(&export_settings);
             let entity_converter_registry_clone = Arc::clone(&config.entity_converter_registry);
+
+            let cache_manager_for_thread = Arc::clone(&cache_manager);
 
             let handle = thread::spawn(move || {
                 let mut render_service = RenderService::new(
@@ -219,7 +224,7 @@ impl RenderQueue {
                         background_color_clone,
                     ),
                     plugin_manager,
-                    Arc::clone(&property_evaluators),
+                    cache_manager_for_thread,
                     entity_converter_registry_clone,
                 );
 

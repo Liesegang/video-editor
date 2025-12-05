@@ -8,7 +8,7 @@ use crate::model::project::entity::Entity;
 use crate::model::project::project::{Composition, Project};
 use crate::util::timing::ScopedTimer;
 
-use super::property::PropertyEvaluatorRegistry;
+use crate::plugin::PropertyEvaluatorRegistry;
 use super::entity_converters::{EntityConverterRegistry, FrameEvaluationContext};
 
 pub struct FrameEvaluator<'a> {
@@ -116,13 +116,14 @@ pub fn get_frame_from_project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::framing::entity_converters::register_builtin_entity_converters;
     use crate::model::project::property::{Property, PropertyValue, Vec2, PropertyMap};
-    use crate::model::frame::color::Color;
-    use crate::model::frame::entity::FrameEntity;
+    use crate::model::project::project::Composition; // Added
+    use crate::model::frame::color::Color; // Added
+    use crate::model::frame::entity::FrameEntity; // Added
     use crate::model::project::{Track, TrackEntity};
     use std::sync::Arc;
-    use crate::plugin::properties::builtin::register_builtin_evaluators;
+    use crate::plugin::properties::{ConstantPropertyPlugin, KeyframePropertyPlugin, ExpressionPropertyPlugin};
+    use crate::plugin::PluginManager; // Added
 
     fn make_vec2(x: f64, y: f64) -> PropertyValue {
         PropertyValue::Vec2(Vec2 { x, y })
@@ -131,6 +132,17 @@ mod tests {
     fn constant(value: PropertyValue) -> Property {
         Property::constant(value)
     }
+
+    // Helper function to create a PluginManager with registered property plugins for tests
+    fn create_test_plugin_manager() -> Arc<PluginManager> {
+        let manager = Arc::new(PluginManager::new());
+        manager.register_property_plugin(Arc::new(ConstantPropertyPlugin::new()));
+        manager.register_property_plugin(Arc::new(KeyframePropertyPlugin::new()));
+        manager.register_property_plugin(Arc::new(ExpressionPropertyPlugin::new()));
+        manager.register_entity_converter_plugin(Arc::new(crate::framing::entity_converters::BuiltinEntityConverterPlugin::new())); // Added
+        manager
+    }
+
 
     #[test]
     fn frame_evaluator_builds_text_object() {
@@ -174,14 +186,13 @@ mod tests {
         };
         composition.add_track(track);
 
-        let mut registry = PropertyEvaluatorRegistry::new();
-        register_builtin_evaluators(&mut registry);
-        let mut entity_converter_registry = EntityConverterRegistry::new();
-        register_builtin_entity_converters(&mut entity_converter_registry);
+        let plugin_manager = create_test_plugin_manager();
+        let registry = plugin_manager.get_property_evaluators();
+        let entity_converter_registry = plugin_manager.get_entity_converter_registry();
         let evaluator = FrameEvaluator::new(
             &composition,
-            Arc::new(registry),
-            Arc::new(entity_converter_registry),
+            Arc::clone(&registry),
+            Arc::clone(&entity_converter_registry),
         );
         let frame = evaluator.evaluate(1.0);
 
@@ -236,14 +247,13 @@ mod tests {
         };
         composition.add_track(track);
 
-        let mut registry = PropertyEvaluatorRegistry::new();
-        register_builtin_evaluators(&mut registry);
-        let mut entity_converter_registry = EntityConverterRegistry::new();
-        register_builtin_entity_converters(&mut entity_converter_registry);
+        let plugin_manager = create_test_plugin_manager();
+        let registry = plugin_manager.get_property_evaluators();
+        let entity_converter_registry = plugin_manager.get_entity_converter_registry();
         let evaluator = FrameEvaluator::new(
             &composition,
-            Arc::new(registry),
-            Arc::new(entity_converter_registry),
+            Arc::clone(&registry),
+            Arc::clone(&entity_converter_registry),
         );
 
         let frame = evaluator.evaluate(0.5);

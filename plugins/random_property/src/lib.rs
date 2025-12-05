@@ -1,8 +1,9 @@
-use library::framing::property::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
+use library::plugin::{EvaluationContext, PropertyEvaluator};
 use library::model::project::property::{Property, PropertyValue};
 use library::plugin::{Plugin, PluginCategory, PropertyPlugin};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use std::sync::Arc;
 
 pub struct RandomPropertyPlugin;
 
@@ -21,8 +22,8 @@ impl Plugin for RandomPropertyPlugin {
 }
 
 impl PropertyPlugin for RandomPropertyPlugin {
-    fn register(&self, registry: &mut PropertyEvaluatorRegistry) {
-        registry.register("random_noise", Box::new(RandomNoiseEvaluator));
+    fn get_evaluator_instance(&self) -> Arc<dyn PropertyEvaluator> {
+        Arc::new(RandomNoiseEvaluator)
     }
 }
 

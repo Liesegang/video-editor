@@ -15,7 +15,6 @@ struct SaveTask {
     frame_index: u64,
     output_path: String,
     image: Image,
-    format: ExportFormat,
     export_settings: Arc<ExportSettings>,
 }
 
@@ -36,7 +35,7 @@ impl ExportService {
         let saver_handle = thread::spawn(move || {
             while let Ok(task) = save_rx.recv() {
                 if let Err(err) = plugin_manager.export_image(
-                    task.format,
+                    "png_export", // Hardcoded exporter_id
                     &task.output_path,
                     &task.image,
                     &task.export_settings,
@@ -104,7 +103,6 @@ impl ExportService {
                     frame_index,
                     output_path,
                     image,
-                    format: export_format,
                     export_settings: Arc::clone(&self.export_settings),
                 })
                 .map_err(|_| LibraryError::Render("Save queue disconnected".to_string()))?;

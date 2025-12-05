@@ -13,8 +13,8 @@ use crate::model::frame::{
 use crate::model::project::entity::{EffectConfig, Entity};
 use crate::model::project::project::Composition;
 use crate::model::project::property::{PropertyMap, PropertyValue};
-use super::property::{EvaluationContext, PropertyEvaluatorRegistry};
-
+use crate::plugin::{EvaluationContext, PropertyEvaluatorRegistry};
+use crate::plugin::Plugin; // Added this line
 
 /// Trait for converting an Entity into a FrameObject.
 pub trait EntityConverter: Send + Sync {
@@ -25,6 +25,12 @@ pub trait EntityConverter: Send + Sync {
         time: f64,
     ) -> Option<FrameObject>;
 }
+
+// New trait for entity converter plugins
+pub trait EntityConverterPlugin: Plugin {
+    fn register_converters(&self, registry: &mut EntityConverterRegistry);
+}
+
 
 /// Context passed to EntityConverters, encapsulating common FrameEvaluator methods
 pub struct FrameEvaluationContext<'a> {
@@ -338,8 +344,9 @@ impl EntityConverter for ShapeEntityConverter {
 }
 
 /// Registry for EntityConverter implementations.
+#[derive(Clone)] // Added derive Clone
 pub struct EntityConverterRegistry {
-    converters: HashMap<String, Box<dyn EntityConverter>>,
+    converters: HashMap<String, Arc<dyn EntityConverter>>, // Changed to Arc
 }
 
 impl EntityConverterRegistry {
@@ -349,7 +356,7 @@ impl EntityConverterRegistry {
         }
     }
 
-    pub fn register(&mut self, entity_type: String, converter: Box<dyn EntityConverter>) {
+    pub fn register(&mut self, entity_type: String, converter: Arc<dyn EntityConverter>) { // Changed to Arc
         self.converters.insert(entity_type, converter);
     }
 
@@ -369,10 +376,38 @@ impl EntityConverterRegistry {
     }
 }
 
+pub struct BuiltinEntityConverterPlugin;
+
+impl BuiltinEntityConverterPlugin {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl crate::plugin::Plugin for BuiltinEntityConverterPlugin {
+    fn id(&self) -> &'static str {
+        "builtin_entity_converters"
+    }
+
+    fn category(&self) -> crate::plugin::PluginCategory {
+        crate::plugin::PluginCategory::EntityConverter
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 1, 0)
+    }
+}
+
+impl EntityConverterPlugin for BuiltinEntityConverterPlugin {
+    fn register_converters(&self, registry: &mut EntityConverterRegistry) {
+        register_builtin_entity_converters(registry);
+    }
+}
+
 // Function to register built-in entity converters
 pub fn register_builtin_entity_converters(registry: &mut EntityConverterRegistry) {
-    registry.register("video".to_string(), Box::new(VideoEntityConverter));
-    registry.register("image".to_string(), Box::new(ImageEntityConverter));
-    registry.register("text".to_string(), Box::new(TextEntityConverter));
-    registry.register("shape".to_string(), Box::new(ShapeEntityConverter));
+    registry.register("video".to_string(), Arc::new(VideoEntityConverter));
+    registry.register("image".to_string(), Arc::new(ImageEntityConverter));
+    registry.register("text".to_string(), Arc::new(TextEntityConverter));
+    registry.register("shape".to_string(), Arc::new(ShapeEntityConverter));
 }

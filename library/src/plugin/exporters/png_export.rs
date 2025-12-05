@@ -1,4 +1,4 @@
-use super::super::{ExportFormat, ExportPlugin, ExportSettings, Plugin, PluginCategory};
+use super::super::{ExportPlugin, ExportSettings, Plugin, PluginCategory};
 use crate::loader::image::Image;
 use image::ImageEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
@@ -29,13 +29,8 @@ impl Plugin for PngExportPlugin {
 }
 
 impl ExportPlugin for PngExportPlugin {
-    fn supports(&self, format: ExportFormat) -> bool {
-        matches!(format, ExportFormat::Png)
-    }
-
     fn export_image(
         &self,
-        _format: ExportFormat,
         path: &str,
         image: &Image,
         _settings: &ExportSettings,
