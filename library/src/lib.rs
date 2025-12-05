@@ -17,13 +17,30 @@ pub use crate::plugin::ExportSettings; // Added
 pub use service::{ExportService, ProjectModel, RenderService};
 pub use rendering::skia_renderer::SkiaRenderer;
 
-use crate::plugin::load_plugins; // Added
+// use crate::plugin::load_plugins; // Removed
 // use crate::rendering::effects::EffectRegistry; // Removed
 use log::info;
 use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
-use crate::framing::entity_converters::{EntityConverterRegistry, register_builtin_entity_converters};
+use crate::framing::entity_converters::BuiltinEntityConverterPlugin;
+use crate::plugin::PluginManager; // Added
+
+// Function to create and initialize the PluginManager with built-in plugins
+fn create_plugin_manager() -> Arc<PluginManager> {
+    let manager = Arc::new(PluginManager::new());
+    manager.register_effect(Arc::new(crate::plugin::effects::BlurEffectPlugin::new()));
+    manager.register_effect(Arc::new(crate::plugin::effects::PixelSorterPlugin::new()));
+    manager.register_load_plugin(Arc::new(crate::plugin::loaders::NativeImageLoader::new()));
+    manager.register_load_plugin(Arc::new(crate::plugin::loaders::FfmpegVideoLoader::new()));
+    manager.register_export_plugin(Arc::new(crate::plugin::exporters::PngExportPlugin::new()));
+    manager.register_export_plugin(Arc::new(crate::plugin::exporters::FfmpegExportPlugin::new()));
+    manager.register_property_plugin(Arc::new(crate::plugin::properties::ConstantPropertyPlugin::new()));
+    manager.register_property_plugin(Arc::new(crate::plugin::properties::KeyframePropertyPlugin::new()));
+    manager.register_property_plugin(Arc::new(crate::plugin::properties::ExpressionPropertyPlugin::new()));
+    manager.register_entity_converter_plugin(Arc::new(BuiltinEntityConverterPlugin::new())); // Added
+    manager
+}
 
 pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -43,7 +60,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
     let project_model = ProjectModel::from_project_path(file_path, 0)?;
 
     let plugin_paths: Vec<_> = args.iter().skip(2).filter(|s| !s.starts_with("--")).collect();
-    let plugin_manager = load_plugins();
+    let plugin_manager = create_plugin_manager(); // Changed
     for plugin_path in plugin_paths {
         info!("Loading property plugin {}", plugin_path);
         plugin_manager.load_property_plugin_from_file(plugin_path)?;
@@ -71,20 +88,19 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         composition.height as u32,
         composition.background_color.clone(),
     );
-    let mut render_service = {
-        let property_evaluators = Arc::new(plugin_manager.build_property_registry());
 
-        let mut entity_converter_registry = EntityConverterRegistry::new();
-        register_builtin_entity_converters(&mut entity_converter_registry);
-        let entity_converter_registry = Arc::new(entity_converter_registry);
+    let cache_manager = Arc::new(crate::cache::CacheManager::new());
 
-        RenderService::new(
-            renderer,
-            plugin_manager.clone(),
-            property_evaluators,
-            entity_converter_registry, // Removed effect_registry
-        )
-    };
+    let property_evaluators = plugin_manager.get_property_evaluators();
+
+    let entity_converter_registry = plugin_manager.get_entity_converter_registry();
+
+    let mut render_service = RenderService::new(
+        renderer,
+        plugin_manager.clone(),
+        cache_manager.clone(),
+        entity_converter_registry.clone(),
+    );
 
     let export_settings = Arc::new(ExportSettings::from_project(
         project_model.project().as_ref(),

@@ -1,4 +1,4 @@
-use crate::framing::{get_frame_from_project, PropertyEvaluatorRegistry};
+use crate::framing::get_frame_from_project;
 use crate::framing::entity_converters::EntityConverterRegistry;
 use crate::loader::image::Image;
 use crate::model::frame::entity::{FrameEntity, FrameObject};
@@ -9,12 +9,13 @@ use crate::rendering::renderer::Renderer;
 use crate::service::project_model::ProjectModel;
 use crate::util::timing::{measure_debug, ScopedTimer};
 use crate::error::LibraryError;
+use crate::cache::SharedCacheManager; // Added this line
 // Removed HashMap and EvaluationContext imports
 use std::sync::Arc;
 
 pub struct RenderService<T: Renderer> {
     pub renderer: T,
-    property_evaluators: Arc<PropertyEvaluatorRegistry>,
+    cache_manager: SharedCacheManager,
     plugin_manager: Arc<PluginManager>,
     entity_converter_registry: Arc<EntityConverterRegistry>,
 }
@@ -23,13 +24,13 @@ impl<T: Renderer> RenderService<T> {
     pub fn new(
         renderer: T,
         plugin_manager: Arc<PluginManager>,
-        property_evaluators: Arc<PropertyEvaluatorRegistry>,
+        cache_manager: SharedCacheManager,
         entity_converter_registry: Arc<EntityConverterRegistry>,
     ) -> Self {
         Self {
             renderer,
-            property_evaluators,
             plugin_manager,
+            cache_manager,
             entity_converter_registry,
         }
     }
@@ -61,7 +62,7 @@ impl<T: Renderer> RenderService<T> {
                     let video_frame = measure_debug(
                         format!("Decode video {} frame {}", surface.file_path, frame_number),
                         || -> Result<Image, LibraryError> {
-                            match self.plugin_manager.load_resource(&request)? {
+                            match self.plugin_manager.load_resource(&request, &self.cache_manager)? {
                                 LoadResponse::Image(img) => Ok(img),
                             }
                         },
@@ -80,7 +81,7 @@ impl<T: Renderer> RenderService<T> {
                     let image_frame = measure_debug(
                         format!("Load image {}", surface.file_path),
                         || -> Result<Image, LibraryError> {
-                            match self.plugin_manager.load_resource(&request)? {
+                            match self.plugin_manager.load_resource(&request, &self.cache_manager)? {
                                 LoadResponse::Image(img) => Ok(img),
                             }
                         },
@@ -141,22 +142,17 @@ impl<T: Renderer> RenderService<T> {
     }
     
     fn get_frame(&self, project_model: &ProjectModel, time: f64) -> FrameInfo {
+        let property_evaluators = self.plugin_manager.get_property_evaluators();
         get_frame_from_project(
             project_model.project(),
             project_model.composition_index(),
             time,
-            &self.property_evaluators,
+            &property_evaluators,
             &self.entity_converter_registry,
         )
     }
 
-    pub fn property_evaluators(&self) -> Arc<PropertyEvaluatorRegistry> {
-        Arc::clone(&self.property_evaluators)
-    }
 
-    pub fn set_property_evaluators(&mut self, evaluators: Arc<PropertyEvaluatorRegistry>) {
-        self.property_evaluators = evaluators;
-    }
 
     fn apply_effects(
         &self,

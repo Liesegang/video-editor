@@ -1,8 +1,46 @@
 [package]
 name = "library"
-version = "0.1.0"
+version = "0.6.0"
 edition = "2024"
 description = "Core library for video editor."
+
+# Changelog
+# 0.6.0
+# - Plugin-ified entity converters:
+#   - Defined `EntityConverterPlugin` trait.
+#   - Created `BuiltinEntityConverterPlugin`.
+#   - Modified `PluginManager` to manage `EntityConverterPlugin`s and provide `EntityConverterRegistry`.
+#   - Updated `lib.rs` and `framing/frame.rs` to use the plugin system for entity converters.
+#   - Made `EntityConverterRegistry` cloneable for Arc handling.
+
+# 0.5.0
+# - Plugin-ified entity converters:
+#   - Defined `EntityConverterPlugin` trait.
+#   - Created `BuiltinEntityConverterPlugin`.
+#   - Modified `PluginManager` to manage `EntityConverterPlugin`s and provide `EntityConverterRegistry`.
+#   - Updated `lib.rs` to use the plugin system for entity converters.
+#   - Made `EntityConverterRegistry` cloneable for Arc handling.
+
+# 0.4.0
+# - Added `load_plugins_from_directory` function to `PluginManager` for dynamic loading of all plugin types.
+# - Moved built-in plugin registration logic from `plugin/mod.rs` to `lib.rs` (into `create_plugin_manager` function).
+
+# 0.3.1
+# - Removed `get_evaluator_id` from `PropertyPlugin` trait and use `Plugin::id()` instead.
+
+# 0.3.0
+# - Removed `register` method from `PropertyPlugin` trait.
+# - Split `BuiltinPropertyPlugin` into individual `ConstantPropertyPlugin`, `KeyframePropertyPlugin`, and `ExpressionPropertyPlugin`.
+# - `PropertyPlugin` now requires `get_evaluator_instance` and `get_evaluator_id` methods.
+# - Updated `PluginManager` and `load_plugins()` to reflect these changes.
+
+# 0.2.0
+# - Refactored PluginManager to use XxxRepository structs for plugin management.
+# - PluginRepository now directly holds PropertyEvaluatorRegistry.
+# - Exporter selection is now by ID instead of checking 'supports'.
+# - All plugin types are now dynamically loadable.
+# - Updated all related code to reflect these architectural changes.
+
 
 [features]
 default = ["gl"]

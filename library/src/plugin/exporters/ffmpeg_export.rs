@@ -1,4 +1,4 @@
-use super::super::{ExportFormat, ExportPlugin, ExportSettings, Plugin, PluginCategory};
+use super::super::{ExportPlugin, ExportSettings, Plugin, PluginCategory};
 use crate::loader::image::Image;
 use log::{info, warn};
 use std::collections::HashMap;
@@ -35,13 +35,8 @@ impl Plugin for FfmpegExportPlugin {
 }
 
 impl ExportPlugin for FfmpegExportPlugin {
-    fn supports(&self, format: ExportFormat) -> bool {
-        matches!(format, ExportFormat::Video)
-    }
-
     fn export_image(
         &self,
-        _format: ExportFormat,
         path: &str,
         image: &Image,
         settings: &ExportSettings,
