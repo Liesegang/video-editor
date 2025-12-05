@@ -1,15 +1,22 @@
 [package]
 name = "app"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-cxx = "1.0.95"
-cxx-qt = "0.7"
-cxx-qt-lib = { version="0.7", features = ["qt_full"] }
-library = { path = "../library" }
+eframe = { version = "0.28.0", features = ["serde"] }
+egui = "0.28.0"
+egui_dock = "0.13.0"
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
+rfd = "0.14"
 log = "0.4"
 env_logger = "0.11"
+library = { path = "../library" }
 
-[build-dependencies]
-cxx-qt-build = { version = "0.7" }
+# native:
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+
+# web:
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
