@@ -1,6 +1,5 @@
+use log::{debug, warn}; // Ensure debug is imported
 use std::collections::HashMap;
-
-use log::warn;
 
 use crate::animation::EasingFunction;
 use crate::model::project::property::{Property, PropertyMap, PropertyValue, Vec2, Vec3};
@@ -83,22 +82,28 @@ pub fn register_builtin_evaluators(registry: &mut PropertyEvaluatorRegistry) {
 
 fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
     let keyframes = property.keyframes();
+    debug!("evaluate_keyframes for property {:?} at time {}", property, time); // Added debug log
+
     if keyframes.is_empty() {
+        debug!("evaluate_keyframes: keyframes empty, returning 0.0"); // Added debug log
         return PropertyValue::Number(0.0);
     }
     if time <= keyframes[0].time {
+        debug!("evaluate_keyframes: time <= first keyframe, returning first keyframe value {:?}", keyframes[0].value); // Added debug log
         return keyframes[0].value.clone();
     }
     if time >= keyframes.last().unwrap().time {
+        debug!("evaluate_keyframes: time >= last keyframe, returning last keyframe value {:?}", keyframes.last().unwrap().value); // Added debug log
         return keyframes.last().unwrap().value.clone();
     }
 
     let current = keyframes.iter().rev().find(|k| k.time <= time).unwrap();
     let next = keyframes.iter().find(|k| k.time > time).unwrap();
     let t = (time - current.time) / (next.time - current.time);
-    interpolate_property_values(&current.value, &next.value, t, &current.easing)
+    let interpolated = interpolate_property_values(&current.value, &next.value, t, &current.easing);
+    debug!("evaluate_keyframes: interpolated value {:?} for time {}", interpolated, time); // Added debug log
+    interpolated
 }
-
 fn interpolate_property_values(
     start: &PropertyValue,
     end: &PropertyValue,

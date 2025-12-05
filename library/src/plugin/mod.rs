@@ -8,6 +8,7 @@ use crate::loader::image::Image;
 // use crate::model::project::entity::Entity; // Removed - This line was there from previous step, but should be removed
 use crate::model::project::property::PropertyValue;
 use libloading::{Library, Symbol};
+use log::debug;
 use crate::model::project::project::{Composition, Project};
 use serde_json::Value;
 use crate::error::LibraryError;
@@ -19,7 +20,7 @@ pub mod effects;
 
 
 // Publicly re-export plugin types from their sub-modules
-pub use crate::plugin::effects::blur::BlurEffectPlugin; // Corrected path
+pub use crate::plugin::effects::blur::BlurEffectPlugin;
 pub use crate::plugin::loaders::ffmpeg_video::FfmpegVideoLoader;
 pub use crate::plugin::loaders::native_image::NativeImageLoader;
 pub use crate::plugin::exporters::ffmpeg_export::FfmpegExportPlugin;
@@ -250,10 +251,10 @@ impl PluginManager {
     pub fn apply_effect(&self, key: &str, image: &Image, params: &HashMap<String, PropertyValue>) -> Result<Image, LibraryError> {
         let inner = self.inner.read().unwrap();
         if let Some(plugin) = inner.effect_plugins.get(key) {
+            debug!("PluginManager: Applying effect '{}'", key);
             plugin.apply(image, params)
         } else {
-            // 未登録のエフェクト指定は、警告しつつ元画像をそのまま返すのが安全
-            // log::warn!("Effect '{}' not found", key); 
+            log::warn!("Effect '{}' not found", key);
             Ok(image.clone()) 
         }
     }
@@ -320,6 +321,7 @@ type PropertyPluginCreateFn = unsafe extern "C" fn() -> *mut dyn PropertyPlugin;
 pub fn load_plugins() -> Arc<PluginManager> {
     let manager = Arc::new(PluginManager::new());
     manager.register_effect("blur", Box::new(self::effects::blur::BlurEffectPlugin::new())); // Registered Blur
+    manager.register_effect("pixel_sorter", Box::new(self::effects::pixel_sorter::PixelSorterPlugin::new())); // Registered PixelSorter
     manager.register_load_plugin(Box::new(self::loaders::native_image::NativeImageLoader::new()));
     manager.register_load_plugin(Box::new(self::loaders::ffmpeg_video::FfmpegVideoLoader::new()));
     manager.register_export_plugin(Box::new(self::exporters::png_export::PngExportPlugin::new()));
