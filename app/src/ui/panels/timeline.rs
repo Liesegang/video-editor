@@ -174,99 +174,118 @@ fn show_timeline_ruler(
             }
         }
 
-        let (major_interval, minor_interval) = match editor_context.timeline_display_mode {
-            TimelineDisplayMode::Seconds => {
-                if pixels_per_unit > 150.0 {
-                    (1.0, 0.5)
-                } else if pixels_per_unit > 50.0 {
-                    (1.0, 1.0) // No minor
-                } else if pixels_per_unit > 15.0 {
-                    (5.0, 1.0)
-                } else {
-                    (10.0, 5.0)
-                }
-            }
-            TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => {
-                if pixels_per_unit > 100.0 {
-                    (1.0, 0.5)
-                } else if pixels_per_unit > 30.0 {
-                    (5.0, 1.0)
-                } else if pixels_per_unit > 10.0 {
-                    (10.0, 5.0)
-                } else {
-                    (30.0, 10.0) // half second
-                }
-            }
-        };
-
-        let first_unit = match editor_context.timeline_display_mode {
-            TimelineDisplayMode::Seconds => (scroll_offset_x / pixels_per_unit).floor() as i32,
-            TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => {
-                (scroll_offset_x / pixels_per_unit).floor() as i32
-            }
-        };
-        let last_unit = match editor_context.timeline_display_mode {
-            TimelineDisplayMode::Seconds => {
-                ((scroll_offset_x + rect.width()) / pixels_per_unit).ceil() as i32
-            }
-            TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => {
-                ((scroll_offset_x + rect.width()) / pixels_per_unit).ceil() as i32
-            }
-        };
-
-        for unit_val in first_unit..=last_unit {
-            let s = unit_val as f32; // 's' now represents either seconds or frames
-            if s % minor_interval == 0.0 {
-                // Position of the current unit mark, relative to the *start* of the scrollable content
-                let content_x = s * pixels_per_unit;
-
-                // Position relative to the *visible area* of the ruler (rect)
-                // This is the content_x minus the scroll_offset_x
-                let x_pos_on_rect = content_x - scroll_offset_x;
-
-                // Now, convert to absolute screen coordinates for the painter.
-                // The painter works with absolute screen coordinates.
-                let screen_x = rect.min.x + x_pos_on_rect + 16.0; // +20.0 for the reported offset
-
-                if screen_x >= rect.min.x && screen_x <= rect.max.x {
-                    let is_major = s % major_interval == 0.0;
-                    let line_height = if is_major {
-                        rect.height()
+        let (major_interval, minor_interval, display_frames_in_seconds_mode) =
+            match editor_context.timeline_display_mode {
+                TimelineDisplayMode::Seconds => {
+                    let pixels_per_frame = pixels_per_unit / editor_context.fps;
+                    if pixels_per_frame >= 30.0 {
+                        // 1 frame is 30 pixels or more, show frame-accurate ticks (1 frame minor, 5 frames major)
+                        (5.0 / editor_context.fps, 1.0 / editor_context.fps, true)
+                    } else if pixels_per_frame >= 15.0 {
+                        // 1 frame is 15 pixels or more
+                        (10.0 / editor_context.fps, 1.0 / editor_context.fps, true)
+                    } else if pixels_per_frame >= 5.0 {
+                        // 1 frame is 5 pixels or more
+                        (5.0 / editor_context.fps, 1.0 / editor_context.fps, true)
+                    } else if pixels_per_unit > 150.0 {
+                        // Show 0.1s intervals
+                        (0.5, 0.1, false)
+                    } else if pixels_per_unit > 75.0 {
+                        // Show 0.5s intervals
+                        (1.0, 0.5, false)
+                    } else if pixels_per_unit > 30.0 {
+                        // Show 1s intervals
+                        (5.0, 1.0, false)
+                    } else if pixels_per_unit > 15.0 {
+                        // Show 5s intervals
+                        (10.0, 5.0, false)
                     } else {
-                        rect.height() * 0.5
-                    };
-                    // eprintln!("Drawing line for sec {}: screen_x: {}, y1: {}, y2: {}", s, screen_x, rect.min.y, rect.min.y + line_height);
-                    painter.line_segment(
-                        [
-                            egui::pos2(screen_x, rect.min.y),
-                            egui::pos2(screen_x, rect.min.y + line_height),
-                        ],
-                        egui::Stroke::new(1.0, egui::Color32::WHITE),
-                    );
-                    if is_major {
-                        let text = match editor_context.timeline_display_mode {
-                            TimelineDisplayMode::Seconds => format!("{}s", s),
-                            TimelineDisplayMode::Frames => format!("{}f", s as i32),
-                            TimelineDisplayMode::SecondsAndFrames => {
-                                let total_frames = (s * editor_context.fps).round() as i32;
-                                let seconds = total_frames / editor_context.fps as i32;
-                                let frames = total_frames % editor_context.fps as i32;
-                                format!("{}s {}f", seconds, frames)
-                            }
-                        };
-                        painter.text(
-                            egui::pos2(screen_x + 2.0, rect.center().y),
-                            egui::Align2::LEFT_CENTER,
-                            text,
-                            egui::FontId::monospace(10.0),
-                            egui::Color32::WHITE,
-                        );
+                        // Show 10s intervals
+                        (30.0, 10.0, false)
                     }
                 }
+                TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => {
+                    // pixels_per_unit is pixels per frame
+                    if pixels_per_unit >= 30.0 {
+                        // 1 frame is 30 pixels or more, show every 1 frame as minor
+                        (5.0, 1.0, false) // Every 5 frames major, every 1 frame minor. 'false' here is dummy.
+                    } else if pixels_per_unit >= 15.0 {
+                        // 1 frame is 15 pixels or more
+                        (10.0, 1.0, false)
+                    } else if pixels_per_unit >= 5.0 {
+                        // 1 frame is 5 pixels or more
+                        (5.0, 1.0, false)
+                    } else if pixels_per_unit > 2.0 {
+                        // Moderately zoomed in, show every 10 frames as major, every 5 frames as minor
+                        (10.0, 5.0, false)
+                    } else if pixels_per_unit > 1.0 {
+                        // Less zoomed in, show every 5 frames as major, every 1 frame as minor
+                        (5.0, 1.0, false)
+                    } else {
+                        // Very zoomed out, show every 10 frames as major, every 5 frames as minor
+                        (10.0, 5.0, false)
+                    }
+                }
+            };
+
+        // --- Calculate visible range in timeline units ---
+        let first_visible_timeline_unit = (scroll_offset_x / pixels_per_unit).max(0.0);
+        let last_visible_timeline_unit = (scroll_offset_x + rect.width()) / pixels_per_unit;
+
+        // Find the first minor tick that is visible
+        let mut current_unit =
+            (first_visible_timeline_unit / minor_interval).floor() * minor_interval;
+
+        // Ensure we don't start before 0.0
+        if current_unit < 0.0 {
+            current_unit = 0.0;
+        }
+
+        // Iterate through all minor ticks within the visible range
+        while current_unit <= last_visible_timeline_unit {
+            let s = current_unit; // s is now guaranteed to be a multiple of minor_interval
+
+            // Position of the current unit mark, relative to the *start* of the scrollable content
+            let content_x = s * pixels_per_unit;
+
+            // Position relative to the *visible area* of the ruler (rect)
+            let x_pos_on_rect = content_x - scroll_offset_x;
+
+            // Now, convert to absolute screen coordinates for the painter.
+            let screen_x = rect.min.x + x_pos_on_rect + 16.0;
+
+            if screen_x >= rect.min.x && screen_x <= rect.max.x {
+                // Use a small epsilon for major interval check due to floating point arithmetic
+                let is_major = (s / major_interval).fract().abs() < f32::EPSILON
+                    || (s / major_interval).fract().abs() > 1.0 - f32::EPSILON;
+
+                let (line_start_y, line_end_y);
+                let text_pos_y;
+
+                if is_major {
+                    line_start_y = rect.min.y;
+                    line_end_y = rect.max.y; // Full height for major
+                } else {
+                    line_start_y = rect.center().y; // Start from middle
+                    line_end_y = rect.max.y; // Go to bottom, making it shorter and lower
+                }
+                text_pos_y = rect.min.y + 2.0; // Upper position for all labels
+
+                painter.line_segment(
+                    [
+                        egui::pos2(screen_x, line_start_y),
+                        egui::pos2(screen_x, line_end_y),
+                    ],
+                    egui::Stroke::new(1.0, egui::Color32::WHITE),
+                );
+
+
             }
+            current_unit += minor_interval;
         }
     });
 }
+
 
 // Helper function to show the timeline controls
 fn show_timeline_controls(
@@ -284,8 +303,8 @@ fn show_timeline_controls(
             icons::PLAY
         };
         if ui
-            .add(egui::Button::new(egui::RichText::new(play_icon_enum)))
-            .clicked()
+          .add(egui::Button::new(egui::RichText::new(play_icon_enum)))
+          .clicked()
         {
             editor_context.is_playing = !editor_context.is_playing;
         }
@@ -301,8 +320,8 @@ fn show_timeline_controls(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Zoom reset button
             if ui
-                .add(egui::Button::new(egui::RichText::new(icons::FRAME_CORNERS)))
-                .clicked()
+              .add(egui::Button::new(egui::RichText::new(icons::FRAME_CORNERS)))
+              .clicked()
             {
                 editor_context.timeline_h_zoom = 1.0;
                 editor_context.timeline_v_zoom = 1.0;
@@ -329,42 +348,42 @@ pub fn timeline_panel(
         }
         TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => {
             (editor_context.timeline_pixels_per_second / editor_context.fps)
-                * editor_context.timeline_h_zoom
+              * editor_context.timeline_h_zoom
         }
     };
     let scroll_offset_x = editor_context.timeline_scroll_offset.x;
 
     // Use panels to divide the space correctly
     egui::TopBottomPanel::top("timeline_ruler_panel")
-        .exact_height(20.0)
-        .show_inside(ui, |ui| {
-            show_timeline_ruler(
-                ui,
-                editor_context,
-                project_service,
-                project,
-                pixels_per_unit,
-                scroll_offset_x,
-            );
-        });
+      .exact_height(20.0)
+      .show_inside(ui, |ui| {
+          show_timeline_ruler(
+              ui,
+              editor_context,
+              project_service,
+              project,
+              pixels_per_unit,
+              scroll_offset_x,
+          );
+      });
 
     egui::TopBottomPanel::bottom("timeline_controls_panel")
-        .exact_height(40.0)
-        .show_inside(ui, |ui| {
-            ui.separator();
-            show_timeline_controls(
-                ui,
-                editor_context,
-                history_manager,
-                project_service,
-                project,
-            );
-        });
+      .exact_height(40.0)
+      .show_inside(ui, |ui| {
+          ui.separator();
+          show_timeline_controls(
+              ui,
+              editor_context,
+              history_manager,
+              project_service,
+              project,
+          );
+      });
 
     let mut central_panel_rect = egui::Rect::NOTHING; // Declare before CentralPanel block
     egui::CentralPanel::default().show_inside(ui, |ui| {
         central_panel_rect = ui.available_rect_before_wrap(); // Capture the rect
-                                                              // Main timeline content
+        // Main timeline content
         ui.with_layout(
             egui::Layout::left_to_right(egui::Align::TOP),
             |ui_content| {
@@ -397,8 +416,8 @@ pub fn timeline_panel(
 
                 for (i, track) in current_tracks.iter().enumerate() {
                     let y = track_list_rect.min.y
-                        + (i as f32 * (row_height + track_spacing))
-                        + editor_context.timeline_scroll_offset.y;
+                      + (i as f32 * (row_height + track_spacing))
+                      + editor_context.timeline_scroll_offset.y;
                     let track_label_rect = egui::Rect::from_min_size(
                         egui::pos2(track_list_rect.min.x, y),
                         egui::vec2(track_list_rect.width(), row_height),
@@ -406,12 +425,12 @@ pub fn timeline_panel(
 
                     if track_list_rect.intersects(track_label_rect) {
                         let track_interaction_response = ui_content
-                            .interact(
-                                track_label_rect,
-                                egui::Id::new(track.id).with("track_label_interact"),
-                                egui::Sense::click(),
-                            )
-                            .on_hover_text(format!("Track ID: {}", track.id));
+                          .interact(
+                              track_label_rect,
+                              egui::Id::new(track.id).with("track_label_interact"),
+                              egui::Sense::click(),
+                          )
+                          .on_hover_text(format!("Track ID: {}", track.id));
                         if track_interaction_response.clicked() {
                             editor_context.selected_track_id = Some(track.id);
                         }
@@ -443,33 +462,33 @@ pub fn timeline_panel(
                 track_list_response.context_menu(|ui_content| {
                     if let Some(comp_id) = editor_context.selected_composition_id {
                         if ui_content
-                            .add(egui::Button::new(egui::RichText::new(format!(
-                                "{} Add Track",
-                                icons::PLUS
-                            ))))
-                            .clicked()
+                          .add(egui::Button::new(egui::RichText::new(format!(
+                              "{} Add Track",
+                              icons::PLUS
+                          ))))
+                          .clicked()
                         {
                             let prev_project_state =
-                                project_service.get_project().read().unwrap().clone();
+                              project_service.get_project().read().unwrap().clone();
                             project_service
-                                .add_track(comp_id, "New Track")
-                                .expect("Failed to add track");
+                              .add_track(comp_id, "New Track")
+                              .expect("Failed to add track");
                             history_manager.push_project_state(prev_project_state);
                             ui_content.close();
                         }
                         if let Some(track_id) = editor_context.selected_track_id {
                             if ui_content
-                                .add(egui::Button::new(egui::RichText::new(format!(
-                                    "{} Remove Selected Track",
-                                    icons::TRASH
-                                ))))
-                                .clicked()
+                              .add(egui::Button::new(egui::RichText::new(format!(
+                                  "{} Remove Selected Track",
+                                  icons::TRASH
+                              ))))
+                              .clicked()
                             {
                                 let prev_project_state =
-                                    project_service.get_project().read().unwrap().clone();
+                                  project_service.get_project().read().unwrap().clone();
                                 project_service
-                                    .remove_track(comp_id, track_id)
-                                    .expect("Failed to remove track");
+                                  .remove_track(comp_id, track_id)
+                                  .expect("Failed to remove track");
                                 editor_context.selected_track_id = None;
                                 editor_context.selected_entity_id = None;
                                 history_manager.push_project_state(prev_project_state);
@@ -487,7 +506,7 @@ pub fn timeline_panel(
 
                 // --- Clip area ---
                 let (content_rect_for_clip_area, response) = ui_content
-                    .allocate_at_least(ui_content.available_size(), egui::Sense::click_and_drag());
+                  .allocate_at_least(ui_content.available_size(), egui::Sense::click_and_drag());
                 // Define pixels_per_unit based on display mode
                 let pixels_per_unit = match editor_context.timeline_display_mode {
                     TimelineDisplayMode::Seconds => {
@@ -495,7 +514,7 @@ pub fn timeline_panel(
                     }
                     TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => {
                         (editor_context.timeline_pixels_per_second / editor_context.fps)
-                            * editor_context.timeline_h_zoom
+                          * editor_context.timeline_h_zoom
                     }
                 };
 
@@ -505,7 +524,7 @@ pub fn timeline_panel(
                     if ui_content.input(|i| i.modifiers.ctrl) && scroll_delta.y != 0.0 {
                         let zoom_factor = if scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
                         editor_context.timeline_h_zoom =
-                            (editor_context.timeline_h_zoom * zoom_factor).clamp(0.1, 10.0);
+                          (editor_context.timeline_h_zoom * zoom_factor).clamp(0.1, 10.0);
                     } else if scroll_delta.y != 0.0 {
                         editor_context.timeline_scroll_offset.y -= scroll_delta.y;
                     }
@@ -514,7 +533,7 @@ pub fn timeline_panel(
                         editor_context.timeline_scroll_offset.x -= scroll_delta.x;
                         // Clamp timeline_scroll_offset.x to prevent scrolling left past 0s
                         editor_context.timeline_scroll_offset.x =
-                            editor_context.timeline_scroll_offset.x.max(0.0);
+                          editor_context.timeline_scroll_offset.x.max(0.0);
                     }
                 }
                 if response.dragged_by(egui::PointerButton::Middle) {
@@ -523,23 +542,23 @@ pub fn timeline_panel(
 
                     // Clamp timeline_scroll_offset.x to prevent scrolling left past 0s
                     editor_context.timeline_scroll_offset.x =
-                        editor_context.timeline_scroll_offset.x.max(0.0);
+                      editor_context.timeline_scroll_offset.x.max(0.0);
                 }
 
                 // --- Drawing ---
                 let painter = ui_content.painter_at(content_rect_for_clip_area);
                 // Constrain scroll offset
                 let max_scroll_y = (num_tracks as f32 * (row_height + track_spacing))
-                    - content_rect_for_clip_area.height();
+                  - content_rect_for_clip_area.height();
                 editor_context.timeline_scroll_offset.y = editor_context
-                    .timeline_scroll_offset
-                    .y
-                    .clamp(-max_scroll_y.max(0.0), 0.0);
+                  .timeline_scroll_offset
+                  .y
+                  .clamp(-max_scroll_y.max(0.0), 0.0);
 
                 for i in 0..num_tracks {
                     let y = content_rect_for_clip_area.min.y
-                        + (i as f32 * (row_height + track_spacing))
-                        + editor_context.timeline_scroll_offset.y;
+                      + (i as f32 * (row_height + track_spacing))
+                      + editor_context.timeline_scroll_offset.y;
                     let track_rect = egui::Rect::from_min_size(
                         egui::pos2(content_rect_for_clip_area.min.x, y),
                         egui::vec2(content_rect_for_clip_area.width(), row_height),
@@ -560,16 +579,16 @@ pub fn timeline_panel(
                     if let Some(asset_index) = editor_context.dragged_asset {
                         if let Some(mouse_pos) = response.hover_pos() {
                             let drop_time = ((mouse_pos.x
-                                - content_rect_for_clip_area.min.x
-                                - editor_context.timeline_scroll_offset.x)
-                                / pixels_per_unit)
-                                .max(0.0);
+                              - content_rect_for_clip_area.min.x
+                              - editor_context.timeline_scroll_offset.x)
+                              / pixels_per_unit)
+                              .max(0.0);
                             let drop_track_index = ((mouse_pos.y
-                                - content_rect_for_clip_area.min.y
-                                - editor_context.timeline_scroll_offset.y)
-                                / (row_height + track_spacing))
-                                .floor()
-                                as usize;
+                              - content_rect_for_clip_area.min.y
+                              - editor_context.timeline_scroll_offset.y)
+                              / (row_height + track_spacing))
+                              .floor()
+                              as usize;
 
                             if let Some(comp_id) = editor_context.selected_composition_id {
                                 if let Some(track) = current_tracks.get(drop_track_index) {
@@ -578,10 +597,10 @@ pub fn timeline_panel(
                                         if let AssetKind::Composition(_nested_comp_id) = asset.kind
                                         {
                                             let prev_project_state = project_service
-                                                .get_project()
-                                                .read()
-                                                .unwrap()
-                                                .clone();
+                                              .get_project()
+                                              .read()
+                                              .unwrap()
+                                              .clone();
                                             if let Err(e) = project_service.add_entity_to_track(
                                                 comp_id,
                                                 track.id,
@@ -595,14 +614,14 @@ pub fn timeline_panel(
                                                 );
                                             } else {
                                                 history_manager
-                                                    .push_project_state(prev_project_state);
+                                                  .push_project_state(prev_project_state);
                                             }
                                         } else {
                                             let prev_project_state = project_service
-                                                .get_project()
-                                                .read()
-                                                .unwrap()
-                                                .clone();
+                                              .get_project()
+                                              .read()
+                                              .unwrap()
+                                              .clone();
                                             if let Err(e) = project_service.add_entity_to_track(
                                                 comp_id,
                                                 track.id,
@@ -613,7 +632,7 @@ pub fn timeline_panel(
                                                 eprintln!("Failed to add entity to track: {:?}", e);
                                             } else {
                                                 history_manager
-                                                    .push_project_state(prev_project_state);
+                                                  .push_project_state(prev_project_state);
                                             }
                                         }
                                     }
@@ -627,27 +646,27 @@ pub fn timeline_panel(
                 let mut clicked_on_entity = false;
 
                 if !is_dragging_asset
-                    && response.dragged()
-                    && !response.dragged_by(egui::PointerButton::Middle)
+                  && response.dragged()
+                  && !response.dragged_by(egui::PointerButton::Middle)
                 {
                     // Added condition
                     if let Some(pos) = response.interact_pointer_pos() {
                         editor_context.current_time = ((pos.x - content_rect_for_clip_area.min.x
-                            + editor_context.timeline_scroll_offset.x)
-                            / pixels_per_unit)
-                            .max(0.0);
+                          + editor_context.timeline_scroll_offset.x)
+                          / pixels_per_unit)
+                          .max(0.0);
                     }
                 }
                 if !is_dragging_asset
-                    && response.drag_stopped()
-                    && !response.dragged_by(egui::PointerButton::Middle)
+                  && response.drag_stopped()
+                  && !response.dragged_by(egui::PointerButton::Middle)
                 {
                     // Added condition
                     if let Some(pos) = response.interact_pointer_pos() {
                         editor_context.current_time = ((pos.x - content_rect_for_clip_area.min.x
-                            + editor_context.timeline_scroll_offset.x)
-                            / pixels_per_unit)
-                            .max(0.0);
+                          + editor_context.timeline_scroll_offset.x)
+                          / pixels_per_unit)
+                          .max(0.0);
                     }
                 }
 
@@ -668,14 +687,14 @@ pub fn timeline_panel(
                 for track_in_all_entities in &current_tracks {
                     // Iterate over the pre-collected tracks
                     let clip_track_index = current_tracks
-                        .iter()
-                        .position(|t| t.id == track_in_all_entities.id)
-                        .map(|idx| idx as f32)
-                        .unwrap_or(0.0);
+                      .iter()
+                      .position(|t| t.id == track_in_all_entities.id)
+                      .map(|idx| idx as f32)
+                      .unwrap_or(0.0);
 
                     for (entity_track_id, entity) in all_entities
-                        .iter()
-                        .filter(|(t_id, _)| *t_id == track_in_all_entities.id)
+                      .iter()
+                      .filter(|(t_id, _)| *t_id == track_in_all_entities.id)
                     {
                         let asset_index = 0; // Temporary: should derive from entity properties
                         let asset = editor_context.assets.get(asset_index);
@@ -699,11 +718,11 @@ pub fn timeline_panel(
                             };
 
                             let x = content_rect_for_clip_area.min.x
-                                + gc.start_time * pixels_per_unit
-                                - editor_context.timeline_scroll_offset.x;
+                              + gc.start_time * pixels_per_unit
+                              - editor_context.timeline_scroll_offset.x;
                             let y = content_rect_for_clip_area.min.y
-                                + editor_context.timeline_scroll_offset.y
-                                + clip_track_index * (row_height + track_spacing);
+                              + editor_context.timeline_scroll_offset.y
+                              + clip_track_index * (row_height + track_spacing);
                             let clip_rect = egui::Rect::from_min_size(
                                 egui::pos2(x, y),
                                 egui::vec2(gc.duration * pixels_per_unit, row_height),
@@ -725,42 +744,42 @@ pub fn timeline_panel(
                                 editor_context.selected_track_id = Some(gc.track_id);
                                 if editor_context.last_project_state_before_drag.is_none() {
                                     editor_context.last_project_state_before_drag =
-                                        Some(project_service.get_project().read().unwrap().clone());
+                                      Some(project_service.get_project().read().unwrap().clone());
                                 }
                             }
                             if clip_resp.dragged()
-                                && editor_context.selected_entity_id == Some(gc.id)
+                              && editor_context.selected_entity_id == Some(gc.id)
                             {
                                 let dt = clip_resp.drag_delta().x as f64 / pixels_per_unit as f64;
 
                                 if let Some(comp_id) = editor_context.selected_composition_id {
                                     if let Some(track_id) = editor_context.selected_track_id {
                                         project_service
-                                            .with_track_mut(comp_id, track_id, |track_mut| {
-                                                if let Some(entity_mut) = track_mut
-                                                    .entities
-                                                    .iter_mut()
-                                                    .find(|e| e.id == gc.id)
-                                                {
-                                                    entity_mut.start_time =
-                                                        (entity_mut.start_time + dt).max(0.0);
-                                                    entity_mut.end_time = (entity_mut.end_time
-                                                        + dt)
-                                                        .max(entity_mut.start_time);
-                                                }
-                                            })
-                                            .ok();
+                                          .with_track_mut(comp_id, track_id, |track_mut| {
+                                              if let Some(entity_mut) = track_mut
+                                                .entities
+                                                .iter_mut()
+                                                .find(|e| e.id == gc.id)
+                                              {
+                                                  entity_mut.start_time =
+                                                    (entity_mut.start_time + dt).max(0.0);
+                                                  entity_mut.end_time = (entity_mut.end_time
+                                                    + dt)
+                                                    .max(entity_mut.start_time);
+                                              }
+                                          })
+                                          .ok();
                                     }
                                 }
                             }
                             if clip_resp.drag_stopped()
-                                && editor_context.selected_entity_id == Some(gc.id)
+                              && editor_context.selected_entity_id == Some(gc.id)
                             {
                                 if let Some(initial_state) =
-                                    editor_context.last_project_state_before_drag.take()
+                                  editor_context.last_project_state_before_drag.take()
                                 {
                                     let current_state =
-                                        project_service.get_project().read().unwrap().clone();
+                                      project_service.get_project().read().unwrap().clone();
                                     if initial_state != current_state {
                                         history_manager.push_project_state(initial_state);
                                     }
@@ -807,10 +826,10 @@ pub fn timeline_panel(
 
     // Draw cursor after all panels are laid out
     let cx = central_panel_rect.min.x
-        + TRACK_LIST_SIDEBAR_WIDTH // Add the width of the track list sidebar
-        - scroll_offset_x
-        + editor_context.current_time * pixels_per_unit
-        + 24.0;
+      + TRACK_LIST_SIDEBAR_WIDTH // Add the width of the track list sidebar
+      - scroll_offset_x
+      + editor_context.current_time * pixels_per_unit
+      + 24.0;
 
     let full_timeline_area = ui.available_rect_before_wrap(); // This is the total area for the timeline_panel
 
@@ -834,7 +853,7 @@ pub fn timeline_panel(
     // Draw the central panel segment of the cursor (restricted width)
     // This segment should start from the right of the sidebar.
     if cx >= central_panel_rect.min.x + TRACK_LIST_SIDEBAR_WIDTH + 24.0
-        && cx <= central_panel_rect.max.x
+      && cx <= central_panel_rect.max.x
     {
         ui.painter().line_segment(
             [egui::pos2(cx, central_panel_y_min - 12.0), egui::pos2(cx, central_panel_y_max + 8.0)],
