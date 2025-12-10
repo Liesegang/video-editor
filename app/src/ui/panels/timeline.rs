@@ -136,9 +136,9 @@ fn show_timeline_ruler(
         });
 
         // --- The actual ruler ---
-        let (rect, _) = h_ui.allocate_at_least(
+        let (rect, response) = h_ui.allocate_at_least(
             h_ui.available_size(),
-            egui::Sense::hover(),
+            egui::Sense::drag(),
         );
         let painter = h_ui.painter_at(rect); // Painter for the allocated rect within h_ui
         painter.rect_filled(rect, 0.0, h_ui.style().visuals.widgets.noninteractive.bg_fill);
@@ -149,6 +149,16 @@ fn show_timeline_ruler(
         };
 
         let scroll_offset_x = editor_context.timeline_scroll_offset.x; // Current scroll offset
+
+        if response.dragged() && !response.dragged_by(egui::PointerButton::Middle) { // New condition
+            if let Some(pos) = response.interact_pointer_pos() {
+                editor_context.current_time = ((pos.x
+                    - rect.min.x
+                    + scroll_offset_x)
+                    / pixels_per_unit)
+                    .max(0.0);
+            }
+        }
 
         let (major_interval, minor_interval) = match editor_context.timeline_display_mode {
             TimelineDisplayMode::Seconds => {
@@ -196,7 +206,7 @@ fn show_timeline_ruler(
 
                 // Now, convert to absolute screen coordinates for the painter.
                 // The painter works with absolute screen coordinates.
-                let screen_x = rect.min.x + x_pos_on_rect + 20.0; // +20.0 for the reported offset
+                let screen_x = rect.min.x + x_pos_on_rect + 16.0; // +20.0 for the reported offset
 
                 if screen_x >= rect.min.x && screen_x <= rect.max.x {
                     let is_major = s % major_interval == 0.0;
@@ -431,14 +441,21 @@ pub fn timeline_panel(
                         } else if scroll_delta.y != 0.0 {
                             editor_context.timeline_scroll_offset.y -= scroll_delta.y;
                         }
-            
+
                         if scroll_delta.x != 0.0 {
                             editor_context.timeline_scroll_offset.x -= scroll_delta.x;
+                            // Clamp timeline_scroll_offset.x to prevent scrolling left past 0s
+                            editor_context.timeline_scroll_offset.x =
+                                editor_context.timeline_scroll_offset.x.max(0.0);
                         }
                     }
-                    if response.dragged() {
+                    if response.dragged_by(egui::PointerButton::Middle) {
                         editor_context.timeline_scroll_offset.x -= response.drag_delta().x;
                         editor_context.timeline_scroll_offset.y += response.drag_delta().y;
+
+                        // Clamp timeline_scroll_offset.x to prevent scrolling left past 0s
+                        editor_context.timeline_scroll_offset.x =
+                            editor_context.timeline_scroll_offset.x.max(0.0);
                     }
             
                     // --- Drawing ---
@@ -531,10 +548,18 @@ pub fn timeline_panel(
             let is_dragging_asset = editor_context.dragged_asset.is_some();
             let mut clicked_on_entity = false;
 
-            if !is_dragging_asset && response.drag_stopped() {
+            if !is_dragging_asset && response.dragged() && !response.dragged_by(egui::PointerButton::Middle) { // Added condition
                 if let Some(pos) = response.interact_pointer_pos() {
                     editor_context.current_time =
-                        ((pos.x - content_rect.min.x - editor_context.timeline_scroll_offset.x)
+                        ((pos.x - content_rect.min.x + editor_context.timeline_scroll_offset.x)
+                            / pixels_per_unit)
+                            .max(0.0);
+                }
+            }
+            if !is_dragging_asset && response.drag_stopped() && !response.dragged_by(egui::PointerButton::Middle) { // Added condition
+                if let Some(pos) = response.interact_pointer_pos() {
+                    editor_context.current_time =
+                        ((pos.x - content_rect.min.x + editor_context.timeline_scroll_offset.x)
                             / pixels_per_unit)
                             .max(0.0);
                 }
@@ -690,7 +715,7 @@ pub fn timeline_panel(
             }
 
             let cx = content_rect.min.x
-                + editor_context.timeline_scroll_offset.x
+                - editor_context.timeline_scroll_offset.x
                 + editor_context.current_time * pixels_per_unit;
             if cx > content_rect.min.x && cx < content_rect.max.x {
                 painter.line_segment(
