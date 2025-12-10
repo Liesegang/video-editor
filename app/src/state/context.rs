@@ -12,7 +12,6 @@ pub struct EditorContext {
     pub current_time: f32,
     pub is_playing: bool,
     pub timeline_pixels_per_second: f32,
-    pub fps: f32,                                   // New field for frames per second
     pub timeline_display_mode: TimelineDisplayMode, // New field for timeline display mode,
 
     #[serde(with = "Vec2Def")]
@@ -101,7 +100,6 @@ impl EditorContext {
             current_time: 0.0,
             is_playing: false,
             timeline_pixels_per_second: 50.0,
-            fps: 30.0,                                           // Default FPS
             timeline_display_mode: TimelineDisplayMode::Seconds, // Default display mode,
 
             view_pan: egui::vec2(20.0, 20.0),
