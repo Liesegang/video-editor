@@ -10,6 +10,8 @@ use crate::{
     state::context::EditorContext,
 };
 
+const EDGE_DRAG_WIDTH: f32 = 5.0;
+
 #[allow(clippy::too_many_arguments)]
 pub fn show_clip_area(
     ui_content: &mut Ui,
@@ -153,7 +155,7 @@ pub fn show_clip_area(
                                             e
                                         );
                                     } else {
-                                        history_manager.push_project_state(prev_project_state);
+                                        history_manager.push_project_state(project_service.get_project().read().unwrap().clone());
                                     }
                                 } else {
                                     let prev_project_state =
@@ -167,7 +169,7 @@ pub fn show_clip_area(
                                     ) {
                                         eprintln!("Failed to add entity to track: {:?}", e);
                                     } else {
-                                        history_manager.push_project_state(prev_project_state);
+                                        history_manager.push_project_state(project_service.get_project().read().unwrap().clone());
                                     }
                                 }
                             }
@@ -230,6 +232,76 @@ pub fn show_clip_area(
                     egui::Sense::click_and_drag(),
                 );
 
+                // Create edge responses using initial_clip_rect for hit detection
+                let left_edge_rect = egui::Rect::from_min_size(
+                    egui::pos2(initial_clip_rect.min.x, initial_clip_rect.min.y),
+                    egui::vec2(EDGE_DRAG_WIDTH, initial_clip_rect.height()),
+                );
+                let left_edge_resp = ui_content.interact(
+                    left_edge_rect,
+                    egui::Id::new(gc.id).with("left_edge"), // Unique ID for the left edge
+                    egui::Sense::drag(),
+                );
+
+                let right_edge_rect = egui::Rect::from_min_size(
+                    egui::pos2(initial_clip_rect.max.x - EDGE_DRAG_WIDTH, initial_clip_rect.min.y),
+                    egui::vec2(EDGE_DRAG_WIDTH, initial_clip_rect.height()),
+                );
+                let right_edge_resp = ui_content.interact(
+                    right_edge_rect,
+                    egui::Id::new(gc.id).with("right_edge"), // Unique ID for the right edge
+                    egui::Sense::drag(),
+                );
+
+                // Handle edge dragging (resize) - takes precedence over full entity drag
+                if left_edge_resp.drag_started() || right_edge_resp.drag_started() {
+                    editor_context.is_resizing_entity = true;
+                    editor_context.selected_entity_id = Some(gc.id);
+                    editor_context.selected_track_id = Some(gc.track_id);
+                    if editor_context.last_project_state_before_drag.is_none() {
+                        editor_context.last_project_state_before_drag = Some(project_service.get_project().read().unwrap().clone());
+                    }
+                }
+
+                if editor_context.is_resizing_entity && editor_context.selected_entity_id == Some(gc.id) {
+                    let mut new_start_time = gc.start_time as f64;
+                    let mut new_end_time = (gc.start_time + gc.duration) as f64;
+
+                    if left_edge_resp.dragged() {
+                        let dt = left_edge_resp.drag_delta().x as f64 / pixels_per_unit as f64;
+                        new_start_time = (new_start_time + dt).max(0.0);
+                        new_start_time = new_start_time.min(new_end_time - 0.01);
+                    } else if right_edge_resp.dragged() {
+                        let dt = right_edge_resp.drag_delta().x as f64 / pixels_per_unit as f64;
+                        new_end_time = (new_end_time + dt).max(new_start_time + 0.01);
+                    }
+
+                    if new_start_time != gc.start_time as f64 || new_end_time != (gc.start_time + gc.duration) as f64 {
+                        if let (Some(comp_id), Some(track_id)) = (
+                            editor_context.selected_composition_id,
+                            editor_context.selected_track_id,
+                        ) {
+                            project_service.update_entity_time(
+                                comp_id,
+                                track_id,
+                                gc.id,
+                                new_start_time,
+                                new_end_time,
+                            ).ok();
+                        }
+                    }
+                }
+
+                if left_edge_resp.drag_stopped() || right_edge_resp.drag_stopped() {
+                    editor_context.is_resizing_entity = false;
+                    if let Some(initial_state) = editor_context.last_project_state_before_drag.take() {
+                        let current_state = project_service.get_project().read().unwrap().clone();
+                        if initial_state != current_state {
+                            history_manager.push_project_state(current_state);
+                        }
+                    }
+                }
+
                 // Calculate display position (potentially adjusted for drag preview)
                 let mut display_x = initial_x;
                 let mut display_y = initial_y;
@@ -277,13 +349,18 @@ pub fn show_clip_area(
                     egui::Color32::BLACK,
                 );
                 // --- End Drawing for clips ---
-                if clip_resp.clicked() {
+
+                // Cursor feedback for edge resizing
+                if left_edge_resp.hovered() || right_edge_resp.hovered() {
+                    ui_content.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                }
+                if !editor_context.is_resizing_entity && clip_resp.clicked() {
                     editor_context.selected_entity_id = Some(gc.id);
                     editor_context.selected_track_id = Some(gc.track_id);
                     clicked_on_entity = true;
                 }
 
-                if clip_resp.drag_started() {
+                if !editor_context.is_resizing_entity && clip_resp.drag_started() {
                     editor_context.selected_entity_id = Some(gc.id);
                     editor_context.selected_track_id = Some(gc.track_id);
                     editor_context.dragged_entity_original_track_id = Some(gc.track_id); // Store original track
@@ -293,7 +370,7 @@ pub fn show_clip_area(
                             Some(project_service.get_project().read().unwrap().clone());
                     }
                 }
-                if clip_resp.dragged() && editor_context.selected_entity_id == Some(gc.id) {
+                if !editor_context.is_resizing_entity && clip_resp.dragged() && editor_context.selected_entity_id == Some(gc.id) {
                     // Handle horizontal movement (time change)
                     let dt = clip_resp.drag_delta().x as f64 / pixels_per_unit as f64;
                     if let Some(comp_id) = editor_context.selected_composition_id {
@@ -335,7 +412,7 @@ pub fn show_clip_area(
                         }
                     }
                 }
-                                if clip_resp.drag_stopped() && editor_context.selected_entity_id == Some(gc.id) {
+                                if !editor_context.is_resizing_entity && clip_resp.drag_stopped() && editor_context.selected_entity_id == Some(gc.id) {
                                     let mut moved_track = false;
                                     if let (Some(original_track_id), Some(hovered_track_id), Some(comp_id)) = (
                                         editor_context.dragged_entity_original_track_id,
@@ -378,7 +455,7 @@ pub fn show_clip_area(
     // --- End Loop for drawing and interacting with entities ---
 
     // Final selection clearing logic
-    if response.clicked() && !clicked_on_entity && !is_dragging_asset {
+    if !editor_context.is_resizing_entity && response.clicked() && !clicked_on_entity && !is_dragging_asset {
         editor_context.selected_entity_id = None;
     }
 }

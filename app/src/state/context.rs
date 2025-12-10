@@ -45,6 +45,8 @@ pub struct EditorContext {
     pub dragged_entity_original_track_id: Option<Uuid>,
     #[serde(skip)]
     pub dragged_entity_hovered_track_id: Option<Uuid>,
+    #[serde(skip)]
+    pub is_resizing_entity: bool,
 
     #[serde(skip)]
     pub current_time_text_input: String,
@@ -123,6 +125,7 @@ impl EditorContext {
             last_project_state_before_drag: None,
             dragged_entity_original_track_id: None,
             dragged_entity_hovered_track_id: None,
+            is_resizing_entity: false,
 
             current_time_text_input: "".to_string(), // Initialize new field
             is_editing_current_time: false,          // Initialize new field
