@@ -41,6 +41,10 @@ pub struct EditorContext {
     pub drag_start_property_value: Option<library::model::project::property::PropertyValue>,
     #[serde(skip)]
     pub last_project_state_before_drag: Option<Project>,
+    #[serde(skip)]
+    pub dragged_entity_original_track_id: Option<Uuid>,
+    #[serde(skip)]
+    pub dragged_entity_hovered_track_id: Option<Uuid>,
 
     #[serde(skip)]
     pub current_time_text_input: String,
@@ -117,6 +121,8 @@ impl EditorContext {
             drag_start_property_name: None,
             drag_start_property_value: None,
             last_project_state_before_drag: None,
+            dragged_entity_original_track_id: None,
+            dragged_entity_hovered_track_id: None,
 
             current_time_text_input: "".to_string(), // Initialize new field
             is_editing_current_time: false,          // Initialize new field

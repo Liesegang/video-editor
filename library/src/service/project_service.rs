@@ -274,29 +274,50 @@ impl ProjectService {
         })?
     }
 
-    pub fn update_entity_time(
+    pub fn move_entity_to_track(
         &self,
         composition_id: Uuid,
-        track_id: Uuid,
+        source_track_id: Uuid,
+        target_track_id: Uuid,
         entity_id: Uuid,
-        new_start_time: f64,
-        new_end_time: f64,
     ) -> Result<(), LibraryError> {
-        self.with_track_mut(composition_id, track_id, |track| {
-            let track_entity = track
-                .entities
-                .iter_mut()
-                .find(|e| e.id == entity_id)
-                .ok_or_else(|| {
-                    LibraryError::Project(format!(
-                        "Entity with ID {} not found in Track {}",
-                        entity_id, track_id
-                    ))
-                })?;
+        if source_track_id == target_track_id {
+            // No actual move needed if source and target are the same
+            return Ok(());
+        }
 
-            track_entity.start_time = new_start_time;
-            track_entity.end_time = new_end_time;
-            Ok(())
-        })?
+        let mut entity_to_move: Option<TrackEntity> = None;
+
+        // 1. Remove entity from source track and capture it
+        let _ = self.with_track_mut(composition_id, source_track_id, |track| {
+            let initial_len = track.entities.len();
+            track.entities.retain(|e| {
+                if e.id == entity_id {
+                    entity_to_move = Some(e.clone()); // Clone the entity before retaining
+                    false // Remove it
+                } else {
+                    true // Keep it
+                }
+            });
+            if track.entities.len() == initial_len {
+                return Err(LibraryError::Project(format!(
+                    "Entity with ID {} not found in source Track {}",
+                    entity_id, source_track_id
+                )));
+            }
+            Ok(()) as Result<(), LibraryError>
+        })?; // Propagate errors from the nested closure
+
+        let moved_entity = entity_to_move.ok_or_else(|| {
+            LibraryError::Runtime("Failed to retrieve entity after removal from source track".to_string())
+        })?;
+
+        // 2. Add entity to target track
+        let _ = self.with_track_mut(composition_id, target_track_id, |track| {
+            track.entities.push(moved_entity);
+            Ok(()) as Result<(), LibraryError>
+        })?; // Propagate errors from the nested closure
+
+        Ok(())
     }
 }
