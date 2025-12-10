@@ -26,8 +26,61 @@ pub fn show_clip_area(
     let (content_rect_for_clip_area, response) =
         ui_content.allocate_at_least(ui_content.available_size(), egui::Sense::click_and_drag());
 
-    // --- Interaction ---
+    let is_dragging_asset = editor_context.dragged_asset.is_some();
+    let mut clicked_on_entity = false;
+
+    // --- Data collection for entities ---
+    let mut all_entities: Vec<(Uuid, TrackEntity)> = Vec::new();
+    let mut current_tracks: Vec<library::model::project::Track> = Vec::new();
+    let selected_composition_id = editor_context.selected_composition_id;
+    if let Some(comp_id) = selected_composition_id {
+        if let Ok(proj_read) = project.read() {
+            if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
+                current_tracks = comp.tracks.clone();
+            }
+        }
+    }
+
+    for track in &current_tracks {
+        for entity in &track.entities {
+            all_entities.push((track.id, entity.clone()));
+        }
+    }
+    // --- End Data collection for entities ---
+
+    // --- Drawing of track backgrounds ---
+    let painter = ui_content.painter_at(content_rect_for_clip_area);
+    // Constrain scroll offset
+    let max_scroll_y =
+        (num_tracks as f32 * (row_height + track_spacing)) - content_rect_for_clip_area.height();
+    editor_context.timeline_scroll_offset.y = editor_context
+        .timeline_scroll_offset
+        .y
+        .clamp(-max_scroll_y.max(0.0), 0.0);
+
+    for i in 0..num_tracks {
+        let y = content_rect_for_clip_area.min.y
+            + (i as f32 * (row_height + track_spacing))
+            + editor_context.timeline_scroll_offset.y;
+        let track_rect = egui::Rect::from_min_size(
+            egui::pos2(content_rect_for_clip_area.min.x, y),
+            egui::vec2(content_rect_for_clip_area.width(), row_height),
+        );
+        painter.rect_filled(
+            track_rect,
+            0.0,
+            if i % 2 == 0 {
+                egui::Color32::from_gray(50)
+            } else {
+                egui::Color32::from_gray(60)
+            },
+        );
+    }
+    // --- End Drawing of track backgrounds ---
+
+    // --- Main Interaction Block (only if hovered over the clip area) ---
     if response.hovered() {
+        // Scroll/Zoom interaction
         let scroll_delta = ui_content.input(|i| i.raw_scroll_delta);
         if ui_content.input(|i| i.modifiers.ctrl) && scroll_delta.y != 0.0 {
             let zoom_factor = if scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
@@ -53,35 +106,6 @@ pub fn show_clip_area(
             // Clamp timeline_scroll_offset.x to prevent scrolling left past 0s
             editor_context.timeline_scroll_offset.x =
                 editor_context.timeline_scroll_offset.x.max(0.0);
-        }
-
-        // --- Drawing ---
-        let painter = ui_content.painter_at(content_rect_for_clip_area);
-        // Constrain scroll offset
-        let max_scroll_y = (num_tracks as f32 * (row_height + track_spacing))
-            - content_rect_for_clip_area.height();
-        editor_context.timeline_scroll_offset.y = editor_context
-            .timeline_scroll_offset
-            .y
-            .clamp(-max_scroll_y.max(0.0), 0.0);
-
-        for i in 0..num_tracks {
-            let y = content_rect_for_clip_area.min.y
-                + (i as f32 * (row_height + track_spacing))
-                + editor_context.timeline_scroll_offset.y;
-            let track_rect = egui::Rect::from_min_size(
-                egui::pos2(content_rect_for_clip_area.min.x, y),
-                egui::vec2(content_rect_for_clip_area.width(), row_height),
-            );
-            painter.rect_filled(
-                track_rect,
-                0.0,
-                if i % 2 == 0 {
-                    egui::Color32::from_gray(50)
-                } else {
-                    egui::Color32::from_gray(60)
-                },
-            );
         }
 
         // Logic for adding entity to track on drag-drop
@@ -151,94 +175,78 @@ pub fn show_clip_area(
                 }
             }
         }
+    }
 
-        let is_dragging_asset = editor_context.dragged_asset.is_some();
-        let mut clicked_on_entity = false;
+    // --- Loop for drawing and interacting with entities ---
+    for track_in_all_entities in &current_tracks {
+        let clip_track_index = current_tracks
+            .iter()
+            .position(|t| t.id == track_in_all_entities.id)
+            .map(|idx| idx as f32)
+            .unwrap_or(0.0);
 
-        if !is_dragging_asset
-            && response.dragged()
-            && response.dragged_by(egui::PointerButton::Primary)
+        for (entity_track_id, entity) in all_entities
+            .iter()
+            .filter(|(t_id, _)| *t_id == track_in_all_entities.id)
         {
-            if let Some(pos) = response.interact_pointer_pos() {
-                editor_context.current_time = ((pos.x - content_rect_for_clip_area.min.x
-                    + editor_context.timeline_scroll_offset.x)
-                    / pixels_per_unit)
-                    .max(0.0);
-            }
-        }
-        if !is_dragging_asset
-            && response.drag_stopped()
-            && response.dragged_by(egui::PointerButton::Primary)
-        {
-            if let Some(pos) = response.interact_pointer_pos() {
-                editor_context.current_time = ((pos.x - content_rect_for_clip_area.min.x
-                    + editor_context.timeline_scroll_offset.x)
-                    / pixels_per_unit)
-                    .max(0.0);
-            }
-        }
+            let asset_index = 0; // Temporary: should derive from entity properties
+            let asset = editor_context.assets.get(asset_index);
 
-        // --- Data collection for entities ---
-        let mut all_entities: Vec<(Uuid, TrackEntity)> = Vec::new();
-        let mut current_tracks: Vec<library::model::project::Track> = Vec::new();
-        let selected_composition_id = editor_context.selected_composition_id;
-        if let Some(comp_id) = selected_composition_id {
-            if let Ok(proj_read) = project.read() {
-                if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-                    current_tracks = comp.tracks.clone();
-                }
-            }
-        }
+            if let Some(a) = asset {
+                let gc = GuiClip {
+                    id: entity.id,
+                    name: entity.entity_type.clone(),
+                    track_id: *entity_track_id,
+                    start_time: entity.start_time as f32,
+                    duration: (entity.end_time - entity.start_time) as f32,
+                    color: a.color,
+                    position: [
+                        entity.properties.get_f32("position_x").unwrap_or(960.0),
+                        entity.properties.get_f32("position_y").unwrap_or(540.0),
+                    ],
+                    scale: entity.properties.get_f32("scale").unwrap_or(100.0),
+                    opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
+                    rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
+                    asset_index,
+                };
 
-        for track in &current_tracks {
-            for entity in &track.entities {
-                all_entities.push((track.id, entity.clone()));
-            }
-        }
-        // --- End Data collection for entities ---
+                let x = content_rect_for_clip_area.min.x + gc.start_time * pixels_per_unit
+                    - editor_context.timeline_scroll_offset.x;
+                let y = content_rect_for_clip_area.min.y
+                    + editor_context.timeline_scroll_offset.y
+                    + clip_track_index * (row_height + track_spacing);
+                let clip_rect = egui::Rect::from_min_size(
+                    egui::pos2(x, y),
+                    egui::vec2(gc.duration * pixels_per_unit, row_height),
+                );
 
-        for track_in_all_entities in &current_tracks {
-            let clip_track_index = current_tracks
-                .iter()
-                .position(|t| t.id == track_in_all_entities.id)
-                .map(|idx| idx as f32)
-                .unwrap_or(0.0);
+                // --- Drawing for clips (always) ---
+                let is_sel_entity = editor_context.selected_entity_id == Some(gc.id); // Renamed to avoid conflict
+                let color = gc.color;
+                let transparent_color =
+                    egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 150);
 
-            for (entity_track_id, entity) in all_entities
-                .iter()
-                .filter(|(t_id, _)| *t_id == track_in_all_entities.id)
-            {
-                let asset_index = 0; // Temporary: should derive from entity properties
-                let asset = editor_context.assets.get(asset_index);
-
-                if let Some(a) = asset {
-                    let gc = GuiClip {
-                        id: entity.id,
-                        name: entity.entity_type.clone(),
-                        track_id: *entity_track_id,
-                        start_time: entity.start_time as f32,
-                        duration: (entity.end_time - entity.start_time) as f32,
-                        color: a.color,
-                        position: [
-                            entity.properties.get_f32("position_x").unwrap_or(960.0),
-                            entity.properties.get_f32("position_y").unwrap_or(540.0),
-                        ],
-                        scale: entity.properties.get_f32("scale").unwrap_or(100.0),
-                        opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
-                        rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
-                        asset_index,
-                    };
-
-                    let x = content_rect_for_clip_area.min.x + gc.start_time * pixels_per_unit
-                        - editor_context.timeline_scroll_offset.x;
-                    let y = content_rect_for_clip_area.min.y
-                        + editor_context.timeline_scroll_offset.y
-                        + clip_track_index * (row_height + track_spacing);
-                    let clip_rect = egui::Rect::from_min_size(
-                        egui::pos2(x, y),
-                        egui::vec2(gc.duration * pixels_per_unit, row_height),
+                painter.rect_filled(clip_rect, 4.0, transparent_color);
+                if is_sel_entity {
+                    painter.rect_stroke(
+                        clip_rect,
+                        4.0,
+                        egui::Stroke::new(2.0, egui::Color32::WHITE),
+                        StrokeKind::Middle,
                     );
+                }
+                painter.text(
+                    clip_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    &gc.name,
+                    egui::FontId::default(),
+                    egui::Color32::BLACK,
+                );
+                // --- End Drawing for clips ---
 
+                // --- Interaction for clips (only if hovered) ---
+                if response.hovered() {
+                    // Keep interaction conditional on hover
                     let clip_resp = ui_content.interact(
                         clip_rect,
                         egui::Id::new(gc.id),
@@ -290,36 +298,15 @@ pub fn show_clip_area(
                             }
                         }
                     }
-
-                    let is_sel = editor_context.selected_entity_id == Some(gc.id);
-                    let color = gc.color;
-                    let transparent_color = egui::Color32::from_rgba_premultiplied(
-                        color.r(),
-                        color.g(),
-                        color.b(),
-                        150,
-                    );
-
-                    painter.rect_filled(clip_rect, 4.0, transparent_color);
-                    if is_sel {
-                        painter.rect_stroke(
-                            clip_rect,
-                            4.0,
-                            egui::Stroke::new(2.0, egui::Color32::WHITE),
-                            StrokeKind::Middle,
-                        );
-                    }
-                    painter.text(
-                        clip_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        &gc.name,
-                        egui::FontId::default(),
-                        egui::Color32::BLACK,
-                    );
                 }
             }
         }
+    }
+    // --- End Loop for drawing and interacting with entities ---
 
+    // Final selection clearing logic
+    if response.hovered() {
+        // This block should be after the entity loop, but still conditional on hovered
         if clicked_on_entity {
             // Selected entity is already set
         } else if response.clicked() && !is_dragging_asset {
