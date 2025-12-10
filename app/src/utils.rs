@@ -1,5 +1,4 @@
 use egui::Context;
-use egui_phosphor::regular as icons;
 use std::fs;
 
 pub fn setup_fonts(ctx: &Context) {

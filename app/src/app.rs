@@ -146,7 +146,7 @@ impl eframe::App for MyApp {
             let main_ui_enabled = !self.settings_open && !self.settings_show_close_warning;
             // Disable menu bar if a modal is open
             ui.add_enabled_ui(main_ui_enabled, |ui| {
-                egui::menu::bar(ui, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button("File", |ui| {
                         for cmd_id in [CommandId::NewProject, CommandId::LoadProject, CommandId::Save, CommandId::SaveAs, CommandId::Quit] {
                             if let Some(cmd) = self.command_registry.find(cmd_id) {

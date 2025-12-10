@@ -4,79 +4,228 @@ use library::model::project::project::Project;
 use library::model::project::Track;
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
+use regex::Regex; // Added for regex parsing
 
-use crate::{action::HistoryManager, model::assets::AssetKind, state::context::EditorContext};
+use crate::{action::HistoryManager, model::assets::AssetKind, state::context::EditorContext, model::ui_types::TimelineDisplayMode};
 
-// Helper function to show the timeline ruler
 fn show_timeline_ruler(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
-    _project_service: &ProjectService, // Not used here, but keeping signature for consistency
-    _project: &Arc<RwLock<Project>>,   // Not used here, but keeping signature for consistency
+    _project_service: &ProjectService,
+    _project: &Arc<RwLock<Project>>,
 ) {
-    let (outer_rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), ui.available_height()),
-        egui::Sense::hover(),
-    );
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |h_ui| {
+        let time_display_response = h_ui.vertical(|ui| {
+            ui.set_width(100.0); // Ensure this section takes 100px width
 
-    ui.horizontal(|ui| {
-        // Spacer for the track list
-        let (spacer_rect, _) =
-            ui.allocate_exact_size(egui::vec2(100.0, outer_rect.height()), egui::Sense::hover());
-        ui.painter_at(spacer_rect).rect_filled(
-            spacer_rect,
-            0.0,
-            ui.style().visuals.widgets.noninteractive.bg_fill,
-        );
+            // Format current_time into current_time_text_input if not editing
+            if !editor_context.is_editing_current_time {
+                editor_context.current_time_text_input = match editor_context.timeline_display_mode {
+                    TimelineDisplayMode::Seconds => {
+                        let minutes = (editor_context.current_time / 60.0).floor();
+                        let seconds = (editor_context.current_time % 60.0).floor();
+                        let ms = ((editor_context.current_time % 1.0) * 100.0).floor();
+                        format!("{:02}:{:02}.{:02}", minutes, seconds, ms)
+                    }
+                    TimelineDisplayMode::Frames => {
+                        let current_frame = (editor_context.current_time * editor_context.fps).round() as i32;
+                        format!("{}f", current_frame)
+                    }
+                    TimelineDisplayMode::SecondsAndFrames => {
+                        let total_frames = (editor_context.current_time * editor_context.fps).round() as i32;
+                        let seconds = total_frames / editor_context.fps as i32;
+                        let frames = total_frames % editor_context.fps as i32;
+                        format!("{}s {}f", seconds, frames)
+                    }
+                };
+            }
 
-        // The actual ruler
-        let (rect, _) = ui.allocate_at_least(
-            egui::vec2(ui.available_width(), outer_rect.height()),
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut editor_context.current_time_text_input)
+                    .desired_width(ui.available_width())
+                    .font(egui::FontId::monospace(10.0))
+            );
+
+            if response.clicked() {
+                editor_context.is_editing_current_time = true;
+            }
+
+            if editor_context.is_editing_current_time && (response.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                let input_str = editor_context.current_time_text_input.clone();
+                let parsed_time_in_seconds = match editor_context.timeline_display_mode {
+                    TimelineDisplayMode::Seconds => {
+                        // Attempt to parse MM:SS.ms or just seconds
+                        let parts: Vec<&str> = input_str.split(':').collect();
+                        if parts.len() == 2 {
+                            // MM:SS.ms format
+                            let minutes = parts[0].parse::<f32>().unwrap_or(0.0);
+                            let seconds_ms_parts: Vec<&str> = parts[1].split('.').collect();
+                            let seconds = seconds_ms_parts[0].parse::<f32>().unwrap_or(0.0);
+                            let ms = if seconds_ms_parts.len() == 2 {
+                                seconds_ms_parts[1].parse::<f32>().unwrap_or(0.0) / 100.0
+                            } else {
+                                0.0
+                            };
+                            Some(minutes * 60.0 + seconds + ms)
+                        } else {
+                            // Just seconds (f32)
+                            input_str.parse::<f32>().ok()
+                        }
+                    }
+                    TimelineDisplayMode::Frames => {
+                        // Parse as frames (integer), convert to seconds
+                        input_str.trim_end_matches('f').parse::<i32>().ok().map(|f| f as f32 / editor_context.fps)
+                    }
+                    TimelineDisplayMode::SecondsAndFrames => {
+                        // Parse "Xs Yf"
+                        let re = regex::Regex::new(r"(\d+)s\s*(\d+)f").unwrap();
+                        if let Some(captures) = re.captures(&input_str) {
+                            let seconds = captures[1].parse::<i32>().unwrap_or(0);
+                            let frames = captures[2].parse::<i32>().unwrap_or(0);
+                            Some((seconds as f32) + (frames as f32 / editor_context.fps))
+                        } else {
+                            None
+                        }
+                    }
+                };
+
+                if let Some(new_time) = parsed_time_in_seconds {
+                    editor_context.current_time = new_time.max(0.0);
+                } else {
+                    eprintln!("Failed to parse time input: {}", input_str);
+                    // Revert to current_time's formatted string
+                    editor_context.current_time_text_input = match editor_context.timeline_display_mode {
+                        TimelineDisplayMode::Seconds => {
+                            let minutes = (editor_context.current_time / 60.0).floor();
+                            let seconds = (editor_context.current_time % 60.0).floor();
+                            let ms = ((editor_context.current_time % 1.0) * 100.0).floor();
+                            format!("{:02}:{:02}.{:02}", minutes, seconds, ms)
+                        }
+                        TimelineDisplayMode::Frames => {
+                            let current_frame = (editor_context.current_time * editor_context.fps).round() as i32;
+                            format!("{}f", current_frame)
+                        }
+                        TimelineDisplayMode::SecondsAndFrames => {
+                            let total_frames = (editor_context.current_time * editor_context.fps).round() as i32;
+                            let seconds = total_frames / editor_context.fps as i32;
+                            let frames = total_frames % editor_context.fps as i32;
+                            format!("{}s {}f", seconds, frames)
+                        }
+                    };
+                }
+                editor_context.is_editing_current_time = false;
+            }
+
+            ui.separator();
+        }).response;
+
+        time_display_response.context_menu(|ui| {
+            if ui.button("Seconds").clicked() {
+                editor_context.timeline_display_mode = TimelineDisplayMode::Seconds;
+                ui.close();
+            }
+            if ui.button("Frames").clicked() {
+                editor_context.timeline_display_mode = TimelineDisplayMode::Frames;
+                ui.close();
+            }
+            if ui.button("Seconds + Frames").clicked() {
+                editor_context.timeline_display_mode = TimelineDisplayMode::SecondsAndFrames;
+                ui.close();
+            }
+        });
+
+        // --- The actual ruler ---
+        let (rect, _) = h_ui.allocate_at_least(
+            h_ui.available_size(),
             egui::Sense::hover(),
         );
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, ui.style().visuals.widgets.noninteractive.bg_fill);
+        let painter = h_ui.painter_at(rect); // Painter for the allocated rect within h_ui
+        painter.rect_filled(rect, 0.0, h_ui.style().visuals.widgets.noninteractive.bg_fill);
 
-        let time_scale = editor_context.timeline_pixels_per_second * editor_context.timeline_h_zoom;
-        let start_x = rect.min.x + editor_context.timeline_scroll_offset.x;
-
-        // Determine the density of markers based on zoom
-        let (major_interval, minor_interval) = if time_scale > 150.0 {
-            (1.0, 0.5)
-        } else if time_scale > 50.0 {
-            (1.0, 1.0) // No minor
-        } else if time_scale > 15.0 {
-            (5.0, 1.0)
-        } else {
-            (10.0, 5.0)
+        let pixels_per_unit = match editor_context.timeline_display_mode {
+            TimelineDisplayMode::Seconds => editor_context.timeline_pixels_per_second * editor_context.timeline_h_zoom,
+            TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => (editor_context.timeline_pixels_per_second / editor_context.fps) * editor_context.timeline_h_zoom,
         };
 
-        let first_second = (-editor_context.timeline_scroll_offset.x / time_scale).floor() as i32;
-        let last_second =
-            ((-editor_context.timeline_scroll_offset.x + rect.width()) / time_scale).ceil() as i32;
+        let scroll_offset_x = editor_context.timeline_scroll_offset.x; // Current scroll offset
 
-        for sec in first_second..=last_second {
-            let s = sec as f32;
+        let (major_interval, minor_interval) = match editor_context.timeline_display_mode {
+            TimelineDisplayMode::Seconds => {
+                if pixels_per_unit > 150.0 {
+                    (1.0, 0.5)
+                } else if pixels_per_unit > 50.0 {
+                    (1.0, 1.0) // No minor
+                } else if pixels_per_unit > 15.0 {
+                    (5.0, 1.0)
+                } else {
+                    (10.0, 5.0)
+                }
+            },
+            TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => {
+                if pixels_per_unit > 100.0 {
+                    (1.0, 0.5)
+                } else if pixels_per_unit > 30.0 {
+                    (5.0, 1.0)
+                } else if pixels_per_unit > 10.0 {
+                    (10.0, 5.0)
+                } else {
+                    (30.0, 10.0) // half second
+                }
+            }
+        };
+
+        let first_unit = match editor_context.timeline_display_mode {
+            TimelineDisplayMode::Seconds => (scroll_offset_x / pixels_per_unit).floor() as i32,
+            TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => (scroll_offset_x / pixels_per_unit).floor() as i32,
+        };
+        let last_unit = match editor_context.timeline_display_mode {
+            TimelineDisplayMode::Seconds => ((scroll_offset_x + rect.width()) / pixels_per_unit).ceil() as i32,
+            TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => ((scroll_offset_x + rect.width()) / pixels_per_unit).ceil() as i32,
+        };
+
+        for unit_val in first_unit..=last_unit {
+            let s = unit_val as f32; // 's' now represents either seconds or frames
             if s % minor_interval == 0.0 {
-                let x = start_x + s * time_scale;
-                if x >= rect.min.x && x <= rect.max.x {
+                // Position of the current unit mark, relative to the *start* of the scrollable content
+                let content_x = s * pixels_per_unit;
+
+                // Position relative to the *visible area* of the ruler (rect)
+                // This is the content_x minus the scroll_offset_x
+                let x_pos_on_rect = content_x - scroll_offset_x;
+
+                // Now, convert to absolute screen coordinates for the painter.
+                // The painter works with absolute screen coordinates.
+                let screen_x = rect.min.x + x_pos_on_rect + 20.0; // +20.0 for the reported offset
+
+                if screen_x >= rect.min.x && screen_x <= rect.max.x {
                     let is_major = s % major_interval == 0.0;
-                    let _height = if is_major {
+                    let line_height = if is_major {
                         rect.height()
                     } else {
                         rect.height() * 0.5
                     };
+                    // eprintln!("Drawing line for sec {}: screen_x: {}, y1: {}, y2: {}", s, screen_x, rect.min.y, rect.min.y + line_height);
                     painter.line_segment(
-                        [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
-                        ui.style().visuals.widgets.noninteractive.bg_stroke,
+                        [egui::pos2(screen_x, rect.min.y), egui::pos2(screen_x, rect.min.y + line_height)],
+                        egui::Stroke::new(1.0, egui::Color32::WHITE),
                     );
                     if is_major {
+                        let text = match editor_context.timeline_display_mode {
+                            TimelineDisplayMode::Seconds => format!("{}s", s),
+                            TimelineDisplayMode::Frames => format!("{}f", s as i32),
+                            TimelineDisplayMode::SecondsAndFrames => {
+                                let total_frames = (s * editor_context.fps).round() as i32;
+                                let seconds = total_frames / editor_context.fps as i32;
+                                let frames = total_frames % editor_context.fps as i32;
+                                format!("{}s {}f", seconds, frames)
+                            }
+                        };
                         painter.text(
-                            egui::pos2(x + 2.0, rect.center().y),
+                            egui::pos2(screen_x + 2.0, rect.center().y),
                             egui::Align2::LEFT_CENTER,
-                            format!("{}s", s),
+                            text,
                             egui::FontId::monospace(10.0),
-                            ui.style().visuals.text_color(),
+                            egui::Color32::WHITE,
                         );
                     }
                 }
@@ -258,44 +407,45 @@ pub fn timeline_panel(
 
             ui.separator();
 
-            // --- Clip area ---
-            let (content_rect, response) =
-                ui.allocate_at_least(ui.available_size(), egui::Sense::click_and_drag());
-
-            // --- Interaction ---
-            if response.hovered() {
-                let scroll_delta = ui.input(|i| i.raw_scroll_delta);
-                if ui.input(|i| i.modifiers.ctrl) && scroll_delta.y != 0.0 {
-                    let zoom_factor = if scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
-                    editor_context.timeline_h_zoom =
-                        (editor_context.timeline_h_zoom * zoom_factor).clamp(0.1, 10.0);
-                } else if scroll_delta.y != 0.0 {
-                    editor_context.timeline_scroll_offset.y -= scroll_delta.y;
-                }
-
-                if scroll_delta.x != 0.0 {
-                    editor_context.timeline_scroll_offset.x -= scroll_delta.x;
-                }
-            }
-            if response.dragged() {
-                editor_context.timeline_scroll_offset.x += response.drag_delta().x;
-                editor_context.timeline_scroll_offset.y += response.drag_delta().y;
-            }
-
-            // --- Drawing ---
-            let painter = ui.painter_at(content_rect);
-            let time_scale =
-                editor_context.timeline_pixels_per_second * editor_context.timeline_h_zoom;
-
-            // Constrain scroll offset
-            let max_scroll_y =
-                (num_tracks as f32 * (row_height + track_spacing)) - content_rect.height();
-            editor_context.timeline_scroll_offset.y = editor_context
-                .timeline_scroll_offset
-                .y
-                .clamp(-max_scroll_y.max(0.0), 0.0);
-            editor_context.timeline_scroll_offset.x =
-                editor_context.timeline_scroll_offset.x.min(0.0);
+                    // --- Clip area ---
+                    let (content_rect, response) =
+                        ui.allocate_at_least(ui.available_size(), egui::Sense::click_and_drag());
+            
+                    // Define pixels_per_unit based on display mode
+                    let pixels_per_unit = match editor_context.timeline_display_mode {
+                        TimelineDisplayMode::Seconds => editor_context.timeline_pixels_per_second * editor_context.timeline_h_zoom,
+                        TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => (editor_context.timeline_pixels_per_second / editor_context.fps) * editor_context.timeline_h_zoom,
+                    };
+            
+                    // --- Interaction ---
+                    if response.hovered() {
+                        let scroll_delta = ui.input(|i| i.raw_scroll_delta);
+                        if ui.input(|i| i.modifiers.ctrl) && scroll_delta.y != 0.0 {
+                            let zoom_factor = if scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
+                            editor_context.timeline_h_zoom =
+                                (editor_context.timeline_h_zoom * zoom_factor).clamp(0.1, 10.0);
+                        } else if scroll_delta.y != 0.0 {
+                            editor_context.timeline_scroll_offset.y -= scroll_delta.y;
+                        }
+            
+                        if scroll_delta.x != 0.0 {
+                            editor_context.timeline_scroll_offset.x -= scroll_delta.x;
+                        }
+                    }
+                    if response.dragged() {
+                        editor_context.timeline_scroll_offset.x -= response.drag_delta().x;
+                        editor_context.timeline_scroll_offset.y += response.drag_delta().y;
+                    }
+            
+                    // --- Drawing ---
+                    let painter = ui.painter_at(content_rect);
+                    // Constrain scroll offset
+                    let max_scroll_y =
+                        (num_tracks as f32 * (row_height + track_spacing)) - content_rect.height();
+                    editor_context.timeline_scroll_offset.y = editor_context
+                        .timeline_scroll_offset
+                        .y
+                        .clamp(-max_scroll_y.max(0.0), 0.0);
 
             for i in 0..num_tracks {
                 let y = content_rect.min.y
@@ -323,7 +473,7 @@ pub fn timeline_panel(
                         let drop_time = ((mouse_pos.x
                             - content_rect.min.x
                             - editor_context.timeline_scroll_offset.x)
-                            / time_scale)
+                            / pixels_per_unit)
                             .max(0.0);
                         let drop_track_index = ((mouse_pos.y
                             - content_rect.min.y
@@ -381,7 +531,7 @@ pub fn timeline_panel(
                 if let Some(pos) = response.interact_pointer_pos() {
                     editor_context.current_time =
                         ((pos.x - content_rect.min.x - editor_context.timeline_scroll_offset.x)
-                            / time_scale)
+                            / pixels_per_unit)
                             .max(0.0);
                 }
             }
@@ -420,14 +570,14 @@ pub fn timeline_panel(
                                 };
 
                                 let x = content_rect.min.x
-                                    + editor_context.timeline_scroll_offset.x
-                                    + gc.start_time * time_scale;
+                                    + gc.start_time * pixels_per_unit
+                                    - editor_context.timeline_scroll_offset.x;
                                 let y = content_rect.min.y
                                     + editor_context.timeline_scroll_offset.y
                                     + clip_track_index * (row_height + track_spacing);
                                 let clip_rect = egui::Rect::from_min_size(
                                     egui::pos2(x, y),
-                                    egui::vec2(gc.duration * time_scale, row_height),
+                                    egui::vec2(gc.duration * pixels_per_unit, row_height),
                                 );
 
                                 let clip_resp = ui.interact(
@@ -453,7 +603,7 @@ pub fn timeline_panel(
                                 if clip_resp.dragged()
                                     && editor_context.selected_entity_id == Some(gc.id)
                                 {
-                                    let dt = clip_resp.drag_delta().x as f64 / time_scale as f64;
+                                    let dt = clip_resp.drag_delta().x as f64 / pixels_per_unit as f64;
 
                                     if let Some(comp_id) = editor_context.selected_composition_id {
                                         if let Some(track_id) = editor_context.selected_track_id {
@@ -528,7 +678,7 @@ pub fn timeline_panel(
 
             let cx = content_rect.min.x
                 + editor_context.timeline_scroll_offset.x
-                + editor_context.current_time * time_scale;
+                + editor_context.current_time * pixels_per_unit;
             if cx > content_rect.min.x && cx < content_rect.max.x {
                 painter.line_segment(
                     [

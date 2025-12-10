@@ -47,3 +47,10 @@ pub struct Vec2Def {
     pub x: f32,
     pub y: f32,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimelineDisplayMode {
+    Seconds,
+    Frames,
+    SecondsAndFrames,
+}
