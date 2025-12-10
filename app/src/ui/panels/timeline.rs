@@ -4,7 +4,8 @@ use library::model::project::project::Project;
 use library::model::project::Track;
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
-use regex::Regex; // Added for regex parsing
+use uuid::Uuid;
+use library::model::project::TrackEntity;
 
 use crate::{action::HistoryManager, model::assets::AssetKind, state::context::EditorContext, model::ui_types::TimelineDisplayMode};
 
@@ -316,13 +317,16 @@ pub fn timeline_panel(
             let row_height = 30.0;
             let track_spacing = 2.0;
 
-            let mut current_tracks: Vec<Track> = Vec::new();
-            if let Ok(proj_read) = project.read() {
-                if let Some(comp) = editor_context.get_current_composition(&proj_read) {
-                    current_tracks = comp.tracks.clone();
-                }
+    let mut current_tracks: Vec<Track> = Vec::new();
+    let selected_composition_id = editor_context.selected_composition_id;
+    if let Some(comp_id) = selected_composition_id {
+        if let Ok(proj_read) = project.read() {
+            if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
+                current_tracks = comp.tracks.clone();
             }
-            let num_tracks = current_tracks.len();
+        }
+    }
+    let num_tracks = current_tracks.len();
 
             for (i, track) in current_tracks.iter().enumerate() {
                 let y = track_list_rect.min.y
@@ -536,136 +540,145 @@ pub fn timeline_panel(
                 }
             }
 
-            // Draw entities (clips) from the Project model
-            if let Ok(proj_read) = project.read() {
-                if let Some(comp) = editor_context.get_current_composition(&proj_read) {
-                    for track in &comp.tracks {
-                        let clip_track_index = comp
-                            .tracks
-                            .iter()
-                            .position(|t| t.id == track.id)
-                            .map(|idx| idx as f32)
-                            .unwrap_or(0.0);
 
-                        for entity in &track.entities {
-                            let asset_index = 0; // Temporary: should derive from entity properties
-                            let asset = editor_context.assets.get(asset_index);
+    // --- Data collection for entities (new block) ---
+    let mut all_entities: Vec<(Uuid, TrackEntity)> = Vec::new(); // (track_id, entity)
+    for track in &current_tracks {
+        for entity in &track.entities {
+            all_entities.push((track.id, entity.clone()));
+        }
+    }
+    // --- End Data collection for entities ---
 
-                            if let Some(a) = asset {
-                                let gc = crate::model::ui_types::GuiClip {
-                                    id: entity.id,
-                                    name: entity.entity_type.clone(),
-                                    track_id: track.id,
-                                    start_time: entity.start_time as f32,
-                                    duration: (entity.end_time - entity.start_time) as f32,
-                                    color: a.color,
-                                    position: [
-                                        entity.properties.get_f32("position_x").unwrap_or(960.0),
-                                        entity.properties.get_f32("position_y").unwrap_or(540.0),
-                                    ],
-                                    scale: entity.properties.get_f32("scale").unwrap_or(100.0),
-                                    opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
-                                    rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
-                                    asset_index,
-                                };
+    // ... (rest of the timeline_panel function) ...
 
-                                let x = content_rect.min.x
-                                    + gc.start_time * pixels_per_unit
-                                    - editor_context.timeline_scroll_offset.x;
-                                let y = content_rect.min.y
-                                    + editor_context.timeline_scroll_offset.y
-                                    + clip_track_index * (row_height + track_spacing);
-                                let clip_rect = egui::Rect::from_min_size(
-                                    egui::pos2(x, y),
-                                    egui::vec2(gc.duration * pixels_per_unit, row_height),
-                                );
+    // Draw entities (clips) from the Project model
+    // if let Ok(proj_read) = project.read() { // REMOVED THIS BLOCK
+    //     if let Some(comp) = editor_context.get_current_composition(&proj_read) { // REMOVED THIS BLOCK
+            for track_in_all_entities in &current_tracks { // Iterate over the pre-collected tracks
+                let clip_track_index = current_tracks
+                    .iter()
+                    .position(|t| t.id == track_in_all_entities.id)
+                    .map(|idx| idx as f32)
+                    .unwrap_or(0.0);
 
-                                let clip_resp = ui.interact(
-                                    clip_rect,
-                                    egui::Id::new(gc.id),
-                                    egui::Sense::click_and_drag(),
-                                );
-                                if clip_resp.clicked() {
-                                    editor_context.selected_entity_id = Some(gc.id);
-                                    editor_context.selected_track_id = Some(gc.track_id);
-                                    clicked_on_entity = true;
-                                }
+                for (entity_track_id, entity) in all_entities.iter().filter(|(t_id, _)| *t_id == track_in_all_entities.id) {
+                    let asset_index = 0; // Temporary: should derive from entity properties
+                    let asset = editor_context.assets.get(asset_index);
 
-                                if clip_resp.drag_started() {
-                                    editor_context.selected_entity_id = Some(gc.id);
-                                    editor_context.selected_track_id = Some(gc.track_id);
-                                    if editor_context.last_project_state_before_drag.is_none() {
-                                        editor_context.last_project_state_before_drag = Some(
-                                            project_service.get_project().read().unwrap().clone(),
-                                        );
-                                    }
-                                }
-                                if clip_resp.dragged()
-                                    && editor_context.selected_entity_id == Some(gc.id)
-                                {
-                                    let dt = clip_resp.drag_delta().x as f64 / pixels_per_unit as f64;
+                    if let Some(a) = asset {
+                        let gc = crate::model::ui_types::GuiClip {
+                            id: entity.id,
+                            name: entity.entity_type.clone(),
+                            track_id: *entity_track_id,
+                            start_time: entity.start_time as f32,
+                            duration: (entity.end_time - entity.start_time) as f32,
+                            color: a.color,
+                            position: [
+                                entity.properties.get_f32("position_x").unwrap_or(960.0),
+                                entity.properties.get_f32("position_y").unwrap_or(540.0),
+                            ],
+                            scale: entity.properties.get_f32("scale").unwrap_or(100.0),
+                            opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
+                            rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
+                            asset_index,
+                        };
 
-                                    if let Some(comp_id) = editor_context.selected_composition_id {
-                                        if let Some(track_id) = editor_context.selected_track_id {
-                                            project_service
-                                                .with_track_mut(comp_id, track_id, |track_mut| {
-                                                    if let Some(entity_mut) = track_mut
-                                                        .entities
-                                                        .iter_mut()
-                                                        .find(|e| e.id == gc.id)
-                                                    {
-                                                        entity_mut.start_time =
-                                                            (entity_mut.start_time + dt).max(0.0);
-                                                        entity_mut.end_time = (entity_mut.end_time
-                                                            + dt)
-                                                            .max(entity_mut.start_time);
-                                                    }
-                                                })
-                                                .ok();
-                                        }
-                                    }
-                                }
-                                if clip_resp.drag_stopped()
-                                    && editor_context.selected_entity_id == Some(gc.id)
-                                {
-                                    if let Some(initial_state) =
-                                        editor_context.last_project_state_before_drag.take()
-                                    {
-                                        let current_state =
-                                            project_service.get_project().read().unwrap().clone();
-                                        if initial_state != current_state {
-                                            history_manager.push_project_state(initial_state);
-                                        }
-                                    }
-                                }
+                        let x = content_rect.min.x
+                            + gc.start_time * pixels_per_unit
+                            - editor_context.timeline_scroll_offset.x;
+                        let y = content_rect.min.y
+                            + editor_context.timeline_scroll_offset.y
+                            + clip_track_index * (row_height + track_spacing);
+                        let clip_rect = egui::Rect::from_min_size(
+                            egui::pos2(x, y),
+                            egui::vec2(gc.duration * pixels_per_unit, row_height),
+                        );
 
-                                let is_sel = editor_context.selected_entity_id == Some(gc.id);
-                                let color = gc.color;
-                                let transparent_color = egui::Color32::from_rgba_premultiplied(
-                                    color.r(),
-                                    color.g(),
-                                    color.b(),
-                                    150,
-                                );
+                        let clip_resp = ui.interact(
+                            clip_rect,
+                            egui::Id::new(gc.id),
+                            egui::Sense::click_and_drag(),
+                        );
+                        if clip_resp.clicked() {
+                            editor_context.selected_entity_id = Some(gc.id);
+                            editor_context.selected_track_id = Some(gc.track_id);
+                            clicked_on_entity = true;
+                        }
 
-                                painter.rect_filled(clip_rect, 4.0, transparent_color);
-                                if is_sel {
-                                    painter.rect_stroke(
-                                        clip_rect,
-                                        4.0,
-                                        egui::Stroke::new(2.0, egui::Color32::WHITE),
-                                        StrokeKind::Middle,
-                                    );
-                                }
-                                painter.text(
-                                    clip_rect.center(),
-                                    egui::Align2::CENTER_CENTER,
-                                    &gc.name,
-                                    egui::FontId::default(),
-                                    egui::Color32::BLACK,
+                        if clip_resp.drag_started() {
+                            editor_context.selected_entity_id = Some(gc.id);
+                            editor_context.selected_track_id = Some(gc.track_id);
+                            if editor_context.last_project_state_before_drag.is_none() {
+                                editor_context.last_project_state_before_drag = Some(
+                                    project_service.get_project().read().unwrap().clone(),
                                 );
                             }
                         }
+                        if clip_resp.dragged()
+                            && editor_context.selected_entity_id == Some(gc.id)
+                        {
+                            let dt = clip_resp.drag_delta().x as f64 / pixels_per_unit as f64;
+
+                            if let Some(comp_id) = editor_context.selected_composition_id {
+                                if let Some(track_id) = editor_context.selected_track_id {
+                                    project_service
+                                        .with_track_mut(comp_id, track_id, |track_mut| {
+                                            if let Some(entity_mut) = track_mut
+                                                .entities
+                                                .iter_mut()
+                                                .find(|e| e.id == gc.id)
+                                            {
+                                                entity_mut.start_time =
+                                                    (entity_mut.start_time + dt).max(0.0);
+                                                entity_mut.end_time = (entity_mut.end_time
+                                                    + dt)
+                                                    .max(entity_mut.start_time);
+                                            }
+                                        })
+                                        .ok();
+                                }
+                            }
+                        }
+                        if clip_resp.drag_stopped()
+                            && editor_context.selected_entity_id == Some(gc.id)
+                        {
+                            if let Some(initial_state) =
+                                editor_context.last_project_state_before_drag.take()
+                            {
+                                let current_state =
+                                    project_service.get_project().read().unwrap().clone();
+                                if initial_state != current_state {
+                                    history_manager.push_project_state(initial_state);
+                                }
+                            }
+                        }
+
+                        let is_sel = editor_context.selected_entity_id == Some(gc.id);
+                        let color = gc.color;
+                        let transparent_color = egui::Color32::from_rgba_premultiplied(
+                            color.r(),
+                            color.g(),
+                            color.b(),
+                            150,
+                        );
+
+                        painter.rect_filled(clip_rect, 4.0, transparent_color);
+                        if is_sel {
+                            painter.rect_stroke(
+                                clip_rect,
+                                4.0,
+                                egui::Stroke::new(2.0, egui::Color32::WHITE),
+                                StrokeKind::Middle,
+                            );
+                        }
+                        painter.text(
+                            clip_rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            &gc.name,
+                            egui::FontId::default(),
+                            egui::Color32::BLACK,
+                        );
                     }
                 }
             }
