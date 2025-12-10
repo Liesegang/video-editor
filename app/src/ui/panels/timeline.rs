@@ -170,7 +170,7 @@ fn show_timeline_ruler(
             // New condition
             if let Some(pos) = response.interact_pointer_pos() {
                 editor_context.current_time =
-                    ((pos.x - rect.min.x + scroll_offset_x) / pixels_per_unit).max(0.0);
+                    ((pos.x - rect.min.x + scroll_offset_x - 8.0) / pixels_per_unit).max(0.0);
             }
         }
 
@@ -527,7 +527,7 @@ pub fn timeline_panel(
                 }
 
                 // --- Drawing ---
-                let painter = ui.painter_at(content_rect_for_clip_area);
+                let painter = ui_content.painter_at(content_rect_for_clip_area);
                 // Constrain scroll offset
                 let max_scroll_y = (num_tracks as f32 * (row_height + track_spacing))
                     - content_rect_for_clip_area.height();
@@ -709,7 +709,7 @@ pub fn timeline_panel(
                                 egui::vec2(gc.duration * pixels_per_unit, row_height),
                             );
 
-                            let clip_resp = ui.interact(
+                            let clip_resp = ui_content.interact(
                                 clip_rect,
                                 egui::Id::new(gc.id),
                                 egui::Sense::click_and_drag(),
@@ -809,20 +809,35 @@ pub fn timeline_panel(
     let cx = central_panel_rect.min.x
         + TRACK_LIST_SIDEBAR_WIDTH // Add the width of the track list sidebar
         - scroll_offset_x
-        + editor_context.current_time * pixels_per_unit;
+        + editor_context.current_time * pixels_per_unit
+        + 24.0;
 
     let full_timeline_area = ui.available_rect_before_wrap(); // This is the total area for the timeline_panel
 
     // The line should span from the top of the ruler to the bottom of the central panel.
     // The top of the ruler is full_timeline_area.min.y
     // The bottom of the central panel is central_panel_rect.max.y
+    let ruler_y_min = ui.clip_rect().min.y;
+    let ruler_y_max = ruler_y_min + 20.0; // Exact height of ruler panel
 
-    let cursor_y_min = ui.clip_rect().min.y; // Top of the entire timeline_panel area
-    let cursor_y_max = central_panel_rect.max.y; // Bottom of the central content area
+    let central_panel_y_min = central_panel_rect.min.y;
+    let central_panel_y_max = central_panel_rect.max.y;
 
-    if cx > full_timeline_area.min.x && cx < full_timeline_area.max.x {
+    // Draw the ruler segment of the cursor (full width)
+    if cx >= full_timeline_area.min.x + 132.0 && cx <= full_timeline_area.max.x {
         ui.painter().line_segment(
-            [egui::pos2(cx, cursor_y_min), egui::pos2(cx, cursor_y_max)],
+            [egui::pos2(cx, ruler_y_min), egui::pos2(cx, ruler_y_max + 12.0)],
+            egui::Stroke::new(2.0, egui::Color32::RED),
+        );
+    }
+
+    // Draw the central panel segment of the cursor (restricted width)
+    // This segment should start from the right of the sidebar.
+    if cx >= central_panel_rect.min.x + TRACK_LIST_SIDEBAR_WIDTH + 24.0
+        && cx <= central_panel_rect.max.x
+    {
+        ui.painter().line_segment(
+            [egui::pos2(cx, central_panel_y_min - 12.0), egui::pos2(cx, central_panel_y_max + 8.0)],
             egui::Stroke::new(2.0, egui::Color32::RED),
         );
     }
