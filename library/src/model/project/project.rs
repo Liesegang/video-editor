@@ -8,7 +8,7 @@ use super::Track;
 use crate::model::frame::color::Color;
 use crate::model::project::entity::Entity;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct Project {
     pub name: String,
     pub compositions: Vec<Composition>,
@@ -16,7 +16,7 @@ pub struct Project {
     pub export: ExportConfig,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct ExportConfig {
     #[serde(default)]
     pub container: Option<String>,
@@ -65,7 +65,7 @@ impl Project {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct Composition {
     pub id: Uuid, // Added UUID field
     pub name: String,

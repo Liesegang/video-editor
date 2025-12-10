@@ -35,7 +35,7 @@ pub use crate::plugin::exporters::png_export::PngExportPlugin;
 pub use crate::plugin::properties::{ConstantPropertyPlugin, KeyframePropertyPlugin, ExpressionPropertyPlugin};
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PluginCategory {
     Effect,
     Load,
@@ -85,7 +85,7 @@ pub trait ExportPlugin: Plugin {
     ) -> Result<(), LibraryError>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ExportFormat {
     Png,
     Video,

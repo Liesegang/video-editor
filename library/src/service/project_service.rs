@@ -19,6 +19,11 @@ impl ProjectService {
         Arc::clone(&self.project)
     }
 
+    pub fn set_project(&self, new_project: Project) {
+        let mut project_write = self.project.write().unwrap();
+        *project_write = new_project;
+    }
+
     // --- Project Operations ---
 
     pub fn load_project(&self, json_str: &str) -> Result<(), LibraryError> {

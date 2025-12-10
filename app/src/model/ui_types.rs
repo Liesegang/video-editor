@@ -18,7 +18,7 @@ pub struct GuiClip {
     pub asset_index: usize, // To link back to local assets for display info
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Tab {
     Preview,
     Timeline,

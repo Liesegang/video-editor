@@ -1,11 +1,8 @@
-pub mod command;
-pub mod commands;
-
-use anyhow::Result;
+use library::model::project::project::Project;
 
 pub struct HistoryManager {
-    undo_stack: Vec<Box<dyn command::Command + 'static>>,
-    redo_stack: Vec<Box<dyn command::Command + 'static>>,
+    undo_stack: Vec<Project>,
+    redo_stack: Vec<Project>,
 }
 
 impl HistoryManager {
@@ -16,37 +13,29 @@ impl HistoryManager {
         }
     }
 
-    /// Pushes a new command onto the undo stack. Clears the redo stack.
-    pub fn push(&mut self, mut command: Box<dyn command::Command + 'static>, service: &mut library::service::project_service::ProjectService) -> Result<()> {
-        command.execute(service)?;
-        self.undo_stack.push(command);
+    /// Pushes a new project state onto the undo stack. Clears the redo stack.
+    pub fn push_project_state(&mut self, project: Project) {
+        self.undo_stack.push(project);
         self.redo_stack.clear();
-        Ok(())
     }
 
-    /// Executes the next command on the undo stack, moves it to the redo stack.
-    pub fn undo(&mut self, service: &mut library::service::project_service::ProjectService) -> Result<()> {
-        if let Some(mut command) = self.undo_stack.pop() {
-            command.undo(service)?;
-            self.redo_stack.push(command);
+    /// Pops a project state from the undo stack, pushes the current state to the redo stack, and returns the popped state.
+    pub fn undo(&mut self, current_project: Project) -> Option<Project> {
+        if let Some(project) = self.undo_stack.pop() {
+            self.redo_stack.push(current_project);
+            Some(project)
+        } else {
+            None
         }
-        Ok(())
     }
 
-    /// Executes the next command on the redo stack, moves it back to the undo stack.
-    pub fn redo(&mut self, service: &mut library::service::project_service::ProjectService) -> Result<()> {
-        if let Some(mut command) = self.redo_stack.pop() {
-            command.redo(service)?;
-            self.undo_stack.push(command);
+    /// Pops a project state from the redo stack, pushes the current state to the undo stack, and returns the popped state.
+    pub fn redo(&mut self, current_project: Project) -> Option<Project> {
+        if let Some(project) = self.redo_stack.pop() {
+            self.undo_stack.push(current_project);
+            Some(project)
+        } else {
+            None
         }
-        Ok(())
-    }
-
-    pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
-    }
-
-    pub fn can_redo(&self) -> bool {
-        !self.redo_stack.is_empty()
     }
 }

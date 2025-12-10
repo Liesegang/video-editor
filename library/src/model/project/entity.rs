@@ -4,7 +4,7 @@ use uuid::Uuid; // Added Uuid import
 
 use crate::model::project::property::{Property, PropertyMap, PropertyValue};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct EffectConfig {
     #[serde(rename = "type")]
     pub effect_type: String,
@@ -12,7 +12,7 @@ pub struct EffectConfig {
     pub properties: PropertyMap,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct Entity {
     pub id: Uuid, // Added UUID field
     pub entity_type: String,

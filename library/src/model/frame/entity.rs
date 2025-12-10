@@ -5,7 +5,7 @@ use crate::model::frame::transform::Transform;
 use crate::model::project::property::PropertyMap;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct ImageSurface {
     #[serde(rename = "file_path")]
     pub file_path: String,
@@ -15,7 +15,7 @@ pub struct ImageSurface {
     pub transform: Transform,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type")]
 pub enum FrameEntity {
     Video {
@@ -48,7 +48,7 @@ pub enum FrameEntity {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct FrameObject {
     pub entity: FrameEntity,
     pub properties: PropertyMap,
