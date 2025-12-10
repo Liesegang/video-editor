@@ -83,10 +83,10 @@ impl<'a> TabViewer for AppTabViewer<'a> {
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         match tab {
-            Tab::Preview => format!("{}{}", icons::MONITOR_PLAY, "Preview").into(),
-            Tab::Timeline => format!("{}{}", icons::FILM_STRIP, "Timeline").into(),
-            Tab::Inspector => format!("{}{}", icons::WRENCH, "Inspector").into(),
-            Tab::Assets => format!("{}{}", icons::FOLDER, "Assets").into(),
+            Tab::Preview => format!("{} {}", icons::MONITOR_PLAY, "Preview").into(),
+            Tab::Timeline => format!("{} {}", icons::FILM_STRIP, "Timeline").into(),
+            Tab::Inspector => format!("{} {}", icons::WRENCH, "Inspector").into(),
+            Tab::Assets => format!("{} {}", icons::FOLDER, "Assets").into(),
         }
     }
 }
