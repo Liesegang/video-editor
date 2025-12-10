@@ -17,9 +17,11 @@ impl HistoryManager {
     }
 
     /// Pushes a new command onto the undo stack. Clears the redo stack.
-    pub fn push(&mut self, command: Box<dyn command::Command + 'static>) {
+    pub fn push(&mut self, mut command: Box<dyn command::Command + 'static>, service: &mut library::service::project_service::ProjectService) -> Result<()> {
+        command.execute(service)?;
         self.undo_stack.push(command);
         self.redo_stack.clear();
+        Ok(())
     }
 
     /// Executes the next command on the undo stack, moves it to the redo stack.

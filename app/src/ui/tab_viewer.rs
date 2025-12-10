@@ -15,7 +15,7 @@ use library::service::project_service::ProjectService;
 pub struct AppTabViewer<'a> {
     editor_context: &'a mut EditorContext,
     history_manager: &'a mut HistoryManager,
-    project_service: &'a ProjectService, // Changed to non-mut reference
+    project_service: &'a mut ProjectService, // Changed to non-mut reference
     project: &'a Arc<RwLock<Project>>, // Added
     // Add other shared state here
 }
@@ -24,7 +24,7 @@ impl<'a> AppTabViewer<'a> {
     pub fn new(
         editor_context: &'a mut EditorContext,
         history_manager: &'a mut HistoryManager,
-        project_service: &'a ProjectService, // Changed to non-mut reference
+        project_service: &'a mut ProjectService, // Changed to non-mut reference
         project: &'a Arc<RwLock<Project>>, // Added
     ) -> Self {
         Self {

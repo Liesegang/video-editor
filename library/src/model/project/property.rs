@@ -32,6 +32,36 @@ pub enum PropertyValue {
     Map(HashMap<String, PropertyValue>),
 }
 
+impl From<f64> for PropertyValue {
+    fn from(value: f64) -> Self {
+        PropertyValue::Number(value)
+    }
+}
+
+impl From<f32> for PropertyValue {
+    fn from(value: f32) -> Self {
+        PropertyValue::Number(value as f64)
+    }
+}
+
+impl From<i64> for PropertyValue {
+    fn from(value: i64) -> Self {
+        PropertyValue::Integer(value)
+    }
+}
+
+impl From<String> for PropertyValue {
+    fn from(value: String) -> Self {
+        PropertyValue::String(value)
+    }
+}
+
+impl From<bool> for PropertyValue {
+    fn from(value: bool) -> Self {
+        PropertyValue::Boolean(value)
+    }
+}
+
 impl From<serde_json::Value> for PropertyValue {
     fn from(value: serde_json::Value) -> Self {
         match value {

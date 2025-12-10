@@ -34,6 +34,13 @@ pub struct EditorContext {
     #[serde(skip)]
     pub inspector_entity_cache: Option<(Uuid, String, PropertyMap, f64, f64)>,
 
+    #[serde(skip)]
+    pub drag_start_entity_id: Option<Uuid>,
+    #[serde(skip)]
+    pub drag_start_entity_original_start_time: Option<f64>,
+    #[serde(skip)]
+    pub drag_start_entity_original_end_time: Option<f64>,
+
 }
 
 impl EditorContext {
@@ -101,6 +108,9 @@ impl EditorContext {
             selected_track_id: None,
             selected_entity_id: None,
             inspector_entity_cache: None,
+            drag_start_entity_id: None,
+            drag_start_entity_original_start_time: None,
+            drag_start_entity_original_end_time: None,
         }
     }
 
