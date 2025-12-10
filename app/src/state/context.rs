@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::model::assets::{Asset, AssetKind};
-use crate::model::ui_types::{Vec2Def, TimelineDisplayMode};
+use crate::model::ui_types::{TimelineDisplayMode, Vec2Def};
 
 #[derive(Serialize, Deserialize)]
 pub struct EditorContext {
@@ -12,7 +12,7 @@ pub struct EditorContext {
     pub current_time: f32,
     pub is_playing: bool,
     pub timeline_pixels_per_second: f32,
-    pub fps: f32, // New field for frames per second
+    pub fps: f32,                                   // New field for frames per second
     pub timeline_display_mode: TimelineDisplayMode, // New field for timeline display mode,
 
     #[serde(with = "Vec2Def")]
@@ -101,7 +101,7 @@ impl EditorContext {
             current_time: 0.0,
             is_playing: false,
             timeline_pixels_per_second: 50.0,
-            fps: 30.0, // Default FPS
+            fps: 30.0,                                           // Default FPS
             timeline_display_mode: TimelineDisplayMode::Seconds, // Default display mode,
 
             view_pan: egui::vec2(20.0, 20.0),
@@ -121,7 +121,7 @@ impl EditorContext {
             last_project_state_before_drag: None,
 
             current_time_text_input: "".to_string(), // Initialize new field
-            is_editing_current_time: false, // Initialize new field
+            is_editing_current_time: false,          // Initialize new field
         }
     }
 

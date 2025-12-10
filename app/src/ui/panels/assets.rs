@@ -26,10 +26,7 @@ pub fn assets_panel(
                     .background_color(asset.color);
 
                 let item_response = ui_in_scope
-                    .add(
-                        egui::Label::new(rich_text_label)
-                        .sense(egui::Sense::drag()),
-                    )
+                    .add(egui::Label::new(rich_text_label).sense(egui::Sense::drag()))
                     .on_hover_text(format!("Asset ID: {:?}", asset.id()));
 
                 if item_response.drag_started() {

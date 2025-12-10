@@ -1,8 +1,8 @@
 use egui::Ui;
 use egui_dock::{DockState, TabViewer};
+use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use std::sync::{Arc, RwLock};
-use egui_phosphor::regular as icons;
 
 use crate::command::CommandRegistry;
 use crate::{
