@@ -1,5 +1,5 @@
+use crate::command::{CommandId, CommandRegistry};
 use eframe::egui::Context;
-use crate::command::{CommandRegistry, CommandId};
 
 pub struct ShortcutManager;
 

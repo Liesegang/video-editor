@@ -1,7 +1,7 @@
 use super::super::{LoadPlugin, LoadRequest, LoadResponse, Plugin, PluginCategory};
 use crate::cache::CacheManager;
-use crate::loader::video::VideoReader;
 use crate::error::LibraryError;
+use crate::loader::video::VideoReader;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -60,7 +60,9 @@ impl LoadPlugin for FfmpegVideoLoader {
             cache.put_video_frame(path, *frame_number, &image);
             Ok(LoadResponse::Image(image))
         } else {
-            Err(LibraryError::Plugin("FfmpegVideoLoader received unsupported request".to_string()))
+            Err(LibraryError::Plugin(
+                "FfmpegVideoLoader received unsupported request".to_string(),
+            ))
         }
     }
 }

@@ -1,5 +1,5 @@
-use thiserror::Error;
 use ffmpeg_next as ffmpeg;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum LibraryError {

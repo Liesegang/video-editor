@@ -1,11 +1,11 @@
+use crate::error::LibraryError;
 use crate::loader::image::Image;
 use log::{debug, warn};
 use skia_safe::gpu::gl::Interface;
-use skia_safe::gpu::{self, direct_contexts, DirectContext, SurfaceOrigin};
+use skia_safe::gpu::{self, DirectContext, SurfaceOrigin, direct_contexts};
 use skia_safe::images::raster_from_data;
 use skia_safe::surfaces;
 use skia_safe::{AlphaType, ColorType, Data, ISize, Image as SkImage, ImageInfo, Surface};
-use crate::error::LibraryError;
 
 #[cfg(feature = "gl")]
 use glutin::PossiblyCurrent;
@@ -32,7 +32,10 @@ pub fn create_gpu_context() -> Option<GpuContext> {
         match init_glutin_headless() {
             Ok(ctx) => Some(ctx),
             Err(err) => {
-                warn!("SkiaRenderer: failed to initialize GPU context via glutin: {}", err);
+                warn!(
+                    "SkiaRenderer: failed to initialize GPU context via glutin: {}",
+                    err
+                );
                 None
             }
         }
@@ -50,7 +53,9 @@ fn init_glutin_headless() -> Result<GpuContext, String> {
     let context = ContextBuilder::new()
         .build_headless(event_loop, size)
         .map_err(|e| e.to_string())?;
-    let context = Box::leak(Box::new(unsafe { context.make_current().map_err(|(_, e)| e.to_string())? }));
+    let context = Box::leak(Box::new(unsafe {
+        context.make_current().map_err(|(_, e)| e.to_string())?
+    }));
 
     let interface =
         Interface::new_native().ok_or_else(|| "Failed to create Skia GL interface".to_string())?;
@@ -90,7 +95,8 @@ pub fn create_surface(
 
 pub fn create_raster_surface(width: u32, height: u32) -> Result<Surface, LibraryError> {
     let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
-    surfaces::raster(&info, None, None).ok_or_else(|| LibraryError::Render("Cannot create Skia surface".to_string()))
+    surfaces::raster(&info, None, None)
+        .ok_or_else(|| LibraryError::Render("Cannot create Skia surface".to_string()))
 }
 
 pub fn image_to_skia(image: &Image) -> Result<SkImage, LibraryError> {
@@ -119,7 +125,9 @@ pub fn surface_to_image(
         None,
     );
     if !surface.read_pixels(&image_info, &mut buffer, row_bytes, (0, 0)) {
-        return Err(LibraryError::Render("Failed to read surface pixels".to_string()));
+        return Err(LibraryError::Render(
+            "Failed to read surface pixels".to_string(),
+        ));
     }
     Ok(Image {
         width,

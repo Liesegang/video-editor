@@ -1,11 +1,11 @@
-use log::debug;
-use std::collections::HashMap;
-use image::{Rgba};
-use crate::loader::image::Image;
 use crate::error::LibraryError;
-use crate::plugin::{Plugin, PluginCategory, EffectPlugin};
+use crate::loader::image::Image;
 use crate::model::project::property::PropertyValue;
-use rayon::prelude::*; // Add rayon prelude
+use crate::plugin::{EffectPlugin, Plugin, PluginCategory};
+use image::Rgba;
+use log::debug;
+use rayon::prelude::*;
+use std::collections::HashMap; // Add rayon prelude
 
 pub struct PixelSorterPlugin;
 
@@ -30,19 +30,28 @@ impl Plugin for PixelSorterPlugin {
 }
 
 impl EffectPlugin for PixelSorterPlugin {
-    fn apply(&self, image: &Image, params: &HashMap<String, PropertyValue>) -> Result<Image, LibraryError> {
+    fn apply(
+        &self,
+        image: &Image,
+        params: &HashMap<String, PropertyValue>,
+    ) -> Result<Image, LibraryError> {
         let threshold_value = params
             .get("threshold")
             .and_then(|pv| pv.get_as::<f64>())
             .unwrap_or(0.5); // Default threshold
 
-        debug!("PixelSorterPlugin: Applying with threshold_value = {}", threshold_value);
+        debug!(
+            "PixelSorterPlugin: Applying with threshold_value = {}",
+            threshold_value
+        );
 
         let direction_str = params
             .get("direction")
             .and_then(|pv| pv.get_as::<String>())
             .unwrap_or_else(|| {
-                debug!("PixelSorterPlugin: 'direction' parameter not found, defaulting to 'horizontal'");
+                debug!(
+                    "PixelSorterPlugin: 'direction' parameter not found, defaulting to 'horizontal'"
+                );
                 "horizontal".to_string()
             });
 
@@ -58,13 +67,17 @@ impl EffectPlugin for PixelSorterPlugin {
 
         match direction_str.as_str() {
             "horizontal" => {
-                processed_data.par_chunks_mut((image.width * 4) as usize)
+                processed_data
+                    .par_chunks_mut((image.width * 4) as usize)
                     .for_each(|row_chunk| {
                         // Extract pixels for the row
-                        let mut row_pixels: Vec<(u8, Rgba<u8>)> = row_chunk.chunks_exact(4).map(|chunk| {
-                            let pixel = Rgba([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                            (get_pixel_criteria_value(&pixel, &sort_criteria_str), pixel)
-                        }).collect();
+                        let mut row_pixels: Vec<(u8, Rgba<u8>)> = row_chunk
+                            .chunks_exact(4)
+                            .map(|chunk| {
+                                let pixel = Rgba([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                                (get_pixel_criteria_value(&pixel, &sort_criteria_str), pixel)
+                            })
+                            .collect();
 
                         // Apply sorting logic
                         let mut current_run_start: Option<usize> = None;
@@ -72,11 +85,13 @@ impl EffectPlugin for PixelSorterPlugin {
                             let (criteria_value, _) = row_pixels[x];
                             let pixel_norm = criteria_value as f32 / 255.0;
 
-                            if pixel_norm < threshold_value as f32 { // Condition met
+                            if pixel_norm < threshold_value as f32 {
+                                // Condition met
                                 if current_run_start.is_none() {
                                     current_run_start = Some(x); // Start a new run
                                 }
-                            } else { // Condition not met
+                            } else {
+                                // Condition not met
                                 if let Some(start) = current_run_start {
                                     // End of run, sort the segment
                                     row_pixels[start..x].sort_by_key(|(val, _)| *val);
@@ -107,7 +122,12 @@ impl EffectPlugin for PixelSorterPlugin {
                         (0..image.height)
                             .map(|y| {
                                 let start_index = (y * image.width + x) as usize * 4;
-                                Rgba([processed_data[start_index], processed_data[start_index + 1], processed_data[start_index + 2], processed_data[start_index + 3]])
+                                Rgba([
+                                    processed_data[start_index],
+                                    processed_data[start_index + 1],
+                                    processed_data[start_index + 2],
+                                    processed_data[start_index + 3],
+                                ])
                             })
                             .collect()
                     })
@@ -115,20 +135,23 @@ impl EffectPlugin for PixelSorterPlugin {
 
                 // Process each column in parallel
                 columns.par_iter_mut().for_each(|col_pixels| {
-                    let mut column_pixels_with_criteria: Vec<(u8, Rgba<u8>)> = col_pixels.iter().map(|p| {
-                        (get_pixel_criteria_value(p, &sort_criteria_str), *p)
-                    }).collect();
+                    let mut column_pixels_with_criteria: Vec<(u8, Rgba<u8>)> = col_pixels
+                        .iter()
+                        .map(|p| (get_pixel_criteria_value(p, &sort_criteria_str), *p))
+                        .collect();
 
                     let mut current_run_start: Option<usize> = None;
                     for y in 0..column_pixels_with_criteria.len() {
                         let (criteria_value, _) = column_pixels_with_criteria[y];
                         let pixel_norm = criteria_value as f32 / 255.0;
 
-                        if pixel_norm < threshold_value as f32 { // Condition met
+                        if pixel_norm < threshold_value as f32 {
+                            // Condition met
                             if current_run_start.is_none() {
                                 current_run_start = Some(y); // Start a new run
                             }
-                        } else { // Condition not met
+                        } else {
+                            // Condition not met
                             if let Some(start) = current_run_start {
                                 // End of run, sort the segment
                                 column_pixels_with_criteria[start..y].sort_by_key(|(val, _)| *val);
@@ -160,7 +183,12 @@ impl EffectPlugin for PixelSorterPlugin {
                     }
                 }
             }
-            _ => return Err(LibraryError::Plugin(format!("Unsupported sort direction: {}", direction_str))),
+            _ => {
+                return Err(LibraryError::Plugin(format!(
+                    "Unsupported sort direction: {}",
+                    direction_str
+                )));
+            }
         }
 
         Ok(Image {

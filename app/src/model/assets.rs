@@ -26,7 +26,7 @@ impl Asset {
 pub enum AssetKind {
     Video,
     Audio,
-    Image, // Added Image back
+    Image,             // Added Image back
     Composition(Uuid), // Added: a composition asset links to its actual composition
 }
 

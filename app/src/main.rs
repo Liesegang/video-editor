@@ -1,13 +1,14 @@
 use eframe::egui;
 
-mod app;
 mod action;
+mod app;
+mod command;
+mod config;
 mod model;
+mod shortcut;
 mod state;
 mod ui;
 mod utils;
-mod shortcut;
-mod command;
 
 fn main() -> eframe::Result<()> {
     env_logger::init();

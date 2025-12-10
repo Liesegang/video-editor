@@ -1,7 +1,7 @@
-use log::warn;
 use super::super::{Plugin, PluginCategory, PropertyPlugin};
-use crate::plugin::{EvaluationContext, PropertyEvaluator};
 use crate::model::project::property::{Property, PropertyValue};
+use crate::plugin::{EvaluationContext, PropertyEvaluator};
+use log::warn;
 use std::sync::Arc;
 
 pub struct ConstantPropertyPlugin;

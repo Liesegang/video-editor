@@ -43,7 +43,15 @@ pub struct TrackEntity {
 }
 
 impl TrackEntity {
-    pub fn new(id: Uuid, entity_type: String, start_time: f64, end_time: f64, fps: f64, properties: PropertyMap, effects: Vec<EffectConfig>) -> Self {
+    pub fn new(
+        id: Uuid,
+        entity_type: String,
+        start_time: f64,
+        end_time: f64,
+        fps: f64,
+        properties: PropertyMap,
+        effects: Vec<EffectConfig>,
+    ) -> Self {
         Self {
             id,
             entity_type,

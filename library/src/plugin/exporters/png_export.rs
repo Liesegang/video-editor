@@ -1,8 +1,8 @@
 use super::super::{ExportPlugin, ExportSettings, Plugin, PluginCategory};
+use crate::error::LibraryError;
 use crate::loader::image::Image;
 use image::ImageEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use crate::error::LibraryError;
 use std::fs::File;
 use std::io::BufWriter;
 

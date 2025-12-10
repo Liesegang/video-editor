@@ -1,15 +1,10 @@
-use egui::Ui;
+use egui::{epaint::StrokeKind, Ui};
 use std::sync::{Arc, RwLock};
 
+use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
-use library::model::project::project::{Project};
 
-use crate::{
-    action::HistoryManager,
-    state::context::EditorContext,
-    model::assets::{AssetKind},
-};
-
+use crate::{action::HistoryManager, model::assets::AssetKind, state::context::EditorContext};
 
 pub fn preview_panel(
     ui: &mut Ui,
@@ -18,7 +13,7 @@ pub fn preview_panel(
     project_service: &ProjectService,
     project: &Arc<RwLock<Project>>,
 ) {
-    let (rect, response) = 
+    let (rect, response) =
         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
 
     let pointer_pos = ui.input(|i| i.pointer.hover_pos());
@@ -51,8 +46,7 @@ pub fn preview_panel(
     let view_offset = rect.min + editor_context.view_pan;
     let view_zoom = editor_context.view_zoom;
 
-    let to_screen =
-        |pos: egui::Pos2| -> egui::Pos2 { view_offset + (pos.to_vec2() * view_zoom) };
+    let to_screen = |pos: egui::Pos2| -> egui::Pos2 { view_offset + (pos.to_vec2() * view_zoom) };
     let to_world = |pos: egui::Pos2| -> egui::Pos2 {
         let vec = pos - view_offset;
         egui::pos2(vec.x / view_zoom, vec.y / view_zoom)
@@ -67,31 +61,38 @@ pub fn preview_panel(
     let grid_size = 100.0 * editor_context.view_zoom;
 
     if grid_size > 10.0 {
-                    let (_cols, _rows) = ((rect.width() / grid_size).ceil() as usize + 2, (rect.height() / grid_size).ceil() as usize + 2);                                let start_x = rect.min.x + ((editor_context.view_pan.x % grid_size) + grid_size) % grid_size;
-                                let start_y = rect.min.y + ((editor_context.view_pan.y % grid_size) + grid_size) % grid_size;        
-                                            let grid_color = egui::Color32::from_gray(50);
-                                
-                                            // Calculate the first visible line's coordinate for x and y
-                                            let first_visible_x = ((rect.min.x - start_x) / grid_size).floor();
-                                            let first_visible_y = ((rect.min.y - start_y) / grid_size).floor();
-                                
-                                            // Draw vertical lines
-                                            for i in (first_visible_x as i32)..=((rect.max.x - start_x) / grid_size).ceil() as i32 {
-                                                let x = start_x + (i as f32) * grid_size;
-                                                painter.line_segment(
-                                                    [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
-                                                    egui::Stroke::new(1.0, grid_color),
-                                                );
-                                            }
-                                
-                                            // Draw horizontal lines
-                                            for i in (first_visible_y as i32)..=((rect.max.y - start_y) / grid_size).ceil() as i32 {
-                                                let y = start_y + (i as f32) * grid_size;
-                                                painter.line_segment(
-                                                    [egui::pos2(rect.min.x, y), egui::pos2(rect.max.x, y)],
-                                                    egui::Stroke::new(1.0, grid_color),
-                                                );
-                                            }    }
+        let (_cols, _rows) = (
+            (rect.width() / grid_size).ceil() as usize + 2,
+            (rect.height() / grid_size).ceil() as usize + 2,
+        );
+        let start_x =
+            rect.min.x + ((editor_context.view_pan.x % grid_size) + grid_size) % grid_size;
+        let start_y =
+            rect.min.y + ((editor_context.view_pan.y % grid_size) + grid_size) % grid_size;
+        let grid_color = egui::Color32::from_gray(50);
+
+        // Calculate the first visible line's coordinate for x and y
+        let first_visible_x = ((rect.min.x - start_x) / grid_size).floor();
+        let first_visible_y = ((rect.min.y - start_y) / grid_size).floor();
+
+        // Draw vertical lines
+        for i in (first_visible_x as i32)..=((rect.max.x - start_x) / grid_size).ceil() as i32 {
+            let x = start_x + (i as f32) * grid_size;
+            painter.line_segment(
+                [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
+                egui::Stroke::new(1.0, grid_color),
+            );
+        }
+
+        // Draw horizontal lines
+        for i in (first_visible_y as i32)..=((rect.max.y - start_y) / grid_size).ceil() as i32 {
+            let y = start_y + (i as f32) * grid_size;
+            painter.line_segment(
+                [egui::pos2(rect.min.x, y), egui::pos2(rect.max.x, y)],
+                egui::Stroke::new(1.0, grid_color),
+            );
+        }
+    }
 
     // Video frame outline
     let frame_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1920.0, 1080.0));
@@ -100,7 +101,11 @@ pub fn preview_panel(
     painter.rect_stroke(
         egui::Rect::from_min_max(screen_frame_min, screen_frame_max),
         0.0,
-        egui::Stroke::new(2.0 * editor_context.view_zoom.max(1.0), egui::Color32::WHITE),
+        egui::Stroke::new(
+            2.0 * editor_context.view_zoom.max(1.0),
+            egui::Color32::WHITE,
+        ),
+        StrokeKind::Middle,
     );
 
     let mut hovered_entity_id = None;
@@ -218,14 +223,8 @@ pub fn preview_panel(
                                     entity.properties.get_f32("position_y").unwrap_or(540.0),
                                 ],
                                 scale: entity.properties.get_f32("scale").unwrap_or(100.0),
-                                opacity: entity
-                                    .properties
-                                    .get_f32("opacity")
-                                    .unwrap_or(100.0),
-                                rotation: entity
-                                    .properties
-                                    .get_f32("rotation")
-                                    .unwrap_or(0.0),
+                                opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
+                                rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
                                 asset_index,
                             };
                             visible_clips.push(gc);
