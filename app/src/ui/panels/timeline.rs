@@ -435,9 +435,9 @@ pub fn timeline_panel(
                                 if clip_resp.drag_started() {
                                     editor_context.selected_entity_id = Some(gc.id);
                                     editor_context.selected_track_id = Some(gc.track_id);
-                                    editor_context.drag_start_entity_id = Some(gc.id);
-                                    editor_context.drag_start_entity_original_start_time = Some(entity.start_time);
-                                    editor_context.drag_start_entity_original_end_time = Some(entity.end_time);
+                                    if editor_context.last_project_state_before_drag.is_none() {
+                                        editor_context.last_project_state_before_drag = Some(project_service.get_project().read().unwrap().clone());
+                                    }
                                 }
                                 if clip_resp.dragged() && editor_context.selected_entity_id == Some(gc.id)
                                 {
@@ -471,31 +471,12 @@ pub fn timeline_panel(
                                     }
                                 }
                                 if clip_resp.drag_stopped() && editor_context.selected_entity_id == Some(gc.id) {
-                                    if let (Some(comp_id), Some(track_id), Some(entity_id)) = (
-                                        editor_context.selected_composition_id,
-                                        editor_context.selected_track_id,
-                                        editor_context.drag_start_entity_id,
-                                    ) {
-                                        // Retrieve the track and then the entity to ensure the data is owned and not borrowed
-                                        if let Ok(track) = project_service.get_track(comp_id, track_id) {
-                                            if let Some(current_entity) = track.entities.iter().find(|e| e.id == entity_id).cloned() {
-                                                let current_entity_start_time = current_entity.start_time;
-                                                let current_entity_end_time = current_entity.end_time;
-                                                
-                                                if let (Some(original_start), Some(original_end)) = (
-                                                    editor_context.drag_start_entity_original_start_time,
-                                                    editor_context.drag_start_entity_original_end_time,
-                                                ) {
-                                                                                                    if current_entity_start_time != original_start || current_entity_end_time != original_end {
-                                                                                                        // Only push state if actual change occurred
-                                                                                                        history_manager.push_project_state(project_service.get_project().read().unwrap().clone());
-                                                                                                    }                                                }
-                                            }
+                                    if let Some(initial_state) = editor_context.last_project_state_before_drag.take() {
+                                        let current_state = project_service.get_project().read().unwrap().clone();
+                                        if initial_state != current_state {
+                                            history_manager.push_project_state(initial_state);
                                         }
                                     }
-                                    editor_context.drag_start_entity_id = None;
-                                    editor_context.drag_start_entity_original_start_time = None;
-                                    editor_context.drag_start_entity_original_end_time = None;
                                 }
 
                                 let is_sel = editor_context.selected_entity_id == Some(gc.id);
