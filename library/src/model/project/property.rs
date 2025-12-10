@@ -152,6 +152,17 @@ impl TryGetProperty<f64> for f64 {
     }
 }
 
+// Implement for f32
+impl TryGetProperty<f32> for f32 {
+    fn try_get(p: &PropertyValue) -> Option<f32> {
+        match p {
+            PropertyValue::Number(v) => Some(*v as f32),
+            PropertyValue::Integer(v) => Some(*v as f32),
+            _ => None,
+        }
+    }
+}
+
 // Implement for i64
 impl TryGetProperty<i64> for i64 {
     fn try_get(p: &PropertyValue) -> Option<i64> {
@@ -356,13 +367,23 @@ impl PropertyMap {
             })
     }
 
-    pub fn get_constant_number(&self, key: &str, default: f64) -> f64 {
-        self.get(key)
-            .and_then(|property| match property.evaluator.as_str() {
-                "constant" => property.value(),
-                _ => None,
-            })
+    pub fn get_f64(&self, key: &str) -> Option<f64> {
+        self.get_constant_value(key)
             .and_then(|pv| pv.get_as::<f64>())
-            .unwrap_or(default)
+    }
+
+    pub fn get_f32(&self, key: &str) -> Option<f32> {
+        self.get_constant_value(key)
+            .and_then(|pv| pv.get_as::<f32>())
+    }
+
+    pub fn get_i64(&self, key: &str) -> Option<i64> {
+        self.get_constant_value(key)
+            .and_then(|pv| pv.get_as::<i64>())
+    }
+
+    pub fn get_string(&self, key: &str) -> Option<String> {
+        self.get_constant_value(key)
+            .and_then(|pv| pv.get_as::<String>())
     }
 }

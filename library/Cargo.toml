@@ -61,6 +61,7 @@ glutin = "0.28"
 thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 rayon = "1.9.0"
+uuid = { version = "1.16.0", features = ["serde", "v4"] }
 #opencv = "0.94.2"
 
 [profile.release]

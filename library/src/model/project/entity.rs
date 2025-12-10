@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use uuid::Uuid; // Added Uuid import
 
 use crate::model::project::property::{Property, PropertyMap, PropertyValue};
 
@@ -13,6 +14,7 @@ pub struct EffectConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Entity {
+    pub id: Uuid, // Added UUID field
     pub entity_type: String,
 
     #[serde(default)]
@@ -35,6 +37,7 @@ pub struct Entity {
 impl Entity {
     pub fn new(entity_type: &str) -> Self {
         Self {
+            id: Uuid::new_v4(), // Initialize with a new UUID
             entity_type: entity_type.to_string(),
             start_time: 0.0,
             end_time: 0.0,
