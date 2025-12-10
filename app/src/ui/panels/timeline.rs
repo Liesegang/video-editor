@@ -5,9 +5,7 @@ use library::model::project::Track;
 use library::service::project_service::ProjectService;
 
 use crate::{
-    action::{
-        HistoryManager,
-    },
+    action::HistoryManager,
     state::context::EditorContext,
     model::assets::AssetKind,
 };
@@ -222,20 +220,22 @@ pub fn timeline_panel(
             track_list_response.context_menu(|ui| {
                 if let Some(comp_id) = editor_context.selected_composition_id {
                     if ui.button("Add Track").clicked() {
-                        let command = crate::action::commands::track::AddTrackCommand::new(comp_id, "New Track".to_string());
-                        if let Err(e) = history_manager.push(Box::new(command), project_service) {
-                            eprintln!("Failed to add track: {:?}", e);
-                        }
+                        let prev_project_state = project_service.get_project().read().unwrap().clone();
+                        project_service
+                            .add_track(comp_id, "New Track")
+                            .expect("Failed to add track");
+                        history_manager.push_project_state(prev_project_state);
                         ui.close_menu();
                     }
                     if let Some(track_id) = editor_context.selected_track_id {
                         if ui.button("Remove Selected Track").clicked() {
-                            let command = crate::action::commands::track::RemoveTrackCommand::new(comp_id, track_id);
-                            if let Err(e) = history_manager.push(Box::new(command), project_service) {
-                                eprintln!("Failed to remove track: {:?}", e);
-                            }
+                            let prev_project_state = project_service.get_project().read().unwrap().clone();
+                            project_service
+                                .remove_track(comp_id, track_id)
+                                .expect("Failed to remove track");
                             editor_context.selected_track_id = None;
                             editor_context.selected_entity_id = None;
+                            history_manager.push_project_state(prev_project_state);
                             ui.close_menu();
                         }
                     } else {
@@ -323,26 +323,33 @@ pub fn timeline_panel(
                                 if let Some(asset) = editor_context.assets.get(asset_index) {
                                     // Handle dropping a Composition asset
                                     if let AssetKind::Composition(_nested_comp_id) = asset.kind {
-                                        let command = crate::action::commands::entity_command::AddEntityCommand::new(
+                                        let prev_project_state = project_service.get_project().read().unwrap().clone();
+                                        if let Err(e) = project_service.add_entity_to_track(
                                             comp_id,
                                             track.id,
-                                            format!("Nested Comp: {}", asset.name),
+                                            &format!("Nested Comp: {}", asset.name),
                                             drop_time as f64,
                                             (drop_time + asset.duration) as f64,
-                                        );
-                                        if let Err(e) = history_manager.push(Box::new(command), project_service) {
-                                            eprintln!("Failed to add nested composition entity: {:?}", e);
+                                        ) {
+                                            eprintln!(
+                                                "Failed to add nested composition entity: {:?}",
+                                                e
+                                            );
+                                        } else {
+                                            history_manager.push_project_state(prev_project_state);
                                         }
                                     } else {
-                                        let command = crate::action::commands::entity_command::AddEntityCommand::new(
+                                        let prev_project_state = project_service.get_project().read().unwrap().clone();
+                                        if let Err(e) = project_service.add_entity_to_track(
                                             comp_id,
                                             track.id,
-                                            asset.name.clone(), // Use asset name as entity type for now
+                                            &asset.name, // Use asset name as entity type for now
                                             drop_time as f64,
                                             (drop_time + asset.duration) as f64,
-                                        );
-                                        if let Err(e) = history_manager.push(Box::new(command), project_service) {
+                                        ) {
                                             eprintln!("Failed to add entity to track: {:?}", e);
+                                        } else {
+                                            history_manager.push_project_state(prev_project_state);
                                         }
                                     }
                                 }
@@ -469,26 +476,20 @@ pub fn timeline_panel(
                                         editor_context.selected_track_id,
                                         editor_context.drag_start_entity_id,
                                     ) {
-                                        let current_entity_start_time = entity.start_time;
-                                        let current_entity_end_time = entity.end_time;
-                                        
-                                        if let (Some(original_start), Some(original_end)) = (
-                                            editor_context.drag_start_entity_original_start_time,
-                                            editor_context.drag_start_entity_original_end_time,
-                                        ) {
-                                            if current_entity_start_time != original_start || current_entity_end_time != original_end {
-                                                let command = crate::action::commands::entity_command::MoveEntityTimeCommand::new(
-                                                    comp_id,
-                                                    track_id,
-                                                    entity_id,
-                                                    original_start,
-                                                    original_end,
-                                                    current_entity_start_time,
-                                                    current_entity_end_time,
-                                                );
-                                                if let Err(e) = history_manager.push(Box::new(command), project_service) {
-                                                    eprintln!("Failed to move entity time: {:?}", e);
-                                                }
+                                        // Retrieve the track and then the entity to ensure the data is owned and not borrowed
+                                        if let Ok(track) = project_service.get_track(comp_id, track_id) {
+                                            if let Some(current_entity) = track.entities.iter().find(|e| e.id == entity_id).cloned() {
+                                                let current_entity_start_time = current_entity.start_time;
+                                                let current_entity_end_time = current_entity.end_time;
+                                                
+                                                if let (Some(original_start), Some(original_end)) = (
+                                                    editor_context.drag_start_entity_original_start_time,
+                                                    editor_context.drag_start_entity_original_end_time,
+                                                ) {
+                                                                                                    if current_entity_start_time != original_start || current_entity_end_time != original_end {
+                                                                                                        // Only push state if actual change occurred
+                                                                                                        history_manager.push_project_state(project_service.get_project().read().unwrap().clone());
+                                                                                                    }                                                }
                                             }
                                         }
                                     }

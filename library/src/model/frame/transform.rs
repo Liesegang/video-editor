@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Transform {
     #[serde(default)]
     pub position: Position,
@@ -22,7 +22,7 @@ impl Default for Transform {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Position {
     pub x: f64,
     pub y: f64,
@@ -34,7 +34,7 @@ impl Default for Position {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Scale {
     pub x: f64,
     pub y: f64,

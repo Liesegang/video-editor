@@ -5,20 +5,20 @@ use std::collections::HashMap;
 use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub struct Vec2 {
     pub x: f64,
     pub y: f64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub struct Vec3 {
     pub x: f64,
     pub y: f64,
     pub z: f64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(untagged)]
 pub enum PropertyValue {
     Number(f64),
@@ -287,7 +287,7 @@ impl PropertyValue {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)]
 pub struct Property {
     #[serde(default = "default_constant_evaluator", rename = "type")]
     pub evaluator: String,
@@ -299,7 +299,7 @@ fn default_constant_evaluator() -> String {
     "constant".to_string()
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct Keyframe {
     pub time: f64,
     pub value: PropertyValue,
@@ -364,7 +364,7 @@ impl Property {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq)]
 #[serde(transparent)]
 pub struct PropertyMap {
     properties: HashMap<String, Property>,

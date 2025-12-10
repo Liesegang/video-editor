@@ -8,7 +8,7 @@ use crate::model::project::property::PropertyMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid; // Added Uuid import
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct Track {
     pub id: Uuid, // Added UUID field
     pub name: String,
@@ -25,7 +25,7 @@ impl Track {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct TrackEntity {
     pub id: Uuid, // Added UUID field
     #[serde(rename = "type")]

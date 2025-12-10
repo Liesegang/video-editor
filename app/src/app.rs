@@ -42,13 +42,16 @@ impl MyApp {
         let mut editor_context = EditorContext::new(default_comp_id); // Pass default_comp_id
         editor_context.selected_composition_id = Some(default_comp_id); // Select the default composition
 
-        Self {
+        let mut app = Self {
             editor_context,
             dock_state: create_initial_dock_state(),
             project_service,
             project: default_project,
             history_manager: HistoryManager::new(),
-        }
+        };
+        app.history_manager.push_project_state(app.project_service.get_project().read().unwrap().clone());
+        cc.egui_ctx.request_repaint(); // Request repaint after initial state setup
+        app
     }
 
     fn reset_layout(&mut self) {
@@ -58,15 +61,24 @@ impl MyApp {
     fn handle_shortcuts(&mut self, ctx: &Context) {
         ctx.input(|i| {
             if i.modifiers.command && i.key_pressed(egui::Key::Z) {
+                let current_project = self.project_service.get_project().read().unwrap().clone();
                 if i.modifiers.shift {
                     // Ctrl+Shift+Z for Redo
-                    if let Err(e) = self.history_manager.redo(&mut self.project_service) {
-                        eprintln!("Redo error: {:?}", e);
+                    if let Some(new_project) = self.history_manager.redo(current_project) {
+                        self.project_service.set_project(new_project);
+                        self.editor_context.inspector_entity_cache = None; // Clear cache
+                        ctx.request_repaint();
+                    } else {
+                        eprintln!("Redo stack is empty.");
                     }
                 } else {
                     // Ctrl+Z for Undo
-                    if let Err(e) = self.history_manager.undo(&mut self.project_service) {
-                        eprintln!("Undo error: {:?}", e);
+                    if let Some(new_project) = self.history_manager.undo(current_project) {
+                        self.project_service.set_project(new_project);
+                        self.editor_context.inspector_entity_cache = None; // Clear cache
+                        ctx.request_repaint();
+                    } else {
+                        eprintln!("Undo stack is empty.");
                     }
                 }
             }
@@ -76,16 +88,17 @@ impl MyApp {
             if i.key_pressed(egui::Key::Delete) {
                 if let Some(comp_id) = self.editor_context.selected_composition_id {
                     if let Some(track_id) = self.editor_context.selected_track_id {
-                        if let Some(entity_id) = self.editor_context.selected_entity_id {
-                            if let Err(e) = self
-                                .project_service
-                                .remove_entity_from_track(comp_id, track_id, entity_id)
-                            {
-                                eprintln!("Failed to remove entity: {:?}", e);
-                            } else {
-                                self.editor_context.selected_entity_id = None;
-                            }
-                            // Request repaint if entity was removed
+                                                        if let Some(entity_id) = self.editor_context.selected_entity_id {
+                                                            let prev_project_state = self.project_service.get_project().read().unwrap().clone();
+                                                            if let Err(e) = self
+                                                                .project_service
+                                                                .remove_entity_from_track(comp_id, track_id, entity_id)
+                                                            {
+                                                                eprintln!("Failed to remove entity: {:?}", e);
+                                                            } else {
+                                                                self.editor_context.selected_entity_id = None;
+                                                                self.history_manager.push_project_state(prev_project_state);
+                                                            }                            // Request repaint if entity was removed
                             ctx.request_repaint();
                         }
                     }
@@ -143,11 +156,13 @@ impl eframe::App for MyApp {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("New Project").clicked() {
+                        let prev_project_state = self.project_service.get_project().read().unwrap().clone();
                         let new_comp_id = self
                             .project_service
                             .add_composition("Main Composition", 1920, 1080, 30.0, 60.0)
                             .expect("Failed to add composition");
                         self.editor_context.selected_composition_id = Some(new_comp_id);
+                        self.history_manager.push_project_state(prev_project_state);
                         ui.close_menu();
                     }
                     if ui.button("Load Project").clicked() {
@@ -160,6 +175,9 @@ impl eframe::App for MyApp {
                                     if let Err(e) = self.project_service.load_project(&s) {
                                         eprintln!("Failed to load project: {}", e);
                                     } else {
+                                        // Clear history and push the loaded project as the initial state
+                                        self.history_manager = HistoryManager::new();
+                                        self.history_manager.push_project_state(self.project_service.get_project().read().unwrap().clone());
                                         println!("Project loaded from {}", path.display());
                                     }
                                 }
@@ -198,14 +216,24 @@ impl eframe::App for MyApp {
 
                 ui.menu_button("Edit", |ui| {
                     if ui.button("Undo").clicked() {
-                        if let Err(e) = self.history_manager.undo(&mut self.project_service) {
-                            eprintln!("Undo error: {:?}", e);
+                        let current_project = self.project_service.get_project().read().unwrap().clone();
+                        if let Some(new_project) = self.history_manager.undo(current_project) {
+                            self.project_service.set_project(new_project);
+                            self.editor_context.inspector_entity_cache = None; // Clear cache
+                            ctx.request_repaint();
+                        } else {
+                            eprintln!("Undo stack is empty.");
                         }
                         ui.close_menu();
                     }
                     if ui.button("Redo").clicked() {
-                        if let Err(e) = self.history_manager.redo(&mut self.project_service) {
-                            eprintln!("Redo error: {:?}", e);
+                        let current_project = self.project_service.get_project().read().unwrap().clone();
+                        if let Some(new_project) = self.history_manager.redo(current_project) {
+                            self.project_service.set_project(new_project);
+                            self.editor_context.inspector_entity_cache = None; // Clear cache
+                            ctx.request_repaint();
+                        } else {
+                            eprintln!("Redo stack is empty.");
                         }
                         ui.close_menu();
                     }
