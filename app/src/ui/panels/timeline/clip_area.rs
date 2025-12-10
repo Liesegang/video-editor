@@ -50,13 +50,6 @@ pub fn show_clip_area(
 
     // --- Drawing of track backgrounds ---
     let painter = ui_content.painter_at(content_rect_for_clip_area);
-    // Constrain scroll offset
-    let max_scroll_y =
-        (num_tracks as f32 * (row_height + track_spacing)) - content_rect_for_clip_area.height();
-    editor_context.timeline_scroll_offset.y = editor_context
-        .timeline_scroll_offset
-        .y
-        .clamp(-max_scroll_y.max(0.0), 0.0);
 
     for i in 0..num_tracks {
         let y = content_rect_for_clip_area.min.y
@@ -78,7 +71,7 @@ pub fn show_clip_area(
     }
     // --- End Drawing of track backgrounds ---
 
-    // --- Main Interaction Block (only if hovered over the clip area) ---
+    // --- Main Interaction Block (for overall clip area, e.g., scroll, zoom, asset drop) ---
     if response.hovered() {
         // Scroll/Zoom interaction
         let scroll_delta = ui_content.input(|i| i.raw_scroll_delta);
@@ -106,6 +99,14 @@ pub fn show_clip_area(
             // Clamp timeline_scroll_offset.x to prevent scrolling left past 0s
             editor_context.timeline_scroll_offset.x =
                 editor_context.timeline_scroll_offset.x.max(0.0);
+
+            // Clamp timeline_scroll_offset.y to prevent scrolling out of bounds vertically
+            let max_scroll_y = (num_tracks as f32 * (row_height + track_spacing))
+                - content_rect_for_clip_area.height();
+            editor_context.timeline_scroll_offset.y = editor_context
+                .timeline_scroll_offset
+                .y
+                .clamp(-max_scroll_y.max(0.0), 0.0);
         }
 
         // Logic for adding entity to track on drag-drop
@@ -176,6 +177,7 @@ pub fn show_clip_area(
             }
         }
     }
+    // --- End Main Interaction Block ---
 
     // --- Loop for drawing and interacting with entities ---
     for track_in_all_entities in &current_tracks {
@@ -244,58 +246,53 @@ pub fn show_clip_area(
                 );
                 // --- End Drawing for clips ---
 
-                // --- Interaction for clips (only if hovered) ---
-                if response.hovered() {
-                    // Keep interaction conditional on hover
-                    let clip_resp = ui_content.interact(
-                        clip_rect,
-                        egui::Id::new(gc.id),
-                        egui::Sense::click_and_drag(),
-                    );
-                    if clip_resp.clicked() {
-                        editor_context.selected_entity_id = Some(gc.id);
-                        editor_context.selected_track_id = Some(gc.track_id);
-                        clicked_on_entity = true;
-                    }
+                // --- Interaction for clips ---
+                let clip_resp = ui_content.interact(
+                    clip_rect,
+                    egui::Id::new(gc.id),
+                    egui::Sense::click_and_drag(),
+                );
+                if clip_resp.clicked() {
+                    editor_context.selected_entity_id = Some(gc.id);
+                    editor_context.selected_track_id = Some(gc.track_id);
+                    clicked_on_entity = true;
+                }
 
-                    if clip_resp.drag_started() {
-                        editor_context.selected_entity_id = Some(gc.id);
-                        editor_context.selected_track_id = Some(gc.track_id);
-                        if editor_context.last_project_state_before_drag.is_none() {
-                            editor_context.last_project_state_before_drag =
-                                Some(project_service.get_project().read().unwrap().clone());
+                if clip_resp.drag_started() {
+                    editor_context.selected_entity_id = Some(gc.id);
+                    editor_context.selected_track_id = Some(gc.track_id);
+                    if editor_context.last_project_state_before_drag.is_none() {
+                        editor_context.last_project_state_before_drag =
+                            Some(project_service.get_project().read().unwrap().clone());
+                    }
+                }
+                if clip_resp.dragged() && editor_context.selected_entity_id == Some(gc.id) {
+                    let dt = clip_resp.drag_delta().x as f64 / pixels_per_unit as f64;
+
+                    if let Some(comp_id) = editor_context.selected_composition_id {
+                        if let Some(track_id) = editor_context.selected_track_id {
+                            project_service
+                                .with_track_mut(comp_id, track_id, |track_mut| {
+                                    if let Some(entity_mut) =
+                                        track_mut.entities.iter_mut().find(|e| e.id == gc.id)
+                                    {
+                                        entity_mut.start_time =
+                                            (entity_mut.start_time + dt).max(0.0);
+                                        entity_mut.end_time =
+                                            (entity_mut.end_time + dt).max(entity_mut.start_time);
+                                    }
+                                })
+                                .ok();
                         }
                     }
-                    if clip_resp.dragged() && editor_context.selected_entity_id == Some(gc.id) {
-                        let dt = clip_resp.drag_delta().x as f64 / pixels_per_unit as f64;
-
-                        if let Some(comp_id) = editor_context.selected_composition_id {
-                            if let Some(track_id) = editor_context.selected_track_id {
-                                project_service
-                                    .with_track_mut(comp_id, track_id, |track_mut| {
-                                        if let Some(entity_mut) =
-                                            track_mut.entities.iter_mut().find(|e| e.id == gc.id)
-                                        {
-                                            entity_mut.start_time =
-                                                (entity_mut.start_time + dt).max(0.0);
-                                            entity_mut.end_time = (entity_mut.end_time + dt)
-                                                .max(entity_mut.start_time);
-                                        }
-                                    })
-                                    .ok();
-                            }
-                        }
-                    }
-                    if clip_resp.drag_stopped() && editor_context.selected_entity_id == Some(gc.id)
+                }
+                if clip_resp.drag_stopped() && editor_context.selected_entity_id == Some(gc.id) {
+                    if let Some(initial_state) =
+                        editor_context.last_project_state_before_drag.take()
                     {
-                        if let Some(initial_state) =
-                            editor_context.last_project_state_before_drag.take()
-                        {
-                            let current_state =
-                                project_service.get_project().read().unwrap().clone();
-                            if initial_state != current_state {
-                                history_manager.push_project_state(initial_state);
-                            }
+                        let current_state = project_service.get_project().read().unwrap().clone();
+                        if initial_state != current_state {
+                            history_manager.push_project_state(initial_state);
                         }
                     }
                 }
@@ -305,12 +302,7 @@ pub fn show_clip_area(
     // --- End Loop for drawing and interacting with entities ---
 
     // Final selection clearing logic
-    if response.hovered() {
-        // This block should be after the entity loop, but still conditional on hovered
-        if clicked_on_entity {
-            // Selected entity is already set
-        } else if response.clicked() && !is_dragging_asset {
-            editor_context.selected_entity_id = None;
-        }
+    if response.clicked() && !clicked_on_entity && !is_dragging_asset {
+        editor_context.selected_entity_id = None;
     }
 }
