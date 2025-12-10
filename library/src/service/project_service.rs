@@ -274,6 +274,32 @@ impl ProjectService {
         })?
     }
 
+    pub fn update_entity_time(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        entity_id: Uuid,
+        new_start_time: f64,
+        new_end_time: f64,
+    ) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+            let track_entity = track
+                .entities
+                .iter_mut()
+                .find(|e| e.id == entity_id)
+                .ok_or_else(|| {
+                    LibraryError::Project(format!(
+                        "Entity with ID {} not found in Track {}",
+                        entity_id, track_id
+                    ))
+                })?;
+
+            track_entity.start_time = new_start_time;
+            track_entity.end_time = new_end_time;
+            Ok(())
+        })?
+    }
+
     pub fn move_entity_to_track(
         &self,
         composition_id: Uuid,
