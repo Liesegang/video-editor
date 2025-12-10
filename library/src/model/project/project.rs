@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use uuid::Uuid;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -51,14 +52,22 @@ impl Project {
     }
 
     pub fn add_composition(&mut self, composition: Composition) {
-        let mut composition = composition;
-        composition.rebuild_entity_cache();
         self.compositions.push(composition);
+    }
+
+    pub fn get_composition_mut(&mut self, id: Uuid) -> Option<&mut Composition> {
+        self.compositions.iter_mut().find(|c| c.id == id)
+    }
+
+    pub fn remove_composition(&mut self, id: Uuid) -> Option<Composition> {
+        let index = self.compositions.iter().position(|c| c.id == id)?;
+        Some(self.compositions.remove(index))
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Composition {
+    pub id: Uuid, // Added UUID field
     pub name: String,
     pub width: u64,
     pub height: u64,
@@ -76,6 +85,7 @@ pub struct Composition {
 impl Composition {
     pub fn new(name: &str, width: u64, height: u64, fps: f64, duration: f64) -> Self {
         Self {
+            id: Uuid::new_v4(), // Initialize with a new UUID
             name: name.to_string(),
             width,
             height,
@@ -98,6 +108,17 @@ impl Composition {
         self.rebuild_entity_cache();
     }
 
+    pub fn get_track_mut(&mut self, id: Uuid) -> Option<&mut Track> {
+        self.tracks.iter_mut().find(|t| t.id == id)
+    }
+
+    pub fn remove_track(&mut self, id: Uuid) -> Option<Track> {
+        let index = self.tracks.iter().position(|t| t.id == id)?;
+        let removed_track = self.tracks.remove(index);
+        self.rebuild_entity_cache(); // Rebuild cache after removing a track
+        Some(removed_track)
+    }
+
     pub(crate) fn cached_entities(&self) -> &[Entity] {
         &self.cached_entities
     }
@@ -111,3 +132,4 @@ impl Composition {
             .collect();
     }
 }
+
