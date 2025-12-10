@@ -27,6 +27,20 @@ pub enum Tab {
     // Add other tabs as needed
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompositionPreset {
+    pub name: String,
+    pub width: u64,
+    pub height: u64,
+    pub fps: f64,
+}
+
+impl CompositionPreset {
+    pub fn resolution(&self) -> String {
+        format!("{}x{}", self.width, self.height)
+    }
+}
+
 // Serde helper for egui::Color32
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "egui::Color32")]

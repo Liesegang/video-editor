@@ -5,11 +5,7 @@ use library::model::project::property::{Property, PropertyValue};
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
 
-use crate::{
-    action::HistoryManager,
-    model::assets::{Asset, AssetKind},
-    state::context::EditorContext,
-};
+use crate::{action::HistoryManager, state::context::EditorContext};
 use anyhow::Result;
 use uuid::Uuid;
 
@@ -129,74 +125,13 @@ fn handle_slider_property(
 pub fn inspector_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
-    history_manager: &mut HistoryManager, // Changed from _history_manager to history_manager
-    project_service: &mut ProjectService, // Changed to mutable
+    history_manager: &mut HistoryManager,
+    project_service: &mut ProjectService,
     project: &Arc<RwLock<Project>>,
 ) {
     let mut needs_refresh = false;
 
-    // Display compositions
-    ui.heading("Compositions");
-    ui.separator();
-    egui::ScrollArea::vertical()
-        .id_salt("compositions_scroll_area")
-        .max_height(200.0)
-        .show(ui, |ui| {
-            if let Ok(proj_read) = project.read() {
-                for comp in &proj_read.compositions {
-                    ui.push_id(comp.id, |ui_in_scope| {
-                        let is_selected = editor_context.selected_composition_id == Some(comp.id);
-                        let response = ui_in_scope
-                            .selectable_label(is_selected, &comp.name)
-                            .on_hover_text(format!("Comp ID: {}", comp.id));
-                        if response.clicked() {
-                            editor_context.selected_composition_id = Some(comp.id);
-                            editor_context.selected_track_id = None; // Deselect track when composition changes
-                            editor_context.selected_entity_id = None; // Deselect entity when composition changes
-                        }
-                    });
-                }
-            }
-        });
-
-    ui.horizontal(|ui| {
-        if ui.button(format!("{} Add Comp", icons::PLUS)).clicked() {
-            let prev_project_state = project_service.get_project().read().unwrap().clone();
-            let new_comp_id = project_service
-                .add_composition("New Composition", 1920, 1080, 30.0, 60.0)
-                .expect("Failed to add composition");
-            editor_context.selected_composition_id = Some(new_comp_id);
-            // Also add a corresponding asset
-            editor_context.assets.push(Asset {
-                name: format!("Comp: New Composition"),
-                duration: 60.0,
-                color: egui::Color32::from_rgb(255, 150, 255),
-                kind: AssetKind::Composition(new_comp_id),
-                composition_id: Some(new_comp_id),
-            });
-            history_manager.push_project_state(prev_project_state);
-            needs_refresh = true;
-        }
-        if ui.button(format!("{} Remove Comp", icons::MINUS)).clicked() {
-            if let Some(comp_id) = editor_context.selected_composition_id {
-                let prev_project_state = project_service.get_project().read().unwrap().clone();
-                project_service
-                    .remove_composition(comp_id)
-                    .expect("Failed to remove composition");
-                // Also remove the corresponding asset
-                editor_context.assets.retain(
-                    |asset| !matches!(asset.kind, AssetKind::Composition(id) if id == comp_id),
-                );
-                editor_context.selected_composition_id = None;
-                editor_context.selected_track_id = None;
-                editor_context.selected_entity_id = None;
-                history_manager.push_project_state(prev_project_state);
-                needs_refresh = true;
-            }
-        }
-    });
-
-    ui.add_space(10.0);
+    // Display tracks for selected composition
 
     // Display tracks for selected composition
     if let Some(comp_id) = editor_context.selected_composition_id {

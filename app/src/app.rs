@@ -13,6 +13,7 @@ use crate::config;
 use crate::model::ui_types::Tab;
 use crate::shortcut::ShortcutManager;
 use crate::state::context::EditorContext;
+use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::ui::panels::settings;
 use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
 use crate::utils;
@@ -29,6 +30,7 @@ pub struct MyApp {
     settings_open: bool,
     settings_show_close_warning: bool,
     triggered_action: Option<CommandId>,
+    pub composition_dialog: CompositionDialog,
 }
 
 impl MyApp {
@@ -70,6 +72,7 @@ impl MyApp {
             settings_open: false,
             settings_show_close_warning: false,
             triggered_action: None,
+            composition_dialog: CompositionDialog::new(),
         };
         app.history_manager
             .push_project_state(app.project_service.get_project().read().unwrap().clone());
@@ -300,9 +303,16 @@ impl eframe::App for MyApp {
                 });
         }
 
+        // 5. Composition Dialog
+        if self.composition_dialog.is_open {
+            self.composition_dialog.show(ctx);
+        }
+
         // 1. Shortcuts (continued)
         // Only handle shortcuts if no modal window is open and not listening, to prevent conflicts
-        let main_ui_enabled = !self.settings_open && !self.settings_show_close_warning;
+        let main_ui_enabled = !self.settings_open
+            && !self.settings_show_close_warning
+            && !self.composition_dialog.is_open;
         if main_ui_enabled && !is_listening_for_shortcut {
             if let Some(action_id) = self
                 .shortcut_manager
@@ -433,6 +443,7 @@ impl eframe::App for MyApp {
                     &mut self.project_service,
                     &self.project,
                     &mut self.command_registry,
+                    &mut self.composition_dialog,
                 );
                 DockArea::new(&mut self.dock_state)
                     .style(Style::from_egui(ui.style().as_ref()))
