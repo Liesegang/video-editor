@@ -2,6 +2,7 @@ use egui::Ui;
 use egui_dock::{DockState, TabViewer};
 use library::model::project::project::Project;
 use std::sync::{Arc, RwLock};
+use egui_phosphor::regular as icons;
 
 use crate::command::CommandRegistry;
 use crate::{
@@ -71,10 +72,10 @@ impl<'a> TabViewer for AppTabViewer<'a> {
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         match tab {
-            Tab::Preview => "Preview".into(),
-            Tab::Timeline => "Timeline".into(),
-            Tab::Inspector => "Inspector".into(),
-            Tab::Assets => "Assets".into(),
+            Tab::Preview => format!("{}{}", icons::MONITOR_PLAY, "Preview").into(),
+            Tab::Timeline => format!("{}{}", icons::FILM_STRIP, "Timeline").into(),
+            Tab::Inspector => format!("{}{}", icons::WRENCH, "Inspector").into(),
+            Tab::Assets => format!("{}{}", icons::FOLDER, "Assets").into(),
         }
     }
 }

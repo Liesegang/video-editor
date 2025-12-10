@@ -401,6 +401,7 @@ impl eframe::App for MyApp {
                 );
                 DockArea::new(&mut self.dock_state)
                     .style(Style::from_egui(ui.style().as_ref()))
+                    .show_leaf_collapse_buttons(false)
                     .show_inside(ui, &mut tab_viewer);
             });
         });
