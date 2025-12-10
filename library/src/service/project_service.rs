@@ -81,6 +81,14 @@ impl ProjectService {
         })
     }
 
+    pub fn add_track_with_id(&self, composition_id: Uuid, track: Track) -> Result<Uuid, LibraryError> {
+        let track_id = track.id;
+        self.with_composition_mut(composition_id, |composition| {
+            composition.add_track(track);
+            track_id
+        })
+    }
+
     pub fn get_track(&self, composition_id: Uuid, track_id: Uuid) -> Result<Track, LibraryError> {
         let project_read = self.project.read().map_err(|e| LibraryError::Runtime(format!("Failed to acquire project read lock: {}", e)))?;
         let composition = project_read.compositions.iter().find(|&c| c.id == composition_id)
@@ -150,6 +158,17 @@ impl ProjectService {
                 .ok_or_else(|| LibraryError::Project(format!("Entity with ID {} not found in Track {}", entity_id, track_id)))?;
             
             track_entity.properties.set(key.to_string(), Property::constant(value));
+            Ok(())
+        })?
+    }
+
+    pub fn update_entity_time(&self, composition_id: Uuid, track_id: Uuid, entity_id: Uuid, new_start_time: f64, new_end_time: f64) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+            let track_entity = track.entities.iter_mut().find(|e| e.id == entity_id)
+                .ok_or_else(|| LibraryError::Project(format!("Entity with ID {} not found in Track {}", entity_id, track_id)))?;
+            
+            track_entity.start_time = new_start_time;
+            track_entity.end_time = new_end_time;
             Ok(())
         })?
     }

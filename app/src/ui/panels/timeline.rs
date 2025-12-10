@@ -131,7 +131,7 @@ pub fn timeline_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     history_manager: &mut HistoryManager,
-    project_service: &ProjectService,
+    project_service: &mut ProjectService,
     project: &Arc<RwLock<Project>>,
 ) {
     // Use panels to divide the space correctly
@@ -222,18 +222,18 @@ pub fn timeline_panel(
             track_list_response.context_menu(|ui| {
                 if let Some(comp_id) = editor_context.selected_composition_id {
                     if ui.button("Add Track").clicked() {
-                        // TODO: Replace with a Command
-                        project_service
-                            .add_track(comp_id, "New Track")
-                            .expect("Failed to add track");
+                        let command = crate::action::commands::track::AddTrackCommand::new(comp_id, "New Track".to_string());
+                        if let Err(e) = history_manager.push(Box::new(command), project_service) {
+                            eprintln!("Failed to add track: {:?}", e);
+                        }
                         ui.close_menu();
                     }
                     if let Some(track_id) = editor_context.selected_track_id {
                         if ui.button("Remove Selected Track").clicked() {
-                            // TODO: Replace with a Command
-                            project_service
-                                .remove_track(comp_id, track_id)
-                                .expect("Failed to remove track");
+                            let command = crate::action::commands::track::RemoveTrackCommand::new(comp_id, track_id);
+                            if let Err(e) = history_manager.push(Box::new(command), project_service) {
+                                eprintln!("Failed to remove track: {:?}", e);
+                            }
                             editor_context.selected_track_id = None;
                             editor_context.selected_entity_id = None;
                             ui.close_menu();
@@ -322,30 +322,26 @@ pub fn timeline_panel(
                             if let Some(track) = current_tracks.get(drop_track_index) {
                                 if let Some(asset) = editor_context.assets.get(asset_index) {
                                     // Handle dropping a Composition asset
-                                    if let AssetKind::Composition(_nested_comp_id) = asset.kind
-                                    {
-                                        // TODO: Replace with a Command
-                                        if let Err(e) = project_service.add_entity_to_track(
+                                    if let AssetKind::Composition(_nested_comp_id) = asset.kind {
+                                        let command = crate::action::commands::entity_command::AddEntityCommand::new(
                                             comp_id,
                                             track.id,
-                                            &format!("Nested Comp: {}", asset.name),
+                                            format!("Nested Comp: {}", asset.name),
                                             drop_time as f64,
                                             (drop_time + asset.duration) as f64,
-                                        ) {
-                                            eprintln!(
-                                                "Failed to add nested composition entity: {:?}",
-                                                e
-                                            );
+                                        );
+                                        if let Err(e) = history_manager.push(Box::new(command), project_service) {
+                                            eprintln!("Failed to add nested composition entity: {:?}", e);
                                         }
                                     } else {
-                                        // TODO: Replace with a Command
-                                        if let Err(e) = project_service.add_entity_to_track(
+                                        let command = crate::action::commands::entity_command::AddEntityCommand::new(
                                             comp_id,
                                             track.id,
-                                            &asset.name, // Use asset name as entity type for now
+                                            asset.name.clone(), // Use asset name as entity type for now
                                             drop_time as f64,
                                             (drop_time + asset.duration) as f64,
-                                        ) {
+                                        );
+                                        if let Err(e) = history_manager.push(Box::new(command), project_service) {
                                             eprintln!("Failed to add entity to track: {:?}", e);
                                         }
                                     }
@@ -432,12 +428,14 @@ pub fn timeline_panel(
                                 if clip_resp.drag_started() {
                                     editor_context.selected_entity_id = Some(gc.id);
                                     editor_context.selected_track_id = Some(gc.track_id);
+                                    editor_context.drag_start_entity_id = Some(gc.id);
+                                    editor_context.drag_start_entity_original_start_time = Some(entity.start_time);
+                                    editor_context.drag_start_entity_original_end_time = Some(entity.end_time);
                                 }
                                 if clip_resp.dragged() && editor_context.selected_entity_id == Some(gc.id)
                                 {
-                                    let dt = clip_resp.drag_delta().x / time_scale;
-                                    // TODO: Replace with a Command
-                                    // Update entity's start_time in ProjectService
+                                    let dt = clip_resp.drag_delta().x as f64 / time_scale as f64;
+                                    
                                     if let Some(comp_id) = editor_context.selected_composition_id {
                                         if let Some(track_id) = editor_context.selected_track_id {
                                             project_service
@@ -452,11 +450,11 @@ pub fn timeline_panel(
                                                         {
                                                             entity_mut.start_time = (entity_mut
                                                                 .start_time
-                                                                + dt as f64)
+                                                                + dt)
                                                                 .max(0.0);
                                                             entity_mut.end_time = (entity_mut
                                                                 .end_time
-                                                                + dt as f64)
+                                                                + dt)
                                                                 .max(entity_mut.start_time);
                                                         }
                                                     },
@@ -464,6 +462,39 @@ pub fn timeline_panel(
                                                 .ok();
                                         }
                                     }
+                                }
+                                if clip_resp.drag_stopped() && editor_context.selected_entity_id == Some(gc.id) {
+                                    if let (Some(comp_id), Some(track_id), Some(entity_id)) = (
+                                        editor_context.selected_composition_id,
+                                        editor_context.selected_track_id,
+                                        editor_context.drag_start_entity_id,
+                                    ) {
+                                        let current_entity_start_time = entity.start_time;
+                                        let current_entity_end_time = entity.end_time;
+                                        
+                                        if let (Some(original_start), Some(original_end)) = (
+                                            editor_context.drag_start_entity_original_start_time,
+                                            editor_context.drag_start_entity_original_end_time,
+                                        ) {
+                                            if current_entity_start_time != original_start || current_entity_end_time != original_end {
+                                                let command = crate::action::commands::entity_command::MoveEntityTimeCommand::new(
+                                                    comp_id,
+                                                    track_id,
+                                                    entity_id,
+                                                    original_start,
+                                                    original_end,
+                                                    current_entity_start_time,
+                                                    current_entity_end_time,
+                                                );
+                                                if let Err(e) = history_manager.push(Box::new(command), project_service) {
+                                                    eprintln!("Failed to move entity time: {:?}", e);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    editor_context.drag_start_entity_id = None;
+                                    editor_context.drag_start_entity_original_start_time = None;
+                                    editor_context.drag_start_entity_original_end_time = None;
                                 }
 
                                 let is_sel = editor_context.selected_entity_id == Some(gc.id);

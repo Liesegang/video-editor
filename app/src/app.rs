@@ -250,7 +250,7 @@ impl eframe::App for MyApp {
             let mut tab_viewer = AppTabViewer::new(
                 &mut self.editor_context,
                 &mut self.history_manager,
-                &self.project_service,
+                &mut self.project_service,
                 &self.project, // Pass project here
             );
             DockArea::new(&mut self.dock_state)
