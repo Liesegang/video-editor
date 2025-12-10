@@ -6,11 +6,11 @@ use crate::cache::CacheManager;
 
 use crate::loader::image::Image;
 // use crate::model::project::entity::Entity; // Removed - This line was there from previous step, but should be removed
+use crate::error::LibraryError;
+use crate::model::project::project::{Composition, Project};
 use libloading::{Library, Symbol};
 use log::debug;
-use crate::model::project::project::{Composition, Project};
 use serde_json::Value;
-use crate::error::LibraryError;
 
 use crate::framing::entity_converters::{EntityConverterPlugin, EntityConverterRegistry}; // Added this line
 
@@ -20,20 +20,20 @@ pub type LoadPluginCreateFn = unsafe extern "C" fn() -> *mut dyn LoadPlugin;
 pub type ExportPluginCreateFn = unsafe extern "C" fn() -> *mut dyn ExportPlugin;
 pub type EntityConverterPluginCreateFn = unsafe extern "C" fn() -> *mut dyn EntityConverterPlugin;
 
+pub mod effects;
 pub mod exporters;
 pub mod loaders;
 pub mod properties;
-pub mod effects;
-
 
 // Publicly re-export plugin types from their sub-modules
 pub use crate::plugin::effects::blur::BlurEffectPlugin;
-pub use crate::plugin::loaders::ffmpeg_video::FfmpegVideoLoader;
-pub use crate::plugin::loaders::native_image::NativeImageLoader;
 pub use crate::plugin::exporters::ffmpeg_export::FfmpegExportPlugin;
 pub use crate::plugin::exporters::png_export::PngExportPlugin;
-pub use crate::plugin::properties::{ConstantPropertyPlugin, KeyframePropertyPlugin, ExpressionPropertyPlugin};
-
+pub use crate::plugin::loaders::ffmpeg_video::FfmpegVideoLoader;
+pub use crate::plugin::loaders::native_image::NativeImageLoader;
+pub use crate::plugin::properties::{
+    ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PluginCategory {
@@ -51,7 +51,11 @@ pub trait Plugin: Send + Sync {
 }
 
 pub trait EffectPlugin: Plugin {
-    fn apply(&self, image: &Image, params: &HashMap<String, PropertyValue>) -> Result<Image, LibraryError>;
+    fn apply(
+        &self,
+        image: &Image,
+        params: &HashMap<String, PropertyValue>,
+    ) -> Result<Image, LibraryError>;
 }
 
 pub trait PropertyPlugin: Plugin {
@@ -104,7 +108,10 @@ pub struct ExportSettings {
 }
 
 impl ExportSettings {
-    pub fn from_project(project: &Project, composition: &Composition) -> Result<Self, LibraryError> {
+    pub fn from_project(
+        project: &Project,
+        composition: &Composition,
+    ) -> Result<Self, LibraryError> {
         let mut settings = ExportSettings::for_dimensions(
             composition.width as u32,
             composition.height as u32,
@@ -288,11 +295,9 @@ struct PluginRepository {
     load_plugins: LoadRepository,
     export_plugins: ExportRepository,
     entity_converter_plugins: EntityConverterRepository, // Added
-    property_evaluators: PropertyEvaluatorRegistry, // Direct ownership
-    dynamic_libraries: Vec<Library>, // Moved here
+    property_evaluators: PropertyEvaluatorRegistry,      // Direct ownership
+    dynamic_libraries: Vec<Library>,                     // Moved here
 }
-
-
 
 pub struct PluginManager {
     inner: RwLock<PluginRepository>,
@@ -336,28 +341,42 @@ impl PluginManager {
         let mut inner = self.inner.write().unwrap();
         let evaluator_id = plugin.id();
         let evaluator_instance = plugin.get_evaluator_instance();
-        inner.property_evaluators.register(evaluator_id, evaluator_instance);
+        inner
+            .property_evaluators
+            .register(evaluator_id, evaluator_instance);
     }
 
-    pub fn apply_effect(&self, key: &str, image: &Image, params: &HashMap<String, PropertyValue>) -> Result<Image, LibraryError> {
+    pub fn apply_effect(
+        &self,
+        key: &str,
+        image: &Image,
+        params: &HashMap<String, PropertyValue>,
+    ) -> Result<Image, LibraryError> {
         let inner = self.inner.read().unwrap();
         if let Some(plugin) = inner.effect_plugins.get(key) {
             debug!("PluginManager: Applying effect '{}'", key);
             plugin.apply(image, params)
         } else {
             log::warn!("Effect '{}' not found", key);
-            Ok(image.clone()) 
+            Ok(image.clone())
         }
     }
 
-    pub fn load_resource(&self, request: &LoadRequest, cache: &CacheManager) -> Result<LoadResponse, LibraryError> {
+    pub fn load_resource(
+        &self,
+        request: &LoadRequest,
+        cache: &CacheManager,
+    ) -> Result<LoadResponse, LibraryError> {
         let inner = self.inner.read().unwrap();
         for plugin in inner.load_plugins.plugins.values() {
             if plugin.supports(request) {
                 return plugin.load(request, cache);
             }
         }
-        Err(LibraryError::Plugin(format!("No load plugin registered for request {:?}", request)))
+        Err(LibraryError::Plugin(format!(
+            "No load plugin registered for request {:?}",
+            request
+        )))
     }
 
     pub fn export_image(
@@ -371,10 +390,11 @@ impl PluginManager {
         if let Some(plugin) = inner.export_plugins.get(exporter_id) {
             return plugin.export_image(path, image, settings);
         }
-        Err(LibraryError::Plugin(format!("Exporter '{}' not found", exporter_id)))
+        Err(LibraryError::Plugin(format!(
+            "Exporter '{}' not found",
+            exporter_id
+        )))
     }
-
-
 
     pub fn load_property_plugin_from_file<P: AsRef<Path>>(
         &self,
@@ -386,7 +406,9 @@ impl PluginManager {
                 library.get(b"create_property_plugin")?;
             let raw = constructor();
             if raw.is_null() {
-                return Err(LibraryError::Plugin("create_property_plugin returned null".to_string()));
+                return Err(LibraryError::Plugin(
+                    "create_property_plugin returned null".to_string(),
+                ));
             }
             let plugin_box = Box::from_raw(raw);
             let plugin_arc: Arc<dyn PropertyPlugin> = Arc::from(plugin_box); // Convert Box to Arc
@@ -394,7 +416,9 @@ impl PluginManager {
             let mut inner = self.inner.write().unwrap();
             let evaluator_id = plugin_arc.id();
             let evaluator_instance = plugin_arc.get_evaluator_instance();
-            inner.property_evaluators.register(evaluator_id, evaluator_instance);
+            inner
+                .property_evaluators
+                .register(evaluator_id, evaluator_instance);
             inner.dynamic_libraries.push(library);
         }
         Ok(())
@@ -410,7 +434,9 @@ impl PluginManager {
                 library.get(b"create_effect_plugin")?;
             let raw = constructor();
             if raw.is_null() {
-                return Err(LibraryError::Plugin("create_effect_plugin returned null".to_string()));
+                return Err(LibraryError::Plugin(
+                    "create_effect_plugin returned null".to_string(),
+                ));
             }
             let plugin_box = Box::from_raw(raw);
             let plugin_arc: Arc<dyn EffectPlugin> = Arc::from(plugin_box); // Convert Box to Arc
@@ -422,17 +448,16 @@ impl PluginManager {
         Ok(())
     }
 
-    pub fn load_load_plugin_from_file<P: AsRef<Path>>(
-        &self,
-        path: P,
-    ) -> Result<(), LibraryError> {
+    pub fn load_load_plugin_from_file<P: AsRef<Path>>(&self, path: P) -> Result<(), LibraryError> {
         unsafe {
             let library = Library::new(path.as_ref())?;
             let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn LoadPlugin> =
                 library.get(b"create_load_plugin")?;
             let raw = constructor();
             if raw.is_null() {
-                return Err(LibraryError::Plugin("create_load_plugin returned null".to_string()));
+                return Err(LibraryError::Plugin(
+                    "create_load_plugin returned null".to_string(),
+                ));
             }
             let plugin_box = Box::from_raw(raw);
             let plugin_arc: Arc<dyn LoadPlugin> = Arc::from(plugin_box); // Convert Box to Arc
@@ -454,7 +479,9 @@ impl PluginManager {
                 library.get(b"create_export_plugin")?;
             let raw = constructor();
             if raw.is_null() {
-                return Err(LibraryError::Plugin("create_export_plugin returned null".to_string()));
+                return Err(LibraryError::Plugin(
+                    "create_export_plugin returned null".to_string(),
+                ));
             }
             let plugin_box = Box::from_raw(raw);
             let plugin_arc: Arc<dyn ExportPlugin> = Arc::from(plugin_box); // Convert Box to Arc
@@ -476,7 +503,9 @@ impl PluginManager {
                 library.get(b"create_entity_converter_plugin")?;
             let raw = constructor();
             if raw.is_null() {
-                return Err(LibraryError::Plugin("create_entity_converter_plugin returned null".to_string()));
+                return Err(LibraryError::Plugin(
+                    "create_entity_converter_plugin returned null".to_string(),
+                ));
             }
             let plugin_box = Box::from_raw(raw);
             let plugin_arc: Arc<dyn EntityConverterPlugin> = Arc::from(plugin_box); // Convert Box to Arc
@@ -553,10 +582,9 @@ impl PluginManager {
     }
 } // Correct closing brace for impl PluginManager
 
-
 // Trait and structs moved from framing/property.rs
-use log::warn;
 use crate::model::project::property::{Property, PropertyMap, PropertyValue};
+use log::warn;
 
 pub struct PropertyEvaluatorRegistry {
     evaluators: HashMap<&'static str, Arc<dyn PropertyEvaluator>>,

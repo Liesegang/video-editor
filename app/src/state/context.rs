@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use library::model::project::project::{Composition, Project};
 use library::model::project::property::PropertyMap;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::model::assets::{Asset, AssetKind};
 use crate::model::ui_types::Vec2Def;
@@ -40,7 +40,6 @@ pub struct EditorContext {
     pub drag_start_property_value: Option<library::model::project::property::PropertyValue>,
     #[serde(skip)]
     pub last_project_state_before_drag: Option<Project>,
-
 }
 
 impl EditorContext {
@@ -109,9 +108,9 @@ impl EditorContext {
             selected_entity_id: None,
             inspector_entity_cache: None,
             drag_start_property_name: None,
-                        drag_start_property_value: None,
-                        last_project_state_before_drag: None,
-                    }
+            drag_start_property_value: None,
+            last_project_state_before_drag: None,
+        }
     }
 
     pub fn get_current_composition<'a>(&self, project: &'a Project) -> Option<&'a Composition> {

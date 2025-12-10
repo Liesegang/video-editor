@@ -200,12 +200,13 @@ impl TryGetProperty<i64> for i64 {
             PropertyValue::Integer(v) => Some(*v),
             PropertyValue::Number(v) => {
                 // Only convert if it's a whole number and fits in i64
-                if v.fract().abs() < f64::EPSILON && *v >= i64::MIN as f64 && *v <= i64::MAX as f64 {
+                if v.fract().abs() < f64::EPSILON && *v >= i64::MIN as f64 && *v <= i64::MAX as f64
+                {
                     Some(*v as i64)
                 } else {
                     None
                 }
-            },
+            }
             _ => None,
         }
     }

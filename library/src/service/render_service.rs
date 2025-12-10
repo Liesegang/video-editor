@@ -1,5 +1,7 @@
-use crate::framing::get_frame_from_project;
+use crate::cache::SharedCacheManager;
+use crate::error::LibraryError;
 use crate::framing::entity_converters::EntityConverterRegistry;
+use crate::framing::get_frame_from_project;
 use crate::loader::image::Image;
 use crate::model::frame::entity::{FrameEntity, FrameObject};
 use crate::model::frame::frame::FrameInfo;
@@ -7,9 +9,7 @@ use crate::model::frame::transform::Transform;
 use crate::plugin::{LoadRequest, LoadResponse, PluginManager};
 use crate::rendering::renderer::Renderer;
 use crate::service::project_model::ProjectModel;
-use crate::util::timing::{measure_debug, ScopedTimer};
-use crate::error::LibraryError;
-use crate::cache::SharedCacheManager; // Added this line
+use crate::util::timing::{ScopedTimer, measure_debug}; // Added this line
 // Removed HashMap and EvaluationContext imports
 use std::sync::Arc;
 
@@ -43,7 +43,10 @@ impl<T: Renderer> RenderService<T> {
         self.clear()?;
         let frame_info = self.get_frame(project_model, time);
         let object_count = frame_info.objects.len();
-        let _timer = ScopedTimer::debug(format!("RenderService::render_frame objects={}", object_count));
+        let _timer = ScopedTimer::debug(format!(
+            "RenderService::render_frame objects={}",
+            object_count
+        ));
 
         for frame_object in frame_info.objects {
             let FrameObject {
@@ -62,7 +65,10 @@ impl<T: Renderer> RenderService<T> {
                     let video_frame = measure_debug(
                         format!("Decode video {} frame {}", surface.file_path, frame_number),
                         || -> Result<Image, LibraryError> {
-                            match self.plugin_manager.load_resource(&request, &self.cache_manager)? {
+                            match self
+                                .plugin_manager
+                                .load_resource(&request, &self.cache_manager)?
+                            {
                                 LoadResponse::Image(img) => Ok(img),
                             }
                         },
@@ -72,16 +78,17 @@ impl<T: Renderer> RenderService<T> {
                         self.renderer.draw_image(&final_image, &surface.transform)
                     })?;
                 }
-                FrameEntity::Image {
-                    surface
-                } => {
+                FrameEntity::Image { surface } => {
                     let request = LoadRequest::Image {
                         path: surface.file_path.clone(),
                     };
                     let image_frame = measure_debug(
                         format!("Load image {}", surface.file_path),
                         || -> Result<Image, LibraryError> {
-                            match self.plugin_manager.load_resource(&request, &self.cache_manager)? {
+                            match self
+                                .plugin_manager
+                                .load_resource(&request, &self.cache_manager)?
+                            {
                                 LoadResponse::Image(img) => Ok(img),
                             }
                         },
@@ -140,7 +147,7 @@ impl<T: Renderer> RenderService<T> {
     pub fn clear(&mut self) -> Result<(), LibraryError> {
         measure_debug("RenderService::clear", || self.renderer.clear())
     }
-    
+
     fn get_frame(&self, project_model: &ProjectModel, time: f64) -> FrameInfo {
         let property_evaluators = self.plugin_manager.get_property_evaluators();
         get_frame_from_project(
@@ -151,8 +158,6 @@ impl<T: Renderer> RenderService<T> {
             &self.entity_converter_registry,
         )
     }
-
-
 
     fn apply_effects(
         &self,
@@ -166,13 +171,15 @@ impl<T: Renderer> RenderService<T> {
             for effect in effects {
                 // The 'ImageEffect' struct already holds evaluated 'PropertyValue's.
                 // We just need to pass them to the plugin manager.
-                image = measure_debug(
-                    format!("Apply effect '{}'", effect.effect_type),
-                    || self.plugin_manager.apply_effect(effect.effect_type.as_str(), &image, &effect.properties),
-                )?;
+                image = measure_debug(format!("Apply effect '{}'", effect.effect_type), || {
+                    self.plugin_manager.apply_effect(
+                        effect.effect_type.as_str(),
+                        &image,
+                        &effect.properties,
+                    )
+                })?;
             }
             Ok(image)
         }
     }
 } // Added closing brace for impl RenderService
-

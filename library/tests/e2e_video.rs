@@ -1,7 +1,7 @@
+use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use serde_json::json;
 
 fn setup_test_environment() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -13,7 +13,7 @@ fn setup_test_environment() -> PathBuf {
         fs::remove_dir_all(&rendered_dir).unwrap();
     }
     // Ensure rendered directory exists
-    fs::create_dir(&rendered_dir).unwrap(); 
+    fs::create_dir(&rendered_dir).unwrap();
 
     workspace_root.to_path_buf()
 }
@@ -69,11 +69,22 @@ fn test_video_export() {
         .expect("Failed to execute library process");
 
     // Check if the command executed successfully
-    assert!(output.status.success(), "Library process failed: {:?}", output);
-    
+    assert!(
+        output.status.success(),
+        "Library process failed: {:?}",
+        output
+    );
+
     // Verify output
-    assert!(output_video_path.exists(), "Output video file does not exist: {:?}", output_video_path);
-    assert!(output_video_path.metadata().unwrap().len() > 0, "Output video file is empty");
+    assert!(
+        output_video_path.exists(),
+        "Output video file does not exist: {:?}",
+        output_video_path
+    );
+    assert!(
+        output_video_path.metadata().unwrap().len() > 0,
+        "Output video file is empty"
+    );
 
     // Clean up
     fs::remove_file(&temp_project_path).unwrap();

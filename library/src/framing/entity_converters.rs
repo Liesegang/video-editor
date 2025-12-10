@@ -1,7 +1,7 @@
 use log::{debug, warn}; // Ensure debug is imported
+use serde_json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use serde_json;
 
 use crate::model::frame::{
     color::Color,
@@ -13,8 +13,8 @@ use crate::model::frame::{
 use crate::model::project::entity::{EffectConfig, Entity};
 use crate::model::project::project::Composition;
 use crate::model::project::property::{PropertyMap, PropertyValue};
-use crate::plugin::{EvaluationContext, PropertyEvaluatorRegistry};
-use crate::plugin::Plugin; // Added this line
+use crate::plugin::Plugin;
+use crate::plugin::{EvaluationContext, PropertyEvaluatorRegistry}; // Added this line
 
 /// Trait for converting an Entity into a FrameObject.
 pub trait EntityConverter: Send + Sync {
@@ -30,7 +30,6 @@ pub trait EntityConverter: Send + Sync {
 pub trait EntityConverterPlugin: Plugin {
     fn register_converters(&self, registry: &mut EntityConverterRegistry);
 }
-
 
 /// Context passed to EntityConverters, encapsulating common FrameEvaluator methods
 pub struct FrameEvaluationContext<'a> {
@@ -94,7 +93,10 @@ impl<'a> FrameEvaluationContext<'a> {
             property_map: properties,
         };
         let evaluated_value = self.property_evaluators.evaluate(property, time, &ctx);
-        debug!("Evaluated property '{}' at time {} to {:?}", key, time, evaluated_value); // Added debug log
+        debug!(
+            "Evaluated property '{}' at time {} to {:?}",
+            key, time, evaluated_value
+        ); // Added debug log
         Some(evaluated_value)
     }
 
@@ -204,7 +206,6 @@ impl<'a> FrameEvaluationContext<'a> {
     }
 }
 
-
 // Concrete EntityConverter implementations
 
 pub struct VideoEntityConverter;
@@ -218,7 +219,9 @@ impl EntityConverter for VideoEntityConverter {
     ) -> Option<FrameObject> {
         let props = &entity.properties;
         let file_path = evaluator.require_string(props, "file_path", time, "video")?;
-        let frame_number = evaluator.evaluate_number(props, "frame", time, 0.0).max(0.0) as u64;
+        let frame_number = evaluator
+            .evaluate_number(props, "frame", time, 0.0)
+            .max(0.0) as u64;
         let transform = evaluator.build_transform(props, time);
         let effects = evaluator.build_image_effects(&entity.effects, time);
         let surface = ImageSurface {
@@ -356,7 +359,8 @@ impl EntityConverterRegistry {
         }
     }
 
-    pub fn register(&mut self, entity_type: String, converter: Arc<dyn EntityConverter>) { // Changed to Arc
+    pub fn register(&mut self, entity_type: String, converter: Arc<dyn EntityConverter>) {
+        // Changed to Arc
         self.converters.insert(entity_type, converter);
     }
 
@@ -369,7 +373,10 @@ impl EntityConverterRegistry {
         match self.converters.get(&entity.entity_type) {
             Some(converter) => converter.convert_entity(evaluator, entity, time),
             None => {
-                warn!("No converter registered for entity type '{}'", entity.entity_type);
+                warn!(
+                    "No converter registered for entity type '{}'",
+                    entity.entity_type
+                );
                 None
             }
         }

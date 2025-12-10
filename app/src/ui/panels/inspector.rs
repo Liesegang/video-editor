@@ -1,13 +1,14 @@
 use egui::Ui;
-use std::sync::{Arc, RwLock};
+use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use library::model::project::property::{Property, PropertyValue};
 use library::service::project_service::ProjectService;
+use std::sync::{Arc, RwLock};
 
 use crate::{
     action::HistoryManager,
-    state::context::EditorContext,
     model::assets::{Asset, AssetKind},
+    state::context::EditorContext,
 };
 use anyhow::Result;
 use uuid::Uuid;
@@ -27,23 +28,20 @@ fn handle_drag_value_property(
     current_value: &mut f32,
     speed: f32,
     suffix: &str,
-    update_fn: impl Fn(
-        &mut ProjectService,
-        Uuid,
-        Uuid,
-        Uuid,
-        &str,
-        PropertyValue,
-    ) -> Result<()>
+    update_fn: impl Fn(&mut ProjectService, Uuid, Uuid, Uuid, &str, PropertyValue) -> Result<()>,
 ) -> bool {
     ui.label(property_label);
     let mut needs_refresh = false;
-    let response = ui
-        .add(egui::DragValue::new(current_value).speed(speed).suffix(suffix));
+    let response = ui.add(
+        egui::DragValue::new(current_value)
+            .speed(speed)
+            .suffix(suffix),
+    );
 
     if response.drag_started() {
         if editor_context.last_project_state_before_drag.is_none() {
-            editor_context.last_project_state_before_drag = Some(project_service.get_project().read().unwrap().clone());
+            editor_context.last_project_state_before_drag =
+                Some(project_service.get_project().read().unwrap().clone());
         }
     }
 
@@ -89,23 +87,16 @@ fn handle_slider_property(
     current_value: &mut f32,
     range: std::ops::RangeInclusive<f32>,
     suffix: &str,
-    update_fn: impl Fn(
-        &mut ProjectService,
-        Uuid,
-        Uuid,
-        Uuid,
-        &str,
-        PropertyValue,
-    ) -> Result<()>
+    update_fn: impl Fn(&mut ProjectService, Uuid, Uuid, Uuid, &str, PropertyValue) -> Result<()>,
 ) -> bool {
     ui.label(property_label);
     let mut needs_refresh = false;
-    let response = ui
-        .add(egui::Slider::new(current_value, range).suffix(suffix));
+    let response = ui.add(egui::Slider::new(current_value, range).suffix(suffix));
 
     if response.drag_started() {
         if editor_context.last_project_state_before_drag.is_none() {
-            editor_context.last_project_state_before_drag = Some(project_service.get_project().read().unwrap().clone());
+            editor_context.last_project_state_before_drag =
+                Some(project_service.get_project().read().unwrap().clone());
         }
     }
 
@@ -148,7 +139,7 @@ pub fn inspector_panel(
     ui.heading("Compositions");
     ui.separator();
     egui::ScrollArea::vertical()
-        .id_source("compositions_scroll_area")
+        .id_salt("compositions_scroll_area")
         .max_height(200.0)
         .show(ui, |ui| {
             if let Ok(proj_read) = project.read() {
@@ -169,7 +160,7 @@ pub fn inspector_panel(
         });
 
     ui.horizontal(|ui| {
-        if ui.button("Add Comp").clicked() {
+        if ui.button(format!("{} Add Comp", icons::PLUS)).clicked() {
             let prev_project_state = project_service.get_project().read().unwrap().clone();
             let new_comp_id = project_service
                 .add_composition("New Composition", 1920, 1080, 30.0, 60.0)
@@ -186,7 +177,7 @@ pub fn inspector_panel(
             history_manager.push_project_state(prev_project_state);
             needs_refresh = true;
         }
-        if ui.button("Remove Comp").clicked() {
+        if ui.button(format!("{} Remove Comp", icons::MINUS)).clicked() {
             if let Some(comp_id) = editor_context.selected_composition_id {
                 let prev_project_state = project_service.get_project().read().unwrap().clone();
                 project_service
@@ -212,15 +203,15 @@ pub fn inspector_panel(
         ui.heading(format!("Tracks in Comp: {}", comp_id)); // Displaying ID for now
         ui.separator();
         egui::ScrollArea::vertical()
-            .id_source("tracks_scroll_area")
+            .id_salt("tracks_scroll_area")
             .max_height(200.0)
             .show(ui, |ui| {
                 if let Ok(proj_read) = project.read() {
-                    if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id)
-                    {
+                    if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
                         for track in &comp.tracks {
                             ui.push_id(track.id, |ui_in_scope| {
-                                let is_selected = editor_context.selected_track_id == Some(track.id);
+                                let is_selected =
+                                    editor_context.selected_track_id == Some(track.id);
                                 let response = ui_in_scope
                                     .selectable_label(is_selected, &track.name)
                                     .on_hover_text(format!("Track ID: {}", track.id));
@@ -246,12 +237,12 @@ pub fn inspector_panel(
 
                 match cache {
                     Some((
-                             cached_entity_id,
-                             mut cached_entity_type,
-                             mut cached_properties,
-                             mut cached_start_time,
-                             mut cached_end_time,
-                         )) => {
+                        cached_entity_id,
+                        mut cached_entity_type,
+                        mut cached_properties,
+                        mut cached_start_time,
+                        mut cached_end_time,
+                    )) => {
                         if cached_entity_id == selected_entity_id {
                             ui.heading("Entity Properties");
                             ui.separator();
@@ -261,20 +252,19 @@ pub fn inspector_panel(
                                 ui.label("Type");
                                 if ui.text_edit_singleline(&mut current_entity_type).changed() {
                                     let prev_project_state =
-                                      project_service.get_project().read().unwrap().clone();
+                                        project_service.get_project().read().unwrap().clone();
                                     cached_entity_type = current_entity_type.clone();
                                     project_service
-                                      .with_track_mut(comp_id, track_id, |track_mut| {
-                                          if let Some(entity_mut) = track_mut
-                                            .entities
-                                            .iter_mut()
-                                            .find(|e| e.id == selected_entity_id)
-                                          {
-                                              entity_mut.entity_type =
-                                                cached_entity_type.clone();
-                                          }
-                                      })
-                                      .ok();
+                                        .with_track_mut(comp_id, track_id, |track_mut| {
+                                            if let Some(entity_mut) = track_mut
+                                                .entities
+                                                .iter_mut()
+                                                .find(|e| e.id == selected_entity_id)
+                                            {
+                                                entity_mut.entity_type = cached_entity_type.clone();
+                                            }
+                                        })
+                                        .ok();
                                     history_manager.push_project_state(prev_project_state);
                                     needs_refresh = true;
                                 }
@@ -283,12 +273,12 @@ pub fn inspector_panel(
                             let mut keep_cache = true;
 
                             egui::Grid::new("entity_props")
-                              .striped(true)
-                              .show(ui, |ui| {
-                                  // position_x
-                                  let mut pos_x =
-                                    cached_properties.get_f32("position_x").unwrap_or(960.0);
-                                  needs_refresh |= handle_drag_value_property(
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    // position_x
+                                    let mut pos_x =
+                                        cached_properties.get_f32("position_x").unwrap_or(960.0);
+                                    needs_refresh |= handle_drag_value_property(
                                       ui,
                                       history_manager,
                                       editor_context,
@@ -312,16 +302,16 @@ pub fn inspector_panel(
                                           )?)
                                       },
                                   );
-                                  cached_properties.set(
-                                      "position_x".to_string(),
-                                      Property::constant(PropertyValue::Number(pos_x as f64)),
-                                  );
-                                  ui.end_row();
+                                    cached_properties.set(
+                                        "position_x".to_string(),
+                                        Property::constant(PropertyValue::Number(pos_x as f64)),
+                                    );
+                                    ui.end_row();
 
-                                  // position_y
-                                  let mut pos_y =
-                                    cached_properties.get_f32("position_y").unwrap_or(540.0);
-                                  needs_refresh |= handle_drag_value_property(
+                                    // position_y
+                                    let mut pos_y =
+                                        cached_properties.get_f32("position_y").unwrap_or(540.0);
+                                    needs_refresh |= handle_drag_value_property(
                                       ui,
                                       history_manager,
                                       editor_context,
@@ -345,15 +335,15 @@ pub fn inspector_panel(
                                           )?)
                                       },
                                   );
-                                  cached_properties.set(
-                                      "position_y".to_string(),
-                                      Property::constant(PropertyValue::Number(pos_y as f64)),
-                                  );
+                                    cached_properties.set(
+                                        "position_y".to_string(),
+                                        Property::constant(PropertyValue::Number(pos_y as f64)),
+                                    );
 
-                                  // scale
-                                  let mut scale =
-                                    cached_properties.get_f32("scale").unwrap_or(100.0);
-                                  needs_refresh |= handle_slider_property(
+                                    // scale
+                                    let mut scale =
+                                        cached_properties.get_f32("scale").unwrap_or(100.0);
+                                    needs_refresh |= handle_slider_property(
                                       ui,
                                       history_manager,
                                       editor_context,
@@ -377,15 +367,15 @@ pub fn inspector_panel(
                                           )?)
                                       },
                                   );
-                                  cached_properties.set(
-                                      "scale".to_string(),
-                                      Property::constant(PropertyValue::Number(scale as f64)),
-                                  );
+                                    cached_properties.set(
+                                        "scale".to_string(),
+                                        Property::constant(PropertyValue::Number(scale as f64)),
+                                    );
 
-                                  // opacity
-                                  let mut opacity =
-                                    cached_properties.get_f32("opacity").unwrap_or(100.0);
-                                  needs_refresh |= handle_slider_property(
+                                    // opacity
+                                    let mut opacity =
+                                        cached_properties.get_f32("opacity").unwrap_or(100.0);
+                                    needs_refresh |= handle_slider_property(
                                       ui,
                                       history_manager,
                                       editor_context,
@@ -409,15 +399,15 @@ pub fn inspector_panel(
                                           )?)
                                       },
                                   );
-                                  cached_properties.set(
-                                      "opacity".to_string(),
-                                      Property::constant(PropertyValue::Number(opacity as f64)),
-                                  );
+                                    cached_properties.set(
+                                        "opacity".to_string(),
+                                        Property::constant(PropertyValue::Number(opacity as f64)),
+                                    );
 
-                                  // rotation
-                                  let mut rotation =
-                                    cached_properties.get_f32("rotation").unwrap_or(0.0);
-                                  needs_refresh |= handle_drag_value_property(
+                                    // rotation
+                                    let mut rotation =
+                                        cached_properties.get_f32("rotation").unwrap_or(0.0);
+                                    needs_refresh |= handle_drag_value_property(
                                       ui,
                                       history_manager,
                                       editor_context,
@@ -441,14 +431,14 @@ pub fn inspector_panel(
                                           )?)
                                       },
                                   );
-                                  cached_properties.set(
-                                      "rotation".to_string(),
-                                      Property::constant(PropertyValue::Number(rotation as f64)),
-                                  );
+                                    cached_properties.set(
+                                        "rotation".to_string(),
+                                        Property::constant(PropertyValue::Number(rotation as f64)),
+                                    );
 
-                                  // Start Time
-                                  let mut current_start_time = cached_start_time as f32;
-                                  needs_refresh |= handle_drag_value_property(
+                                    // Start Time
+                                    let mut current_start_time = cached_start_time as f32;
+                                    needs_refresh |= handle_drag_value_property(
                                       ui,
                                       history_manager,
                                       editor_context,
@@ -490,12 +480,12 @@ pub fn inspector_panel(
                                           )?)
                                       },
                                   );
-                                  cached_start_time = current_start_time as f64;
-                                  ui.end_row();
+                                    cached_start_time = current_start_time as f64;
+                                    ui.end_row();
 
-                                  // End Time
-                                  let mut current_end_time = cached_end_time as f32;
-                                  needs_refresh |= handle_drag_value_property(
+                                    // End Time
+                                    let mut current_end_time = cached_end_time as f32;
+                                    needs_refresh |= handle_drag_value_property(
                                       ui,
                                       history_manager,
                                       editor_context,
@@ -519,13 +509,13 @@ pub fn inspector_panel(
                                           )?)
                                       },
                                   );
-                                  cached_end_time = current_end_time as f64;
-                                  ui.end_row();
-                              });
+                                    cached_end_time = current_end_time as f64;
+                                    ui.end_row();
+                                });
 
-                            if ui.button("🗑 Delete Entity").clicked() {
+                            if ui.button(format!("{} Delete Entity", icons::TRASH)).clicked() {
                                 let prev_project_state =
-                                  project_service.get_project().read().unwrap().clone();
+                                    project_service.get_project().read().unwrap().clone();
                                 if let Err(e) = project_service.remove_entity_from_track(
                                     comp_id,
                                     track_id,
@@ -534,10 +524,7 @@ pub fn inspector_panel(
                                     eprintln!("Failed to remove entity: {:?}", e);
                                 } else {
                                     editor_context.selected_entity_id = None;
-                                    history_manager
-                                      .push_project_state(
-                                          prev_project_state,
-                                      );
+                                    history_manager.push_project_state(prev_project_state);
                                     needs_refresh = true;
                                     keep_cache = false;
                                 }
@@ -555,7 +542,9 @@ pub fn inspector_panel(
                                 editor_context.inspector_entity_cache = None;
                             }
                         } else {
-                            ui.label("Inspector cache is stale or mismatched. Please re-select entity.");
+                            ui.label(
+                                "Inspector cache is stale or mismatched. Please re-select entity.",
+                            );
                             editor_context.inspector_entity_cache = None;
                         }
                     }

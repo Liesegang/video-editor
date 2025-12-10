@@ -1,8 +1,8 @@
+use crate::error::LibraryError;
 use crate::loader::image::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::transform::Transform;
-use crate::error::LibraryError;
 
 pub trait Renderer {
     fn draw_image(&mut self, image: &Image, transform: &Transform) -> Result<(), LibraryError>;

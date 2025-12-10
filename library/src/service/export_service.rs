@@ -1,14 +1,14 @@
+use crate::error::LibraryError;
 use crate::loader::image::Image;
 use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
 use crate::rendering::renderer::Renderer;
 use crate::service::project_model::ProjectModel;
 use crate::service::render_service::RenderService;
-use crate::util::timing::{measure_info, ScopedTimer};
-use crate::error::LibraryError;
+use crate::util::timing::{ScopedTimer, measure_info};
 use log::{error, info};
 use std::ops::Range;
-use std::sync::mpsc::{self, SyncSender};
 use std::sync::Arc;
+use std::sync::mpsc::{self, SyncSender};
 use std::thread::{self, JoinHandle};
 
 struct SaveTask {
@@ -65,10 +65,9 @@ impl ExportService {
     ) -> Result<(), LibraryError> {
         let composition = project_model.composition();
         let (fps, total_frames) = (composition.fps, composition.duration.ceil().max(0.0) as u64);
-        let sender = self
-            .save_tx
-            .as_ref()
-            .ok_or(LibraryError::Render("Save queue is already closed".to_string()))?;
+        let sender = self.save_tx.as_ref().ok_or(LibraryError::Render(
+            "Save queue is already closed".to_string(),
+        ))?;
         let export_format = self.export_settings.export_format();
         let video_output = if matches!(export_format, ExportFormat::Video) {
             Some(format!(

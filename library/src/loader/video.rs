@@ -1,6 +1,6 @@
+use crate::error::LibraryError;
 use crate::loader::image::Image;
 use ffmpeg_next as ffmpeg;
-use crate::error::LibraryError;
 
 pub struct VideoReader {
     input_context: ffmpeg::format::context::Input,
@@ -16,7 +16,9 @@ impl VideoReader {
         let input = input_context
             .streams()
             .best(ffmpeg::media::Type::Video)
-            .ok_or(LibraryError::FfmpegOther("動画ストリームが見つかりません".to_string()))?;
+            .ok_or(LibraryError::FfmpegOther(
+                "動画ストリームが見つかりません".to_string(),
+            ))?;
         let video_stream_index = input.index();
 
         let context_decoder = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
@@ -42,10 +44,12 @@ impl VideoReader {
         // To properly seek, we should use self.input_context.seek().
         // However, exact frame seeking is hard. Let's try a naive seek to timestamp.
 
-        let stream = self
-            .input_context
-            .stream(self.video_stream_index)
-            .ok_or(LibraryError::FfmpegOther("ストリームが見つかりません".to_string()))?;
+        let stream =
+            self.input_context
+                .stream(self.video_stream_index)
+                .ok_or(LibraryError::FfmpegOther(
+                    "ストリームが見つかりません".to_string(),
+                ))?;
         let time_base = stream.time_base();
         // rough timestamp for the frame number. This assumes constant frame rate which might not be true.
         // But we don't have fps info easily here without more parsing.
@@ -111,7 +115,9 @@ impl VideoReader {
             }
         }
 
-        let frame = decoded_frame.ok_or(LibraryError::FfmpegOther("指定したフレームをデコードできませんでした".to_string()))?;
+        let frame = decoded_frame.ok_or(LibraryError::FfmpegOther(
+            "指定したフレームをデコードできませんでした".to_string(),
+        ))?;
 
         // Scaler setup
         let mut scaler = ffmpeg::software::scaling::context::Context::get(

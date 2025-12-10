@@ -8,8 +8,8 @@ use crate::model::project::entity::Entity;
 use crate::model::project::project::{Composition, Project};
 use crate::util::timing::ScopedTimer;
 
-use crate::plugin::PropertyEvaluatorRegistry;
 use super::entity_converters::{EntityConverterRegistry, FrameEvaluationContext};
+use crate::plugin::PropertyEvaluatorRegistry;
 
 pub struct FrameEvaluator<'a> {
     composition: &'a Composition,
@@ -68,8 +68,6 @@ impl<'a> FrameEvaluator<'a> {
             time,
         )
     }
-
-
 }
 
 pub fn evaluate_composition_frame(
@@ -82,7 +80,8 @@ pub fn evaluate_composition_frame(
         composition,
         Arc::clone(property_evaluators),
         Arc::clone(entity_converter_registry),
-    ).evaluate(time)
+    )
+    .evaluate(time)
 }
 
 pub fn get_frame_from_project(
@@ -116,14 +115,16 @@ pub fn get_frame_from_project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::project::property::{Property, PropertyValue, Vec2, PropertyMap};
-    use crate::model::project::project::Composition; // Added
     use crate::model::frame::color::Color; // Added
     use crate::model::frame::entity::FrameEntity; // Added
+    use crate::model::project::project::Composition; // Added
+    use crate::model::project::property::{Property, PropertyMap, PropertyValue, Vec2};
     use crate::model::project::{Track, TrackEntity};
-    use std::sync::Arc;
-    use crate::plugin::properties::{ConstantPropertyPlugin, KeyframePropertyPlugin, ExpressionPropertyPlugin};
-    use crate::plugin::PluginManager; // Added
+    use crate::plugin::PluginManager;
+    use crate::plugin::properties::{
+        ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin,
+    };
+    use std::sync::Arc; // Added
 
     fn make_vec2(x: f64, y: f64) -> PropertyValue {
         PropertyValue::Vec2(Vec2 { x, y })
@@ -139,10 +140,11 @@ mod tests {
         manager.register_property_plugin(Arc::new(ConstantPropertyPlugin::new()));
         manager.register_property_plugin(Arc::new(KeyframePropertyPlugin::new()));
         manager.register_property_plugin(Arc::new(ExpressionPropertyPlugin::new()));
-        manager.register_entity_converter_plugin(Arc::new(crate::framing::entity_converters::BuiltinEntityConverterPlugin::new())); // Added
+        manager.register_entity_converter_plugin(Arc::new(
+            crate::framing::entity_converters::BuiltinEntityConverterPlugin::new(),
+        )); // Added
         manager
     }
-
 
     #[test]
     fn frame_evaluator_builds_text_object() {

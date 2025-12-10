@@ -1,10 +1,11 @@
+use crate::error::LibraryError;
 use crate::loader::image::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
 use crate::model::frame::transform::Transform;
 use crate::rendering::renderer::Renderer;
 use crate::rendering::skia_utils::{
-    create_gpu_context, create_surface, image_to_skia, surface_to_image, GpuContext,
+    GpuContext, create_gpu_context, create_surface, image_to_skia, surface_to_image,
 };
 use crate::util::timing::ScopedTimer;
 use log::{debug, trace};
@@ -15,7 +16,6 @@ use skia_safe::{
     Canvas, Color as SkColor, CubicResampler, Font, FontMgr, FontStyle, Matrix, Paint, PaintStyle,
     Point, SamplingOptions, Surface,
 };
-use crate::error::LibraryError;
 
 pub struct SkiaRenderer {
     width: u32,
@@ -37,10 +37,9 @@ impl SkiaRenderer {
         let surface = create_surface(
             width,
             height,
-            gpu_context
-                .as_mut()
-                .map(|ctx| &mut ctx.direct_context),
-        ).map_err(|e| LibraryError::Render(format!("Cannot create Skia Surface: {}", e)))
+            gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
+        )
+        .map_err(|e| LibraryError::Render(format!("Cannot create Skia Surface: {}", e)))
         .expect("Cannot create Skia Surface");
 
         let mut renderer = SkiaRenderer {
@@ -50,8 +49,10 @@ impl SkiaRenderer {
             surface,
             gpu_context,
         };
-        renderer.clear().map_err(|e| LibraryError::Render(format!("Failed to clear render target: {}", e)))
-        .expect("Failed to clear render target");
+        renderer
+            .clear()
+            .map_err(|e| LibraryError::Render(format!("Failed to clear render target: {}", e)))
+            .expect("Failed to clear render target");
         renderer
     }
 
@@ -68,9 +69,7 @@ impl SkiaRenderer {
         create_surface(
             self.width,
             self.height,
-            self.gpu_context
-                .as_mut()
-                .map(|ctx| &mut ctx.direct_context),
+            self.gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
         )
     }
 
@@ -143,23 +142,30 @@ fn convert_path_effect(path_effect: &PathEffect) -> Result<skia_safe::PathEffect
     match path_effect {
         PathEffect::Dash { intervals, phase } => {
             let intervals: Vec<f32> = intervals.iter().map(|&x| x as f32).collect();
-            Ok(SkPathEffect::dash(&intervals, *phase as f32)
-                .ok_or(LibraryError::Render("Failed to create PathEffect".to_string()))?)
+            Ok(
+                SkPathEffect::dash(&intervals, *phase as f32).ok_or(LibraryError::Render(
+                    "Failed to create PathEffect".to_string(),
+                ))?,
+            )
         }
-        PathEffect::Corner { radius } => {
-            Ok(SkPathEffect::corner_path(*radius as f32).ok_or(LibraryError::Render("Failed to create PathEffect".to_string()))?)
-        }
+        PathEffect::Corner { radius } => Ok(SkPathEffect::corner_path(*radius as f32).ok_or(
+            LibraryError::Render("Failed to create PathEffect".to_string()),
+        )?),
         PathEffect::Discrete {
             seg_length,
             deviation,
             seed,
         } => Ok(
-            SkPathEffect::discrete(*seg_length as f32, *deviation as f32, *seed as u32)
-                .ok_or(LibraryError::Render("Failed to create PathEffect".to_string()))?,
+            SkPathEffect::discrete(*seg_length as f32, *deviation as f32, *seed as u32).ok_or(
+                LibraryError::Render("Failed to create PathEffect".to_string()),
+            )?,
         ),
         PathEffect::Trim { start, end } => {
-            Ok(SkPathEffect::trim(*start as f32, *end as f32, Mode::Normal)
-                .ok_or(LibraryError::Render("Failed to create PathEffect".to_string()))?)
+            Ok(
+                SkPathEffect::trim(*start as f32, *end as f32, Mode::Normal).ok_or(
+                    LibraryError::Render("Failed to create PathEffect".to_string()),
+                )?,
+            )
         }
     }
 }
@@ -179,7 +185,9 @@ fn apply_path_effects(
                 None => Some(sk_path_effect),
             };
         }
-        paint.set_path_effect(composed_effect.ok_or(LibraryError::Render("Failed to compose PathEffects".to_string()))?);
+        paint.set_path_effect(composed_effect.ok_or(LibraryError::Render(
+            "Failed to compose PathEffects".to_string(),
+        ))?);
     }
     Ok(())
 }
@@ -269,7 +277,9 @@ impl Renderer for SkiaRenderer {
         {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
-            let path = from_svg(path_data).ok_or(LibraryError::Render("Failed to parse SVG path data".to_string()))?;
+            let path = from_svg(path_data).ok_or(LibraryError::Render(
+                "Failed to parse SVG path data".to_string(),
+            ))?;
             let matrix = build_transform_matrix(transform);
             canvas.save();
             canvas.concat(&matrix);

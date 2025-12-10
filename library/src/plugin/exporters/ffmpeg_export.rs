@@ -1,9 +1,9 @@
 use super::super::{ExportPlugin, ExportSettings, Plugin, PluginCategory};
+use crate::error::LibraryError;
 use crate::loader::image::Image;
 use log::{info, warn};
 use std::collections::HashMap;
-use crate::error::LibraryError;
-use std::io::{Write};
+use std::io::Write;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 // use skia_safe::M44; // Removed, as it's not directly used here
@@ -66,7 +66,9 @@ impl ExportPlugin for FfmpegExportPlugin {
         if let Some(session) = sessions.get_mut(path) {
             session.write_frame(&image.data)
         } else {
-            Err(LibraryError::Render("Failed to start ffmpeg session".to_string()))
+            Err(LibraryError::Render(
+                "Failed to start ffmpeg session".to_string(),
+            ))
         }
     }
 }

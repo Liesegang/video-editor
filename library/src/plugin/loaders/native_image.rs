@@ -1,7 +1,7 @@
 use super::super::{LoadPlugin, LoadRequest, LoadResponse, Plugin, PluginCategory};
 use crate::cache::CacheManager;
-use crate::loader::image::load_image;
 use crate::error::LibraryError;
+use crate::loader::image::load_image;
 
 pub struct NativeImageLoader;
 
@@ -44,7 +44,9 @@ impl LoadPlugin for NativeImageLoader {
             cache.put_image(path, &image);
             Ok(LoadResponse::Image(image))
         } else {
-            Err(LibraryError::Plugin("NativeImageLoader received unsupported request".to_string()))
+            Err(LibraryError::Plugin(
+                "NativeImageLoader received unsupported request".to_string(),
+            ))
         }
     }
 }

@@ -1,9 +1,9 @@
-use log::debug;
-use crate::animation::EasingFunction;
 use super::super::{Plugin, PluginCategory, PropertyPlugin};
-use crate::plugin::{EvaluationContext, PropertyEvaluator};
+use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
 use crate::model::project::property::{Property, PropertyValue, Vec2, Vec3};
+use crate::plugin::{EvaluationContext, PropertyEvaluator};
+use log::debug;
 use std::sync::Arc;
 
 pub struct KeyframePropertyPlugin;
@@ -44,18 +44,27 @@ impl PropertyEvaluator for KeyframeEvaluator {
 
 fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
     let keyframes = property.keyframes();
-    debug!("evaluate_keyframes for property {:?} at time {}", property, time);
+    debug!(
+        "evaluate_keyframes for property {:?} at time {}",
+        property, time
+    );
 
     if keyframes.is_empty() {
         debug!("evaluate_keyframes: keyframes empty, returning 0.0");
         return PropertyValue::Number(0.0);
     }
     if time <= keyframes[0].time {
-        debug!("evaluate_keyframes: time <= first keyframe, returning first keyframe value {:?}", keyframes[0].value);
+        debug!(
+            "evaluate_keyframes: time <= first keyframe, returning first keyframe value {:?}",
+            keyframes[0].value
+        );
         return keyframes[0].value.clone();
     }
     if time >= keyframes.last().unwrap().time {
-        debug!("evaluate_keyframes: time >= last keyframe, returning last keyframe value {:?}", keyframes.last().unwrap().value);
+        debug!(
+            "evaluate_keyframes: time >= last keyframe, returning last keyframe value {:?}",
+            keyframes.last().unwrap().value
+        );
         return keyframes.last().unwrap().value.clone();
     }
 
@@ -63,7 +72,10 @@ fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
     let next = keyframes.iter().find(|k| k.time > time).unwrap();
     let t = (time - current.time) / (next.time - current.time);
     let interpolated = interpolate_property_values(&current.value, &next.value, t, &current.easing);
-    debug!("evaluate_keyframes: interpolated value {:?} for time {}", interpolated, time);
+    debug!(
+        "evaluate_keyframes: interpolated value {:?} for time {}",
+        interpolated, time
+    );
     interpolated
 }
 fn interpolate_property_values(
@@ -81,23 +93,42 @@ fn interpolate_property_values(
         (PropertyValue::Integer(s), PropertyValue::Integer(e)) => {
             PropertyValue::Number(*s as f64 + (*e as f64 - *s as f64) * t)
         }
-        (PropertyValue::Vec2(Vec2 { x: sx, y: sy }), PropertyValue::Vec2(Vec2 { x: ex, y: ey })) => {
-            PropertyValue::Vec2(Vec2 {
-                x: sx + (ex - sx) * t,
-                y: sy + (ey - sy) * t,
-            })
-        }
         (
-            PropertyValue::Vec3(Vec3 { x: sx, y: sy, z: sz }),
-            PropertyValue::Vec3(Vec3 { x: ex, y: ey, z: ez }),
+            PropertyValue::Vec2(Vec2 { x: sx, y: sy }),
+            PropertyValue::Vec2(Vec2 { x: ex, y: ey }),
+        ) => PropertyValue::Vec2(Vec2 {
+            x: sx + (ex - sx) * t,
+            y: sy + (ey - sy) * t,
+        }),
+        (
+            PropertyValue::Vec3(Vec3 {
+                x: sx,
+                y: sy,
+                z: sz,
+            }),
+            PropertyValue::Vec3(Vec3 {
+                x: ex,
+                y: ey,
+                z: ez,
+            }),
         ) => PropertyValue::Vec3(Vec3 {
             x: sx + (ex - sx) * t,
             y: sy + (ey - sy) * t,
             z: sz + (ez - sz) * t,
         }),
         (
-            PropertyValue::Color(Color { r: sr, g: sg, b: sb, a: sa }),
-            PropertyValue::Color(Color { r: er, g: eg, b: eb, a: ea }),
+            PropertyValue::Color(Color {
+                r: sr,
+                g: sg,
+                b: sb,
+                a: sa,
+            }),
+            PropertyValue::Color(Color {
+                r: er,
+                g: eg,
+                b: eb,
+                a: ea,
+            }),
         ) => PropertyValue::Color(Color {
             r: ((*sr as f64) + (*er as f64 - *sr as f64) * t).round() as u8,
             g: ((*sg as f64) + (*eg as f64 - *sg as f64) * t).round() as u8,
@@ -106,17 +137,17 @@ fn interpolate_property_values(
         }),
         (PropertyValue::Array(s), PropertyValue::Array(e)) => PropertyValue::Array(
             s.iter()
-              .zip(e.iter())
-              .map(|(start, end)| interpolate_property_values(start, end, t, easing))
-              .collect(),
+                .zip(e.iter())
+                .map(|(start, end)| interpolate_property_values(start, end, t, easing))
+                .collect(),
         ),
         (PropertyValue::Map(s), PropertyValue::Map(e)) => PropertyValue::Map(
             s.iter()
-              .zip(e.iter())
-              .map(|((k, sv), (_, ev))| {
-                  (k.clone(), interpolate_property_values(sv, ev, t, easing))
-              })
-              .collect(),
+                .zip(e.iter())
+                .map(|((k, sv), (_, ev))| {
+                    (k.clone(), interpolate_property_values(sv, ev, t, easing))
+                })
+                .collect(),
         ),
         _ => start.clone(),
     }

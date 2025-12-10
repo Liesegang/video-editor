@@ -1,5 +1,6 @@
 pub mod animation;
 pub mod cache;
+pub mod error;
 pub mod framing;
 pub mod loader;
 pub mod model;
@@ -7,24 +8,23 @@ pub mod plugin;
 pub mod rendering;
 pub mod service;
 pub mod util;
-pub mod error;
 
 pub use error::LibraryError;
 
 pub use crate::loader::image::Image;
 pub use crate::plugin::ExportSettings; // Added
 // Re-export the services and models that the app will need.
-pub use service::{ExportService, ProjectModel, RenderService};
 pub use rendering::skia_renderer::SkiaRenderer;
+pub use service::{ExportService, ProjectModel, RenderService};
 
 // use crate::plugin::load_plugins; // Removed
 // use crate::rendering::effects::EffectRegistry; // Removed
+use crate::framing::entity_converters::BuiltinEntityConverterPlugin;
+use crate::plugin::PluginManager;
 use log::info;
 use std::fs;
 use std::ops::Range;
-use std::sync::Arc;
-use crate::framing::entity_converters::BuiltinEntityConverterPlugin;
-use crate::plugin::PluginManager; // Added
+use std::sync::Arc; // Added
 
 // Function to create and initialize the PluginManager with built-in plugins
 fn create_plugin_manager() -> Arc<PluginManager> {
@@ -35,9 +35,15 @@ fn create_plugin_manager() -> Arc<PluginManager> {
     manager.register_load_plugin(Arc::new(crate::plugin::loaders::FfmpegVideoLoader::new()));
     manager.register_export_plugin(Arc::new(crate::plugin::exporters::PngExportPlugin::new()));
     manager.register_export_plugin(Arc::new(crate::plugin::exporters::FfmpegExportPlugin::new()));
-    manager.register_property_plugin(Arc::new(crate::plugin::properties::ConstantPropertyPlugin::new()));
-    manager.register_property_plugin(Arc::new(crate::plugin::properties::KeyframePropertyPlugin::new()));
-    manager.register_property_plugin(Arc::new(crate::plugin::properties::ExpressionPropertyPlugin::new()));
+    manager.register_property_plugin(Arc::new(
+        crate::plugin::properties::ConstantPropertyPlugin::new(),
+    ));
+    manager.register_property_plugin(Arc::new(
+        crate::plugin::properties::KeyframePropertyPlugin::new(),
+    ));
+    manager.register_property_plugin(Arc::new(
+        crate::plugin::properties::ExpressionPropertyPlugin::new(),
+    ));
     manager.register_entity_converter_plugin(Arc::new(BuiltinEntityConverterPlugin::new())); // Added
     manager
 }
@@ -48,7 +54,9 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         .init();
 
     if args.len() < 2 {
-        return Err(LibraryError::InvalidArgument("Please provide the path to a project JSON file.".to_string()));
+        return Err(LibraryError::InvalidArgument(
+            "Please provide the path to a project JSON file.".to_string(),
+        ));
     }
 
     if !fs::metadata("./rendered").is_ok() {
@@ -59,7 +67,11 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
     let file_path = &args[1];
     let project_model = ProjectModel::from_project_path(file_path, 0)?;
 
-    let plugin_paths: Vec<_> = args.iter().skip(2).filter(|s| !s.starts_with("--")).collect();
+    let plugin_paths: Vec<_> = args
+        .iter()
+        .skip(2)
+        .filter(|s| !s.starts_with("--"))
+        .collect();
     let plugin_manager = create_plugin_manager(); // Changed
     for plugin_path in plugin_paths {
         info!("Loading property plugin {}", plugin_path);
@@ -91,7 +103,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
 
     let cache_manager = Arc::new(crate::cache::CacheManager::new());
 
-    let property_evaluators = plugin_manager.get_property_evaluators();
+    let _property_evaluators = plugin_manager.get_property_evaluators();
 
     let entity_converter_registry = plugin_manager.get_entity_converter_registry();
 

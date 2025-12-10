@@ -132,4 +132,3 @@ impl Composition {
             .collect();
     }
 }
-

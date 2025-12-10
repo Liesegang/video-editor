@@ -1,17 +1,17 @@
-use crate::service::{ProjectModel, RenderService};
 use crate::Image;
 use crate::model::project::project::{Composition, Project};
 use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
+use crate::service::{ProjectModel, RenderService};
 // use crate::rendering::effects::EffectRegistry; // Removed
+use crate::error::LibraryError;
+use crate::framing::entity_converters::EntityConverterRegistry;
+use crate::plugin::PropertyEvaluatorRegistry;
 use crate::rendering::skia_renderer::SkiaRenderer;
-use crate::util::timing::{measure_info, ScopedTimer};
+use crate::util::timing::{ScopedTimer, measure_info};
 use log::{error, info};
 use std::cmp;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use crate::plugin::PropertyEvaluatorRegistry;
-use crate::framing::entity_converters::EntityConverterRegistry;
-use crate::error::LibraryError;
 use tokio::task; // Corrected tokio::task import
 
 #[derive(Debug)]
@@ -21,7 +21,6 @@ struct SaveTask {
     image: Image,
     export_settings: Arc<ExportSettings>,
 }
-
 
 #[derive(Debug)]
 pub struct FrameRenderJob {
@@ -113,14 +112,18 @@ impl RenderQueue {
             .render_tx
             .as_ref()
             .ok_or(LibraryError::RenderQueueClosed)?;
-        sender.send(job).map_err(|_| LibraryError::RenderSubmitFailed)
+        sender
+            .send(job)
+            .map_err(|_| LibraryError::RenderSubmitFailed)
     }
 
-    pub async fn finish(mut self) -> Result<(), LibraryError> { // Made async
+    pub async fn finish(mut self) -> Result<(), LibraryError> {
+        // Made async
         self.shutdown().await
     }
 
-    async fn shutdown(&mut self) -> Result<(), LibraryError> { // Made async
+    async fn shutdown(&mut self) -> Result<(), LibraryError> {
+        // Made async
         if let Some(sender) = self.render_tx.take() {
             drop(sender);
         }
@@ -218,11 +221,7 @@ impl RenderQueue {
 
             let handle = thread::spawn(move || {
                 let mut render_service = RenderService::new(
-                    SkiaRenderer::new(
-                        surface_width,
-                        surface_height,
-                        background_color_clone,
-                    ),
+                    SkiaRenderer::new(surface_width, surface_height, background_color_clone),
                     plugin_manager,
                     cache_manager_for_thread,
                     entity_converter_registry_clone,
@@ -231,7 +230,10 @@ impl RenderQueue {
                 let project_model = match ProjectModel::new(project, composition_index) {
                     Ok(model) => model,
                     Err(err) => {
-                        error!("Worker {} failed to create project model: {}", worker_id, err);
+                        error!(
+                            "Worker {} failed to create project model: {}",
+                            worker_id, err
+                        );
                         return; // Exit worker thread
                     }
                 };
@@ -292,7 +294,6 @@ impl RenderQueue {
         (render_tx, workers)
     }
 }
-
 
 impl Drop for RenderQueue {
     fn drop(&mut self) {

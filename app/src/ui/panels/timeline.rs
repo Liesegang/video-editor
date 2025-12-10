@@ -1,21 +1,18 @@
-use egui::Ui;
-use std::sync::{Arc, RwLock};
+use egui::{epaint::StrokeKind, Ui};
+use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use library::model::project::Track;
 use library::service::project_service::ProjectService;
+use std::sync::{Arc, RwLock};
 
-use crate::{
-    action::HistoryManager,
-    state::context::EditorContext,
-    model::assets::AssetKind,
-};
+use crate::{action::HistoryManager, model::assets::AssetKind, state::context::EditorContext};
 
 // Helper function to show the timeline ruler
 fn show_timeline_ruler(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     _project_service: &ProjectService, // Not used here, but keeping signature for consistency
-    _project: &Arc<RwLock<Project>>, // Not used here, but keeping signature for consistency
+    _project: &Arc<RwLock<Project>>,   // Not used here, but keeping signature for consistency
 ) {
     let (outer_rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), ui.available_height()),
@@ -24,8 +21,8 @@ fn show_timeline_ruler(
 
     ui.horizontal(|ui| {
         // Spacer for the track list
-        let (spacer_rect, _) = ui
-            .allocate_exact_size(egui::vec2(100.0, outer_rect.height()), egui::Sense::hover());
+        let (spacer_rect, _) =
+            ui.allocate_exact_size(egui::vec2(100.0, outer_rect.height()), egui::Sense::hover());
         ui.painter_at(spacer_rect).rect_filled(
             spacer_rect,
             0.0,
@@ -98,7 +95,12 @@ fn show_timeline_controls(
 ) {
     ui.horizontal(|ui| {
         // Play button
-        if ui.button(if editor_context.is_playing { "◼" } else { "▶" }).clicked() {
+        let play_icon_enum = if editor_context.is_playing {
+            icons::PAUSE
+        } else {
+            icons::PLAY
+        };
+        if ui.add(egui::Button::new(egui::RichText::new(play_icon_enum))).clicked() {
             editor_context.is_playing = !editor_context.is_playing;
         }
 
@@ -112,7 +114,7 @@ fn show_timeline_controls(
         // Spacer
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Zoom reset button
-            if ui.button("1:1").clicked() {
+            if ui.add(egui::Button::new(egui::RichText::new(icons::FRAME_CORNERS))).clicked() {
                 editor_context.timeline_h_zoom = 1.0;
                 editor_context.timeline_v_zoom = 1.0;
             }
@@ -123,7 +125,6 @@ fn show_timeline_controls(
         });
     });
 }
-
 
 pub fn timeline_panel(
     ui: &mut Ui,
@@ -143,7 +144,13 @@ pub fn timeline_panel(
         .exact_height(40.0)
         .show_inside(ui, |ui| {
             ui.separator();
-            show_timeline_controls(ui, editor_context, history_manager, project_service, project);
+            show_timeline_controls(
+                ui,
+                editor_context,
+                history_manager,
+                project_service,
+                project,
+            );
         });
 
     egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -155,11 +162,7 @@ pub fn timeline_panel(
                 egui::Sense::click_and_drag(),
             );
             let track_list_painter = ui.painter_at(track_list_rect);
-            track_list_painter.rect_filled(
-                track_list_rect,
-                0.0,
-                ui.style().visuals.window_fill(),
-            ); // Fill entire sidebar background
+            track_list_painter.rect_filled(track_list_rect, 0.0, ui.style().visuals.window_fill()); // Fill entire sidebar background
 
             let row_height = 30.0;
             let track_spacing = 2.0;
@@ -219,24 +222,31 @@ pub fn timeline_panel(
             // Track list right-click context menu
             track_list_response.context_menu(|ui| {
                 if let Some(comp_id) = editor_context.selected_composition_id {
-                    if ui.button("Add Track").clicked() {
-                        let prev_project_state = project_service.get_project().read().unwrap().clone();
+                    if ui
+                        .add(egui::Button::new(egui::RichText::new(format!("{} Add Track", icons::PLUS))))
+                        .clicked()
+                    {
+                        let prev_project_state =
+                            project_service.get_project().read().unwrap().clone();
                         project_service
                             .add_track(comp_id, "New Track")
                             .expect("Failed to add track");
                         history_manager.push_project_state(prev_project_state);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if let Some(track_id) = editor_context.selected_track_id {
-                        if ui.button("Remove Selected Track").clicked() {
-                            let prev_project_state = project_service.get_project().read().unwrap().clone();
+                                            if ui
+                                                .add(egui::Button::new(egui::RichText::new(format!("{} Remove Selected Track", icons::TRASH))))
+                                                .clicked()                        {
+                            let prev_project_state =
+                                project_service.get_project().read().unwrap().clone();
                             project_service
                                 .remove_track(comp_id, track_id)
                                 .expect("Failed to remove track");
                             editor_context.selected_track_id = None;
                             editor_context.selected_entity_id = None;
                             history_manager.push_project_state(prev_project_state);
-                            ui.close_menu();
+                            ui.close();
                         }
                     } else {
                         ui.label("Select a track to remove");
@@ -274,7 +284,8 @@ pub fn timeline_panel(
 
             // --- Drawing ---
             let painter = ui.painter_at(content_rect);
-            let time_scale = editor_context.timeline_pixels_per_second * editor_context.timeline_h_zoom;
+            let time_scale =
+                editor_context.timeline_pixels_per_second * editor_context.timeline_h_zoom;
 
             // Constrain scroll offset
             let max_scroll_y =
@@ -283,7 +294,8 @@ pub fn timeline_panel(
                 .timeline_scroll_offset
                 .y
                 .clamp(-max_scroll_y.max(0.0), 0.0);
-            editor_context.timeline_scroll_offset.x = editor_context.timeline_scroll_offset.x.min(0.0);
+            editor_context.timeline_scroll_offset.x =
+                editor_context.timeline_scroll_offset.x.min(0.0);
 
             for i in 0..num_tracks {
                 let y = content_rect.min.y
@@ -313,17 +325,19 @@ pub fn timeline_panel(
                             - editor_context.timeline_scroll_offset.x)
                             / time_scale)
                             .max(0.0);
-                        let drop_track_index =
-                            ((mouse_pos.y - content_rect.min.y - editor_context.timeline_scroll_offset.y)
-                                / (row_height + track_spacing))
-                                .floor() as usize;
+                        let drop_track_index = ((mouse_pos.y
+                            - content_rect.min.y
+                            - editor_context.timeline_scroll_offset.y)
+                            / (row_height + track_spacing))
+                            .floor() as usize;
 
                         if let Some(comp_id) = editor_context.selected_composition_id {
                             if let Some(track) = current_tracks.get(drop_track_index) {
                                 if let Some(asset) = editor_context.assets.get(asset_index) {
                                     // Handle dropping a Composition asset
                                     if let AssetKind::Composition(_nested_comp_id) = asset.kind {
-                                        let prev_project_state = project_service.get_project().read().unwrap().clone();
+                                        let prev_project_state =
+                                            project_service.get_project().read().unwrap().clone();
                                         if let Err(e) = project_service.add_entity_to_track(
                                             comp_id,
                                             track.id,
@@ -339,7 +353,8 @@ pub fn timeline_panel(
                                             history_manager.push_project_state(prev_project_state);
                                         }
                                     } else {
-                                        let prev_project_state = project_service.get_project().read().unwrap().clone();
+                                        let prev_project_state =
+                                            project_service.get_project().read().unwrap().clone();
                                         if let Err(e) = project_service.add_entity_to_track(
                                             comp_id,
                                             track.id,
@@ -399,14 +414,8 @@ pub fn timeline_panel(
                                         entity.properties.get_f32("position_y").unwrap_or(540.0),
                                     ],
                                     scale: entity.properties.get_f32("scale").unwrap_or(100.0),
-                                    opacity: entity
-                                        .properties
-                                        .get_f32("opacity")
-                                        .unwrap_or(100.0),
-                                    rotation: entity
-                                        .properties
-                                        .get_f32("rotation")
-                                        .unwrap_or(0.0),
+                                    opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
+                                    rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
                                     asset_index,
                                 };
 
@@ -436,43 +445,44 @@ pub fn timeline_panel(
                                     editor_context.selected_entity_id = Some(gc.id);
                                     editor_context.selected_track_id = Some(gc.track_id);
                                     if editor_context.last_project_state_before_drag.is_none() {
-                                        editor_context.last_project_state_before_drag = Some(project_service.get_project().read().unwrap().clone());
+                                        editor_context.last_project_state_before_drag = Some(
+                                            project_service.get_project().read().unwrap().clone(),
+                                        );
                                     }
                                 }
-                                if clip_resp.dragged() && editor_context.selected_entity_id == Some(gc.id)
+                                if clip_resp.dragged()
+                                    && editor_context.selected_entity_id == Some(gc.id)
                                 {
                                     let dt = clip_resp.drag_delta().x as f64 / time_scale as f64;
-                                    
+
                                     if let Some(comp_id) = editor_context.selected_composition_id {
                                         if let Some(track_id) = editor_context.selected_track_id {
                                             project_service
-                                                .with_track_mut(
-                                                    comp_id,
-                                                    track_id,
-                                                    |track_mut| {
-                                                        if let Some(entity_mut) = track_mut
-                                                            .entities
-                                                            .iter_mut()
-                                                            .find(|e| e.id == gc.id)
-                                                        {
-                                                            entity_mut.start_time = (entity_mut
-                                                                .start_time
-                                                                + dt)
-                                                                .max(0.0);
-                                                            entity_mut.end_time = (entity_mut
-                                                                .end_time
-                                                                + dt)
-                                                                .max(entity_mut.start_time);
-                                                        }
-                                                    },
-                                                )
+                                                .with_track_mut(comp_id, track_id, |track_mut| {
+                                                    if let Some(entity_mut) = track_mut
+                                                        .entities
+                                                        .iter_mut()
+                                                        .find(|e| e.id == gc.id)
+                                                    {
+                                                        entity_mut.start_time =
+                                                            (entity_mut.start_time + dt).max(0.0);
+                                                        entity_mut.end_time = (entity_mut.end_time
+                                                            + dt)
+                                                            .max(entity_mut.start_time);
+                                                    }
+                                                })
                                                 .ok();
                                         }
                                     }
                                 }
-                                if clip_resp.drag_stopped() && editor_context.selected_entity_id == Some(gc.id) {
-                                    if let Some(initial_state) = editor_context.last_project_state_before_drag.take() {
-                                        let current_state = project_service.get_project().read().unwrap().clone();
+                                if clip_resp.drag_stopped()
+                                    && editor_context.selected_entity_id == Some(gc.id)
+                                {
+                                    if let Some(initial_state) =
+                                        editor_context.last_project_state_before_drag.take()
+                                    {
+                                        let current_state =
+                                            project_service.get_project().read().unwrap().clone();
                                         if initial_state != current_state {
                                             history_manager.push_project_state(initial_state);
                                         }
@@ -494,6 +504,7 @@ pub fn timeline_panel(
                                         clip_rect,
                                         4.0,
                                         egui::Stroke::new(2.0, egui::Color32::WHITE),
+                                        StrokeKind::Middle,
                                     );
                                 }
                                 painter.text(
