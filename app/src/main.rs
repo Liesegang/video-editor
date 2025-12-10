@@ -6,6 +6,8 @@ mod model;
 mod state;
 mod ui;
 mod utils;
+mod shortcut;
+mod command;
 
 fn main() -> eframe::Result<()> {
     env_logger::init();

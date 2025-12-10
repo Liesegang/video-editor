@@ -183,7 +183,7 @@ pub fn inspector_panel(
                 kind: AssetKind::Composition(new_comp_id),
                 composition_id: Some(new_comp_id),
             });
-            history_manager.push_project_state(project_service.get_project().read().unwrap().clone());
+            history_manager.push_project_state(prev_project_state);
             needs_refresh = true;
         }
         if ui.button("Remove Comp").clicked() {
@@ -199,7 +199,7 @@ pub fn inspector_panel(
                 editor_context.selected_composition_id = None;
                 editor_context.selected_track_id = None;
                 editor_context.selected_entity_id = None;
-                history_manager.push_project_state(project_service.get_project().read().unwrap().clone());
+                history_manager.push_project_state(prev_project_state);
                 needs_refresh = true;
             }
         }
@@ -536,7 +536,7 @@ pub fn inspector_panel(
                                     editor_context.selected_entity_id = None;
                                     history_manager
                                       .push_project_state(
-                                          project_service.get_project().read().unwrap().clone(),
+                                          prev_project_state,
                                       );
                                     needs_refresh = true;
                                     keep_cache = false;
