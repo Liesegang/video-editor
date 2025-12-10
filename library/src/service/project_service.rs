@@ -101,6 +101,24 @@ impl ProjectService {
         }
     }
 
+    pub fn update_composition(
+        &self,
+        id: Uuid,
+        name: &str,
+        width: u64,
+        height: u64,
+        fps: f64,
+        duration: f64,
+    ) -> Result<(), LibraryError> {
+        self.with_composition_mut(id, |composition| {
+            composition.name = name.to_string();
+            composition.width = width;
+            composition.height = height;
+            composition.fps = fps;
+            composition.duration = duration;
+        })
+    }
+
     // --- Track Operations ---
 
     pub fn add_track(&self, composition_id: Uuid, track_name: &str) -> Result<Uuid, LibraryError> {

@@ -5,6 +5,7 @@ use library::model::project::project::Project;
 use std::sync::{Arc, RwLock};
 
 use crate::command::CommandRegistry;
+use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::{
     action::HistoryManager,
     model::ui_types::Tab,
@@ -19,6 +20,7 @@ pub struct AppTabViewer<'a> {
     project_service: &'a mut ProjectService,
     project: &'a Arc<RwLock<Project>>,
     command_registry: &'a mut CommandRegistry,
+    composition_dialog: &'a mut CompositionDialog,
     // Add other shared state here
 }
 
@@ -29,6 +31,7 @@ impl<'a> AppTabViewer<'a> {
         project_service: &'a mut ProjectService,
         project: &'a Arc<RwLock<Project>>,
         command_registry: &'a mut CommandRegistry,
+        composition_dialog: &'a mut CompositionDialog,
     ) -> Self {
         Self {
             editor_context,
@@ -36,6 +39,7 @@ impl<'a> AppTabViewer<'a> {
             project_service,
             project,
             command_registry,
+            composition_dialog,
         }
     }
 }
@@ -66,7 +70,14 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                 self.project_service,
                 self.project,
             ),
-            Tab::Assets => assets::assets_panel(ui, self.editor_context, self.history_manager),
+            Tab::Assets => assets::assets_panel(
+                ui,
+                self.editor_context,
+                self.history_manager,
+                self.project_service,
+                self.project,
+                self.composition_dialog,
+            ),
         }
     }
 
