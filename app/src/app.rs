@@ -113,7 +113,15 @@ impl eframe::App for MyApp {
 
         let mut should_update_cache = false;
         if let Some(selected_id) = current_selected_entity_id {
-            if self.editor_context.inspector_entity_cache.is_none() || self.editor_context.inspector_entity_cache.as_ref().unwrap().0 != selected_id {
+            if self.editor_context.inspector_entity_cache.is_none()
+                || self
+                    .editor_context
+                    .inspector_entity_cache
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    != selected_id
+            {
                 should_update_cache = true;
             }
         } else {
@@ -122,11 +130,16 @@ impl eframe::App for MyApp {
             }
         }
         if should_update_cache {
-            if let (Some(entity_id), Some(comp_id), Some(track_id)) = (current_selected_entity_id, current_selected_composition_id, current_selected_track_id) {
+            if let (Some(entity_id), Some(comp_id), Some(track_id)) = (
+                current_selected_entity_id,
+                current_selected_composition_id,
+                current_selected_track_id,
+            ) {
                 if let Ok(proj_read) = self.project.read() {
                     if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
                         if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                            if let Some(entity) = track.entities.iter().find(|e| e.id == entity_id) {
+                            if let Some(entity) = track.entities.iter().find(|e| e.id == entity_id)
+                            {
                                 self.editor_context.inspector_entity_cache = Some((
                                     entity.id,
                                     entity.entity_type.clone(),
@@ -148,7 +161,13 @@ impl eframe::App for MyApp {
             ui.add_enabled_ui(main_ui_enabled, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button("File", |ui| {
-                        for cmd_id in [CommandId::NewProject, CommandId::LoadProject, CommandId::Save, CommandId::SaveAs, CommandId::Quit] {
+                        for cmd_id in [
+                            CommandId::NewProject,
+                            CommandId::LoadProject,
+                            CommandId::Save,
+                            CommandId::SaveAs,
+                            CommandId::Quit,
+                        ] {
                             if let Some(cmd) = self.command_registry.find(cmd_id) {
                                 let icon = match cmd_id {
                                     CommandId::NewProject => icons::FILE_PLUS,
@@ -158,8 +177,11 @@ impl eframe::App for MyApp {
                                     CommandId::Quit => icons::SIGN_OUT,
                                     _ => unreachable!(), // Should not happen
                                 };
-                                let button = Button::new(egui::RichText::new(format!("{} {}", icon, cmd.text)))
-                                    .shortcut_text(cmd.shortcut_text.clone());
+                                let button = Button::new(egui::RichText::new(format!(
+                                    "{} {}",
+                                    icon, cmd.text
+                                )))
+                                .shortcut_text(cmd.shortcut_text.clone());
                                 if ui.add(button).clicked() {
                                     self.triggered_action = Some(cmd.id);
                                     ui.close();
@@ -169,9 +191,15 @@ impl eframe::App for MyApp {
                     });
 
                     ui.menu_button("Edit", |ui| {
-                        for cmd_id in [CommandId::Undo, CommandId::Redo, CommandId::Delete, CommandId::Settings] {
+                        for cmd_id in [
+                            CommandId::Undo,
+                            CommandId::Redo,
+                            CommandId::Delete,
+                            CommandId::Settings,
+                        ] {
                             if let Some(cmd) = self.command_registry.find(cmd_id) {
-                                let button = Button::new(cmd.text).shortcut_text(cmd.shortcut_text.clone());
+                                let button =
+                                    Button::new(cmd.text).shortcut_text(cmd.shortcut_text.clone());
                                 if ui.add(button).clicked() {
                                     self.triggered_action = Some(cmd.id);
                                     ui.close();
@@ -182,7 +210,8 @@ impl eframe::App for MyApp {
 
                     ui.menu_button("View", |ui| {
                         if let Some(cmd) = self.command_registry.find(CommandId::ResetLayout) {
-                            let button = Button::new(cmd.text).shortcut_text(cmd.shortcut_text.clone());
+                            let button =
+                                Button::new(cmd.text).shortcut_text(cmd.shortcut_text.clone());
                             if ui.add(button).clicked() {
                                 self.triggered_action = Some(cmd.id);
                                 ui.close();
@@ -202,7 +231,8 @@ impl eframe::App for MyApp {
                 .open(&mut still_open)
                 .vscroll(true)
                 .show(ctx, |ui| {
-                    let output = settings::settings_panel(ui, &mut self.settings_command_registry.commands);
+                    let output =
+                        settings::settings_panel(ui, &mut self.settings_command_registry.commands);
                     is_listening_for_shortcut = output.is_listening;
 
                     if let Some(result) = output.result {
@@ -227,13 +257,15 @@ impl eframe::App for MyApp {
                                 }
                             }
                             settings::SettingsResult::RestoreDefaults => {
-                                self.settings_command_registry = CommandRegistry::new(&config::ShortcutConfig::new());
+                                self.settings_command_registry =
+                                    CommandRegistry::new(&config::ShortcutConfig::new());
                             }
                         }
                     }
                 });
 
-            if !still_open { // 'x' button was clicked
+            if !still_open {
+                // 'x' button was clicked
                 if self.settings_command_registry != self.command_registry {
                     self.settings_show_close_warning = true;
                 } else {
@@ -267,12 +299,15 @@ impl eframe::App for MyApp {
                     });
                 });
         }
-        
+
         // 1. Shortcuts (continued)
         // Only handle shortcuts if no modal window is open and not listening, to prevent conflicts
         let main_ui_enabled = !self.settings_open && !self.settings_show_close_warning;
         if main_ui_enabled && !is_listening_for_shortcut {
-            if let Some(action_id) = self.shortcut_manager.handle_shortcuts(ctx, &self.command_registry) {
+            if let Some(action_id) = self
+                .shortcut_manager
+                .handle_shortcuts(ctx, &self.command_registry)
+            {
                 self.triggered_action = Some(action_id);
             }
         }

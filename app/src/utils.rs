@@ -11,10 +11,12 @@ pub fn setup_fonts(ctx: &Context) {
     if let Ok(font_data) = fs::read(font_path) {
         fonts.font_data.insert(
             "my_font".to_owned(),
-            egui::FontData::from_owned(font_data).tweak(egui::FontTweak {
-                scale: 1.2,
-                ..Default::default()
-            }).into(),
+            egui::FontData::from_owned(font_data)
+                .tweak(egui::FontTweak {
+                    scale: 1.2,
+                    ..Default::default()
+                })
+                .into(),
         );
 
         // Add my_font to the proportional and monospace families
@@ -36,4 +38,3 @@ pub fn setup_fonts(ctx: &Context) {
         ctx.set_fonts(fonts);
     }
 }
-

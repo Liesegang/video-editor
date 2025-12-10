@@ -513,7 +513,10 @@ pub fn inspector_panel(
                                     ui.end_row();
                                 });
 
-                            if ui.button(format!("{} Delete Entity", icons::TRASH)).clicked() {
+                            if ui
+                                .button(format!("{} Delete Entity", icons::TRASH))
+                                .clicked()
+                            {
                                 let prev_project_state =
                                     project_service.get_project().read().unwrap().clone();
                                 if let Err(e) = project_service.remove_entity_from_track(
