@@ -61,6 +61,25 @@ pub fn show_track_list(
                     egui::Sense::click(),
                 )
                 .on_hover_text(format!("Track ID: {}", track.id));
+
+            track_interaction_response.context_menu(|ui| {
+                if let Some(comp_id) = editor_context.selected_composition_id {
+                     if ui.button(format!("{} Remove Track", icons::TRASH)).clicked() {
+                        if let Err(e) = project_service.remove_track(comp_id, track.id) {
+                            eprintln!("Failed to remove track: {:?}", e);
+                        } else {
+                            // If the removed track was selected, deselect it
+                            if editor_context.selected_track_id == Some(track.id) {
+                                editor_context.selected_track_id = None;
+                                editor_context.selected_entity_id = None;
+                            }
+                            let current_state = project.read().unwrap().clone();
+                            history_manager.push_project_state(current_state);
+                            ui.close_menu();
+                        }
+                    }
+                }
+            });
             if track_interaction_response.clicked() {
                 editor_context.selected_track_id = Some(track.id);
             }
@@ -102,26 +121,7 @@ pub fn show_track_list(
                 history_manager.push_project_state(current_state);
                 ui_content.close();
             }
-            if let Some(track_id) = editor_context.selected_track_id {
-                if ui_content
-                    .add(egui::Button::new(egui::RichText::new(format!(
-                        "{} Remove Selected Track",
-                        icons::TRASH
-                    ))))
-                    .clicked()
-                {
-                    project_service
-                        .remove_track(comp_id, track_id)
-                        .expect("Failed to remove track");
-                    editor_context.selected_track_id = None;
-                    editor_context.selected_entity_id = None;
-                    let current_state = project.read().unwrap().clone();
-                    history_manager.push_project_state(current_state);
-                    ui_content.close();
-                }
-            } else {
-                ui_content.label("Select a track to remove");
-            }
+
         } else {
             ui_content.label("Select a Composition first");
         }
