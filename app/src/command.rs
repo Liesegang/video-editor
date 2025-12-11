@@ -1,4 +1,5 @@
 use crate::config::ShortcutConfig;
+use crate::model::ui_types::Tab;
 use eframe::egui::{Key, Modifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -18,6 +19,7 @@ pub enum CommandId {
 
     // View Menu
     ResetLayout,
+    TogglePanel(Tab),
 
     // Playback
     TogglePlayback,
@@ -26,17 +28,17 @@ pub enum CommandId {
 #[derive(Clone, PartialEq)]
 pub struct Command {
     pub id: CommandId,
-    pub text: &'static str,
+    pub text: String, // Changed to String to support dynamic text
     pub shortcut: Option<(Modifiers, Key)>,
     pub shortcut_text: String, // Made mutable
 }
 
 impl Command {
-    fn new(id: CommandId, text: &'static str, shortcut: Option<(Modifiers, Key)>) -> Self {
+    fn new(id: CommandId, text: &str, shortcut: Option<(Modifiers, Key)>) -> Self {
         let shortcut_text = get_shortcut_text(&shortcut);
         Self {
             id,
-            text,
+            text: text.to_string(),
             shortcut,
             shortcut_text,
         }
@@ -113,6 +115,14 @@ impl CommandRegistry {
             ),
         ];
 
+        // Register TogglePanel commands
+        for tab in Tab::all() {
+            commands.push(Command::new(
+                CommandId::TogglePanel(*tab),
+                tab.name(), // Use tab name as command text
+                None,       // No default shortcut for now, users can assign one
+            ));
+        }
         // Override defaults with user config
         for cmd in &mut commands {
             if let Some(loaded_shortcut) = config.shortcuts.get(&cmd.id) {

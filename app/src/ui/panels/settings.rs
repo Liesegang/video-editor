@@ -123,7 +123,7 @@ fn draw_command_row(ui: &mut Ui, command: &mut Command, state: &mut SettingsStat
     }
 
     ui.horizontal(|ui| {
-        ui.label(command.text);
+        ui.label(&command.text);
         ui.with_layout(
             eframe::egui::Layout::right_to_left(eframe::egui::Align::Center),
             |ui| {

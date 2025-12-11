@@ -1,6 +1,5 @@
-use eframe::egui::{self, Button, Visuals};
+use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, Style};
-use egui_phosphor::regular as icons;
 use library::model::project::project::{Composition, Project};
 use library::service::project_service::ProjectService;
 use std::fs;
@@ -119,84 +118,12 @@ impl eframe::App for MyApp {
             let main_ui_enabled = !self.settings_open && !self.settings_show_close_warning;
             // Disable menu bar if a modal is open
             ui.add_enabled_ui(main_ui_enabled, |ui| {
-                egui::MenuBar::new().ui(ui, |ui| {
-                    ui.menu_button("File", |ui| {
-                        for cmd_id in [
-                            CommandId::NewProject,
-                            CommandId::LoadProject,
-                            CommandId::Save,
-                            CommandId::SaveAs,
-                            CommandId::Quit,
-                        ] {
-                            if let Some(cmd) = self.command_registry.find(cmd_id) {
-                                let icon = match cmd_id {
-                                    CommandId::NewProject => icons::FILE_PLUS,
-                                    CommandId::LoadProject => icons::FOLDER_OPEN,
-                                    CommandId::Save => icons::FLOPPY_DISK,
-                                    CommandId::SaveAs => icons::FLOPPY_DISK_BACK,
-                                    CommandId::Quit => icons::SIGN_OUT,
-                                    _ => unreachable!(), // Should not happen
-                                };
-                                let button = Button::new(egui::RichText::new(format!(
-                                    "{} {}",
-                                    icon, cmd.text
-                                )))
-                                .shortcut_text(cmd.shortcut_text.clone());
-                                if ui.add(button).clicked() {
-                                    self.triggered_action = Some(cmd.id);
-                                    ui.close();
-                                }
-                            }
-                        }
-                    });
-
-                    ui.menu_button("Edit", |ui| {
-                        for cmd_id in [
-                            CommandId::Undo,
-                            CommandId::Redo,
-                            CommandId::Delete,
-                            CommandId::Settings,
-                        ] {
-                            if let Some(cmd) = self.command_registry.find(cmd_id) {
-                                let button =
-                                    Button::new(cmd.text).shortcut_text(cmd.shortcut_text.clone());
-                                if ui.add(button).clicked() {
-                                    self.triggered_action = Some(cmd.id);
-                                    ui.close();
-                                }
-                            }
-                        }
-                    });
-
-                    ui.menu_button("View", |ui| {
-                        // Panel Toggles
-                        for tab in Tab::all() {
-                            let mut is_open = self.dock_state.find_tab(tab).is_some();
-                            if ui.checkbox(&mut is_open, tab.name()).changed() {
-                                if is_open {
-                                    // Open the tab
-                                    self.dock_state.push_to_focused_leaf(tab.clone());
-                                } else {
-                                    // Close the tab
-                                    if let Some(index) = self.dock_state.find_tab(tab) {
-                                        self.dock_state.remove_tab(index);
-                                    }
-                                }
-                            }
-                        }
-                        
-                        ui.separator();
-
-                        if let Some(cmd) = self.command_registry.find(CommandId::ResetLayout) {
-                            let button =
-                                Button::new(cmd.text).shortcut_text(cmd.shortcut_text.clone());
-                            if ui.add(button).clicked() {
-                                self.triggered_action = Some(cmd.id);
-                                ui.close();
-                            }
-                        }
-                    });
-                });
+                crate::ui::menu::menu_bar(
+                    ui,
+                    &self.command_registry,
+                    &mut self.dock_state,
+                    &mut self.triggered_action,
+                );
             });
         });
 
@@ -390,6 +317,13 @@ impl eframe::App for MyApp {
                 }
                 CommandId::TogglePlayback => {
                     self.editor_context.is_playing = !self.editor_context.is_playing;
+                }
+                CommandId::TogglePanel(tab) => {
+                    if let Some(index) = self.dock_state.find_tab(&tab) {
+                        self.dock_state.remove_tab(index);
+                    } else {
+                        self.dock_state.push_to_focused_leaf(tab);
+                    }
                 }
             }
             ctx.request_repaint();
