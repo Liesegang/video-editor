@@ -207,18 +207,19 @@ impl ProjectService {
         &self,
         composition_id: Uuid,
         track_id: Uuid,
-        entity_type: &str,
-        start_time: f64,
-        end_time: f64,
+        entity: Entity, // Pass a fully formed Entity object
+        in_frame: u64,  // Timeline start frame
+        out_frame: u64, // Timeline end frame
     ) -> Result<Uuid, LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
-            let entity = Entity::new(entity_type);
             let id = entity.id;
             track.entities.push(TrackEntity::new(
                 entity.id,
                 entity.entity_type,
-                start_time,
-                end_time,
+                in_frame,                  // New argument
+                out_frame,                 // New argument
+                entity.source_begin_frame, // From the passed Entity
+                entity.duration_frame,     // From the passed Entity
                 entity.fps,
                 entity.properties,
                 entity.effects,
@@ -279,8 +280,8 @@ impl ProjectService {
         composition_id: Uuid,
         track_id: Uuid,
         entity_id: Uuid,
-        new_start_time: f64,
-        new_end_time: f64,
+        new_in_frame: u64,  // Renamed parameter, u64
+        new_out_frame: u64, // Renamed parameter, u64
     ) -> Result<(), LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
             let track_entity = track
@@ -294,8 +295,34 @@ impl ProjectService {
                     ))
                 })?;
 
-            track_entity.start_time = new_start_time;
-            track_entity.end_time = new_end_time;
+            track_entity.in_frame = new_in_frame; // Updated field
+            track_entity.out_frame = new_out_frame; // Updated field
+            Ok(())
+        })?
+    }
+
+    pub fn update_entity_source_frames(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        entity_id: Uuid,
+        new_source_begin_frame: u64,
+        new_duration_frame: Option<u64>,
+    ) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+            let track_entity = track
+                .entities
+                .iter_mut()
+                .find(|e| e.id == entity_id)
+                .ok_or_else(|| {
+                    LibraryError::Project(format!(
+                        "Entity with ID {} not found in Track {}",
+                        entity_id, track_id
+                    ))
+                })?;
+
+            track_entity.source_begin_frame = new_source_begin_frame;
+            track_entity.duration_frame = new_duration_frame;
             Ok(())
         })?
     }
@@ -335,7 +362,9 @@ impl ProjectService {
         })?; // Propagate errors from the nested closure
 
         let moved_entity = entity_to_move.ok_or_else(|| {
-            LibraryError::Runtime("Failed to retrieve entity after removal from source track".to_string())
+            LibraryError::Runtime(
+                "Failed to retrieve entity after removal from source track".to_string(),
+            )
         })?;
 
         // 2. Add entity to target track

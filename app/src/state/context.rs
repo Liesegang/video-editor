@@ -33,7 +33,7 @@ pub struct EditorContext {
     #[serde(skip)]
     pub selected_entity_id: Option<Uuid>,
     #[serde(skip)]
-    pub inspector_entity_cache: Option<(Uuid, String, PropertyMap, f64, f64)>,
+    pub inspector_entity_cache: Option<(Uuid, String, PropertyMap, u64, u64, u64, Option<u64>)>,
 
     #[serde(skip)]
     pub drag_start_property_name: Option<String>,

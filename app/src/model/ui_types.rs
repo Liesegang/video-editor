@@ -8,8 +8,12 @@ pub struct GuiClip {
     pub id: Uuid,
     pub name: String,
     pub track_id: Uuid,
-    pub start_time: f32,
-    pub duration: f32,
+    pub in_frame: u64,                 // New: Timeline start frame (u64)
+    pub out_frame: u64,                // New: Timeline end frame (u64)
+    pub timeline_duration_frames: u64, // New: (out_frame - in_frame)
+    pub source_begin_frame: u64,       // New: Source content begin frame (u64)
+    pub duration_frame: Option<u64>,   // New: Source content duration in frames (Option<u64>)
+
     pub color: egui::Color32,
     pub position: [f32; 2],
     pub scale: f32,

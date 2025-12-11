@@ -126,8 +126,11 @@ pub fn preview_panel(
                             id: entity.id,
                             name: entity.entity_type.clone(), // Use entity_type as name for now
                             track_id: track.id,
-                            start_time: entity.start_time as f32,
-                            duration: (entity.end_time - entity.start_time) as f32,
+                            in_frame: entity.in_frame,   // u64
+                            out_frame: entity.out_frame, // u64
+                            timeline_duration_frames: entity.out_frame - entity.in_frame, // u64
+                            source_begin_frame: entity.source_begin_frame, // u64
+                            duration_frame: entity.duration_frame, // Option<u64>
                             color: a.color,
                             position: [
                                 entity.properties.get_f32("position_x").unwrap_or(960.0),
@@ -149,8 +152,9 @@ pub fn preview_panel(
                     let mut sorted_clips: Vec<&crate::model::ui_types::GuiClip> = gui_clips
                         .iter()
                         .filter(|gc| {
-                            editor_context.current_time >= gc.start_time
-                                && editor_context.current_time < gc.start_time + gc.duration
+                            let current_frame =
+                                (editor_context.current_time as f64 * comp.fps).round() as u64; // Convert current_time (f32) to frame (u64)
+                            current_frame >= gc.in_frame && current_frame < gc.out_frame
                         })
                         .collect();
                     // Sort by track index for consistent Z-order hit testing
@@ -207,16 +211,19 @@ pub fn preview_panel(
                     let asset_index = 0; // Temporary: should derive from entity properties
                     let asset = editor_context.assets.get(asset_index);
 
-                    if editor_context.current_time >= entity.start_time as f32
-                        && editor_context.current_time < entity.end_time as f32
-                    {
+                    let current_frame =
+                        (editor_context.current_time as f64 * comp.fps).round() as u64; // Convert current_time (f32) to frame (u64)
+                    if current_frame >= entity.in_frame && current_frame < entity.out_frame {
                         if let Some(a) = asset {
                             let gc = crate::model::ui_types::GuiClip {
                                 id: entity.id,
                                 name: entity.entity_type.clone(),
                                 track_id: track.id,
-                                start_time: entity.start_time as f32,
-                                duration: (entity.end_time - entity.start_time) as f32,
+                                in_frame: entity.in_frame,   // u64
+                                out_frame: entity.out_frame, // u64
+                                timeline_duration_frames: entity.out_frame - entity.in_frame, // u64
+                                source_begin_frame: entity.source_begin_frame, // u64
+                                duration_frame: entity.duration_frame, // Option<u64>
                                 color: a.color,
                                 position: [
                                     entity.properties.get_f32("position_x").unwrap_or(960.0),

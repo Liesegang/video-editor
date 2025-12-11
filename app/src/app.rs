@@ -147,8 +147,10 @@ impl eframe::App for MyApp {
                                     entity.id,
                                     entity.entity_type.clone(),
                                     entity.properties.clone(),
-                                    entity.start_time,
-                                    entity.end_time,
+                                    entity.in_frame,           // New field
+                                    entity.out_frame,          // New field
+                                    entity.source_begin_frame, // New field
+                                    entity.duration_frame,     // New field
                                 ));
                             }
                         }
