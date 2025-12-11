@@ -155,7 +155,7 @@ pub fn inspector_panel(
             let mut current_kind = kind.clone();
             ui.horizontal(|ui| {
                 ui.label("Type");
-                egui::ComboBox::from_id_source("kind_combo")
+                egui::ComboBox::from_id_salt("kind_combo")
                     .selected_text(current_kind.to_string())
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut current_kind, TrackClipKind::Video, "Video");

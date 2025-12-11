@@ -330,13 +330,13 @@ pub fn show_clip_area(
                             gc.track_id,
                             gc.id,
                         ) {
-                            eprintln!("Failed to remove entity: {:?}", e);
+                            log::error!("Failed to remove entity: {:?}", e);
                         } else {
                             editor_context.selected_entity_id = None;
                             let current_state = project_service.get_project().read().unwrap().clone();
                             history_manager.push_project_state(current_state);
                             ui.ctx().request_repaint();
-                            ui.close_menu();
+                            ui.close();
                         }
                     }
                 }
@@ -599,7 +599,7 @@ pub fn show_clip_area(
                             hovered_track_id,
                             gc.id,
                         ) {
-                            eprintln!("Failed to move entity to new track: {:?}", e);
+                            log::error!("Failed to move entity to new track: {:?}", e);
                         } else {
                             editor_context.selected_track_id = Some(hovered_track_id); // Update selected track
                             moved_track = true;

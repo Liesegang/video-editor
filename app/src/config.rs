@@ -1,6 +1,7 @@
 use crate::command::CommandId;
 use directories::ProjectDirs;
 use eframe::egui::{Key, Modifiers};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -193,7 +194,7 @@ fn get_config_path() -> Option<PathBuf> {
         let config_dir = proj_dirs.config_dir();
         if !config_dir.exists() {
             if let Err(e) = fs::create_dir_all(config_dir) {
-                eprintln!("Failed to create config directory: {}", e);
+                error!("Failed to create config directory: {}", e);
                 return None;
             }
         }
@@ -208,13 +209,13 @@ pub fn save_config(config: &ShortcutConfig) {
         match toml::to_string_pretty(config) {
             Ok(toml_str) => {
                 if let Err(e) = fs::write(&path, toml_str) {
-                    eprintln!("Failed to write config file: {}", e);
+                    error!("Failed to write config file: {}", e);
                 } else {
-                    println!("Shortcuts saved to {}", path.display());
+                    info!("Shortcuts saved to {}", path.display());
                 }
             }
             Err(e) => {
-                eprintln!("Failed to serialize config: {}", e);
+                error!("Failed to serialize config: {}", e);
             }
         }
     }
@@ -227,11 +228,11 @@ pub fn load_config() -> ShortcutConfig {
                 Ok(toml_str) => match toml::from_str(&toml_str) {
                     Ok(config) => return config,
                     Err(e) => {
-                        eprintln!("Failed to parse config file, using defaults: {}", e);
+                        warn!("Failed to parse config file, using defaults: {}", e);
                     }
                 },
                 Err(e) => {
-                    eprintln!("Failed to read config file, using defaults: {}", e);
+                    warn!("Failed to read config file, using defaults: {}", e);
                 }
             }
         }

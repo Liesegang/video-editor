@@ -27,7 +27,9 @@ pub struct SkiaRenderer {
 
 impl SkiaRenderer {
     pub fn new(width: u32, height: u32, background_color: Color) -> Self {
-        let mut gpu_context = create_gpu_context();
+        // let mut gpu_context = create_gpu_context();
+        let mut gpu_context: Option<GpuContext> = None; // Force CPU for now
+        
         if gpu_context.is_some() {
             debug!("SkiaRenderer: GPU context enabled");
         } else {

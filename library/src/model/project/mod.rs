@@ -117,6 +117,14 @@ impl TrackClip {
     ) -> Self {
         let mut props = PropertyMap::new();
         props.set("file_path".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::String(file_path.to_string())));
+        // Default transform
+        props.set("position_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(960.0)));
+        props.set("position_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(540.0)));
+        props.set("scale_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(1.0)));
+        props.set("scale_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(1.0)));
+        props.set("rotation".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(0.0)));
+        props.set("anchor_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(0.0)));
+        props.set("anchor_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(0.0)));
 
         TrackClip::new(
             Uuid::new_v4(),
@@ -140,6 +148,15 @@ impl TrackClip {
     ) -> Self {
         let mut props = PropertyMap::new();
         props.set("file_path".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::String(file_path.to_string())));
+        
+        // Default transform
+        props.set("position_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(960.0)));
+        props.set("position_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(540.0)));
+        props.set("scale_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(1.0)));
+        props.set("scale_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(1.0)));
+        props.set("rotation".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(0.0)));
+        props.set("anchor_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(0.0)));
+        props.set("anchor_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(0.0)));
 
         TrackClip::new(
             Uuid::new_v4(),
@@ -158,6 +175,14 @@ impl TrackClip {
     pub fn create_text(text: &str, in_frame: u64, out_frame: u64) -> Self {
         let mut props = PropertyMap::new();
         props.set("text".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::String(text.to_string())));
+        // Default transform
+        props.set("position_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(960.0)));
+        props.set("position_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(540.0)));
+        props.set("scale_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(1.0)));
+        props.set("scale_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(1.0)));
+        props.set("rotation".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(0.0)));
+        props.set("anchor_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(0.0)));
+        props.set("anchor_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(0.0)));
 
         TrackClip::new(
             Uuid::new_v4(),

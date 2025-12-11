@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
+use library::RenderServer;
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 use library::model::project::asset::AssetKind;
@@ -13,6 +14,7 @@ pub fn preview_panel(
     _history_manager: &mut HistoryManager, // HistoryManager is not directly used in preview, but kept for consistency
     project_service: &ProjectService,
     project: &Arc<RwLock<Project>>,
+    render_server: &Arc<RenderServer>,
 ) {
     let (rect, response) =
         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
@@ -95,10 +97,66 @@ pub fn preview_panel(
         }
     }
 
-    // Video frame outline
+    // Video frame outline and Preview Image
     let frame_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1920.0, 1080.0));
     let screen_frame_min = to_screen(frame_rect.min);
     let screen_frame_max = to_screen(frame_rect.max);
+    
+    // Calculate current frame and Request Render
+    if let Ok(proj_read) = project.read() {
+        if let Some(comp) = editor_context.get_current_composition(&proj_read) {
+            let current_frame = (editor_context.current_time as f64 * comp.fps).round() as u64;
+            
+            if let Some(comp_idx) = proj_read.compositions.iter().position(|c| c.id == comp.id) {
+                 let plugin_manager = project_service.get_plugin_manager();
+                 let property_evaluators = plugin_manager.get_property_evaluators();
+                 let entity_converter_registry = plugin_manager.get_entity_converter_registry();
+                 
+                 let frame_info = library::framing::get_frame_from_project(
+                     &proj_read,
+                     comp_idx,
+                     current_frame,
+                     &property_evaluators,
+                     &entity_converter_registry
+                 );
+                 
+                 render_server.send_request(frame_info);
+            }
+        }
+    }
+
+    // 2. Poll for results and update texture
+    let mut latest_image = None;
+    while let Ok(result) = render_server.poll_result() {
+         latest_image = Some(result.image);
+    }
+    
+    if let Some(image) = latest_image {
+         let size = [image.width as usize, image.height as usize];
+         let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &image.data);
+         
+         if let Some(texture) = &mut editor_context.preview_texture {
+             texture.set(color_image, Default::default());
+         } else {
+             editor_context.preview_texture = Some(ui.ctx().load_texture(
+                 "preview_texture",
+                 color_image,
+                 Default::default()
+             ));
+         }
+    }
+    
+    // 3. Draw Texture
+    if let Some(texture) = &editor_context.preview_texture {
+         painter.image(
+             texture.id(),
+             egui::Rect::from_min_max(screen_frame_min, screen_frame_max),
+             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+             egui::Color32::WHITE
+         );
+    }
+
+    // Draw outline
     painter.rect_stroke(
         egui::Rect::from_min_max(screen_frame_min, screen_frame_max),
         0.0,
@@ -108,6 +166,7 @@ pub fn preview_panel(
         ),
         StrokeKind::Middle,
     );
+
 
     let mut hovered_entity_id = None;
     let mut gui_clips: Vec<crate::model::ui_types::TimelineClip> = Vec::new();
@@ -213,108 +272,7 @@ pub fn preview_panel(
         }
     }
 
-    // Clip drawing
-    if let Ok(proj_read) = project.read() {
-        if let Some(comp) = editor_context.get_current_composition(&proj_read) {
-            // Re-collect visible GuiClips after potential modifications in Inspector
-            let mut visible_clips: Vec<crate::model::ui_types::TimelineClip> = Vec::new();
-            for track in &comp.tracks {
-                for entity in &track.clips {
-                    
-                     let asset_opt = if let Some(path) = entity.properties.get_string("file_path") {
-                         proj_read.assets.iter().find(|a| a.path == path)
-                    } else {
-                         None
-                    };
-                    let asset_id = asset_opt.map(|a| a.id);
-                    let asset_color = asset_opt.map(|a| {
-                        let c = a.color.clone();
-                        egui::Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
-                    }).unwrap_or(egui::Color32::GRAY);
 
-                    let current_frame =
-                        (editor_context.current_time as f64 * comp.fps).round() as u64; // Convert current_time (f32) to frame (u64)
-                    if current_frame >= entity.in_frame && current_frame < entity.out_frame {
-                        let gc = crate::model::ui_types::TimelineClip {
-                            id: entity.id,
-                        name: entity.kind.to_string(), // entity_type -> kind
-                            track_id: track.id,
-                            in_frame: entity.in_frame,   // u64
-                            out_frame: entity.out_frame, // u64
-                            timeline_duration_frames: entity.out_frame.saturating_sub(entity.in_frame), // u64
-                            source_begin_frame: entity.source_begin_frame, // u64
-                            duration_frame: entity.duration_frame, // Option<u64>
-                            color: asset_color,
-                            position: [
-                                entity.properties.get_f32("position_x").unwrap_or(960.0),
-                                entity.properties.get_f32("position_y").unwrap_or(540.0),
-                            ],
-                            scale: entity.properties.get_f32("scale").unwrap_or(100.0),
-                            opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
-                            rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
-                            asset_id,
-                        };
-                        visible_clips.push(gc);
-                    }
-                }
-            }
-            // Sort by track index for consistent Z-order drawing
-            visible_clips.sort_by_key(|gc| {
-                comp.tracks
-                    .iter()
-                    .position(|t| t.id == gc.track_id)
-                    .unwrap_or(0)
-            });
-
-            for clip in visible_clips {
-                 let is_audio = if let Some(aid) = clip.asset_id {
-                     proj_read.assets.iter().find(|a| a.id == aid).map(|a| a.kind == library::model::project::asset::AssetKind::Audio).unwrap_or(false)
-                } else {
-                    false
-                };
-
-                if is_audio {
-                    continue;
-                }
-
-                let opacity = (clip.opacity / 100.0).clamp(0.0, 1.0);
-                let color = clip.color.linear_multiply(opacity);
-
-                let base_w = 640.0;
-                let base_h = 360.0;
-                let scale = clip.scale / 100.0;
-                let w = base_w * scale;
-                let h = base_h * scale;
-
-                let center = egui::pos2(clip.position[0], clip.position[1]);
-                let rot = clip.rotation.to_radians();
-                let cos_r = rot.cos();
-                let sin_r = rot.sin();
-
-                let local_corners = [
-                    egui::vec2(-w / 2.0, -h / 2.0),
-                    egui::vec2(w / 2.0, -h / 2.0),
-                    egui::vec2(w / 2.0, h / 2.0),
-                    egui::vec2(-w / 2.0, h / 2.0),
-                ];
-
-                let screen_points: Vec<egui::Pos2> = local_corners
-                    .iter()
-                    .map(|corner| {
-                        let rot_x = corner.x * cos_r - corner.y * sin_r;
-                        let rot_y = corner.x * sin_r + corner.y * cos_r;
-                        to_screen(center + egui::vec2(rot_x, rot_y))
-                    })
-                    .collect();
-
-                painter.add(egui::Shape::convex_polygon(
-                    screen_points.clone(),
-                    color,
-                    egui::Stroke::NONE,
-                ));
-            }
-        }
-    }
 
     let interacted_with_gizmo = false; // Placeholder
 
