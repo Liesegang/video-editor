@@ -74,8 +74,9 @@ impl MyApp {
             triggered_action: None,
             composition_dialog: CompositionDialog::new(),
         };
-        app.history_manager
-            .push_project_state(app.project_service.get_project().read().unwrap().clone());
+        if let Ok(proj_read) = app.project_service.get_project().read() {
+            app.history_manager.push_project_state(proj_read.clone());
+        }
         cc.egui_ctx.request_repaint(); // Request repaint after initial state setup
         app
     }
@@ -97,8 +98,10 @@ impl MyApp {
 
 
         self.history_manager = HistoryManager::new();
-        self.history_manager
-            .push_project_state(self.project_service.get_project().read().unwrap().clone());
+
+        if let Ok(proj_read) = self.project_service.get_project().read() {
+            self.history_manager.push_project_state(proj_read.clone());
+        }
     }
 }
 
@@ -332,21 +335,15 @@ impl eframe::App for MyApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 CommandId::Undo => {
-                    let current_project =
-                        self.project_service.get_project().read().unwrap().clone();
-                    if let Some(new_project) = self.history_manager.undo(current_project) {
-                        self.project_service.set_project(new_project);
-
+                    if let Some(prev_state) = self.history_manager.undo() {
+                        self.project_service.set_project(prev_state);
                     } else {
-                        eprintln!("Undo stack is empty.");
+                        eprintln!("Undo stack is empty (or at initial state).");
                     }
                 }
                 CommandId::Redo => {
-                    let current_project =
-                        self.project_service.get_project().read().unwrap().clone();
-                    if let Some(new_project) = self.history_manager.redo(current_project) {
-                        self.project_service.set_project(new_project);
-
+                    if let Some(next_state) = self.history_manager.redo() {
+                        self.project_service.set_project(next_state);
                     } else {
                         eprintln!("Redo stack is empty.");
                     }
@@ -355,8 +352,7 @@ impl eframe::App for MyApp {
                     if let Some(comp_id) = self.editor_context.selected_composition_id {
                         if let Some(track_id) = self.editor_context.selected_track_id {
                             if let Some(entity_id) = self.editor_context.selected_entity_id {
-                                let prev_project_state =
-                                    self.project_service.get_project().read().unwrap().clone();
+
                                 if let Err(e) = self
                                     .project_service
                                     .remove_entity_from_track(comp_id, track_id, entity_id)
@@ -364,7 +360,8 @@ impl eframe::App for MyApp {
                                     eprintln!("Failed to remove entity: {:?}", e);
                                 } else {
                                     self.editor_context.selected_entity_id = None;
-                                    self.history_manager.push_project_state(prev_project_state);
+                                    let current_state = self.project_service.get_project().read().unwrap().clone();
+                                    self.history_manager.push_project_state(current_state);
                                 }
                             }
                         }
