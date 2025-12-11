@@ -9,6 +9,7 @@ use crate::{
     action::HistoryManager, model::assets::AssetKind, model::ui_types::GuiClip,
     state::context::EditorContext,
 };
+use library::model::project::property::PropertyValue;
 
 const EDGE_DRAG_WIDTH: f32 = 5.0;
 
@@ -115,16 +116,18 @@ pub fn show_clip_area(
         if ui_content.input(|i| i.pointer.any_released()) {
             if let Some(asset_index) = editor_context.dragged_asset {
                 if let Some(mouse_pos) = response.hover_pos() {
-                    let drop_time = ((mouse_pos.x
+                    let drop_time_f64 = ((mouse_pos.x
                         - content_rect_for_clip_area.min.x
                         - editor_context.timeline_scroll_offset.x)
                         / pixels_per_unit)
-                        .max(0.0);
+                        .max(0.0) as f64;
                     let drop_track_index = ((mouse_pos.y
                         - content_rect_for_clip_area.min.y
                         - editor_context.timeline_scroll_offset.y)
                         / (row_height + track_spacing))
                         .floor() as usize;
+
+                    let drop_in_frame = (drop_time_f64 * composition_fps).round() as u64;
 
                     if let Some(comp_id) = editor_context.selected_composition_id {
                         let mut current_tracks_for_drop: Vec<library::model::project::Track> =
@@ -139,38 +142,73 @@ pub fn show_clip_area(
 
                         if let Some(track) = current_tracks_for_drop.get(drop_track_index) {
                             if let Some(asset) = editor_context.assets.get(asset_index) {
-                                // Handle dropping a Composition asset
-                                if let AssetKind::Composition(_nested_comp_id) = asset.kind {
-                                    let prev_project_state =
-                                        project_service.get_project().read().unwrap().clone();
-                                    if let Err(e) = project_service.add_entity_to_track(
-                                        comp_id,
-                                        track.id,
-                                        &format!("Nested Comp: {}", asset.name),
-                                        drop_time as f64,
-                                        (drop_time + asset.duration) as f64,
-                                    ) {
-                                        eprintln!(
-                                            "Failed to add nested composition entity: {:?}",
-                                            e
+                                let prev_project_state =
+                                    project_service.get_project().read().unwrap().clone();
+
+                                // Calculate initial out_frame based on asset duration
+                                let drop_out_frame = drop_in_frame
+                                    + ((asset.duration as f64 * composition_fps).round() as u64);
+
+                                let new_entity = match asset.kind {
+                                    AssetKind::Video => {
+                                        library::model::project::entity::Entity::create_video(
+                                            &asset.name, // Assuming asset.name is file_path for video
+                                            drop_in_frame,
+                                            drop_out_frame,
+                                            0, // Default source_begin_frame
+                                            (asset.duration as f64 * composition_fps).round()
+                                                as u64, // Source duration frames
+                                        )
+                                    }
+                                    AssetKind::Image => {
+                                        library::model::project::entity::Entity::create_image(
+                                            &asset.name, // Assuming asset.name is file_path for image
+                                            drop_in_frame,
+                                            drop_out_frame,
+                                        )
+                                    }
+                                    AssetKind::Audio => {
+                                        let mut audio_entity =
+                                            library::model::project::entity::Entity::new("audio");
+                                        audio_entity.in_frame = drop_in_frame;
+                                        audio_entity.out_frame = drop_out_frame;
+                                        audio_entity.duration_frame =
+                                            Some((asset.duration as f64 * composition_fps).round()
+                                                as u64);
+                                        audio_entity.set_constant_property(
+                                            "file_path",
+                                            PropertyValue::String(asset.name.clone()),
                                         );
-                                    } else {
-                                        history_manager.push_project_state(project_service.get_project().read().unwrap().clone());
+                                        audio_entity
                                     }
+                                    AssetKind::Composition(_nested_comp_id) => {
+                                        let mut comp_entity =
+                                            library::model::project::entity::Entity::new(
+                                                "composition",
+                                            );
+                                        comp_entity.in_frame = drop_in_frame;
+                                        comp_entity.out_frame = drop_out_frame;
+                                        comp_entity.duration_frame =
+                                            Some((asset.duration as f64 * composition_fps).round()
+                                                as u64);
+                                        comp_entity.set_constant_property(
+                                            "composition_id",
+                                            PropertyValue::String(_nested_comp_id.to_string()),
+                                        );
+                                        comp_entity
+                                    }
+                                };
+
+                                if let Err(e) = project_service.add_entity_to_track(
+                                    comp_id,
+                                    track.id,
+                                    new_entity, // Pass the created Entity object
+                                    drop_in_frame,
+                                    drop_out_frame,
+                                ) {
+                                    eprintln!("Failed to add entity to track: {:?}", e);
                                 } else {
-                                    let prev_project_state =
-                                        project_service.get_project().read().unwrap().clone();
-                                    if let Err(e) = project_service.add_entity_to_track(
-                                        comp_id,
-                                        track.id,
-                                        &asset.name, // Use asset name as entity type for now
-                                        drop_time as f64,
-                                        (drop_time + asset.duration) as f64,
-                                    ) {
-                                        eprintln!("Failed to add entity to track: {:?}", e);
-                                    } else {
-                                        history_manager.push_project_state(project_service.get_project().read().unwrap().clone());
-                                    }
+                                    history_manager.push_project_state(prev_project_state);
                                 }
                             }
                         }
@@ -201,8 +239,11 @@ pub fn show_clip_area(
                     id: entity.id,
                     name: entity.entity_type.clone(),
                     track_id: *entity_track_id,
-                    start_time: entity.start_time as f32,
-                    duration: (entity.end_time - entity.start_time) as f32,
+                    in_frame: entity.in_frame,   // u64
+                    out_frame: entity.out_frame, // u64
+                    timeline_duration_frames: entity.out_frame - entity.in_frame, // u64
+                    source_begin_frame: entity.source_begin_frame, // u64
+                    duration_frame: entity.duration_frame, // Option<u64>
                     color: a.color,
                     position: [
                         entity.properties.get_f32("position_x").unwrap_or(960.0),
@@ -214,14 +255,19 @@ pub fn show_clip_area(
                     asset_index,
                 };
 
-                let initial_x = content_rect_for_clip_area.min.x + gc.start_time * pixels_per_unit
+                let initial_x = content_rect_for_clip_area.min.x
+                    + (gc.in_frame as f32 / composition_fps as f32) * pixels_per_unit
                     - editor_context.timeline_scroll_offset.x;
                 let initial_y = content_rect_for_clip_area.min.y
                     + editor_context.timeline_scroll_offset.y
                     + clip_track_index * (row_height + track_spacing);
                 let initial_clip_rect = egui::Rect::from_min_size(
                     egui::pos2(initial_x, initial_y),
-                    egui::vec2(gc.duration * pixels_per_unit, row_height),
+                    egui::vec2(
+                        (gc.timeline_duration_frames as f32 / composition_fps as f32)
+                            * pixels_per_unit,
+                        row_height,
+                    ),
                 );
 
                 // --- Interaction for clips ---
@@ -244,7 +290,10 @@ pub fn show_clip_area(
                 );
 
                 let right_edge_rect = egui::Rect::from_min_size(
-                    egui::pos2(initial_clip_rect.max.x - EDGE_DRAG_WIDTH, initial_clip_rect.min.y),
+                    egui::pos2(
+                        initial_clip_rect.max.x - EDGE_DRAG_WIDTH,
+                        initial_clip_rect.min.y,
+                    ),
                     egui::vec2(EDGE_DRAG_WIDTH, initial_clip_rect.height()),
                 );
                 let right_edge_resp = ui_content.interact(
@@ -259,42 +308,61 @@ pub fn show_clip_area(
                     editor_context.selected_entity_id = Some(gc.id);
                     editor_context.selected_track_id = Some(gc.track_id);
                     if editor_context.last_project_state_before_drag.is_none() {
-                        editor_context.last_project_state_before_drag = Some(project_service.get_project().read().unwrap().clone());
+                        editor_context.last_project_state_before_drag =
+                            Some(project_service.get_project().read().unwrap().clone());
                     }
                 }
 
-                if editor_context.is_resizing_entity && editor_context.selected_entity_id == Some(gc.id) {
-                    let mut new_start_time = gc.start_time as f64;
-                    let mut new_end_time = (gc.start_time + gc.duration) as f64;
+                if editor_context.is_resizing_entity
+                    && editor_context.selected_entity_id == Some(gc.id)
+                {
+                    let mut new_in_frame = gc.in_frame;
+                    let mut new_out_frame = gc.out_frame;
+
+                    // Source constraints
+                    let source_max_out_frame =
+                        gc.source_begin_frame + gc.duration_frame.unwrap_or(u64::MAX);
+
+                    // Convert pixel delta to frame delta
+                    let dt_frames_f32 =
+                        left_edge_resp.drag_delta().x / pixels_per_unit * composition_fps as f32;
+                    let dt_frames = dt_frames_f32.round() as i64;
 
                     if left_edge_resp.dragged() {
-                        let dt = left_edge_resp.drag_delta().x as f64 / pixels_per_unit as f64;
-                        new_start_time = (new_start_time + dt).max(0.0);
-                        new_start_time = new_start_time.min(new_end_time - 0.01);
+                        new_in_frame = ((new_in_frame as i64 + dt_frames).max(0) as u64)
+                            .max(gc.source_begin_frame) // Cannot go before source begin frame
+                            .min(new_out_frame.saturating_sub(1)); // Minimum 1 frame duration
                     } else if right_edge_resp.dragged() {
-                        let dt = right_edge_resp.drag_delta().x as f64 / pixels_per_unit as f64;
-                        new_end_time = (new_end_time + dt).max(new_start_time + 0.01);
+                        new_out_frame = ((new_out_frame as i64 + dt_frames)
+                            .max(new_in_frame as i64 + 1)
+                            as u64) // Minimum 1 frame duration
+                            .min(source_max_out_frame); // Cannot go beyond source duration
                     }
 
-                    if new_start_time != gc.start_time as f64 || new_end_time != (gc.start_time + gc.duration) as f64 {
+                    // Update if there's an actual change
+                    if new_in_frame != gc.in_frame || new_out_frame != gc.out_frame {
                         if let (Some(comp_id), Some(track_id)) = (
                             editor_context.selected_composition_id,
                             editor_context.selected_track_id,
                         ) {
-                            project_service.update_entity_time(
-                                comp_id,
-                                track_id,
-                                gc.id,
-                                new_start_time,
-                                new_end_time,
-                            ).ok();
+                            project_service
+                                .update_entity_time(
+                                    comp_id,
+                                    track_id,
+                                    gc.id,
+                                    new_in_frame,
+                                    new_out_frame,
+                                )
+                                .ok();
                         }
                     }
                 }
 
                 if left_edge_resp.drag_stopped() || right_edge_resp.drag_stopped() {
                     editor_context.is_resizing_entity = false;
-                    if let Some(initial_state) = editor_context.last_project_state_before_drag.take() {
+                    if let Some(initial_state) =
+                        editor_context.last_project_state_before_drag.take()
+                    {
                         let current_state = project_service.get_project().read().unwrap().clone();
                         if initial_state != current_state {
                             history_manager.push_project_state(current_state);
@@ -313,7 +381,9 @@ pub fn show_clip_area(
 
                     // Adjust Y position based on hovered track
                     if let Some(hovered_track_id) = editor_context.dragged_entity_hovered_track_id {
-                        if let Some(hovered_track_index) = current_tracks.iter().position(|t| t.id == hovered_track_id) {
+                        if let Some(hovered_track_index) =
+                            current_tracks.iter().position(|t| t.id == hovered_track_id)
+                        {
                             display_y = content_rect_for_clip_area.min.y
                                 + editor_context.timeline_scroll_offset.y
                                 + hovered_track_index as f32 * (row_height + track_spacing);
@@ -323,7 +393,11 @@ pub fn show_clip_area(
 
                 let drawing_clip_rect = egui::Rect::from_min_size(
                     egui::pos2(display_x, display_y),
-                    egui::vec2(gc.duration * pixels_per_unit, row_height),
+                    egui::vec2(
+                        (gc.timeline_duration_frames as f32 / composition_fps as f32)
+                            * pixels_per_unit,
+                        row_height,
+                    ),
                 );
 
                 // --- Drawing for clips (always) ---
@@ -352,7 +426,9 @@ pub fn show_clip_area(
 
                 // Cursor feedback for edge resizing
                 if left_edge_resp.hovered() || right_edge_resp.hovered() {
-                    ui_content.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                    ui_content
+                        .ctx()
+                        .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                 }
                 if !editor_context.is_resizing_entity && clip_resp.clicked() {
                     editor_context.selected_entity_id = Some(gc.id);
@@ -370,22 +446,29 @@ pub fn show_clip_area(
                             Some(project_service.get_project().read().unwrap().clone());
                     }
                 }
-                if !editor_context.is_resizing_entity && clip_resp.dragged() && editor_context.selected_entity_id == Some(gc.id) {
-                    // Handle horizontal movement (time change)
-                    let dt = clip_resp.drag_delta().x as f64 / pixels_per_unit as f64;
+                if !editor_context.is_resizing_entity
+                    && clip_resp.dragged()
+                    && editor_context.selected_entity_id == Some(gc.id)
+                {
+                    // Handle horizontal movement (frame change)
+                    let dt_frames_f32 =
+                        clip_resp.drag_delta().x / pixels_per_unit * composition_fps as f32;
+                    let dt_frames = dt_frames_f32.round() as i64;
+
                     if let Some(comp_id) = editor_context.selected_composition_id {
                         if let Some(track_id) = editor_context.selected_track_id {
+                            let new_in_frame = (gc.in_frame as i64 + dt_frames).max(0) as u64;
+                            let new_out_frame =
+                                (gc.out_frame as i64 + dt_frames).max(new_in_frame as i64) as u64;
+
                             project_service
-                                .with_track_mut(comp_id, track_id, |track_mut| {
-                                    if let Some(entity_mut) =
-                                        track_mut.entities.iter_mut().find(|e| e.id == gc.id)
-                                    {
-                                        entity_mut.start_time =
-                                            (entity_mut.start_time + dt).max(0.0);
-                                        entity_mut.end_time =
-                                            (entity_mut.end_time + dt).max(entity_mut.start_time);
-                                    }
-                                })
+                                .update_entity_time(
+                                    comp_id,
+                                    track_id,
+                                    gc.id,
+                                    new_in_frame,
+                                    new_out_frame,
+                                )
                                 .ok();
                         }
                     }
@@ -396,15 +479,23 @@ pub fn show_clip_area(
                             - content_rect_for_clip_area.min.y
                             - editor_context.timeline_scroll_offset.y;
 
-                        let hovered_track_index =
-                            (current_y_in_clip_area / (row_height + track_spacing)).floor() as usize;
+                        let hovered_track_index = (current_y_in_clip_area
+                            / (row_height + track_spacing))
+                            .floor() as usize;
 
                         if let Some(comp_id) = editor_context.selected_composition_id {
                             if let Ok(proj_read) = project.read() {
-                                if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-                                    if let Some(hovered_track) = comp.tracks.get(hovered_track_index) {
-                                        if editor_context.dragged_entity_hovered_track_id != Some(hovered_track.id) {
-                                            editor_context.dragged_entity_hovered_track_id = Some(hovered_track.id);
+                                if let Some(comp) =
+                                    proj_read.compositions.iter().find(|c| c.id == comp_id)
+                                {
+                                    if let Some(hovered_track) =
+                                        comp.tracks.get(hovered_track_index)
+                                    {
+                                        if editor_context.dragged_entity_hovered_track_id
+                                            != Some(hovered_track.id)
+                                        {
+                                            editor_context.dragged_entity_hovered_track_id =
+                                                Some(hovered_track.id);
                                         }
                                     }
                                 }
@@ -412,50 +503,57 @@ pub fn show_clip_area(
                         }
                     }
                 }
-                                if !editor_context.is_resizing_entity && clip_resp.drag_stopped() && editor_context.selected_entity_id == Some(gc.id) {
-                                    let mut moved_track = false;
-                                    if let (Some(original_track_id), Some(hovered_track_id), Some(comp_id)) = (
-                                        editor_context.dragged_entity_original_track_id,
-                                        editor_context.dragged_entity_hovered_track_id,
-                                        editor_context.selected_composition_id,
-                                    ) {
-                                        if original_track_id != hovered_track_id {
-                                            // Move entity to new track
-                                            if let Err(e) = project_service.move_entity_to_track(
-                                                comp_id,
-                                                original_track_id,
-                                                hovered_track_id,
-                                                gc.id,
-                                            ) {
-                                                eprintln!("Failed to move entity to new track: {:?}", e);
-                                            } else {
-                                                editor_context.selected_track_id = Some(hovered_track_id); // Update selected track
-                                                moved_track = true;
-                                            }
-                                        }
-                                    }
-                
-                                    if let Some(initial_state) =
-                                        editor_context.last_project_state_before_drag.take()
-                                    {
-                                        let current_state =
-                                            project_service.get_project().read().unwrap().clone();
-                                        if initial_state != current_state || moved_track { // Push history if time changed or track moved
-                                            history_manager.push_project_state(current_state); // Changed to push current state, not initial state
-                                        }
-                                    }
-                
-                                    // Clear drag related states
-                                    editor_context.dragged_entity_original_track_id = None;
-                                    editor_context.dragged_entity_hovered_track_id = None;
-                                }
+                if !editor_context.is_resizing_entity
+                    && clip_resp.drag_stopped()
+                    && editor_context.selected_entity_id == Some(gc.id)
+                {
+                    let mut moved_track = false;
+                    if let (Some(original_track_id), Some(hovered_track_id), Some(comp_id)) = (
+                        editor_context.dragged_entity_original_track_id,
+                        editor_context.dragged_entity_hovered_track_id,
+                        editor_context.selected_composition_id,
+                    ) {
+                        if original_track_id != hovered_track_id {
+                            // Move entity to new track
+                            if let Err(e) = project_service.move_entity_to_track(
+                                comp_id,
+                                original_track_id,
+                                hovered_track_id,
+                                gc.id,
+                            ) {
+                                eprintln!("Failed to move entity to new track: {:?}", e);
+                            } else {
+                                editor_context.selected_track_id = Some(hovered_track_id); // Update selected track
+                                moved_track = true;
+                            }
+                        }
+                    }
+
+                    if let Some(initial_state) =
+                        editor_context.last_project_state_before_drag.take()
+                    {
+                        let current_state = project_service.get_project().read().unwrap().clone();
+                        if initial_state != current_state || moved_track {
+                            // Push history if time changed or track moved
+                            history_manager.push_project_state(current_state); // Changed to push current state, not initial state
+                        }
+                    }
+
+                    // Clear drag related states
+                    editor_context.dragged_entity_original_track_id = None;
+                    editor_context.dragged_entity_hovered_track_id = None;
+                }
             }
         }
     }
     // --- End Loop for drawing and interacting with entities ---
 
     // Final selection clearing logic
-    if !editor_context.is_resizing_entity && response.clicked() && !clicked_on_entity && !is_dragging_asset {
+    if !editor_context.is_resizing_entity
+        && response.clicked()
+        && !clicked_on_entity
+        && !is_dragging_asset
+    {
         editor_context.selected_entity_id = None;
     }
 }

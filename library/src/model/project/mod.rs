@@ -31,11 +31,17 @@ pub struct TrackEntity {
     #[serde(rename = "type")]
     pub entity_type: String,
     #[serde(default)]
-    pub start_time: f64,
+    pub in_frame: u64, // Renamed from start_time (timeline start in frames)
     #[serde(default)]
-    pub end_time: f64,
+    pub out_frame: u64, // Renamed from end_time (timeline end in frames)
+    #[serde(default)]
+    pub source_begin_frame: u64, // Frame where source content begins
+    #[serde(default)]
+    pub duration_frame: Option<u64>, // Duration of source content in frames, None for static/infinite
+
     #[serde(default = "default_fps")]
-    pub fps: f64,
+    pub fps: f64, // This fps likely refers to the source content fps
+
     #[serde(default)]
     pub properties: PropertyMap,
     #[serde(default)]
@@ -46,8 +52,10 @@ impl TrackEntity {
     pub fn new(
         id: Uuid,
         entity_type: String,
-        start_time: f64,
-        end_time: f64,
+        in_frame: u64,               // Renamed parameter
+        out_frame: u64,              // Renamed parameter
+        source_begin_frame: u64,     // New parameter
+        duration_frame: Option<u64>, // New parameter
         fps: f64,
         properties: PropertyMap,
         effects: Vec<EffectConfig>,
@@ -55,8 +63,10 @@ impl TrackEntity {
         Self {
             id,
             entity_type,
-            start_time,
-            end_time,
+            in_frame,
+            out_frame,
+            source_begin_frame,
+            duration_frame,
             fps,
             properties,
             effects,

@@ -150,10 +150,19 @@ impl<T: Renderer> RenderService<T> {
 
     fn get_frame(&self, project_model: &ProjectModel, time: f64) -> FrameInfo {
         let property_evaluators = self.plugin_manager.get_property_evaluators();
+
+        let project = project_model.project();
+        let composition_index = project_model.composition_index();
+        let composition = &project.compositions[composition_index];
+        let composition_fps = composition.fps;
+
+        // Convert time (f64) to frame_number (u64) using composition_fps
+        let frame_number = (time * composition_fps).round() as u64;
+
         get_frame_from_project(
-            project_model.project(),
-            project_model.composition_index(),
-            time,
+            project,
+            composition_index,
+            frame_number, // Pass frame_number (u64)
             &property_evaluators,
             &self.entity_converter_registry,
         )

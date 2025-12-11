@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::Track;
 use crate::model::frame::color::Color;
-use crate::model::project::entity::Entity;
+use crate::model::project::TrackEntity; // Add this
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct Project {
@@ -79,7 +79,7 @@ pub struct Composition {
     pub tracks: Vec<Track>,
 
     #[serde(skip)]
-    cached_entities: Vec<Entity>,
+    cached_entities: Vec<TrackEntity>,
 }
 
 impl Composition {
@@ -119,7 +119,8 @@ impl Composition {
         Some(removed_track)
     }
 
-    pub(crate) fn cached_entities(&self) -> &[Entity] {
+    pub(crate) fn cached_entities(&self) -> &[TrackEntity] {
+        // Change return type
         &self.cached_entities
     }
 
@@ -128,7 +129,7 @@ impl Composition {
             .tracks
             .iter()
             .flat_map(|track| track.entities.iter())
-            .map(|track_entity| track_entity.into())
+            .cloned() // Clone TrackEntity directly
             .collect();
     }
 }

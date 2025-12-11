@@ -4,7 +4,7 @@ use log::debug;
 
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::frame::FrameInfo;
-use crate::model::project::entity::Entity;
+use crate::model::project::TrackEntity; // Add this
 use crate::model::project::project::{Composition, Project};
 use crate::util::timing::ScopedTimer;
 
@@ -30,10 +30,13 @@ impl<'a> FrameEvaluator<'a> {
         }
     }
 
-    pub fn evaluate(&self, time: f64) -> FrameInfo {
+    pub fn evaluate(&self, frame_number: u64) -> FrameInfo {
+        // Changed to u64
         let mut frame = self.initialize_frame();
-        for entity in self.active_entities(time) {
-            if let Some(object) = self.convert_entity(entity, time) {
+        for track_entity in self.active_entities(frame_number) {
+            // Changed to track_entity
+            if let Some(object) = self.convert_entity(track_entity, frame_number) {
+                // Changed to track_entity
                 frame.objects.push(object);
             }
         }
@@ -50,29 +53,33 @@ impl<'a> FrameEvaluator<'a> {
         }
     }
 
-    fn active_entities(&self, time: f64) -> impl Iterator<Item = &Entity> {
+    fn active_entities(&self, frame_number: u64) -> impl Iterator<Item = &TrackEntity> {
+        // Changed to u64
         self.composition
-            .cached_entities()
+            .cached_entities() // Returns &[TrackEntity] now
             .iter()
-            .filter(move |entity| entity.start_time <= time && entity.end_time >= time)
+            .filter(move |track_entity| {
+                track_entity.in_frame <= frame_number && track_entity.out_frame >= frame_number
+            })
     }
 
-    fn convert_entity(&self, entity: &Entity, time: f64) -> Option<FrameObject> {
+    fn convert_entity(&self, track_entity: &TrackEntity, frame_number: u64) -> Option<FrameObject> {
+        // Changed to track_entity, u64
         self.entity_converter_registry.convert_entity(
             // Pass self (the FrameEvaluator) as the evaluation context
             &FrameEvaluationContext {
                 composition: self.composition,
                 property_evaluators: &self.property_evaluators,
             },
-            entity,
-            time,
+            track_entity, // Pass track_entity
+            frame_number, // Changed to frame_number
         )
     }
 }
 
 pub fn evaluate_composition_frame(
     composition: &Composition,
-    time: f64,
+    frame_number: u64, // Changed to u64
     property_evaluators: &Arc<PropertyEvaluatorRegistry>,
     entity_converter_registry: &Arc<EntityConverterRegistry>,
 ) -> FrameInfo {
@@ -81,32 +88,32 @@ pub fn evaluate_composition_frame(
         Arc::clone(property_evaluators),
         Arc::clone(entity_converter_registry),
     )
-    .evaluate(time)
+    .evaluate(frame_number) // Pass frame_number
 }
 
 pub fn get_frame_from_project(
     project: &Project,
     composition_index: usize,
-    frame_index: f64,
+    frame_number: u64, // Changed to u64
     property_evaluators: &Arc<PropertyEvaluatorRegistry>,
     entity_converter_registry: &Arc<EntityConverterRegistry>,
 ) -> FrameInfo {
     let _timer = ScopedTimer::debug(format!(
         "Frame assembly comp={} frame={}",
-        composition_index, frame_index
+        composition_index, frame_number
     ));
 
     let composition = &project.compositions[composition_index];
     let frame = evaluate_composition_frame(
         composition,
-        frame_index,
+        frame_number, // Pass frame_number
         property_evaluators,
         entity_converter_registry,
     );
 
     debug!(
         "Frame {} summary: objects={}",
-        frame_index,
+        frame_number, // Changed to frame_number
         frame.objects.len()
     );
     frame
