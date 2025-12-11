@@ -7,11 +7,11 @@ use crate::model::frame::{
     color::Color,
     draw_type::{DrawStyle, PathEffect},
     effect::ImageEffect,
-    entity::{FrameEntity, FrameObject, ImageSurface},
+    entity::{FrameContent, FrameObject, ImageSurface},
     transform::{Position, Scale, Transform},
 };
-use crate::model::project::TrackEntity; // Add this
-use crate::model::project::entity::EffectConfig;
+use crate::model::project::TrackClip; // Add this
+use crate::model::project::EffectConfig;
 use crate::model::project::project::Composition;
 use crate::model::project::property::{PropertyMap, PropertyValue};
 use crate::plugin::Plugin;
@@ -22,7 +22,7 @@ pub trait EntityConverter: Send + Sync {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext, // Pass context instead of individual fields
-        track_entity: &TrackEntity,         // Changed to TrackEntity
+        track_clip: &TrackClip,         // Changed to TrackClip
         frame_number: u64,                  // Changed to u64
     ) -> Option<FrameObject>;
 }
@@ -215,25 +215,25 @@ impl EntityConverter for VideoEntityConverter {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_entity: &TrackEntity, // Changed to TrackEntity
+        track_clip: &TrackClip, // Changed to TrackClip
         frame_number: u64,          // Changed to u64
     ) -> Option<FrameObject> {
-        let props = &track_entity.properties; // Use track_entity.properties
+        let props = &track_clip.properties; // Use track_clip.properties
         let file_path =
             evaluator.require_string(props, "file_path", frame_number as f64, "video")?; // time argument for evaluator, so convert back for now
 
-        // Calculate source_frame_number based on track_entity's timing
+        // Calculate source_frame_number based on track_clip's timing
         // frame_number is the current composition frame.
-        // track_entity.in_frame is when the entity starts on the timeline.
-        // track_entity.source_begin_frame is the timeline frame where the source media's frame 0 would be.
+        // track_clip.in_frame is when the entity starts on the timeline.
+        // track_clip.source_begin_frame is the timeline frame where the source media's frame 0 would be.
 
         // Example: in_frame=100. We want to show frame 50 of the video.
         // source_begin_frame = 50.
         // source_frame_number = 100 - 50 = 50.
-        let source_frame_number = frame_number.saturating_sub(track_entity.source_begin_frame);
+        let source_frame_number = frame_number.saturating_sub(track_clip.source_begin_frame);
 
         let transform = evaluator.build_transform(props, frame_number as f64); // time argument for evaluator
-        let effects = evaluator.build_image_effects(&track_entity.effects, frame_number as f64); // time argument for evaluator
+        let effects = evaluator.build_image_effects(&track_clip.effects, frame_number as f64); // time argument for evaluator
         let surface = ImageSurface {
             file_path,
             effects,
@@ -241,7 +241,7 @@ impl EntityConverter for VideoEntityConverter {
         };
 
         Some(FrameObject {
-            entity: FrameEntity::Video {
+            content: FrameContent::Video {
                 surface,
                 frame_number: source_frame_number, // Use the calculated source_frame_number
             },
@@ -256,14 +256,14 @@ impl EntityConverter for ImageEntityConverter {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_entity: &TrackEntity, // Changed to TrackEntity
+        track_clip: &TrackClip, // Changed to TrackClip
         frame_number: u64,          // Changed to u64
     ) -> Option<FrameObject> {
-        let props = &track_entity.properties; // Use track_entity.properties
+        let props = &track_clip.properties; // Use track_clip.properties
         let file_path =
             evaluator.require_string(props, "file_path", frame_number as f64, "image")?;
         let transform = evaluator.build_transform(props, frame_number as f64);
-        let effects = evaluator.build_image_effects(&track_entity.effects, frame_number as f64);
+        let effects = evaluator.build_image_effects(&track_clip.effects, frame_number as f64);
         let surface = ImageSurface {
             file_path,
             effects,
@@ -271,7 +271,7 @@ impl EntityConverter for ImageEntityConverter {
         };
 
         Some(FrameObject {
-            entity: FrameEntity::Image { surface },
+            content: FrameContent::Image { surface },
             properties: props.clone(), // This is the properties from TrackEntity
         })
     }
@@ -283,10 +283,10 @@ impl EntityConverter for TextEntityConverter {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_entity: &TrackEntity, // Changed to TrackEntity
+        track_clip: &TrackClip, // Changed to TrackClip
         frame_number: u64,          // Changed to u64
     ) -> Option<FrameObject> {
-        let props = &track_entity.properties; // Use track_entity.properties
+        let props = &track_clip.properties; // Use track_clip.properties
         let text = evaluator.require_string(props, "text", frame_number as f64, "text")?;
         let font = evaluator
             .optional_string(props, "font", frame_number as f64)
@@ -304,10 +304,10 @@ impl EntityConverter for TextEntityConverter {
             },
         );
         let transform = evaluator.build_transform(props, frame_number as f64);
-        let effects = evaluator.build_image_effects(&track_entity.effects, frame_number as f64);
+        let effects = evaluator.build_image_effects(&track_clip.effects, frame_number as f64);
 
         Some(FrameObject {
-            entity: FrameEntity::Text {
+            content: FrameContent::Text {
                 text,
                 font,
                 size,
@@ -326,10 +326,10 @@ impl EntityConverter for ShapeEntityConverter {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_entity: &TrackEntity, // Changed to TrackEntity
+        track_clip: &TrackClip, // Changed to TrackClip
         frame_number: u64,          // Changed to u64
     ) -> Option<FrameObject> {
-        let props = &track_entity.properties; // Use track_entity.properties
+        let props = &track_clip.properties; // Use track_clip.properties
         let path = evaluator.require_string(props, "path", frame_number as f64, "shape")?;
         let transform = evaluator.build_transform(props, frame_number as f64);
 
@@ -342,10 +342,10 @@ impl EntityConverter for ShapeEntityConverter {
             .evaluate_property_value(props, "path_effects", frame_number as f64)
             .unwrap_or(PropertyValue::Array(vec![]));
         let path_effects = evaluator.parse_path_effects(effects_value);
-        let effects = evaluator.build_image_effects(&track_entity.effects, frame_number as f64);
+        let effects = evaluator.build_image_effects(&track_clip.effects, frame_number as f64);
 
         Some(FrameObject {
-            entity: FrameEntity::Shape {
+            content: FrameContent::Shape {
                 path,
                 transform,
                 styles,
@@ -378,16 +378,16 @@ impl EntityConverterRegistry {
     pub fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_entity: &TrackEntity, // Changed to TrackEntity
+        track_clip: &TrackClip, // Changed to TrackClip
         frame_number: u64,          // Changed to u64
     ) -> Option<FrameObject> {
-        match self.converters.get(&track_entity.entity_type) {
-            // Use track_entity.entity_type
-            Some(converter) => converter.convert_entity(evaluator, track_entity, frame_number),
+        match self.converters.get(&track_clip.entity_type) {
+             // Use track_clip.entity_type
+            Some(converter) => converter.convert_entity(evaluator, track_clip, frame_number),
             None => {
                 warn!(
                     "No converter registered for entity type '{}'",
-                    track_entity.entity_type
+                    track_clip.entity_type
                 );
                 None
             }

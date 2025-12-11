@@ -109,20 +109,20 @@ pub fn preview_panel(
     );
 
     let mut hovered_entity_id = None;
-    let mut gui_clips: Vec<crate::model::ui_types::GuiClip> = Vec::new();
+    let mut gui_clips: Vec<crate::model::ui_types::TimelineClip> = Vec::new();
 
     if let Ok(proj_read) = project.read() {
         if let Some(comp) = editor_context.get_current_composition(&proj_read) {
             // Collect GuiClips from current composition's tracks
             for track in &comp.tracks {
-                for entity in &track.entities {
+                for entity in &track.clips {
                     // For simplicity, hardcode asset_index 0 (first asset) for now.
                     // In a real app, this would be determined by entity_type or asset property.
                     let asset_index = 0;
                     let asset = editor_context.assets.get(asset_index);
 
                     if let Some(a) = asset {
-                        let gc = crate::model::ui_types::GuiClip {
+                        let gc = crate::model::ui_types::TimelineClip {
                             id: entity.id,
                             name: entity.entity_type.clone(), // Use entity_type as name for now
                             track_id: track.id,
@@ -149,7 +149,7 @@ pub fn preview_panel(
             // Clip hit test
             if let Some(mouse_screen_pos) = pointer_pos {
                 if rect.contains(mouse_screen_pos) {
-                    let mut sorted_clips: Vec<&crate::model::ui_types::GuiClip> = gui_clips
+                    let mut sorted_clips: Vec<&crate::model::ui_types::TimelineClip> = gui_clips
                         .iter()
                         .filter(|gc| {
                             let current_frame =
@@ -205,9 +205,9 @@ pub fn preview_panel(
     if let Ok(proj_read) = project.read() {
         if let Some(comp) = editor_context.get_current_composition(&proj_read) {
             // Re-collect visible GuiClips after potential modifications in Inspector
-            let mut visible_clips: Vec<crate::model::ui_types::GuiClip> = Vec::new();
+            let mut visible_clips: Vec<crate::model::ui_types::TimelineClip> = Vec::new();
             for track in &comp.tracks {
-                for entity in &track.entities {
+                for entity in &track.clips {
                     let asset_index = 0; // Temporary: should derive from entity properties
                     let asset = editor_context.assets.get(asset_index);
 
@@ -215,7 +215,7 @@ pub fn preview_panel(
                         (editor_context.current_time as f64 * comp.fps).round() as u64; // Convert current_time (f32) to frame (u64)
                     if current_frame >= entity.in_frame && current_frame < entity.out_frame {
                         if let Some(a) = asset {
-                            let gc = crate::model::ui_types::GuiClip {
+                            let gc = crate::model::ui_types::TimelineClip {
                                 id: entity.id,
                                 name: entity.entity_type.clone(),
                                 track_id: track.id,
@@ -311,7 +311,7 @@ pub fn preview_panel(
 
                         // Update properties via ProjectService
                         project_service
-                            .update_entity_property(
+                            .update_clip_property(
                                 comp_id,
                                 track_id,
                                 entity_id,
@@ -320,7 +320,7 @@ pub fn preview_panel(
                                     project_service
                                         .with_track_mut(comp_id, track_id, |track| {
                                             track
-                                                .entities
+                                                .clips
                                                 .iter()
                                                 .find(|e| e.id == entity_id)
                                                 .and_then(|e| e.properties.get_f64("position_x"))
@@ -332,7 +332,7 @@ pub fn preview_panel(
                             )
                             .ok(); // Handle error
                         project_service
-                            .update_entity_property(
+                            .update_clip_property(
                                 comp_id,
                                 track_id,
                                 entity_id,
@@ -341,7 +341,7 @@ pub fn preview_panel(
                                     project_service
                                         .with_track_mut(comp_id, track_id, |track| {
                                             track
-                                                .entities
+                                                .clips
                                                 .iter()
                                                 .find(|e| e.id == entity_id)
                                                 .and_then(|e| e.properties.get_f64("position_y"))

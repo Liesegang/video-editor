@@ -4,7 +4,7 @@ use log::debug;
 
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::frame::FrameInfo;
-use crate::model::project::TrackEntity; // Add this
+use crate::model::project::TrackClip; // Add explicit import
 use crate::model::project::project::{Composition, Project};
 use crate::util::timing::ScopedTimer;
 
@@ -33,10 +33,10 @@ impl<'a> FrameEvaluator<'a> {
     pub fn evaluate(&self, frame_number: u64) -> FrameInfo {
         // Changed to u64
         let mut frame = self.initialize_frame();
-        for track_entity in self.active_entities(frame_number) {
+        for track_clip in self.active_clips(frame_number) {
             // Changed to track_entity
-            if let Some(object) = self.convert_entity(track_entity, frame_number) {
-                // Changed to track_entity
+            if let Some(object) = self.convert_entity(track_clip, frame_number) {
+                // Changed to track_clip
                 frame.objects.push(object);
             }
         }
@@ -53,17 +53,17 @@ impl<'a> FrameEvaluator<'a> {
         }
     }
 
-    fn active_entities(&self, frame_number: u64) -> impl Iterator<Item = &TrackEntity> {
+    fn active_clips(&self, frame_number: u64) -> impl Iterator<Item = &TrackClip> {
         // Changed to u64
         self.composition
-            .cached_entities() // Returns &[TrackEntity] now
+            .cached_entities() // Returns &[TrackClip] now - updated to cached_clips if renamed in project.rs, but currently cached_entities uses TrackClip
             .iter()
-            .filter(move |track_entity| {
-                track_entity.in_frame <= frame_number && track_entity.out_frame >= frame_number
+            .filter(move |track_clip| {
+                track_clip.in_frame <= frame_number && track_clip.out_frame >= frame_number
             })
     }
 
-    fn convert_entity(&self, track_entity: &TrackEntity, frame_number: u64) -> Option<FrameObject> {
+    fn convert_entity(&self, track_clip: &TrackClip, frame_number: u64) -> Option<FrameObject> {
         // Changed to track_entity, u64
         self.entity_converter_registry.convert_entity(
             // Pass self (the FrameEvaluator) as the evaluation context
@@ -71,7 +71,7 @@ impl<'a> FrameEvaluator<'a> {
                 composition: self.composition,
                 property_evaluators: &self.property_evaluators,
             },
-            track_entity, // Pass track_entity
+            track_clip, // Pass track_clip
             frame_number, // Changed to frame_number
         )
     }
@@ -123,10 +123,10 @@ pub fn get_frame_from_project(
 mod tests {
     use super::*;
     use crate::model::frame::color::Color; // Added
-    use crate::model::frame::entity::FrameEntity; // Added
+    use crate::model::frame::entity::FrameContent; // Added
     use crate::model::project::project::Composition; // Added
     use crate::model::project::property::{Property, PropertyMap, PropertyValue, Vec2};
-    use crate::model::project::{Track, TrackEntity};
+    use crate::model::project::{Track, TrackClip};
     use crate::plugin::PluginManager;
     use crate::plugin::properties::{
         ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin,
@@ -181,17 +181,21 @@ mod tests {
         text_props.set("anchor".into(), constant(make_vec2(0.0, 0.0)));
         text_props.set("rotation".into(), constant(PropertyValue::Number(0.0)));
 
-        let track_entity = TrackEntity {
+        let track_clip = TrackClip {
+            id: uuid::Uuid::new_v4(), // Added ID
             entity_type: "text".into(),
-            start_time: 0.0,
-            end_time: 5.0,
+            in_frame: 0, // Renamed
+            out_frame: 150, // Renamed
+            source_begin_frame: 0, // Added
+            duration_frame: None, // Added
             fps: 30.0,
             properties: text_props,
             effects: Vec::new(),
         };
         let track = Track {
+            id: uuid::Uuid::new_v4(), // Added ID
             name: "track".into(),
-            entities: vec![track_entity],
+            clips: vec![track_clip],
         };
         composition.add_track(track);
 
@@ -203,11 +207,11 @@ mod tests {
             Arc::clone(&registry),
             Arc::clone(&entity_converter_registry),
         );
-        let frame = evaluator.evaluate(1.0);
+        let frame = evaluator.evaluate(1);
 
         assert_eq!(frame.objects.len(), 1);
-        match &frame.objects[0].entity {
-            FrameEntity::Text {
+        match &frame.objects[0].content {
+            FrameContent::Text {
                 text, font, size, ..
             } => {
                 assert_eq!(text, "Hello");
@@ -232,27 +236,34 @@ mod tests {
         props.set("anchor".into(), constant(make_vec2(0.0, 0.0)));
         props.set("rotation".into(), constant(PropertyValue::Number(0.0)));
 
-        let early = TrackEntity {
+        let early = TrackClip {
+            id: uuid::Uuid::new_v4(), // Added ID
             entity_type: "image".into(),
-            start_time: 0.0,
-            end_time: 1.0,
+            in_frame: 0, // Renamed
+            out_frame: 30, // Renamed (1.0 sec at 30fps)
+            source_begin_frame: 0,
+            duration_frame: None,
             fps: 30.0,
             properties: props.clone(),
             effects: Vec::new(),
         };
 
-        let late = TrackEntity {
+        let late = TrackClip {
+            id: uuid::Uuid::new_v4(), // Added ID
             entity_type: "image".into(),
-            start_time: 5.0,
-            end_time: 6.0,
+            in_frame: 150, // Renamed (5.0 sec at 30fps)
+            out_frame: 180, // Renamed (6.0 sec at 30fps)
+            source_begin_frame: 0,
+            duration_frame: None,
             fps: 30.0,
             properties: props,
             effects: Vec::new(),
         };
 
         let track = Track {
+            id: uuid::Uuid::new_v4(),
             name: "track".into(),
-            entities: vec![early, late],
+            clips: vec![early, late],
         };
         composition.add_track(track);
 
@@ -265,10 +276,10 @@ mod tests {
             Arc::clone(&entity_converter_registry),
         );
 
-        let frame = evaluator.evaluate(0.5);
+        let frame = evaluator.evaluate(15); // 0.5s * 30fps = 15 frames
         assert_eq!(frame.objects.len(), 1, "Only early entity should render");
 
-        let frame_late = evaluator.evaluate(5.5);
+        let frame_late = evaluator.evaluate(165); // 5.5s * 30fps = 165 frames
         assert_eq!(
             frame_late.objects.len(),
             1,

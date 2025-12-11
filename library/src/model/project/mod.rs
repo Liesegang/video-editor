@@ -1,9 +1,8 @@
-pub mod conversion;
-pub mod entity;
+// pub mod conversion;
+// pub mod entity;
 pub mod project;
 pub mod property;
 
-use crate::model::project::entity::EffectConfig;
 use crate::model::project::property::PropertyMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid; // Added Uuid import
@@ -12,7 +11,7 @@ use uuid::Uuid; // Added Uuid import
 pub struct Track {
     pub id: Uuid, // Added UUID field
     pub name: String,
-    pub entities: Vec<TrackEntity>,
+    pub clips: Vec<TrackClip>,
 }
 
 impl Track {
@@ -20,13 +19,13 @@ impl Track {
         Self {
             id: Uuid::new_v4(), // Initialize with a new UUID
             name: name.to_string(),
-            entities: Vec::new(),
+            clips: Vec::new(),
         }
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
-pub struct TrackEntity {
+pub struct TrackClip {
     pub id: Uuid, // Added UUID field
     #[serde(rename = "type")]
     pub entity_type: String,
@@ -48,7 +47,13 @@ pub struct TrackEntity {
     pub effects: Vec<EffectConfig>,
 }
 
-impl TrackEntity {
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct EffectConfig {
+    pub effect_type: String,
+    pub properties: PropertyMap,
+}
+
+impl TrackClip {
     pub fn new(
         id: Uuid,
         entity_type: String,
@@ -71,6 +76,69 @@ impl TrackEntity {
             properties,
             effects,
         }
+    }
+
+    // Ported helper constructors from Entity
+    pub fn create_video(
+        file_path: &str,
+        in_frame: u64,
+        out_frame: u64,
+        source_begin_frame: u64,
+        duration_frame: u64,
+    ) -> Self {
+        let mut props = PropertyMap::new();
+        props.set("file_path".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::String(file_path.to_string())));
+
+        TrackClip::new(
+            Uuid::new_v4(),
+            "video".to_string(),
+            in_frame,
+            out_frame,
+            source_begin_frame,
+            Some(duration_frame),
+            0.0,
+            props,
+            Vec::new(),
+        )
+    }
+
+    pub fn create_image(file_path: &str, in_frame: u64, out_frame: u64) -> Self {
+        let mut props = PropertyMap::new();
+        props.set("file_path".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::String(file_path.to_string())));
+
+        TrackClip::new(
+            Uuid::new_v4(),
+            "image".to_string(),
+            in_frame,
+            out_frame,
+            0,
+            None, // Image is static
+            0.0,
+            props,
+            Vec::new(),
+        )
+    }
+
+    pub fn create_text(text: &str, in_frame: u64, out_frame: u64) -> Self {
+        let mut props = PropertyMap::new();
+        props.set("text".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::String(text.to_string())));
+
+        TrackClip::new(
+            Uuid::new_v4(),
+            "text".to_string(),
+            in_frame,
+            out_frame,
+            0,
+            None, // Text is static
+            0.0,
+            props,
+            Vec::new(),
+        )
+    }
+
+    // Helper for consistency with Entity
+    pub fn set_constant_property(&mut self, key: &str, value: crate::model::project::property::PropertyValue) {
+        self.properties.set(key.to_string(), crate::model::project::property::Property::constant(value));
     }
 }
 

@@ -355,7 +355,7 @@ impl eframe::App for MyApp {
 
                                 if let Err(e) = self
                                     .project_service
-                                    .remove_entity_from_track(comp_id, track_id, entity_id)
+                                    .remove_clip_from_track(comp_id, track_id, entity_id)
                                 {
                                     eprintln!("Failed to remove entity: {:?}", e);
                                 } else {

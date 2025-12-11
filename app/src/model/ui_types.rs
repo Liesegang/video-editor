@@ -4,22 +4,22 @@ use uuid::Uuid;
 // GUI-specific Clip representation (derived from TrackEntity for display)
 // This struct holds display-only properties, actual data resides in Project
 #[derive(Debug, Clone, PartialEq)]
-pub struct GuiClip {
+pub struct TimelineClip {
     pub id: Uuid,
     pub name: String,
     pub track_id: Uuid,
-    pub in_frame: u64,                 // New: Timeline start frame (u64)
-    pub out_frame: u64,                // New: Timeline end frame (u64)
-    pub timeline_duration_frames: u64, // New: (out_frame - in_frame)
-    pub source_begin_frame: u64,       // New: Source content begin frame (u64)
-    pub duration_frame: Option<u64>,   // New: Source content duration in frames (Option<u64>)
-
-    pub color: egui::Color32,
+    pub in_frame: u64,
+    pub out_frame: u64,
+    pub timeline_duration_frames: u64,
+    pub source_begin_frame: u64,
+    pub duration_frame: Option<u64>,
+    pub color: egui::Color32, // Changed from Color32 to egui::Color32 to match original context
     pub position: [f32; 2],
     pub scale: f32,
     pub opacity: f32,
     pub rotation: f32,
-    pub asset_index: usize, // To link back to local assets for display info
+    pub asset_index: usize,
+    // Add other UI-specific properties here (is_selected, etc. if needed in future)
 }
 
 #[derive(Debug, Clone, PartialEq)]

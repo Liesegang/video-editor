@@ -365,7 +365,7 @@ impl Property {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)] // Added Debug
 #[serde(transparent)]
 pub struct PropertyMap {
     properties: HashMap<String, Property>,
