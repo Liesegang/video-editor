@@ -295,7 +295,7 @@ pub fn preview_panel(
                                 entity_id,
                                 "position_x",
                                 library::model::project::property::PropertyValue::Number(
-                                    project_service
+                                    ordered_float::OrderedFloat(project_service
                                         .with_track_mut(comp_id, track_id, |track| {
                                             track
                                                 .clips
@@ -305,7 +305,7 @@ pub fn preview_panel(
                                                 .unwrap_or(0.0)
                                         })
                                         .unwrap_or(0.0)
-                                        + world_delta.x as f64,
+                                        + world_delta.x as f64),
                                 ),
                             )
                             .ok(); // Handle error
@@ -316,7 +316,7 @@ pub fn preview_panel(
                                 entity_id,
                                 "position_y",
                                 library::model::project::property::PropertyValue::Number(
-                                    project_service
+                                    ordered_float::OrderedFloat(project_service
                                         .with_track_mut(comp_id, track_id, |track| {
                                             track
                                                 .clips
@@ -326,7 +326,7 @@ pub fn preview_panel(
                                                 .unwrap_or(0.0)
                                         })
                                         .unwrap_or(0.0)
-                                        + world_delta.y as f64,
+                                        + world_delta.y as f64),
                                 ),
                             )
                             .ok(); // Handle error

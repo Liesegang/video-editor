@@ -55,7 +55,7 @@ skia-safe = { version = "0.82.0", features = ["gpu", "gl"] }
 log = "0.4.26"
 env_logger = "0.11.7"
 lru = "0.12.3"
-ordered-float = "4.2.1"
+ordered-float = { version = "4.2.1", features = ["serde"] }
 libloading = "0.8"
 glutin = "0.28"
 thiserror = "1.0"

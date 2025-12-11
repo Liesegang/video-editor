@@ -1,3 +1,4 @@
+use ordered_float::OrderedFloat;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -636,7 +637,7 @@ impl PropertyEvaluatorRegistry {
             Some(evaluator) => evaluator.evaluate(property, time, ctx),
             None => {
                 warn!("Unknown property evaluator '{}'", key);
-                PropertyValue::Number(0.0)
+                PropertyValue::Number(OrderedFloat(0.0))
             }
         }
     }

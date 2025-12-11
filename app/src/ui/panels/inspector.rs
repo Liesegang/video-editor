@@ -1,5 +1,5 @@
 use egui::Ui;
-use egui_phosphor::regular as icons;
+
 use library::model::project::project::Project;
 use library::model::project::property::PropertyValue;
 use library::model::project::TrackClipKind; // Added
@@ -43,7 +43,7 @@ fn handle_drag_value_property(
             track_id,
             selected_entity_id,
             property_name,
-            PropertyValue::Number(*current_value as f64),
+            PropertyValue::Number(ordered_float::OrderedFloat(*current_value as f64)),
         )
         .ok();
         *needs_refresh = true; // Update needs_refresh internally
@@ -85,7 +85,7 @@ fn handle_slider_property(
             track_id,
             selected_entity_id,
             property_name,
-            PropertyValue::Number(*current_value as f64),
+            PropertyValue::Number(ordered_float::OrderedFloat(*current_value as f64)),
         )
         .ok();
         *needs_refresh = true; // Update needs_refresh internally
@@ -354,7 +354,7 @@ pub fn inspector_panel(
                          _name: &str,
                          value: PropertyValue| {
                             if let PropertyValue::Number(new_val_f64) = value {
-                                let new_in_frame = new_val_f64 as u64;
+                                let new_in_frame = new_val_f64.0 as u64;
                                 service.update_clip_time(comp, track, entity, new_in_frame, out_frame).map_err(|e| anyhow::anyhow!(e))
                             } else {
                                 Err(anyhow::anyhow!("Expected Number for In Frame"))
@@ -386,7 +386,7 @@ pub fn inspector_panel(
                          _name: &str,
                          value: PropertyValue| {
                             if let PropertyValue::Number(new_val_f64) = value {
-                                let new_out_frame = new_val_f64 as u64;
+                                let new_out_frame = new_val_f64.0 as u64;
                                 service.update_clip_time(comp, track, entity, in_frame, new_out_frame).map_err(|e| anyhow::anyhow!(e))
                             } else {
                                 Err(anyhow::anyhow!("Expected Number for Out Frame"))
@@ -418,7 +418,7 @@ pub fn inspector_panel(
                          _name: &str,
                          value: PropertyValue| {
                             if let PropertyValue::Number(new_val_f64) = value {
-                                let new_source_begin_frame = new_val_f64 as u64;
+                                let new_source_begin_frame = new_val_f64.0 as u64;
                                 service.update_clip_source_frames(comp, track, entity, new_source_begin_frame, duration_frame).map_err(|e| anyhow::anyhow!(e))
                             } else {
                                 Err(anyhow::anyhow!("Expected Number for Source Begin Frame"))

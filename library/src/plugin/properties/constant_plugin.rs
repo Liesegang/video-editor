@@ -2,6 +2,7 @@ use super::super::{Plugin, PluginCategory, PropertyPlugin};
 use crate::model::project::property::{Property, PropertyValue};
 use crate::plugin::{EvaluationContext, PropertyEvaluator};
 use log::warn;
+use ordered_float::OrderedFloat;
 use std::sync::Arc;
 
 pub struct ConstantPropertyPlugin;
@@ -38,7 +39,7 @@ impl PropertyEvaluator for ConstantEvaluator {
     fn evaluate(&self, property: &Property, _time: f64, _ctx: &EvaluationContext) -> PropertyValue {
         property.value().cloned().unwrap_or_else(|| {
             warn!("Constant evaluator missing 'value'; using 0");
-            PropertyValue::Number(0.0)
+            PropertyValue::Number(OrderedFloat(0.0))
         })
     }
 }

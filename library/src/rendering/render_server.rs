@@ -1,10 +1,8 @@
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::num::NonZeroUsize;
-use log::{debug, info, error};
+use log::error;
 use lru::LruCache;
-use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
 use std::sync::Arc;
 
 use crate::model::frame::frame::FrameInfo;
@@ -18,11 +16,13 @@ use crate::framing::entity_converters::EntityConverterRegistry;
 pub struct RenderServer {
     tx: Sender<RenderRequest>,
     rx_result: Receiver<RenderResult>,
+    #[allow(dead_code)]
     handle: Option<thread::JoinHandle<()>>,
 }
 
 enum RenderRequest {
     Render(FrameInfo),
+    #[allow(dead_code)]
     Shutdown,
 }
 
@@ -30,11 +30,6 @@ pub struct RenderResult {
     pub frame_hash: u64,
     pub image: Image,
     pub frame_info: FrameInfo, // Return frame info to verify content if needed, though hash is mostly enough
-}
-
-struct CacheEntry {
-    frame_info: FrameInfo,
-    image: Image,
 }
 
 impl RenderServer {
@@ -47,7 +42,7 @@ impl RenderServer {
         let (tx_result, rx_result) = channel::<RenderResult>();
 
         let handle = thread::spawn(move || {
-            let mut cache: LruCache<u64, Vec<CacheEntry>> = LruCache::new(NonZeroUsize::new(50).unwrap());
+            let mut cache: LruCache<FrameInfo, Vec<u8>> = LruCache::new(NonZeroUsize::new(50).unwrap());
             
             // Initial renderer
             let mut current_background_color = crate::model::frame::color::Color { r: 0, g: 0, b: 0, a: 0 };
@@ -85,23 +80,11 @@ impl RenderServer {
 
                 match req {
                     RenderRequest::Render(frame_info) => {
-                        let hash = calculate_hash(&frame_info);
-                        
                         // Check cache
-                        let mut found = None;
-                        if let Some(entries) = cache.get(&hash) {
-                            for entry in entries {
-                                if entry.frame_info == frame_info {
-                                    found = Some(entry.image.clone());
-                                    break;
-                                }
-                            }
-                        }
-
-                        if let Some(image) = found {
+                        if let Some(cached_image_data) = cache.get(&frame_info) {
                             let _ = tx_result.send(RenderResult {
-                                frame_hash: hash,
-                                image,
+                                frame_hash: 0, // Hash is no longer used/needed for identification in the same way, or we can compute a cheap hash if needed for Result
+                                image: Image::new(frame_info.width as u32, frame_info.height as u32, cached_image_data.clone()),
                                 frame_info,
                             });
                             continue;
@@ -122,18 +105,10 @@ impl RenderServer {
                         match render_service.render_from_frame_info(&frame_info) {
                             Ok(image) => {
                                 // Cache
-                                if !cache.contains(&hash) {
-                                    cache.put(hash, Vec::new());
-                                }
-                                if let Some(bucket) = cache.get_mut(&hash) {
-                                    bucket.push(CacheEntry {
-                                        frame_info: frame_info.clone(),
-                                        image: image.clone(),
-                                    });
-                                }
+                                cache.put(frame_info.clone(), image.data.clone());
 
                                 let _ = tx_result.send(RenderResult {
-                                    frame_hash: hash,
+                                    frame_hash: 0,
                                     image,
                                     frame_info,
                                 });
@@ -163,12 +138,3 @@ impl RenderServer {
         self.rx_result.try_recv()
     }
 }
-
-fn calculate_hash(frame_info: &FrameInfo) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    // Serialize to bytes using bincode
-    let bytes = bincode::serialize(frame_info).unwrap_or_default();
-    bytes.hash(&mut hasher);
-    hasher.finish()
-}
-

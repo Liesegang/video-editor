@@ -129,7 +129,7 @@ impl<'a> FrameEvaluationContext<'a> {
 
     fn evaluate_number(&self, properties: &PropertyMap, key: &str, time: f64, default: f64) -> f64 {
         match self.evaluate_property_value(properties, key, time) {
-            Some(PropertyValue::Number(value)) => value,
+            Some(PropertyValue::Number(value)) => *value,
             Some(PropertyValue::Integer(value)) => value as f64,
             None => default,
             Some(other) => {
@@ -152,7 +152,7 @@ impl<'a> FrameEvaluationContext<'a> {
     ) -> (f64, f64) {
         // Initialize with default or Vec2 value
         let (mut vx, mut vy) = if let Some(PropertyValue::Vec2(v)) = self.evaluate_property_value(properties, key, time) {
-            (v.x, v.y)
+            (*v.x, *v.y)
         } else {
             (default_x, default_y)
         };
@@ -161,7 +161,7 @@ impl<'a> FrameEvaluationContext<'a> {
         let key_x = format!("{}_x", key);
         if let Some(val) = self.evaluate_property_value(properties, &key_x, time) {
              match val {
-                 PropertyValue::Number(n) => vx = n,
+                 PropertyValue::Number(n) => vx = n.0,
                  PropertyValue::Integer(i) => vx = i as f64,
                  _ => {}
              }
@@ -170,7 +170,7 @@ impl<'a> FrameEvaluationContext<'a> {
         let key_y = format!("{}_y", key);
         if let Some(val) = self.evaluate_property_value(properties, &key_y, time) {
              match val {
-                 PropertyValue::Number(n) => vy = n,
+                 PropertyValue::Number(n) => vy = n.0,
                  PropertyValue::Integer(i) => vy = i as f64,
                  _ => {}
              }

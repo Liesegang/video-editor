@@ -5,7 +5,7 @@ use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
 use crate::model::frame::transform::Transform;
 use crate::rendering::renderer::Renderer;
 use crate::rendering::skia_utils::{
-    GpuContext, create_gpu_context, create_surface, image_to_skia, surface_to_image,
+    GpuContext, create_surface, image_to_skia, surface_to_image,
 };
 use crate::util::timing::ScopedTimer;
 use log::{debug, trace};
