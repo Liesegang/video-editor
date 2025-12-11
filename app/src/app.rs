@@ -94,7 +94,7 @@ impl MyApp {
         self.editor_context.selected_composition_id = Some(new_comp_id);
         self.editor_context.selected_track_id = None;
         self.editor_context.selected_entity_id = None;
-        self.editor_context.inspector_entity_cache = None;
+
 
         self.history_manager = HistoryManager::new();
         self.history_manager
@@ -109,55 +109,7 @@ impl eframe::App for MyApp {
 
         // --- Draw UI and Collect Inputs ---
 
-        // Manage inspector_entity_cache
-        let current_selected_entity_id = self.editor_context.selected_entity_id;
-        let current_selected_composition_id = self.editor_context.selected_composition_id;
-        let current_selected_track_id = self.editor_context.selected_track_id;
 
-        let mut should_update_cache = false;
-        if let Some(selected_id) = current_selected_entity_id {
-            if self.editor_context.inspector_entity_cache.is_none()
-                || self
-                    .editor_context
-                    .inspector_entity_cache
-                    .as_ref()
-                    .unwrap()
-                    .0
-                    != selected_id
-            {
-                should_update_cache = true;
-            }
-        } else {
-            if self.editor_context.inspector_entity_cache.is_some() {
-                self.editor_context.inspector_entity_cache = None;
-            }
-        }
-        if should_update_cache {
-            if let (Some(entity_id), Some(comp_id), Some(track_id)) = (
-                current_selected_entity_id,
-                current_selected_composition_id,
-                current_selected_track_id,
-            ) {
-                if let Ok(proj_read) = self.project.read() {
-                    if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-                        if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                            if let Some(entity) = track.entities.iter().find(|e| e.id == entity_id)
-                            {
-                                self.editor_context.inspector_entity_cache = Some((
-                                    entity.id,
-                                    entity.entity_type.clone(),
-                                    entity.properties.clone(),
-                                    entity.in_frame,           // New field
-                                    entity.out_frame,          // New field
-                                    entity.source_begin_frame, // New field
-                                    entity.duration_frame,     // New field
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
         // 2. Menu Bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
@@ -384,7 +336,7 @@ impl eframe::App for MyApp {
                         self.project_service.get_project().read().unwrap().clone();
                     if let Some(new_project) = self.history_manager.undo(current_project) {
                         self.project_service.set_project(new_project);
-                        self.editor_context.inspector_entity_cache = None;
+
                     } else {
                         eprintln!("Undo stack is empty.");
                     }
@@ -394,7 +346,7 @@ impl eframe::App for MyApp {
                         self.project_service.get_project().read().unwrap().clone();
                     if let Some(new_project) = self.history_manager.redo(current_project) {
                         self.project_service.set_project(new_project);
-                        self.editor_context.inspector_entity_cache = None;
+
                     } else {
                         eprintln!("Redo stack is empty.");
                     }
