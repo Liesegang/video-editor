@@ -6,6 +6,7 @@ use crate::model::project::property::PropertyMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct ImageSurface {
     #[serde(rename = "file_path")]
     pub file_path: String,
@@ -17,7 +18,8 @@ pub struct ImageSurface {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type")]
-pub enum FrameEntity {
+#[derive(Debug)]
+pub enum FrameContent {
     Video {
         #[serde(flatten)]
         surface: ImageSurface,
@@ -50,19 +52,19 @@ pub enum FrameEntity {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct FrameObject {
-    pub entity: FrameEntity,
+    pub content: FrameContent, // Renamed from entity: FrameEntity
     pub properties: PropertyMap,
 }
 
-pub trait ImageEntity {
-    fn surface(&self) -> Option<&ImageSurface>;
+pub trait ImageContent {
+    fn get_surface(&self) -> Option<&ImageSurface>;
 }
 
-impl ImageEntity for FrameEntity {
-    fn surface(&self) -> Option<&ImageSurface> {
+impl ImageContent for FrameContent {
+    fn get_surface(&self) -> Option<&ImageSurface> {
         match self {
-            FrameEntity::Video { surface, .. } => Some(surface),
-            FrameEntity::Image { surface } => Some(surface),
+            FrameContent::Video { surface, .. } => Some(surface),
+            FrameContent::Image { surface } => Some(surface),
             _ => None,
         }
     }

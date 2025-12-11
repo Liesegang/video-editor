@@ -1,7 +1,7 @@
 use crate::model::frame::color::Color;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub enum JoinType {
     Round,
     Bevel,
@@ -14,7 +14,7 @@ impl Default for JoinType {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub enum CapType {
     Round,
     Square,
@@ -28,6 +28,7 @@ impl Default for CapType {
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum DrawStyle {
     Fill {
         color: Color,

@@ -3,7 +3,7 @@ use crate::error::LibraryError;
 use crate::framing::entity_converters::EntityConverterRegistry;
 use crate::framing::get_frame_from_project;
 use crate::loader::image::Image;
-use crate::model::frame::entity::{FrameEntity, FrameObject};
+use crate::model::frame::entity::{FrameContent, FrameObject}; // FrameEntity -> FrameContent
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
 use crate::plugin::{LoadRequest, LoadResponse, PluginManager};
@@ -50,11 +50,11 @@ impl<T: Renderer> RenderService<T> {
 
         for frame_object in frame_info.objects {
             let FrameObject {
-                entity,
+                content, // entity -> content
                 properties: _properties,
             } = frame_object;
-            match entity {
-                FrameEntity::Video {
+            match content { // entity -> content
+                FrameContent::Video { // FrameEntity -> FrameContent
                     surface,
                     frame_number,
                 } => {
@@ -78,7 +78,7 @@ impl<T: Renderer> RenderService<T> {
                         self.renderer.draw_image(&final_image, &surface.transform)
                     })?;
                 }
-                FrameEntity::Image { surface } => {
+                FrameContent::Image { surface } => { // FrameEntity -> FrameContent
                     let request = LoadRequest::Image {
                         path: surface.file_path.clone(),
                     };
@@ -98,7 +98,7 @@ impl<T: Renderer> RenderService<T> {
                         self.renderer.draw_image(&final_image, &surface.transform)
                     })?;
                 }
-                FrameEntity::Text {
+                FrameContent::Text { // FrameEntity -> FrameContent
                     text,
                     font,
                     size,
@@ -117,7 +117,7 @@ impl<T: Renderer> RenderService<T> {
                             .draw_image(&final_image, &Transform::default())
                     })?;
                 }
-                FrameEntity::Shape {
+                FrameContent::Shape { // FrameEntity -> FrameContent
                     path,
                     styles,
                     path_effects,

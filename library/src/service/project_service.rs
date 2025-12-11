@@ -1,8 +1,8 @@
 use crate::error::LibraryError;
-use crate::model::project::entity::Entity;
+// use crate::model::project::entity::Entity; // Removed
 use crate::model::project::project::{Composition, Project};
 use crate::model::project::property::{Property, PropertyValue};
-use crate::model::project::{Track, TrackEntity};
+use crate::model::project::{Track, TrackClip};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -203,176 +203,147 @@ impl ProjectService {
 
     // --- Entity Operations ---
 
-    pub fn add_entity_to_track(
+    pub fn add_clip_to_track(
         &self,
         composition_id: Uuid,
         track_id: Uuid,
-        entity: Entity, // Pass a fully formed Entity object
+        clip: TrackClip, // Pass a fully formed TrackClip object
         in_frame: u64,  // Timeline start frame
         out_frame: u64, // Timeline end frame
     ) -> Result<Uuid, LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
-            let id = entity.id;
-            track.entities.push(TrackEntity::new(
-                entity.id,
-                entity.entity_type,
-                in_frame,                  // New argument
-                out_frame,                 // New argument
-                entity.source_begin_frame, // From the passed Entity
-                entity.duration_frame,     // From the passed Entity
-                entity.fps,
-                entity.properties,
-                entity.effects,
-            ));
+            let id = clip.id;
+            // Ensure the clip's timing matches the requested timing
+            let mut final_clip = clip;
+            final_clip.in_frame = in_frame;
+            final_clip.out_frame = out_frame;
+
+            track.clips.push(final_clip);
             Ok(id)
         })?
     }
 
-    pub fn remove_entity_from_track(
+    pub fn remove_clip_from_track(
         &self,
         composition_id: Uuid,
         track_id: Uuid,
-        entity_id: Uuid,
+        clip_id: Uuid,
     ) -> Result<(), LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
-            let initial_len = track.entities.len();
-            track.entities.retain(|e| e.id != entity_id);
-            if track.entities.len() < initial_len {
+            if let Some(index) = track.clips.iter().position(|e| e.id == clip_id) {
+                track.clips.remove(index);
                 Ok(())
             } else {
                 Err(LibraryError::Project(format!(
-                    "Entity with ID {} not found in Track {}",
-                    entity_id, track_id
+                    "Clip with ID {} not found in track {}",
+                    clip_id, track_id
                 )))
             }
         })?
     }
 
-    pub fn update_entity_property(
+    pub fn update_clip_property(
         &self,
         composition_id: Uuid,
         track_id: Uuid,
-        entity_id: Uuid,
+        clip_id: Uuid,
         key: &str,
         value: PropertyValue,
     ) -> Result<(), LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
-            let track_entity = track
-                .entities
-                .iter_mut()
-                .find(|e| e.id == entity_id)
-                .ok_or_else(|| {
-                    LibraryError::Project(format!(
-                        "Entity with ID {} not found in Track {}",
-                        entity_id, track_id
-                    ))
-                })?;
-
-            track_entity
-                .properties
-                .set(key.to_string(), Property::constant(value));
-            Ok(())
+            if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                clip.properties.set(key.to_string(), Property::constant(value));
+                Ok(())
+            } else {
+                Err(LibraryError::Project(format!(
+                    "Clip with ID {} not found",
+                    clip_id
+                )))
+            }
         })?
     }
 
-    pub fn update_entity_time(
+    pub fn update_clip_time(
         &self,
         composition_id: Uuid,
         track_id: Uuid,
-        entity_id: Uuid,
-        new_in_frame: u64,  // Renamed parameter, u64
-        new_out_frame: u64, // Renamed parameter, u64
+        clip_id: Uuid,
+        new_in_frame: u64,
+        new_out_frame: u64,
     ) -> Result<(), LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
-            let track_entity = track
-                .entities
+            let track_clip = track
+                .clips
                 .iter_mut()
-                .find(|e| e.id == entity_id)
+                .find(|e| e.id == clip_id)
                 .ok_or_else(|| {
                     LibraryError::Project(format!(
-                        "Entity with ID {} not found in Track {}",
-                        entity_id, track_id
+                        "Clip with ID {} not found in Track {}",
+                        clip_id, track_id
                     ))
                 })?;
 
-            track_entity.in_frame = new_in_frame; // Updated field
-            track_entity.out_frame = new_out_frame; // Updated field
+            track_clip.in_frame = new_in_frame;
+            track_clip.out_frame = new_out_frame;
             Ok(())
         })?
     }
 
-    pub fn update_entity_source_frames(
+    pub fn update_clip_source_frames(
         &self,
         composition_id: Uuid,
         track_id: Uuid,
-        entity_id: Uuid,
+        clip_id: Uuid,
         new_source_begin_frame: u64,
         new_duration_frame: Option<u64>,
     ) -> Result<(), LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
-            let track_entity = track
-                .entities
+            let track_clip = track
+                .clips
                 .iter_mut()
-                .find(|e| e.id == entity_id)
+                .find(|e| e.id == clip_id)
                 .ok_or_else(|| {
                     LibraryError::Project(format!(
-                        "Entity with ID {} not found in Track {}",
-                        entity_id, track_id
+                        "Clip with ID {} not found in Track {}",
+                        clip_id, track_id
                     ))
                 })?;
 
-            track_entity.source_begin_frame = new_source_begin_frame;
-            track_entity.duration_frame = new_duration_frame;
+            track_clip.source_begin_frame = new_source_begin_frame;
+            track_clip.duration_frame = new_duration_frame;
             Ok(())
         })?
     }
 
-    pub fn move_entity_to_track(
+    pub fn move_clip_to_track(
         &self,
         composition_id: Uuid,
         source_track_id: Uuid,
         target_track_id: Uuid,
-        entity_id: Uuid,
+        clip_id: Uuid,
     ) -> Result<(), LibraryError> {
-        if source_track_id == target_track_id {
-            // No actual move needed if source and target are the same
-            return Ok(());
-        }
-
-        let mut entity_to_move: Option<TrackEntity> = None;
-
-        // 1. Remove entity from source track and capture it
-        let _ = self.with_track_mut(composition_id, source_track_id, |track| {
-            let initial_len = track.entities.len();
-            track.entities.retain(|e| {
-                if e.id == entity_id {
-                    entity_to_move = Some(e.clone()); // Clone the entity before retaining
-                    false // Remove it
-                } else {
-                    true // Keep it
-                }
-            });
-            if track.entities.len() == initial_len {
-                return Err(LibraryError::Project(format!(
-                    "Entity with ID {} not found in source Track {}",
-                    entity_id, source_track_id
-                )));
+        // 1. Remove clip from source track
+        let mut clip_to_move = None;
+        self.with_track_mut(composition_id, source_track_id, |track| {
+            if let Some(pos) = track.clips.iter().position(|e| e.id == clip_id) {
+                clip_to_move = Some(track.clips.remove(pos));
+                Ok(())
+            } else {
+                 Err(LibraryError::Project(format!(
+                    "Clip with ID {} not found in source Track {}",
+                    clip_id, source_track_id
+                )))
             }
-            Ok(()) as Result<(), LibraryError>
-        })?; // Propagate errors from the nested closure
+        })??; // Double question mark because with_track_mut returns Result, and closure returns Result
 
-        let moved_entity = entity_to_move.ok_or_else(|| {
-            LibraryError::Runtime(
-                "Failed to retrieve entity after removal from source track".to_string(),
-            )
+        let moved_clip = clip_to_move.ok_or_else(|| {
+             LibraryError::Runtime("Unexpected error: Clip not found after position check".to_string())
         })?;
 
-        // 2. Add entity to target track
-        let _ = self.with_track_mut(composition_id, target_track_id, |track| {
-            track.entities.push(moved_entity);
-            Ok(()) as Result<(), LibraryError>
-        })?; // Propagate errors from the nested closure
-
-        Ok(())
+        // 2. Add clip to target track
+        self.with_track_mut(composition_id, target_track_id, |track| {
+            track.clips.push(moved_clip);
+            Ok(())
+        })?
     }
 }

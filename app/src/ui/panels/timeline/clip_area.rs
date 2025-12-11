@@ -1,12 +1,12 @@
 use egui::{epaint::StrokeKind, Ui};
 use library::model::project::project::Project;
-use library::model::project::TrackEntity;
+use library::model::project::TrackClip;
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use crate::{
-    action::HistoryManager, model::assets::AssetKind, model::ui_types::GuiClip,
+    action::HistoryManager, model::assets::AssetKind, model::ui_types::TimelineClip,
     state::context::EditorContext,
 };
 use library::model::project::property::PropertyValue;
@@ -33,7 +33,7 @@ pub fn show_clip_area(
     let mut clicked_on_entity = false;
 
     // --- Data collection for entities ---
-    let mut all_entities: Vec<(Uuid, TrackEntity)> = Vec::new();
+    let mut all_clips: Vec<(Uuid, TrackClip)> = Vec::new(); // all_entities -> all_clips
     let mut current_tracks: Vec<library::model::project::Track> = Vec::new();
     let selected_composition_id = editor_context.selected_composition_id;
     if let Some(comp_id) = selected_composition_id {
@@ -45,8 +45,8 @@ pub fn show_clip_area(
     }
 
     for track in &current_tracks {
-        for entity in &track.entities {
-            all_entities.push((track.id, entity.clone()));
+        for clip in &track.clips { // entity -> clip
+            all_clips.push((track.id, clip.clone())); // all_entities -> all_clips
         }
     }
     // --- End Data collection for entities ---
@@ -150,7 +150,7 @@ pub fn show_clip_area(
 
                                 let new_entity = match asset.kind {
                                     AssetKind::Video => {
-                                        library::model::project::entity::Entity::create_video(
+                                        library::model::project::TrackClip::create_video(
                                             &asset.name, // Assuming asset.name is file_path for video
                                             drop_in_frame,
                                             drop_out_frame,
@@ -160,7 +160,7 @@ pub fn show_clip_area(
                                         )
                                     }
                                     AssetKind::Image => {
-                                        library::model::project::entity::Entity::create_image(
+                                        library::model::project::TrackClip::create_image(
                                             &asset.name, // Assuming asset.name is file_path for image
                                             drop_in_frame,
                                             drop_out_frame,
@@ -168,7 +168,13 @@ pub fn show_clip_area(
                                     }
                                     AssetKind::Audio => {
                                         let mut audio_entity =
-                                            library::model::project::entity::Entity::new("audio");
+                                            library::model::project::TrackClip::new(
+                                                Uuid::new_v4(),
+                                                "audio".to_string(),
+                                                0, 0, 0, None, 0.0,
+                                                library::model::project::property::PropertyMap::new(),
+                                                Vec::new()
+                                            );
                                         audio_entity.in_frame = drop_in_frame;
                                         audio_entity.out_frame = drop_out_frame;
                                         audio_entity.duration_frame =
@@ -182,8 +188,12 @@ pub fn show_clip_area(
                                     }
                                     AssetKind::Composition(_nested_comp_id) => {
                                         let mut comp_entity =
-                                            library::model::project::entity::Entity::new(
-                                                "composition",
+                                            library::model::project::TrackClip::new(
+                                                Uuid::new_v4(),
+                                                "composition".to_string(),
+                                                0, 0, 0, None, 0.0,
+                                                library::model::project::property::PropertyMap::new(),
+                                                Vec::new()
                                             );
                                         comp_entity.in_frame = drop_in_frame;
                                         comp_entity.out_frame = drop_out_frame;
@@ -198,10 +208,10 @@ pub fn show_clip_area(
                                     }
                                 };
 
-                                if let Err(e) = project_service.add_entity_to_track(
+                                if let Err(e) = project_service.add_clip_to_track(
                                     comp_id,
                                     track.id,
-                                    new_entity, // Pass the created Entity object
+                                    new_entity, // Pass the created TrackClip object
                                     drop_in_frame,
                                     drop_out_frame,
                                 ) {
@@ -227,7 +237,7 @@ pub fn show_clip_area(
             .map(|idx| idx as f32)
             .unwrap_or(0.0);
 
-        for (entity_track_id, entity) in all_entities
+        for (entity_track_id, entity) in all_clips // all_entities -> all_clips
             .iter()
             .filter(|(t_id, _)| *t_id == track_in_all_entities.id)
         {
@@ -235,7 +245,7 @@ pub fn show_clip_area(
             let asset = editor_context.assets.get(asset_index);
 
             if let Some(a) = asset {
-                let gc = GuiClip {
+                let gc = TimelineClip {
                     id: entity.id,
                     name: entity.entity_type.clone(),
                     track_id: *entity_track_id,
@@ -353,7 +363,7 @@ pub fn show_clip_area(
                             editor_context.selected_track_id,
                         ) {
                             project_service
-                                .update_entity_time(
+                                .update_clip_time(
                                     comp_id,
                                     track_id,
                                     gc.id,
@@ -465,7 +475,7 @@ pub fn show_clip_area(
                                 (gc.out_frame as i64 + dt_frames).max(new_in_frame as i64) as u64;
 
                             project_service
-                                .update_entity_time(
+                                .update_clip_time(
                                     comp_id,
                                     track_id,
                                     gc.id,
@@ -477,7 +487,7 @@ pub fn show_clip_area(
                             // Also update source_begin_frame to shift the source content
                             let new_source_begin_frame = (gc.source_begin_frame as i64 + dt_frames).max(0) as u64;
                             project_service
-                                .update_entity_source_frames(
+                                .update_clip_source_frames(
                                     comp_id,
                                     track_id,
                                     gc.id,
@@ -530,7 +540,7 @@ pub fn show_clip_area(
                     ) {
                         if original_track_id != hovered_track_id {
                             // Move entity to new track
-                            if let Err(e) = project_service.move_entity_to_track(
+                            if let Err(e) = project_service.move_clip_to_track(
                                 comp_id,
                                 original_track_id,
                                 hovered_track_id,
