@@ -442,25 +442,7 @@ pub fn inspector_panel(
                     ui.end_row();
                 });
 
-            if ui
-                .button(format!("{} Delete Clip", icons::TRASH))
-                .clicked()
-            {
 
-                if let Err(e) = project_service.remove_clip_from_track(
-                    comp_id,
-                    track_id,
-                    selected_entity_id,
-                ) {
-                    eprintln!("Failed to remove entity: {:?}", e);
-                } else {
-                    editor_context.selected_entity_id = None;
-                    editor_context.selected_entity_id = None;
-                    let current_state = project_service.get_project().read().unwrap().clone();
-                    history_manager.push_project_state(current_state);
-                    needs_refresh = true;
-                }
-            }
         } else {
              ui.label("Clip not found (it may have been deleted).");
              // Deselect if not found
