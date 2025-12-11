@@ -71,6 +71,8 @@ pub enum LoadResponse {
     Image(Image),
 }
 
+use crate::model::project::asset::AssetKind; // Added import
+
 pub trait LoadPlugin: Plugin {
     fn supports(&self, request: &LoadRequest) -> bool;
     fn load(
@@ -78,6 +80,10 @@ pub trait LoadPlugin: Plugin {
         request: &LoadRequest,
         cache: &CacheManager,
     ) -> Result<LoadResponse, LibraryError>;
+    
+    fn get_asset_kind(&self, _path: &str) -> Option<AssetKind> {
+        None
+    }
 }
 
 pub trait ExportPlugin: Plugin {
@@ -377,6 +383,16 @@ impl PluginManager {
             "No load plugin registered for request {:?}",
             request
         )))
+    }
+
+    pub fn probe_asset_kind(&self, path: &str) -> AssetKind {
+        let inner = self.inner.read().unwrap();
+        for plugin in inner.load_plugins.plugins.values() {
+            if let Some(kind) = plugin.get_asset_kind(path) {
+                return kind;
+            }
+        }
+        AssetKind::Other
     }
 
     pub fn export_image(

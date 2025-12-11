@@ -7,13 +7,19 @@ use crate::model::project::{Track, TrackClip};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+use crate::plugin::PluginManager;
+
 pub struct ProjectService {
     project: Arc<RwLock<Project>>,
+    plugin_manager: Arc<PluginManager>,
 }
 
 impl ProjectService {
-    pub fn new(project: Arc<RwLock<Project>>) -> Self {
-        ProjectService { project }
+    pub fn new(project: Arc<RwLock<Project>>, plugin_manager: Arc<PluginManager>) -> Self {
+        ProjectService { 
+            project, 
+            plugin_manager 
+        }
     }
 
     pub fn get_project(&self) -> Arc<RwLock<Project>> {
@@ -50,6 +56,24 @@ impl ProjectService {
         let id = asset.id;
         project_write.assets.push(asset);
         Ok(id)
+    }
+
+    pub fn import_file(&self, path: &str) -> Result<Uuid, LibraryError> {
+        let path_buf = std::path::Path::new(path);
+        let name = path_buf
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or("New Asset".to_string());
+        
+        let kind = self.plugin_manager.probe_asset_kind(path);
+        
+        // TODO: In the future, we can load metadata (duration, width, height) here using plugins
+        let duration = None; 
+        
+        let mut asset = Asset::new(&name, path, kind);
+        asset.duration = duration;
+        
+        self.add_asset(asset)
     }
 
     // --- Composition Operations ---

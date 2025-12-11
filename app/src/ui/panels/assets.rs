@@ -136,34 +136,18 @@ pub fn assets_panel(
         if ui.button(format!("{} Add Asset", icons::PLUS)).clicked() {
             if let Some(path) = rfd::FileDialog::new().pick_file() {
                 let path_str = path.to_string_lossy().to_string();
-                let name = path
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or("New Asset".to_string());
 
-                // Determine kind
-                let kind = if let Some(ext) = path.extension() {
-                    let ext_str = ext.to_string_lossy().to_lowercase();
-                    match ext_str.as_str() {
-                        "mp4" | "mov" | "avi" | "mkv" => AssetKind::Video,
-                        "mp3" | "wav" | "aac" => AssetKind::Audio,
-                        "png" | "jpg" | "jpeg" | "bmp" => AssetKind::Image,
-                        "obj" | "fbx" | "gltf" | "glb" => AssetKind::Model3D,
-                        _ => AssetKind::Other,
+                // Import asset using ProjectService
+                match project_service.import_file(&path_str) {
+                    Ok(_) => {
+                        let current_state = project_service.get_project().read().unwrap().clone();
+                        history_manager.push_project_state(current_state);
+                        needs_refresh = true;
                     }
-                } else {
-                    AssetKind::Other
-                };
-
-                // Create asset
-                let asset = Asset::new(&name, &path_str, kind);
-
-                // Add to project
-                project_service.add_asset(asset).expect("Failed to add asset");
-
-                let current_state = project_service.get_project().read().unwrap().clone();
-                history_manager.push_project_state(current_state);
-                needs_refresh = true;
+                    Err(e) => {
+                         log::error!("Failed to import asset: {}", e);
+                    }
+                }
             }
         }
     });
