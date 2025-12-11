@@ -241,7 +241,7 @@ pub fn show_clip_area(
                     track_id: *entity_track_id,
                     in_frame: entity.in_frame,   // u64
                     out_frame: entity.out_frame, // u64
-                    timeline_duration_frames: entity.out_frame - entity.in_frame, // u64
+                    timeline_duration_frames: entity.out_frame.saturating_sub(entity.in_frame), // u64
                     source_begin_frame: entity.source_begin_frame, // u64
                     duration_frame: entity.duration_frame, // Option<u64>
                     color: a.color,
@@ -320,12 +320,22 @@ pub fn show_clip_area(
                     let mut new_out_frame = gc.out_frame;
 
                     // Source constraints
-                    let source_max_out_frame =
-                        gc.source_begin_frame + gc.duration_frame.unwrap_or(u64::MAX);
+                    let source_max_out_frame = if let Some(duration) = gc.duration_frame {
+                        gc.source_begin_frame.saturating_add(duration)
+                    } else {
+                        u64::MAX
+                    };
 
                     // Convert pixel delta to frame delta
-                    let dt_frames_f32 =
-                        left_edge_resp.drag_delta().x / pixels_per_unit * composition_fps as f32;
+                    let delta_x = if left_edge_resp.dragged() {
+                        left_edge_resp.drag_delta().x
+                    } else if right_edge_resp.dragged() {
+                        right_edge_resp.drag_delta().x
+                    } else {
+                        0.0
+                    };
+
+                    let dt_frames_f32 = delta_x / pixels_per_unit * composition_fps as f32;
                     let dt_frames = dt_frames_f32.round() as i64;
 
                     if left_edge_resp.dragged() {
@@ -468,6 +478,18 @@ pub fn show_clip_area(
                                     gc.id,
                                     new_in_frame,
                                     new_out_frame,
+                                )
+                                .ok();
+
+                            // Also update source_begin_frame to shift the source content
+                            let new_source_begin_frame = (gc.source_begin_frame as i64 + dt_frames).max(0) as u64;
+                            project_service
+                                .update_entity_source_frames(
+                                    comp_id,
+                                    track_id,
+                                    gc.id,
+                                    new_source_begin_frame,
+                                    gc.duration_frame,
                                 )
                                 .ok();
                         }
