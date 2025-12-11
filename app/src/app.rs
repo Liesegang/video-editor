@@ -169,6 +169,24 @@ impl eframe::App for MyApp {
                     });
 
                     ui.menu_button("View", |ui| {
+                        // Panel Toggles
+                        for tab in Tab::all() {
+                            let mut is_open = self.dock_state.find_tab(tab).is_some();
+                            if ui.checkbox(&mut is_open, tab.name()).changed() {
+                                if is_open {
+                                    // Open the tab
+                                    self.dock_state.push_to_focused_leaf(tab.clone());
+                                } else {
+                                    // Close the tab
+                                    if let Some(index) = self.dock_state.find_tab(tab) {
+                                        self.dock_state.remove_tab(index);
+                                    }
+                                }
+                            }
+                        }
+                        
+                        ui.separator();
+
                         if let Some(cmd) = self.command_registry.find(CommandId::ResetLayout) {
                             let button =
                                 Button::new(cmd.text).shortcut_text(cmd.shortcut_text.clone());

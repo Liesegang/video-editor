@@ -31,6 +31,26 @@ pub enum Tab {
     // Add other tabs as needed
 }
 
+impl Tab {
+    pub fn all() -> &'static [Tab] {
+        &[
+            Tab::Preview,
+            Tab::Timeline,
+            Tab::Inspector,
+            Tab::Assets,
+        ]
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Tab::Preview => "Preview",
+            Tab::Timeline => "Timeline",
+            Tab::Inspector => "Inspector",
+            Tab::Assets => "Assets",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompositionPreset {
     pub name: String,
