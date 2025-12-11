@@ -4,7 +4,8 @@ use std::sync::{Arc, RwLock};
 use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
 
-use crate::{action::HistoryManager, model::assets::AssetKind, state::context::EditorContext};
+use crate::{action::HistoryManager, state::context::EditorContext};
+use library::model::project::asset::AssetKind;
 
 pub fn preview_panel(
     ui: &mut Ui,
@@ -116,33 +117,41 @@ pub fn preview_panel(
             // Collect GuiClips from current composition's tracks
             for track in &comp.tracks {
                 for entity in &track.clips {
-                    // For simplicity, hardcode asset_index 0 (first asset) for now.
-                    // In a real app, this would be determined by entity_type or asset property.
-                    let asset_index = 0;
-                    let asset = editor_context.assets.get(asset_index);
+                    // Try to resolve asset ID from file_path property or similar
+                    // In a real implementation this might be more robust.
+                    // For now, if it has a file_path, we try to find the asset by path.
+                    let asset_opt = if let Some(path) = entity.properties.get_string("file_path") {
+                         proj_read.assets.iter().find(|a| a.path == path)
+                    } else {
+                         None
+                    };
 
-                    if let Some(a) = asset {
-                        let gc = crate::model::ui_types::TimelineClip {
-                            id: entity.id,
-                            name: entity.entity_type.clone(), // Use entity_type as name for now
-                            track_id: track.id,
-                            in_frame: entity.in_frame,   // u64
-                            out_frame: entity.out_frame, // u64
-                            timeline_duration_frames: entity.out_frame.saturating_sub(entity.in_frame), // u64
-                            source_begin_frame: entity.source_begin_frame, // u64
-                            duration_frame: entity.duration_frame, // Option<u64>
-                            color: a.color,
-                            position: [
-                                entity.properties.get_f32("position_x").unwrap_or(960.0),
-                                entity.properties.get_f32("position_y").unwrap_or(540.0),
-                            ],
-                            scale: entity.properties.get_f32("scale").unwrap_or(100.0),
-                            opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
-                            rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
-                            asset_index,
-                        };
-                        gui_clips.push(gc);
-                    }
+                    let asset_id = asset_opt.map(|a| a.id);
+                    let asset_color = asset_opt.map(|a| {
+                        let c = a.color.clone();
+                        egui::Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
+                    }).unwrap_or(egui::Color32::GRAY);
+
+                    let gc = crate::model::ui_types::TimelineClip {
+                        id: entity.id,
+                        name: entity.entity_type.clone(),
+                        track_id: track.id,
+                        in_frame: entity.in_frame,   // u64
+                        out_frame: entity.out_frame, // u64
+                        timeline_duration_frames: entity.out_frame.saturating_sub(entity.in_frame), // u64
+                        source_begin_frame: entity.source_begin_frame, // u64
+                        duration_frame: entity.duration_frame, // Option<u64>
+                        color: asset_color,
+                        position: [
+                            entity.properties.get_f32("position_x").unwrap_or(960.0),
+                            entity.properties.get_f32("position_y").unwrap_or(540.0),
+                        ],
+                        scale: entity.properties.get_f32("scale").unwrap_or(100.0),
+                        opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
+                        rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
+                        asset_id: asset_id,
+                    };
+                    gui_clips.push(gc);
                 }
             }
 
@@ -152,9 +161,9 @@ pub fn preview_panel(
                     let mut sorted_clips: Vec<&crate::model::ui_types::TimelineClip> = gui_clips
                         .iter()
                         .filter(|gc| {
-                            let current_frame =
+                             let current_frame =
                                 (editor_context.current_time as f64 * comp.fps).round() as u64; // Convert current_time (f32) to frame (u64)
-                            current_frame >= gc.in_frame && current_frame < gc.out_frame
+                             current_frame >= gc.in_frame && current_frame < gc.out_frame
                         })
                         .collect();
                     // Sort by track index for consistent Z-order hit testing
@@ -167,11 +176,14 @@ pub fn preview_panel(
 
                     for gc in sorted_clips.iter().rev() {
                         // Iterate in reverse to hit top-most clips first
-                        let is_audio = editor_context
-                            .assets
-                            .get(gc.asset_index)
-                            .map(|a| a.kind == AssetKind::Audio)
-                            .unwrap_or(false);
+                        
+                        // Check if audio 
+                        let is_audio = if let Some(aid) = gc.asset_id {
+                             proj_read.assets.iter().find(|a| a.id == aid).map(|a| a.kind == AssetKind::Audio).unwrap_or(false)
+                        } else {
+                            false
+                        };
+
                         if is_audio {
                             continue;
                         }
@@ -208,34 +220,41 @@ pub fn preview_panel(
             let mut visible_clips: Vec<crate::model::ui_types::TimelineClip> = Vec::new();
             for track in &comp.tracks {
                 for entity in &track.clips {
-                    let asset_index = 0; // Temporary: should derive from entity properties
-                    let asset = editor_context.assets.get(asset_index);
+                    
+                     let asset_opt = if let Some(path) = entity.properties.get_string("file_path") {
+                         proj_read.assets.iter().find(|a| a.path == path)
+                    } else {
+                         None
+                    };
+                    let asset_id = asset_opt.map(|a| a.id);
+                    let asset_color = asset_opt.map(|a| {
+                        let c = a.color.clone();
+                        egui::Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
+                    }).unwrap_or(egui::Color32::GRAY);
 
                     let current_frame =
                         (editor_context.current_time as f64 * comp.fps).round() as u64; // Convert current_time (f32) to frame (u64)
                     if current_frame >= entity.in_frame && current_frame < entity.out_frame {
-                        if let Some(a) = asset {
-                            let gc = crate::model::ui_types::TimelineClip {
-                                id: entity.id,
-                                name: entity.entity_type.clone(),
-                                track_id: track.id,
-                                in_frame: entity.in_frame,   // u64
-                                out_frame: entity.out_frame, // u64
-                                timeline_duration_frames: entity.out_frame.saturating_sub(entity.in_frame), // u64
-                                source_begin_frame: entity.source_begin_frame, // u64
-                                duration_frame: entity.duration_frame, // Option<u64>
-                                color: a.color,
-                                position: [
-                                    entity.properties.get_f32("position_x").unwrap_or(960.0),
-                                    entity.properties.get_f32("position_y").unwrap_or(540.0),
-                                ],
-                                scale: entity.properties.get_f32("scale").unwrap_or(100.0),
-                                opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
-                                rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
-                                asset_index,
-                            };
-                            visible_clips.push(gc);
-                        }
+                        let gc = crate::model::ui_types::TimelineClip {
+                            id: entity.id,
+                            name: entity.entity_type.clone(),
+                            track_id: track.id,
+                            in_frame: entity.in_frame,   // u64
+                            out_frame: entity.out_frame, // u64
+                            timeline_duration_frames: entity.out_frame.saturating_sub(entity.in_frame), // u64
+                            source_begin_frame: entity.source_begin_frame, // u64
+                            duration_frame: entity.duration_frame, // Option<u64>
+                            color: asset_color,
+                            position: [
+                                entity.properties.get_f32("position_x").unwrap_or(960.0),
+                                entity.properties.get_f32("position_y").unwrap_or(540.0),
+                            ],
+                            scale: entity.properties.get_f32("scale").unwrap_or(100.0),
+                            opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
+                            rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
+                            asset_id,
+                        };
+                        visible_clips.push(gc);
                     }
                 }
             }
@@ -248,11 +267,12 @@ pub fn preview_panel(
             });
 
             for clip in visible_clips {
-                let is_audio = editor_context
-                    .assets
-                    .get(clip.asset_index)
-                    .map(|a| a.kind == AssetKind::Audio)
-                    .unwrap_or(false);
+                 let is_audio = if let Some(aid) = clip.asset_id {
+                     proj_read.assets.iter().find(|a| a.id == aid).map(|a| a.kind == library::model::project::asset::AssetKind::Audio).unwrap_or(false)
+                } else {
+                    false
+                };
+
                 if is_audio {
                     continue;
                 }

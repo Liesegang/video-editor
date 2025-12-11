@@ -1,5 +1,6 @@
 use crate::error::LibraryError;
 // use crate::model::project::entity::Entity; // Removed
+use crate::model::project::asset::Asset;
 use crate::model::project::project::{Composition, Project};
 use crate::model::project::property::{Property, PropertyValue};
 use crate::model::project::{Track, TrackClip};
@@ -40,6 +41,15 @@ impl ProjectService {
             LibraryError::Runtime(format!("Failed to acquire project read lock: {}", e))
         })?;
         Ok(project_read.save()?)
+    }
+
+    pub fn add_asset(&self, asset: Asset) -> Result<Uuid, LibraryError> {
+        let mut project_write = self.project.write().map_err(|e| {
+            LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
+        })?;
+        let id = asset.id;
+        project_write.assets.push(asset);
+        Ok(id)
     }
 
     // --- Composition Operations ---

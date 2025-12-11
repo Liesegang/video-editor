@@ -356,7 +356,7 @@ impl eframe::App for MyApp {
         });
 
         if ctx.input(|i| i.pointer.any_released()) {
-            self.editor_context.dragged_asset = None;
+            self.editor_context.dragged_item = None;
         }
 
         if self.editor_context.is_playing {
