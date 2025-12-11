@@ -23,11 +23,38 @@ impl Track {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(rename_all = "lowercase")] // Serialize as "video", "image", etc.
+pub enum TrackClipKind {
+    Video,
+    Image,
+    Audio,
+    Text,
+    Shape,
+    Composition,
+    // Add other kinds as needed
+}
+
+impl std::fmt::Display for TrackClipKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            TrackClipKind::Video => "video",
+            TrackClipKind::Image => "image",
+            TrackClipKind::Audio => "audio",
+            TrackClipKind::Text => "text",
+            TrackClipKind::Shape => "shape",
+            TrackClipKind::Composition => "composition",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct TrackClip {
     pub id: Uuid, // Added UUID field
+    pub reference_id: Option<Uuid>, // ID of the referenced Asset or Composition
     #[serde(rename = "type")]
-    pub entity_type: String,
+    pub kind: TrackClipKind,
     #[serde(default)]
     pub in_frame: u64, // Renamed from start_time (timeline start in frames)
     #[serde(default)]
@@ -55,7 +82,8 @@ pub struct EffectConfig {
 impl TrackClip {
     pub fn new(
         id: Uuid,
-        entity_type: String,
+        reference_id: Option<Uuid>,
+        kind: TrackClipKind,
         in_frame: u64,               // Renamed parameter
         out_frame: u64,              // Renamed parameter
         source_begin_frame: u64,     // New parameter
@@ -66,7 +94,8 @@ impl TrackClip {
     ) -> Self {
         Self {
             id,
-            entity_type,
+            reference_id,
+            kind,
             in_frame,
             out_frame,
             source_begin_frame,
@@ -79,6 +108,7 @@ impl TrackClip {
 
     // Ported helper constructors from Entity
     pub fn create_video(
+        reference_id: Option<Uuid>,
         file_path: &str,
         in_frame: u64,
         out_frame: u64,
@@ -90,7 +120,8 @@ impl TrackClip {
 
         TrackClip::new(
             Uuid::new_v4(),
-            "video".to_string(),
+            reference_id,
+            TrackClipKind::Video,
             in_frame,
             out_frame,
             source_begin_frame,
@@ -101,13 +132,19 @@ impl TrackClip {
         )
     }
 
-    pub fn create_image(file_path: &str, in_frame: u64, out_frame: u64) -> Self {
+    pub fn create_image(
+        reference_id: Option<Uuid>,
+        file_path: &str, 
+        in_frame: u64, 
+        out_frame: u64
+    ) -> Self {
         let mut props = PropertyMap::new();
         props.set("file_path".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::String(file_path.to_string())));
 
         TrackClip::new(
             Uuid::new_v4(),
-            "image".to_string(),
+            reference_id,
+            TrackClipKind::Image,
             in_frame,
             out_frame,
             0,
@@ -124,7 +161,8 @@ impl TrackClip {
 
         TrackClip::new(
             Uuid::new_v4(),
-            "text".to_string(),
+            None,
+            TrackClipKind::Text,
             in_frame,
             out_frame,
             0,

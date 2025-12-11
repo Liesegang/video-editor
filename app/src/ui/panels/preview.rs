@@ -134,7 +134,7 @@ pub fn preview_panel(
 
                     let gc = crate::model::ui_types::TimelineClip {
                         id: entity.id,
-                        name: entity.entity_type.clone(),
+                        name: entity.kind.to_string(), // entity_type -> kind
                         track_id: track.id,
                         in_frame: entity.in_frame,   // u64
                         out_frame: entity.out_frame, // u64
@@ -237,7 +237,7 @@ pub fn preview_panel(
                     if current_frame >= entity.in_frame && current_frame < entity.out_frame {
                         let gc = crate::model::ui_types::TimelineClip {
                             id: entity.id,
-                            name: entity.entity_type.clone(),
+                        name: entity.kind.to_string(), // entity_type -> kind
                             track_id: track.id,
                             in_frame: entity.in_frame,   // u64
                             out_frame: entity.out_frame, // u64
