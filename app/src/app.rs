@@ -206,9 +206,31 @@ impl eframe::App for MyApp {
                 });
         }
 
-        // 5. Composition Dialog
         if self.composition_dialog.is_open {
             self.composition_dialog.show(ctx);
+        }
+
+        // 6. Generic Error Modal
+        if let Some(error_msg) = self.editor_context.active_modal_error.clone() {
+            let mut open = true;
+            egui::Window::new("⚠ Error")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label(&error_msg);
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("OK").clicked() {
+                            self.editor_context.active_modal_error = None;
+                        }
+                    });
+                });
+            if !open {
+                // Window closed via X button
+                self.editor_context.active_modal_error = None;
+            }
         }
 
         // 1. Shortcuts (continued)

@@ -20,6 +20,10 @@ pub struct EditorContext {
     pub dragged_item: Option<DraggedItem>,
     #[serde(skip)]
     pub asset_delete_candidate: Option<Uuid>,
+    #[serde(skip)]
+    pub comp_delete_candidate: Option<Uuid>,
+    #[serde(skip)]
+    pub active_modal_error: Option<String>,
 
     pub timeline_v_zoom: f32,
     pub timeline_h_zoom: f32,
@@ -66,6 +70,8 @@ impl EditorContext {
             view_zoom: 0.3,
             dragged_item: None,
             asset_delete_candidate: None,
+            comp_delete_candidate: None,
+            active_modal_error: None,
 
             timeline_v_zoom: 1.0,
             timeline_h_zoom: 1.0,
