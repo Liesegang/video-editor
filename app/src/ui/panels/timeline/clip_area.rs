@@ -1,4 +1,5 @@
 use egui::{epaint::StrokeKind, Ui};
+use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use library::model::project::TrackClip;
 use library::model::project::TrackClipKind;
@@ -320,6 +321,26 @@ pub fn show_clip_area(
                 egui::Id::new(gc.id),
                 egui::Sense::click_and_drag(),
             );
+
+            clip_resp.context_menu(|ui| {
+                if ui.button(format!("{} Remove", icons::TRASH)).clicked() {
+                     if let Some(comp_id) = editor_context.selected_composition_id {
+                        if let Err(e) = project_service.remove_clip_from_track(
+                            comp_id,
+                            gc.track_id,
+                            gc.id,
+                        ) {
+                            eprintln!("Failed to remove entity: {:?}", e);
+                        } else {
+                            editor_context.selected_entity_id = None;
+                            let current_state = project_service.get_project().read().unwrap().clone();
+                            history_manager.push_project_state(current_state);
+                            ui.ctx().request_repaint();
+                            ui.close_menu();
+                        }
+                    }
+                }
+            });
 
             // Create edge responses using initial_clip_rect for hit detection
             let left_edge_rect = egui::Rect::from_min_size(
