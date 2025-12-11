@@ -315,7 +315,7 @@ impl ProjectService {
                 ))
             })?;
             let res = f(track);
-            composition.rebuild_entity_cache();
+
             Ok(res)
         })?
     }
