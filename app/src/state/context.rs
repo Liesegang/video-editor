@@ -18,6 +18,8 @@ pub struct EditorContext {
 
     #[serde(skip)]
     pub dragged_item: Option<DraggedItem>,
+    #[serde(skip)]
+    pub asset_delete_candidate: Option<Uuid>,
 
     pub timeline_v_zoom: f32,
     pub timeline_h_zoom: f32,
@@ -63,6 +65,7 @@ impl EditorContext {
             view_pan: egui::vec2(20.0, 20.0),
             view_zoom: 0.3,
             dragged_item: None,
+            asset_delete_candidate: None,
 
             timeline_v_zoom: 1.0,
             timeline_h_zoom: 1.0,

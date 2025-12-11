@@ -58,6 +58,46 @@ impl ProjectService {
         Ok(id)
     }
 
+    pub fn is_asset_used(&self, asset_id: Uuid) -> bool {
+        let project_read = self.project.read().unwrap();
+        for comp in &project_read.compositions {
+            for track in &comp.tracks {
+                for clip in &track.clips {
+                    if clip.reference_id == Some(asset_id) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    pub fn remove_asset_fully(&self, asset_id: Uuid) -> Result<(), LibraryError> {
+        let mut project_write = self.project.write().map_err(|e| {
+            LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
+        })?;
+        
+        // Remove clips referencing the asset
+        for comp in &mut project_write.compositions {
+            for track in &mut comp.tracks {
+                track.clips.retain(|clip| clip.reference_id != Some(asset_id));
+            }
+        }
+
+        // Remove the asset itself
+        project_write.assets.retain(|a| a.id != asset_id);
+        
+        Ok(())
+    }
+
+    fn remove_asset(&self, asset_id: Uuid) -> Result<(), LibraryError> {
+        let mut project_write = self.project.write().map_err(|e| {
+            LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
+        })?;
+        project_write.assets.retain(|a| a.id != asset_id);
+        Ok(())
+    }
+
     pub fn import_file(&self, path: &str) -> Result<Uuid, LibraryError> {
         let path_buf = std::path::Path::new(path);
         let name = path_buf
