@@ -2,13 +2,14 @@ use egui::Ui;
 use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
+use library::model::project::asset::{Asset, AssetKind}; // Updated import
 use std::sync::{Arc, RwLock};
 
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::{
     action::HistoryManager,
-    model::assets::{Asset, AssetKind},
     state::context::EditorContext,
+    model::ui_types::DraggedItem, // Added import
 };
 
 pub fn assets_panel(
@@ -33,13 +34,9 @@ pub fn assets_panel(
             )
             .expect("Failed to add composition");
         editor_context.selected_composition_id = Some(new_comp_id);
-        editor_context.assets.push(Asset {
-            name: format!("Comp: {}", composition_dialog.name),
-            duration: composition_dialog.duration as f32,
-            color: egui::Color32::from_rgb(255, 150, 255),
-            kind: AssetKind::Composition(new_comp_id),
-            composition_id: Some(new_comp_id),
-        });
+        
+        // No need to add to assets list anymore, as Compositions are separate
+        
         let current_state = project_service.get_project().read().unwrap().clone();
         history_manager.push_project_state(current_state);
         needs_refresh = true;
@@ -60,15 +57,7 @@ pub fn assets_panel(
             )
             .expect("Failed to update composition");
 
-        // Update the asset name in editor_context
-        if let Some(asset) = editor_context
-            .assets
-            .iter_mut()
-            .find(|asset| matches!(asset.kind, AssetKind::Composition(id) if id == composition_dialog.comp_id.unwrap()))
-        {
-            asset.name = format!("Comp: {}", composition_dialog.name);
-            asset.duration = composition_dialog.duration as f32;
-        }
+        // No need to update assets list manually
 
         let current_state = project_service.get_project().read().unwrap().clone();
         history_manager.push_project_state(current_state);
@@ -90,10 +79,11 @@ pub fn assets_panel(
                 for comp in &proj_read.compositions {
                     ui.push_id(comp.id, |ui_in_scope| {
                         let is_selected = editor_context.selected_composition_id == Some(comp.id);
-                        let response = ui_in_scope
-                            .selectable_label(is_selected, &comp.name)
-                            .on_hover_text(format!("Comp ID: {}", comp.id));
-
+                        
+                        // Make composition selectable AND draggable
+                        let label = egui::SelectableLabel::new(is_selected, &comp.name);
+                        let response = ui_in_scope.add(label.sense(egui::Sense::click().union(egui::Sense::drag())));
+                        
                         response.context_menu(|ui_context_menu| {
                             if ui_context_menu.button("Edit Properties").clicked() {
                                 composition_dialog.open_for_edit(comp);
@@ -106,6 +96,12 @@ pub fn assets_panel(
                             editor_context.selected_track_id = None; // Deselect track when composition changes
                             editor_context.selected_entity_id = None; // Deselect entity when composition changes
                         }
+                        
+                        if response.drag_started() {
+                            editor_context.dragged_item = Some(DraggedItem::Composition(comp.id));
+                        }
+                        
+                         response.on_hover_text(format!("Comp ID: {}", comp.id));
                     });
                 }
             }
@@ -120,10 +116,7 @@ pub fn assets_panel(
                 project_service
                     .remove_composition(comp_id)
                     .expect("Failed to remove composition");
-                // Also remove the corresponding asset
-                editor_context.assets.retain(
-                    |asset| !matches!(asset.kind, AssetKind::Composition(id) if id == comp_id),
-                );
+                
                 editor_context.selected_composition_id = None;
                 editor_context.selected_track_id = None;
                 editor_context.selected_entity_id = None;
@@ -139,37 +132,80 @@ pub fn assets_panel(
 
     // Other Assets section
     ui.heading("Other Assets");
+    ui.horizontal(|ui| {
+        if ui.button(format!("{} Add Asset", icons::PLUS)).clicked() {
+            if let Some(path) = rfd::FileDialog::new().pick_file() {
+                let path_str = path.to_string_lossy().to_string();
+                let name = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or("New Asset".to_string());
+
+                // Determine kind
+                let kind = if let Some(ext) = path.extension() {
+                    let ext_str = ext.to_string_lossy().to_lowercase();
+                    match ext_str.as_str() {
+                        "mp4" | "mov" | "avi" | "mkv" => AssetKind::Video,
+                        "mp3" | "wav" | "aac" => AssetKind::Audio,
+                        "png" | "jpg" | "jpeg" | "bmp" => AssetKind::Image,
+                        "obj" | "fbx" | "gltf" | "glb" => AssetKind::Model3D,
+                        _ => AssetKind::Other,
+                    }
+                } else {
+                    AssetKind::Other
+                };
+
+                // Create asset
+                let asset = Asset::new(&name, &path_str, kind);
+
+                // Add to project
+                project_service.add_asset(asset).expect("Failed to add asset");
+
+                let current_state = project_service.get_project().read().unwrap().clone();
+                history_manager.push_project_state(current_state);
+                needs_refresh = true;
+            }
+        }
+    });
     egui::ScrollArea::vertical()
         .id_salt("assets_other_scroll_area")
         .show(ui, |ui| {
-            for (index, asset) in editor_context.assets.iter().enumerate() {
-                // Only display non-composition assets here
-                if !matches!(asset.kind, AssetKind::Composition(_)) {
-                    ui.push_id(asset.id(), |ui_in_scope| {
-                        let label_text = format!("{} ({:.1}s)", asset.name, asset.duration);
+             if let Ok(proj_read) = project.read() {
+                for asset in &proj_read.assets {
+                     ui.push_id(asset.id, |ui_in_scope| {
+                        let duration_text = if let Some(d) = asset.duration {
+                            format!("({:.1}s)", d)
+                        } else {
+                            "".to_string()
+                        };
+                        let label_text = format!("{} {}", asset.name, duration_text);
                         let icon = match asset.kind {
                             AssetKind::Video => icons::FILE_VIDEO,
                             AssetKind::Audio => icons::FILE_AUDIO,
                             AssetKind::Image => icons::FILE_IMAGE,
-                            AssetKind::Composition(_) => unreachable!("Compositions handled above"),
+                            AssetKind::Model3D => icons::CUBE, // Assuming Model3D maps to something or CUBE
+                            AssetKind::Other => icons::FILE,
                         };
+
+                        let c = asset.color.clone();
+                        let bg_color = egui::Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a);
 
                         let rich_text_label =
                             egui::RichText::new(format!("{} {}", icon, label_text))
                                 .color(egui::Color32::BLACK)
-                                .background_color(asset.color);
+                                .background_color(bg_color);
 
                         let item_response = ui_in_scope
                             .add(egui::Label::new(rich_text_label).sense(egui::Sense::drag()))
-                            .on_hover_text(format!("Asset ID: {:?}", asset.id()));
+                            .on_hover_text(format!("Asset ID: {:?}", asset.id));
 
                         if item_response.drag_started() {
-                            editor_context.dragged_asset = Some(index);
+                            editor_context.dragged_item = Some(DraggedItem::Asset(asset.id));
                         }
                         ui_in_scope.add_space(5.0);
                     });
                 }
-            }
+             }
         });
 
     if needs_refresh {

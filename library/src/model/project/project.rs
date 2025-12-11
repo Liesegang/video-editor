@@ -7,11 +7,14 @@ use serde_json::Value;
 use super::Track;
 use crate::model::frame::color::Color;
 use crate::model::project::TrackClip; // Add this
+use crate::model::project::asset::Asset;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct Project {
     pub name: String,
     pub compositions: Vec<Composition>,
+    #[serde(default)]
+    pub assets: Vec<Asset>,
     #[serde(default)]
     pub export: ExportConfig,
 }
@@ -35,6 +38,7 @@ impl Project {
         Self {
             name: name.to_string(),
             compositions: Vec::new(),
+            assets: Vec::new(),
             export: ExportConfig::default(),
         }
     }

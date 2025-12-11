@@ -18,8 +18,14 @@ pub struct TimelineClip {
     pub scale: f32,
     pub opacity: f32,
     pub rotation: f32,
-    pub asset_index: usize,
+    pub asset_id: Option<Uuid>, // Changed from asset_index to asset_id
     // Add other UI-specific properties here (is_selected, etc. if needed in future)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DraggedItem {
+    Asset(Uuid),
+    Composition(Uuid),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
