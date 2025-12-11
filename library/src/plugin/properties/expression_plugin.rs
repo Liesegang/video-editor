@@ -2,6 +2,7 @@ use super::super::{Plugin, PluginCategory, PropertyPlugin};
 use crate::model::project::property::{Property, PropertyValue}; // Added Property and PropertyValue
 use crate::plugin::{EvaluationContext, PropertyEvaluator};
 use log::warn;
+use ordered_float::OrderedFloat;
 use std::sync::Arc;
 
 pub struct ExpressionPropertyPlugin;
@@ -40,6 +41,6 @@ impl PropertyEvaluator for ExpressionEvaluator {
             "Expression evaluator not implemented for property '{}' at time {}",
             property.evaluator, time
         );
-        PropertyValue::Number(0.0)
+        PropertyValue::Number(OrderedFloat(0.0))
     }
 }

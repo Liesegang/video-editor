@@ -2,6 +2,7 @@ use super::super::{Plugin, PluginCategory, PropertyPlugin};
 use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
 use crate::model::project::property::{Property, PropertyValue, Vec2, Vec3};
+use ordered_float::OrderedFloat;
 use crate::plugin::{EvaluationContext, PropertyEvaluator};
 use log::debug;
 use std::sync::Arc;
@@ -50,27 +51,20 @@ fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
     );
 
     if keyframes.is_empty() {
-        debug!("evaluate_keyframes: keyframes empty, returning 0.0");
-        return PropertyValue::Number(0.0);
+        return PropertyValue::Number(OrderedFloat(0.0));
     }
-    if time <= keyframes[0].time {
-        debug!(
-            "evaluate_keyframes: time <= first keyframe, returning first keyframe value {:?}",
-            keyframes[0].value
-        );
+
+    if time <= *keyframes[0].time {
         return keyframes[0].value.clone();
     }
-    if time >= keyframes.last().unwrap().time {
-        debug!(
-            "evaluate_keyframes: time >= last keyframe, returning last keyframe value {:?}",
-            keyframes.last().unwrap().value
-        );
+    if time >= *keyframes.last().unwrap().time {
         return keyframes.last().unwrap().value.clone();
     }
 
-    let current = keyframes.iter().rev().find(|k| k.time <= time).unwrap();
-    let next = keyframes.iter().find(|k| k.time > time).unwrap();
-    let t = (time - current.time) / (next.time - current.time);
+    // Find the keyframe before and after the current time
+    let current = keyframes.iter().rev().find(|k| *k.time <= time).unwrap();
+    let next = keyframes.iter().find(|k| *k.time > time).unwrap();
+    let t = (time - *current.time) / (*next.time - *current.time);
     let interpolated = interpolate_property_values(&current.value, &next.value, t, &current.easing);
     debug!(
         "evaluate_keyframes: interpolated value {:?} for time {}",
@@ -88,33 +82,22 @@ fn interpolate_property_values(
 
     match (start, end) {
         (PropertyValue::Number(s), PropertyValue::Number(e)) => {
-            PropertyValue::Number(s + (e - s) * t)
-        }
-        (PropertyValue::Integer(s), PropertyValue::Integer(e)) => {
-            PropertyValue::Number(*s as f64 + (*e as f64 - *s as f64) * t)
+            PropertyValue::Number(OrderedFloat(s.0 + (e.0 - s.0) * t))
         }
         (
             PropertyValue::Vec2(Vec2 { x: sx, y: sy }),
             PropertyValue::Vec2(Vec2 { x: ex, y: ey }),
         ) => PropertyValue::Vec2(Vec2 {
-            x: sx + (ex - sx) * t,
-            y: sy + (ey - sy) * t,
+            x: OrderedFloat(sx.0 + (ex.0 - sx.0) * t),
+            y: OrderedFloat(sy.0 + (ey.0 - sy.0) * t),
         }),
         (
-            PropertyValue::Vec3(Vec3 {
-                x: sx,
-                y: sy,
-                z: sz,
-            }),
-            PropertyValue::Vec3(Vec3 {
-                x: ex,
-                y: ey,
-                z: ez,
-            }),
+            PropertyValue::Vec3(Vec3 { x: sx, y: sy, z: sz }),
+            PropertyValue::Vec3(Vec3 { x: ex, y: ey, z: ez }),
         ) => PropertyValue::Vec3(Vec3 {
-            x: sx + (ex - sx) * t,
-            y: sy + (ey - sy) * t,
-            z: sz + (ez - sz) * t,
+            x: OrderedFloat(sx.0 + (ex.0 - sx.0) * t),
+            y: OrderedFloat(sy.0 + (ey.0 - sy.0) * t),
+            z: OrderedFloat(sz.0 + (ez.0 - sz.0) * t),
         }),
         (
             PropertyValue::Color(Color {

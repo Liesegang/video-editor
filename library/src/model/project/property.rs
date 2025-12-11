@@ -2,26 +2,44 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
 
+use ordered_float::OrderedFloat;
+use std::hash::{Hash, Hasher};
+
 use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Vec2 {
-    pub x: f64,
-    pub y: f64,
+    pub x: OrderedFloat<f64>,
+    pub y: OrderedFloat<f64>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Vec3 {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
+    pub x: OrderedFloat<f64>,
+    pub y: OrderedFloat<f64>,
+    pub z: OrderedFloat<f64>,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+impl Hash for Vec2 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.x.hash(state);
+        self.y.hash(state);
+    }
+}
+
+impl Hash for Vec3 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.x.hash(state);
+        self.y.hash(state);
+        self.z.hash(state);
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(untagged)]
 pub enum PropertyValue {
-    Number(f64),
+    Number(OrderedFloat<f64>),
     Integer(i64),
     String(String),
     Boolean(bool),
@@ -32,15 +50,39 @@ pub enum PropertyValue {
     Map(HashMap<String, PropertyValue>),
 }
 
+impl Hash for PropertyValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            PropertyValue::Number(n) => n.hash(state),
+            PropertyValue::Integer(i) => i.hash(state),
+            PropertyValue::String(s) => s.hash(state),
+            PropertyValue::Boolean(b) => b.hash(state),
+            PropertyValue::Vec2(v) => v.hash(state),
+            PropertyValue::Vec3(v) => v.hash(state),
+            PropertyValue::Color(c) => c.hash(state),
+            PropertyValue::Array(arr) => arr.hash(state),
+            PropertyValue::Map(map) => {
+                let mut entries: Vec<_> = map.iter().collect();
+                entries.sort_by_key(|(k, _)| k.as_str()); // Deterministic order
+                for (k, v) in entries {
+                    k.hash(state);
+                    v.hash(state);
+                }
+            }
+        }
+    }
+}
+
 impl From<f64> for PropertyValue {
     fn from(value: f64) -> Self {
-        PropertyValue::Number(value)
+        PropertyValue::Number(OrderedFloat(value))
     }
 }
 
 impl From<f32> for PropertyValue {
     fn from(value: f32) -> Self {
-        PropertyValue::Number(value as f64)
+        PropertyValue::Number(OrderedFloat(value as f64))
     }
 }
 
@@ -73,9 +115,9 @@ impl From<serde_json::Value> for PropertyValue {
                 } else if let Some(u) = n.as_u64() {
                     PropertyValue::Integer(u as i64)
                 } else if let Some(f) = n.as_f64() {
-                    PropertyValue::Number(f)
+                    PropertyValue::Number(OrderedFloat(f))
                 } else {
-                    PropertyValue::Number(0.0)
+                    PropertyValue::Number(OrderedFloat(0.0))
                 }
             }
             serde_json::Value::String(s) => PropertyValue::String(s),
@@ -89,7 +131,7 @@ impl From<serde_json::Value> for PropertyValue {
                         o.get("x").and_then(|v| v.as_f64()),
                         o.get("y").and_then(|v| v.as_f64()),
                     ) {
-                        return PropertyValue::Vec2(Vec2 { x: x_val, y: y_val });
+                        return PropertyValue::Vec2(Vec2 { x: OrderedFloat(x_val), y: OrderedFloat(y_val) });
                     }
                 }
 
@@ -101,9 +143,9 @@ impl From<serde_json::Value> for PropertyValue {
                         o.get("z").and_then(|v| v.as_f64()),
                     ) {
                         return PropertyValue::Vec3(Vec3 {
-                            x: x_val,
-                            y: y_val,
-                            z: z_val,
+                            x: OrderedFloat(x_val),
+                            y: OrderedFloat(y_val),
+                            z: OrderedFloat(z_val),
                         });
                     }
                 }
@@ -140,10 +182,10 @@ impl From<&PropertyValue> for serde_json::Value {
         match value {
             PropertyValue::Number(n) => {
                 if n.fract().abs() < f64::EPSILON && n.abs() <= (i64::MAX as f64) {
-                    serde_json::Value::Number(serde_json::Number::from(*n as i64))
+                    serde_json::Value::Number(serde_json::Number::from(n.into_inner() as i64))
                 } else {
                     serde_json::Value::Number(
-                        serde_json::Number::from_f64(*n)
+                        serde_json::Number::from_f64(n.into_inner())
                             .unwrap_or_else(|| serde_json::Number::from_f64(0.0).unwrap()),
                     )
                 }
@@ -151,8 +193,8 @@ impl From<&PropertyValue> for serde_json::Value {
             PropertyValue::Integer(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
             PropertyValue::String(s) => serde_json::Value::String(s.clone()),
             PropertyValue::Boolean(b) => serde_json::Value::Bool(*b),
-            PropertyValue::Vec2(v) => serde_json::json!({ "x": v.x, "y": v.y }),
-            PropertyValue::Vec3(v) => serde_json::json!({ "x": v.x, "y": v.y, "z": v.z }),
+            PropertyValue::Vec2(v) => serde_json::json!({ "x": v.x.into_inner(), "y": v.y.into_inner() }),
+            PropertyValue::Vec3(v) => serde_json::json!({ "x": v.x.into_inner(), "y": v.y.into_inner(), "z": v.z.into_inner() }),
             PropertyValue::Color(c) => {
                 serde_json::json!({ "r": c.r, "g": c.g, "b": c.b, "a": c.a })
             }
@@ -175,7 +217,7 @@ pub trait TryGetProperty<T> {
 impl TryGetProperty<f64> for f64 {
     fn try_get(p: &PropertyValue) -> Option<f64> {
         match p {
-            PropertyValue::Number(v) => Some(*v),
+            PropertyValue::Number(v) => Some(v.into_inner()),
             PropertyValue::Integer(v) => Some(*v as f64),
             _ => None,
         }
@@ -186,7 +228,7 @@ impl TryGetProperty<f64> for f64 {
 impl TryGetProperty<f32> for f32 {
     fn try_get(p: &PropertyValue) -> Option<f32> {
         match p {
-            PropertyValue::Number(v) => Some(*v as f32),
+            PropertyValue::Number(v) => Some(v.into_inner() as f32),
             PropertyValue::Integer(v) => Some(*v as f32),
             _ => None,
         }
@@ -200,9 +242,9 @@ impl TryGetProperty<i64> for i64 {
             PropertyValue::Integer(v) => Some(*v),
             PropertyValue::Number(v) => {
                 // Only convert if it's a whole number and fits in i64
-                if v.fract().abs() < f64::EPSILON && *v >= i64::MIN as f64 && *v <= i64::MAX as f64
+                if v.fract().abs() < f64::EPSILON && *v >= OrderedFloat(i64::MIN as f64) && *v <= OrderedFloat(i64::MAX as f64)
                 {
-                    Some(*v as i64)
+                    Some(v.into_inner() as i64)
                 } else {
                     None
                 }
@@ -288,7 +330,7 @@ impl PropertyValue {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Eq, Debug)]
 pub struct Property {
     #[serde(default = "default_constant_evaluator", rename = "type")]
     pub evaluator: String,
@@ -296,16 +338,28 @@ pub struct Property {
     pub properties: HashMap<String, PropertyValue>,
 }
 
+impl Hash for Property {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.evaluator.hash(state);
+        let mut entries: Vec<_> = self.properties.iter().collect();
+        entries.sort_by_key(|(k, _)| k.as_str());
+        for (k, v) in entries {
+            k.hash(state);
+            v.hash(state);
+        }
+    }
+}
+
 fn default_constant_evaluator() -> String {
     "constant".to_string()
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Keyframe {
-    pub time: f64,
+    pub time: OrderedFloat<f64>,
     pub value: PropertyValue,
     #[serde(default)]
-    pub easing: EasingFunction,
+    pub easing: EasingFunction, // Assuming EasingFunction implements Hash/Eq, check later
 }
 
 impl Property {
@@ -365,10 +419,21 @@ impl Property {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)] // Added Debug
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Eq, Debug)] // Added Debug
 #[serde(transparent)]
 pub struct PropertyMap {
     properties: HashMap<String, Property>,
+}
+
+impl Hash for PropertyMap {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut entries: Vec<_> = self.properties.iter().collect();
+        entries.sort_by_key(|(k, _)| k.as_str());
+        for (k, v) in entries {
+            k.hash(state);
+            v.hash(state);
+        }
+    }
 }
 
 impl PropertyMap {

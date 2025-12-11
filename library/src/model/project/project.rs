@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::Track;
 use crate::model::frame::color::Color;
-use crate::model::project::TrackClip; // Add this
+
 use crate::model::project::asset::Asset;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
@@ -44,7 +44,7 @@ impl Project {
     }
 
     pub fn load(json_str: &str) -> Result<Self, serde_json::Error> {
-        let mut project: Project = serde_json::from_str(json_str)?;
+        let project: Project = serde_json::from_str(json_str)?;
 
         Ok(project)
     }

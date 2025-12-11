@@ -3,7 +3,8 @@ use pyo3::types::{PyDict, PyString, PyTuple, PyList, PyDict as PyDictType};
 use pyo3::ffi::PyThreadState; // Use PyThreadState from ffi
 use crate::model::project::property::{Property, PropertyValue, Vec2};
 use crate::model::frame::color::Color;
-use super::{Plugin, PluginCategory, PropertyPlugin, EvaluationContext, PropertyEvaluator};
+use crate::plugin::{EvaluationContext, Plugin, PluginCategory, PluginId, PropertyEvaluator, PropertyPlugin};
+use ordered_float::OrderedFloat;
 use std::sync::Arc;
 
 
@@ -64,7 +65,7 @@ fn expression_evaluator_python(_py: Python, m: &Bound<PyModule>) -> PyResult<()>
 // Helper function to convert Rust PropertyValue to Python PyObject
 fn convert_property_value_to_pyobject(py: Python, value: &PropertyValue) -> PyResult<PyObject> {
     match value {
-        PropertyValue::Number(n) => Ok(n.into_pyobject(py)?.into()),
+        PropertyValue::Number(n) => Ok(n.into_inner().into_pyobject(py)?.into()),
         PropertyValue::Integer(i) => Ok(i.into_pyobject(py)?.into()),
         PropertyValue::String(s) => Ok(s.into_pyobject(py)?.into()),
         PropertyValue::Boolean(b) => Ok(b.into_pyobject(py)?),
@@ -96,7 +97,7 @@ fn convert_pyobject_to_property_value(obj: &Bound<'_, PyAny>) -> PyResult<Proper
     if let Ok(s) = obj.extract::<String>() {
         Ok(PropertyValue::String(s))
     } else if let Ok(f) = obj.extract::<f64>() {
-        Ok(PropertyValue::Number(f))
+        Ok(PropertyValue::Number(OrderedFloat(f)))
     } else if let Ok(i) = obj.extract::<i64>() {
         Ok(PropertyValue::Integer(i))
     } else if let Ok(b) = obj.extract::<bool>() {
@@ -106,7 +107,7 @@ fn convert_pyobject_to_property_value(obj: &Bound<'_, PyAny>) -> PyResult<Proper
             // Assume Vec2
             let x = tup.get_item(0)?.extract::<f64>()?;
             let y = tup.get_item(1)?.extract::<f64>()?;
-            Ok(PropertyValue::Vec2(Vec2 { x, y }))
+            Ok(PropertyValue::Vec2(Vec2 { x: OrderedFloat(x), y: OrderedFloat(y) }))
         } else if tup.len() == 4 {
             // Assume Color
             let r = tup.get_item(0)?.extract::<u8>()?;

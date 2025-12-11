@@ -19,6 +19,7 @@ struct SaveTask {
     frame_index: u64,
     output_path: String,
     image: Image,
+    #[allow(dead_code)]
     export_settings: Arc<ExportSettings>,
 }
 
@@ -71,6 +72,7 @@ impl RenderQueueConfig {
 
 pub struct RenderQueue {
     render_tx: Option<mpsc::Sender<FrameRenderJob>>,
+    #[allow(dead_code)]
     save_tx: Option<mpsc::SyncSender<SaveTask>>,
     workers: Vec<JoinHandle<()>>,
     saver_handle: Option<JoinHandle<()>>,

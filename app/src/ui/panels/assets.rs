@@ -2,7 +2,7 @@ use egui::Ui;
 use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
-use library::model::project::asset::{Asset, AssetKind}; // Updated import
+use library::model::project::asset::AssetKind; // Updated import
 use std::sync::{Arc, RwLock};
 
 use crate::ui::dialogs::composition_dialog::CompositionDialog;

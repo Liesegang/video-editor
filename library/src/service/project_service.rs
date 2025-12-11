@@ -94,6 +94,7 @@ impl ProjectService {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn remove_asset(&self, asset_id: Uuid) -> Result<(), LibraryError> {
         let mut project_write = self.project.write().map_err(|e| {
             LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
@@ -190,6 +191,7 @@ impl ProjectService {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn remove_composition(&self, comp_id: Uuid) -> Result<(), LibraryError> {
         let mut project_write = self.project.write().map_err(|e| {
             LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
@@ -393,7 +395,7 @@ impl ProjectService {
                                      // Continue searching strictly deeper? 
                                      // Actually, we just need to traverse the graph of compositions.
                                      // We need to look up the comp definition for 'ref_id'.
-                                     if let Some(next_comp) = project.compositions.iter().find(|c| c.id == ref_id) {
+                                     if let Some(_next_comp) = project.compositions.iter().find(|c| c.id == ref_id) {
                                          // Prevent infinite loop in traversal if there's already a cycle elsewhere (safeguard)
                                          // But simple tree traversal is fine if we assume existing graph is DAG.
                                          // Just push to stack.

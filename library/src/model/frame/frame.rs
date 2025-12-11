@@ -1,7 +1,7 @@
 use crate::model::frame::color::Color;
 use crate::model::frame::entity::FrameObject;
 use serde::{Deserialize, Serialize};
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct FrameInfo {
     pub width: u64,
     pub height: u64,

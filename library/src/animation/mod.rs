@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+use ordered_float::OrderedFloat;
+use std::hash::{Hash, Hasher};
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)] // Removed PartialEq, Eq, Hash, Copy; Added Default
 pub enum EasingFunction {
     #[default]
     Linear,
@@ -304,5 +307,78 @@ impl EasingFunction {
         }
 
         Self::evaluate_bezier(&temp, t)
+    }
+}
+
+
+impl PartialEq for EasingFunction {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (EasingFunction::Linear, EasingFunction::Linear) => true,
+            (EasingFunction::EaseInSine, EasingFunction::EaseInSine) => true,
+            (EasingFunction::EaseOutSine, EasingFunction::EaseOutSine) => true,
+            (EasingFunction::EaseInOutSine, EasingFunction::EaseInOutSine) => true,
+            (EasingFunction::EaseInQuad, EasingFunction::EaseInQuad) => true,
+            (EasingFunction::EaseOutQuad, EasingFunction::EaseOutQuad) => true,
+            (EasingFunction::EaseInOutQuad, EasingFunction::EaseInOutQuad) => true,
+            (EasingFunction::EaseInCubic, EasingFunction::EaseInCubic) => true,
+            (EasingFunction::EaseOutCubic, EasingFunction::EaseOutCubic) => true,
+            (EasingFunction::EaseInOutCubic, EasingFunction::EaseInOutCubic) => true,
+            (EasingFunction::EaseInQuart, EasingFunction::EaseInQuart) => true,
+            (EasingFunction::EaseOutQuart, EasingFunction::EaseOutQuart) => true,
+            (EasingFunction::EaseInOutQuart, EasingFunction::EaseInOutQuart) => true,
+            (EasingFunction::EaseInQuint, EasingFunction::EaseInQuint) => true,
+            (EasingFunction::EaseOutQuint, EasingFunction::EaseOutQuint) => true,
+            (EasingFunction::EaseInOutQuint, EasingFunction::EaseInOutQuint) => true,
+            (EasingFunction::EaseInExpo, EasingFunction::EaseInExpo) => true,
+            (EasingFunction::EaseOutExpo, EasingFunction::EaseOutExpo) => true,
+            (EasingFunction::EaseInOutExpo, EasingFunction::EaseInOutExpo) => true,
+            (EasingFunction::EaseInCirc, EasingFunction::EaseInCirc) => true,
+            (EasingFunction::EaseOutCirc, EasingFunction::EaseOutCirc) => true,
+            (EasingFunction::EaseInOutCirc, EasingFunction::EaseInOutCirc) => true,
+            (EasingFunction::EaseInBack, EasingFunction::EaseInBack) => true,
+            (EasingFunction::EaseOutBack, EasingFunction::EaseOutBack) => true,
+            (EasingFunction::EaseInOutBack, EasingFunction::EaseInOutBack) => true,
+            (EasingFunction::EaseInElastic, EasingFunction::EaseInElastic) => true,
+            (EasingFunction::EaseOutElastic, EasingFunction::EaseOutElastic) => true,
+            (EasingFunction::EaseInOutElastic, EasingFunction::EaseInOutElastic) => true,
+            (EasingFunction::EaseInBounce, EasingFunction::EaseInBounce) => true,
+            (EasingFunction::EaseOutBounce, EasingFunction::EaseOutBounce) => true,
+            (EasingFunction::EaseInOutBounce, EasingFunction::EaseInOutBounce) => true,
+            (EasingFunction::SimpleBezier { start: s1, end: e1 }, 
+             EasingFunction::SimpleBezier { start: s2, end: e2 }) => {
+                OrderedFloat(s1.0) == OrderedFloat(s2.0) && OrderedFloat(s1.1) == OrderedFloat(s2.1) &&
+                OrderedFloat(e1.0) == OrderedFloat(e2.0) && OrderedFloat(e1.1) == OrderedFloat(e2.1)
+            },
+            (EasingFunction::Bezier { points: p1 }, EasingFunction::Bezier { points: p2 }) => {
+                p1.len() == p2.len() && p1.iter().zip(p2.iter()).all(|(a, b)| {
+                    OrderedFloat(a.0) == OrderedFloat(b.0) && OrderedFloat(a.1) == OrderedFloat(b.1)
+                })
+            },
+            _ => false
+        }
+    }
+}
+
+impl Eq for EasingFunction {}
+
+impl Hash for EasingFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            EasingFunction::SimpleBezier { start, end } => {
+                OrderedFloat(start.0).hash(state);
+                OrderedFloat(start.1).hash(state);
+                OrderedFloat(end.0).hash(state);
+                OrderedFloat(end.1).hash(state);
+            }
+            EasingFunction::Bezier { points } => {
+                for p in points {
+                    OrderedFloat(p.0).hash(state);
+                    OrderedFloat(p.1).hash(state);
+                }
+            }
+            _ => {} // Unit variants only hash discriminant
+        }
     }
 }
