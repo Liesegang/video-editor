@@ -38,12 +38,13 @@ pub struct EditorContext {
     pub drag_start_property_name: Option<String>,
     #[serde(skip)]
     pub drag_start_property_value: Option<library::model::project::property::PropertyValue>,
-    #[serde(skip)]
-    pub last_project_state_before_drag: Option<Project>,
+
     #[serde(skip)]
     pub dragged_entity_original_track_id: Option<Uuid>,
     #[serde(skip)]
     pub dragged_entity_hovered_track_id: Option<Uuid>,
+    #[serde(skip)]
+    pub dragged_entity_has_moved: bool, // Track if entity was actually moved during drag
     #[serde(skip)]
     pub is_resizing_entity: bool,
 
@@ -121,9 +122,9 @@ impl EditorContext {
 
             drag_start_property_name: None,
             drag_start_property_value: None,
-            last_project_state_before_drag: None,
             dragged_entity_original_track_id: None,
             dragged_entity_hovered_track_id: None,
+            dragged_entity_has_moved: false,
             is_resizing_entity: false,
 
             current_time_text_input: "".to_string(), // Initialize new field

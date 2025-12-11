@@ -95,11 +95,11 @@ pub fn show_track_list(
                 ))))
                 .clicked()
             {
-                let prev_project_state = project.read().unwrap().clone();
                 project_service
                     .add_track(comp_id, "New Track")
                     .expect("Failed to add track");
-                history_manager.push_project_state(prev_project_state);
+                let current_state = project.read().unwrap().clone();
+                history_manager.push_project_state(current_state);
                 ui_content.close();
             }
             if let Some(track_id) = editor_context.selected_track_id {
@@ -110,13 +110,13 @@ pub fn show_track_list(
                     ))))
                     .clicked()
                 {
-                    let prev_project_state = project.read().unwrap().clone();
                     project_service
                         .remove_track(comp_id, track_id)
                         .expect("Failed to remove track");
                     editor_context.selected_track_id = None;
                     editor_context.selected_entity_id = None;
-                    history_manager.push_project_state(prev_project_state);
+                    let current_state = project.read().unwrap().clone();
+                    history_manager.push_project_state(current_state);
                     ui_content.close();
                 }
             } else {

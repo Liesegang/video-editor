@@ -19,21 +19,30 @@ impl HistoryManager {
         self.redo_stack.clear();
     }
 
-    /// Pops a project state from the undo stack, pushes the current state to the redo stack, and returns the popped state.
-    pub fn undo(&mut self, current_project: Project) -> Option<Project> {
-        if let Some(project) = self.undo_stack.pop() {
-            self.redo_stack.push(current_project);
-            Some(project)
+    /// Undoes the last action.
+    /// Pops the current state (top of undo stack) and pushes it to the redo stack.
+    /// Returns the *new* top of the undo stack (the state before the action), without popping it.
+    /// If the undo stack has 1 or 0 elements, returns None (cannot undo initial state).
+    pub fn undo(&mut self) -> Option<Project> {
+        if self.undo_stack.len() <= 1 {
+            return None;
+        }
+
+        if let Some(current_state) = self.undo_stack.pop() {
+            self.redo_stack.push(current_state);
+            // Return a clone of the new top (the previous state)
+            self.undo_stack.last().cloned()
         } else {
             None
         }
     }
 
-    /// Pops a project state from the redo stack, pushes the current state to the undo stack, and returns the popped state.
-    pub fn redo(&mut self, current_project: Project) -> Option<Project> {
-        if let Some(project) = self.redo_stack.pop() {
-            self.undo_stack.push(current_project);
-            Some(project)
+    /// Redoes the last undone action.
+    /// Pops from redo stack, pushes to undo stack, and returns the new current state.
+    pub fn redo(&mut self) -> Option<Project> {
+        if let Some(next_state) = self.redo_stack.pop() {
+            self.undo_stack.push(next_state.clone());
+            Some(next_state)
         } else {
             None
         }

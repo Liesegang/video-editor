@@ -142,8 +142,7 @@ pub fn show_clip_area(
 
                         if let Some(track) = current_tracks_for_drop.get(drop_track_index) {
                             if let Some(asset) = editor_context.assets.get(asset_index) {
-                                let prev_project_state =
-                                    project_service.get_project().read().unwrap().clone();
+
 
                                 // Calculate initial out_frame based on asset duration
                                 let drop_out_frame = drop_in_frame
@@ -208,7 +207,8 @@ pub fn show_clip_area(
                                 ) {
                                     eprintln!("Failed to add entity to track: {:?}", e);
                                 } else {
-                                    history_manager.push_project_state(prev_project_state);
+                                    let current_state = project_service.get_project().read().unwrap().clone();
+                                    history_manager.push_project_state(current_state);
                                 }
                             }
                         }
@@ -307,10 +307,7 @@ pub fn show_clip_area(
                     editor_context.is_resizing_entity = true;
                     editor_context.selected_entity_id = Some(gc.id);
                     editor_context.selected_track_id = Some(gc.track_id);
-                    if editor_context.last_project_state_before_drag.is_none() {
-                        editor_context.last_project_state_before_drag =
-                            Some(project_service.get_project().read().unwrap().clone());
-                    }
+
                 }
 
                 if editor_context.is_resizing_entity
@@ -370,14 +367,9 @@ pub fn show_clip_area(
 
                 if left_edge_resp.drag_stopped() || right_edge_resp.drag_stopped() {
                     editor_context.is_resizing_entity = false;
-                    if let Some(initial_state) =
-                        editor_context.last_project_state_before_drag.take()
-                    {
-                        let current_state = project_service.get_project().read().unwrap().clone();
-                        if initial_state != current_state {
-                            history_manager.push_project_state(current_state);
-                        }
-                    }
+                    editor_context.is_resizing_entity = false;
+                    let current_state = project_service.get_project().read().unwrap().clone();
+                    history_manager.push_project_state(current_state);
                 }
 
                 // Calculate display position (potentially adjusted for drag preview)
@@ -449,25 +441,26 @@ pub fn show_clip_area(
                 if !editor_context.is_resizing_entity && clip_resp.drag_started() {
                     editor_context.selected_entity_id = Some(gc.id);
                     editor_context.selected_track_id = Some(gc.track_id);
-                    editor_context.dragged_entity_original_track_id = Some(gc.track_id); // Store original track
-                    editor_context.dragged_entity_hovered_track_id = Some(gc.track_id); // Initially hovered is original track
-                    if editor_context.last_project_state_before_drag.is_none() {
-                        editor_context.last_project_state_before_drag =
-                            Some(project_service.get_project().read().unwrap().clone());
-                    }
-                }
-                if !editor_context.is_resizing_entity
-                    && clip_resp.dragged()
-                    && editor_context.selected_entity_id == Some(gc.id)
-                {
-                    // Handle horizontal movement (frame change)
-                    let dt_frames_f32 =
-                        clip_resp.drag_delta().x / pixels_per_unit * composition_fps as f32;
-                    let dt_frames = dt_frames_f32.round() as i64;
+                            editor_context.dragged_entity_original_track_id = Some(gc.track_id); // Store original track
+                            editor_context.dragged_entity_hovered_track_id = Some(gc.track_id); // Initially hovered is original track
+                            editor_context.dragged_entity_has_moved = false; // Reset move flag
+                        }
+                        if !editor_context.is_resizing_entity
+                            && clip_resp.dragged()
+                            && editor_context.selected_entity_id == Some(gc.id)
+                        {
+                            // Mark as moved if drag delta is non-zero
+                            if clip_resp.drag_delta().length_sq() > 0.0 {
+                                editor_context.dragged_entity_has_moved = true;
+                            }
+                            // Handle horizontal movement (frame change)
+                            let dt_frames_f32 =
+                                clip_resp.drag_delta().x / pixels_per_unit * composition_fps as f32;
+                            let dt_frames = dt_frames_f32.round() as i64;
 
-                    if let Some(comp_id) = editor_context.selected_composition_id {
-                        if let Some(track_id) = editor_context.selected_track_id {
-                            let new_in_frame = (gc.in_frame as i64 + dt_frames).max(0) as u64;
+                            if let Some(comp_id) = editor_context.selected_composition_id {
+                                if let Some(track_id) = editor_context.selected_track_id {
+                                    let new_in_frame = (gc.in_frame as i64 + dt_frames).max(0) as u64;
                             let new_out_frame =
                                 (gc.out_frame as i64 + dt_frames).max(new_in_frame as i64) as u64;
 
@@ -551,14 +544,10 @@ pub fn show_clip_area(
                         }
                     }
 
-                    if let Some(initial_state) =
-                        editor_context.last_project_state_before_drag.take()
-                    {
-                        let current_state = project_service.get_project().read().unwrap().clone();
-                        if initial_state != current_state || moved_track {
-                            // Push history if time changed or track moved
-                            history_manager.push_project_state(current_state); // Changed to push current state, not initial state
-                        }
+                    // Push history if time changed or track moves (dragged)
+                    if moved_track || editor_context.dragged_entity_has_moved {
+                         let current_state = project_service.get_project().read().unwrap().clone();
+                         history_manager.push_project_state(current_state);
                     }
 
                     // Clear drag related states

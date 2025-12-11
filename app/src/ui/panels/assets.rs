@@ -23,7 +23,6 @@ pub fn assets_panel(
 
     // Handle new composition dialog results
     if composition_dialog.confirmed && !composition_dialog.edit_mode {
-        let prev_project_state = project_service.get_project().read().unwrap().clone();
         let new_comp_id = project_service
             .add_composition(
                 &composition_dialog.name,
@@ -41,7 +40,8 @@ pub fn assets_panel(
             kind: AssetKind::Composition(new_comp_id),
             composition_id: Some(new_comp_id),
         });
-        history_manager.push_project_state(prev_project_state);
+        let current_state = project_service.get_project().read().unwrap().clone();
+        history_manager.push_project_state(current_state);
         needs_refresh = true;
         composition_dialog.confirmed = false; // Reset confirmed state
         *composition_dialog = CompositionDialog::new(); // Reset dialog state
@@ -49,7 +49,6 @@ pub fn assets_panel(
 
     // Handle edit composition dialog results
     if composition_dialog.confirmed && composition_dialog.edit_mode {
-        let prev_project_state = project_service.get_project().read().unwrap().clone();
         project_service
             .update_composition(
                 composition_dialog.comp_id.unwrap(),
@@ -71,7 +70,8 @@ pub fn assets_panel(
             asset.duration = composition_dialog.duration as f32;
         }
 
-        history_manager.push_project_state(prev_project_state);
+        let current_state = project_service.get_project().read().unwrap().clone();
+        history_manager.push_project_state(current_state);
         needs_refresh = true;
         composition_dialog.confirmed = false; // Reset confirmed state
         *composition_dialog = CompositionDialog::new(); // Reset dialog state
@@ -117,7 +117,6 @@ pub fn assets_panel(
         }
         if ui.button(format!("{} Remove Comp", icons::MINUS)).clicked() {
             if let Some(comp_id) = editor_context.selected_composition_id {
-                let prev_project_state = project_service.get_project().read().unwrap().clone();
                 project_service
                     .remove_composition(comp_id)
                     .expect("Failed to remove composition");
@@ -128,7 +127,8 @@ pub fn assets_panel(
                 editor_context.selected_composition_id = None;
                 editor_context.selected_track_id = None;
                 editor_context.selected_entity_id = None;
-                history_manager.push_project_state(prev_project_state);
+                let current_state = project_service.get_project().read().unwrap().clone();
+                history_manager.push_project_state(current_state);
                 needs_refresh = true;
             }
         }

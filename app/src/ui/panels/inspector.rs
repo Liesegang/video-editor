@@ -11,10 +11,11 @@ use uuid::Uuid;
 
 // Helper function to handle continuous property input via DragValue
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn handle_drag_value_property(
     ui: &mut Ui,
     history_manager: &mut HistoryManager,
-    editor_context: &mut EditorContext,
+    _editor_context: &mut EditorContext,
     project_service: &mut ProjectService,
     comp_id: Uuid,
     track_id: Uuid,
@@ -34,13 +35,6 @@ fn handle_drag_value_property(
             .suffix(suffix),
     );
 
-    if response.drag_started() {
-        if editor_context.last_project_state_before_drag.is_none() {
-            editor_context.last_project_state_before_drag =
-                Some(project_service.get_project().read().unwrap().clone());
-        }
-    }
-
     if response.changed() {
         update_fn(
             project_service,
@@ -55,12 +49,9 @@ fn handle_drag_value_property(
     }
 
     if response.drag_stopped() {
-        if let Some(initial_state) = editor_context.last_project_state_before_drag.take() {
-            let current_state = project_service.get_project().read().unwrap().clone();
-            if initial_state != current_state {
-                history_manager.push_project_state(initial_state);
-            }
-        }
+        // Post-Operation Push: Push the current state (which includes the change)
+        let current_state = project_service.get_project().read().unwrap().clone();
+        history_manager.push_project_state(current_state);
     }
     response
 }
@@ -70,7 +61,7 @@ fn handle_drag_value_property(
 fn handle_slider_property(
     ui: &mut Ui,
     history_manager: &mut HistoryManager,
-    editor_context: &mut EditorContext,
+    _editor_context: &mut EditorContext,
     project_service: &mut ProjectService,
     comp_id: Uuid,
     track_id: Uuid,
@@ -86,13 +77,6 @@ fn handle_slider_property(
     ui.label(property_label);
     let response = ui.add(egui::Slider::new(current_value, range).suffix(suffix));
 
-    if response.drag_started() {
-        if editor_context.last_project_state_before_drag.is_none() {
-            editor_context.last_project_state_before_drag =
-                Some(project_service.get_project().read().unwrap().clone());
-        }
-    }
-
     if response.changed() {
         update_fn(
             project_service,
@@ -107,12 +91,9 @@ fn handle_slider_property(
     }
 
     if response.drag_stopped() {
-        if let Some(initial_state) = editor_context.last_project_state_before_drag.take() {
-            let current_state = project_service.get_project().read().unwrap().clone();
-            if initial_state != current_state {
-                history_manager.push_project_state(initial_state);
-            }
-        }
+        // Post-Operation Push
+        let current_state = project_service.get_project().read().unwrap().clone();
+        history_manager.push_project_state(current_state);
     }
     response
 }
@@ -203,8 +184,6 @@ pub fn inspector_panel(
             ui.horizontal(|ui| {
                 ui.label("Type");
                 if ui.text_edit_singleline(&mut current_entity_type).changed() {
-                    let prev_project_state =
-                        project_service.get_project().read().unwrap().clone();
                     project_service
                         .with_track_mut(comp_id, track_id, |track_mut| {
                             if let Some(entity_mut) = track_mut
@@ -216,7 +195,8 @@ pub fn inspector_panel(
                             }
                         })
                         .ok();
-                    history_manager.push_project_state(prev_project_state);
+                    let current_state = project_service.get_project().read().unwrap().clone();
+                    history_manager.push_project_state(current_state);
                     needs_refresh = true;
                 }
             });
@@ -522,8 +502,7 @@ pub fn inspector_panel(
                 .button(format!("{} Delete Entity", icons::TRASH))
                 .clicked()
             {
-                let prev_project_state =
-                    project_service.get_project().read().unwrap().clone();
+
                 if let Err(e) = project_service.remove_entity_from_track(
                     comp_id,
                     track_id,
@@ -532,7 +511,9 @@ pub fn inspector_panel(
                     eprintln!("Failed to remove entity: {:?}", e);
                 } else {
                     editor_context.selected_entity_id = None;
-                    history_manager.push_project_state(prev_project_state);
+                    editor_context.selected_entity_id = None;
+                    let current_state = project_service.get_project().read().unwrap().clone();
+                    history_manager.push_project_state(current_state);
                     needs_refresh = true;
                 }
             }
