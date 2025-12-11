@@ -134,7 +134,11 @@ pub fn assets_panel(
                                         ui.close_menu();
                                     }
                                     if ui.button(format!("{} Delete Composition", icons::TRASH)).clicked() {
-                                        comp_to_remove = Some(comp.id);
+                                        if project_service.is_composition_used(comp.id) {
+                                            editor_context.comp_delete_candidate = Some(comp.id);
+                                        } else {
+                                            comp_to_remove = Some(comp.id);
+                                        }
                                         ui.close_menu();
                                     }
                                 });
@@ -268,7 +272,7 @@ pub fn assets_panel(
         }
         
         project_service
-            .remove_composition(comp_id)
+            .remove_composition_fully(comp_id)
             .expect("Failed to remove composition");
         
         let current_state = project_service.get_project().read().unwrap().clone();
@@ -284,6 +288,45 @@ pub fn assets_panel(
          let current_state = project_service.get_project().read().unwrap().clone();
          history_manager.push_project_state(current_state);
          needs_refresh = true;
+    }
+
+    // Confirmation Modal for Composition Deletion
+    if let Some(comp_id) = editor_context.comp_delete_candidate {
+        egui::Window::new("⚠ Confirm Composition Deletion")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ui.ctx(), |ui| {
+                ui.label("This composition is used inside another timeline.");
+                ui.label("Deleting it will remove all associated clips.");
+                ui.label("Are you sure?");
+                
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        editor_context.comp_delete_candidate = None;
+                    }
+                    if ui.button(egui::RichText::new("Delete").color(egui::Color32::RED)).clicked() {
+                         match project_service.remove_composition_fully(comp_id) {
+                            Ok(_) => {
+                                // Clear selection if we just deleted the selected comp
+                                if editor_context.selected_composition_id == Some(comp_id) {
+                                    editor_context.selected_composition_id = None;
+                                    editor_context.selected_track_id = None;
+                                    editor_context.selected_entity_id = None;
+                                }
+
+                                let current_state = project_service.get_project().read().unwrap().clone();
+                                history_manager.push_project_state(current_state);
+                                needs_refresh = true;
+                            }
+                            Err(e) => {
+                                log::error!("Failed to remove composition fully: {}", e);
+                            }
+                        }
+                        editor_context.comp_delete_candidate = None;
+                    }
+                });
+            });
     }
 
     // Confirmation Modal for Asset Deletion

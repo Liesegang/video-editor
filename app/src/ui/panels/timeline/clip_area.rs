@@ -241,7 +241,8 @@ pub fn show_clip_area(
                                     drop_in_frame,
                                     drop_out,
                                 ) {
-                                    eprintln!("Failed to add entity to track: {:?}", e);
+                                    log::error!("Failed to add entity to track: {:?}", e);
+                                    editor_context.active_modal_error = Some(e.to_string());
                                 } else {
                                     let current_state = project_service.get_project().read().unwrap().clone();
                                     history_manager.push_project_state(current_state);

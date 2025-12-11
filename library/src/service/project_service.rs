@@ -3,7 +3,7 @@ use crate::error::LibraryError;
 use crate::model::project::asset::Asset;
 use crate::model::project::project::{Composition, Project};
 use crate::model::project::property::{Property, PropertyValue};
-use crate::model::project::{Track, TrackClip};
+use crate::model::project::{Track, TrackClip, TrackClipKind};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -142,9 +142,61 @@ impl ProjectService {
         project_read
             .compositions
             .iter()
-            .find(|&c| c.id == id)
+            .find(|c| c.id == id)
             .cloned()
-            .ok_or_else(|| LibraryError::Project(format!("Composition with ID {} not found", id)))
+            .ok_or(LibraryError::Project(format!("Composition not found: {}", id)))
+    }
+
+    pub fn is_composition_used(&self, comp_id: Uuid) -> bool {
+        let project_read = self.project.read().unwrap();
+        for comp in &project_read.compositions {
+            // A composition can't contain itself directly (usually), but we check all comps
+            // Ideally we check if *other* comps use this one.
+            for track in &comp.tracks {
+                for clip in &track.clips {
+                    if clip.reference_id == Some(comp_id) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    pub fn remove_composition_fully(&self, comp_id: Uuid) -> Result<(), LibraryError> {
+        let mut project_write = self.project.write().map_err(|e| {
+            LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
+        })?;
+
+        // Remove clips referencing the composition from ALL compositions
+        for comp in &mut project_write.compositions {
+            for track in &mut comp.tracks {
+                track.clips.retain(|clip| clip.reference_id != Some(comp_id));
+            }
+        }
+
+        // Remove the composition itself
+        project_write
+            .remove_composition(comp_id)
+            .ok_or(LibraryError::Project(format!(
+                "Failed to remove composition {}",
+                comp_id
+            )))?;
+
+        Ok(())
+    }
+
+    fn remove_composition(&self, comp_id: Uuid) -> Result<(), LibraryError> {
+        let mut project_write = self.project.write().map_err(|e| {
+            LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
+        })?;
+        project_write
+            .remove_composition(comp_id)
+            .ok_or(LibraryError::Project(format!(
+                "Failed to remove composition {}",
+                comp_id
+            )))?;
+        Ok(())
     }
 
     // New closure-based method for mutable access to Composition
@@ -161,7 +213,7 @@ impl ProjectService {
         Ok(f(composition))
     }
 
-    pub fn remove_composition(&self, id: Uuid) -> Result<(), LibraryError> {
+    pub fn remove_composition_old(&self, id: Uuid) -> Result<(), LibraryError> { // Renamed to avoid conflict
         let mut project_write = self.project.write().map_err(|e| {
             LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
         })?;
@@ -285,6 +337,17 @@ impl ProjectService {
         in_frame: u64,  // Timeline start frame
         out_frame: u64, // Timeline end frame
     ) -> Result<Uuid, LibraryError> {
+        // Validation: Prevent circular references if adding a composition
+        if clip.kind == TrackClipKind::Composition {
+            if let Some(ref_id) = clip.reference_id {
+                if !self.validate_recursion(ref_id, composition_id) {
+                    return Err(LibraryError::Project(
+                        "Cannot add composition: Circular reference detected".to_string(),
+                    ));
+                }
+            }
+        }
+
         self.with_track_mut(composition_id, track_id, |track| {
             let id = clip.id;
             // Ensure the clip's timing matches the requested timing
@@ -295,6 +358,85 @@ impl ProjectService {
             track.clips.push(final_clip);
             Ok(id)
         })?
+    }
+
+    fn validate_recursion(&self, child_id: Uuid, parent_id: Uuid) -> bool {
+        // 1. Direct reflexive check
+        if child_id == parent_id {
+            return false;
+        }
+
+        // 2. Cycle check: Does 'child' (the comp being added) ALREADY contain 'parent'?
+        // If so, adding child to parent creates Parent -> Child -> ... -> Parent (Cycle).
+        if let Ok(project) = self.project.read() {
+            // Find the child composition definition
+            if let Some(child_comp) = project.compositions.iter().find(|c| c.id == child_id) {
+                // BFS/DFS Traversal of child_comp's dependencies
+                let mut stack = vec![child_comp];
+                
+                while let Some(current_comp) = stack.pop() {
+                     for track in &current_comp.tracks {
+                         for clip in &track.clips {
+                             if clip.kind == TrackClipKind::Composition {
+                                 if let Some(ref_id) = clip.reference_id {
+                                     if ref_id == parent_id {
+                                         // Found parent inside child's hierarchy -> Cycle!
+                                         return false;
+                                     }
+                                     
+                                     // Continue searching strictly deeper? 
+                                     // Actually, we just need to traverse the graph of compositions.
+                                     // We need to look up the comp definition for 'ref_id'.
+                                     if let Some(next_comp) = project.compositions.iter().find(|c| c.id == ref_id) {
+                                         // Prevent infinite loop in traversal if there's already a cycle elsewhere (safeguard)
+                                         // But simple tree traversal is fine if we assume existing graph is DAG.
+                                         // Just push to stack.
+                                         // Use simple recursion check.
+                                     }
+                                     
+                                     // Optimization: We actually need to traverse deeper.
+                                     // But we can't easily push references to stack if we are iterating.
+                                     // Let's implement a simple recursive helper or stack of IDs.
+                                 }
+                             }
+                         }
+                     }
+                }
+            }
+        }
+        
+        // Re-implementing traversal cleanly using ID stack to avoid lifetime hell
+        let project_read = match self.project.read() {
+            Ok(p) => p,
+            Err(_) => return false, // Lock failure
+        };
+
+        let mut stack = vec![child_id];
+        // We should track visited to avoid infinite loops if graph is already cyclic (though it shouldn't be)
+        let mut visited = std::collections::HashSet::new();
+
+        while let Some(current_id) = stack.pop() {
+            if !visited.insert(current_id) {
+                continue;
+            }
+
+            if let Some(comp) = project_read.compositions.iter().find(|c| c.id == current_id) {
+                for track in &comp.tracks {
+                    for clip in &track.clips {
+                        if clip.kind == TrackClipKind::Composition {
+                             if let Some(ref_id) = clip.reference_id {
+                                 if ref_id == parent_id {
+                                     return false; // Found parent in child's descendants
+                                 }
+                                 stack.push(ref_id);
+                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        true
     }
 
     pub fn remove_clip_from_track(
