@@ -128,7 +128,7 @@ pub fn preview_panel(
                             track_id: track.id,
                             in_frame: entity.in_frame,   // u64
                             out_frame: entity.out_frame, // u64
-                            timeline_duration_frames: entity.out_frame - entity.in_frame, // u64
+                            timeline_duration_frames: entity.out_frame.saturating_sub(entity.in_frame), // u64
                             source_begin_frame: entity.source_begin_frame, // u64
                             duration_frame: entity.duration_frame, // Option<u64>
                             color: a.color,
@@ -221,7 +221,7 @@ pub fn preview_panel(
                                 track_id: track.id,
                                 in_frame: entity.in_frame,   // u64
                                 out_frame: entity.out_frame, // u64
-                                timeline_duration_frames: entity.out_frame - entity.in_frame, // u64
+                                timeline_duration_frames: entity.out_frame.saturating_sub(entity.in_frame), // u64
                                 source_begin_frame: entity.source_begin_frame, // u64
                                 duration_frame: entity.duration_frame, // Option<u64>
                                 color: a.color,
