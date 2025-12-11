@@ -107,35 +107,6 @@ pub fn inspector_panel(
 ) {
     let mut needs_refresh = false;
 
-    // Display tracks for selected composition
-    if let Some(comp_id) = editor_context.selected_composition_id {
-        ui.heading(format!("Tracks in Comp: {}", comp_id));
-        ui.separator();
-        egui::ScrollArea::vertical()
-            .id_salt("tracks_scroll_area")
-            .max_height(200.0)
-            .show(ui, |ui| {
-                if let Ok(proj_read) = project.read() {
-                    if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-                        for track in &comp.tracks {
-                            ui.push_id(track.id, |ui_in_scope| {
-                                let is_selected =
-                                    editor_context.selected_track_id == Some(track.id);
-                                let response = ui_in_scope
-                                    .selectable_label(is_selected, &track.name)
-                                    .on_hover_text(format!("Track ID: {}", track.id));
-                                if response.clicked() {
-                                    editor_context.selected_track_id = Some(track.id);
-                                    editor_context.selected_entity_id = None; // Deselect entity when track changes
-                                }
-                            });
-                        }
-                    }
-                }
-            });
-
-        ui.add_space(10.0);
-    }
 
     // Display properties of selected entity
     if let (Some(selected_entity_id), Some(comp_id), Some(track_id)) = (
@@ -446,54 +417,15 @@ pub fn inspector_panel(
                     ui.end_row();
 
                     // Duration Frame
-                    let mut current_duration_f32 = duration_frame.unwrap_or(0) as f32;
-                    let mut is_infinite_duration = duration_frame.is_none();
+                    let duration_text = if let Some(d) = duration_frame {
+                        format!("{} fr", d)
+                    } else {
+                        "Infinite".to_string()
+                    };
 
                     ui.horizontal(|ui| {
                         ui.label("Duration Frame");
-                        let checkbox_response = ui.checkbox(&mut is_infinite_duration, "Infinite");
-                        if checkbox_response.changed() {
-                            let new_duration = if is_infinite_duration { None } else { Some(current_duration_f32 as u64) };
-                            if let Err(e) = project_service.update_clip_source_frames(comp_id, track_id, selected_entity_id, source_begin_frame, new_duration) {
-                                eprintln!("Failed to update source duration: {:?}", e);
-                            } else {
-                                needs_refresh = true;
-                            }
-                        }
-
-                        let drag_value_response = ui.add_enabled_ui(!is_infinite_duration, |ui| {
-                            handle_drag_value_property(
-                                ui,
-                                history_manager,
-                                editor_context,
-                                project_service,
-                                comp_id,
-                                track_id,
-                                selected_entity_id,
-                                "",
-                                "duration_frame",
-                                &mut current_duration_f32,
-                                1.0,
-                                "fr",
-                                |service: &mut ProjectService,
-                                 comp: Uuid,
-                                 track: Uuid,
-                                 entity: Uuid,
-                                 _name: &str,
-                                 value: PropertyValue| {
-                                    if let PropertyValue::Number(new_val_f64) = value {
-                                        let new_duration = Some(new_val_f64 as u64);
-                                        service.update_clip_source_frames(comp, track, entity, source_begin_frame, new_duration).map_err(|e| anyhow::anyhow!(e))
-                                    } else {
-                                        Err(anyhow::anyhow!("Expected Number for Duration Frame"))
-                                    }
-                                },
-                                &mut needs_refresh
-                            )
-                        }).inner;
-
-                        needs_refresh |= checkbox_response.changed();
-                        needs_refresh |= drag_value_response.changed();
+                        ui.label(duration_text);
                     });
                     ui.end_row();
                 });
