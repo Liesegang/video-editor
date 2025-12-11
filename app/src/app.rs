@@ -54,7 +54,8 @@ impl MyApp {
             .unwrap()
             .add_composition(default_comp);
 
-        let project_service = ProjectService::new(Arc::clone(&default_project));
+        let plugin_manager = library::create_plugin_manager();
+        let project_service = ProjectService::new(Arc::clone(&default_project), plugin_manager);
 
         let mut editor_context = EditorContext::new(default_comp_id); // Pass default_comp_id
         editor_context.selected_composition_id = Some(default_comp_id); // Select the default composition

@@ -27,7 +27,7 @@ use std::ops::Range;
 use std::sync::Arc; // Added
 
 // Function to create and initialize the PluginManager with built-in plugins
-fn create_plugin_manager() -> Arc<PluginManager> {
+pub fn create_plugin_manager() -> Arc<PluginManager> {
     let manager = Arc::new(PluginManager::new());
     manager.register_effect(Arc::new(crate::plugin::effects::BlurEffectPlugin::new()));
     manager.register_effect(Arc::new(crate::plugin::effects::PixelSorterPlugin::new()));
