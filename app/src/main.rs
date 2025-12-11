@@ -11,6 +11,7 @@ mod ui;
 mod utils;
 
 fn main() -> eframe::Result<()> {
+    // Initialize the logger
     env_logger::init();
     eframe::run_native(
         "Video Editor with Canvas",

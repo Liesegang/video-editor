@@ -15,6 +15,7 @@ pub use crate::loader::image::Image;
 pub use crate::plugin::ExportSettings; // Added
 // Re-export the services and models that the app will need.
 pub use rendering::skia_renderer::SkiaRenderer;
+pub use rendering::render_server::{RenderServer, RenderResult};
 pub use service::{ExportService, ProjectModel, RenderService};
 
 // use crate::plugin::load_plugins; // Removed

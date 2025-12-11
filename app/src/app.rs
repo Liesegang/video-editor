@@ -1,6 +1,7 @@
 use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, Style};
 use library::model::project::project::{Composition, Project};
+use log::{error, info, warn};
 use library::service::project_service::ProjectService;
 use std::fs;
 use std::io::Write;
@@ -16,6 +17,7 @@ use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::ui::panels::settings;
 use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
 use crate::utils;
+use library::RenderServer;
 
 pub struct MyApp {
     pub editor_context: EditorContext,
@@ -30,6 +32,7 @@ pub struct MyApp {
     settings_show_close_warning: bool,
     triggered_action: Option<CommandId>,
     pub composition_dialog: CompositionDialog,
+    pub render_server: Arc<RenderServer>,
 }
 
 impl MyApp {
@@ -55,10 +58,18 @@ impl MyApp {
             .add_composition(default_comp);
 
         let plugin_manager = library::create_plugin_manager();
-        let project_service = ProjectService::new(Arc::clone(&default_project), plugin_manager);
+        let cache_manager = Arc::new(library::cache::CacheManager::new());
+        let project_service = ProjectService::new(Arc::clone(&default_project), plugin_manager.clone());
 
         let mut editor_context = EditorContext::new(default_comp_id); // Pass default_comp_id
         editor_context.selected_composition_id = Some(default_comp_id); // Select the default composition
+
+        let entity_converter_registry = plugin_manager.get_entity_converter_registry();
+        let render_server = Arc::new(RenderServer::new(
+            plugin_manager,
+            cache_manager,
+            entity_converter_registry,
+        ));
 
         let mut app = Self {
             editor_context,
@@ -73,6 +84,7 @@ impl MyApp {
             settings_show_close_warning: false,
             triggered_action: None,
             composition_dialog: CompositionDialog::new(),
+            render_server,
         };
         if let Ok(proj_read) = app.project_service.get_project().read() {
             app.history_manager.push_project_state(proj_read.clone());
@@ -95,6 +107,7 @@ impl MyApp {
         self.editor_context.selected_composition_id = Some(new_comp_id);
         self.editor_context.selected_track_id = None;
         self.editor_context.selected_entity_id = None;
+        self.editor_context.current_time = 0.0;
 
 
         self.history_manager = HistoryManager::new();
@@ -265,16 +278,17 @@ impl eframe::App for MyApp {
                         match fs::read_to_string(&path) {
                             Ok(s) => {
                                 if let Err(e) = self.project_service.load_project(&s) {
-                                    eprintln!("Failed to load project: {}", e);
+                                    error!("Failed to load project: {}", e);
                                 } else {
                                     self.history_manager = HistoryManager::new();
                                     self.history_manager.push_project_state(
                                         self.project_service.get_project().read().unwrap().clone(),
                                     );
-                                    println!("Project loaded from {}", path.display());
+                                    info!("Project loaded from {}", path.display());
+                                    self.editor_context.current_time = 0.0;
                                 }
                             }
-                            Err(e) => eprintln!("Failed to read project file: {}", e),
+                            Err(e) => error!("Failed to read project file: {}", e),
                         }
                     }
                 }
@@ -288,14 +302,14 @@ impl eframe::App for MyApp {
                             Ok(json_str) => match fs::File::create(&path) {
                                 Ok(mut file) => {
                                     if let Err(e) = file.write_all(json_str.as_bytes()) {
-                                        eprintln!("Failed to write project to file: {}", e);
+                                        error!("Failed to write project to file: {}", e);
                                     } else {
-                                        println!("Project saved to {}", path.display());
+                                        info!("Project saved to {}", path.display());
                                     }
                                 }
-                                Err(e) => eprintln!("Failed to create file: {}", e),
+                                Err(e) => error!("Failed to create file: {}", e),
                             },
-                            Err(e) => eprintln!("Failed to save project: {}", e),
+                            Err(e) => error!("Failed to save project: {}", e),
                         }
                     }
                 }
@@ -306,14 +320,14 @@ impl eframe::App for MyApp {
                     if let Some(prev_state) = self.history_manager.undo() {
                         self.project_service.set_project(prev_state);
                     } else {
-                        eprintln!("Undo stack is empty (or at initial state).");
+                        warn!("Undo stack is empty (or at initial state).");
                     }
                 }
                 CommandId::Redo => {
                     if let Some(next_state) = self.history_manager.redo() {
                         self.project_service.set_project(next_state);
                     } else {
-                        eprintln!("Redo stack is empty.");
+                        warn!("Redo stack is empty.");
                     }
                 }
                 CommandId::Delete => {
@@ -325,7 +339,7 @@ impl eframe::App for MyApp {
                                     .project_service
                                     .remove_clip_from_track(comp_id, track_id, entity_id)
                                 {
-                                    eprintln!("Failed to remove entity: {:?}", e);
+                                    error!("Failed to remove entity: {:?}", e);
                                 } else {
                                     self.editor_context.selected_entity_id = None;
                                     let current_state = self.project_service.get_project().read().unwrap().clone();
@@ -370,6 +384,7 @@ impl eframe::App for MyApp {
                     &self.project,
                     &mut self.command_registry,
                     &mut self.composition_dialog,
+                    &self.render_server,
                 );
                 DockArea::new(&mut self.dock_state)
                     .style(Style::from_egui(ui.style().as_ref()))

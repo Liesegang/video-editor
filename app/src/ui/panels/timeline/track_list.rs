@@ -1,4 +1,5 @@
 use egui::Ui;
+use log::error;
 use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use library::model::project::Track;
@@ -66,7 +67,7 @@ pub fn show_track_list(
                 if let Some(comp_id) = editor_context.selected_composition_id {
                      if ui.button(format!("{} Remove Track", icons::TRASH)).clicked() {
                         if let Err(e) = project_service.remove_track(comp_id, track.id) {
-                            eprintln!("Failed to remove track: {:?}", e);
+                            error!("Failed to remove track: {:?}", e);
                         } else {
                             // If the removed track was selected, deselect it
                             if editor_context.selected_track_id == Some(track.id) {
@@ -75,7 +76,7 @@ pub fn show_track_list(
                             }
                             let current_state = project.read().unwrap().clone();
                             history_manager.push_project_state(current_state);
-                            ui.close_menu();
+                            ui.close();
                         }
                     }
                 }

@@ -26,6 +26,10 @@ impl ProjectService {
         Arc::clone(&self.project)
     }
 
+    pub fn get_plugin_manager(&self) -> Arc<PluginManager> {
+        Arc::clone(&self.plugin_manager)
+    }
+
     pub fn set_project(&self, new_project: Project) {
         let mut project_write = self.project.write().unwrap();
         *project_write = new_project;
@@ -310,7 +314,9 @@ impl ProjectService {
                     track_id, composition_id
                 ))
             })?;
-            Ok(f(track))
+            let res = f(track);
+            composition.rebuild_entity_cache();
+            Ok(res)
         })?
     }
 

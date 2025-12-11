@@ -40,27 +40,34 @@ impl<T: Renderer> RenderService<T> {
         project_model: &ProjectModel,
         time: f64,
     ) -> Result<Image, LibraryError> {
-        self.clear()?;
         let frame_info = self.get_frame(project_model, time);
+        self.render_from_frame_info(&frame_info)
+    }
+
+    pub fn render_from_frame_info(
+        &mut self,
+        frame_info: &FrameInfo,
+    ) -> Result<Image, LibraryError> {
+        self.clear()?;
         let object_count = frame_info.objects.len();
         let _timer = ScopedTimer::debug(format!(
             "RenderService::render_frame objects={}",
             object_count
         ));
 
-        for frame_object in frame_info.objects {
+        for frame_object in &frame_info.objects {
             let FrameObject {
-                content, // entity -> content
+                content,
                 properties: _properties,
             } = frame_object;
-            match content { // entity -> content
-                FrameContent::Video { // FrameEntity -> FrameContent
+            match content {
+                FrameContent::Video {
                     surface,
                     frame_number,
                 } => {
                     let request = LoadRequest::VideoFrame {
                         path: surface.file_path.clone(),
-                        frame_number,
+                        frame_number: *frame_number,
                     };
                     let video_frame = measure_debug(
                         format!("Decode video {} frame {}", surface.file_path, frame_number),
@@ -73,12 +80,12 @@ impl<T: Renderer> RenderService<T> {
                             }
                         },
                     )?;
-                    let final_image = self.apply_effects(video_frame, &surface.effects, time)?;
+                    let final_image = self.apply_effects(video_frame, &surface.effects, 0.0)?;
                     measure_debug(format!("Draw video {}", surface.file_path), || {
                         self.renderer.draw_image(&final_image, &surface.transform)
                     })?;
                 }
-                FrameContent::Image { surface } => { // FrameEntity -> FrameContent
+                FrameContent::Image { surface } => {
                     let request = LoadRequest::Image {
                         path: surface.file_path.clone(),
                     };
@@ -93,12 +100,12 @@ impl<T: Renderer> RenderService<T> {
                             }
                         },
                     )?;
-                    let final_image = self.apply_effects(image_frame, &surface.effects, time)?;
+                    let final_image = self.apply_effects(image_frame, &surface.effects, 0.0)?;
                     measure_debug(format!("Draw image {}", surface.file_path), || {
                         self.renderer.draw_image(&final_image, &surface.transform)
                     })?;
                 }
-                FrameContent::Text { // FrameEntity -> FrameContent
+                FrameContent::Text {
                     text,
                     font,
                     size,
@@ -109,15 +116,15 @@ impl<T: Renderer> RenderService<T> {
                     let text_layer =
                         measure_debug(format!("Rasterize text layer '{}'", text), || {
                             self.renderer
-                                .rasterize_text_layer(&text, size, &font, &color, &transform)
+                                .rasterize_text_layer(&text, *size, &font, &color, &transform)
                         })?;
-                    let final_image = self.apply_effects(text_layer, &effects, time)?;
+                    let final_image = self.apply_effects(text_layer, &effects, 0.0)?;
                     measure_debug(format!("Composite text '{}'", text), || {
                         self.renderer
                             .draw_image(&final_image, &Transform::default())
                     })?;
                 }
-                FrameContent::Shape { // FrameEntity -> FrameContent
+                FrameContent::Shape {
                     path,
                     styles,
                     path_effects,
@@ -133,7 +140,7 @@ impl<T: Renderer> RenderService<T> {
                                 &transform,
                             )
                         })?;
-                    let final_image = self.apply_effects(shape_layer, &effects, time)?;
+                    let final_image = self.apply_effects(shape_layer, &effects, 0.0)?;
                     measure_debug(format!("Composite shape {}", path), || {
                         self.renderer
                             .draw_image(&final_image, &Transform::default())

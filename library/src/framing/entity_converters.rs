@@ -131,7 +131,8 @@ impl<'a> FrameEvaluationContext<'a> {
         match self.evaluate_property_value(properties, key, time) {
             Some(PropertyValue::Number(value)) => value,
             Some(PropertyValue::Integer(value)) => value as f64,
-            other => {
+            None => default,
+            Some(other) => {
                 warn!(
                     "Property '{}' evaluated to {:?} at time {}. Falling back to default {}.",
                     key, other, time, default
@@ -149,10 +150,33 @@ impl<'a> FrameEvaluationContext<'a> {
         default_x: f64,
         default_y: f64,
     ) -> (f64, f64) {
-        match self.evaluate_property_value(properties, key, time) {
-            Some(PropertyValue::Vec2(v)) => (v.x, v.y),
-            _ => (default_x, default_y),
+        // Initialize with default or Vec2 value
+        let (mut vx, mut vy) = if let Some(PropertyValue::Vec2(v)) = self.evaluate_property_value(properties, key, time) {
+            (v.x, v.y)
+        } else {
+            (default_x, default_y)
+        };
+        
+        // Override with split keys (e.g. position_x, position_y) if they exist
+        let key_x = format!("{}_x", key);
+        if let Some(val) = self.evaluate_property_value(properties, &key_x, time) {
+             match val {
+                 PropertyValue::Number(n) => vx = n,
+                 PropertyValue::Integer(i) => vx = i as f64,
+                 _ => {}
+             }
         }
+
+        let key_y = format!("{}_y", key);
+        if let Some(val) = self.evaluate_property_value(properties, &key_y, time) {
+             match val {
+                 PropertyValue::Number(n) => vy = n,
+                 PropertyValue::Integer(i) => vy = i as f64,
+                 _ => {}
+             }
+        }
+
+        (vx, vy)
     }
 
     fn evaluate_color(

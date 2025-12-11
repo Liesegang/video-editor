@@ -13,6 +13,7 @@ use crate::{
     ui::panels::{assets, inspector, preview, timeline},
 };
 use library::service::project_service::ProjectService;
+use library::RenderServer;
 
 pub struct AppTabViewer<'a> {
     editor_context: &'a mut EditorContext,
@@ -21,7 +22,7 @@ pub struct AppTabViewer<'a> {
     project: &'a Arc<RwLock<Project>>,
     command_registry: &'a mut CommandRegistry,
     composition_dialog: &'a mut CompositionDialog,
-    // Add other shared state here
+    render_server: &'a Arc<RenderServer>,
 }
 
 impl<'a> AppTabViewer<'a> {
@@ -32,6 +33,7 @@ impl<'a> AppTabViewer<'a> {
         project: &'a Arc<RwLock<Project>>,
         command_registry: &'a mut CommandRegistry,
         composition_dialog: &'a mut CompositionDialog,
+        render_server: &'a Arc<RenderServer>,
     ) -> Self {
         Self {
             editor_context,
@@ -40,6 +42,7 @@ impl<'a> AppTabViewer<'a> {
             project,
             command_registry,
             composition_dialog,
+            render_server,
         }
     }
 }
@@ -55,6 +58,7 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                 self.history_manager,
                 self.project_service,
                 self.project,
+                self.render_server,
             ),
             Tab::Timeline => timeline::timeline_panel(
                 ui,

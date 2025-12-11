@@ -1,4 +1,5 @@
 use egui::Context;
+use log::warn;
 use std::fs;
 
 pub fn setup_fonts(ctx: &Context) {
@@ -33,7 +34,7 @@ pub fn setup_fonts(ctx: &Context) {
 
         ctx.set_fonts(fonts);
     } else {
-        eprintln!("Warning: Failed to load font from {}", font_path);
+        warn!("Warning: Failed to load font from {}", font_path);
         // Fallback to default egui fonts if MS Gothic fails to load
         ctx.set_fonts(fonts);
     }

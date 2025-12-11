@@ -125,13 +125,12 @@ pub fn assets_panel(
                         for comp in &proj_read.compositions {
                             ui.push_id(comp.id, |ui| {
                                 let is_selected = editor_context.selected_composition_id == Some(comp.id);
-                                let label = egui::SelectableLabel::new(is_selected, &comp.name);
-                                let response = ui.add(label.sense(egui::Sense::click().union(egui::Sense::drag())));
+                                let response = ui.selectable_label(is_selected, &comp.name);
                                 
                                 response.context_menu(|ui| {
                                     if ui.button("Edit Properties").clicked() {
                                         composition_dialog.open_for_edit(comp);
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                     if ui.button(format!("{} Delete Composition", icons::TRASH)).clicked() {
                                         if project_service.is_composition_used(comp.id) {
@@ -139,7 +138,7 @@ pub fn assets_panel(
                                         } else {
                                             comp_to_remove = Some(comp.id);
                                         }
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                 });
 
@@ -208,7 +207,7 @@ pub fn assets_panel(
                                      } else {
                                          asset_to_remove = Some(asset.id);
                                      }
-                                     ui.close_menu();
+                                     ui.close();
                                 }
                             });
 

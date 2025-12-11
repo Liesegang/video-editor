@@ -56,6 +56,8 @@ pub struct EditorContext {
     pub current_time_text_input: String,
     #[serde(skip)]
     pub is_editing_current_time: bool,
+    #[serde(skip)]
+    pub preview_texture: Option<egui::TextureHandle>,
 }
 
 impl EditorContext {
@@ -90,6 +92,7 @@ impl EditorContext {
 
             current_time_text_input: "".to_string(), // Initialize new field
             is_editing_current_time: false,          // Initialize new field
+            preview_texture: None,
         }
     }
 
