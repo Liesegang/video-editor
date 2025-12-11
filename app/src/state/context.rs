@@ -1,5 +1,5 @@
 use library::model::project::project::{Composition, Project};
-use library::model::project::property::PropertyMap;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -32,8 +32,7 @@ pub struct EditorContext {
     pub selected_track_id: Option<Uuid>,
     #[serde(skip)]
     pub selected_entity_id: Option<Uuid>,
-    #[serde(skip)]
-    pub inspector_entity_cache: Option<(Uuid, String, PropertyMap, u64, u64, u64, Option<u64>)>,
+
 
     #[serde(skip)]
     pub drag_start_property_name: Option<String>,
@@ -119,7 +118,7 @@ impl EditorContext {
             selected_composition_id: Some(default_comp_id),
             selected_track_id: None,
             selected_entity_id: None,
-            inspector_entity_cache: None,
+
             drag_start_property_name: None,
             drag_start_property_value: None,
             last_project_state_before_drag: None,
