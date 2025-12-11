@@ -45,9 +45,7 @@ impl Project {
 
     pub fn load(json_str: &str) -> Result<Self, serde_json::Error> {
         let mut project: Project = serde_json::from_str(json_str)?;
-        for composition in project.compositions.iter_mut() {
-            composition.rebuild_entity_cache();
-        }
+
         Ok(project)
     }
 
@@ -81,9 +79,6 @@ pub struct Composition {
     pub color_profile: String,
 
     pub tracks: Vec<Track>,
-
-    #[serde(skip)]
-    cached_entities: Vec<TrackClip>,
 }
 
 impl Composition {
@@ -103,13 +98,11 @@ impl Composition {
             },
             color_profile: "sRGB".to_string(),
             tracks: Vec::new(),
-            cached_entities: Vec::new(),
         }
     }
 
     pub fn add_track(&mut self, track: Track) {
         self.tracks.push(track);
-        self.rebuild_entity_cache();
     }
 
     pub fn get_track_mut(&mut self, id: Uuid) -> Option<&mut Track> {
@@ -119,21 +112,8 @@ impl Composition {
     pub fn remove_track(&mut self, id: Uuid) -> Option<Track> {
         let index = self.tracks.iter().position(|t| t.id == id)?;
         let removed_track = self.tracks.remove(index);
-        self.rebuild_entity_cache(); // Rebuild cache after removing a track
         Some(removed_track)
     }
-
-    pub(crate) fn cached_entities(&self) -> &[TrackClip] {
-        // Change return type
-        &self.cached_entities
-    }
-
-    pub fn rebuild_entity_cache(&mut self) {
-        self.cached_entities = self
-            .tracks
-            .iter()
-            .flat_map(|track| track.clips.iter())
-            .cloned() // Clone TrackClip directly
-            .collect();
-    }
 }
+
+

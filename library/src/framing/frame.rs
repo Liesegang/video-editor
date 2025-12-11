@@ -54,10 +54,10 @@ impl<'a> FrameEvaluator<'a> {
     }
 
     fn active_clips(&self, frame_number: u64) -> impl Iterator<Item = &TrackClip> {
-        // Changed to u64
         self.composition
-            .cached_entities() // Returns &[TrackClip] now - updated to cached_clips if renamed in project.rs, but currently cached_entities uses TrackClip
+            .tracks
             .iter()
+            .flat_map(|track| track.clips.iter())
             .filter(move |track_clip| {
                 track_clip.in_frame <= frame_number && track_clip.out_frame >= frame_number
             })
