@@ -126,7 +126,8 @@ mod tests {
     use crate::model::frame::entity::FrameContent; // Added
     use crate::model::project::project::Composition; // Added
     use crate::model::project::property::{Property, PropertyMap, PropertyValue, Vec2};
-    use crate::model::project::{Track, TrackClip};
+    use crate::model::project::{Track, TrackClip, TrackClipKind}; // import kind
+
     use crate::plugin::PluginManager;
     use crate::plugin::properties::{
         ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin,
@@ -183,7 +184,8 @@ mod tests {
 
         let track_clip = TrackClip {
             id: uuid::Uuid::new_v4(), // Added ID
-            entity_type: "text".into(),
+            reference_id: None,
+            kind: TrackClipKind::Text,
             in_frame: 0, // Renamed
             out_frame: 150, // Renamed
             source_begin_frame: 0, // Added
@@ -238,7 +240,8 @@ mod tests {
 
         let early = TrackClip {
             id: uuid::Uuid::new_v4(), // Added ID
-            entity_type: "image".into(),
+            reference_id: None,
+            kind: TrackClipKind::Image,
             in_frame: 0, // Renamed
             out_frame: 30, // Renamed (1.0 sec at 30fps)
             source_begin_frame: 0,
@@ -250,7 +253,8 @@ mod tests {
 
         let late = TrackClip {
             id: uuid::Uuid::new_v4(), // Added ID
-            entity_type: "image".into(),
+            reference_id: None,
+            kind: TrackClipKind::Image,
             in_frame: 150, // Renamed (5.0 sec at 30fps)
             out_frame: 180, // Renamed (6.0 sec at 30fps)
             source_begin_frame: 0,

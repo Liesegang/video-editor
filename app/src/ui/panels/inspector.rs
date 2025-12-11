@@ -2,6 +2,7 @@ use egui::Ui;
 use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use library::model::project::property::PropertyValue;
+use library::model::project::TrackClipKind; // Added
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
 
@@ -121,7 +122,7 @@ pub fn inspector_panel(
                 if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
                     track.clips.iter().find(|e| e.id == selected_entity_id).map(|e| {
                         (
-                            e.entity_type.clone(),
+                            e.kind.clone(),
                             e.properties.clone(),
                             e.in_frame,
                             e.out_frame,
@@ -140,7 +141,7 @@ pub fn inspector_panel(
         };
 
         if let Some((
-            entity_type,
+            kind,
             properties,
             in_frame,
             out_frame,
@@ -151,10 +152,21 @@ pub fn inspector_panel(
             ui.heading("Clip Properties");
             ui.separator();
 
-             let mut current_entity_type = entity_type.clone();
+            let mut current_kind = kind.clone();
             ui.horizontal(|ui| {
                 ui.label("Type");
-                if ui.text_edit_singleline(&mut current_entity_type).changed() {
+                egui::ComboBox::from_id_source("kind_combo")
+                    .selected_text(current_kind.to_string())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut current_kind, TrackClipKind::Video, "Video");
+                        ui.selectable_value(&mut current_kind, TrackClipKind::Image, "Image");
+                        ui.selectable_value(&mut current_kind, TrackClipKind::Audio, "Audio");
+                        ui.selectable_value(&mut current_kind, TrackClipKind::Text, "Text");
+                        ui.selectable_value(&mut current_kind, TrackClipKind::Shape, "Shape");
+                        ui.selectable_value(&mut current_kind, TrackClipKind::Composition, "Composition");
+                    });
+
+                if current_kind != kind {
                     project_service
                         .with_track_mut(comp_id, track_id, |track_mut| {
                             if let Some(entity_mut) = track_mut
@@ -162,7 +174,7 @@ pub fn inspector_panel(
                                 .iter_mut()
                                 .find(|e| e.id == selected_entity_id)
                             {
-                                entity_mut.entity_type = current_entity_type.clone();
+                                entity_mut.kind = current_kind.clone();
                             }
                         })
                         .ok();

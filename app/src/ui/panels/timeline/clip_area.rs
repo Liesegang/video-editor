@@ -1,6 +1,7 @@
 use egui::{epaint::StrokeKind, Ui};
 use library::model::project::project::Project;
 use library::model::project::TrackClip;
+use library::model::project::TrackClipKind;
 use library::service::project_service::ProjectService;
 use library::model::project::asset::AssetKind;
 use library::model::project::property::PropertyValue;
@@ -159,6 +160,7 @@ pub fn show_clip_area(
                                             new_clip_opt = match asset.kind {
                                                 AssetKind::Video => {
                                                      Some(TrackClip::create_video(
+                                                        Some(asset.id),
                                                         &asset.path,
                                                         drop_in_frame,
                                                         drop_out,
@@ -168,15 +170,18 @@ pub fn show_clip_area(
                                                 },
                                                 AssetKind::Image => {
                                                      Some(TrackClip::create_image(
+                                                        Some(asset.id),
                                                         &asset.path,
                                                         drop_in_frame,
                                                         drop_out,
                                                     ))
                                                 },
+
                                                 AssetKind::Audio => {
                                                      let mut audio_entity = TrackClip::new(
                                                         Uuid::new_v4(),
-                                                        "audio".to_string(),
+                                                        Some(asset.id),
+                                                        TrackClipKind::Audio,
                                                         0, 0, 0, None, 0.0,
                                                         library::model::project::property::PropertyMap::new(),
                                                         Vec::new()
@@ -211,7 +216,8 @@ pub fn show_clip_area(
 
                                       let mut comp_entity = TrackClip::new(
                                         Uuid::new_v4(),
-                                        "composition".to_string(),
+                                        Some(*target_comp_id),
+                                        TrackClipKind::Composition,
                                         0, 0, 0, None, 0.0,
                                         library::model::project::property::PropertyMap::new(),
                                         Vec::new()
@@ -261,19 +267,19 @@ pub fn show_clip_area(
             .iter()
             .filter(|(t_id, _)| *t_id == track_in_all_entities.id)
         {
-            // Determine Color based on entity_type
-            let clip_color = match entity.entity_type.as_str() {
-                "video" => egui::Color32::from_rgb(100, 150, 255), // Blue
-                "audio" => egui::Color32::from_rgb(100, 255, 150), // Green
-                "image" => egui::Color32::from_rgb(255, 100, 150), // Pink
-                "composition" => egui::Color32::from_rgb(255, 150, 255), // Magenta
-                "text" => egui::Color32::from_rgb(255, 200, 100), // Orange/Yellow
+            // Determine Color based on kind
+            let clip_color = match entity.kind {
+                TrackClipKind::Video => egui::Color32::from_rgb(100, 150, 255), // Blue
+                TrackClipKind::Audio => egui::Color32::from_rgb(100, 255, 150), // Green
+                TrackClipKind::Image => egui::Color32::from_rgb(255, 100, 150), // Pink
+                TrackClipKind::Composition => egui::Color32::from_rgb(255, 150, 255), // Magenta
+                TrackClipKind::Text => egui::Color32::from_rgb(255, 200, 100), // Orange/Yellow
                 _ => egui::Color32::GRAY,
             };
 
             let gc = TimelineClip {
                 id: entity.id,
-                name: entity.entity_type.clone(),
+                name: entity.kind.to_string(), // Use Display impl
                 track_id: *entity_track_id,
                 in_frame: entity.in_frame,   // u64
                 out_frame: entity.out_frame, // u64

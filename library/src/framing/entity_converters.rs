@@ -381,13 +381,14 @@ impl EntityConverterRegistry {
         track_clip: &TrackClip, // Changed to TrackClip
         frame_number: u64,          // Changed to u64
     ) -> Option<FrameObject> {
-        match self.converters.get(&track_clip.entity_type) {
-             // Use track_clip.entity_type
+        let kind_str = track_clip.kind.to_string();
+        match self.converters.get(&kind_str) {
+             // Use track_clip.kind.to_string()
             Some(converter) => converter.convert_entity(evaluator, track_clip, frame_number),
             None => {
                 warn!(
                     "No converter registered for entity type '{}'",
-                    track_clip.entity_type
+                    kind_str
                 );
                 None
             }
