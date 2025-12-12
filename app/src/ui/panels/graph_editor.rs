@@ -15,6 +15,7 @@ enum Action {
     Move(String, usize, f64, f64), // prop_key, index, new_time, new_value
     Add(String, f64, f64),         // prop_key, time, value
     SetEasing(String, usize, EasingFunction),
+    Remove(String, usize),
     None,
 }
 
@@ -270,6 +271,11 @@ pub fn graph_editor_panel(
                              if ui.button("EaseInOut").clicked() {
                                  action = Action::SetEasing(name.clone(), i, EasingFunction::EaseInOutCubic);
                              }
+                             ui.separator();
+                             if ui.button(egui::RichText::new("Delete Keyframe").color(Color32::RED)).clicked() {
+                                 action = Action::Remove(name.clone(), i);
+                                 ui.close_menu(); // Explicitly close for destructive action feedback or just rely on click
+                             }
                          });
                     
                          // Dragging
@@ -360,6 +366,9 @@ pub fn graph_editor_panel(
                  None, // Keep existing value
                  Some(easing)
              );
+        }
+        Action::Remove(name, idx) => {
+            let _ = project_service.remove_keyframe(comp_id, track_id, entity_id, &name, idx);
         }
         Action::None => {}
     }
