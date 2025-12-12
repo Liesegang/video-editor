@@ -113,9 +113,7 @@ impl ProjectService {
             .unwrap_or("New Asset".to_string());
 
         let kind = self.plugin_manager.probe_asset_kind(path);
-
-        // TODO: In the future, we can load metadata (duration, width, height) here using plugins
-        let duration = None;
+        let duration = self.plugin_manager.get_duration(path);
 
         let mut asset = Asset::new(&name, path, kind);
         asset.duration = duration;
