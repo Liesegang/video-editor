@@ -67,7 +67,7 @@ impl EditorContext {
             timeline_display_mode: TimelineDisplayMode::Seconds, // Default display mode,
 
             view_pan: egui::vec2(20.0, 20.0),
-            view_zoom: 1.0,
+            view_zoom: 0.3,
             dragged_item: None,
             asset_delete_candidate: None,
             comp_delete_candidate: None,

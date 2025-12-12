@@ -317,10 +317,15 @@ pub fn preview_panel(
                             entity.properties.get_f32("position_x").unwrap_or(960.0),
                             entity.properties.get_f32("position_y").unwrap_or(540.0),
                         ],
-                        scale: entity.properties.get_f32("scale").unwrap_or(100.0),
+                        scale_x: entity.properties.get_f32("scale_x").unwrap_or(100.0),
+                        scale_y: entity.properties.get_f32("scale_y").unwrap_or(100.0),
+                        anchor_x: entity.properties.get_f32("anchor_x").unwrap_or(0.0),
+                        anchor_y: entity.properties.get_f32("anchor_y").unwrap_or(0.0),
                         opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
                         rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
                         asset_id: asset_id,
+                        width: asset_opt.and_then(|a| a.width.map(|w| w as f32)),
+                        height: asset_opt.and_then(|a| a.height.map(|h| h as f32)),
                     };
                     gui_clips.push(gc);
                 }
@@ -364,24 +369,56 @@ pub fn preview_panel(
                             continue;
                         }
 
-                        let mouse_world_pos = to_world(mouse_screen_pos);
-                        let center = egui::pos2(gc.position[0], gc.position[1]);
-
-                        let vec = mouse_world_pos - center;
-                        let angle_rad = -gc.rotation.to_radians();
+                        let base_w = gc.width.unwrap_or(1920.0);
+                        let base_h = gc.height.unwrap_or(1080.0);
+                        let sx = gc.scale_x / 100.0;
+                        let sy = gc.scale_y / 100.0;
+                        
+                        // Transform point from Screen to Local
+                        // World = Pos + Rot * (Local * Scale - Anchor * Scale)
+                        // This seems complex to invert. Easier to check if point is in OBB.
+                        
+                        // Let's use the forward transform logic to define the OBB corners
+                        let center_curr = egui::pos2(gc.position[0], gc.position[1]);
+                        let angle_rad = gc.rotation.to_radians();
                         let cos = angle_rad.cos();
                         let sin = angle_rad.sin();
-                        let local_x = vec.x * cos - vec.y * sin;
-                        let local_y = vec.x * sin + vec.y * cos;
+                        
+                        let transform_point = |local_x: f32, local_y: f32| -> egui::Pos2 {
+                            let ox = local_x - gc.anchor_x;
+                            let oy = local_y - gc.anchor_y;
+                            let sx_ox = ox * sx;
+                            let sy_oy = oy * sy;
+                            let rx = sx_ox * cos - sy_oy * sin;
+                            let ry = sx_ox * sin + sy_oy * cos;
+                            center_curr + egui::vec2(rx, ry)
+                        };
 
-                        let base_w = 640.0;
-                        let base_h = 360.0;
-                        let half_w = (base_w * gc.scale / 100.0) / 2.0;
-                        let half_h = (base_h * gc.scale / 100.0) / 2.0;
-
-                        if local_x.abs() <= half_w && local_y.abs() <= half_h {
-                            hovered_entity_id = Some(gc.id);
-                            break;
+                        let p1 = transform_point(0.0, 0.0);       // Top-Left in Texture
+                        let p2 = transform_point(base_w, 0.0);    // Top-Right
+                        let p3 = transform_point(base_w, base_h); // Bottom-Right
+                        let p4 = transform_point(0.0, base_h);    // Bottom-Left
+                        
+                        // Check if mouse_world_pos is inside the quad defined by p1, p2, p3, p4
+                        // Using barycentric coordinates or separating axis theorem.
+                        // Or simpler: Transform mouse into local un-rotated, un-scaled space.
+                        let mouse_world_pos = to_world(mouse_screen_pos);
+                        let mouse_world_vec = mouse_world_pos - center_curr;
+                        // Inverse Rotate
+                        let inv_rx = mouse_world_vec.x * cos + mouse_world_vec.y * sin;
+                        let inv_ry = -mouse_world_vec.x * sin + mouse_world_vec.y * cos;
+                        
+                        // Inverse Scale (Add Anchor * Scale back first? No, Scale then Anchor)
+                        // Local * Scale - Anchor * Scale = Rotated
+                        // Local * Scale = Rotated + Anchor * Scale
+                        // Local = Rotated/Scale + Anchor
+                        
+                        let local_x = inv_rx / sx + gc.anchor_x;
+                        let local_y = inv_ry / sy + gc.anchor_y;
+                        
+                        if local_x >= 0.0 && local_x <= base_w && local_y >= 0.0 && local_y <= base_h {
+                             hovered_entity_id = Some(gc.id);
+                             break;
                         }
                     }
                 }
@@ -456,6 +493,62 @@ pub fn preview_panel(
                     }
                 }
             }
+        }
+    }
+
+    // Draw Gizmo for selected entity
+    if let Some(selected_id) = editor_context.selected_entity_id {
+        if let Some(gc) = gui_clips.iter().find(|gc| gc.id == selected_id) {
+            let base_w = gc.width.unwrap_or(1920.0);
+            let base_h = gc.height.unwrap_or(1080.0);
+            let sx = gc.scale_x / 100.0;
+            let sy = gc.scale_y / 100.0;
+
+            let center = egui::pos2(gc.position[0], gc.position[1]);
+            let angle_rad = gc.rotation.to_radians();
+            let cos = angle_rad.cos();
+            let sin = angle_rad.sin();
+
+            let transform_point = |local_x: f32, local_y: f32| -> egui::Pos2 {
+                let ox = local_x - gc.anchor_x;
+                let oy = local_y - gc.anchor_y;
+                let sx_ox = ox * sx;
+                let sy_oy = oy * sy;
+                let rx = sx_ox * cos - sy_oy * sin;
+                let ry = sx_ox * sin + sy_oy * cos;
+                center + egui::vec2(rx, ry)
+            };
+
+            // 4 Corners in World Space relative to texture 0,0
+            let p1 = transform_point(0.0, 0.0);
+            let p2 = transform_point(base_w, 0.0);
+            let p3 = transform_point(base_w, base_h);
+            let p4 = transform_point(0.0, base_h);
+
+            // To Screen Space
+            let s1 = to_screen(p1);
+            let s2 = to_screen(p2);
+            let s3 = to_screen(p3);
+            let s4 = to_screen(p4);
+            let s_center = to_screen(center);
+
+            // Draw Box
+            let gizmo_color = egui::Color32::from_rgb(0, 200, 255);
+            let stroke = egui::Stroke::new(2.0, gizmo_color);
+
+            painter.line_segment([s1, s2], stroke);
+            painter.line_segment([s2, s3], stroke);
+            painter.line_segment([s3, s4], stroke);
+            painter.line_segment([s4, s1], stroke);
+
+            // Draw dots at corners
+            let handle_radius = 4.0;
+            for p in [s1, s2, s3, s4] {
+                painter.circle_filled(p, handle_radius, gizmo_color);
+            }
+
+            // Draw Anchor (Pivot used for rotation/position) - this is 'center' in our logic
+            painter.circle_filled(s_center, 3.0, egui::Color32::YELLOW);
         }
     }
 

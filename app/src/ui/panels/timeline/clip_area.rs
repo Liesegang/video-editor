@@ -321,10 +321,15 @@ pub fn show_clip_area(
                     entity.properties.get_f32("position_x").unwrap_or(960.0),
                     entity.properties.get_f32("position_y").unwrap_or(540.0),
                 ],
-                scale: entity.properties.get_f32("scale").unwrap_or(100.0),
+                scale_x: entity.properties.get_f32("scale_x").unwrap_or(100.0),
+                scale_y: entity.properties.get_f32("scale_y").unwrap_or(100.0),
+                anchor_x: entity.properties.get_f32("anchor_x").unwrap_or(0.0),
+                anchor_y: entity.properties.get_f32("anchor_y").unwrap_or(0.0),
                 opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
                 rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
                 asset_id: None, // We don't have asset_id stored on clip yet
+                width: None,
+                height: None,
             };
 
             let initial_x = content_rect_for_clip_area.min.x
