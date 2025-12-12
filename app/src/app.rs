@@ -4,7 +4,10 @@ use library::model::project::project::{Composition, Project};
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
 
-use crate::action::{handler::{handle_command, ActionContext}, HistoryManager};
+use crate::action::{
+    handler::{handle_command, ActionContext},
+    HistoryManager,
+};
 use crate::command::{CommandId, CommandRegistry};
 use crate::config;
 use crate::model::ui_types::Tab;
@@ -24,11 +27,11 @@ pub struct MyApp {
     pub history_manager: HistoryManager,
     shortcut_manager: ShortcutManager,
     command_registry: CommandRegistry,
-    
+
     // Dialogs
     pub settings_dialog: SettingsDialog,
     pub composition_dialog: CompositionDialog,
-    
+
     pub triggered_action: Option<CommandId>,
     pub render_server: Arc<RenderServer>,
 }
@@ -89,8 +92,6 @@ impl MyApp {
         cc.egui_ctx.request_repaint(); // Request repaint after initial state setup
         app
     }
-
-
 }
 
 impl eframe::App for MyApp {
@@ -102,7 +103,8 @@ impl eframe::App for MyApp {
 
         // 2. Menu Bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            let main_ui_enabled = !self.settings_dialog.is_open && !self.settings_dialog.show_close_warning;
+            let main_ui_enabled =
+                !self.settings_dialog.is_open && !self.settings_dialog.show_close_warning;
             // Disable menu bar if a modal is open
             ui.add_enabled_ui(main_ui_enabled, |ui| {
                 crate::ui::menu::menu_bar(
@@ -169,7 +171,7 @@ impl eframe::App for MyApp {
                 history_manager: &mut self.history_manager,
                 dock_state: &mut self.dock_state,
             };
-            
+
             handle_command(ctx, action, context, &mut trigger_settings);
 
             if trigger_settings {
@@ -187,7 +189,8 @@ impl eframe::App for MyApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let main_ui_enabled = !self.settings_dialog.is_open && !self.settings_dialog.show_close_warning;
+            let main_ui_enabled =
+                !self.settings_dialog.is_open && !self.settings_dialog.show_close_warning;
             ui.add_enabled_ui(main_ui_enabled, |ui| {
                 let mut tab_viewer = AppTabViewer::new(
                     &mut self.editor_context,
@@ -214,4 +217,3 @@ impl eframe::App for MyApp {
         }
     }
 }
-

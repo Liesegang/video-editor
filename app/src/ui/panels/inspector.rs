@@ -57,8 +57,7 @@ fn handle_drag_value_property(
     response
 }
 
-
-    pub fn inspector_panel(
+pub fn inspector_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     history_manager: &mut HistoryManager,
@@ -121,10 +120,7 @@ fn handle_drag_value_property(
                 Vec<library::plugin::PropertyDefinition>,
             > = std::collections::HashMap::new();
             for def in definitions {
-                grouped
-                    .entry(def.category.clone())
-                    .or_default()
-                    .push(def);
+                grouped.entry(def.category.clone()).or_default().push(def);
             }
 
             // Sort categories? Transform first, then others.
@@ -150,18 +146,14 @@ fn handle_drag_value_property(
                         if let Some(defs) = grouped.get(&category) {
                             for def in defs {
                                 match &def.ui_type {
-                                    PropertyUiType::Float {
-                                        step,
-                                        suffix,
-                                        ..
-                                    } => {
+                                    PropertyUiType::Float { step, suffix, .. } => {
                                         // Get current value or default
-                                        let current_val = properties
-                                            .get_f32(&def.name)
-                                            .unwrap_or(def.default_value.get_as::<f32>().unwrap_or(0.0));
-                                        
+                                        let current_val = properties.get_f32(&def.name).unwrap_or(
+                                            def.default_value.get_as::<f32>().unwrap_or(0.0),
+                                        );
+
                                         let mut val_mut = current_val;
-                                        
+
                                         // use handle_drag_value_property
                                         handle_drag_value_property(
                                             ui,
@@ -179,17 +171,15 @@ fn handle_drag_value_property(
                                             |service, c, t, e, n, v| {
                                                 Ok(service.update_clip_property(c, t, e, n, v)?)
                                             },
-                                            &mut needs_refresh
+                                            &mut needs_refresh,
                                         );
                                         ui.end_row();
                                     }
-                                    PropertyUiType::Integer {
-                                        ..
-                                    } => {
-                                         // Support Integer UI if needed, for now skip or treat as float
-                                         ui.label(&def.label);
-                                         ui.label("Integer UI not impl");
-                                         ui.end_row();
+                                    PropertyUiType::Integer { .. } => {
+                                        // Support Integer UI if needed, for now skip or treat as float
+                                        ui.label(&def.label);
+                                        ui.label("Integer UI not impl");
+                                        ui.end_row();
                                     }
                                     _ => {
                                         ui.label(&def.label);
@@ -202,7 +192,6 @@ fn handle_drag_value_property(
                     });
             }
 
-
             ui.add_space(10.0);
             ui.heading("Timing");
             ui.separator();
@@ -210,7 +199,7 @@ fn handle_drag_value_property(
             egui::Grid::new("entity_timing")
                 .striped(true)
                 .show(ui, |ui| {
-                     // In Frame
+                    // In Frame
                     let mut current_in_frame_f32 = in_frame as f32;
                     let _response = handle_drag_value_property(
                         ui,

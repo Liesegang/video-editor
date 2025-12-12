@@ -37,8 +37,6 @@ pub struct EditorContext {
     #[serde(skip)]
     pub selected_entity_id: Option<Uuid>,
 
-
-
     #[serde(skip)]
     pub dragged_entity_original_track_id: Option<Uuid>,
     #[serde(skip)]
@@ -71,7 +69,7 @@ pub struct GizmoState {
     pub original_scale_x: f32,
     pub original_scale_y: f32,
     pub original_rotation: f32,
-    // Store original anchor too if we implement anchor drag later, 
+    // Store original anchor too if we implement anchor drag later,
     // but for resize w/ anchor compensation we might need it.
     pub original_anchor_x: f32,
     pub original_anchor_y: f32,

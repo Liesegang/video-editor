@@ -748,9 +748,9 @@ impl CompositionDialog {
                         self.active_preset = ActivePreset::Custom;
                     }
                 }
-                
+
                 close_dialog
-            }) 
+            })
         {
             if inner.inner.unwrap_or(false) {
                 is_open_local = false;
