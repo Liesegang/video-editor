@@ -105,8 +105,11 @@ pub fn create_initial_dock_state() -> DockState<Tab> {
     let surface = dock_state.main_surface_mut();
 
     // 1. Split off the timeline at the bottom (30% of height)
-    let [main_area, _] =
-        surface.split_below(egui_dock::NodeIndex::root(), 0.7, vec![Tab::Timeline, Tab::GraphEditor]);
+    let [main_area, _] = surface.split_below(
+        egui_dock::NodeIndex::root(),
+        0.7,
+        vec![Tab::Timeline, Tab::GraphEditor],
+    );
 
     // 2. Split off the inspector on the right (20% of width)
     // The remaining area is 80% wide, so we split at 0.8

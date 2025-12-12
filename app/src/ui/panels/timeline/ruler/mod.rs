@@ -29,8 +29,13 @@ pub fn show_timeline_ruler(
 
     ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |h_ui| {
         // Time Input Panel
-        let _ = time_input::show_time_input(h_ui, editor_context, composition_fps, current_comp_duration);
-        
+        let _ = time_input::show_time_input(
+            h_ui,
+            editor_context,
+            composition_fps,
+            current_comp_duration,
+        );
+
         h_ui.separator();
 
         // --- The actual ruler ---
@@ -45,7 +50,9 @@ pub fn show_timeline_ruler(
         if response.dragged() && response.dragged_by(egui::PointerButton::Primary) {
             if let Some(pos) = response.interact_pointer_pos() {
                 const RULER_INPUT_OFFSET_X: f32 = 0.0;
-                let raw_time = ((pos.x - rect.min.x + scroll_offset_x + RULER_INPUT_OFFSET_X) / pixels_per_unit).max(0.0);
+                let raw_time = ((pos.x - rect.min.x + scroll_offset_x + RULER_INPUT_OFFSET_X)
+                    / pixels_per_unit)
+                    .max(0.0);
                 let snapped = (raw_time * composition_fps as f32).round() / composition_fps as f32;
                 editor_context.timeline.current_time = snapped.min(current_comp_duration as f32);
             }

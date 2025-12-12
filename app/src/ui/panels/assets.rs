@@ -1,10 +1,10 @@
 use egui::Ui;
+use egui_extras::{Column, TableBuilder};
 use egui_phosphor::regular as icons;
 use library::model::project::asset::AssetKind;
 use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
-use egui_extras::{TableBuilder, Column};
 
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::{
@@ -125,7 +125,7 @@ pub fn assets_panel(
 
             // 1. Compositions
             ui.heading("Compositions");
-            
+
             if let Ok(proj_read) = project.read() {
                 ui.push_id("compositions_table_scope", |ui| {
                     let available_height = 150.0;
@@ -135,14 +135,22 @@ pub fn assets_panel(
                         .min_scrolled_height(0.0)
                         .max_scroll_height(available_height)
                         .column(Column::initial(150.0).resizable(true)) // Name
-                        .column(Column::initial(80.0).resizable(true))  // Resolution
-                        .column(Column::initial(40.0).resizable(true))  // FPS
-                        .column(Column::remainder())                    // Duration
+                        .column(Column::initial(80.0).resizable(true)) // Resolution
+                        .column(Column::initial(40.0).resizable(true)) // FPS
+                        .column(Column::remainder()) // Duration
                         .header(20.0, |mut header| {
-                            header.col(|ui| { ui.strong("Name"); });
-                            header.col(|ui| { ui.strong("Res"); });
-                            header.col(|ui| { ui.strong("FPS"); });
-                            header.col(|ui| { ui.strong("Dur"); });
+                            header.col(|ui| {
+                                ui.strong("Name");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Res");
+                            });
+                            header.col(|ui| {
+                                ui.strong("FPS");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Dur");
+                            });
                         })
                         .body(|mut body| {
                             for comp in &proj_read.compositions {
@@ -150,48 +158,68 @@ pub fn assets_panel(
                                     // Name Column
                                     row.col(|ui| {
                                         ui.push_id(comp.id, |ui| {
-                                            let is_selected = editor_context.selection.composition_id == Some(comp.id);
-                                            let response = ui.selectable_label(is_selected, &comp.name);
-                                            
+                                            let is_selected =
+                                                editor_context.selection.composition_id
+                                                    == Some(comp.id);
+                                            let response =
+                                                ui.selectable_label(is_selected, &comp.name);
+
                                             // Interactions (same as before)
                                             response.context_menu(|ui| {
-                                            if ui.button(format!("{} Edit Properties", icons::PENCIL_SIMPLE)).clicked() {
-                                                composition_dialog.open_for_edit(comp);
-                                                ui.close();
-                                            }
-                                                if ui.button(format!("{} Delete Composition", icons::TRASH)).clicked() {
-                                                    if project_service.is_composition_used(comp.id) {
-                                                        editor_context.interaction.comp_delete_candidate = Some(comp.id);
+                                                if ui
+                                                    .button(format!(
+                                                        "{} Edit Properties",
+                                                        icons::PENCIL_SIMPLE
+                                                    ))
+                                                    .clicked()
+                                                {
+                                                    composition_dialog.open_for_edit(comp);
+                                                    ui.close();
+                                                }
+                                                if ui
+                                                    .button(format!(
+                                                        "{} Delete Composition",
+                                                        icons::TRASH
+                                                    ))
+                                                    .clicked()
+                                                {
+                                                    if project_service.is_composition_used(comp.id)
+                                                    {
+                                                        editor_context
+                                                            .interaction
+                                                            .comp_delete_candidate = Some(comp.id);
                                                     } else {
                                                         comp_to_remove = Some(comp.id);
                                                     }
                                                     ui.close();
                                                 }
                                             });
-    
+
                                             if response.clicked() {
-                                                editor_context.selection.composition_id = Some(comp.id);
+                                                editor_context.selection.composition_id =
+                                                    Some(comp.id);
                                                 editor_context.selection.track_id = None;
                                                 editor_context.selection.entity_id = None;
                                             }
-    
+
                                             if response.drag_started() {
-                                                editor_context.interaction.dragged_item = Some(DraggedItem::Composition(comp.id));
+                                                editor_context.interaction.dragged_item =
+                                                    Some(DraggedItem::Composition(comp.id));
                                             }
                                             response.on_hover_text(format!("Comp ID: {}", comp.id));
                                         });
                                     });
-                                    
+
                                     // Resolution Column
                                     row.col(|ui| {
                                         ui.label(format!("{}x{}", comp.width, comp.height));
                                     });
-    
+
                                     // FPS Column
                                     row.col(|ui| {
                                         ui.label(format!("{:.2}", comp.fps));
                                     });
-    
+
                                     // Duration Column
                                     row.col(|ui| {
                                         ui.label(format!("{:.2}s", comp.duration));
@@ -207,27 +235,35 @@ pub fn assets_panel(
 
             // 2. Other Assets
             ui.heading("Other Assets");
-            
+
             if let Ok(proj_read) = project.read() {
                 ui.push_id("assets_table_scope", |ui| {
                     TableBuilder::new(ui)
                         .striped(true)
                         .vscroll(true)
-                        .column(Column::auto())                         // Type Icon
+                        .column(Column::auto()) // Type Icon
                         .column(Column::initial(150.0).resizable(true)) // Name
-                        .column(Column::initial(80.0).resizable(true))  // Type Text
-                        .column(Column::initial(80.0).resizable(true))  // Duration
-                        .column(Column::remainder())                    // Resolution
+                        .column(Column::initial(80.0).resizable(true)) // Type Text
+                        .column(Column::initial(80.0).resizable(true)) // Duration
+                        .column(Column::remainder()) // Resolution
                         .header(20.0, |mut header| {
                             header.col(|_| {}); // Icon header empty
-                            header.col(|ui| { ui.strong("Name"); });
-                            header.col(|ui| { ui.strong("Type"); });
-                            header.col(|ui| { ui.strong("Duration"); });
-                            header.col(|ui| { ui.strong("Res"); });
+                            header.col(|ui| {
+                                ui.strong("Name");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Type");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Duration");
+                            });
+                            header.col(|ui| {
+                                ui.strong("Res");
+                            });
                         })
                         .body(|mut body| {
                             for asset in &proj_read.assets {
-                                 body.row(20.0, |mut row| {
+                                body.row(20.0, |mut row| {
                                     let icon = match asset.kind {
                                         AssetKind::Video => icons::FILE_VIDEO,
                                         AssetKind::Audio => icons::FILE_AUDIO,
@@ -236,68 +272,87 @@ pub fn assets_panel(
                                         AssetKind::Other => icons::FILE,
                                     };
                                     let type_text = format!("{:?}", asset.kind); // e.g. "Video", "Image"
-                                    
+
                                     // Icon Column
                                     row.col(|ui| {
                                         let c = asset.color.clone();
-                                        let icon_color = egui::Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a);
-                                        ui.label(egui::RichText::new(icon).color(icon_color).size(16.0));
+                                        let icon_color = egui::Color32::from_rgba_unmultiplied(
+                                            c.r, c.g, c.b, c.a,
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(icon).color(icon_color).size(16.0),
+                                        );
                                     });
-    
-                                        // Name Column (Interactive)
-                                        row.col(|ui| {
-                                            ui.push_id(asset.id, |ui| {
-                                                let _is_dragged = match editor_context.interaction.dragged_item {
+
+                                    // Name Column (Interactive)
+                                    row.col(|ui| {
+                                        ui.push_id(asset.id, |ui| {
+                                            let _is_dragged =
+                                                match editor_context.interaction.dragged_item {
                                                     Some(DraggedItem::Asset(id)) => id == asset.id,
                                                     _ => false,
                                                 };
-                                            
-                                                // Use selectable_label logic or custom logic
-                                                // We want it to be selectable? Maybe not strictly "selected" as current selection model is Comp/Track/Entity.
-                                                // But we need context menu and drag.
-                                                
-                                                let response = ui.add(egui::Label::new(&asset.name).sense(egui::Sense::click().union(egui::Sense::drag())));
-    
-                                                // Context Menu
-                                                response.context_menu(|ui| {
-                                                    if ui.button(format!("{} Delete Asset", icons::TRASH)).clicked() {
-                                                        if project_service.is_asset_used(asset.id) {
-                                                            editor_context.interaction.asset_delete_candidate = Some(asset.id);
-                                                        } else {
-                                                            asset_to_remove = Some(asset.id);
-                                                        }
-                                                        ui.close();
+
+                                            // Use selectable_label logic or custom logic
+                                            // We want it to be selectable? Maybe not strictly "selected" as current selection model is Comp/Track/Entity.
+                                            // But we need context menu and drag.
+
+                                            let response =
+                                                ui.add(egui::Label::new(&asset.name).sense(
+                                                    egui::Sense::click().union(egui::Sense::drag()),
+                                                ));
+
+                                            // Context Menu
+                                            response.context_menu(|ui| {
+                                                if ui
+                                                    .button(format!(
+                                                        "{} Delete Asset",
+                                                        icons::TRASH
+                                                    ))
+                                                    .clicked()
+                                                {
+                                                    if project_service.is_asset_used(asset.id) {
+                                                        editor_context
+                                                            .interaction
+                                                            .asset_delete_candidate =
+                                                            Some(asset.id);
+                                                    } else {
+                                                        asset_to_remove = Some(asset.id);
                                                     }
-                                                });
-    
-                                                // Drag
-                                                if response.drag_started() {
-                                                    editor_context.interaction.dragged_item = Some(DraggedItem::Asset(asset.id));
+                                                    ui.close();
                                                 }
-                                                
-                                                response.on_hover_text(format!("Asset ID: {}", asset.id));
                                             });
+
+                                            // Drag
+                                            if response.drag_started() {
+                                                editor_context.interaction.dragged_item =
+                                                    Some(DraggedItem::Asset(asset.id));
+                                            }
+
+                                            response
+                                                .on_hover_text(format!("Asset ID: {}", asset.id));
                                         });
-    
+                                    });
+
                                     // Type Text Column
                                     row.col(|ui| {
                                         ui.label(type_text);
                                     });
-    
+
                                     // Duration Column
                                     row.col(|ui| {
                                         if let Some(d) = asset.duration {
                                             ui.label(format!("{:.1}s", d));
                                         }
                                     });
-                                    
+
                                     // Resolution Column
                                     row.col(|ui| {
                                         if let (Some(w), Some(h)) = (asset.width, asset.height) {
                                             ui.label(format!("{}x{}", w, h));
                                         }
                                     });
-                                 });
+                                });
                             }
                         });
                 });

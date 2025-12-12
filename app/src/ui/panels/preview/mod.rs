@@ -83,7 +83,10 @@ pub fn preview_panel(
         (1920, 1080)
     };
 
-    let frame_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(comp_width as f32, comp_height as f32));
+    let frame_rect = egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(comp_width as f32, comp_height as f32),
+    );
     let screen_frame_min = to_screen(frame_rect.min);
     let screen_frame_max = to_screen(frame_rect.max);
 
@@ -438,10 +441,11 @@ pub fn preview_panel(
                     editor_context.interaction.is_moving_selected_entity = true;
                     // Started drag on entity - Capture State
                     if let Some(pointer_pos) = pointer_pos {
-                         editor_context.interaction.body_drag_state = Some(crate::state::context_types::BodyDragState {
-                             start_mouse_pos: pointer_pos,
-                             original_position: gc.position,
-                         });
+                        editor_context.interaction.body_drag_state =
+                            Some(crate::state::context_types::BodyDragState {
+                                start_mouse_pos: pointer_pos,
+                                original_position: gc.position,
+                            });
                     }
                 }
             } else {
@@ -466,41 +470,43 @@ pub fn preview_panel(
                     let current_zoom = editor_context.view.zoom;
                     if let Some(comp_id) = editor_context.selection.composition_id {
                         if let Some(track_id) = editor_context.selection.track_id {
-                             if let Some(drag_state) = &editor_context.interaction.body_drag_state {
-                                 if let Some(curr_mouse) = pointer_pos {
-                                     let screen_delta = curr_mouse - drag_state.start_mouse_pos;
-                                     let world_delta = screen_delta / current_zoom;
-                                     
-                                     let new_x = drag_state.original_position[0] as f64 + world_delta.x as f64;
-                                     let new_y = drag_state.original_position[1] as f64 + world_delta.y as f64;
-                                     
-                                     let current_time = editor_context.timeline.current_time as f64;
-                                     
-                                     let _ = project_service.update_property_or_keyframe(
-                                         comp_id,
-                                         track_id,
-                                         entity_id,
-                                         "position_x",
-                                         current_time,
-                                         library::model::project::property::PropertyValue::Number(
-                                             ordered_float::OrderedFloat(new_x)
-                                         ),
-                                         None
-                                     );
-                                     
-                                     let _ = project_service.update_property_or_keyframe(
-                                         comp_id,
-                                         track_id,
-                                         entity_id,
-                                         "position_y",
-                                         current_time,
-                                         library::model::project::property::PropertyValue::Number(
-                                             ordered_float::OrderedFloat(new_y)
-                                         ),
-                                         None
-                                     );
-                                 }
-                             }
+                            if let Some(drag_state) = &editor_context.interaction.body_drag_state {
+                                if let Some(curr_mouse) = pointer_pos {
+                                    let screen_delta = curr_mouse - drag_state.start_mouse_pos;
+                                    let world_delta = screen_delta / current_zoom;
+
+                                    let new_x = drag_state.original_position[0] as f64
+                                        + world_delta.x as f64;
+                                    let new_y = drag_state.original_position[1] as f64
+                                        + world_delta.y as f64;
+
+                                    let current_time = editor_context.timeline.current_time as f64;
+
+                                    let _ = project_service.update_property_or_keyframe(
+                                        comp_id,
+                                        track_id,
+                                        entity_id,
+                                        "position_x",
+                                        current_time,
+                                        library::model::project::property::PropertyValue::Number(
+                                            ordered_float::OrderedFloat(new_x),
+                                        ),
+                                        None,
+                                    );
+
+                                    let _ = project_service.update_property_or_keyframe(
+                                        comp_id,
+                                        track_id,
+                                        entity_id,
+                                        "position_y",
+                                        current_time,
+                                        library::model::project::property::PropertyValue::Number(
+                                            ordered_float::OrderedFloat(new_y),
+                                        ),
+                                        None,
+                                    );
+                                }
+                            }
                         }
                     }
                 }

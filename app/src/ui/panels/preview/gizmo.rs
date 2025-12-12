@@ -207,7 +207,7 @@ pub fn handle_gizmo_interaction(
                     // Apply Updates
                     // Apply Updates
                     let current_time = editor_context.timeline.current_time as f64;
-                    
+
                     let _ = project_service.update_property_or_keyframe(
                         comp_id,
                         track_id,

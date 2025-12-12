@@ -12,7 +12,7 @@ pub fn get_nice_time_intervals(
             break;
         }
     }
-    
+
     // If still too small (zoom out extreme), keep doubling until it fits
     while major_interval * pixels_per_unit < target_pixels_per_major_tick {
         major_interval *= 2.0;

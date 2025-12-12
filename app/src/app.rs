@@ -224,9 +224,9 @@ impl eframe::App for MyApp {
                 30.0
             };
             let frame_duration = 1.0 / fps as f32;
-            
+
             self.editor_context.timeline.playback_accumulator += ctx.input(|i| i.stable_dt);
-            
+
             // Limit the accumulator to prevent spiraling if lag occurs (e.g. max 10 frames catchup)
             if self.editor_context.timeline.playback_accumulator > frame_duration * 10.0 {
                 self.editor_context.timeline.playback_accumulator = frame_duration;

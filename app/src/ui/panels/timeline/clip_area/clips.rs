@@ -7,11 +7,7 @@ use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-use crate::{
-    action::HistoryManager,
-    model::ui_types::TimelineClip,
-    state::context::EditorContext,
-};
+use crate::{action::HistoryManager, model::ui_types::TimelineClip, state::context::EditorContext};
 
 const EDGE_DRAG_WIDTH: f32 = 5.0;
 
@@ -84,17 +80,15 @@ pub fn draw_clips(
             let initial_y = content_rect_for_clip_area.min.y
                 + editor_context.timeline.scroll_offset.y
                 + clip_track_index * (row_height + track_spacing);
-            
-            let width = (gc.timeline_duration_frames as f32 / composition_fps as f32) * pixels_per_unit;
+
+            let width =
+                (gc.timeline_duration_frames as f32 / composition_fps as f32) * pixels_per_unit;
             // Prevent negative/zero width rects which might panic or cause issues
             let safe_width = width.max(1.0);
-            
+
             let initial_clip_rect = egui::Rect::from_min_size(
                 egui::pos2(initial_x, initial_y),
-                egui::vec2(
-                    safe_width,
-                    row_height,
-                ),
+                egui::vec2(safe_width, row_height),
             );
 
             // --- Interaction for clips ---
@@ -231,10 +225,7 @@ pub fn draw_clips(
 
             let drawing_clip_rect = egui::Rect::from_min_size(
                 egui::pos2(display_x, display_y),
-                egui::vec2(
-                    safe_width,
-                    row_height,
-                ),
+                egui::vec2(safe_width, row_height),
             );
 
             // --- Drawing for clips (always) ---
@@ -288,7 +279,7 @@ pub fn draw_clips(
                 if clip_resp.drag_delta().length_sq() > 0.0 {
                     editor_context.interaction.dragged_entity_has_moved = true;
                 }
-                
+
                 let dt_frames_f32 =
                     clip_resp.drag_delta().x / pixels_per_unit * composition_fps as f32;
                 let dt_frames = dt_frames_f32.round() as i64;

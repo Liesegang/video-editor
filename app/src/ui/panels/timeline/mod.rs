@@ -8,9 +8,7 @@ use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
 
-use crate::{
-    action::HistoryManager, state::context::EditorContext,
-};
+use crate::{action::HistoryManager, state::context::EditorContext};
 
 // Re-export functions for easier access
 pub use clip_area::show_clip_area;
@@ -36,7 +34,8 @@ pub fn timeline_panel(
     } // `project_lock` is dropped here, releasing the read lock.
 
     const TRACK_LIST_SIDEBAR_WIDTH: f32 = 100.0;
-    let pixels_per_unit = editor_context.timeline.pixels_per_second * editor_context.timeline.h_zoom;
+    let pixels_per_unit =
+        editor_context.timeline.pixels_per_second * editor_context.timeline.h_zoom;
     let scroll_offset_x = editor_context.timeline.scroll_offset.x;
 
     egui::TopBottomPanel::top("timeline_ruler_panel")
@@ -95,30 +94,28 @@ pub fn timeline_panel(
                     track_spacing,
                     current_composition_fps,
                 );
-                
+
                 // Draw cursor after all panels are laid out
-                let cx = clip_area_rect.min.x
-                  - scroll_offset_x
+                let cx = clip_area_rect.min.x - scroll_offset_x
                     + editor_context.timeline.current_time * pixels_per_unit; // Locked to clip area start
-                
-                
+
                 // Constants for Playhead Display
                 const RULER_HEIGHT_ESTIMATE: f32 = 28.0; // Approximation of Ruler Height + Gap
-                const VISIBILITY_BUFFER_PX: f32 = 20.0;  // Extra buffer for visibility check
+                const VISIBILITY_BUFFER_PX: f32 = 20.0; // Extra buffer for visibility check
 
                 // Draw overlay line
-                let line_top = clip_area_rect.min.y - RULER_HEIGHT_ESTIMATE; 
+                let line_top = clip_area_rect.min.y - RULER_HEIGHT_ESTIMATE;
                 let line_bottom = clip_area_rect.max.y;
-                
+
                 // Draw if visible in clip area horizontal range (extended slightly for safety)
                 if cx >= clip_area_rect.min.x - VISIBILITY_BUFFER_PX && cx <= clip_area_rect.max.x {
-                    // Use a foreground layer to draw over the ruler (which is in a higher panel) 
+                    // Use a foreground layer to draw over the ruler (which is in a higher panel)
                     // and bypass clipping of the current central panel
                     let painter = ui_content.ctx().layer_painter(egui::LayerId::new(
                         egui::Order::Foreground,
                         egui::Id::new("timeline_cursor"),
                     ));
-                    
+
                     painter.line_segment(
                         [egui::pos2(cx, line_top), egui::pos2(cx, line_bottom)],
                         egui::Stroke::new(2.0, egui::Color32::RED),
