@@ -83,4 +83,33 @@ impl LoadPlugin for FfmpegVideoLoader {
             _ => None,
         }
     }
+
+    fn get_duration(&self, path: &str) -> Option<f64> {
+        // We need to access the VideoReader to get duration.
+        // If it's not in the cache/map, we should temporarily open it.
+        // However, self.readers is a Mutex<HashMap<String, VideoReader>>.
+        // So we can check if it exists or create a new temporary one.
+
+        // Note: Creating a new VideoReader involves ffmpeg overhead.
+        // But get_duration is usually called once at import time.
+
+        let mut readers = self.readers.lock().unwrap();
+
+        // Check if we already have a reader for this path
+        if let Some(reader) = readers.get(path) {
+            return reader.get_duration();
+        }
+
+        // If not, try to create one
+        match VideoReader::new(path) {
+            Ok(reader) => {
+                let duration = reader.get_duration();
+                // Should we cache this reader? Maybe not if we are just probing.
+                // But for now, let's cache it as we might use it soon for thumbnails.
+                readers.insert(path.to_string(), reader);
+                duration
+            }
+            Err(_) => None,
+        }
+    }
 }

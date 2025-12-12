@@ -31,6 +31,15 @@ impl VideoReader {
         })
     }
 
+    pub fn get_duration(&self) -> Option<f64> {
+        if self.input_context.duration() == ffmpeg::ffi::AV_NOPTS_VALUE {
+            None
+        } else {
+            // Duration is in AV_TIME_BASE units (microseconds)
+            Some(self.input_context.duration() as f64 / ffmpeg::ffi::AV_TIME_BASE as f64)
+        }
+    }
+
     pub fn decode_frame(&mut self, frame_number: u64) -> Result<Image, LibraryError> {
         // Seek to the approximate position
         // Note: Seeking in ffmpeg is complex and might not land on the exact frame.

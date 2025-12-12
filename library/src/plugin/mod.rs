@@ -124,6 +124,10 @@ pub trait LoadPlugin: Plugin {
     fn get_asset_kind(&self, _path: &str) -> Option<AssetKind> {
         None
     }
+
+    fn get_duration(&self, _path: &str) -> Option<f64> {
+        None
+    }
 }
 
 pub trait ExportPlugin: Plugin {
@@ -458,6 +462,16 @@ impl PluginManager {
             }
         }
         AssetKind::Other
+    }
+
+    pub fn get_duration(&self, path: &str) -> Option<f64> {
+        let inner = self.inner.read().unwrap();
+        for plugin in inner.load_plugins.plugins.values() {
+            if let Some(duration) = plugin.get_duration(path) {
+                return Some(duration);
+            }
+        }
+        None
     }
 
     pub fn export_image(
