@@ -42,8 +42,47 @@ pub enum PluginCategory {
     Load,
     Export,
     Property,
-    EntityConverter, // Added
+    EntityConverter,
+    Inspector,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PropertyUiType {
+    Float {
+        min: f64,
+        max: f64,
+        step: f64,
+        suffix: String,
+    },
+    Integer {
+        min: i64,
+        max: i64,
+        suffix: String,
+    },
+    Color,
+    Text,
+    Bool,
+    Vec2,
+    Vec3,
+}
+
+#[derive(Debug, Clone)]
+pub struct PropertyDefinition {
+    pub name: String,
+    pub label: String,
+    pub ui_type: PropertyUiType,
+    pub default_value: PropertyValue,
+    pub category: String,
+}
+
+pub trait InspectorPlugin: Plugin {
+    // We pass the "kind" of the clip (e.g. Video, Image, Effect?)
+    // Actually, for now, let's just say it receives the TrackClipKind.
+    fn get_definitions(&self, kind: &crate::model::project::TrackClipKind) -> Vec<PropertyDefinition>;
+}
+
+// Re-export this if needed?
+pub type InspectorPluginCreateFn = unsafe extern "C" fn() -> *mut dyn InspectorPlugin;
 
 pub trait Plugin: Send + Sync {
     fn id(&self) -> &'static str;
@@ -281,6 +320,24 @@ pub struct EntityConverterRepository {
     plugins: HashMap<String, Arc<dyn EntityConverterPlugin>>,
 }
 
+// ... existing impl ...
+
+pub struct InspectorRepository {
+    plugins: HashMap<String, Arc<dyn InspectorPlugin>>,
+}
+
+impl InspectorRepository {
+    pub fn new() -> Self {
+        Self {
+            plugins: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, plugin: Arc<dyn InspectorPlugin>) {
+        self.plugins.insert(plugin.id().to_string(), plugin);
+    }
+}
+
 impl EntityConverterRepository {
     pub fn new() -> Self {
         Self {
@@ -301,7 +358,8 @@ struct PluginRepository {
     effect_plugins: EffectRepository,
     load_plugins: LoadRepository,
     export_plugins: ExportRepository,
-    entity_converter_plugins: EntityConverterRepository, // Added
+    entity_converter_plugins: EntityConverterRepository,
+    inspector_plugins: InspectorRepository,
     property_evaluators: PropertyEvaluatorRegistry,      // Direct ownership
     dynamic_libraries: Vec<Library>,                     // Moved here
 }
@@ -317,7 +375,8 @@ impl PluginManager {
                 effect_plugins: EffectRepository::new(),
                 load_plugins: LoadRepository::new(),
                 export_plugins: ExportRepository::new(),
-                entity_converter_plugins: EntityConverterRepository::new(), // Initialized
+                entity_converter_plugins: EntityConverterRepository::new(),
+                inspector_plugins: InspectorRepository::new(),
                 property_evaluators: PropertyEvaluatorRegistry::new(),
                 dynamic_libraries: Vec::new(), // Initialized here
             }),
@@ -351,6 +410,11 @@ impl PluginManager {
         inner
             .property_evaluators
             .register(evaluator_id, evaluator_instance);
+    }
+
+    pub fn register_inspector_plugin(&self, plugin: Arc<dyn InspectorPlugin>) {
+        let mut inner = self.inner.write().unwrap();
+        inner.inspector_plugins.register(plugin);
     }
 
     pub fn apply_effect(
@@ -534,6 +598,30 @@ impl PluginManager {
         Ok(())
     }
 
+    pub fn load_inspector_plugin_from_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), LibraryError> {
+        unsafe {
+            let library = Library::new(path.as_ref())?;
+            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn InspectorPlugin> =
+                library.get(b"create_inspector_plugin")?;
+            let raw = constructor();
+            if raw.is_null() {
+                return Err(LibraryError::Plugin(
+                    "create_inspector_plugin returned null".to_string(),
+                ));
+            }
+            let plugin_box = Box::from_raw(raw);
+            let plugin_arc: Arc<dyn InspectorPlugin> = Arc::from(plugin_box);
+
+            let mut inner = self.inner.write().unwrap();
+            inner.inspector_plugins.register(plugin_arc);
+            inner.dynamic_libraries.push(library);
+        }
+        Ok(())
+    }
+
     pub fn load_plugins_from_directory<P: AsRef<Path>>(
         &self,
         dir_path: P,
@@ -577,6 +665,11 @@ impl PluginManager {
                     } else {
                         continue;
                     }
+                    if let Err(e) = self.load_inspector_plugin_from_file(&path) {
+                        log::debug!("Not an inspector plugin: {}", e);
+                    } else {
+                        continue;
+                    }
                     log::warn!("File is not a recognized plugin type: {}", path.display());
                 }
             }
@@ -596,6 +689,17 @@ impl PluginManager {
             plugin.register_converters(&mut registry);
         }
         Arc::new(registry) // EntityConverterRegistry will need to be Clone
+    }
+    pub fn get_inspector_definitions(
+        &self,
+        kind: &crate::model::project::TrackClipKind,
+    ) -> Vec<PropertyDefinition> {
+        let inner = self.inner.read().unwrap();
+        let mut definitions = Vec::new();
+        for plugin in inner.inspector_plugins.plugins.values() {
+            definitions.extend(plugin.get_definitions(kind));
+        }
+        definitions
     }
 } // Correct closing brace for impl PluginManager
 

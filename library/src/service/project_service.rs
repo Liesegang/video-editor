@@ -587,4 +587,124 @@ impl ProjectService {
             Ok(())
         })?
     }
+
+    pub fn get_property_definitions(
+        &self,
+        kind: crate::model::project::TrackClipKind,
+    ) -> Vec<crate::plugin::PropertyDefinition> {
+        let mut definitions = Vec::new();
+
+        use crate::plugin::{PropertyDefinition, PropertyUiType};
+        use crate::model::project::property::PropertyValue;
+        use ordered_float::OrderedFloat;
+
+        // 1. Default Transform Properties (Available for almost all visual clips)
+        if kind != crate::model::project::TrackClipKind::Audio {
+            let defaults = vec![
+                PropertyDefinition {
+                    name: "position_x".to_string(),
+                    label: "Position X".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: -10000.0,
+                        max: 10000.0,
+                        step: 1.0,
+                        suffix: "px".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(960.0)),
+                    category: "Transform".to_string(),
+                },
+                PropertyDefinition {
+                    name: "position_y".to_string(),
+                    label: "Position Y".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: -10000.0,
+                        max: 10000.0,
+                        step: 1.0,
+                        suffix: "px".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(540.0)),
+                    category: "Transform".to_string(),
+                },
+                PropertyDefinition {
+                    name: "scale_x".to_string(),
+                    label: "Scale X".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 1000.0,
+                        step: 1.0,
+                        suffix: "%".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(100.0)),
+                    category: "Transform".to_string(),
+                },
+                PropertyDefinition {
+                    name: "scale_y".to_string(),
+                    label: "Scale Y".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 1000.0,
+                        step: 1.0,
+                        suffix: "%".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(100.0)),
+                    category: "Transform".to_string(),
+                },
+                PropertyDefinition {
+                    name: "anchor_x".to_string(),
+                    label: "Anchor X".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: -10000.0,
+                        max: 10000.0,
+                        step: 1.0,
+                        suffix: "px".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(0.0)),
+                    category: "Transform".to_string(),
+                },
+                PropertyDefinition {
+                    name: "anchor_y".to_string(),
+                    label: "Anchor Y".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: -10000.0,
+                        max: 10000.0,
+                        step: 1.0,
+                        suffix: "px".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(0.0)),
+                    category: "Transform".to_string(),
+                },
+                PropertyDefinition {
+                    name: "rotation".to_string(),
+                    label: "Rotation".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: -360.0,
+                        max: 360.0,
+                        step: 1.0,
+                        suffix: "°".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(0.0)),
+                    category: "Transform".to_string(),
+                },
+                PropertyDefinition {
+                    name: "opacity".to_string(),
+                    label: "Opacity".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "%".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(100.0)),
+                    category: "Transform".to_string(),
+                },
+            ];
+            definitions.extend(defaults);
+        }
+
+        // 2. Plugin Properties
+        let plugin_defs = self.plugin_manager.get_inspector_definitions(&kind);
+        definitions.extend(plugin_defs);
+
+        definitions
+    }
 }
