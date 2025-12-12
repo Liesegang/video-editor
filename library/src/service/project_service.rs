@@ -704,6 +704,46 @@ impl ProjectService {
             definitions.extend(defaults);
         }
 
+        // 2a. Text Properties
+        if kind == crate::model::project::TrackClipKind::Text {
+           let text_defs = vec![
+                PropertyDefinition {
+                    name: "text".to_string(),
+                    label: "Content".to_string(),
+                    ui_type: PropertyUiType::Text,
+                    default_value: PropertyValue::String("New Text".to_string()),
+                    category: "Text".to_string(),
+                },
+                PropertyDefinition {
+                    name: "font".to_string(),
+                    label: "Font".to_string(),
+                    ui_type: PropertyUiType::Text, // Ideally a dropdown, but text for now
+                    default_value: PropertyValue::String("Arial".to_string()),
+                    category: "Text".to_string(),
+                },
+                PropertyDefinition {
+                    name: "size".to_string(),
+                    label: "Font Size".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 1.0,
+                        max: 1000.0,
+                        step: 1.0,
+                        suffix: "px".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(48.0)),
+                    category: "Text".to_string(),
+                },
+                PropertyDefinition {
+                    name: "color".to_string(),
+                    label: "Color".to_string(),
+                    ui_type: PropertyUiType::Color,
+                    default_value: PropertyValue::Color(crate::model::frame::color::Color { r: 255, g: 255, b: 255, a: 255 }),
+                    category: "Text".to_string(),
+                },
+           ];
+           definitions.extend(text_defs);
+        }
+
         // 2. Plugin Properties
         let plugin_defs = self.plugin_manager.get_inspector_definitions(&kind);
         definitions.extend(plugin_defs);

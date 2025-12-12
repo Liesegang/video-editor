@@ -5,6 +5,7 @@ pub mod property;
 use crate::model::project::property::PropertyMap;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
+use serde_json;
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
@@ -255,12 +256,34 @@ impl TrackClip {
 
     pub fn create_text(text: &str, in_frame: u64, out_frame: u64) -> Self {
         let mut props = PropertyMap::new();
+        // User requested default: "this is sample text", Arial, White
+        // If 'text' arg is provided, use it, but caller from interactions uses "New Text".
+        // I should update interactions.rs to pass "this is sample text" OR just ignore the arg?
+        // Better to respect the arg and update interactions.rs, OR just force it here if the arg is generic.
+        // The user said "text is this is sample text".
+        // I will change the caller in interactions.rs to pass "this is sample text" and here just set properties.
+        
         props.set(
             "text".to_string(),
             crate::model::project::property::Property::constant(
                 crate::model::project::property::PropertyValue::String(text.to_string()),
             ),
         );
+         props.set(
+            "font_family".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::String("Arial".to_string()),
+            ),
+        );
+        props.set(
+            "color".to_string(),
+             crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Color(crate::model::frame::color::Color {
+                    r: 255, g: 255, b: 255, a: 255
+                }),
+            ),
+        );
+
         // Default transform
         props.set(
             "position_x".to_string(),
@@ -304,6 +327,12 @@ impl TrackClip {
                 crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
             ),
         );
+        props.set(
+            "opacity".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+        );
 
         TrackClip::new(
             Uuid::new_v4(),
@@ -313,6 +342,124 @@ impl TrackClip {
             out_frame,
             0,
             None, // Text is static
+            0.0,
+            props,
+            Vec::new(),
+        )
+    }
+
+    pub fn create_shape(in_frame: u64, out_frame: u64) -> Self {
+        let mut props = PropertyMap::new();
+        
+        // Default Shape Properties
+        // User requested: Heart (White Border, Red Fill)
+        let heart_path = "M 50,30 A 20,20 0,0,1 90,30 C 90,55 50,85 50,85 C 50,85 10,55 10,30 A 20,20 0,0,1 50,30 Z";
+        props.set(
+            "path".to_string(),
+             crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::String(heart_path.to_string()),
+            ),
+        );
+
+        // Styles: Fill Red (#FF0000), Stroke White (#FFFFFF, width 2.0)
+        let styles = vec![
+            crate::model::frame::draw_type::DrawStyle::Fill {
+                color: crate::model::frame::color::Color { r: 255, g: 0, b: 0, a: 255 },
+            },
+            crate::model::frame::draw_type::DrawStyle::Stroke {
+                color: crate::model::frame::color::Color { r: 255, g: 255, b: 255, a: 255 },
+                width: 5.0,
+                cap: Default::default(),
+                join: Default::default(),
+                miter: 4.0,
+            },
+        ];
+
+        // Serialize styles to PropertyValue::Array
+        let styles_json = serde_json::to_value(styles).unwrap();
+        let styles_array = match styles_json {
+            serde_json::Value::Array(arr) => arr.into_iter().map(crate::model::project::property::PropertyValue::from).collect(),
+            _ => vec![],
+        };
+
+        props.set(
+            "styles".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Array(styles_array),
+            ),
+        );
+
+        props.set(
+            "width".to_string(),
+             crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+        );
+        props.set(
+            "height".to_string(),
+             crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+        );
+
+        // Transform
+        props.set(
+            "position_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(960.0)),
+            ),
+        );
+        props.set(
+            "position_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(540.0)),
+            ),
+        );
+        props.set(
+            "scale_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+        );
+        props.set(
+            "scale_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+        );
+        props.set(
+            "rotation".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
+        props.set(
+            "anchor_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
+        props.set(
+            "anchor_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
+        props.set(
+            "opacity".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+        );
+
+        TrackClip::new(
+            Uuid::new_v4(),
+            None,
+            TrackClipKind::Shape,
+            in_frame,
+            out_frame,
+            0,
+            None, 
             0.0,
             props,
             Vec::new(),
