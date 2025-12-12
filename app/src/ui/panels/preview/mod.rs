@@ -19,8 +19,22 @@ pub fn preview_panel(
     project: &Arc<RwLock<Project>>,
     render_server: &Arc<RenderServer>,
 ) {
-    let (rect, response) =
-        ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+    let bottom_bar_height = 24.0;
+    let available_rect = ui.available_rect_before_wrap();
+    let preview_rect = egui::Rect::from_min_size(
+        available_rect.min,
+        egui::vec2(
+            available_rect.width(),
+            available_rect.height() - bottom_bar_height,
+        ),
+    );
+    let bottom_bar_rect = egui::Rect::from_min_max(
+        egui::pos2(available_rect.min.x, preview_rect.max.y),
+        available_rect.max,
+    );
+
+    let response = ui.allocate_rect(preview_rect, egui::Sense::click_and_drag());
+    let rect = preview_rect;
 
     let pointer_pos = ui.input(|i| i.pointer.hover_pos());
     let space_down = ui.input(|i| i.key_down(egui::Key::Space));
@@ -107,9 +121,9 @@ pub fn preview_panel(
                     egui::vec2(comp_width as f32, comp_height as f32)
                 };
 
-                // Calculate scale: fit 1080p into current rect
-                // We want the render to match the pixel size of the rect on screen
-                let render_scale = (rect.width() / comp_width as f32).max(0.1).min(1.0) as f64;
+                let render_scale = ((editor_context.view.zoom * ui.ctx().pixels_per_point() * editor_context.view.preview_resolution) as f64)
+                    .max(0.01)
+                    .min(1.0);
 
                 let frame_info = library::framing::get_frame_from_project(
                     &proj_read,
@@ -530,4 +544,22 @@ pub fn preview_panel(
         egui::FontId::monospace(14.0),
         egui::Color32::WHITE,
     );
+
+    // Draw Bottom Bar
+    ui.allocate_ui_at_rect(bottom_bar_rect, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Resolution:");
+            egui::ComboBox::from_id_source("preview_resolution")
+                .selected_text(format!(
+                    "{}%",
+                    (editor_context.view.preview_resolution * 100.0) as i32
+                ))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut editor_context.view.preview_resolution, 1.0, "Full");
+                    ui.selectable_value(&mut editor_context.view.preview_resolution, 0.75, "3/4");
+                    ui.selectable_value(&mut editor_context.view.preview_resolution, 0.5, "1/2");
+                    ui.selectable_value(&mut editor_context.view.preview_resolution, 0.25, "1/4");
+                });
+        });
+    });
 }

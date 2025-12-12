@@ -136,12 +136,11 @@ impl<T: Renderer> RenderService<T> {
                     transform,
                 } => {
                     let scaled_transform = apply_scale(transform, scale);
-                    let scaled_size = size * scale;
                     let text_layer =
                         measure_debug(format!("Rasterize text layer '{}'", text), || {
                             self.renderer.rasterize_text_layer(
                                 &text,
-                                scaled_size,
+                                *size,
                                 &font,
                                 &color,
                                 &scaled_transform,

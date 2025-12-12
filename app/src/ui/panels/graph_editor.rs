@@ -1,4 +1,4 @@
-use egui::{vec2, Color32, CursorIcon, Id, PointerButton, Pos2, Rect, Sense, Stroke, Ui, Vec2};
+use egui::{vec2, Color32, CursorIcon, Id, PointerButton, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2};
 use library::animation::EasingFunction;
 use library::model::project::project::Project;
 use library::model::project::property::{Property, PropertyValue};
@@ -436,7 +436,7 @@ pub fn graph_editor_panel(
 
                             if ui.button("Linear").clicked() {
                                 action = Action::SetEasing(name.clone(), i, EasingFunction::Linear);
-                                ui.close_menu();
+                                ui.close_kind(UiKind::Menu);
                             }
 
                             ui.menu_button("Sine", |ui| {
@@ -446,7 +446,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInSine,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
@@ -454,7 +454,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseOutSine,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
@@ -462,7 +462,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInOutSine,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                             });
                             ui.menu_button("Quad", |ui| {
@@ -472,7 +472,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInQuad,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
@@ -480,7 +480,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseOutQuad,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
@@ -488,7 +488,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInOutQuad,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                             });
                             ui.menu_button("Cubic", |ui| {
@@ -498,7 +498,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInCubic,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
@@ -506,7 +506,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseOutCubic,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
@@ -514,7 +514,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInOutCubic,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                             });
                             ui.menu_button("Quart", |ui| {
@@ -524,7 +524,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInQuart,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
@@ -532,7 +532,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseOutQuart,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
@@ -540,7 +540,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInOutQuart,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                             });
                             ui.menu_button("Quint", |ui| {
@@ -550,7 +550,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInQuint,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
@@ -558,7 +558,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseOutQuint,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
@@ -566,7 +566,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInOutQuint,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                             });
                             ui.menu_button("Expo", |ui| {
@@ -576,7 +576,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInExpo,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
@@ -584,7 +584,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseOutExpo,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
@@ -592,7 +592,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInOutExpo,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                             });
                             ui.menu_button("Circ", |ui| {
@@ -602,7 +602,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInCirc,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
@@ -610,7 +610,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseOutCirc,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
@@ -618,7 +618,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInOutCirc,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                             });
                             ui.menu_button("Back", |ui| {
@@ -628,7 +628,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInBack,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
@@ -636,7 +636,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseOutBack,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
@@ -644,7 +644,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInOutBack,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                             });
                             ui.menu_button("Elastic", |ui| {
@@ -654,7 +654,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInElastic,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
@@ -662,7 +662,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseOutElastic,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
@@ -670,7 +670,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInOutElastic,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                             });
                             ui.menu_button("Bounce", |ui| {
@@ -680,7 +680,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInBounce,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
@@ -688,7 +688,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseOutBounce,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
@@ -696,7 +696,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInOutBounce,
                                     );
-                                    ui.close_menu();
+                                    ui.close_kind(UiKind::Menu);
                                 }
                             });
 
@@ -706,7 +706,7 @@ pub fn graph_editor_panel(
                                 .clicked()
                             {
                                 action = Action::Remove(name.clone(), i);
-                                ui.close_menu();
+                                ui.close_kind(UiKind::Menu);
                             }
                         });
 
