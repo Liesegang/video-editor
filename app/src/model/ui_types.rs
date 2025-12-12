@@ -26,6 +26,19 @@ pub struct TimelineClip {
     pub height: Option<f32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GizmoHandle {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Top,
+    Bottom,
+    Left,
+    Right,
+    Rotation,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DraggedItem {
     Asset(Uuid),

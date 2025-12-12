@@ -56,6 +56,25 @@ pub struct EditorContext {
     pub preview_texture: Option<egui::TextureHandle>,
     #[serde(skip)]
     pub preview_texture_id: Option<u32>, // Raw GL texture ID
+
+    #[serde(skip)]
+    pub gizmo_state: Option<GizmoState>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GizmoState {
+    pub start_mouse_pos: egui::Pos2,
+    pub active_handle: crate::model::ui_types::GizmoHandle,
+    pub original_position: [f32; 2],
+    pub original_scale_x: f32,
+    pub original_scale_y: f32,
+    pub original_rotation: f32,
+    // Store original anchor too if we implement anchor drag later, 
+    // but for resize w/ anchor compensation we might need it.
+    pub original_anchor_x: f32,
+    pub original_anchor_y: f32,
+    pub original_width: f32,
+    pub original_height: f32,
 }
 
 impl EditorContext {
@@ -91,6 +110,7 @@ impl EditorContext {
             is_editing_current_time: false,          // Initialize new field
             preview_texture: None,
             preview_texture_id: None,
+            gizmo_state: None,
         }
     }
 
