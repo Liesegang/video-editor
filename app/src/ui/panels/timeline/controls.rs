@@ -15,7 +15,7 @@ pub fn show_timeline_controls(
 ) {
     ui.horizontal(|ui| {
         // Play button
-        let play_icon_enum = if editor_context.is_playing {
+        let play_icon_enum = if editor_context.timeline.is_playing {
             icons::PAUSE
         } else {
             icons::PLAY
@@ -24,13 +24,13 @@ pub fn show_timeline_controls(
             .add(egui::Button::new(egui::RichText::new(play_icon_enum)))
             .clicked()
         {
-            editor_context.is_playing = !editor_context.is_playing;
+            editor_context.timeline.is_playing = !editor_context.timeline.is_playing;
         }
 
         // Time display
-        let minutes = (editor_context.current_time / 60.0).floor();
-        let seconds = (editor_context.current_time % 60.0).floor();
-        let ms = ((editor_context.current_time % 1.0) * 100.0).floor();
+        let minutes = (editor_context.timeline.current_time / 60.0).floor();
+        let seconds = (editor_context.timeline.current_time % 60.0).floor();
+        let ms = ((editor_context.timeline.current_time % 1.0) * 100.0).floor();
         let time_text = format!("{:02}:{:02}.{:02}", minutes, seconds, ms);
         ui.label(egui::RichText::new(time_text).monospace());
 
@@ -41,12 +41,12 @@ pub fn show_timeline_controls(
                 .add(egui::Button::new(egui::RichText::new(icons::FRAME_CORNERS)))
                 .clicked()
             {
-                editor_context.timeline_h_zoom = 1.0;
-                editor_context.timeline_v_zoom = 1.0;
+                editor_context.timeline.h_zoom = 1.0;
+                editor_context.timeline.v_zoom = 1.0;
             }
 
             // Zoom information
-            let zoom_text = format!("H-Zoom: {:.1}x", editor_context.timeline_h_zoom);
+            let zoom_text = format!("H-Zoom: {:.1}x", editor_context.timeline.h_zoom);
             ui.label(zoom_text);
         });
     });

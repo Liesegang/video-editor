@@ -64,7 +64,7 @@ impl MyApp {
             ProjectService::new(Arc::clone(&default_project), plugin_manager.clone());
 
         let mut editor_context = EditorContext::new(default_comp_id); // Pass default_comp_id
-        editor_context.selected_composition_id = Some(default_comp_id); // Select the default composition
+        editor_context.selection.composition_id = Some(default_comp_id); // Select the default composition
 
         let entity_converter_registry = plugin_manager.get_entity_converter_registry();
         let render_server = Arc::new(RenderServer::new(
@@ -126,7 +126,7 @@ impl eframe::App for MyApp {
         }
 
         // 6. Generic Error Modal
-        if let Some(error_msg) = self.editor_context.active_modal_error.clone() {
+        if let Some(error_msg) = self.editor_context.interaction.active_modal_error.clone() {
             let mut open = true;
             egui::Window::new("⚠ Error")
                 .collapsible(false)
@@ -138,13 +138,13 @@ impl eframe::App for MyApp {
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         if ui.button("OK").clicked() {
-                            self.editor_context.active_modal_error = None;
+                            self.editor_context.interaction.active_modal_error = None;
                         }
                     });
                 });
             if !open {
                 // Window closed via X button
-                self.editor_context.active_modal_error = None;
+                self.editor_context.interaction.active_modal_error = None;
             }
         }
 
@@ -184,7 +184,7 @@ impl eframe::App for MyApp {
             ui.horizontal(|ui| {
                 ui.label("Ready");
                 ui.separator();
-                ui.label(format!("Time: {:.2}", self.editor_context.current_time));
+                ui.label(format!("Time: {:.2}", self.editor_context.timeline.current_time));
             });
         });
 
@@ -208,11 +208,11 @@ impl eframe::App for MyApp {
         });
 
         if ctx.input(|i| i.pointer.any_released()) {
-            self.editor_context.dragged_item = None;
+            self.editor_context.interaction.dragged_item = None;
         }
 
-        if self.editor_context.is_playing {
-            self.editor_context.current_time += ctx.input(|i| i.stable_dt);
+        if self.editor_context.timeline.is_playing {
+            self.editor_context.timeline.current_time += ctx.input(|i| i.stable_dt);
             ctx.request_repaint();
         }
     }
