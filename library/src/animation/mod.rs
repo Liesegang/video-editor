@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use ordered_float::OrderedFloat;
 use std::hash::{Hash, Hasher};
+
+
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)] // Removed PartialEq, Eq, Hash, Copy; Added Default
 pub enum EasingFunction {
@@ -36,17 +40,17 @@ pub enum EasingFunction {
     EaseOutCirc,
     EaseInOutCirc,
     // Back
-    EaseInBack,
-    EaseOutBack,
-    EaseInOutBack,
+    EaseInBack { c1: f64 },
+    EaseOutBack { c1: f64 },
+    EaseInOutBack { c1: f64 },
     // Elastic
-    EaseInElastic,
-    EaseOutElastic,
-    EaseInOutElastic,
+    EaseInElastic { period: f64 },
+    EaseOutElastic { period: f64 },
+    EaseInOutElastic { period: f64 },
     // Bounce
-    EaseInBounce,
-    EaseOutBounce,
-    EaseInOutBounce,
+    EaseInBounce { n1: f64, d1: f64 },
+    EaseOutBounce { n1: f64, d1: f64 },
+    EaseInOutBounce { n1: f64, d1: f64 },
     // Custom
     SimpleBezier {
         start: (f64, f64),
@@ -54,6 +58,10 @@ pub enum EasingFunction {
     },
     Bezier {
         points: Vec<(f64, f64)>,
+    },
+    #[serde(rename = "Expression")]
+    Expression {
+        text: String,
     },
 }
 
@@ -134,18 +142,15 @@ impl EasingFunction {
                     ((1.0 - (-2.0 * t + 2.0).powi(2)).sqrt() + 1.0) / 2.0
                 }
             }
-            EasingFunction::EaseInBack => {
-                let c1 = 1.70158;
+            EasingFunction::EaseInBack { c1 } => {
                 let c3 = c1 + 1.0;
                 c3 * t * t * t - c1 * t * t
             }
-            EasingFunction::EaseOutBack => {
-                let c1 = 1.70158;
+            EasingFunction::EaseOutBack { c1 } => {
                 let c3 = c1 + 1.0;
                 1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2)
             }
-            EasingFunction::EaseInOutBack => {
-                let c1 = 1.70158;
+            EasingFunction::EaseInOutBack { c1 } => {
                 let c2 = c1 * 1.525;
                 if t < 0.5 {
                     ((2.0 * t).powi(2) * ((c2 + 1.0) * 2.0 * t - c2)) / 2.0
@@ -153,8 +158,8 @@ impl EasingFunction {
                     ((2.0 * t - 2.0).powi(2) * ((c2 + 1.0) * (t * 2.0 - 2.0) + c2) + 2.0) / 2.0
                 }
             }
-            EasingFunction::EaseInElastic => {
-                let c4 = (2.0 * std::f64::consts::PI) / 3.0;
+            EasingFunction::EaseInElastic { period } => {
+                let c4 = (2.0 * std::f64::consts::PI) / period;
                 if t == 0.0 {
                     0.0
                 } else if t == 1.0 {
@@ -163,8 +168,8 @@ impl EasingFunction {
                     -2.0_f64.powf(10.0 * t - 10.0) * ((t * 10.0 - 10.75) * c4).sin()
                 }
             }
-            EasingFunction::EaseOutElastic => {
-                let c4 = (2.0 * std::f64::consts::PI) / 3.0;
+            EasingFunction::EaseOutElastic { period } => {
+                let c4 = (2.0 * std::f64::consts::PI) / period;
                 if t == 0.0 {
                     0.0
                 } else if t == 1.0 {
@@ -173,8 +178,8 @@ impl EasingFunction {
                     2.0_f64.powf(-10.0 * t) * ((t * 10.0 - 0.75) * c4).sin() + 1.0
                 }
             }
-            EasingFunction::EaseInOutElastic => {
-                let c5 = (2.0 * std::f64::consts::PI) / 4.5;
+            EasingFunction::EaseInOutElastic { period } => {
+                let c5 = (2.0 * std::f64::consts::PI) / period;
                 if t == 0.0 {
                     0.0
                 } else if t == 1.0 {
@@ -185,13 +190,13 @@ impl EasingFunction {
                     (2.0_f64.powf(-20.0 * t + 10.0) * ((20.0 * t - 11.125) * c5).sin()) / 2.0 + 1.0
                 }
             }
-            EasingFunction::EaseInBounce => 1.0 - Self::bounce_out(1.0 - t),
-            EasingFunction::EaseOutBounce => Self::bounce_out(t),
-            EasingFunction::EaseInOutBounce => {
+            EasingFunction::EaseInBounce { n1, d1 } => 1.0 - Self::bounce_out(1.0 - t, *n1, *d1),
+            EasingFunction::EaseOutBounce { n1, d1 } => Self::bounce_out(t, *n1, *d1),
+            EasingFunction::EaseInOutBounce { n1, d1 } => {
                 if t < 0.5 {
-                    (1.0 - Self::bounce_out(1.0 - 2.0 * t)) / 2.0
+                    (1.0 - Self::bounce_out(1.0 - 2.0 * t, *n1, *d1)) / 2.0
                 } else {
-                    (1.0 + Self::bounce_out(2.0 * t - 1.0)) / 2.0
+                    (1.0 + Self::bounce_out(2.0 * t - 1.0, *n1, *d1)) / 2.0
                 }
             }
             EasingFunction::SimpleBezier { start, end } => {
@@ -273,13 +278,65 @@ impl EasingFunction {
                 let (x, _) = EasingFunction::evaluate_bezier(&all_points, current_t);
                 x
             }
+            Self::Expression { text } => {
+                Python::with_gil(|py| {
+                    let locals = PyDict::new(py);
+                    if let Err(e) = locals.set_item("t", t) {
+                        log::error!("Failed to set 't' in python context: {}", e);
+                        return t;
+                    }
+                    
+                    let builtins = match PyModule::import(py, "builtins") {
+                        Ok(m) => m,
+                        Err(e) => {
+                            log::error!("Failed to import builtins: {}", e);
+                            return t;
+                        }
+                    };
+
+                    let eval_func = match builtins.getattr("eval") {
+                        Ok(f) => f,
+                        Err(e) => {
+                            log::error!("Failed to get eval: {}", e);
+                            return t;
+                        }
+                    };
+
+                    let globals = PyDict::new(py);
+                    
+                    if let Ok(math_mod) = PyModule::import(py, "math") {
+                        let _ = globals.set_item("math", math_mod);
+                    } else {
+                        log::warn!("Failed to import math module for expression");
+                    }
+
+                    if let Ok(random_mod) = PyModule::import(py, "random") {
+                         let _ = globals.set_item("random", random_mod);
+                    } else {
+                        log::warn!("Failed to import random module for expression");
+                    }
+                    
+                    match eval_func.call1((text.as_str(), Some(&globals), Some(&locals))) {
+                        Ok(result) => {
+                             match result.extract::<f64>() {
+                                Ok(val) => val,
+                                Err(e) => {
+                                    log::error!("Expression result is not a float: {}", e);
+                                    t
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to evaluate expression: {}", e);
+                            t
+                        }
+                    }
+                })
+            }
         }
     }
 
-    fn bounce_out(t: f64) -> f64 {
-        let n1 = 7.5625;
-        let d1 = 2.75;
-
+    fn bounce_out(t: f64, n1: f64, d1: f64) -> f64 {
         if t < 1.0 / d1 {
             n1 * t * t
         } else if t < 2.0 / d1 {
@@ -335,15 +392,39 @@ impl PartialEq for EasingFunction {
             (EasingFunction::EaseInCirc, EasingFunction::EaseInCirc) => true,
             (EasingFunction::EaseOutCirc, EasingFunction::EaseOutCirc) => true,
             (EasingFunction::EaseInOutCirc, EasingFunction::EaseInOutCirc) => true,
-            (EasingFunction::EaseInBack, EasingFunction::EaseInBack) => true,
-            (EasingFunction::EaseOutBack, EasingFunction::EaseOutBack) => true,
-            (EasingFunction::EaseInOutBack, EasingFunction::EaseInOutBack) => true,
-            (EasingFunction::EaseInElastic, EasingFunction::EaseInElastic) => true,
-            (EasingFunction::EaseOutElastic, EasingFunction::EaseOutElastic) => true,
-            (EasingFunction::EaseInOutElastic, EasingFunction::EaseInOutElastic) => true,
-            (EasingFunction::EaseInBounce, EasingFunction::EaseInBounce) => true,
-            (EasingFunction::EaseOutBounce, EasingFunction::EaseOutBounce) => true,
-            (EasingFunction::EaseInOutBounce, EasingFunction::EaseInOutBounce) => true,
+            (EasingFunction::EaseInBack { c1: a }, EasingFunction::EaseInBack { c1: b }) => {
+                OrderedFloat(*a) == OrderedFloat(*b)
+            }
+            (EasingFunction::EaseOutBack { c1: a }, EasingFunction::EaseOutBack { c1: b }) => {
+                OrderedFloat(*a) == OrderedFloat(*b)
+            }
+            (EasingFunction::EaseInOutBack { c1: a }, EasingFunction::EaseInOutBack { c1: b }) => {
+                OrderedFloat(*a) == OrderedFloat(*b)
+            }
+            (
+                EasingFunction::EaseInElastic { period: a },
+                EasingFunction::EaseInElastic { period: b },
+            ) => OrderedFloat(*a) == OrderedFloat(*b),
+            (
+                EasingFunction::EaseOutElastic { period: a },
+                EasingFunction::EaseOutElastic { period: b },
+            ) => OrderedFloat(*a) == OrderedFloat(*b),
+            (
+                EasingFunction::EaseInOutElastic { period: a },
+                EasingFunction::EaseInOutElastic { period: b },
+            ) => OrderedFloat(*a) == OrderedFloat(*b),
+            (
+                EasingFunction::EaseInBounce { n1: a, d1: b },
+                EasingFunction::EaseInBounce { n1: c, d1: d },
+            ) => OrderedFloat(*a) == OrderedFloat(*c) && OrderedFloat(*b) == OrderedFloat(*d),
+            (
+                EasingFunction::EaseOutBounce { n1: a, d1: b },
+                EasingFunction::EaseOutBounce { n1: c, d1: d },
+            ) => OrderedFloat(*a) == OrderedFloat(*c) && OrderedFloat(*b) == OrderedFloat(*d),
+            (
+                EasingFunction::EaseInOutBounce { n1: a, d1: b },
+                EasingFunction::EaseInOutBounce { n1: c, d1: d },
+            ) => OrderedFloat(*a) == OrderedFloat(*c) && OrderedFloat(*b) == OrderedFloat(*d),
             (
                 EasingFunction::SimpleBezier { start: s1, end: e1 },
                 EasingFunction::SimpleBezier { start: s2, end: e2 },
@@ -360,6 +441,9 @@ impl PartialEq for EasingFunction {
                             && OrderedFloat(a.1) == OrderedFloat(b.1)
                     })
             }
+            (EasingFunction::Expression { text: t1 }, EasingFunction::Expression { text: t2 }) => {
+                t1 == t2
+            }
             _ => false,
         }
     }
@@ -371,6 +455,22 @@ impl Hash for EasingFunction {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
         match self {
+            EasingFunction::EaseInBack { c1 }
+            | EasingFunction::EaseOutBack { c1 }
+            | EasingFunction::EaseInOutBack { c1 } => {
+                OrderedFloat(*c1).hash(state);
+            }
+            EasingFunction::EaseInElastic { period }
+            | EasingFunction::EaseOutElastic { period }
+            | EasingFunction::EaseInOutElastic { period } => {
+                OrderedFloat(*period).hash(state);
+            }
+            EasingFunction::EaseInBounce { n1, d1 }
+            | EasingFunction::EaseOutBounce { n1, d1 }
+            | EasingFunction::EaseInOutBounce { n1, d1 } => {
+                OrderedFloat(*n1).hash(state);
+                OrderedFloat(*d1).hash(state);
+            }
             EasingFunction::SimpleBezier { start, end } => {
                 OrderedFloat(start.0).hash(state);
                 OrderedFloat(start.1).hash(state);
@@ -382,6 +482,9 @@ impl Hash for EasingFunction {
                     OrderedFloat(p.0).hash(state);
                     OrderedFloat(p.1).hash(state);
                 }
+            }
+            EasingFunction::Expression { text } => {
+                text.hash(state);
             }
             _ => {} // Unit variants only hash discriminant
         }

@@ -104,7 +104,7 @@ impl eframe::App for MyApp {
         // 2. Menu Bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             let main_ui_enabled =
-                !self.settings_dialog.is_open && !self.settings_dialog.show_close_warning;
+                !self.settings_dialog.is_open && !self.settings_dialog.show_close_warning && !self.editor_context.keyframe_dialog.is_open;
             // Disable menu bar if a modal is open
             ui.add_enabled_ui(main_ui_enabled, |ui| {
                 crate::ui::menu::menu_bar(
@@ -123,6 +123,15 @@ impl eframe::App for MyApp {
 
         if self.composition_dialog.is_open {
             self.composition_dialog.show(ctx);
+        }
+
+        if self.editor_context.keyframe_dialog.is_open {
+            crate::ui::dialogs::keyframe_dialog::show_keyframe_dialog(
+                ctx,
+                &mut self.editor_context,
+                &mut self.project_service,
+                &self.project,
+            );
         }
 
         // 6. Generic Error Modal
@@ -152,7 +161,8 @@ impl eframe::App for MyApp {
         // Only handle shortcuts if no modal window is open and not listening, to prevent conflicts
         let main_ui_enabled = !self.settings_dialog.is_open
             && !self.settings_dialog.show_close_warning
-            && !self.composition_dialog.is_open;
+            && !self.composition_dialog.is_open
+            && !self.editor_context.keyframe_dialog.is_open;
         if main_ui_enabled && !is_listening_for_shortcut {
             if let Some(action_id) = self
                 .shortcut_manager

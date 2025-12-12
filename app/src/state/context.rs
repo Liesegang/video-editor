@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::state::context_types::{
-    GraphEditorState, InteractionState, SelectionState, TimelineState, ViewState,
+    GraphEditorState, InteractionState, KeyframeDialogState, SelectionState, TimelineState, ViewState,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -14,6 +14,9 @@ pub struct EditorContext {
     pub selection: SelectionState,
     // Added graph_editor state
     pub graph_editor: GraphEditorState,
+    
+    // Added keyframe_dialog state
+    pub keyframe_dialog: KeyframeDialogState,
 
     #[serde(skip)]
     pub interaction: InteractionState,
@@ -36,6 +39,7 @@ impl EditorContext {
             view: ViewState::default(),
             selection,
             graph_editor: GraphEditorState::default(),
+            keyframe_dialog: KeyframeDialogState::default(),
             interaction: InteractionState::default(),
             preview_texture: None,
             preview_texture_id: None,
