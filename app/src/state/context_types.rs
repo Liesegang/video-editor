@@ -37,6 +37,12 @@ pub struct ViewState {
     #[serde(with = "Vec2Def")]
     pub pan: egui::Vec2,
     pub zoom: f32,
+    #[serde(default = "default_preview_resolution")]
+    pub preview_resolution: f32,
+}
+
+fn default_preview_resolution() -> f32 {
+    1.0
 }
 
 impl Default for ViewState {
@@ -44,6 +50,7 @@ impl Default for ViewState {
         Self {
             pan: egui::vec2(20.0, 20.0),
             zoom: 0.3,
+            preview_resolution: 1.0,
         }
     }
 }
