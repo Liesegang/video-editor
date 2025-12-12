@@ -26,7 +26,7 @@ pub struct TimelineClip {
     pub height: Option<f32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GizmoHandle {
     TopLeft,
     TopRight,

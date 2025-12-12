@@ -26,19 +26,20 @@ pub fn show_timeline_ruler(
                             TimelineDisplayMode::Seconds => {
                                 let minutes = (editor_context.timeline.current_time / 60.0).floor();
                                 let seconds = (editor_context.timeline.current_time % 60.0).floor();
-                                let ms = ((editor_context.timeline.current_time % 1.0) * 100.0).floor();
+                                let ms =
+                                    ((editor_context.timeline.current_time % 1.0) * 100.0).floor();
                                 format!("{:02}:{:02}.{:02}", minutes, seconds, ms)
                             }
                             TimelineDisplayMode::Frames => {
                                 let current_frame =
-                                    (editor_context.timeline.current_time * composition_fps as f32).round()
-                                        as i32;
+                                    (editor_context.timeline.current_time * composition_fps as f32)
+                                        .round() as i32;
                                 format!("{}f", current_frame)
                             }
                             TimelineDisplayMode::SecondsAndFrames => {
                                 let total_frames =
-                                    (editor_context.timeline.current_time * composition_fps as f32).round()
-                                        as i32;
+                                    (editor_context.timeline.current_time * composition_fps as f32)
+                                        .round() as i32;
                                 let seconds = total_frames / composition_fps as i32;
                                 let frames = total_frames % composition_fps as i32;
                                 format!("{}s {}f", seconds, frames)
@@ -47,9 +48,11 @@ pub fn show_timeline_ruler(
                 }
 
                 let response = ui.add(
-                    egui::TextEdit::singleline(&mut editor_context.interaction.current_time_text_input)
-                        .desired_width(ui.available_width())
-                        .font(egui::FontId::monospace(10.0)),
+                    egui::TextEdit::singleline(
+                        &mut editor_context.interaction.current_time_text_input,
+                    )
+                    .desired_width(ui.available_width())
+                    .font(egui::FontId::monospace(10.0)),
                 );
 
                 if response.clicked() {
@@ -106,29 +109,32 @@ pub fn show_timeline_ruler(
                     } else {
                         eprintln!("Failed to parse time input: {}", input_str);
                         // Revert to current_time's formatted string
-                        editor_context.interaction.current_time_text_input =
-                            match editor_context.timeline.display_mode {
-                                TimelineDisplayMode::Seconds => {
-                                    let minutes = (editor_context.timeline.current_time / 60.0).floor();
-                                    let seconds = (editor_context.timeline.current_time % 60.0).floor();
-                                    let ms = ((editor_context.timeline.current_time % 1.0) * 100.0).floor();
-                                    format!("{:02}:{:02}.{:02}", minutes, seconds, ms)
-                                }
-                                TimelineDisplayMode::Frames => {
-                                    let current_frame =
-                                        (editor_context.timeline.current_time * composition_fps as f32)
-                                            .round() as i32;
-                                    format!("{}f", current_frame)
-                                }
-                                TimelineDisplayMode::SecondsAndFrames => {
-                                    let total_frames =
-                                        (editor_context.timeline.current_time * composition_fps as f32)
-                                            .round() as i32;
-                                    let seconds = total_frames / composition_fps as i32;
-                                    let frames = total_frames % composition_fps as i32;
-                                    format!("{}s {}f", seconds, frames)
-                                }
-                            };
+                        editor_context.interaction.current_time_text_input = match editor_context
+                            .timeline
+                            .display_mode
+                        {
+                            TimelineDisplayMode::Seconds => {
+                                let minutes = (editor_context.timeline.current_time / 60.0).floor();
+                                let seconds = (editor_context.timeline.current_time % 60.0).floor();
+                                let ms =
+                                    ((editor_context.timeline.current_time % 1.0) * 100.0).floor();
+                                format!("{:02}:{:02}.{:02}", minutes, seconds, ms)
+                            }
+                            TimelineDisplayMode::Frames => {
+                                let current_frame =
+                                    (editor_context.timeline.current_time * composition_fps as f32)
+                                        .round() as i32;
+                                format!("{}f", current_frame)
+                            }
+                            TimelineDisplayMode::SecondsAndFrames => {
+                                let total_frames =
+                                    (editor_context.timeline.current_time * composition_fps as f32)
+                                        .round() as i32;
+                                let seconds = total_frames / composition_fps as i32;
+                                let frames = total_frames % composition_fps as i32;
+                                format!("{}s {}f", seconds, frames)
+                            }
+                        };
                     }
                     editor_context.interaction.is_editing_current_time = false;
                 }

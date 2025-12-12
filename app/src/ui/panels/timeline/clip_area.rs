@@ -112,7 +112,8 @@ pub fn show_clip_area(
             let max_scroll_y = (num_tracks as f32 * (row_height + track_spacing))
                 - content_rect_for_clip_area.height();
             editor_context.timeline.scroll_offset.y = editor_context
-                .timeline.scroll_offset
+                .timeline
+                .scroll_offset
                 .y
                 .clamp(-max_scroll_y.max(0.0), 0.0);
         }
@@ -274,7 +275,8 @@ pub fn show_clip_area(
                                     drop_out,
                                 ) {
                                     log::error!("Failed to add entity to track: {:?}", e);
-                                    editor_context.interaction.active_modal_error = Some(e.to_string());
+                                    editor_context.interaction.active_modal_error =
+                                        Some(e.to_string());
                                 } else {
                                     let current_state =
                                         project_service.get_project().read().unwrap().clone();
@@ -408,7 +410,8 @@ pub fn show_clip_area(
                 editor_context.selection.track_id = Some(gc.track_id);
             }
 
-            if editor_context.interaction.is_resizing_entity && editor_context.selection.entity_id == Some(gc.id)
+            if editor_context.interaction.is_resizing_entity
+                && editor_context.selection.entity_id == Some(gc.id)
             {
                 let mut new_in_frame = gc.in_frame;
                 let mut new_out_frame = gc.out_frame;
@@ -471,7 +474,9 @@ pub fn show_clip_area(
                 display_x += clip_resp.drag_delta().x;
 
                 // Adjust Y position based on hovered track
-                if let Some(hovered_track_id) = editor_context.interaction.dragged_entity_hovered_track_id {
+                if let Some(hovered_track_id) =
+                    editor_context.interaction.dragged_entity_hovered_track_id
+                {
                     if let Some(hovered_track_index) =
                         current_tracks.iter().position(|t| t.id == hovered_track_id)
                     {
@@ -589,7 +594,9 @@ pub fn show_clip_area(
                                     if editor_context.interaction.dragged_entity_hovered_track_id
                                         != Some(hovered_track.id)
                                     {
-                                        editor_context.interaction.dragged_entity_hovered_track_id =
+                                        editor_context
+                                            .interaction
+                                            .dragged_entity_hovered_track_id =
                                             Some(hovered_track.id);
                                     }
                                 }

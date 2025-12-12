@@ -162,7 +162,8 @@ pub fn handle_command(
             *context.dock_state = crate::ui::tab_viewer::create_initial_dock_state();
         }
         CommandId::TogglePlayback => {
-            context.editor_context.timeline.is_playing = !context.editor_context.timeline.is_playing;
+            context.editor_context.timeline.is_playing =
+                !context.editor_context.timeline.is_playing;
         }
         CommandId::TogglePanel(tab) => {
             if let Some(index) = context.dock_state.find_tab(&tab) {
