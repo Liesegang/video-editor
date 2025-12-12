@@ -148,9 +148,11 @@ impl<T: Renderer> RenderService<T> {
                             )
                         })?;
                     let final_image = self.apply_effects(text_layer, &effects, 0.0)?;
+                    let mut composite_transform = Transform::default();
+                    composite_transform.opacity = transform.opacity;
                     measure_debug(format!("Composite text '{}'", text), || {
                         self.renderer
-                            .draw_layer(&final_image, &Transform::default())
+                            .draw_layer(&final_image, &composite_transform)
                     })?;
                 }
                 FrameContent::Shape {
@@ -171,9 +173,11 @@ impl<T: Renderer> RenderService<T> {
                             )
                         })?;
                     let final_image = self.apply_effects(shape_layer, &effects, 0.0)?;
+                    let mut composite_transform = Transform::default();
+                    composite_transform.opacity = transform.opacity;
                     measure_debug(format!("Composite shape {}", path), || {
                         self.renderer
-                            .draw_layer(&final_image, &Transform::default())
+                            .draw_layer(&final_image, &composite_transform)
                     })?;
                 }
             }

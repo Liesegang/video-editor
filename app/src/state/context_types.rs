@@ -82,6 +82,9 @@ pub struct InteractionState {
     // Text Input
     pub current_time_text_input: String,
     pub is_editing_current_time: bool,
+
+    // Context Menu
+    pub context_menu_open_pos: Option<egui::Pos2>,
 }
 
 #[derive(Debug, Clone)]

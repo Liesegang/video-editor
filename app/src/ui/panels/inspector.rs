@@ -181,6 +181,69 @@ pub fn inspector_panel(
                                         ui.label("Integer UI not impl");
                                         ui.end_row();
                                     }
+                                    PropertyUiType::Text => {
+                                        ui.label(&def.label);
+                                        let current_val = properties.get_string(&def.name).unwrap_or(
+                                            def.default_value.get_as::<String>().unwrap_or_default(),
+                                        );
+                                        let mut buffer = current_val.clone();
+                                        let response = ui.text_edit_singleline(&mut buffer);
+                                        if response.changed() {
+                                            use library::model::project::property::PropertyValue;
+                                            project_service.update_clip_property(
+                                                comp_id,
+                                                track_id,
+                                                selected_entity_id,
+                                                &def.name,
+                                                PropertyValue::String(buffer),
+                                            ).ok();
+                                            needs_refresh = true;
+                                        }
+                                        if response.lost_focus() {
+                                            let current_state = project_service.get_project().read().unwrap().clone();
+                                            history_manager.push_project_state(current_state);
+                                        }
+                                        ui.end_row();
+                                    }
+                                    PropertyUiType::Color => {
+                                        ui.label(&def.label);
+                                         let current_val = properties.get_constant_value(&def.name).and_then(|v| v.get_as::<library::model::frame::color::Color>()).unwrap_or(
+                                            def.default_value.get_as::<library::model::frame::color::Color>().unwrap_or(library::model::frame::color::Color{r:255,g:255,b:255,a:255})
+                                        );
+                                        
+                                        let mut color32 = egui::Color32::from_rgba_premultiplied(
+                                            current_val.r,
+                                            current_val.g,
+                                            current_val.b,
+                                            current_val.a,
+                                        );
+
+                                        let response = ui.color_edit_button_srgba(&mut color32);
+                                        if response.changed() {
+                                            use library::model::project::property::PropertyValue;
+                                            // Handle unmultiplied alpha if needed, but for now direct mapping
+                                            let new_color = library::model::frame::color::Color {
+                                                r: color32.r(),
+                                                g: color32.g(),
+                                                b: color32.b(),
+                                                a: color32.a(),
+                                            };
+
+                                             project_service.update_clip_property(
+                                                comp_id,
+                                                track_id,
+                                                selected_entity_id,
+                                                &def.name,
+                                                PropertyValue::Color(new_color),
+                                            ).ok();
+                                            needs_refresh = true;
+                                            
+                                            // Push history for color change (debatable if on every change, but simple for now)
+                                            let current_state = project_service.get_project().read().unwrap().clone();
+                                            history_manager.push_project_state(current_state);
+                                        }
+                                        ui.end_row();
+                                    }
                                     _ => {
                                         ui.label(&def.label);
                                         ui.label("UI type not implemented");
