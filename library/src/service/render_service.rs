@@ -7,7 +7,7 @@ use crate::model::frame::entity::{FrameContent, FrameObject}; // FrameEntity -> 
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
 use crate::plugin::{LoadRequest, LoadResponse, PluginManager};
-use crate::rendering::renderer::Renderer;
+use crate::rendering::renderer::{Renderer, RenderOutput};
 use crate::service::project_model::ProjectModel;
 use crate::util::timing::{ScopedTimer, measure_debug}; // Added this line
 // Removed HashMap and EvaluationContext imports
@@ -60,6 +60,18 @@ impl<T: Renderer> RenderService<T> {
                 content,
                 properties: _properties,
             } = frame_object;
+            
+            // helper to scale transform
+            let apply_scale = |t: &Transform, s: f64| -> Transform {
+                let mut new_t = t.clone();
+                new_t.position.x *= s;
+                new_t.position.y *= s;
+                new_t.scale.x *= s;
+                new_t.scale.y *= s;
+                new_t
+            };
+            let scale = frame_info.render_scale.into_inner();
+
             match content {
                 FrameContent::Video {
                     surface,
@@ -80,9 +92,9 @@ impl<T: Renderer> RenderService<T> {
                             }
                         },
                     )?;
-                    let final_image = self.apply_effects(video_frame, &surface.effects, 0.0)?;
+                    let final_image = self.apply_effects(RenderOutput::Image(video_frame), &surface.effects, 0.0)?;
                     measure_debug(format!("Draw video {}", surface.file_path), || {
-                        self.renderer.draw_image(&final_image, &surface.transform)
+                        self.renderer.draw_layer(&final_image, &apply_scale(&surface.transform, scale))
                     })?;
                 }
                 FrameContent::Image { surface } => {
@@ -100,9 +112,9 @@ impl<T: Renderer> RenderService<T> {
                             }
                         },
                     )?;
-                    let final_image = self.apply_effects(image_frame, &surface.effects, 0.0)?;
+                    let final_image = self.apply_effects(RenderOutput::Image(image_frame), &surface.effects, 0.0)?;
                     measure_debug(format!("Draw image {}", surface.file_path), || {
-                        self.renderer.draw_image(&final_image, &surface.transform)
+                        self.renderer.draw_layer(&final_image, &apply_scale(&surface.transform, scale))
                     })?;
                 }
                 FrameContent::Text {
@@ -113,15 +125,17 @@ impl<T: Renderer> RenderService<T> {
                     effects,
                     transform,
                 } => {
+                    let scaled_transform = apply_scale(transform, scale);
+                    let scaled_size = size * scale;
                     let text_layer =
                         measure_debug(format!("Rasterize text layer '{}'", text), || {
                             self.renderer
-                                .rasterize_text_layer(&text, *size, &font, &color, &transform)
+                                .rasterize_text_layer(&text, scaled_size, &font, &color, &scaled_transform)
                         })?;
                     let final_image = self.apply_effects(text_layer, &effects, 0.0)?;
                     measure_debug(format!("Composite text '{}'", text), || {
                         self.renderer
-                            .draw_image(&final_image, &Transform::default())
+                            .draw_layer(&final_image, &Transform::default())
                     })?;
                 }
                 FrameContent::Shape {
@@ -131,19 +145,20 @@ impl<T: Renderer> RenderService<T> {
                     effects,
                     transform,
                 } => {
+                    let scaled_transform = apply_scale(transform, scale);
                     let shape_layer =
                         measure_debug(format!("Rasterize shape layer {}", path), || {
                             self.renderer.rasterize_shape_layer(
                                 &path,
                                 &styles,
                                 &path_effects,
-                                &transform,
+                                &scaled_transform,
                             )
                         })?;
                     let final_image = self.apply_effects(shape_layer, &effects, 0.0)?;
                     measure_debug(format!("Composite shape {}", path), || {
                         self.renderer
-                            .draw_image(&final_image, &Transform::default())
+                            .draw_layer(&final_image, &Transform::default())
                     })?;
                 }
             }
@@ -170,20 +185,26 @@ impl<T: Renderer> RenderService<T> {
             project,
             composition_index,
             frame_number, // Pass frame_number (u64)
+            1.0, // Default render_scale to 1.0 for self-managed renders (e.g. export)
             &property_evaluators,
             &self.entity_converter_registry,
         )
     }
 
     fn apply_effects(
-        &self,
-        mut image: Image,
+        &mut self,
+        layer: RenderOutput,
         effects: &[crate::model::frame::effect::ImageEffect],
-        _current_time: f64, // Not prefixed with _ anymore
-    ) -> Result<Image, LibraryError> {
+        _current_time: f64,
+    ) -> Result<RenderOutput, LibraryError> {
         if effects.is_empty() {
-            Ok(image)
+            Ok(layer)
         } else {
+            let mut image = match layer {
+                RenderOutput::Image(img) => img,
+                output => self.renderer.read_surface(&output)?,
+            };
+
             for effect in effects {
                 // The 'ImageEffect' struct already holds evaluated 'PropertyValue's.
                 // We just need to pass them to the plugin manager.
@@ -195,7 +216,7 @@ impl<T: Renderer> RenderService<T> {
                     )
                 })?;
             }
-            Ok(image)
+            Ok(RenderOutput::Image(image))
         }
     }
 } // Added closing brace for impl RenderService

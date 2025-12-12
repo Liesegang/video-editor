@@ -4,14 +4,21 @@ use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::transform::Transform;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum RenderOutput {
     Image(Image),
-    Texture(u32), // Texture ID
+    Texture(TextureInfo),
+}
+
+#[derive(Clone, Debug)]
+pub struct TextureInfo {
+    pub texture_id: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 pub trait Renderer {
-    fn draw_image(&mut self, image: &Image, transform: &Transform) -> Result<(), LibraryError>;
+    fn draw_layer(&mut self, layer: &RenderOutput, transform: &Transform) -> Result<(), LibraryError>;
 
     fn rasterize_text_layer(
         &mut self,
@@ -20,7 +27,7 @@ pub trait Renderer {
         font_name: &String,
         color: &Color,
         transform: &Transform,
-    ) -> Result<Image, LibraryError>;
+    ) -> Result<RenderOutput, LibraryError>;
 
     fn rasterize_shape_layer(
         &mut self,
@@ -28,7 +35,9 @@ pub trait Renderer {
         styles: &[DrawStyle],
         path_effects: &Vec<PathEffect>,
         transform: &Transform,
-    ) -> Result<Image, LibraryError>;
+    ) -> Result<RenderOutput, LibraryError>;
+
+    fn read_surface(&mut self, output: &RenderOutput) -> Result<Image, LibraryError>;
 
     fn finalize(&mut self) -> Result<RenderOutput, LibraryError>;
     fn clear(&mut self) -> Result<(), LibraryError>;

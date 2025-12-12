@@ -7,6 +7,7 @@ use crate::error::LibraryError;
 use crate::framing::entity_converters::EntityConverterRegistry;
 use crate::plugin::PropertyEvaluatorRegistry;
 use crate::rendering::skia_renderer::SkiaRenderer;
+use crate::rendering::renderer::Renderer;
 use crate::util::timing::{ScopedTimer, measure_info};
 use log::{error, info};
 use std::cmp;
@@ -273,12 +274,17 @@ impl RenderQueue {
 
                     let image = match render_result {
                         Ok(crate::rendering::renderer::RenderOutput::Image(img)) => img,
-                        Ok(crate::rendering::renderer::RenderOutput::Texture(_)) => {
-                            error!(
-                                "Worker {} received Texture output (unsupported for export)",
-                                worker_id
-                            );
-                            continue;
+                        Ok(output @ crate::rendering::renderer::RenderOutput::Texture(_)) => {
+                            match render_service.renderer.read_surface(&output) {
+                                Ok(img) => img,
+                                Err(err) => {
+                                    error!(
+                                        "Worker {} failed to read texture from surface: {}",
+                                        worker_id, err
+                                    );
+                                    continue;
+                                }
+                            }
                         }
                         Err(err) => {
                             error!(

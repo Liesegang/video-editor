@@ -112,10 +112,21 @@ pub fn preview_panel(
                 let property_evaluators = plugin_manager.get_property_evaluators();
                 let entity_converter_registry = plugin_manager.get_entity_converter_registry();
 
+                let image_rect = if let Some(t) = &editor_context.preview_texture {
+                    egui::vec2(t.size()[0] as f32, t.size()[1] as f32)
+                } else {
+                    egui::vec2(1920.0, 1080.0)
+                };
+                
+                // Calculate scale: fit 1080p into current rect
+                // We want the render to match the pixel size of the rect on screen
+                let render_scale = (rect.width() / 1920.0).max(0.1).min(1.0) as f64;
+
                 let frame_info = library::framing::get_frame_from_project(
                     &proj_read,
                     comp_idx,
                     current_frame,
+                    render_scale,
                     &property_evaluators,
                     &entity_converter_registry,
                 );
@@ -126,7 +137,13 @@ pub fn preview_panel(
     }
 
     // 2. Poll for results and update texture
+    // Optimization: Drain queue and only process the LAST result to avoid backlog freeze/lag
+    let mut latest_result = None;
     while let Ok(result) = render_server.poll_result() {
+        latest_result = Some(result);
+    }
+    
+    if let Some(result) = latest_result {
         match result.output {
             library::rendering::renderer::RenderOutput::Image(image) => {
                 let size = [image.width as usize, image.height as usize];
@@ -143,8 +160,8 @@ pub fn preview_panel(
                 }
                 editor_context.preview_texture_id = None;
             }
-            library::rendering::renderer::RenderOutput::Texture(id) => {
-                editor_context.preview_texture_id = Some(id);
+            library::rendering::renderer::RenderOutput::Texture(info) => {
+                editor_context.preview_texture_id = Some(info.texture_id);
                 editor_context.preview_texture = None; // Invalidate CPU texture
             }
         }

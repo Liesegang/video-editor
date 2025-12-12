@@ -23,7 +23,7 @@ use windows_sys::Win32::Foundation::{HWND, LRESULT, LPARAM, WPARAM};
 #[cfg(feature = "gl")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, RegisterClassExW, WNDCLASSEXW,
-    CW_USEDEFAULT, WS_OVERLAPPEDWINDOW, CS_OWNDC,
+    CW_USEDEFAULT, WS_OVERLAPPEDWINDOW, CS_OWNDC, HWND_MESSAGE,
 };
 #[cfg(feature = "gl")]
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -74,7 +74,7 @@ pub fn create_gpu_context() -> Option<GpuContext> {
 
 #[cfg(feature = "gl")]
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    DefWindowProcW(hwnd, msg, wparam, lparam)
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 #[cfg(feature = "gl")]
@@ -107,7 +107,7 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT, CW_USEDEFAULT,
             CW_USEDEFAULT, CW_USEDEFAULT,
-            0,
+            HWND_MESSAGE,
             0,
             hinstance,
             std::ptr::null(),
@@ -278,4 +278,41 @@ pub fn surface_to_image(
         height,
         data: buffer,
     })
+}
+pub fn create_image_from_texture(
+    context: &mut DirectContext,
+    texture_id: u32,
+    width: u32,
+    height: u32,
+) -> Result<SkImage, LibraryError> {
+    #[cfg(feature = "gl")]
+    {
+        let texture_info = skia_safe::gpu::gl::TextureInfo {
+            target: 0x0DE1, // GL_TEXTURE_2D
+            id: texture_id,
+            format: 0x8058, // GL_RGBA8
+            protected: skia_safe::gpu::Protected::No,
+        };
+        let backend_texture = unsafe {
+            skia_safe::gpu::backend_textures::make_gl(
+                (width as i32, height as i32),
+                skia_safe::gpu::Mipmapped::No,
+                texture_info,
+                "Texture",
+            )
+        };
+        
+        SkImage::from_texture(
+            context,
+            &backend_texture,
+            SurfaceOrigin::TopLeft, // Standard for us?
+            ColorType::RGBA8888,
+            AlphaType::Premul,
+            None,
+        ).ok_or(LibraryError::Render("Failed to create image from texture".to_string()))
+    }
+    #[cfg(not(feature = "gl"))]
+    {
+        Err(LibraryError::Render("GL feature not enabled".to_string()))
+    }
 }

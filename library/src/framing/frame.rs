@@ -30,9 +30,9 @@ impl<'a> FrameEvaluator<'a> {
         }
     }
 
-    pub fn evaluate(&self, frame_number: u64) -> FrameInfo {
+    pub fn evaluate(&self, frame_number: u64, render_scale: f64) -> FrameInfo {
         // Changed to u64
-        let mut frame = self.initialize_frame();
+        let mut frame = self.initialize_frame(render_scale);
         for track_clip in self.active_clips(frame_number) {
             // Changed to track_entity
             if let Some(object) = self.convert_entity(track_clip, frame_number) {
@@ -43,12 +43,13 @@ impl<'a> FrameEvaluator<'a> {
         frame
     }
 
-    fn initialize_frame(&self) -> FrameInfo {
+    fn initialize_frame(&self, render_scale: f64) -> FrameInfo {
         FrameInfo {
             width: self.composition.width,
             height: self.composition.height,
             background_color: self.composition.background_color.clone(),
             color_profile: self.composition.color_profile.clone(),
+            render_scale: ordered_float::OrderedFloat(render_scale),
             objects: Vec::new(),
         }
     }
@@ -80,6 +81,7 @@ impl<'a> FrameEvaluator<'a> {
 pub fn evaluate_composition_frame(
     composition: &Composition,
     frame_number: u64, // Changed to u64
+    render_scale: f64,
     property_evaluators: &Arc<PropertyEvaluatorRegistry>,
     entity_converter_registry: &Arc<EntityConverterRegistry>,
 ) -> FrameInfo {
@@ -88,13 +90,14 @@ pub fn evaluate_composition_frame(
         Arc::clone(property_evaluators),
         Arc::clone(entity_converter_registry),
     )
-    .evaluate(frame_number) // Pass frame_number
+    .evaluate(frame_number, render_scale) // Pass frame_number
 }
 
 pub fn get_frame_from_project(
     project: &Project,
     composition_index: usize,
     frame_number: u64, // Changed to u64
+    render_scale: f64,
     property_evaluators: &Arc<PropertyEvaluatorRegistry>,
     entity_converter_registry: &Arc<EntityConverterRegistry>,
 ) -> FrameInfo {
@@ -107,6 +110,7 @@ pub fn get_frame_from_project(
     let frame = evaluate_composition_frame(
         composition,
         frame_number, // Pass frame_number
+        render_scale,
         property_evaluators,
         entity_converter_registry,
     );
@@ -209,7 +213,7 @@ mod tests {
             Arc::clone(&registry),
             Arc::clone(&entity_converter_registry),
         );
-        let frame = evaluator.evaluate(1);
+        let frame = evaluator.evaluate(1, 1.0);
 
         assert_eq!(frame.objects.len(), 1);
         match &frame.objects[0].content {
@@ -280,10 +284,10 @@ mod tests {
             Arc::clone(&entity_converter_registry),
         );
 
-        let frame = evaluator.evaluate(15); // 0.5s * 30fps = 15 frames
+        let frame = evaluator.evaluate(15, 1.0); // 0.5s * 30fps = 15 frames
         assert_eq!(frame.objects.len(), 1, "Only early entity should render");
 
-        let frame_late = evaluator.evaluate(165); // 5.5s * 30fps = 165 frames
+        let frame_late = evaluator.evaluate(165, 1.0); // 5.5s * 30fps = 165 frames
         assert_eq!(
             frame_late.objects.len(),
             1,

@@ -7,5 +7,6 @@ pub struct FrameInfo {
     pub height: u64,
     pub background_color: Color,
     pub color_profile: String,
+    pub render_scale: ordered_float::OrderedFloat<f64>,
     pub objects: Vec<FrameObject>,
 }
