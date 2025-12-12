@@ -182,9 +182,12 @@ mod tests {
             })),
         );
         text_props.set("position".into(), constant(make_vec2(10.0, 20.0)));
-        text_props.set("scale".into(), constant(make_vec2(1.0, 1.0)));
-        text_props.set("anchor".into(), constant(make_vec2(0.0, 0.0)));
+        text_props.set("scale_x".into(), constant(PropertyValue::Number(100.0)));
+        text_props.set("scale_y".into(), constant(PropertyValue::Number(100.0)));
+        text_props.set("anchor_x".into(), constant(PropertyValue::Number(0.0)));
+        text_props.set("anchor_y".into(), constant(PropertyValue::Number(0.0)));
         text_props.set("rotation".into(), constant(PropertyValue::Number(0.0)));
+        text_props.set("opacity".into(), constant(PropertyValue::Number(100.0)));
 
         let track_clip = TrackClip {
             id: uuid::Uuid::new_v4(), // Added ID
@@ -238,9 +241,12 @@ mod tests {
             constant(PropertyValue::String("foo.png".into())),
         );
         props.set("position".into(), constant(make_vec2(0.0, 0.0)));
-        props.set("scale".into(), constant(make_vec2(1.0, 1.0)));
-        props.set("anchor".into(), constant(make_vec2(0.0, 0.0)));
+        props.set("scale_x".into(), constant(PropertyValue::Number(100.0)));
+        props.set("scale_y".into(), constant(PropertyValue::Number(100.0)));
+        props.set("anchor_x".into(), constant(PropertyValue::Number(0.0)));
+        props.set("anchor_y".into(), constant(PropertyValue::Number(0.0)));
         props.set("rotation".into(), constant(PropertyValue::Number(0.0)));
+        props.set("opacity".into(), constant(PropertyValue::Number(100.0)));
 
         let early = TrackClip {
             id: uuid::Uuid::new_v4(), // Added ID

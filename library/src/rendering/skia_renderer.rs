@@ -286,6 +286,9 @@ impl Renderer for SkiaRenderer {
 
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
+        // Apply opacity from transform
+        paint.set_alpha_f(transform.opacity as f32);
+        
         let cubic_resampler = CubicResampler::mitchell();
         let sampling = SamplingOptions::from(cubic_resampler);
         canvas.draw_image_with_sampling_options(&src_image, (0, 0), sampling, Some(&paint));

@@ -65,21 +65,23 @@ impl<'a> FrameEvaluationContext<'a> {
 
     fn build_transform(&self, props: &PropertyMap, time: f64) -> Transform {
         let (pos_x, pos_y) = self.evaluate_vec2(props, "position", time, 0.0, 0.0);
-        let (scale_x, scale_y) = self.evaluate_vec2(props, "scale", time, 1.0, 1.0);
+        let (scale_x, scale_y) = self.evaluate_vec2(props, "scale", time, 100.0, 100.0);
         let (anchor_x, anchor_y) = self.evaluate_vec2(props, "anchor", time, 0.0, 0.0);
         let rotation = self.evaluate_number(props, "rotation", time, 0.0);
+        let opacity = self.evaluate_number(props, "opacity", time, 100.0);
 
         Transform {
             position: Position { x: pos_x, y: pos_y },
             scale: Scale {
-                x: scale_x,
-                y: scale_y,
+                x: scale_x / 100.0,
+                y: scale_y / 100.0,
             },
             anchor: Position {
                 x: anchor_x,
                 y: anchor_y,
             },
             rotation,
+            opacity: opacity / 100.0,
         }
     }
 

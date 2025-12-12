@@ -11,6 +11,12 @@ pub struct Transform {
     pub anchor: Position,
     #[serde(default)]
     pub rotation: f64,
+    #[serde(default = "default_opacity")]
+    pub opacity: f64,
+}
+
+fn default_opacity() -> f64 {
+    1.0
 }
 
 impl Hash for Transform {
@@ -19,6 +25,7 @@ impl Hash for Transform {
         self.scale.hash(state);
         self.anchor.hash(state);
         OrderedFloat(self.rotation).hash(state);
+        OrderedFloat(self.opacity).hash(state);
     }
 }
 
@@ -29,6 +36,7 @@ impl Default for Transform {
             scale: Default::default(),
             anchor: Default::default(),
             rotation: 0.0,
+            opacity: 1.0,
         }
     }
 }
@@ -77,6 +85,7 @@ impl PartialEq for Transform {
             && self.scale == other.scale
             && OrderedFloat(self.rotation) == OrderedFloat(other.rotation)
             && self.anchor == other.anchor
+            && OrderedFloat(self.opacity) == OrderedFloat(other.opacity)
     }
 }
 impl Eq for Transform {}
