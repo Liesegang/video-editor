@@ -3,9 +3,10 @@ use crate::loader::image::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
 use crate::model::frame::transform::Transform;
-use crate::rendering::renderer::Renderer;
+use crate::rendering::renderer::{Renderer, RenderOutput, TextureInfo};
 use crate::rendering::skia_utils::{
     GpuContext, create_gpu_context, create_surface, image_to_skia, surface_to_image,
+    create_image_from_texture,
 };
 use crate::util::timing::ScopedTimer;
 use log::{debug, trace};
@@ -13,8 +14,8 @@ use skia_safe::path_effect::PathEffect as SkPathEffect;
 use skia_safe::trim_path_effect::Mode;
 use skia_safe::utils::parse_path::from_svg;
 use skia_safe::{
-    Canvas, Color as SkColor, CubicResampler, Font, FontMgr, FontStyle, Matrix, Paint, PaintStyle,
-    Point, SamplingOptions, Surface,
+    AlphaType, Canvas, Color as SkColor, ColorType, CubicResampler, Font, FontMgr, FontStyle,
+    ISize, ImageInfo, Matrix, Paint, PaintStyle, Point, SamplingOptions, Surface,
 };
 
 pub struct SkiaRenderer {
@@ -25,11 +26,6 @@ pub struct SkiaRenderer {
     gpu_context: Option<GpuContext>,
 }
 
-pub struct TextureInfo {
-    pub texture_id: u32,
-    pub width: u32,
-    pub height: u32,
-}
 
 impl SkiaRenderer {
     pub fn render_to_texture(&mut self) -> Result<TextureInfo, LibraryError> {
@@ -257,18 +253,31 @@ fn apply_path_effects(
 }
 
 impl Renderer for SkiaRenderer {
-    fn draw_image(
+    fn draw_layer(
         &mut self,
-        video_frame: &Image,
+        layer: &RenderOutput,
         transform: &Transform,
     ) -> Result<(), LibraryError> {
-        let _timer = ScopedTimer::debug(format!(
-            "SkiaRenderer::draw_image {}x{}",
-            video_frame.width, video_frame.height
-        ));
+        let _timer = ScopedTimer::debug("SkiaRenderer::draw_layer");
         let canvas: &Canvas = self.surface.canvas();
 
-        let src_image = image_to_skia(video_frame)?;
+        let src_image = match layer {
+            RenderOutput::Image(img) => image_to_skia(img)?,
+            RenderOutput::Texture(info) => {
+                if let Some(ctx) = self.gpu_context.as_mut() {
+                    create_image_from_texture(
+                        &mut ctx.direct_context,
+                        info.texture_id,
+                        info.width,
+                        info.height,
+                    )?
+                } else {
+                    return Err(LibraryError::Render(
+                        "Cannot render texture without GPU context".to_string(),
+                    ));
+                }
+            }
+        };
 
         let matrix = build_transform_matrix(transform);
 
@@ -293,7 +302,7 @@ impl Renderer for SkiaRenderer {
         font_name: &String,
         color: &Color,
         transform: &Transform,
-    ) -> Result<Image, LibraryError> {
+    ) -> Result<RenderOutput, LibraryError> {
         let _timer = ScopedTimer::debug(format!(
             "SkiaRenderer::rasterize_text_layer len={} size={}",
             text.len(),
@@ -326,7 +335,24 @@ impl Renderer for SkiaRenderer {
             canvas.draw_str(text, (0.0, y_offset), &font, &paint);
             canvas.restore();
         }
-        surface_to_image(&mut layer, self.width, self.height)
+        if let Some(ctx) = self.gpu_context.as_mut() {
+            ctx.direct_context.flush_and_submit();
+            if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
+                &mut layer,
+                skia_safe::surface::BackendHandleAccess::FlushRead,
+            ) {
+                 if let Some(gl_info) = texture.gl_texture_info() {
+                    return Ok(RenderOutput::Texture(TextureInfo {
+                        texture_id: gl_info.id,
+                        width: self.width,
+                        height: self.height,
+                    }));
+                }
+            }
+        }
+        
+        let image = surface_to_image(&mut layer, self.width, self.height)?;
+        Ok(RenderOutput::Image(image))
     }
 
     fn rasterize_shape_layer(
@@ -335,7 +361,7 @@ impl Renderer for SkiaRenderer {
         styles: &[DrawStyle],
         path_effects: &Vec<PathEffect>,
         transform: &Transform,
-    ) -> Result<Image, LibraryError> {
+    ) -> Result<RenderOutput, LibraryError> {
         let _timer = ScopedTimer::debug("SkiaRenderer::rasterize_shape_layer");
         let mut layer = self.create_layer_surface()?;
         {
@@ -374,10 +400,46 @@ impl Renderer for SkiaRenderer {
             }
             canvas.restore();
         }
-        surface_to_image(&mut layer, self.width, self.height)
+        let image = surface_to_image(&mut layer, self.width, self.height)?;
+        Ok(RenderOutput::Image(image))
     }
 
-    fn finalize(&mut self) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
+    fn read_surface(&mut self, output: &RenderOutput) -> Result<Image, LibraryError> {
+        match output {
+            RenderOutput::Image(img) => Ok(img.clone()),
+            RenderOutput::Texture(info) => {
+                 if let Some(ctx) = self.gpu_context.as_mut() {
+                    let image = create_image_from_texture(
+                        &mut ctx.direct_context,
+                        info.texture_id,
+                        info.width,
+                        info.height,
+                    )?;
+                    // Read pixels
+                    let row_bytes = (info.width * 4) as usize;
+                    let mut buffer = vec![0u8; (info.height as usize) * row_bytes];
+                    let image_info = ImageInfo::new(
+                        ISize::new(info.width as i32, info.height as i32),
+                        ColorType::RGBA8888,
+                        AlphaType::Premul,
+                        None,
+                    );
+                    if !image.read_pixels(&image_info, &mut buffer, row_bytes, (0, 0), skia_safe::image::CachingHint::Disallow) {
+                        return Err(LibraryError::Render("Failed to read texture pixels".to_string()));
+                    }
+                     Ok(Image {
+                        width: info.width,
+                        height: info.height,
+                        data: buffer,
+                    })
+                } else {
+                    Err(LibraryError::Render("No GPU context to read texture".to_string()))
+                }
+            }
+        }
+    }
+
+    fn finalize(&mut self) -> Result<RenderOutput, LibraryError> {
         let _timer = ScopedTimer::debug(format!(
             "SkiaRenderer::finalize {}x{}",
             self.width, self.height
@@ -386,13 +448,11 @@ impl Renderer for SkiaRenderer {
         if let Some(context) = self.gpu_context.as_mut() {
             context.direct_context.flush_and_submit();
         }
-
-        // Always use CPU Path (ReadPixels) to ensure valid data transfer to Main Thread
-        // This bypasses OpenGL Context Sharing issues (Main Thread vs Render Thread).
+        
         let width = self.width;
         let height = self.height;
         let image = surface_to_image(&mut self.surface, width, height)?;
-        Ok(crate::rendering::renderer::RenderOutput::Image(image))
+        Ok(RenderOutput::Image(image))
     }
 
     fn clear(&mut self) -> Result<(), LibraryError> {
