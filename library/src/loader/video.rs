@@ -6,6 +6,7 @@ pub struct VideoReader {
     input_context: ffmpeg::format::context::Input,
     video_stream_index: usize,
     decoder: ffmpeg::decoder::Video,
+    next_frame_number: Option<u64>,
 }
 
 impl VideoReader {
@@ -28,6 +29,7 @@ impl VideoReader {
             input_context,
             video_stream_index,
             decoder,
+            next_frame_number: None,
         })
     }
 
@@ -41,28 +43,13 @@ impl VideoReader {
     }
 
     pub fn decode_frame(&mut self, frame_number: u64) -> Result<Image, LibraryError> {
-        // Seek to the approximate position
-        // Note: Seeking in ffmpeg is complex and might not land on the exact frame.
-        // For simplicity, we might need to seek and then decode forward, or just decode from start if performance isn't an issue yet.
-        // Given the previous implementation was linear scan from start for a single frame call (which is slow but correct),
-        // we'll stick to a simple seek + decode loop, or just loop if seek is tricky.
-        // But since this is a Reader struct now, we can optimize state later.
-        // For now, let's re-implement the logic to find the frame.
-        // CAUTION: Persistent state like `decoder` and `input_context` means we can't just seek casually without flushing buffers.
-
-        // To properly seek, we should use self.input_context.seek().
-        // However, exact frame seeking is hard. Let's try a naive seek to timestamp.
-
-        let stream =
-            self.input_context
-                .stream(self.video_stream_index)
-                .ok_or(LibraryError::FfmpegOther(
-                    "ストリームが見つかりません".to_string(),
-                ))?;
+        let stream = self
+            .input_context
+            .stream(self.video_stream_index)
+            .ok_or(LibraryError::FfmpegOther(
+                "ストリームが見つかりません".to_string(),
+            ))?;
         let time_base = stream.time_base();
-        // rough timestamp for the frame number. This assumes constant frame rate which might not be true.
-        // But we don't have fps info easily here without more parsing.
-        // Let's assume 30fps for calculation or use the stream info if available.
         let avg_frame_rate = stream.avg_frame_rate();
         let fps = if avg_frame_rate.denominator() > 0 {
             avg_frame_rate.numerator() as f64 / avg_frame_rate.denominator() as f64
@@ -70,26 +57,32 @@ impl VideoReader {
             30.0
         };
 
-        let timestamp = (frame_number as f64 / fps / f64::from(time_base.numerator())
-            * f64::from(time_base.denominator())) as i64;
+        // Determine if we need to seek
+        let need_seek = match self.next_frame_number {
+            Some(next) => next != frame_number,
+            None => true,
+        };
 
-        // Seek keyframe before the target
-        self.input_context.seek(timestamp, ..timestamp)?;
-        self.decoder.flush();
+        if need_seek {
+            let timestamp = (frame_number as f64 / fps / f64::from(time_base.numerator())
+                * f64::from(time_base.denominator())) as i64;
+
+            // Seek keyframe before the target (using a wide range backwards)
+            // seeking to ..timestamp means "up to timestamp". 
+            // Often seeking to timestamp with backwards flag (which range implies if min is low) works.
+            // Let's try seeking to exactly the timestamp but relying on ffmpeg to find the previous keyframe by default behavior for some formats,
+            // or providing a range from 0 to timestamp.
+            self.input_context.seek(timestamp, ..timestamp)?;
+            self.decoder.flush();
+        }
 
         let mut decoded_frame = None;
-        // Removed unused current_frame_pts
-
-        // We need to decode packets until we hit the right PTS.
-        // This logic is simplified and might need robustness improvements for variable framerate.
-        // For now, let's just decode next frames and check PTS.
 
         for (stream, packet) in self.input_context.packets() {
             if stream.index() == self.video_stream_index {
                 self.decoder.send_packet(&packet)?;
                 let mut frame = ffmpeg::util::frame::Video::empty();
                 while self.decoder.receive_frame(&mut frame).is_ok() {
-                    // Calculate frame number from PTS
                     let pts = frame.pts().unwrap_or(0);
                     let frame_num = (pts as f64 * f64::from(time_base.numerator())
                         / f64::from(time_base.denominator())
@@ -98,6 +91,8 @@ impl VideoReader {
 
                     if frame_num >= frame_number {
                         decoded_frame = Some(frame.clone());
+                        // Update next frame expectation
+                        self.next_frame_number = Some(frame_num + 1);
                         break;
                     }
                 }
@@ -107,7 +102,7 @@ impl VideoReader {
             }
         }
 
-        // If we still don't have a frame, try EOF
+        // If we still don't have a frame (e.g. EOF reached during search), check EOF frames
         if decoded_frame.is_none() {
             self.decoder.send_eof()?;
             let mut frame = ffmpeg::util::frame::Video::empty();
@@ -119,10 +114,15 @@ impl VideoReader {
                     .round() as u64;
                 if frame_num >= frame_number {
                     decoded_frame = Some(frame.clone());
+                    self.next_frame_number = Some(frame_num + 1);
                     break;
                 }
             }
         }
+        
+        // If we hit EOF but didn't find the exact frame (maybe it's past the end?), handling it gracefully would be good,
+        // but for now let's error as before or return the last frame? 
+        // original logic errored.
 
         let frame = decoded_frame.ok_or(LibraryError::FfmpegOther(
             "指定したフレームをデコードできませんでした".to_string(),
