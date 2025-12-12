@@ -2,7 +2,7 @@ use egui::Ui;
 
 use library::model::project::project::Project;
 use library::model::project::property::PropertyValue;
-use library::model::project::TrackClipKind; // Added
+
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
 
@@ -107,7 +107,7 @@ fn handle_drag_value_property(
             ui.heading("Clip Properties");
             ui.separator();
 
-            let mut current_kind = kind.clone();
+            let current_kind = kind.clone();
             ui.horizontal(|ui| {
                 ui.label("Type:");
                 ui.label(current_kind.to_string());
@@ -151,10 +151,9 @@ fn handle_drag_value_property(
                             for def in defs {
                                 match &def.ui_type {
                                     PropertyUiType::Float {
-                                        min,
-                                        max,
                                         step,
                                         suffix,
+                                        ..
                                     } => {
                                         // Get current value or default
                                         let current_val = properties
@@ -185,9 +184,7 @@ fn handle_drag_value_property(
                                         ui.end_row();
                                     }
                                     PropertyUiType::Integer {
-                                        min,
-                                        max,
-                                        suffix,
+                                        ..
                                     } => {
                                          // Support Integer UI if needed, for now skip or treat as float
                                          ui.label(&def.label);

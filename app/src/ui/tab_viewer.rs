@@ -4,7 +4,7 @@ use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use std::sync::{Arc, RwLock};
 
-use crate::command::CommandRegistry;
+
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::{
     action::HistoryManager,
@@ -20,7 +20,6 @@ pub struct AppTabViewer<'a> {
     history_manager: &'a mut HistoryManager,
     project_service: &'a mut ProjectService,
     project: &'a Arc<RwLock<Project>>,
-    command_registry: &'a mut CommandRegistry,
     composition_dialog: &'a mut CompositionDialog,
     render_server: &'a Arc<RenderServer>,
 }
@@ -31,7 +30,6 @@ impl<'a> AppTabViewer<'a> {
         history_manager: &'a mut HistoryManager,
         project_service: &'a mut ProjectService,
         project: &'a Arc<RwLock<Project>>,
-        command_registry: &'a mut CommandRegistry,
         composition_dialog: &'a mut CompositionDialog,
         render_server: &'a Arc<RenderServer>,
     ) -> Self {
@@ -40,7 +38,6 @@ impl<'a> AppTabViewer<'a> {
             history_manager,
             project_service,
             project,
-            command_registry,
             composition_dialog,
             render_server,
         }

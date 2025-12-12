@@ -139,13 +139,13 @@ impl TrackClip {
         props.set(
             "scale_x".to_string(),
             crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
             ),
         );
         props.set(
             "scale_y".to_string(),
             crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
             ),
         );
         props.set(
@@ -211,13 +211,13 @@ impl TrackClip {
         props.set(
             "scale_x".to_string(),
             crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
             ),
         );
         props.set(
             "scale_y".to_string(),
             crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
             ),
         );
         props.set(
@@ -277,13 +277,13 @@ impl TrackClip {
         props.set(
             "scale_x".to_string(),
             crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
             ),
         );
         props.set(
             "scale_y".to_string(),
             crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
             ),
         );
         props.set(

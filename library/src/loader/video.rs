@@ -42,6 +42,10 @@ impl VideoReader {
         }
     }
 
+    pub fn get_dimensions(&self) -> (u32, u32) {
+        (self.decoder.width(), self.decoder.height())
+    }
+
     pub fn decode_frame(&mut self, frame_number: u64) -> Result<Image, LibraryError> {
         let stream = self
             .input_context

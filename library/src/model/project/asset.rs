@@ -9,6 +9,8 @@ pub struct Asset {
     pub path: String, // Path to the file
     pub kind: AssetKind,
     pub duration: Option<f64>, // Duration in seconds, if applicable
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 
     // Metadata
     #[serde(default)]
@@ -32,6 +34,8 @@ impl Asset {
             path: path.to_string(),
             kind,
             duration: None,
+            width: None,
+            height: None,
             color: Color {
                 r: 100,
                 g: 100,

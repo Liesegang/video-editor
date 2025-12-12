@@ -128,6 +128,10 @@ pub trait LoadPlugin: Plugin {
     fn get_duration(&self, _path: &str) -> Option<f64> {
         None
     }
+
+    fn get_dimensions(&self, _path: &str) -> Option<(u32, u32)> {
+        None
+    }
 }
 
 pub trait ExportPlugin: Plugin {
@@ -469,6 +473,16 @@ impl PluginManager {
         for plugin in inner.load_plugins.plugins.values() {
             if let Some(duration) = plugin.get_duration(path) {
                 return Some(duration);
+            }
+        }
+        None
+    }
+
+    pub fn get_dimensions(&self, path: &str) -> Option<(u32, u32)> {
+        let inner = self.inner.read().unwrap();
+        for plugin in inner.load_plugins.plugins.values() {
+            if let Some(dimensions) = plugin.get_dimensions(path) {
+                return Some(dimensions);
             }
         }
         None

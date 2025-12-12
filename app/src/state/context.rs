@@ -37,10 +37,7 @@ pub struct EditorContext {
     #[serde(skip)]
     pub selected_entity_id: Option<Uuid>,
 
-    #[serde(skip)]
-    pub drag_start_property_name: Option<String>,
-    #[serde(skip)]
-    pub drag_start_property_value: Option<library::model::project::property::PropertyValue>,
+
 
     #[serde(skip)]
     pub dragged_entity_original_track_id: Option<Uuid>,
@@ -70,7 +67,7 @@ impl EditorContext {
             timeline_display_mode: TimelineDisplayMode::Seconds, // Default display mode,
 
             view_pan: egui::vec2(20.0, 20.0),
-            view_zoom: 0.3,
+            view_zoom: 1.0,
             dragged_item: None,
             asset_delete_candidate: None,
             comp_delete_candidate: None,
@@ -84,8 +81,7 @@ impl EditorContext {
             selected_track_id: None,
             selected_entity_id: None,
 
-            drag_start_property_name: None,
-            drag_start_property_value: None,
+
             dragged_entity_original_track_id: None,
             dragged_entity_hovered_track_id: None,
             dragged_entity_has_moved: false,

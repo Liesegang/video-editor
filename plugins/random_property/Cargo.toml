@@ -9,4 +9,5 @@ crate-type = ["cdylib"]
 [dependencies]
 library = { path = "../../library" }
 rand = "0.8"
+ordered-float = "4.2.1"
 

@@ -1,5 +1,6 @@
-use crate::command::{Command, CommandId};
-use eframe::egui::{Key, ScrollArea, TextEdit, Ui};
+use eframe::egui::{self, Key, ScrollArea, TextEdit, Ui};
+use crate::command::{Command, CommandId, CommandRegistry};
+use crate::config;
 
 #[derive(Clone, Default)]
 struct SettingsState {
@@ -19,7 +20,115 @@ pub struct SettingsOutput {
     pub is_listening: bool,
 }
 
-pub fn settings_panel(ui: &mut Ui, commands: &mut Vec<Command>) -> SettingsOutput {
+pub struct SettingsDialog {
+    pub is_open: bool,
+    pub show_close_warning: bool,
+    pub command_registry: CommandRegistry, // The main registry (committed)
+    pub editing_registry: CommandRegistry, // The temporary registry being edited
+}
+
+impl SettingsDialog {
+    pub fn new(initial_registry: CommandRegistry) -> Self {
+        Self {
+            is_open: false,
+            show_close_warning: false,
+            command_registry: initial_registry.clone(),
+            editing_registry: initial_registry,
+        }
+    }
+
+    pub fn open(&mut self, current_registry: &CommandRegistry) {
+        self.command_registry = current_registry.clone();
+        self.editing_registry = current_registry.clone();
+        self.is_open = true;
+        self.show_close_warning = false;
+    }
+
+    pub fn show(&mut self, ctx: &egui::Context) -> bool {
+        let mut is_listening_for_shortcut = false;
+        
+        if self.is_open {
+            let mut still_open = true;
+            let mut close_confirmed = false;
+
+            egui::Window::new("Settings")
+                .open(&mut still_open)
+                .vscroll(true)
+                .show(ctx, |ui| {
+                    let output =
+                        settings_panel(ui, &mut self.editing_registry.commands);
+                    is_listening_for_shortcut = output.is_listening;
+
+                    if let Some(result) = output.result {
+                        match result {
+                            SettingsResult::Save => {
+                                self.command_registry = self.editing_registry.clone();
+                                let mut shortcuts = std::collections::HashMap::new();
+                                for cmd in &self.command_registry.commands {
+                                    if let Some(shortcut) = cmd.shortcut {
+                                        shortcuts.insert(cmd.id, shortcut);
+                                    }
+                                }
+                                let config = config::ShortcutConfig { shortcuts };
+                                config::save_config(&config);
+                                close_confirmed = true;
+                            }
+                            SettingsResult::Cancel => {
+                                if self.editing_registry != self.command_registry {
+                                    self.show_close_warning = true;
+                                } else {
+                                    close_confirmed = true;
+                                }
+                            }
+                            SettingsResult::RestoreDefaults => {
+                                self.editing_registry =
+                                    CommandRegistry::new(&config::ShortcutConfig::new());
+                            }
+                        }
+                    }
+                });
+
+            if !still_open {
+                // 'x' button was clicked
+                if self.editing_registry != self.command_registry {
+                    self.show_close_warning = true;
+                } else {
+                    close_confirmed = true;
+                }
+            }
+
+            if close_confirmed {
+                self.is_open = false;
+                self.show_close_warning = false;
+            }
+        }
+
+        // Unsaved Changes Dialog
+        if self.show_close_warning {
+             egui::Window::new("Unsaved Changes")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label("You have unsaved changes. Are you sure you want to discard them?");
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Discard").clicked() {
+                            self.is_open = false;
+                            self.show_close_warning = false;
+                        }
+                        if ui.button("Go Back").clicked() {
+                            self.show_close_warning = false;
+                        }
+                    });
+                });
+        }
+        
+        is_listening_for_shortcut
+    }
+}
+
+fn settings_panel(ui: &mut Ui, commands: &mut Vec<Command>) -> SettingsOutput {
     let mut result = None;
 
     // Retain state between frames

@@ -2,19 +2,16 @@ use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, Style};
 use library::model::project::project::{Composition, Project};
 use library::service::project_service::ProjectService;
-use log::{error, info, warn};
-use std::fs;
-use std::io::Write;
 use std::sync::{Arc, RwLock};
 
-use crate::action::HistoryManager;
+use crate::action::{handler::{handle_command, ActionContext}, HistoryManager};
 use crate::command::{CommandId, CommandRegistry};
 use crate::config;
 use crate::model::ui_types::Tab;
 use crate::shortcut::ShortcutManager;
 use crate::state::context::EditorContext;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
-use crate::ui::panels::settings;
+use crate::ui::dialogs::settings_dialog::SettingsDialog;
 use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
 use crate::utils;
 use library::RenderServer;
@@ -27,11 +24,12 @@ pub struct MyApp {
     pub history_manager: HistoryManager,
     shortcut_manager: ShortcutManager,
     command_registry: CommandRegistry,
-    settings_command_registry: CommandRegistry,
-    settings_open: bool,
-    settings_show_close_warning: bool,
-    triggered_action: Option<CommandId>,
+    
+    // Dialogs
+    pub settings_dialog: SettingsDialog,
     pub composition_dialog: CompositionDialog,
+    
+    pub triggered_action: Option<CommandId>,
     pub render_server: Arc<RenderServer>,
 }
 
@@ -79,10 +77,8 @@ impl MyApp {
             project: default_project,
             history_manager: HistoryManager::new(),
             shortcut_manager: ShortcutManager::new(),
-            settings_command_registry: command_registry.clone(),
-            command_registry,
-            settings_open: false,
-            settings_show_close_warning: false,
+            command_registry: command_registry.clone(),
+            settings_dialog: SettingsDialog::new(command_registry),
             triggered_action: None,
             composition_dialog: CompositionDialog::new(),
             render_server,
@@ -94,28 +90,7 @@ impl MyApp {
         app
     }
 
-    fn reset_layout(&mut self) {
-        self.dock_state = create_initial_dock_state();
-    }
 
-    fn new_project(&mut self) {
-        let mut new_project = Project::new("New Project");
-        let default_comp = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
-        let new_comp_id = default_comp.id;
-        new_project.add_composition(default_comp);
-        self.project_service.set_project(new_project);
-
-        self.editor_context.selected_composition_id = Some(new_comp_id);
-        self.editor_context.selected_track_id = None;
-        self.editor_context.selected_entity_id = None;
-        self.editor_context.current_time = 0.0;
-
-        self.history_manager = HistoryManager::new();
-
-        if let Ok(proj_read) = self.project_service.get_project().read() {
-            self.history_manager.push_project_state(proj_read.clone());
-        }
-    }
 }
 
 impl eframe::App for MyApp {
@@ -127,7 +102,7 @@ impl eframe::App for MyApp {
 
         // 2. Menu Bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            let main_ui_enabled = !self.settings_open && !self.settings_show_close_warning;
+            let main_ui_enabled = !self.settings_dialog.is_open && !self.settings_dialog.show_close_warning;
             // Disable menu bar if a modal is open
             ui.add_enabled_ui(main_ui_enabled, |ui| {
                 crate::ui::menu::menu_bar(
@@ -139,82 +114,9 @@ impl eframe::App for MyApp {
             });
         });
 
-        // 3. Settings Window
-        if self.settings_open {
-            let mut still_open = true;
-            let mut close_confirmed = false;
-
-            egui::Window::new("Settings")
-                .open(&mut still_open)
-                .vscroll(true)
-                .show(ctx, |ui| {
-                    let output =
-                        settings::settings_panel(ui, &mut self.settings_command_registry.commands);
-                    is_listening_for_shortcut = output.is_listening;
-
-                    if let Some(result) = output.result {
-                        match result {
-                            settings::SettingsResult::Save => {
-                                self.command_registry = self.settings_command_registry.clone();
-                                let mut shortcuts = std::collections::HashMap::new();
-                                for cmd in &self.command_registry.commands {
-                                    if let Some(shortcut) = cmd.shortcut {
-                                        shortcuts.insert(cmd.id, shortcut);
-                                    }
-                                }
-                                let config = config::ShortcutConfig { shortcuts };
-                                config::save_config(&config);
-                                close_confirmed = true;
-                            }
-                            settings::SettingsResult::Cancel => {
-                                if self.settings_command_registry != self.command_registry {
-                                    self.settings_show_close_warning = true;
-                                } else {
-                                    close_confirmed = true;
-                                }
-                            }
-                            settings::SettingsResult::RestoreDefaults => {
-                                self.settings_command_registry =
-                                    CommandRegistry::new(&config::ShortcutConfig::new());
-                            }
-                        }
-                    }
-                });
-
-            if !still_open {
-                // 'x' button was clicked
-                if self.settings_command_registry != self.command_registry {
-                    self.settings_show_close_warning = true;
-                } else {
-                    close_confirmed = true;
-                }
-            }
-
-            if close_confirmed {
-                self.settings_open = false;
-                self.settings_show_close_warning = false;
-            }
-        }
-
-        // 4. "Unsaved Changes" Dialog
-        if self.settings_show_close_warning {
-            egui::Window::new("Unsaved Changes")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-                .show(ctx, |ui| {
-                    ui.label("You have unsaved changes. Are you sure you want to discard them?");
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Discard").clicked() {
-                            self.settings_open = false;
-                            self.settings_show_close_warning = false;
-                        }
-                        if ui.button("Go Back").clicked() {
-                            self.settings_show_close_warning = false;
-                        }
-                    });
-                });
+        // 3. Settings Window & Unsaved Changes Dialog
+        if self.settings_dialog.show(ctx) {
+            is_listening_for_shortcut = true;
         }
 
         if self.composition_dialog.is_open {
@@ -246,8 +148,8 @@ impl eframe::App for MyApp {
 
         // 1. Shortcuts (continued)
         // Only handle shortcuts if no modal window is open and not listening, to prevent conflicts
-        let main_ui_enabled = !self.settings_open
-            && !self.settings_show_close_warning
+        let main_ui_enabled = !self.settings_dialog.is_open
+            && !self.settings_dialog.show_close_warning
             && !self.composition_dialog.is_open;
         if main_ui_enabled && !is_listening_for_shortcut {
             if let Some(action_id) = self
@@ -260,106 +162,18 @@ impl eframe::App for MyApp {
 
         // --- Deferred Action Execution ---
         if let Some(action) = self.triggered_action {
-            match action {
-                CommandId::Settings => {
-                    self.settings_command_registry = self.command_registry.clone();
-                    self.settings_open = true;
-                }
-                CommandId::NewProject => {
-                    self.new_project();
-                }
-                CommandId::LoadProject => {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Project File", &["json"])
-                        .pick_file()
-                    {
-                        match fs::read_to_string(&path) {
-                            Ok(s) => {
-                                if let Err(e) = self.project_service.load_project(&s) {
-                                    error!("Failed to load project: {}", e);
-                                } else {
-                                    self.history_manager = HistoryManager::new();
-                                    self.history_manager.push_project_state(
-                                        self.project_service.get_project().read().unwrap().clone(),
-                                    );
-                                    info!("Project loaded from {}", path.display());
-                                    self.editor_context.current_time = 0.0;
-                                }
-                            }
-                            Err(e) => error!("Failed to read project file: {}", e),
-                        }
-                    }
-                }
-                CommandId::Save | CommandId::SaveAs => {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Project File", &["json"])
-                        .set_file_name("project.json")
-                        .save_file()
-                    {
-                        match self.project_service.save_project() {
-                            Ok(json_str) => match fs::File::create(&path) {
-                                Ok(mut file) => {
-                                    if let Err(e) = file.write_all(json_str.as_bytes()) {
-                                        error!("Failed to write project to file: {}", e);
-                                    } else {
-                                        info!("Project saved to {}", path.display());
-                                    }
-                                }
-                                Err(e) => error!("Failed to create file: {}", e),
-                            },
-                            Err(e) => error!("Failed to save project: {}", e),
-                        }
-                    }
-                }
-                CommandId::Quit => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-                CommandId::Undo => {
-                    if let Some(prev_state) = self.history_manager.undo() {
-                        self.project_service.set_project(prev_state);
-                    } else {
-                        warn!("Undo stack is empty (or at initial state).");
-                    }
-                }
-                CommandId::Redo => {
-                    if let Some(next_state) = self.history_manager.redo() {
-                        self.project_service.set_project(next_state);
-                    } else {
-                        warn!("Redo stack is empty.");
-                    }
-                }
-                CommandId::Delete => {
-                    if let Some(comp_id) = self.editor_context.selected_composition_id {
-                        if let Some(track_id) = self.editor_context.selected_track_id {
-                            if let Some(entity_id) = self.editor_context.selected_entity_id {
-                                if let Err(e) = self
-                                    .project_service
-                                    .remove_clip_from_track(comp_id, track_id, entity_id)
-                                {
-                                    error!("Failed to remove entity: {:?}", e);
-                                } else {
-                                    self.editor_context.selected_entity_id = None;
-                                    let current_state =
-                                        self.project_service.get_project().read().unwrap().clone();
-                                    self.history_manager.push_project_state(current_state);
-                                }
-                            }
-                        }
-                    }
-                }
-                CommandId::ResetLayout => {
-                    self.reset_layout();
-                }
-                CommandId::TogglePlayback => {
-                    self.editor_context.is_playing = !self.editor_context.is_playing;
-                }
-                CommandId::TogglePanel(tab) => {
-                    if let Some(index) = self.dock_state.find_tab(&tab) {
-                        self.dock_state.remove_tab(index);
-                    } else {
-                        self.dock_state.push_to_focused_leaf(tab);
-                    }
-                }
+            let mut trigger_settings = false;
+            let context = ActionContext {
+                editor_context: &mut self.editor_context,
+                project_service: &mut self.project_service,
+                history_manager: &mut self.history_manager,
+                dock_state: &mut self.dock_state,
+            };
+            
+            handle_command(ctx, action, context, &mut trigger_settings);
+
+            if trigger_settings {
+                self.settings_dialog.open(&self.command_registry);
             }
             ctx.request_repaint();
         }
@@ -373,14 +187,13 @@ impl eframe::App for MyApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let main_ui_enabled = !self.settings_open && !self.settings_show_close_warning;
+            let main_ui_enabled = !self.settings_dialog.is_open && !self.settings_dialog.show_close_warning;
             ui.add_enabled_ui(main_ui_enabled, |ui| {
                 let mut tab_viewer = AppTabViewer::new(
                     &mut self.editor_context,
                     &mut self.history_manager,
                     &mut self.project_service,
                     &self.project,
-                    &mut self.command_registry,
                     &mut self.composition_dialog,
                     &self.render_server,
                 );
@@ -401,3 +214,4 @@ impl eframe::App for MyApp {
         }
     }
 }
+

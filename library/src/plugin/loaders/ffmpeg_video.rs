@@ -112,4 +112,20 @@ impl LoadPlugin for FfmpegVideoLoader {
             Err(_) => None,
         }
     }
+
+    fn get_dimensions(&self, path: &str) -> Option<(u32, u32)> {
+        let mut readers = self.readers.lock().unwrap();
+        if let Some(reader) = readers.get(path) {
+            return Some(reader.get_dimensions());
+        }
+
+        match VideoReader::new(path) {
+            Ok(reader) => {
+                let dim = reader.get_dimensions();
+                readers.insert(path.to_string(), reader);
+                Some(dim)
+            }
+            Err(_) => None,
+        }
+    }
 }
