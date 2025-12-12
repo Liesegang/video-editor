@@ -249,7 +249,7 @@ impl EntityConverter for VideoEntityConverter {
         let props = &track_clip.properties;
         let fps = evaluator.composition.fps;
         let time = frame_number as f64 / fps;
-        
+
         let file_path = evaluator.require_string(props, "file_path", time, "video")?;
 
         let source_frame_number = frame_number.saturating_sub(track_clip.source_begin_frame);
@@ -284,7 +284,7 @@ impl EntityConverter for ImageEntityConverter {
         let props = &track_clip.properties;
         let fps = evaluator.composition.fps;
         let time = frame_number as f64 / fps;
-        
+
         let file_path = evaluator.require_string(props, "file_path", time, "image")?;
         let transform = evaluator.build_transform(props, time);
         let effects = evaluator.build_image_effects(&track_clip.effects, time);
@@ -313,7 +313,7 @@ impl EntityConverter for TextEntityConverter {
         let props = &track_clip.properties;
         let fps = evaluator.composition.fps;
         let time = frame_number as f64 / fps;
-        
+
         let text = evaluator.require_string(props, "text", time, "text")?;
         let font = evaluator
             .optional_string(props, "font", time)

@@ -151,8 +151,7 @@ impl<T: Renderer> RenderService<T> {
                     let mut composite_transform = Transform::default();
                     composite_transform.opacity = transform.opacity;
                     measure_debug(format!("Composite text '{}'", text), || {
-                        self.renderer
-                            .draw_layer(&final_image, &composite_transform)
+                        self.renderer.draw_layer(&final_image, &composite_transform)
                     })?;
                 }
                 FrameContent::Shape {
@@ -176,8 +175,7 @@ impl<T: Renderer> RenderService<T> {
                     let mut composite_transform = Transform::default();
                     composite_transform.opacity = transform.opacity;
                     measure_debug(format!("Composite shape {}", path), || {
-                        self.renderer
-                            .draw_layer(&final_image, &composite_transform)
+                        self.renderer.draw_layer(&final_image, &composite_transform)
                     })?;
                 }
             }

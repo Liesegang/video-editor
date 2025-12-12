@@ -516,7 +516,7 @@ impl ProjectService {
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
-             if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+            if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
                 // Get or create property
                 if let Some(prop) = clip.properties.get_mut(property_key) {
                     use crate::model::project::property::{Keyframe, Property};
@@ -525,52 +525,62 @@ impl ProjectService {
                     // Check logic: if currently "constant", convert to "keyframe"
                     if prop.evaluator == "constant" {
                         // Current value becomes a keyframe at time 0
-                        let initial_val = prop.properties.get("value").cloned().unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
+                        let initial_val = prop
+                            .properties
+                            .get("value")
+                            .cloned()
+                            .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
                         let kf0 = Keyframe {
                             time: OrderedFloat(0.0),
                             value: initial_val,
                             easing: crate::animation::EasingFunction::Linear,
                         };
-                        
+
                         // New keyframe
                         let kf_new = Keyframe {
                             time: OrderedFloat(time),
                             value: value.clone(),
                             easing: easing.unwrap_or(crate::animation::EasingFunction::Linear),
                         };
-                        
+
                         let keyframes = vec![kf0, kf_new];
                         // Replace property with new Keyframe property
                         *prop = Property::keyframe(keyframes);
-                     } else if prop.evaluator == "keyframe" {
-                         let mut current_keyframes = prop.keyframes();
-                         
-                         // Check for collision to preserve easing
-                         let mut preserved_easing = crate::animation::EasingFunction::Linear;
-                         if let Some(idx) = current_keyframes.iter().position(|k| (k.time.into_inner() - time).abs() < 0.001) {
-                             preserved_easing = current_keyframes[idx].easing.clone();
-                             current_keyframes.remove(idx);
-                         }
-                         
-                         let final_easing = easing.unwrap_or(preserved_easing);
-                         
-                         current_keyframes.push(Keyframe {
-                             time: OrderedFloat(time),
-                             value,
-                             easing: final_easing,
-                         });
-                         
-                         current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
-                         
+                    } else if prop.evaluator == "keyframe" {
+                        let mut current_keyframes = prop.keyframes();
+
+                        // Check for collision to preserve easing
+                        let mut preserved_easing = crate::animation::EasingFunction::Linear;
+                        if let Some(idx) = current_keyframes
+                            .iter()
+                            .position(|k| (k.time.into_inner() - time).abs() < 0.001)
+                        {
+                            preserved_easing = current_keyframes[idx].easing.clone();
+                            current_keyframes.remove(idx);
+                        }
+
+                        let final_easing = easing.unwrap_or(preserved_easing);
+
+                        current_keyframes.push(Keyframe {
+                            time: OrderedFloat(time),
+                            value,
+                            easing: final_easing,
+                        });
+
+                        current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
+
                         *prop = Property::keyframe(current_keyframes);
-                     }
-                     Ok(())
+                    }
+                    Ok(())
                 } else {
-                     Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                    Err(LibraryError::Project(format!(
+                        "Property {} not found",
+                        property_key
+                    )))
                 }
-             } else {
-                 Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
-             }
+            } else {
+                Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+            }
         })?
     }
 
@@ -582,24 +592,27 @@ impl ProjectService {
         property_key: &str,
         index: usize,
     ) -> Result<(), LibraryError> {
-          self.with_track_mut(composition_id, track_id, |track| {
-             if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+        self.with_track_mut(composition_id, track_id, |track| {
+            if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
                 if let Some(prop) = clip.properties.get_mut(property_key) {
                     if prop.evaluator == "keyframe" {
-                         use crate::model::project::property::Property;
-                         let mut current_keyframes = prop.keyframes();
-                         if index < current_keyframes.len() {
-                             current_keyframes.remove(index);
-                             *prop = Property::keyframe(current_keyframes);
-                         }
+                        use crate::model::project::property::Property;
+                        let mut current_keyframes = prop.keyframes();
+                        if index < current_keyframes.len() {
+                            current_keyframes.remove(index);
+                            *prop = Property::keyframe(current_keyframes);
+                        }
                     }
                     Ok(())
                 } else {
-                     Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                    Err(LibraryError::Project(format!(
+                        "Property {} not found",
+                        property_key
+                    )))
                 }
-             } else {
-                 Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
-             }
+            } else {
+                Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+            }
         })?
     }
 
@@ -614,7 +627,7 @@ impl ProjectService {
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
-             if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+            if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
                 // Get or create property
                 // We must handle property creation if it doesn't exist
                 let (evaluator, _is_new) = if let Some(prop) = clip.properties.get(property_key) {
@@ -624,43 +637,47 @@ impl ProjectService {
                 };
 
                 if evaluator == "keyframe" {
-                     use crate::model::project::property::{Keyframe, Property};
-                     use ordered_float::OrderedFloat;
+                    use crate::model::project::property::{Keyframe, Property};
+                    use ordered_float::OrderedFloat;
 
-                     // Safely get mutable prop - we know it exists because evaluator check passed (which required get)
-                     // But we dropped reference to unpack evaluator.
-                     if let Some(prop) = clip.properties.get_mut(property_key) {
-                         let mut current_keyframes = prop.keyframes();
-                         
-                         // Check for collision to preserve easing
-                         let mut preserved_easing = crate::animation::EasingFunction::Linear;
-                         if let Some(idx) = current_keyframes.iter().position(|k| (k.time.into_inner() - time).abs() < 0.001) {
-                             preserved_easing = current_keyframes[idx].easing.clone();
-                             current_keyframes.remove(idx);
-                         }
-                         
-                         let final_easing = easing.unwrap_or(preserved_easing);
-                         
-                         current_keyframes.push(Keyframe {
-                             time: OrderedFloat(time),
-                             value,
-                             easing: final_easing,
-                         });
-                         
-                         current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
-                         
+                    // Safely get mutable prop - we know it exists because evaluator check passed (which required get)
+                    // But we dropped reference to unpack evaluator.
+                    if let Some(prop) = clip.properties.get_mut(property_key) {
+                        let mut current_keyframes = prop.keyframes();
+
+                        // Check for collision to preserve easing
+                        let mut preserved_easing = crate::animation::EasingFunction::Linear;
+                        if let Some(idx) = current_keyframes
+                            .iter()
+                            .position(|k| (k.time.into_inner() - time).abs() < 0.001)
+                        {
+                            preserved_easing = current_keyframes[idx].easing.clone();
+                            current_keyframes.remove(idx);
+                        }
+
+                        let final_easing = easing.unwrap_or(preserved_easing);
+
+                        current_keyframes.push(Keyframe {
+                            time: OrderedFloat(time),
+                            value,
+                            easing: final_easing,
+                        });
+
+                        current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
+
                         *prop = Property::keyframe(current_keyframes);
-                     }
+                    }
                 } else {
                     // Constant mode
                     use crate::model::project::property::Property;
                     // Simply overwrite or create as constant
-                    clip.properties.set(property_key.to_string(), Property::constant(value));
+                    clip.properties
+                        .set(property_key.to_string(), Property::constant(value));
                 }
                 Ok(())
-             } else {
-                 Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
-             }
+            } else {
+                Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+            }
         })?
     }
 
@@ -684,12 +701,18 @@ impl ProjectService {
             .compositions
             .iter_mut()
             .find(|c| c.id == composition_id)
-            .ok_or(LibraryError::Project(format!("Composition {} not found", composition_id)))?;
+            .ok_or(LibraryError::Project(format!(
+                "Composition {} not found",
+                composition_id
+            )))?;
         let track = composition
             .tracks
             .iter_mut()
             .find(|t| t.id == track_id)
-            .ok_or(LibraryError::Project(format!("Track {} not found", track_id)))?;
+            .ok_or(LibraryError::Project(format!(
+                "Track {} not found",
+                track_id
+            )))?;
         let clip = track
             .clips
             .iter_mut()
@@ -699,9 +722,13 @@ impl ProjectService {
         let property = clip
             .properties
             .get_mut(property_key)
-            .ok_or(LibraryError::Project(format!("Property {} not found", property_key)))?;
+            .ok_or(LibraryError::Project(format!(
+                "Property {} not found",
+                property_key
+            )))?;
 
-        if let Some(PropertyValue::Array(promoted_array)) = property.properties.get_mut("keyframes") {
+        if let Some(PropertyValue::Array(promoted_array)) = property.properties.get_mut("keyframes")
+        {
             let mut keyframes: Vec<Keyframe> = promoted_array
                 .iter()
                 .filter_map(|v| serde_json::from_value(serde_json::Value::from(v)).ok())
@@ -718,7 +745,9 @@ impl ProjectService {
                     kf.easing = easing;
                 }
             } else {
-                 return Err(LibraryError::Project("Keyframe index out of bounds".to_string()));
+                return Err(LibraryError::Project(
+                    "Keyframe index out of bounds".to_string(),
+                ));
             }
 
             // Resort
@@ -938,7 +967,7 @@ impl ProjectService {
 
         // 2a. Text Properties
         if kind == crate::model::project::TrackClipKind::Text {
-           let text_defs = vec![
+            let text_defs = vec![
                 PropertyDefinition {
                     name: "text".to_string(),
                     label: "Content".to_string(),
@@ -969,11 +998,16 @@ impl ProjectService {
                     name: "color".to_string(),
                     label: "Color".to_string(),
                     ui_type: PropertyUiType::Color,
-                    default_value: PropertyValue::Color(crate::model::frame::color::Color { r: 255, g: 255, b: 255, a: 255 }),
+                    default_value: PropertyValue::Color(crate::model::frame::color::Color {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                        a: 255,
+                    }),
                     category: "Text".to_string(),
                 },
-           ];
-           definitions.extend(text_defs);
+            ];
+            definitions.extend(text_defs);
         }
 
         // 2. Plugin Properties

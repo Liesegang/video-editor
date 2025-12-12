@@ -156,22 +156,30 @@ pub fn inspector_panel(
 
                                         let mut val_mut = current_val;
 
-                                            handle_drag_value_property(
-                                                ui,
-                                                history_manager,
-                                                editor_context,
-                                                project_service,
-                                                comp_id,
-                                                track_id,
-                                                selected_entity_id,
-                                                &def.label,
-                                                &def.name,
-                                                &mut val_mut,
-                                                *step as f32,
-                                                suffix,
-                                                move |service, c, t, e, n, v| {
-                                                    Ok(service.update_property_or_keyframe(c, t, e, n, current_time, v, None)?)
-                                                },
+                                        handle_drag_value_property(
+                                            ui,
+                                            history_manager,
+                                            editor_context,
+                                            project_service,
+                                            comp_id,
+                                            track_id,
+                                            selected_entity_id,
+                                            &def.label,
+                                            &def.name,
+                                            &mut val_mut,
+                                            *step as f32,
+                                            suffix,
+                                            move |service, c, t, e, n, v| {
+                                                Ok(service.update_property_or_keyframe(
+                                                    c,
+                                                    t,
+                                                    e,
+                                                    n,
+                                                    current_time,
+                                                    v,
+                                                    None,
+                                                )?)
+                                            },
                                             &mut needs_refresh,
                                         );
                                         ui.end_row();
@@ -184,36 +192,59 @@ pub fn inspector_panel(
                                     }
                                     PropertyUiType::Text => {
                                         ui.label(&def.label);
-                                        let current_val = properties.get_string(&def.name).unwrap_or(
-                                            def.default_value.get_as::<String>().unwrap_or_default(),
-                                        );
+                                        let current_val =
+                                            properties.get_string(&def.name).unwrap_or(
+                                                def.default_value
+                                                    .get_as::<String>()
+                                                    .unwrap_or_default(),
+                                            );
                                         let mut buffer = current_val.clone();
                                         let response = ui.text_edit_singleline(&mut buffer);
                                         if response.changed() {
                                             use library::model::project::property::PropertyValue;
-                                            project_service.update_property_or_keyframe(
-                                                comp_id,
-                                                track_id,
-                                                selected_entity_id,
-                                                &def.name,
-                                                current_time,
-                                                PropertyValue::String(buffer),
-                                                None
-                                            ).ok();
+                                            project_service
+                                                .update_property_or_keyframe(
+                                                    comp_id,
+                                                    track_id,
+                                                    selected_entity_id,
+                                                    &def.name,
+                                                    current_time,
+                                                    PropertyValue::String(buffer),
+                                                    None,
+                                                )
+                                                .ok();
                                             needs_refresh = true;
                                         }
                                         if response.lost_focus() {
-                                            let current_state = project_service.get_project().read().unwrap().clone();
+                                            let current_state = project_service
+                                                .get_project()
+                                                .read()
+                                                .unwrap()
+                                                .clone();
                                             history_manager.push_project_state(current_state);
                                         }
                                         ui.end_row();
                                     }
                                     PropertyUiType::Color => {
                                         ui.label(&def.label);
-                                         let current_val = properties.get_constant_value(&def.name).and_then(|v| v.get_as::<library::model::frame::color::Color>()).unwrap_or(
-                                            def.default_value.get_as::<library::model::frame::color::Color>().unwrap_or(library::model::frame::color::Color{r:255,g:255,b:255,a:255})
-                                        );
-                                        
+                                        let current_val = properties
+                                            .get_constant_value(&def.name)
+                                            .and_then(|v| {
+                                                v.get_as::<library::model::frame::color::Color>()
+                                            })
+                                            .unwrap_or(
+                                                def.default_value
+                                                    .get_as::<library::model::frame::color::Color>()
+                                                    .unwrap_or(
+                                                        library::model::frame::color::Color {
+                                                            r: 255,
+                                                            g: 255,
+                                                            b: 255,
+                                                            a: 255,
+                                                        },
+                                                    ),
+                                            );
+
                                         let mut color32 = egui::Color32::from_rgba_premultiplied(
                                             current_val.r,
                                             current_val.g,
@@ -232,19 +263,25 @@ pub fn inspector_panel(
                                                 a: color32.a(),
                                             };
 
-                                            project_service.update_property_or_keyframe(
-                                                comp_id,
-                                                track_id,
-                                                selected_entity_id,
-                                                &def.name,
-                                                current_time,
-                                                PropertyValue::Color(new_color),
-                                                None
-                                            ).ok();
+                                            project_service
+                                                .update_property_or_keyframe(
+                                                    comp_id,
+                                                    track_id,
+                                                    selected_entity_id,
+                                                    &def.name,
+                                                    current_time,
+                                                    PropertyValue::Color(new_color),
+                                                    None,
+                                                )
+                                                .ok();
                                             needs_refresh = true;
-                                            
+
                                             // Push history for color change (debatable if on every change, but simple for now)
-                                            let current_state = project_service.get_project().read().unwrap().clone();
+                                            let current_state = project_service
+                                                .get_project()
+                                                .read()
+                                                .unwrap()
+                                                .clone();
                                             history_manager.push_project_state(current_state);
                                         }
                                         ui.end_row();

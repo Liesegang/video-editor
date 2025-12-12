@@ -5,10 +5,7 @@ use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-use crate::{
-    action::HistoryManager,
-    state::context::EditorContext,
-};
+use crate::{action::HistoryManager, state::context::EditorContext};
 
 mod background;
 mod clips;
@@ -54,7 +51,7 @@ pub fn show_clip_area(
 
     // --- Drawing of track backgrounds ---
     let painter = ui_content.painter_at(content_rect_for_clip_area);
-    
+
     // Get Composition Duration
     let mut current_comp_duration = 300.0; // Default fallback
     if let Some(comp_id) = selected_composition_id {
@@ -64,7 +61,7 @@ pub fn show_clip_area(
             }
         }
     }
-    
+
     background::draw_track_backgrounds(
         &painter,
         content_rect_for_clip_area,

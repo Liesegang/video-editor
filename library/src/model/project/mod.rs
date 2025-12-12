@@ -262,14 +262,14 @@ impl TrackClip {
         // Better to respect the arg and update interactions.rs, OR just force it here if the arg is generic.
         // The user said "text is this is sample text".
         // I will change the caller in interactions.rs to pass "this is sample text" and here just set properties.
-        
+
         props.set(
             "text".to_string(),
             crate::model::project::property::Property::constant(
                 crate::model::project::property::PropertyValue::String(text.to_string()),
             ),
         );
-         props.set(
+        props.set(
             "font_family".to_string(),
             crate::model::project::property::Property::constant(
                 crate::model::project::property::PropertyValue::String("Arial".to_string()),
@@ -277,10 +277,15 @@ impl TrackClip {
         );
         props.set(
             "color".to_string(),
-             crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Color(crate::model::frame::color::Color {
-                    r: 255, g: 255, b: 255, a: 255
-                }),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Color(
+                    crate::model::frame::color::Color {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                        a: 255,
+                    },
+                ),
             ),
         );
 
@@ -350,13 +355,13 @@ impl TrackClip {
 
     pub fn create_shape(in_frame: u64, out_frame: u64) -> Self {
         let mut props = PropertyMap::new();
-        
+
         // Default Shape Properties
         // User requested: Heart (White Border, Red Fill)
         let heart_path = "M 50,30 A 20,20 0,0,1 90,30 C 90,55 50,85 50,85 C 50,85 10,55 10,30 A 20,20 0,0,1 50,30 Z";
         props.set(
             "path".to_string(),
-             crate::model::project::property::Property::constant(
+            crate::model::project::property::Property::constant(
                 crate::model::project::property::PropertyValue::String(heart_path.to_string()),
             ),
         );
@@ -364,10 +369,20 @@ impl TrackClip {
         // Styles: Fill Red (#FF0000), Stroke White (#FFFFFF, width 2.0)
         let styles = vec![
             crate::model::frame::draw_type::DrawStyle::Fill {
-                color: crate::model::frame::color::Color { r: 255, g: 0, b: 0, a: 255 },
+                color: crate::model::frame::color::Color {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
             },
             crate::model::frame::draw_type::DrawStyle::Stroke {
-                color: crate::model::frame::color::Color { r: 255, g: 255, b: 255, a: 255 },
+                color: crate::model::frame::color::Color {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                },
                 width: 5.0,
                 cap: Default::default(),
                 join: Default::default(),
@@ -378,7 +393,10 @@ impl TrackClip {
         // Serialize styles to PropertyValue::Array
         let styles_json = serde_json::to_value(styles).unwrap();
         let styles_array = match styles_json {
-            serde_json::Value::Array(arr) => arr.into_iter().map(crate::model::project::property::PropertyValue::from).collect(),
+            serde_json::Value::Array(arr) => arr
+                .into_iter()
+                .map(crate::model::project::property::PropertyValue::from)
+                .collect(),
             _ => vec![],
         };
 
@@ -391,13 +409,13 @@ impl TrackClip {
 
         props.set(
             "width".to_string(),
-             crate::model::project::property::Property::constant(
+            crate::model::project::property::Property::constant(
                 crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
             ),
         );
         props.set(
             "height".to_string(),
-             crate::model::project::property::Property::constant(
+            crate::model::project::property::Property::constant(
                 crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
             ),
         );
@@ -459,7 +477,7 @@ impl TrackClip {
             in_frame,
             out_frame,
             0,
-            None, 
+            None,
             0.0,
             props,
             Vec::new(),
