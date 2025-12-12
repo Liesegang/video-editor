@@ -3,13 +3,17 @@ use library::model::project::project::{Composition, Project};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::state::context_types::{InteractionState, SelectionState, TimelineState, ViewState};
+use crate::state::context_types::{
+    GraphEditorState, InteractionState, SelectionState, TimelineState, ViewState,
+};
 
 #[derive(Serialize, Deserialize)]
 pub struct EditorContext {
     pub timeline: TimelineState,
     pub view: ViewState,
     pub selection: SelectionState,
+    // Added graph_editor state
+    pub graph_editor: GraphEditorState,
 
     #[serde(skip)]
     pub interaction: InteractionState,
@@ -31,6 +35,7 @@ impl EditorContext {
             timeline: TimelineState::default(),
             view: ViewState::default(),
             selection,
+            graph_editor: GraphEditorState::default(),
             interaction: InteractionState::default(),
             preview_texture: None,
             preview_texture_id: None,

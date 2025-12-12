@@ -78,6 +78,14 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                 self.project,
                 self.composition_dialog,
             ),
+            Tab::GraphEditor => {
+                crate::ui::panels::graph_editor::graph_editor_panel(
+                    ui,
+                    self.editor_context,
+                    self.project_service,
+                    self.project,
+                );
+            }
         }
     }
 
@@ -87,6 +95,7 @@ impl<'a> TabViewer for AppTabViewer<'a> {
             Tab::Timeline => format!("{} {}", icons::FILM_STRIP, "Timeline").into(),
             Tab::Inspector => format!("{} {}", icons::WRENCH, "Inspector").into(),
             Tab::Assets => format!("{} {}", icons::FOLDER, "Assets").into(),
+            Tab::GraphEditor => format!("{} {}", icons::GRAPH, "Graph Editor").into(),
         }
     }
 }
@@ -97,7 +106,7 @@ pub fn create_initial_dock_state() -> DockState<Tab> {
 
     // 1. Split off the timeline at the bottom (30% of height)
     let [main_area, _] =
-        surface.split_below(egui_dock::NodeIndex::root(), 0.7, vec![Tab::Timeline]);
+        surface.split_below(egui_dock::NodeIndex::root(), 0.7, vec![Tab::Timeline, Tab::GraphEditor]);
 
     // 2. Split off the inspector on the right (20% of width)
     // The remaining area is 80% wide, so we split at 0.8

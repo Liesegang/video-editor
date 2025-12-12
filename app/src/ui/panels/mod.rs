@@ -3,3 +3,4 @@ pub mod inspector;
 pub mod preview;
 
 pub mod timeline;
+pub mod graph_editor;

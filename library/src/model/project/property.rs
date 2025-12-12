@@ -456,6 +456,10 @@ impl PropertyMap {
         self.properties.get(key)
     }
 
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut Property> {
+        self.properties.get_mut(key)
+    }
+
     pub fn set(&mut self, key: String, property: Property) {
         self.properties.insert(key, property);
     }

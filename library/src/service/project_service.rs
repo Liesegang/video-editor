@@ -505,6 +505,136 @@ impl ProjectService {
         })?
     }
 
+    pub fn add_keyframe(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: crate::animation::EasingFunction,
+    ) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+             if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                // Get or create property
+                if let Some(prop) = clip.properties.get_mut(property_key) {
+                    use crate::model::project::property::{Keyframe, Property};
+                    use ordered_float::OrderedFloat;
+
+                    // Check logic: if currently "constant", convert to "keyframe"
+                    if prop.evaluator == "constant" {
+                        // Current value becomes a keyframe at time 0 (or start of clip?)
+                        let initial_val = prop.properties.get("value").cloned().unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
+                        let kf0 = Keyframe {
+                            time: OrderedFloat(0.0),
+                            value: initial_val,
+                            easing: crate::animation::EasingFunction::Linear,
+                        };
+                        
+                        // New keyframe
+                        let kf_new = Keyframe {
+                            time: OrderedFloat(time),
+                            value: value.clone(),
+                            easing: easing.clone(),
+                        };
+                        
+                        let keyframes = vec![kf0, kf_new];
+                        // Replace property with new Keyframe property
+                        *prop = Property::keyframe(keyframes);
+                     } else if prop.evaluator == "keyframe" {
+                         let mut current_keyframes = prop.keyframes();
+                         // Remove existing if very close
+                         current_keyframes.retain(|k| (k.time.into_inner() - time).abs() > 0.001);
+                         
+                         current_keyframes.push(Keyframe {
+                             time: OrderedFloat(time),
+                             value,
+                             easing,
+                         });
+                         
+                         current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
+                         
+                        *prop = Property::keyframe(current_keyframes);
+                     }
+                     Ok(())
+                } else {
+                     Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                }
+             } else {
+                 Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+             }
+        })?
+    }
+
+    pub fn remove_keyframe(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        property_key: &str,
+        index: usize,
+    ) -> Result<(), LibraryError> {
+          self.with_track_mut(composition_id, track_id, |track| {
+             if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                if let Some(prop) = clip.properties.get_mut(property_key) {
+                    if prop.evaluator == "keyframe" {
+                         use crate::model::project::property::Property;
+                         let mut current_keyframes = prop.keyframes();
+                         if index < current_keyframes.len() {
+                             current_keyframes.remove(index);
+                             *prop = Property::keyframe(current_keyframes);
+                         }
+                    }
+                    Ok(())
+                } else {
+                     Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                }
+             } else {
+                 Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+             }
+        })?
+    }
+
+    pub fn update_keyframe(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        property_key: &str,
+        index: usize,
+        new_time: f64,
+        new_value: Option<PropertyValue>,
+    ) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+             if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                if let Some(prop) = clip.properties.get_mut(property_key) {
+                    if prop.evaluator == "keyframe" {
+                         use crate::model::project::property::Property;
+                         use ordered_float::OrderedFloat;
+                         let mut current_keyframes = prop.keyframes();
+                         if index < current_keyframes.len() {
+                             if let Some(kf) = current_keyframes.get_mut(index) {
+                                 kf.time = OrderedFloat(new_time);
+                                 if let Some(v) = new_value {
+                                     kf.value = v;
+                                 }
+                             }
+                             // Re-sort needed as time changed
+                             current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
+                             *prop = Property::keyframe(current_keyframes);
+                         }
+                    }
+                    Ok(())
+                } else {
+                     Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                }
+             } else {
+                 Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+             }
+        })?
+    }
+
     pub fn update_clip_time(
         &self,
         composition_id: Uuid,

@@ -48,6 +48,24 @@ impl Default for ViewState {
     }
 }
 
+// Added GraphEditorState
+#[derive(Serialize, Deserialize, Clone)]
+pub struct GraphEditorState {
+    pub pan: egui::Vec2, // Pan offset
+    pub zoom_x: f32, // Pixels per second
+    pub zoom_y: f32, // Pixels per unit value
+}
+
+impl Default for GraphEditorState {
+    fn default() -> Self {
+        Self {
+            pan: egui::Vec2::ZERO,
+            zoom_x: 100.0, // Default 100 pixels per second
+            zoom_y: 1.0,   // Default 1 pixel per unit
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct SelectionState {
     pub composition_id: Option<Uuid>,
@@ -85,6 +103,9 @@ pub struct InteractionState {
 
     // Context Menu
     pub context_menu_open_pos: Option<egui::Pos2>,
+
+    // Graph Editor Selection: (Property NameRef, Keyframe Index)
+    pub selected_keyframe: Option<(String, usize)>,
 }
 
 #[derive(Debug, Clone)]
