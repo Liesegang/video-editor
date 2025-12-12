@@ -597,8 +597,8 @@ impl ProjectService {
     ) -> Vec<crate::plugin::PropertyDefinition> {
         let mut definitions = Vec::new();
 
-        use crate::plugin::{PropertyDefinition, PropertyUiType};
         use crate::model::project::property::PropertyValue;
+        use crate::plugin::{PropertyDefinition, PropertyUiType};
         use ordered_float::OrderedFloat;
 
         // 1. Default Transform Properties (Available for almost all visual clips)

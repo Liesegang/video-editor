@@ -1,6 +1,6 @@
-use eframe::egui::{self, Key, ScrollArea, TextEdit, Ui};
 use crate::command::{Command, CommandId, CommandRegistry};
 use crate::config;
+use eframe::egui::{self, Key, ScrollArea, TextEdit, Ui};
 
 #[derive(Clone, Default)]
 struct SettingsState {
@@ -46,7 +46,7 @@ impl SettingsDialog {
 
     pub fn show(&mut self, ctx: &egui::Context) -> bool {
         let mut is_listening_for_shortcut = false;
-        
+
         if self.is_open {
             let mut still_open = true;
             let mut close_confirmed = false;
@@ -55,8 +55,7 @@ impl SettingsDialog {
                 .open(&mut still_open)
                 .vscroll(true)
                 .show(ctx, |ui| {
-                    let output =
-                        settings_panel(ui, &mut self.editing_registry.commands);
+                    let output = settings_panel(ui, &mut self.editing_registry.commands);
                     is_listening_for_shortcut = output.is_listening;
 
                     if let Some(result) = output.result {
@@ -105,7 +104,7 @@ impl SettingsDialog {
 
         // Unsaved Changes Dialog
         if self.show_close_warning {
-             egui::Window::new("Unsaved Changes")
+            egui::Window::new("Unsaved Changes")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -123,7 +122,7 @@ impl SettingsDialog {
                     });
                 });
         }
-        
+
         is_listening_for_shortcut
     }
 }

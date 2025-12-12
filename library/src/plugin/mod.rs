@@ -78,7 +78,10 @@ pub struct PropertyDefinition {
 pub trait InspectorPlugin: Plugin {
     // We pass the "kind" of the clip (e.g. Video, Image, Effect?)
     // Actually, for now, let's just say it receives the TrackClipKind.
-    fn get_definitions(&self, kind: &crate::model::project::TrackClipKind) -> Vec<PropertyDefinition>;
+    fn get_definitions(
+        &self,
+        kind: &crate::model::project::TrackClipKind,
+    ) -> Vec<PropertyDefinition>;
 }
 
 // Re-export this if needed?
@@ -368,8 +371,8 @@ struct PluginRepository {
     export_plugins: ExportRepository,
     entity_converter_plugins: EntityConverterRepository,
     inspector_plugins: InspectorRepository,
-    property_evaluators: PropertyEvaluatorRegistry,      // Direct ownership
-    dynamic_libraries: Vec<Library>,                     // Moved here
+    property_evaluators: PropertyEvaluatorRegistry, // Direct ownership
+    dynamic_libraries: Vec<Library>,                // Moved here
 }
 
 pub struct PluginManager {

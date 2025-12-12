@@ -7,7 +7,7 @@ use crate::model::frame::entity::{FrameContent, FrameObject}; // FrameEntity -> 
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
 use crate::plugin::{LoadRequest, LoadResponse, PluginManager};
-use crate::rendering::renderer::{Renderer, RenderOutput};
+use crate::rendering::renderer::{RenderOutput, Renderer};
 use crate::service::project_model::ProjectModel;
 use crate::util::timing::{ScopedTimer, measure_debug}; // Added this line
 // Removed HashMap and EvaluationContext imports
@@ -60,7 +60,7 @@ impl<T: Renderer> RenderService<T> {
                 content,
                 properties: _properties,
             } = frame_object;
-            
+
             // helper to scale transform
             let apply_scale = |t: &Transform, s: f64| -> Transform {
                 let mut new_t = t.clone();
@@ -92,9 +92,14 @@ impl<T: Renderer> RenderService<T> {
                             }
                         },
                     )?;
-                    let final_image = self.apply_effects(RenderOutput::Image(video_frame), &surface.effects, 0.0)?;
+                    let final_image = self.apply_effects(
+                        RenderOutput::Image(video_frame),
+                        &surface.effects,
+                        0.0,
+                    )?;
                     measure_debug(format!("Draw video {}", surface.file_path), || {
-                        self.renderer.draw_layer(&final_image, &apply_scale(&surface.transform, scale))
+                        self.renderer
+                            .draw_layer(&final_image, &apply_scale(&surface.transform, scale))
                     })?;
                 }
                 FrameContent::Image { surface } => {
@@ -112,9 +117,14 @@ impl<T: Renderer> RenderService<T> {
                             }
                         },
                     )?;
-                    let final_image = self.apply_effects(RenderOutput::Image(image_frame), &surface.effects, 0.0)?;
+                    let final_image = self.apply_effects(
+                        RenderOutput::Image(image_frame),
+                        &surface.effects,
+                        0.0,
+                    )?;
                     measure_debug(format!("Draw image {}", surface.file_path), || {
-                        self.renderer.draw_layer(&final_image, &apply_scale(&surface.transform, scale))
+                        self.renderer
+                            .draw_layer(&final_image, &apply_scale(&surface.transform, scale))
                     })?;
                 }
                 FrameContent::Text {
@@ -129,8 +139,13 @@ impl<T: Renderer> RenderService<T> {
                     let scaled_size = size * scale;
                     let text_layer =
                         measure_debug(format!("Rasterize text layer '{}'", text), || {
-                            self.renderer
-                                .rasterize_text_layer(&text, scaled_size, &font, &color, &scaled_transform)
+                            self.renderer.rasterize_text_layer(
+                                &text,
+                                scaled_size,
+                                &font,
+                                &color,
+                                &scaled_transform,
+                            )
                         })?;
                     let final_image = self.apply_effects(text_layer, &effects, 0.0)?;
                     measure_debug(format!("Composite text '{}'", text), || {
@@ -185,7 +200,7 @@ impl<T: Renderer> RenderService<T> {
             project,
             composition_index,
             frame_number, // Pass frame_number (u64)
-            1.0, // Default render_scale to 1.0 for self-managed renders (e.g. export)
+            1.0,          // Default render_scale to 1.0 for self-managed renders (e.g. export)
             &property_evaluators,
             &self.entity_converter_registry,
         )

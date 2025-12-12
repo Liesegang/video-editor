@@ -3,10 +3,10 @@ use crate::loader::image::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
 use crate::model::frame::transform::Transform;
-use crate::rendering::renderer::{Renderer, RenderOutput, TextureInfo};
+use crate::rendering::renderer::{RenderOutput, Renderer, TextureInfo};
 use crate::rendering::skia_utils::{
-    GpuContext, create_gpu_context, create_surface, image_to_skia, surface_to_image,
-    create_image_from_texture,
+    GpuContext, create_gpu_context, create_image_from_texture, create_surface, image_to_skia,
+    surface_to_image,
 };
 use crate::util::timing::ScopedTimer;
 use log::{debug, trace};
@@ -25,7 +25,6 @@ pub struct SkiaRenderer {
     surface: Surface,
     gpu_context: Option<GpuContext>,
 }
-
 
 impl SkiaRenderer {
     pub fn render_to_texture(&mut self) -> Result<TextureInfo, LibraryError> {
@@ -288,7 +287,7 @@ impl Renderer for SkiaRenderer {
         paint.set_anti_alias(true);
         // Apply opacity from transform
         paint.set_alpha_f(transform.opacity as f32);
-        
+
         let cubic_resampler = CubicResampler::mitchell();
         let sampling = SamplingOptions::from(cubic_resampler);
         canvas.draw_image_with_sampling_options(&src_image, (0, 0), sampling, Some(&paint));
@@ -344,7 +343,7 @@ impl Renderer for SkiaRenderer {
                 &mut layer,
                 skia_safe::surface::BackendHandleAccess::FlushRead,
             ) {
-                 if let Some(gl_info) = texture.gl_texture_info() {
+                if let Some(gl_info) = texture.gl_texture_info() {
                     return Ok(RenderOutput::Texture(TextureInfo {
                         texture_id: gl_info.id,
                         width: self.width,
@@ -353,7 +352,7 @@ impl Renderer for SkiaRenderer {
                 }
             }
         }
-        
+
         let image = surface_to_image(&mut layer, self.width, self.height)?;
         Ok(RenderOutput::Image(image))
     }
@@ -411,7 +410,7 @@ impl Renderer for SkiaRenderer {
         match output {
             RenderOutput::Image(img) => Ok(img.clone()),
             RenderOutput::Texture(info) => {
-                 if let Some(ctx) = self.gpu_context.as_mut() {
+                if let Some(ctx) = self.gpu_context.as_mut() {
                     let image = create_image_from_texture(
                         &mut ctx.direct_context,
                         info.texture_id,
@@ -427,16 +426,26 @@ impl Renderer for SkiaRenderer {
                         AlphaType::Premul,
                         None,
                     );
-                    if !image.read_pixels(&image_info, &mut buffer, row_bytes, (0, 0), skia_safe::image::CachingHint::Disallow) {
-                        return Err(LibraryError::Render("Failed to read texture pixels".to_string()));
+                    if !image.read_pixels(
+                        &image_info,
+                        &mut buffer,
+                        row_bytes,
+                        (0, 0),
+                        skia_safe::image::CachingHint::Disallow,
+                    ) {
+                        return Err(LibraryError::Render(
+                            "Failed to read texture pixels".to_string(),
+                        ));
                     }
-                     Ok(Image {
+                    Ok(Image {
                         width: info.width,
                         height: info.height,
                         data: buffer,
                     })
                 } else {
-                    Err(LibraryError::Render("No GPU context to read texture".to_string()))
+                    Err(LibraryError::Render(
+                        "No GPU context to read texture".to_string(),
+                    ))
                 }
             }
         }
@@ -451,7 +460,7 @@ impl Renderer for SkiaRenderer {
         if let Some(context) = self.gpu_context.as_mut() {
             context.direct_context.flush_and_submit();
         }
-        
+
         let width = self.width;
         let height = self.height;
         let image = surface_to_image(&mut self.surface, width, height)?;

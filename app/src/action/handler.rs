@@ -37,7 +37,13 @@ pub fn handle_command(
             // But for now, we can try to implement it here if we have enough access.
             // MyApp::new_project logic:
             let mut new_project = Project::new("New Project");
-            let default_comp = library::model::project::project::Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
+            let default_comp = library::model::project::project::Composition::new(
+                "Main Composition",
+                1920,
+                1080,
+                30.0,
+                60.0,
+            );
             let new_comp_id = default_comp.id;
             new_project.add_composition(default_comp);
             context.project_service.set_project(new_project);
@@ -46,7 +52,7 @@ pub fn handle_command(
             context.editor_context.selected_track_id = None;
             context.editor_context.selected_entity_id = None;
             context.editor_context.current_time = 0.0;
-            
+
             // history_manager reset?
             // We can't replace the history_manager instance itself easily if it's borrowed.
             // We can clear it.
@@ -58,14 +64,16 @@ pub fn handle_command(
             // Or just manually clear stacks.
             // For this refactor, maybe we delegate "NewProject" back to the caller (MyApp) via return value?
             // But let's try to do as much as possible here.
-            
+
             context.history_manager.clear();
-             if let Ok(proj_read) = context.project_service.get_project().read() {
-                context.history_manager.push_project_state(proj_read.clone());
+            if let Ok(proj_read) = context.project_service.get_project().read() {
+                context
+                    .history_manager
+                    .push_project_state(proj_read.clone());
             }
         }
         CommandId::LoadProject => {
-             if let Some(path) = rfd::FileDialog::new()
+            if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Project File", &["json"])
                 .pick_file()
             {
@@ -77,7 +85,9 @@ pub fn handle_command(
                             // Reset history
                             // context.history_manager.reset(); // TODO
                             if let Ok(proj_read) = context.project_service.get_project().read() {
-                                context.history_manager.push_project_state(proj_read.clone());
+                                context
+                                    .history_manager
+                                    .push_project_state(proj_read.clone());
                             }
                             info!("Project loaded from {}", path.display());
                             context.editor_context.current_time = 0.0;
@@ -88,7 +98,7 @@ pub fn handle_command(
             }
         }
         CommandId::Save | CommandId::SaveAs => {
-             if let Some(path) = rfd::FileDialog::new()
+            if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Project File", &["json"])
                 .set_file_name("project.json")
                 .save_file()
@@ -136,8 +146,12 @@ pub fn handle_command(
                             error!("Failed to remove entity: {:?}", e);
                         } else {
                             context.editor_context.selected_entity_id = None;
-                            let current_state =
-                                context.project_service.get_project().read().unwrap().clone();
+                            let current_state = context
+                                .project_service
+                                .get_project()
+                                .read()
+                                .unwrap()
+                                .clone();
                             context.history_manager.push_project_state(current_state);
                         }
                     }
@@ -145,7 +159,7 @@ pub fn handle_command(
             }
         }
         CommandId::ResetLayout => {
-             *context.dock_state = crate::ui::tab_viewer::create_initial_dock_state();
+            *context.dock_state = crate::ui::tab_viewer::create_initial_dock_state();
         }
         CommandId::TogglePlayback => {
             context.editor_context.is_playing = !context.editor_context.is_playing;

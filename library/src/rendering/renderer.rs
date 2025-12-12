@@ -18,7 +18,11 @@ pub struct TextureInfo {
 }
 
 pub trait Renderer {
-    fn draw_layer(&mut self, layer: &RenderOutput, transform: &Transform) -> Result<(), LibraryError>;
+    fn draw_layer(
+        &mut self,
+        layer: &RenderOutput,
+        transform: &Transform,
+    ) -> Result<(), LibraryError>;
 
     fn rasterize_text_layer(
         &mut self,

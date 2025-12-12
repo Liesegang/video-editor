@@ -54,7 +54,8 @@ impl RenderServer {
                 b: 0,
                 a: 0,
             };
-            let renderer = SkiaRenderer::new(1920, 1080, current_background_color.clone(), true, None);
+            let renderer =
+                SkiaRenderer::new(1920, 1080, current_background_color.clone(), true, None);
             let mut current_width = 1920;
             let mut current_height = 1080;
 
@@ -93,8 +94,11 @@ impl RenderServer {
                             let _ = tx_result.send(RenderResult {
                                 frame_hash: 0, // Hash is no longer used/needed for identification in the same way, or we can compute a cheap hash if needed for Result
                                 output: RenderOutput::Image(Image::new(
-                                    (frame_info.width as f64 * frame_info.render_scale.into_inner()).round() as u32,
-                                    (frame_info.height as f64 * frame_info.render_scale.into_inner()).round() as u32,
+                                    (frame_info.width as f64 * frame_info.render_scale.into_inner())
+                                        .round() as u32,
+                                    (frame_info.height as f64
+                                        * frame_info.render_scale.into_inner())
+                                    .round() as u32,
                                     cached_image_data.clone(),
                                 )),
                                 frame_info,
@@ -107,7 +111,8 @@ impl RenderServer {
                         // Check if renderer size or background color matches
                         let render_scale = frame_info.render_scale.into_inner();
                         let target_width = (frame_info.width as f64 * render_scale).round() as u32;
-                        let target_height = (frame_info.height as f64 * render_scale).round() as u32;
+                        let target_height =
+                            (frame_info.height as f64 * render_scale).round() as u32;
 
                         if current_width != target_width
                             || current_height != target_height
@@ -116,10 +121,10 @@ impl RenderServer {
                             current_width = target_width;
                             current_height = target_height;
                             current_background_color = frame_info.background_color.clone();
-                            
+
                             // Reuse existing context to avoid EventLoop creation issues
                             let old_context = render_service.renderer.take_context();
-                            
+
                             render_service.renderer = SkiaRenderer::new(
                                 current_width,
                                 current_height,

@@ -47,12 +47,12 @@ impl VideoReader {
     }
 
     pub fn decode_frame(&mut self, frame_number: u64) -> Result<Image, LibraryError> {
-        let stream = self
-            .input_context
-            .stream(self.video_stream_index)
-            .ok_or(LibraryError::FfmpegOther(
-                "ストリームが見つかりません".to_string(),
-            ))?;
+        let stream =
+            self.input_context
+                .stream(self.video_stream_index)
+                .ok_or(LibraryError::FfmpegOther(
+                    "ストリームが見つかりません".to_string(),
+                ))?;
         let time_base = stream.time_base();
         let avg_frame_rate = stream.avg_frame_rate();
         let fps = if avg_frame_rate.denominator() > 0 {
@@ -72,7 +72,7 @@ impl VideoReader {
                 * f64::from(time_base.denominator())) as i64;
 
             // Seek keyframe before the target (using a wide range backwards)
-            // seeking to ..timestamp means "up to timestamp". 
+            // seeking to ..timestamp means "up to timestamp".
             // Often seeking to timestamp with backwards flag (which range implies if min is low) works.
             // Let's try seeking to exactly the timestamp but relying on ffmpeg to find the previous keyframe by default behavior for some formats,
             // or providing a range from 0 to timestamp.
@@ -123,9 +123,9 @@ impl VideoReader {
                 }
             }
         }
-        
+
         // If we hit EOF but didn't find the exact frame (maybe it's past the end?), handling it gracefully would be good,
-        // but for now let's error as before or return the last frame? 
+        // but for now let's error as before or return the last frame?
         // original logic errored.
 
         let frame = decoded_frame.ok_or(LibraryError::FfmpegOther(

@@ -8,43 +8,45 @@ use skia_safe::surfaces;
 use skia_safe::{AlphaType, ColorType, Data, ISize, Image as SkImage, ImageInfo, Surface};
 
 #[cfg(feature = "gl")]
+use glutin::config::ConfigSurfaceTypes;
+#[cfg(feature = "gl")]
 use glutin::context::ContextAttributesBuilder;
 #[cfg(feature = "gl")]
 use glutin::prelude::*;
 #[cfg(feature = "gl")]
-use glutin::config::ConfigSurfaceTypes;
-#[cfg(feature = "gl")]
-use raw_window_handle::{RawWindowHandle, Win32WindowHandle, RawDisplayHandle, WindowsDisplayHandle};
-#[cfg(feature = "gl")]
 use glutin::surface::WindowSurface;
+#[cfg(feature = "gl")]
+use raw_window_handle::{
+    RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle,
+};
 
 #[cfg(feature = "gl")]
-use windows_sys::Win32::Foundation::{HWND, LRESULT, LPARAM, WPARAM};
+use std::ffi::c_void;
 #[cfg(feature = "gl")]
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, RegisterClassExW, WNDCLASSEXW,
-    CW_USEDEFAULT, WS_OVERLAPPEDWINDOW, CS_OWNDC, HWND_MESSAGE,
-};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 #[cfg(feature = "gl")]
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(feature = "gl")]
-use std::ffi::c_void;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CS_OWNDC, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, HWND_MESSAGE, RegisterClassExW,
+    WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+};
 
 pub struct GpuContext {
     pub(crate) _display: glutin::display::Display,
     pub(crate) _surface: glutin::surface::Surface<WindowSurface>,
     pub context: glutin::context::PossiblyCurrentContext,
     pub direct_context: skia_safe::gpu::DirectContext,
-    // We hold the HWND indirectly? Or need to destroy it? 
+    // We hold the HWND indirectly? Or need to destroy it?
     // For now we leak it (it's hidden message-only, OS cleans up on process exit).
     // Storing handle is enough.
-    pub(crate) _hwnd: usize, 
+    pub(crate) _hwnd: usize,
 }
 
 impl GpuContext {
     // Resize works on WindowSurface!
     pub fn resize(&mut self, width: u32, height: u32) {
-         self._surface.resize(
+        self._surface.resize(
             &self.context,
             std::num::NonZeroU32::new(width.max(1)).unwrap(),
             std::num::NonZeroU32::new(height.max(1)).unwrap(),
@@ -73,7 +75,12 @@ pub fn create_gpu_context() -> Option<GpuContext> {
 }
 
 #[cfg(feature = "gl")]
-unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn window_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
@@ -81,8 +88,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
 fn create_dummy_window() -> Result<RawWindowHandle, String> {
     unsafe {
         let hinstance = GetModuleHandleW(std::ptr::null());
-        let class_name = "VideoEditorDummyClass\0".encode_utf16().collect::<Vec<u16>>();
-        
+        let class_name = "VideoEditorDummyClass\0"
+            .encode_utf16()
+            .collect::<Vec<u16>>();
+
         let wnd_class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_OWNDC,
@@ -105,8 +114,10 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
             class_name.as_ptr(),
             class_name.as_ptr(),
             WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT, CW_USEDEFAULT,
-            CW_USEDEFAULT, CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
             HWND_MESSAGE,
             0,
             hinstance,
@@ -120,7 +131,7 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
         let mut handle = Win32WindowHandle::empty();
         handle.hwnd = hwnd as *mut c_void;
         handle.hinstance = hinstance as *mut c_void;
-        
+
         Ok(RawWindowHandle::Win32(handle))
     }
 }
@@ -135,13 +146,16 @@ fn init_glutin_headless() -> Result<GpuContext, String> {
     };
 
     // 2. Create Display
-    // We can use the window handle to create display? 
+    // We can use the window handle to create display?
     // Or just empty display handle. Glutin works with empty.
     let raw_display_handle = RawDisplayHandle::Windows(WindowsDisplayHandle::empty());
-    let display = unsafe { glutin::display::Display::new(
-        raw_display_handle, 
-        glutin::display::DisplayApiPreference::Wgl(None)
-    ) }.map_err(|e| format!("Display creation failed: {}", e))?;
+    let display = unsafe {
+        glutin::display::Display::new(
+            raw_display_handle,
+            glutin::display::DisplayApiPreference::Wgl(None),
+        )
+    }
+    .map_err(|e| format!("Display creation failed: {}", e))?;
 
     // 3. Find Config (WINDOW)
     let template = glutin::config::ConfigTemplateBuilder::new()
@@ -151,14 +165,24 @@ fn init_glutin_headless() -> Result<GpuContext, String> {
     let config = unsafe { display.find_configs(template) }
         .map_err(|e| format!("Failed to find configs: {}", e))?
         .reduce(|accum, config| {
-             if config.num_samples() == 0 && accum.num_samples() > 0 { return config; }
-             if config.num_samples() > 0 && accum.num_samples() == 0 { return accum; }
-             if config.alpha_size() > accum.alpha_size() { config } else { accum }
+            if config.num_samples() == 0 && accum.num_samples() > 0 {
+                return config;
+            }
+            if config.num_samples() > 0 && accum.num_samples() == 0 {
+                return accum;
+            }
+            if config.alpha_size() > accum.alpha_size() {
+                config
+            } else {
+                accum
+            }
         })
         .ok_or("No matching GL config found")?;
 
-    debug!("init_glutin_headless: Selected config. Alpha: {}, Samples: {}", 
-        config.alpha_size(), config.num_samples()
+    debug!(
+        "init_glutin_headless: Selected config. Alpha: {}, Samples: {}",
+        config.alpha_size(),
+        config.num_samples()
     );
 
     // 4. Create Context
@@ -176,21 +200,23 @@ fn init_glutin_headless() -> Result<GpuContext, String> {
         std::num::NonZeroU32::new(1920).unwrap(), // Initial Size
         std::num::NonZeroU32::new(1080).unwrap(),
     );
-    
+
     let surface = unsafe { display.create_window_surface(&config, &attrs) }
         .map_err(|e| format!("Failed to create window surface: {}", e))?;
-    
+
     // 6. Make Current
-    let context = not_current_context.make_current(&surface)
+    let context = not_current_context
+        .make_current(&surface)
         .map_err(|e| format!("Make current failed: {}", e))?;
 
     let interface = Interface::new_native().ok_or("Failed to create native interface")?;
-    let direct_context = direct_contexts::make_gl(interface, None).ok_or("Failed to create DirectContext")?;
-    
+    let direct_context =
+        direct_contexts::make_gl(interface, None).ok_or("Failed to create DirectContext")?;
+
     Ok(GpuContext {
-        _display: display, 
-        _surface: surface, 
-        context,    
+        _display: display,
+        _surface: surface,
+        context,
         direct_context,
         _hwnd: hwnd,
     })
@@ -301,7 +327,7 @@ pub fn create_image_from_texture(
                 "Texture",
             )
         };
-        
+
         SkImage::from_texture(
             context,
             &backend_texture,
@@ -309,7 +335,10 @@ pub fn create_image_from_texture(
             ColorType::RGBA8888,
             AlphaType::Premul,
             None,
-        ).ok_or(LibraryError::Render("Failed to create image from texture".to_string()))
+        )
+        .ok_or(LibraryError::Render(
+            "Failed to create image from texture".to_string(),
+        ))
     }
     #[cfg(not(feature = "gl"))]
     {
