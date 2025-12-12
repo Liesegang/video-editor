@@ -394,5 +394,52 @@ pub fn handle_area_interaction(
             }
             ui.close();
         }
+
+        if ui.button("Add SkSL Layer").clicked() {
+            let duration_sec = 5.0; // Default duration
+            let duration_frames = (duration_sec * composition_fps).round() as u64;
+            let drop_out_frame = drop_in_frame + duration_frames;
+
+            let sksl_clip = TrackClip::create_sksl(drop_in_frame, drop_out_frame);
+
+            // Determine Target Track
+            let mut track_id_opt = None;
+            if let Ok(proj_read) = project.read() {
+                if let Some(comp_id) = editor_context.selection.composition_id {
+                    if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
+                        // If we have a calculated track index, use it
+                        if let Some(idx) = drop_track_index_opt {
+                            if let Some(track) = comp.tracks.get(idx) {
+                                track_id_opt = Some(track.id);
+                            }
+                        }
+                        // Fallback
+                        if track_id_opt.is_none() {
+                            if let Some(first_track) = comp.tracks.first() {
+                                track_id_opt = Some(first_track.id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(track_id) = track_id_opt {
+                if let Some(comp_id) = editor_context.selection.composition_id {
+                    if let Err(e) = project_service.add_clip_to_track(
+                        comp_id,
+                        track_id,
+                        sksl_clip,
+                        drop_in_frame,
+                        drop_out_frame,
+                    ) {
+                        log::error!("Failed to add SkSL clip: {}", e);
+                    } else {
+                        let current_state = project_service.get_project().read().unwrap().clone();
+                        history_manager.push_project_state(current_state);
+                    }
+                }
+            }
+            ui.close();
+        }
     });
 }

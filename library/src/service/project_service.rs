@@ -1010,6 +1010,19 @@ impl ProjectService {
             definitions.extend(text_defs);
         }
 
+        if kind == crate::model::project::TrackClipKind::SkSL {
+            let shader_defs = vec![
+                PropertyDefinition {
+                    name: "shader".to_string(),
+                    label: "Shader Code".to_string(),
+                    ui_type: PropertyUiType::MultilineText,
+                    default_value: PropertyValue::String("".to_string()),
+                    category: "Shader".to_string(),
+                },
+            ];
+            definitions.extend(shader_defs);
+        }
+
         // 2. Plugin Properties
         let plugin_defs = self.plugin_manager.get_inspector_definitions(&kind);
         definitions.extend(plugin_defs);

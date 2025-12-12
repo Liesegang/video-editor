@@ -33,6 +33,7 @@ pub enum TrackClipKind {
     Audio,
     Text,
     Shape,
+    SkSL,
     Composition,
     // Add other kinds as needed
 }
@@ -45,6 +46,7 @@ impl std::fmt::Display for TrackClipKind {
             TrackClipKind::Audio => "audio",
             TrackClipKind::Text => "text",
             TrackClipKind::Shape => "shape",
+            TrackClipKind::SkSL => "sksl",
             TrackClipKind::Composition => "composition",
         };
         write!(f, "{}", s)
@@ -474,6 +476,94 @@ impl TrackClip {
             Uuid::new_v4(),
             None,
             TrackClipKind::Shape,
+            in_frame,
+            out_frame,
+            0,
+            None,
+            0.0,
+            props,
+            Vec::new(),
+        )
+    }
+
+    pub fn create_sksl(in_frame: u64, out_frame: u64) -> Self {
+        let mut props = PropertyMap::new();
+
+        // Default ShaderToy-compatible shader
+        let default_shader = r#"
+uniform float3 iResolution;
+uniform float iTime;
+uniform float4 iMouse;
+uniform float4 iDate;
+
+half4 main(float2 fragCoord) {
+    float2 uv = fragCoord / iResolution.xy;
+    float3 col = 0.5 + 0.5*cos(iTime+uv.xyx+float3(0,2,4));
+    return half4(col,1.0);
+}
+"#;
+
+        props.set(
+            "shader".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::String(default_shader.to_string()),
+            ),
+        );
+
+       // Default transform
+        props.set(
+            "position_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(960.0)),
+            ),
+        );
+        props.set(
+            "position_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(540.0)),
+            ),
+        );
+        props.set(
+            "scale_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+        );
+        props.set(
+            "scale_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+        );
+         props.set(
+            "rotation".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
+        props.set(
+            "anchor_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(960.0)),
+            ),
+        );
+        props.set(
+            "anchor_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(540.0)),
+            ),
+        );
+        props.set(
+            "opacity".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+        );
+
+        TrackClip::new(
+            Uuid::new_v4(),
+            None,
+            TrackClipKind::SkSL,
             in_frame,
             out_frame,
             0,

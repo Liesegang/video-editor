@@ -142,159 +142,168 @@ pub fn inspector_panel(
             for category in categories {
                 ui.add_space(5.0);
                 ui.heading(&category);
-                egui::Grid::new(format!("cat_{}", category))
-                    .striped(true)
-                    .show(ui, |ui| {
-                        if let Some(defs) = grouped.get(&category) {
-                            for def in defs {
-                                match &def.ui_type {
-                                    PropertyUiType::Float { step, suffix, .. } => {
-                                        // Get current value or default
-                                        let current_val = properties.get_f32(&def.name).unwrap_or(
-                                            def.default_value.get_as::<f32>().unwrap_or(0.0),
-                                        );
 
-                                        let mut val_mut = current_val;
-
-                                        handle_drag_value_property(
-                                            ui,
-                                            history_manager,
-                                            editor_context,
-                                            project_service,
-                                            comp_id,
-                                            track_id,
-                                            selected_entity_id,
-                                            &def.label,
-                                            &def.name,
-                                            &mut val_mut,
-                                            *step as f32,
-                                            suffix,
-                                            move |service, c, t, e, n, v| {
-                                                Ok(service.update_property_or_keyframe(
-                                                    c,
-                                                    t,
-                                                    e,
-                                                    n,
-                                                    current_time,
-                                                    v,
-                                                    None,
-                                                )?)
-                                            },
-                                            &mut needs_refresh,
-                                        );
-                                        ui.end_row();
-                                    }
-                                    PropertyUiType::Integer { .. } => {
-                                        // Support Integer UI if needed, for now skip or treat as float
-                                        ui.label(&def.label);
-                                        ui.label("Integer UI not impl");
-                                        ui.end_row();
-                                    }
-                                    PropertyUiType::Text => {
-                                        ui.label(&def.label);
-                                        let current_val =
-                                            properties.get_string(&def.name).unwrap_or(
-                                                def.default_value
-                                                    .get_as::<String>()
-                                                    .unwrap_or_default(),
-                                            );
-                                        let mut buffer = current_val.clone();
-                                        let response = ui.text_edit_singleline(&mut buffer);
-                                        if response.changed() {
-                                            use library::model::project::property::PropertyValue;
-                                            project_service
-                                                .update_property_or_keyframe(
+                if let Some(defs) = grouped.get(&category) {
+                   // Split into chunks of (is_grid, vecs)
+                   // But simpler: just iterate and flush grid when needed?
+                   // No, Grid::new takes a closure. We can't interrupt it.
+                   // So we must group them.
+                   
+                   struct Chunk<'a> {
+                       is_grid: bool,
+                       defs: Vec<&'a library::plugin::PropertyDefinition>,
+                   }
+                   
+                   let mut chunks: Vec<Chunk> = Vec::new();
+                   let mut current_grid_defs = Vec::new();
+                   
+                   for def in defs {
+                       let is_multiline = matches!(def.ui_type, PropertyUiType::MultilineText);
+                       if is_multiline {
+                           // Push existing grid chunk if any
+                           if !current_grid_defs.is_empty() {
+                               chunks.push(Chunk { is_grid: true, defs: current_grid_defs.clone() });
+                               current_grid_defs.clear();
+                           }
+                           // Push this as full width chunk
+                           chunks.push(Chunk { is_grid: false, defs: vec![def] });
+                       } else {
+                           current_grid_defs.push(def);
+                       }
+                   }
+                   if !current_grid_defs.is_empty() {
+                       chunks.push(Chunk { is_grid: true, defs: current_grid_defs });
+                   }
+                   
+                   for (chunk_idx, chunk) in chunks.iter().enumerate() {
+                       if chunk.is_grid {
+                            egui::Grid::new(format!("cat_{}_{}", category, chunk_idx))
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    for def in &chunk.defs {
+                                        // Copy pasting property handling logic (refactor ideally, but inline for now to save time/context)
+                                        match &def.ui_type {
+                                            PropertyUiType::Float { step, suffix, .. } => {
+                                                let current_val = properties.get_f32(&def.name).unwrap_or(
+                                                    def.default_value.get_as::<f32>().unwrap_or(0.0),
+                                                );
+                                                let mut val_mut = current_val;
+                                                handle_drag_value_property(
+                                                    ui,
+                                                    history_manager,
+                                                    editor_context,
+                                                    project_service,
                                                     comp_id,
                                                     track_id,
                                                     selected_entity_id,
+                                                    &def.label,
                                                     &def.name,
-                                                    current_time,
-                                                    PropertyValue::String(buffer),
-                                                    None,
-                                                )
-                                                .ok();
-                                            needs_refresh = true;
+                                                    &mut val_mut,
+                                                    *step as f32,
+                                                    suffix,
+                                                    move |service, c, t, e, n, v| {
+                                                        Ok(service.update_property_or_keyframe(
+                                                            c, t, e, n, current_time, v, None,
+                                                        )?)
+                                                    },
+                                                    &mut needs_refresh,
+                                                );
+                                                ui.end_row();
+                                            }
+                                            PropertyUiType::Integer { .. } => {
+                                                ui.label(&def.label);
+                                                ui.label("Integer UI not impl");
+                                                ui.end_row();
+                                            }
+                                            PropertyUiType::Text => {
+                                                ui.label(&def.label);
+                                                let current_val = properties.get_string(&def.name).unwrap_or(
+                                                    def.default_value.get_as::<String>().unwrap_or_default(),
+                                                );
+                                                let mut buffer = current_val.clone();
+                                                let response = ui.text_edit_singleline(&mut buffer);
+                                                if response.changed() {
+                                                    use library::model::project::property::PropertyValue;
+                                                    project_service.update_property_or_keyframe(
+                                                        comp_id, track_id, selected_entity_id, &def.name, current_time, PropertyValue::String(buffer), None,
+                                                    ).ok();
+                                                    needs_refresh = true;
+                                                }
+                                                if response.lost_focus() {
+                                                    let current_state = project_service.get_project().read().unwrap().clone();
+                                                    history_manager.push_project_state(current_state);
+                                                }
+                                                ui.end_row();
+                                            }
+                                            PropertyUiType::Color => {
+                                                ui.label(&def.label);
+                                                let current_val = properties.get_constant_value(&def.name)
+                                                    .and_then(|v| v.get_as::<library::model::frame::color::Color>())
+                                                    .unwrap_or(def.default_value.get_as::<library::model::frame::color::Color>().unwrap_or_default());
+        
+                                                let mut color32 = egui::Color32::from_rgba_premultiplied(
+                                                    current_val.r, current_val.g, current_val.b, current_val.a,
+                                                );
+                                                let response = ui.color_edit_button_srgba(&mut color32);
+                                                if response.changed() {
+                                                    use library::model::project::property::PropertyValue;
+                                                    let new_color = library::model::frame::color::Color {
+                                                        r: color32.r(), g: color32.g(), b: color32.b(), a: color32.a(),
+                                                    };
+                                                    project_service.update_property_or_keyframe(
+                                                        comp_id, track_id, selected_entity_id, &def.name, current_time, PropertyValue::Color(new_color), None,
+                                                    ).ok();
+                                                    needs_refresh = true;
+                                                    let current_state = project_service.get_project().read().unwrap().clone();
+                                                    history_manager.push_project_state(current_state);
+                                                }
+                                                ui.end_row();
+                                            }
+                                            _ => {
+                                                ui.label(&def.label);
+                                                ui.label("UI type not implemented");
+                                                ui.end_row();
+                                            }
                                         }
-                                        if response.lost_focus() {
-                                            let current_state = project_service
-                                                .get_project()
-                                                .read()
-                                                .unwrap()
-                                                .clone();
-                                            history_manager.push_project_state(current_state);
-                                        }
-                                        ui.end_row();
                                     }
-                                    PropertyUiType::Color => {
-                                        ui.label(&def.label);
-                                        let current_val = properties
-                                            .get_constant_value(&def.name)
-                                            .and_then(|v| {
-                                                v.get_as::<library::model::frame::color::Color>()
-                                            })
-                                            .unwrap_or(
-                                                def.default_value
-                                                    .get_as::<library::model::frame::color::Color>()
-                                                    .unwrap_or(
-                                                        library::model::frame::color::Color {
-                                                            r: 255,
-                                                            g: 255,
-                                                            b: 255,
-                                                            a: 255,
-                                                        },
-                                                    ),
-                                            );
-
-                                        let mut color32 = egui::Color32::from_rgba_premultiplied(
-                                            current_val.r,
-                                            current_val.g,
-                                            current_val.b,
-                                            current_val.a,
-                                        );
-
-                                        let response = ui.color_edit_button_srgba(&mut color32);
-                                        if response.changed() {
-                                            use library::model::project::property::PropertyValue;
-                                            // Handle unmultiplied alpha if needed, but for now direct mapping
-                                            let new_color = library::model::frame::color::Color {
-                                                r: color32.r(),
-                                                g: color32.g(),
-                                                b: color32.b(),
-                                                a: color32.a(),
-                                            };
-
-                                            project_service
-                                                .update_property_or_keyframe(
-                                                    comp_id,
-                                                    track_id,
-                                                    selected_entity_id,
-                                                    &def.name,
-                                                    current_time,
-                                                    PropertyValue::Color(new_color),
-                                                    None,
-                                                )
-                                                .ok();
-                                            needs_refresh = true;
-
-                                            // Push history for color change (debatable if on every change, but simple for now)
-                                            let current_state = project_service
-                                                .get_project()
-                                                .read()
-                                                .unwrap()
-                                                .clone();
-                                            history_manager.push_project_state(current_state);
-                                        }
-                                        ui.end_row();
+                                });
+                       } else {
+                           // Full Width Render
+                           for def in &chunk.defs {
+                               // Assuming MultilineText
+                               if let PropertyUiType::MultilineText = &def.ui_type {
+                                    ui.add_space(5.0);
+                                    ui.label(&def.label);
+                                    let current_val = properties.get_string(&def.name).unwrap_or(
+                                        def.default_value.get_as::<String>().unwrap_or_default(),
+                                    );
+                                    let mut buffer = current_val.clone();
+                                    
+                                    // Use a scroll area for code ideally, or just a large text edit
+                                    let response = ui.add(
+                                        egui::TextEdit::multiline(&mut buffer)
+                                            .code_editor()
+                                            .desired_rows(15)
+                                            .desired_width(f32::INFINITY)
+                                            .lock_focus(true) // prevent losing focus easily
+                                    );
+                                    if response.changed() {
+                                        use library::model::project::property::PropertyValue;
+                                        project_service.update_property_or_keyframe(
+                                            comp_id, track_id, selected_entity_id, &def.name, current_time,
+                                            PropertyValue::String(buffer), None,
+                                        ).ok();
+                                        needs_refresh = true;
                                     }
-                                    _ => {
-                                        ui.label(&def.label);
-                                        ui.label("UI type not implemented");
-                                        ui.end_row();
+                                    if response.lost_focus() {
+                                         let current_state = project_service.get_project().read().unwrap().clone();
+                                        history_manager.push_project_state(current_state);
                                     }
-                                }
-                            }
-                        }
-                    });
+                               }
+                           }
+                       }
+                   }
+                }
             }
 
             ui.add_space(10.0);

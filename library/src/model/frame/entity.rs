@@ -49,6 +49,14 @@ pub enum FrameContent {
         #[serde(flatten)]
         transform: Transform,
     },
+    SkSL {
+        shader: String,
+        resolution: (f32, f32),
+        #[serde(default)]
+        effects: Vec<ImageEffect>,
+        #[serde(flatten)]
+        transform: Transform,
+    },
 }
 
 impl Hash for FrameContent {
@@ -90,6 +98,18 @@ impl Hash for FrameContent {
                 path.hash(state);
                 styles.hash(state);
                 path_effects.hash(state);
+                effects.hash(state);
+                transform.hash(state);
+            }
+            FrameContent::SkSL {
+                shader,
+                resolution,
+                effects,
+                transform,
+            } => {
+                shader.hash(state);
+                OrderedFloat(resolution.0).hash(state);
+                OrderedFloat(resolution.1).hash(state);
                 effects.hash(state);
                 transform.hash(state);
             }
@@ -152,6 +172,24 @@ impl PartialEq for FrameContent {
                     transform: tr2,
                 },
             ) => p1 == p2 && st1 == st2 && pe1 == pe2 && e1 == e2 && tr1 == tr2,
+           (
+                FrameContent::SkSL {
+                    shader: s1,
+                    resolution: r1,
+                    effects: e1,
+                    transform: tr1,
+                },
+                FrameContent::SkSL {
+                    shader: s2,
+                    resolution: r2,
+                    effects: e2,
+                    transform: tr2,
+                },
+            ) => s1 == s2
+                && OrderedFloat(r1.0) == OrderedFloat(r2.0)
+                && OrderedFloat(r1.1) == OrderedFloat(r2.1)
+                && e1 == e2
+                && tr1 == tr2,
             _ => false,
         }
     }

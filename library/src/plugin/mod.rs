@@ -61,6 +61,7 @@ pub enum PropertyUiType {
     },
     Color,
     Text,
+    MultilineText,
     Bool,
     Vec2,
     Vec3,
