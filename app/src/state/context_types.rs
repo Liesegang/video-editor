@@ -12,6 +12,8 @@ pub struct TimelineState {
     pub v_zoom: f32,
     pub h_zoom: f32,
     #[serde(skip)]
+    pub playback_accumulator: f32,
+    #[serde(skip)]
     pub scroll_offset: egui::Vec2,
 }
 
@@ -24,6 +26,7 @@ impl Default for TimelineState {
             display_mode: TimelineDisplayMode::Seconds,
             v_zoom: 1.0,
             h_zoom: 1.0,
+            playback_accumulator: 0.0,
             scroll_offset: egui::Vec2::ZERO,
         }
     }

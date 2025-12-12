@@ -73,7 +73,17 @@ pub fn preview_panel(
     );
 
     // Video frame outline and Preview Image
-    let frame_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1920.0, 1080.0));
+    let (comp_width, comp_height) = if let Ok(proj_read) = project.read() {
+        if let Some(comp) = editor_context.get_current_composition(&proj_read) {
+            (comp.width, comp.height)
+        } else {
+            (1920, 1080)
+        }
+    } else {
+        (1920, 1080)
+    };
+
+    let frame_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(comp_width as f32, comp_height as f32));
     let screen_frame_min = to_screen(frame_rect.min);
     let screen_frame_max = to_screen(frame_rect.max);
 
@@ -91,12 +101,12 @@ pub fn preview_panel(
                 let _image_rect = if let Some(t) = &editor_context.preview_texture {
                     egui::vec2(t.size()[0] as f32, t.size()[1] as f32)
                 } else {
-                    egui::vec2(1920.0, 1080.0)
+                    egui::vec2(comp_width as f32, comp_height as f32)
                 };
 
                 // Calculate scale: fit 1080p into current rect
                 // We want the render to match the pixel size of the rect on screen
-                let render_scale = (rect.width() / 1920.0).max(0.1).min(1.0) as f64;
+                let render_scale = (rect.width() / comp_width as f32).max(0.1).min(1.0) as f64;
 
                 let frame_info = library::framing::get_frame_from_project(
                     &proj_read,
@@ -174,7 +184,7 @@ pub fn preview_panel(
                             // Wrap the texture
                             let backend_texture = unsafe {
                                 skia_safe::gpu::backend_textures::make_gl(
-                                    (1920, 1080),
+                                    (comp_width as i32, comp_height as i32),
                                     skia_safe::gpu::Mipmapped::No,
                                     skia_safe::gpu::gl::TextureInfo {
                                         target: eframe::glow::TEXTURE_2D,
@@ -198,7 +208,7 @@ pub fn preview_panel(
                             // use skia_safe::gpu::backend_render_targets::make_gl for 0.82+
                             let backend_render_target =
                                 skia_safe::gpu::backend_render_targets::make_gl(
-                                    (1920, 1080),
+                                    (comp_width as i32, comp_height as i32),
                                     0, // sample count
                                     0, // stencil bits
                                     skia_safe::gpu::gl::FramebufferInfo {

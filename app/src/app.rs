@@ -215,8 +215,31 @@ impl eframe::App for MyApp {
         }
 
         if self.editor_context.timeline.is_playing {
-            self.editor_context.timeline.current_time += ctx.input(|i| i.stable_dt);
+            let fps = if let Ok(proj_read) = self.project.read() {
+                self.editor_context
+                    .get_current_composition(&proj_read)
+                    .map(|c| c.fps)
+                    .unwrap_or(30.0)
+            } else {
+                30.0
+            };
+            let frame_duration = 1.0 / fps as f32;
+            
+            self.editor_context.timeline.playback_accumulator += ctx.input(|i| i.stable_dt);
+            
+            // Limit the accumulator to prevent spiraling if lag occurs (e.g. max 10 frames catchup)
+            if self.editor_context.timeline.playback_accumulator > frame_duration * 10.0 {
+                self.editor_context.timeline.playback_accumulator = frame_duration;
+            }
+
+            while self.editor_context.timeline.playback_accumulator >= frame_duration {
+                self.editor_context.timeline.current_time += frame_duration;
+                self.editor_context.timeline.playback_accumulator -= frame_duration;
+            }
             ctx.request_repaint();
+        } else {
+            // Reset accumulator when not playing to avoid jump on resume
+            self.editor_context.timeline.playback_accumulator = 0.0;
         }
     }
 }
