@@ -426,6 +426,7 @@ pub fn preview_panel(
 
     if ui.input(|i| i.pointer.any_released()) {
         editor_context.interaction.is_moving_selected_entity = false;
+        editor_context.interaction.body_drag_state = None;
     }
 
     if !is_panning_input && !interacted_with_gizmo {
@@ -435,10 +436,17 @@ pub fn preview_panel(
                 if let Some(gc) = gui_clips.iter().find(|gc| gc.id == hovered) {
                     editor_context.select_clip(hovered, gc.track_id);
                     editor_context.interaction.is_moving_selected_entity = true;
-                    // Started drag on entity
+                    // Started drag on entity - Capture State
+                    if let Some(pointer_pos) = pointer_pos {
+                         editor_context.interaction.body_drag_state = Some(crate::state::context_types::BodyDragState {
+                             start_mouse_pos: pointer_pos,
+                             original_position: gc.position,
+                         });
+                    }
                 }
             } else {
                 editor_context.interaction.is_moving_selected_entity = false; // Started drag on background
+                editor_context.interaction.body_drag_state = None;
             }
         }
 
@@ -452,66 +460,47 @@ pub fn preview_panel(
                 editor_context.selection.entity_id = None;
             }
         } else if response.dragged() {
-            // Guard: Only move if we started the drag on the entity
+            // Guard: Only move if we started the drag on the entity AND we have state
             if editor_context.interaction.is_moving_selected_entity {
                 if let Some(entity_id) = editor_context.selection.entity_id {
                     let current_zoom = editor_context.view.zoom;
                     if let Some(comp_id) = editor_context.selection.composition_id {
                         if let Some(track_id) = editor_context.selection.track_id {
-                            // Need track_id to update entity properties
-                            let world_delta = response.drag_delta() / current_zoom;
-
-                            // Update properties via ProjectService
-                            project_service
-                                .update_clip_property(
-                                    comp_id,
-                                    track_id,
-                                    entity_id,
-                                    "position_x",
-                                    library::model::project::property::PropertyValue::Number(
-                                        ordered_float::OrderedFloat(
-                                            project_service
-                                                .with_track_mut(comp_id, track_id, |track| {
-                                                    track
-                                                        .clips
-                                                        .iter()
-                                                        .find(|e| e.id == entity_id)
-                                                        .and_then(|e| {
-                                                            e.properties.get_f64("position_x")
-                                                        })
-                                                        .unwrap_or(0.0)
-                                                })
-                                                .unwrap_or(0.0)
-                                                + world_delta.x as f64,
-                                        ),
-                                    ),
-                                )
-                                .ok(); // Handle error
-                            project_service
-                                .update_clip_property(
-                                    comp_id,
-                                    track_id,
-                                    entity_id,
-                                    "position_y",
-                                    library::model::project::property::PropertyValue::Number(
-                                        ordered_float::OrderedFloat(
-                                            project_service
-                                                .with_track_mut(comp_id, track_id, |track| {
-                                                    track
-                                                        .clips
-                                                        .iter()
-                                                        .find(|e| e.id == entity_id)
-                                                        .and_then(|e| {
-                                                            e.properties.get_f64("position_y")
-                                                        })
-                                                        .unwrap_or(0.0)
-                                                })
-                                                .unwrap_or(0.0)
-                                                + world_delta.y as f64,
-                                        ),
-                                    ),
-                                )
-                                .ok(); // Handle error
+                             if let Some(drag_state) = &editor_context.interaction.body_drag_state {
+                                 if let Some(curr_mouse) = pointer_pos {
+                                     let screen_delta = curr_mouse - drag_state.start_mouse_pos;
+                                     let world_delta = screen_delta / current_zoom;
+                                     
+                                     let new_x = drag_state.original_position[0] as f64 + world_delta.x as f64;
+                                     let new_y = drag_state.original_position[1] as f64 + world_delta.y as f64;
+                                     
+                                     let current_time = editor_context.timeline.current_time as f64;
+                                     
+                                     let _ = project_service.update_property_or_keyframe(
+                                         comp_id,
+                                         track_id,
+                                         entity_id,
+                                         "position_x",
+                                         current_time,
+                                         library::model::project::property::PropertyValue::Number(
+                                             ordered_float::OrderedFloat(new_x)
+                                         ),
+                                         None
+                                     );
+                                     
+                                     let _ = project_service.update_property_or_keyframe(
+                                         comp_id,
+                                         track_id,
+                                         entity_id,
+                                         "position_y",
+                                         current_time,
+                                         library::model::project::property::PropertyValue::Number(
+                                             ordered_float::OrderedFloat(new_y)
+                                         ),
+                                         None
+                                     );
+                                 }
+                             }
                         }
                     }
                 }
