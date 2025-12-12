@@ -112,6 +112,8 @@ pub fn inspector_panel(
                 ui.label(current_kind.to_string());
             });
 
+            let current_time = editor_context.timeline.current_time as f64;
+
             // --- Dynamic Properties ---
             let definitions = project_service.get_property_definitions(kind);
             // Group by category
@@ -154,23 +156,22 @@ pub fn inspector_panel(
 
                                         let mut val_mut = current_val;
 
-                                        // use handle_drag_value_property
-                                        handle_drag_value_property(
-                                            ui,
-                                            history_manager,
-                                            editor_context,
-                                            project_service,
-                                            comp_id,
-                                            track_id,
-                                            selected_entity_id,
-                                            &def.label,
-                                            &def.name,
-                                            &mut val_mut,
-                                            *step as f32,
-                                            suffix,
-                                            |service, c, t, e, n, v| {
-                                                Ok(service.update_clip_property(c, t, e, n, v)?)
-                                            },
+                                            handle_drag_value_property(
+                                                ui,
+                                                history_manager,
+                                                editor_context,
+                                                project_service,
+                                                comp_id,
+                                                track_id,
+                                                selected_entity_id,
+                                                &def.label,
+                                                &def.name,
+                                                &mut val_mut,
+                                                *step as f32,
+                                                suffix,
+                                                move |service, c, t, e, n, v| {
+                                                    Ok(service.update_property_or_keyframe(c, t, e, n, current_time, v, None)?)
+                                                },
                                             &mut needs_refresh,
                                         );
                                         ui.end_row();
@@ -190,12 +191,14 @@ pub fn inspector_panel(
                                         let response = ui.text_edit_singleline(&mut buffer);
                                         if response.changed() {
                                             use library::model::project::property::PropertyValue;
-                                            project_service.update_clip_property(
+                                            project_service.update_property_or_keyframe(
                                                 comp_id,
                                                 track_id,
                                                 selected_entity_id,
                                                 &def.name,
+                                                current_time,
                                                 PropertyValue::String(buffer),
+                                                None
                                             ).ok();
                                             needs_refresh = true;
                                         }
@@ -229,12 +232,14 @@ pub fn inspector_panel(
                                                 a: color32.a(),
                                             };
 
-                                             project_service.update_clip_property(
+                                            project_service.update_property_or_keyframe(
                                                 comp_id,
                                                 track_id,
                                                 selected_entity_id,
                                                 &def.name,
+                                                current_time,
                                                 PropertyValue::Color(new_color),
+                                                None
                                             ).ok();
                                             needs_refresh = true;
                                             

@@ -107,6 +107,15 @@ pub struct InteractionState {
 
     // Graph Editor Selection: (Property NameRef, Keyframe Index)
     pub selected_keyframe: Option<(String, usize)>,
+
+    // Body Drag State for absolute delta calculation
+    pub body_drag_state: Option<BodyDragState>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BodyDragState {
+    pub start_mouse_pos: egui::Pos2,
+    pub original_position: [f32; 2],
 }
 
 #[derive(Debug, Clone)]

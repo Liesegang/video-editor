@@ -513,7 +513,7 @@ impl ProjectService {
         property_key: &str,
         time: f64,
         value: PropertyValue,
-        easing: crate::animation::EasingFunction,
+        easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
              if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
@@ -524,7 +524,7 @@ impl ProjectService {
 
                     // Check logic: if currently "constant", convert to "keyframe"
                     if prop.evaluator == "constant" {
-                        // Current value becomes a keyframe at time 0 (or start of clip?)
+                        // Current value becomes a keyframe at time 0
                         let initial_val = prop.properties.get("value").cloned().unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
                         let kf0 = Keyframe {
                             time: OrderedFloat(0.0),
@@ -536,7 +536,7 @@ impl ProjectService {
                         let kf_new = Keyframe {
                             time: OrderedFloat(time),
                             value: value.clone(),
-                            easing: easing.clone(),
+                            easing: easing.unwrap_or(crate::animation::EasingFunction::Linear),
                         };
                         
                         let keyframes = vec![kf0, kf_new];
@@ -544,13 +544,20 @@ impl ProjectService {
                         *prop = Property::keyframe(keyframes);
                      } else if prop.evaluator == "keyframe" {
                          let mut current_keyframes = prop.keyframes();
-                         // Remove existing if very close
-                         current_keyframes.retain(|k| (k.time.into_inner() - time).abs() > 0.001);
+                         
+                         // Check for collision to preserve easing
+                         let mut preserved_easing = crate::animation::EasingFunction::Linear;
+                         if let Some(idx) = current_keyframes.iter().position(|k| (k.time.into_inner() - time).abs() < 0.001) {
+                             preserved_easing = current_keyframes[idx].easing.clone();
+                             current_keyframes.remove(idx);
+                         }
+                         
+                         let final_easing = easing.unwrap_or(preserved_easing);
                          
                          current_keyframes.push(Keyframe {
                              time: OrderedFloat(time),
                              value,
-                             easing,
+                             easing: final_easing,
                          });
                          
                          current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
@@ -596,6 +603,67 @@ impl ProjectService {
         })?
     }
 
+    pub fn update_property_or_keyframe(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+             if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                // Get or create property
+                // We must handle property creation if it doesn't exist
+                let (evaluator, _is_new) = if let Some(prop) = clip.properties.get(property_key) {
+                    (prop.evaluator.clone(), false)
+                } else {
+                    ("constant".to_string(), true)
+                };
+
+                if evaluator == "keyframe" {
+                     use crate::model::project::property::{Keyframe, Property};
+                     use ordered_float::OrderedFloat;
+
+                     // Safely get mutable prop - we know it exists because evaluator check passed (which required get)
+                     // But we dropped reference to unpack evaluator.
+                     if let Some(prop) = clip.properties.get_mut(property_key) {
+                         let mut current_keyframes = prop.keyframes();
+                         
+                         // Check for collision to preserve easing
+                         let mut preserved_easing = crate::animation::EasingFunction::Linear;
+                         if let Some(idx) = current_keyframes.iter().position(|k| (k.time.into_inner() - time).abs() < 0.001) {
+                             preserved_easing = current_keyframes[idx].easing.clone();
+                             current_keyframes.remove(idx);
+                         }
+                         
+                         let final_easing = easing.unwrap_or(preserved_easing);
+                         
+                         current_keyframes.push(Keyframe {
+                             time: OrderedFloat(time),
+                             value,
+                             easing: final_easing,
+                         });
+                         
+                         current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
+                         
+                        *prop = Property::keyframe(current_keyframes);
+                     }
+                } else {
+                    // Constant mode
+                    use crate::model::project::property::Property;
+                    // Simply overwrite or create as constant
+                    clip.properties.set(property_key.to_string(), Property::constant(value));
+                }
+                Ok(())
+             } else {
+                 Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+             }
+        })?
+    }
+
     pub fn update_keyframe(
         &mut self,
         composition_id: Uuid,
@@ -607,7 +675,7 @@ impl ProjectService {
         new_value: Option<PropertyValue>,
         new_easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        use crate::animation::EasingFunction;
+        // use crate::animation::EasingFunction; // Removed unused import
         use crate::model::project::property::{Keyframe, PropertyValue};
         use ordered_float::OrderedFloat;
 

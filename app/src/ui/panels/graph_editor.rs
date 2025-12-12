@@ -523,7 +523,7 @@ pub fn graph_editor_panel(
             let _ = project_service.add_keyframe(
                 comp_id, track_id, entity_id,
                 &name, time, PropertyValue::Number(OrderedFloat(val)),
-                EasingFunction::Linear
+                Some(EasingFunction::Linear)
             );
         }
         Action::SetEasing(name, idx, easing) => {
