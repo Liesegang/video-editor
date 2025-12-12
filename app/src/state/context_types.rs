@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::model::ui_types::{DraggedItem, TimelineDisplayMode, Vec2Def, GizmoHandle};
-
+use crate::model::ui_types::{DraggedItem, GizmoHandle, TimelineDisplayMode, Vec2Def};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TimelineState {
@@ -68,9 +67,9 @@ pub struct InteractionState {
     // Manipulation
     pub is_resizing_entity: bool,
     pub is_moving_selected_entity: bool,
-    
+
     // We can't import GizmoState here easily if it depends on something else or circular dep,
-    // but GizmoState is defined in context.rs. 
+    // but GizmoState is defined in context.rs.
     // Ideally we should move GizmoState here or to a separate file.
     // For now, let's assume we will move GizmoState here or import it.
     // Based on previous file read, GizmoState is in context.rs.

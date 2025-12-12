@@ -184,7 +184,10 @@ impl eframe::App for MyApp {
             ui.horizontal(|ui| {
                 ui.label("Ready");
                 ui.separator();
-                ui.label(format!("Time: {:.2}", self.editor_context.timeline.current_time));
+                ui.label(format!(
+                    "Time: {:.2}",
+                    self.editor_context.timeline.current_time
+                ));
             });
         });
 

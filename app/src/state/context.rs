@@ -3,9 +3,7 @@ use library::model::project::project::{Composition, Project};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::state::context_types::{
-    InteractionState, SelectionState, TimelineState, ViewState,
-};
+use crate::state::context_types::{InteractionState, SelectionState, TimelineState, ViewState};
 
 #[derive(Serialize, Deserialize)]
 pub struct EditorContext {
@@ -40,7 +38,8 @@ impl EditorContext {
     }
 
     pub fn get_current_composition<'a>(&self, project: &'a Project) -> Option<&'a Composition> {
-        self.selection.composition_id
+        self.selection
+            .composition_id
             .and_then(|id| project.compositions.iter().find(|&c| c.id == id))
     }
 
@@ -49,4 +48,3 @@ impl EditorContext {
         self.selection.track_id = Some(track_id);
     }
 }
-

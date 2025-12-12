@@ -145,7 +145,8 @@ pub fn assets_panel(
                                         .clicked()
                                     {
                                         if project_service.is_composition_used(comp.id) {
-                                            editor_context.interaction.comp_delete_candidate = Some(comp.id);
+                                            editor_context.interaction.comp_delete_candidate =
+                                                Some(comp.id);
                                         } else {
                                             comp_to_remove = Some(comp.id);
                                         }
@@ -209,7 +210,8 @@ pub fn assets_panel(
 
                             // Interactions
                             if response.drag_started() {
-                                editor_context.interaction.dragged_item = Some(DraggedItem::Asset(asset.id));
+                                editor_context.interaction.dragged_item =
+                                    Some(DraggedItem::Asset(asset.id));
                             }
 
                             response.context_menu(|ui| {
@@ -218,7 +220,8 @@ pub fn assets_panel(
                                     .clicked()
                                 {
                                     if project_service.is_asset_used(asset.id) {
-                                        editor_context.interaction.asset_delete_candidate = Some(asset.id);
+                                        editor_context.interaction.asset_delete_candidate =
+                                            Some(asset.id);
                                     } else {
                                         asset_to_remove = Some(asset.id);
                                     }
