@@ -164,21 +164,34 @@ pub fn show_clip_area(
 
                                             new_clip_opt = match asset.kind {
                                                 AssetKind::Video => {
-                                                    Some(TrackClip::create_video(
+                                                    let mut video_clip = TrackClip::create_video(
                                                         Some(asset.id),
                                                         &asset.path,
                                                         drop_in_frame,
                                                         drop_out,
-                                                        0,
+                                                        drop_in_frame, // source_begin_frame = drop_in_frame
                                                         duration_frames, // Use asset duration
-                                                    ))
+                                                    );
+                                                    if let (Some(w), Some(h)) = (asset.width, asset.height) {
+                                                        video_clip.properties.set("anchor_x".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(w as f64 / 2.0))));
+                                                        video_clip.properties.set("anchor_y".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(h as f64 / 2.0))));
+                                                    }
+                                                    Some(video_clip)
                                                 }
-                                                AssetKind::Image => Some(TrackClip::create_image(
-                                                    Some(asset.id),
-                                                    &asset.path,
-                                                    drop_in_frame,
-                                                    drop_out,
-                                                )),
+                                                AssetKind::Image => {
+                                                    let mut image_clip = TrackClip::create_image(
+                                                        Some(asset.id),
+                                                        &asset.path,
+                                                        drop_in_frame,
+                                                        drop_out,
+                                                    );
+                                                    image_clip.source_begin_frame = 0; // Images are static, so 0 is fine, or arguably doesn't matter. But let's keep 0 as explicit.
+                                                    if let (Some(w), Some(h)) = (asset.width, asset.height) {
+                                                        image_clip.properties.set("anchor_x".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(w as f64 / 2.0))));
+                                                        image_clip.properties.set("anchor_y".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(h as f64 / 2.0))));
+                                                    }
+                                                    Some(image_clip)
+                                                },
 
                                                 AssetKind::Audio => {
                                                     let mut audio_entity = TrackClip::new(

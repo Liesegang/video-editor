@@ -47,7 +47,7 @@ impl PropertyEvaluator for RandomNoiseEvaluator {
         let time_bucket = (time * 1000.0).round() as u64;
         let mut rng = StdRng::seed_from_u64(seed ^ time_bucket);
         let value = rng.gen_range(-amplitude..=amplitude);
-        PropertyValue::Number(value)
+        PropertyValue::Number(ordered_float::OrderedFloat(value))
     }
 }
 

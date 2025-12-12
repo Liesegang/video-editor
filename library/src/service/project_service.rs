@@ -114,9 +114,14 @@ impl ProjectService {
 
         let kind = self.plugin_manager.probe_asset_kind(path);
         let duration = self.plugin_manager.get_duration(path);
+        let dimensions = self.plugin_manager.get_dimensions(path);
 
         let mut asset = Asset::new(&name, path, kind);
         asset.duration = duration;
+        if let Some((w, h)) = dimensions {
+            asset.width = Some(w);
+            asset.height = Some(h);
+        }
 
         self.add_asset(asset)
     }

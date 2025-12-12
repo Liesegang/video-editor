@@ -561,12 +561,13 @@ impl CompositionDialog {
             "New Composition Properties"
         };
 
-        egui::Window::new(window_title)
+        if let Some(inner) = egui::Window::new(window_title)
             .open(&mut is_open_local)
             .collapsible(false)
             .resizable(false)
             .fixed_size([380.0, 300.0])
             .show(ctx, |ui| {
+                let mut close_dialog = false;
                 // Store initial values to detect changes for "(Edited)" suffix
                 let initial_values = (self.width, self.height, self.fps);
                 let initial_active_preset = self.active_preset.clone();
@@ -728,9 +729,11 @@ impl CompositionDialog {
                     ui.horizontal(|ui| {
                         if ui.button("OK").clicked() {
                             self.confirmed = true;
+                            close_dialog = true;
                         }
                         if ui.button("Cancel").clicked() {
                             self.confirmed = false;
+                            close_dialog = true;
                         }
                     });
                 });
@@ -745,7 +748,14 @@ impl CompositionDialog {
                         self.active_preset = ActivePreset::Custom;
                     }
                 }
-            });
+                
+                close_dialog
+            }) 
+        {
+            if inner.inner.unwrap_or(false) {
+                is_open_local = false;
+            }
+        }
 
         self.is_open = is_open_local;
     }

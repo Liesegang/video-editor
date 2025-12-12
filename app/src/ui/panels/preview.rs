@@ -4,9 +4,9 @@ use std::sync::{Arc, RwLock};
 use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
 use library::RenderServer;
+use library::model::project::asset::AssetKind;
 
 use crate::{action::HistoryManager, state::context::EditorContext};
-use library::model::project::asset::AssetKind;
 
 pub fn preview_panel(
     ui: &mut Ui,
@@ -112,7 +112,7 @@ pub fn preview_panel(
                 let property_evaluators = plugin_manager.get_property_evaluators();
                 let entity_converter_registry = plugin_manager.get_entity_converter_registry();
 
-                let image_rect = if let Some(t) = &editor_context.preview_texture {
+                let _image_rect = if let Some(t) = &editor_context.preview_texture {
                     egui::vec2(t.size()[0] as f32, t.size()[1] as f32)
                 } else {
                     egui::vec2(1920.0, 1080.0)
@@ -232,7 +232,7 @@ pub fn preview_panel(
                                     },
                                 );
 
-                            let mut frame_surface =
+                            let frame_surface =
                                 skia_safe::gpu::surfaces::wrap_backend_render_target(
                                     &mut context,
                                     &backend_render_target,
@@ -277,17 +277,6 @@ pub fn preview_panel(
 
         ui.painter().add(callback);
     }
-
-    // Draw outline
-    painter.rect_stroke(
-        egui::Rect::from_min_max(screen_frame_min, screen_frame_max),
-        0.0,
-        egui::Stroke::new(
-            2.0 * editor_context.view_zoom.max(1.0),
-            egui::Color32::WHITE,
-        ),
-        StrokeKind::Middle,
-    );
 
     let mut hovered_entity_id = None;
     let mut gui_clips: Vec<crate::model::ui_types::TimelineClip> = Vec::new();

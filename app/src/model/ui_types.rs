@@ -61,9 +61,9 @@ pub struct CompositionPreset {
 }
 
 impl CompositionPreset {
-    pub fn resolution(&self) -> String {
+    /*pub fn resolution(&self) -> String {
         format!("{}x{}", self.width, self.height)
-    }
+    }*/
 }
 
 // Serde helper for egui::Color32

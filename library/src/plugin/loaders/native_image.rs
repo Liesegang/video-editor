@@ -60,4 +60,9 @@ impl LoadPlugin for NativeImageLoader {
             _ => None,
         }
     }
+
+
+    fn get_dimensions(&self, path: &str) -> Option<(u32, u32)> {
+        image::image_dimensions(path).ok()
+    }
 }

@@ -1,5 +1,7 @@
 use library::model::project::project::Project;
 
+pub mod handler;
+
 pub struct HistoryManager {
     undo_stack: Vec<Project>,
     redo_stack: Vec<Project>,
@@ -46,5 +48,10 @@ impl HistoryManager {
         } else {
             None
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
     }
 }
