@@ -243,25 +243,19 @@ impl EntityConverter for VideoEntityConverter {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip, // Changed to TrackClip
-        frame_number: u64,      // Changed to u64
+        track_clip: &TrackClip,
+        frame_number: u64,
     ) -> Option<FrameObject> {
-        let props = &track_clip.properties; // Use track_clip.properties
-        let file_path =
-            evaluator.require_string(props, "file_path", frame_number as f64, "video")?; // time argument for evaluator, so convert back for now
+        let props = &track_clip.properties;
+        let fps = evaluator.composition.fps;
+        let time = frame_number as f64 / fps;
+        
+        let file_path = evaluator.require_string(props, "file_path", time, "video")?;
 
-        // Calculate source_frame_number based on track_clip's timing
-        // frame_number is the current composition frame.
-        // track_clip.in_frame is when the entity starts on the timeline.
-        // track_clip.source_begin_frame is the timeline frame where the source media's frame 0 would be.
-
-        // Example: in_frame=100. We want to show frame 50 of the video.
-        // source_begin_frame = 50.
-        // source_frame_number = 100 - 50 = 50.
         let source_frame_number = frame_number.saturating_sub(track_clip.source_begin_frame);
 
-        let transform = evaluator.build_transform(props, frame_number as f64); // time argument for evaluator
-        let effects = evaluator.build_image_effects(&track_clip.effects, frame_number as f64); // time argument for evaluator
+        let transform = evaluator.build_transform(props, time);
+        let effects = evaluator.build_image_effects(&track_clip.effects, time);
         let surface = ImageSurface {
             file_path,
             effects,
@@ -271,9 +265,9 @@ impl EntityConverter for VideoEntityConverter {
         Some(FrameObject {
             content: FrameContent::Video {
                 surface,
-                frame_number: source_frame_number, // Use the calculated source_frame_number
+                frame_number: source_frame_number,
             },
-            properties: props.clone(), // This is the properties from TrackEntity
+            properties: props.clone(),
         })
     }
 }
@@ -284,14 +278,16 @@ impl EntityConverter for ImageEntityConverter {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip, // Changed to TrackClip
-        frame_number: u64,      // Changed to u64
+        track_clip: &TrackClip,
+        frame_number: u64,
     ) -> Option<FrameObject> {
-        let props = &track_clip.properties; // Use track_clip.properties
-        let file_path =
-            evaluator.require_string(props, "file_path", frame_number as f64, "image")?;
-        let transform = evaluator.build_transform(props, frame_number as f64);
-        let effects = evaluator.build_image_effects(&track_clip.effects, frame_number as f64);
+        let props = &track_clip.properties;
+        let fps = evaluator.composition.fps;
+        let time = frame_number as f64 / fps;
+        
+        let file_path = evaluator.require_string(props, "file_path", time, "image")?;
+        let transform = evaluator.build_transform(props, time);
+        let effects = evaluator.build_image_effects(&track_clip.effects, time);
         let surface = ImageSurface {
             file_path,
             effects,
@@ -300,7 +296,7 @@ impl EntityConverter for ImageEntityConverter {
 
         Some(FrameObject {
             content: FrameContent::Image { surface },
-            properties: props.clone(), // This is the properties from TrackEntity
+            properties: props.clone(),
         })
     }
 }
@@ -311,19 +307,22 @@ impl EntityConverter for TextEntityConverter {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip, // Changed to TrackClip
-        frame_number: u64,      // Changed to u64
+        track_clip: &TrackClip,
+        frame_number: u64,
     ) -> Option<FrameObject> {
-        let props = &track_clip.properties; // Use track_clip.properties
-        let text = evaluator.require_string(props, "text", frame_number as f64, "text")?;
+        let props = &track_clip.properties;
+        let fps = evaluator.composition.fps;
+        let time = frame_number as f64 / fps;
+        
+        let text = evaluator.require_string(props, "text", time, "text")?;
         let font = evaluator
-            .optional_string(props, "font", frame_number as f64)
+            .optional_string(props, "font", time)
             .unwrap_or_else(|| "Arial".to_string());
-        let size = evaluator.evaluate_number(props, "size", frame_number as f64, 12.0);
+        let size = evaluator.evaluate_number(props, "size", time, 12.0);
         let color = evaluator.evaluate_color(
             props,
             "color",
-            frame_number as f64,
+            time,
             Color {
                 r: 0,
                 g: 0,
@@ -331,8 +330,8 @@ impl EntityConverter for TextEntityConverter {
                 a: 255,
             },
         );
-        let transform = evaluator.build_transform(props, frame_number as f64);
-        let effects = evaluator.build_image_effects(&track_clip.effects, frame_number as f64);
+        let transform = evaluator.build_transform(props, time);
+        let effects = evaluator.build_image_effects(&track_clip.effects, time);
 
         Some(FrameObject {
             content: FrameContent::Text {
@@ -354,23 +353,26 @@ impl EntityConverter for ShapeEntityConverter {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip, // Changed to TrackClip
-        frame_number: u64,      // Changed to u64
+        track_clip: &TrackClip,
+        frame_number: u64,
     ) -> Option<FrameObject> {
-        let props = &track_clip.properties; // Use track_clip.properties
-        let path = evaluator.require_string(props, "path", frame_number as f64, "shape")?;
-        let transform = evaluator.build_transform(props, frame_number as f64);
+        let props = &track_clip.properties;
+        let fps = evaluator.composition.fps;
+        let time = frame_number as f64 / fps;
+
+        let path = evaluator.require_string(props, "path", time, "shape")?;
+        let transform = evaluator.build_transform(props, time);
 
         let styles_value = evaluator
-            .evaluate_property_value(props, "styles", frame_number as f64)
+            .evaluate_property_value(props, "styles", time)
             .unwrap_or(PropertyValue::Array(vec![]));
         let styles = evaluator.parse_draw_styles(styles_value);
 
         let effects_value = evaluator
-            .evaluate_property_value(props, "path_effects", frame_number as f64)
+            .evaluate_property_value(props, "path_effects", time)
             .unwrap_or(PropertyValue::Array(vec![]));
         let path_effects = evaluator.parse_path_effects(effects_value);
-        let effects = evaluator.build_image_effects(&track_clip.effects, frame_number as f64);
+        let effects = evaluator.build_image_effects(&track_clip.effects, time);
 
         Some(FrameObject {
             content: FrameContent::Shape {

@@ -51,12 +51,13 @@ pub enum Tab {
     Timeline,
     Inspector,
     Assets,
+    GraphEditor,
     // Add other tabs as needed
 }
 
 impl Tab {
     pub fn all() -> &'static [Tab] {
-        &[Tab::Preview, Tab::Timeline, Tab::Inspector, Tab::Assets]
+        &[Tab::Preview, Tab::Timeline, Tab::Inspector, Tab::Assets, Tab::GraphEditor]
     }
 
     pub fn name(&self) -> &'static str {
@@ -65,6 +66,7 @@ impl Tab {
             Tab::Timeline => "Timeline",
             Tab::Inspector => "Inspector",
             Tab::Assets => "Assets",
+            Tab::GraphEditor => "Graph Editor",
         }
     }
 }
