@@ -451,10 +451,60 @@ impl EntityConverterPlugin for BuiltinEntityConverterPlugin {
     }
 }
 
+pub struct SkSLEntityConverter;
+
+impl EntityConverter for SkSLEntityConverter {
+    fn convert_entity(
+        &self,
+        evaluator: &FrameEvaluationContext,
+        track_clip: &TrackClip,
+        frame_number: u64,
+    ) -> Option<FrameObject> {
+        let props = &track_clip.properties;
+        let fps = evaluator.composition.fps;
+        let time = frame_number as f64 / fps;
+
+        let shader = evaluator.require_string(props, "shader", time, "sksl")?;
+        
+        let width = evaluator.evaluate_number(props, "width", time, 1920.0);
+        let height = evaluator.evaluate_number(props, "height", time, 1080.0);
+        
+        // Use composition size as default if not specified, 
+        // but for now properties "width"/"height" aren't standard on clips unless I added them?
+        // Actually, SkSL clips might not have explicit width/height properties yet.
+        // Let's use composition resolution if properties are missing/zero, or hardcode typical?
+        // Better: Use specific properties or default to 1920x1080.
+        // Wait, creating SkSL clip didn't add width/height properties.
+        // It relies on the renderer filling the screen?
+        // But the renderer needs `resolution`.
+        // Let's use the composition's width/height from context.
+        let comp_width = evaluator.composition.width as f64;
+        let comp_height = evaluator.composition.height as f64;
+        
+        // Check if we want overrides, otherwise use comp size
+        let res_x = if width > 0.0 { width } else { comp_width };
+        let res_y = if height > 0.0 { height } else { comp_height };
+
+        let transform = evaluator.build_transform(props, time);
+        let effects = evaluator.build_image_effects(&track_clip.effects, time);
+
+        Some(FrameObject {
+            content: FrameContent::SkSL {
+                shader,
+                resolution: (res_x as f32, res_y as f32),
+                effects,
+                transform,
+            },
+            properties: props.clone(),
+        })
+    }
+}
+
 // Function to register built-in entity converters
 pub fn register_builtin_entity_converters(registry: &mut EntityConverterRegistry) {
     registry.register("video".to_string(), Arc::new(VideoEntityConverter));
     registry.register("image".to_string(), Arc::new(ImageEntityConverter));
     registry.register("text".to_string(), Arc::new(TextEntityConverter));
     registry.register("shape".to_string(), Arc::new(ShapeEntityConverter));
+    registry.register("sksl".to_string(), Arc::new(SkSLEntityConverter));
 }

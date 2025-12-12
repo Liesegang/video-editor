@@ -177,6 +177,29 @@ impl<T: Renderer> RenderService<T> {
                         self.renderer.draw_layer(&final_image, &composite_transform)
                     })?;
                 }
+                FrameContent::SkSL {
+                    shader,
+                    resolution,
+                    effects,
+                    transform,
+                } => {
+                     let scaled_transform = apply_scale(transform, scale);
+                     let sksl_layer = 
+                         measure_debug(format!("Rasterize SkSL"), || {
+                             self.renderer.rasterize_sksl_layer(
+                                 &shader,
+                                 *resolution,
+                                 frame_info.now_time.0 as f32, // Use frame_info.now_time
+                                 &scaled_transform
+                             )
+                         })?;
+                     let final_image = self.apply_effects(sksl_layer, &effects, 0.0)?;
+                     let mut composite_transform = Transform::default();
+                     composite_transform.opacity = transform.opacity;
+                     measure_debug(format!("Composite SkSL"), || {
+                         self.renderer.draw_layer(&final_image, &composite_transform)
+                     })?;
+                }
             }
         }
         measure_debug("RenderService::finalize", || self.renderer.finalize())

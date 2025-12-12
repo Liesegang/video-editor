@@ -32,7 +32,7 @@ impl<'a> FrameEvaluator<'a> {
 
     pub fn evaluate(&self, frame_number: u64, render_scale: f64) -> FrameInfo {
         // Changed to u64
-        let mut frame = self.initialize_frame(render_scale);
+        let mut frame = self.initialize_frame(frame_number, render_scale);
         for track_clip in self.active_clips(frame_number) {
             // Changed to track_entity
             if let Some(object) = self.convert_entity(track_clip, frame_number) {
@@ -43,13 +43,15 @@ impl<'a> FrameEvaluator<'a> {
         frame
     }
 
-    fn initialize_frame(&self, render_scale: f64) -> FrameInfo {
+    fn initialize_frame(&self, frame_number: u64, render_scale: f64) -> FrameInfo {
+         let time = frame_number as f64 / self.composition.fps;
         FrameInfo {
             width: self.composition.width,
             height: self.composition.height,
             background_color: self.composition.background_color.clone(),
             color_profile: self.composition.color_profile.clone(),
             render_scale: ordered_float::OrderedFloat(render_scale),
+            now_time: ordered_float::OrderedFloat(time),
             objects: Vec::new(),
         }
     }

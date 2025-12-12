@@ -41,6 +41,14 @@ pub trait Renderer {
         transform: &Transform,
     ) -> Result<RenderOutput, LibraryError>;
 
+    fn rasterize_sksl_layer(
+        &mut self,
+        shader_code: &str,
+        resolution: (f32, f32),
+        time: f32,
+        transform: &Transform,
+    ) -> Result<RenderOutput, LibraryError>;
+
     fn read_surface(&mut self, output: &RenderOutput) -> Result<Image, LibraryError>;
 
     fn finalize(&mut self) -> Result<RenderOutput, LibraryError>;
