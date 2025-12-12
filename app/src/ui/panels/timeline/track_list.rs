@@ -31,7 +31,7 @@ pub fn show_track_list(
     );
 
     let mut current_tracks: Vec<Track> = Vec::new();
-    let selected_composition_id = editor_context.selected_composition_id;
+    let selected_composition_id = editor_context.selection.composition_id;
     // CRITICAL CHANGE: Acquire read lock, clone necessary data, then release the lock.
     if let Some(comp_id) = selected_composition_id {
         // Scope for the read lock to ensure it's dropped before any write attempts
@@ -48,7 +48,7 @@ pub fn show_track_list(
     for (i, track) in current_tracks.iter().enumerate() {
         let y = track_list_rect.min.y
             + (i as f32 * (row_height + track_spacing))
-            + editor_context.timeline_scroll_offset.y;
+            + editor_context.timeline.scroll_offset.y;
         let track_label_rect = egui::Rect::from_min_size(
             egui::pos2(track_list_rect.min.x, y),
             egui::vec2(track_list_rect.width(), row_height),
@@ -64,7 +64,7 @@ pub fn show_track_list(
                 .on_hover_text(format!("Track ID: {}", track.id));
 
             track_interaction_response.context_menu(|ui| {
-                if let Some(comp_id) = editor_context.selected_composition_id {
+                if let Some(comp_id) = editor_context.selection.composition_id {
                     if ui
                         .button(format!("{} Remove Track", icons::TRASH))
                         .clicked()
@@ -73,9 +73,9 @@ pub fn show_track_list(
                             error!("Failed to remove track: {:?}", e);
                         } else {
                             // If the removed track was selected, deselect it
-                            if editor_context.selected_track_id == Some(track.id) {
-                                editor_context.selected_track_id = None;
-                                editor_context.selected_entity_id = None;
+                            if editor_context.selection.track_id == Some(track.id) {
+                                editor_context.selection.track_id = None;
+                                editor_context.selection.entity_id = None;
                             }
                             let current_state = project.read().unwrap().clone();
                             history_manager.push_project_state(current_state);
@@ -85,13 +85,13 @@ pub fn show_track_list(
                 }
             });
             if track_interaction_response.clicked() {
-                editor_context.selected_track_id = Some(track.id);
+                editor_context.selection.track_id = Some(track.id);
             }
 
             track_list_painter.rect_filled(
                 track_label_rect,
                 0.0,
-                if editor_context.selected_track_id == Some(track.id) {
+                if editor_context.selection.track_id == Some(track.id) {
                     egui::Color32::from_rgb(50, 80, 120)
                 } else if i % 2 == 0 {
                     egui::Color32::from_gray(50)
@@ -110,7 +110,7 @@ pub fn show_track_list(
     }
 
     track_list_response.context_menu(|ui_content| {
-        if let Some(comp_id) = editor_context.selected_composition_id {
+        if let Some(comp_id) = editor_context.selection.composition_id {
             if ui_content
                 .add(egui::Button::new(egui::RichText::new(format!(
                     "{} Add Track",

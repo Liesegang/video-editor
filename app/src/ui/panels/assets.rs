@@ -33,7 +33,7 @@ pub fn assets_panel(
                 composition_dialog.duration,
             )
             .expect("Failed to add composition");
-        editor_context.selected_composition_id = Some(new_comp_id);
+        editor_context.selection.composition_id = Some(new_comp_id);
 
         // No need to add to assets list anymore, as Compositions are separate
 
@@ -132,7 +132,7 @@ pub fn assets_panel(
                         for comp in &proj_read.compositions {
                             ui.push_id(comp.id, |ui| {
                                 let is_selected =
-                                    editor_context.selected_composition_id == Some(comp.id);
+                                    editor_context.selection.composition_id == Some(comp.id);
                                 let response = ui.selectable_label(is_selected, &comp.name);
 
                                 response.context_menu(|ui| {
@@ -145,7 +145,7 @@ pub fn assets_panel(
                                         .clicked()
                                     {
                                         if project_service.is_composition_used(comp.id) {
-                                            editor_context.comp_delete_candidate = Some(comp.id);
+                                            editor_context.interaction.comp_delete_candidate = Some(comp.id);
                                         } else {
                                             comp_to_remove = Some(comp.id);
                                         }
@@ -154,13 +154,13 @@ pub fn assets_panel(
                                 });
 
                                 if response.clicked() {
-                                    editor_context.selected_composition_id = Some(comp.id);
-                                    editor_context.selected_track_id = None;
-                                    editor_context.selected_entity_id = None;
+                                    editor_context.selection.composition_id = Some(comp.id);
+                                    editor_context.selection.track_id = None;
+                                    editor_context.selection.entity_id = None;
                                 }
 
                                 if response.drag_started() {
-                                    editor_context.dragged_item =
+                                    editor_context.interaction.dragged_item =
                                         Some(DraggedItem::Composition(comp.id));
                                 }
                                 response.on_hover_text(format!("Comp ID: {}", comp.id));
@@ -193,7 +193,7 @@ pub fn assets_panel(
                                 AssetKind::Other => icons::FILE,
                             };
 
-                            let is_dragged = match editor_context.dragged_item {
+                            let is_dragged = match editor_context.interaction.dragged_item {
                                 Some(DraggedItem::Asset(id)) => id == asset.id,
                                 _ => false,
                             };
@@ -209,7 +209,7 @@ pub fn assets_panel(
 
                             // Interactions
                             if response.drag_started() {
-                                editor_context.dragged_item = Some(DraggedItem::Asset(asset.id));
+                                editor_context.interaction.dragged_item = Some(DraggedItem::Asset(asset.id));
                             }
 
                             response.context_menu(|ui| {
@@ -218,7 +218,7 @@ pub fn assets_panel(
                                     .clicked()
                                 {
                                     if project_service.is_asset_used(asset.id) {
-                                        editor_context.asset_delete_candidate = Some(asset.id);
+                                        editor_context.interaction.asset_delete_candidate = Some(asset.id);
                                     } else {
                                         asset_to_remove = Some(asset.id);
                                     }
@@ -278,11 +278,11 @@ pub fn assets_panel(
 
     // Handle deferred deletions (to avoid deadlock)
     if let Some(comp_id) = comp_to_remove {
-        if let Some(selected_id) = editor_context.selected_composition_id {
+        if let Some(selected_id) = editor_context.selection.composition_id {
             if selected_id == comp_id {
-                editor_context.selected_composition_id = None;
-                editor_context.selected_track_id = None;
-                editor_context.selected_entity_id = None;
+                editor_context.selection.composition_id = None;
+                editor_context.selection.track_id = None;
+                editor_context.selection.entity_id = None;
             }
         }
 
@@ -306,7 +306,7 @@ pub fn assets_panel(
     }
 
     // Confirmation Modal for Composition Deletion
-    if let Some(comp_id) = editor_context.comp_delete_candidate {
+    if let Some(comp_id) = editor_context.interaction.comp_delete_candidate {
         egui::Window::new("⚠ Confirm Composition Deletion")
             .collapsible(false)
             .resizable(false)
@@ -318,7 +318,7 @@ pub fn assets_panel(
 
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() {
-                        editor_context.comp_delete_candidate = None;
+                        editor_context.interaction.comp_delete_candidate = None;
                     }
                     if ui
                         .button(egui::RichText::new("Delete").color(egui::Color32::RED))
@@ -327,10 +327,10 @@ pub fn assets_panel(
                         match project_service.remove_composition_fully(comp_id) {
                             Ok(_) => {
                                 // Clear selection if we just deleted the selected comp
-                                if editor_context.selected_composition_id == Some(comp_id) {
-                                    editor_context.selected_composition_id = None;
-                                    editor_context.selected_track_id = None;
-                                    editor_context.selected_entity_id = None;
+                                if editor_context.selection.composition_id == Some(comp_id) {
+                                    editor_context.selection.composition_id = None;
+                                    editor_context.selection.track_id = None;
+                                    editor_context.selection.entity_id = None;
                                 }
 
                                 let current_state =
@@ -342,14 +342,14 @@ pub fn assets_panel(
                                 log::error!("Failed to remove composition fully: {}", e);
                             }
                         }
-                        editor_context.comp_delete_candidate = None;
+                        editor_context.interaction.comp_delete_candidate = None;
                     }
                 });
             });
     }
 
     // Confirmation Modal for Asset Deletion
-    if let Some(asset_id) = editor_context.asset_delete_candidate {
+    if let Some(asset_id) = editor_context.interaction.asset_delete_candidate {
         egui::Window::new("⚠ Confirm Deletion")
             .collapsible(false)
             .resizable(false)
@@ -361,7 +361,7 @@ pub fn assets_panel(
 
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() {
-                        editor_context.asset_delete_candidate = None;
+                        editor_context.interaction.asset_delete_candidate = None;
                     }
                     if ui
                         .button(egui::RichText::new("Delete").color(egui::Color32::RED))
@@ -378,7 +378,7 @@ pub fn assets_panel(
                                 log::error!("Failed to remove asset fully: {}", e);
                             }
                         }
-                        editor_context.asset_delete_candidate = None;
+                        editor_context.interaction.asset_delete_candidate = None;
                     }
                 });
             });

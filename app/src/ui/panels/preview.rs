@@ -27,27 +27,27 @@ pub fn preview_panel(
     let is_panning_input = space_down || middle_down;
 
     if is_panning_input && response.dragged() {
-        editor_context.view_pan += response.drag_delta();
+        editor_context.view.pan += response.drag_delta();
     }
 
     if response.hovered() {
         let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
         if scroll_delta != 0.0 {
             let zoom_factor = if scroll_delta > 0.0 { 1.1 } else { 0.9 };
-            let old_zoom = editor_context.view_zoom;
-            editor_context.view_zoom *= zoom_factor;
+            let old_zoom = editor_context.view.zoom;
+            editor_context.view.zoom *= zoom_factor;
 
             if let Some(mouse_pos) = pointer_pos {
                 let mouse_in_canvas = mouse_pos - rect.min;
-                editor_context.view_pan = mouse_in_canvas
-                    - (mouse_in_canvas - editor_context.view_pan)
-                        * (editor_context.view_zoom / old_zoom);
+                editor_context.view.pan = mouse_in_canvas
+                    - (mouse_in_canvas - editor_context.view.pan)
+                        * (editor_context.view.zoom / old_zoom);
             }
         }
     }
 
-    let view_offset = rect.min + editor_context.view_pan;
-    let view_zoom = editor_context.view_zoom;
+    let view_offset = rect.min + editor_context.view.pan;
+    let view_zoom = editor_context.view.zoom;
 
     let to_screen = |pos: egui::Pos2| -> egui::Pos2 { view_offset + (pos.to_vec2() * view_zoom) };
     let to_world = |pos: egui::Pos2| -> egui::Pos2 {
@@ -61,7 +61,7 @@ pub fn preview_panel(
     painter.rect_filled(rect, 0.0, egui::Color32::from_gray(30));
 
     // Grid
-    let grid_size = 100.0 * editor_context.view_zoom;
+    let grid_size = 100.0 * editor_context.view.zoom;
 
     if grid_size > 10.0 {
         let (_cols, _rows) = (
@@ -69,9 +69,9 @@ pub fn preview_panel(
             (rect.height() / grid_size).ceil() as usize + 2,
         );
         let start_x =
-            rect.min.x + ((editor_context.view_pan.x % grid_size) + grid_size) % grid_size;
+            rect.min.x + ((editor_context.view.pan.x % grid_size) + grid_size) % grid_size;
         let start_y =
-            rect.min.y + ((editor_context.view_pan.y % grid_size) + grid_size) % grid_size;
+            rect.min.y + ((editor_context.view.pan.y % grid_size) + grid_size) % grid_size;
         let grid_color = egui::Color32::from_gray(50);
 
         // Calculate the first visible line's coordinate for x and y
@@ -105,7 +105,7 @@ pub fn preview_panel(
     // Calculate current frame and Request Render
     if let Ok(proj_read) = project.read() {
         if let Some(comp) = editor_context.get_current_composition(&proj_read) {
-            let current_frame = (editor_context.current_time as f64 * comp.fps).round() as u64;
+            let current_frame = (editor_context.timeline.current_time as f64 * comp.fps).round() as u64;
 
             if let Some(comp_idx) = proj_read.compositions.iter().position(|c| c.id == comp.id) {
                 let plugin_manager = project_service.get_plugin_manager();
@@ -338,7 +338,7 @@ pub fn preview_panel(
                         .iter()
                         .filter(|gc| {
                             let current_frame =
-                                (editor_context.current_time as f64 * comp.fps).round() as u64; // Convert current_time (f32) to frame (u64)
+                                (editor_context.timeline.current_time as f64 * comp.fps).round() as u64; // Convert current_time (f32) to frame (u64)
                             current_frame >= gc.in_frame && current_frame < gc.out_frame
                         })
                         .collect();
@@ -430,7 +430,7 @@ pub fn preview_panel(
     // Handle Gizmo Interaction (Drag)
     // Handle Gizmo Interaction (Drag)
     // Extract Gizmo Information first to avoid double borrow of editor_context
-    let gizmo_drag_data = if let Some(state) = &editor_context.gizmo_state {
+    let gizmo_drag_data = if let Some(state) = &editor_context.interaction.gizmo_state {
         Some((
             state.start_mouse_pos,
             state.active_handle,
@@ -461,13 +461,13 @@ pub fn preview_panel(
     )) = gizmo_drag_data
     {
         if ui.input(|i| i.pointer.any_released()) {
-            editor_context.gizmo_state = None;
+            editor_context.interaction.gizmo_state = None;
             interacted_with_gizmo = true; // Prevent click-through to selection logic on release
         } else if let Some(mouse_pos) = pointer_pos {
             interacted_with_gizmo = true;
 
             // Re-acquire selected entity data
-            if let Some(selected_id) = editor_context.selected_entity_id {
+            if let Some(selected_id) = editor_context.selection.entity_id {
                 // Clone needed properties to avoid borrow issues
                 let (comp_id, track_id, current_props) = if let Ok(proj_read) = project.read() {
                     if let Some(comp) = editor_context.get_current_composition(&proj_read) {
@@ -700,7 +700,7 @@ pub fn preview_panel(
     }
 
     if ui.input(|i| i.pointer.any_released()) {
-        editor_context.is_moving_selected_entity = false;
+        editor_context.interaction.is_moving_selected_entity = false;
     }
 
     if !is_panning_input && !interacted_with_gizmo {
@@ -709,10 +709,10 @@ pub fn preview_panel(
             if let Some(hovered) = hovered_entity_id {
                 if let Some(gc) = gui_clips.iter().find(|gc| gc.id == hovered) {
                     editor_context.select_clip(hovered, gc.track_id);
-                    editor_context.is_moving_selected_entity = true; // Started drag on entity
+                    editor_context.interaction.is_moving_selected_entity = true; // Started drag on entity
                 }
             } else {
-                editor_context.is_moving_selected_entity = false; // Started drag on background
+                editor_context.interaction.is_moving_selected_entity = false; // Started drag on background
             }
         }
 
@@ -723,15 +723,15 @@ pub fn preview_panel(
                 }
             } else {
                 // Deselect if clicked on background
-                editor_context.selected_entity_id = None;
+                editor_context.selection.entity_id = None;
             }
         } else if response.dragged() {
             // Guard: Only move if we started the drag on the entity
-            if editor_context.is_moving_selected_entity {
-                if let Some(entity_id) = editor_context.selected_entity_id {
-                    let current_zoom = editor_context.view_zoom;
-                    if let Some(comp_id) = editor_context.selected_composition_id {
-                        if let Some(track_id) = editor_context.selected_track_id {
+            if editor_context.interaction.is_moving_selected_entity {
+                if let Some(entity_id) = editor_context.selection.entity_id {
+                    let current_zoom = editor_context.view.zoom;
+                    if let Some(comp_id) = editor_context.selection.composition_id {
+                        if let Some(track_id) = editor_context.selection.track_id {
                             // Need track_id to update entity properties
                             let world_delta = response.drag_delta() / current_zoom;
 
@@ -794,7 +794,7 @@ pub fn preview_panel(
     }
 
     // Draw Gizmo for selected entity
-    if let Some(selected_id) = editor_context.selected_entity_id {
+    if let Some(selected_id) = editor_context.selection.entity_id {
         if let Some(gc) = gui_clips.iter().find(|gc| gc.id == selected_id) {
             let base_w = gc.width.unwrap_or(1920.0);
             let base_h = gc.height.unwrap_or(1080.0);
@@ -830,7 +830,7 @@ pub fn preview_panel(
 
             // Rotation Handle (sticking out top)
             // Center top is p_t.
-            let rot_handle_dist = 10.0 / editor_context.view_zoom; // Fixed screen distance 20px
+            let rot_handle_dist = 10.0 / editor_context.view.zoom; // Fixed screen distance 20px
             let s_rot = to_screen(p_t) + egui::vec2(sin * rot_handle_dist, -cos * rot_handle_dist); // Approx visual up
                                                                                                     // Let's use fixed screen offset logic for rotation handle drawing.
 
@@ -914,14 +914,14 @@ pub fn preview_panel(
                 painter.circle_stroke(*pos, handle_radius, stroke);
 
                 // Hit Test for Start Drag
-                if editor_context.gizmo_state.is_none() && !is_panning_input {
+                if editor_context.interaction.gizmo_state.is_none() && !is_panning_input {
                     if let Some(mouse_pos) = pointer_pos {
                         if pos.distance(mouse_pos) <= handle_radius + 2.0 {
                             ui.ctx().set_cursor_icon(*cursor);
                             if ui.input(|i| i.pointer.primary_pressed()) {
                                 // Start Drag
                                 use crate::state::context::GizmoState;
-                                editor_context.gizmo_state = Some(GizmoState {
+                                editor_context.interaction.gizmo_state = Some(GizmoState {
                                     start_mouse_pos: mouse_pos, // Screen space start? or World? We used world in logic.
                                     // Let's store Screen for simple delta or convert to World?
                                     // Context struct uses `start_mouse_pos: egui::Pos2`.
@@ -951,8 +951,8 @@ pub fn preview_panel(
     // Info text
     let info_text = format!(
         "Time: {:.2}\nZoom: {:.0}%",
-        editor_context.current_time,
-        editor_context.view_zoom * 100.0
+        editor_context.timeline.current_time,
+        editor_context.view.zoom * 100.0
     );
     painter.text(
         rect.left_top() + egui::vec2(10.0, 10.0),

@@ -3,124 +3,50 @@ use library::model::project::project::{Composition, Project};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::model::ui_types::{DraggedItem, TimelineDisplayMode, Vec2Def};
+use crate::state::context_types::{
+    InteractionState, SelectionState, TimelineState, ViewState,
+};
 
 #[derive(Serialize, Deserialize)]
 pub struct EditorContext {
-    pub current_time: f32,
-    pub is_playing: bool,
-    pub timeline_pixels_per_second: f32,
-    pub timeline_display_mode: TimelineDisplayMode, // New field for timeline display mode,
-
-    #[serde(with = "Vec2Def")]
-    pub view_pan: egui::Vec2,
-    pub view_zoom: f32,
+    pub timeline: TimelineState,
+    pub view: ViewState,
+    pub selection: SelectionState,
 
     #[serde(skip)]
-    pub dragged_item: Option<DraggedItem>,
-    #[serde(skip)]
-    pub asset_delete_candidate: Option<Uuid>,
-    #[serde(skip)]
-    pub comp_delete_candidate: Option<Uuid>,
-    #[serde(skip)]
-    pub active_modal_error: Option<String>,
+    pub interaction: InteractionState,
 
-    pub timeline_v_zoom: f32,
-    pub timeline_h_zoom: f32,
-    #[serde(skip)]
-    pub timeline_scroll_offset: egui::Vec2,
-
-    #[serde(skip)]
-    pub selected_composition_id: Option<Uuid>,
-    #[serde(skip)]
-    pub selected_track_id: Option<Uuid>,
-    #[serde(skip)]
-    pub selected_entity_id: Option<Uuid>,
-
-    #[serde(skip)]
-    pub dragged_entity_original_track_id: Option<Uuid>,
-    #[serde(skip)]
-    pub dragged_entity_hovered_track_id: Option<Uuid>,
-    #[serde(skip)]
-    pub dragged_entity_has_moved: bool, // Track if entity was actually moved during drag
-    #[serde(skip)]
-    pub is_resizing_entity: bool,
-    #[serde(skip)]
-    pub is_moving_selected_entity: bool,
-
-    #[serde(skip)]
-    pub current_time_text_input: String,
-    #[serde(skip)]
-    pub is_editing_current_time: bool,
     #[serde(skip)]
     pub preview_texture: Option<egui::TextureHandle>,
     #[serde(skip)]
     pub preview_texture_id: Option<u32>, // Raw GL texture ID
-
-    #[serde(skip)]
-    pub gizmo_state: Option<GizmoState>,
 }
 
-#[derive(Debug, Clone)]
-pub struct GizmoState {
-    pub start_mouse_pos: egui::Pos2,
-    pub active_handle: crate::model::ui_types::GizmoHandle,
-    pub original_position: [f32; 2],
-    pub original_scale_x: f32,
-    pub original_scale_y: f32,
-    pub original_rotation: f32,
-    // Store original anchor too if we implement anchor drag later,
-    // but for resize w/ anchor compensation we might need it.
-    pub original_anchor_x: f32,
-    pub original_anchor_y: f32,
-    pub original_width: f32,
-    pub original_height: f32,
-}
+pub use crate::state::context_types::GizmoState; // Re-export for compatibility if needed, though better to import from context_types
 
 impl EditorContext {
     pub fn new(default_comp_id: Uuid) -> Self {
+        let mut selection = SelectionState::default();
+        selection.composition_id = Some(default_comp_id);
+
         Self {
-            current_time: 0.0,
-            is_playing: false,
-            timeline_pixels_per_second: 50.0,
-            timeline_display_mode: TimelineDisplayMode::Seconds, // Default display mode,
-
-            view_pan: egui::vec2(20.0, 20.0),
-            view_zoom: 0.3,
-            dragged_item: None,
-            asset_delete_candidate: None,
-            comp_delete_candidate: None,
-            active_modal_error: None,
-
-            timeline_v_zoom: 1.0,
-            timeline_h_zoom: 1.0,
-            timeline_scroll_offset: egui::Vec2::ZERO,
-
-            selected_composition_id: Some(default_comp_id),
-            selected_track_id: None,
-            selected_entity_id: None,
-
-            dragged_entity_original_track_id: None,
-            dragged_entity_hovered_track_id: None,
-            dragged_entity_has_moved: false,
-            is_resizing_entity: false,
-            is_moving_selected_entity: false, // Initialize new field
-
-            current_time_text_input: "".to_string(), // Initialize new field
-            is_editing_current_time: false,          // Initialize new field
+            timeline: TimelineState::default(),
+            view: ViewState::default(),
+            selection,
+            interaction: InteractionState::default(),
             preview_texture: None,
             preview_texture_id: None,
-            gizmo_state: None,
         }
     }
 
     pub fn get_current_composition<'a>(&self, project: &'a Project) -> Option<&'a Composition> {
-        self.selected_composition_id
+        self.selection.composition_id
             .and_then(|id| project.compositions.iter().find(|&c| c.id == id))
     }
 
     pub fn select_clip(&mut self, entity_id: Uuid, track_id: Uuid) {
-        self.selected_entity_id = Some(entity_id);
-        self.selected_track_id = Some(track_id);
+        self.selection.entity_id = Some(entity_id);
+        self.selection.track_id = Some(track_id);
     }
 }
+

@@ -36,16 +36,16 @@ pub fn timeline_panel(
     } // `project_lock` is dropped here, releasing the read lock.
 
     const TRACK_LIST_SIDEBAR_WIDTH: f32 = 100.0;
-    let pixels_per_unit = match editor_context.timeline_display_mode {
+    let pixels_per_unit = match editor_context.timeline.display_mode {
         TimelineDisplayMode::Seconds => {
-            editor_context.timeline_pixels_per_second * editor_context.timeline_h_zoom
+            editor_context.timeline.pixels_per_second * editor_context.timeline.h_zoom
         }
         TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => {
-            (editor_context.timeline_pixels_per_second / current_composition_fps as f32) // Use the extracted fps
-                * editor_context.timeline_h_zoom
+            (editor_context.timeline.pixels_per_second / current_composition_fps as f32) // Use the extracted fps
+                * editor_context.timeline.h_zoom
         }
     };
-    let scroll_offset_x = editor_context.timeline_scroll_offset.x;
+    let scroll_offset_x = editor_context.timeline.scroll_offset.x;
 
     egui::TopBottomPanel::top("timeline_ruler_panel")
         .exact_height(20.0)
@@ -111,7 +111,7 @@ pub fn timeline_panel(
     let cx = central_panel_rect.min.x
       + TRACK_LIST_SIDEBAR_WIDTH // Add the width of the track list sidebar
       - scroll_offset_x
-        + editor_context.current_time * pixels_per_unit
+        + editor_context.timeline.current_time * pixels_per_unit
         + 24.0; // This offset might need to be adjusted
 
     let full_timeline_area = ui.available_rect_before_wrap();

@@ -68,9 +68,9 @@ pub fn inspector_panel(
 
     // Display properties of selected entity
     if let (Some(selected_entity_id), Some(comp_id), Some(track_id)) = (
-        editor_context.selected_entity_id,
-        editor_context.selected_composition_id,
-        editor_context.selected_track_id,
+        editor_context.selection.entity_id,
+        editor_context.selection.composition_id,
+        editor_context.selection.track_id,
     ) {
         // Fetch entity data directly from project
         let entity_data = if let Ok(proj_read) = project.read() {
@@ -323,12 +323,12 @@ pub fn inspector_panel(
         } else {
             ui.label("Clip not found (it may have been deleted).");
             // Deselect if not found
-            editor_context.selected_entity_id = None;
+            editor_context.selection.entity_id = None;
         }
     } else {
-        if editor_context.selected_composition_id.is_none() {
+        if editor_context.selection.composition_id.is_none() {
             ui.label("No composition selected.");
-        } else if editor_context.selected_track_id.is_none() {
+        } else if editor_context.selection.track_id.is_none() {
             ui.label("No track selected.");
         } else {
             ui.label("Select a clip to edit");

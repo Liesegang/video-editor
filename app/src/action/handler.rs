@@ -48,10 +48,10 @@ pub fn handle_command(
             new_project.add_composition(default_comp);
             context.project_service.set_project(new_project);
 
-            context.editor_context.selected_composition_id = Some(new_comp_id);
-            context.editor_context.selected_track_id = None;
-            context.editor_context.selected_entity_id = None;
-            context.editor_context.current_time = 0.0;
+            context.editor_context.selection.composition_id = Some(new_comp_id);
+            context.editor_context.selection.track_id = None;
+            context.editor_context.selection.entity_id = None;
+            context.editor_context.timeline.current_time = 0.0;
 
             // history_manager reset?
             // We can't replace the history_manager instance itself easily if it's borrowed.
@@ -90,7 +90,7 @@ pub fn handle_command(
                                     .push_project_state(proj_read.clone());
                             }
                             info!("Project loaded from {}", path.display());
-                            context.editor_context.current_time = 0.0;
+                            context.editor_context.timeline.current_time = 0.0;
                         }
                     }
                     Err(e) => error!("Failed to read project file: {}", e),
@@ -136,16 +136,16 @@ pub fn handle_command(
             }
         }
         CommandId::Delete => {
-            if let Some(comp_id) = context.editor_context.selected_composition_id {
-                if let Some(track_id) = context.editor_context.selected_track_id {
-                    if let Some(entity_id) = context.editor_context.selected_entity_id {
+            if let Some(comp_id) = context.editor_context.selection.composition_id {
+                if let Some(track_id) = context.editor_context.selection.track_id {
+                    if let Some(entity_id) = context.editor_context.selection.entity_id {
                         if let Err(e) = context
                             .project_service
                             .remove_clip_from_track(comp_id, track_id, entity_id)
                         {
                             error!("Failed to remove entity: {:?}", e);
                         } else {
-                            context.editor_context.selected_entity_id = None;
+                            context.editor_context.selection.entity_id = None;
                             let current_state = context
                                 .project_service
                                 .get_project()
@@ -162,7 +162,7 @@ pub fn handle_command(
             *context.dock_state = crate::ui::tab_viewer::create_initial_dock_state();
         }
         CommandId::TogglePlayback => {
-            context.editor_context.is_playing = !context.editor_context.is_playing;
+            context.editor_context.timeline.is_playing = !context.editor_context.timeline.is_playing;
         }
         CommandId::TogglePanel(tab) => {
             if let Some(index) = context.dock_state.find_tab(&tab) {
