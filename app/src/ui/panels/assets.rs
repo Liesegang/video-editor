@@ -1,9 +1,10 @@
 use egui::Ui;
 use egui_phosphor::regular as icons;
-use library::model::project::asset::AssetKind; // Updated import
+use library::model::project::asset::AssetKind;
 use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
+use egui_extras::{TableBuilder, Column};
 
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::{
@@ -124,158 +125,183 @@ pub fn assets_panel(
 
             // 1. Compositions
             ui.heading("Compositions");
-            egui::ScrollArea::vertical()
-                .id_salt("assets_compositions_scroll_area")
-                .max_height(150.0)
-                .show(ui, |ui| {
-                    if let Ok(proj_read) = project.read() {
-                        for comp in &proj_read.compositions {
-                            ui.push_id(comp.id, |ui| {
-                                let is_selected =
-                                    editor_context.selection.composition_id == Some(comp.id);
-                                let response = ui.selectable_label(is_selected, &comp.name);
-
-                                response.context_menu(|ui| {
-                                    if ui.button("Edit Properties").clicked() {
-                                        composition_dialog.open_for_edit(comp);
-                                        ui.close();
-                                    }
-                                    if ui
-                                        .button(format!("{} Delete Composition", icons::TRASH))
-                                        .clicked()
-                                    {
-                                        if project_service.is_composition_used(comp.id) {
-                                            editor_context.interaction.comp_delete_candidate =
-                                                Some(comp.id);
-                                        } else {
-                                            comp_to_remove = Some(comp.id);
-                                        }
-                                        ui.close();
-                                    }
+            
+            if let Ok(proj_read) = project.read() {
+                ui.push_id("compositions_table_scope", |ui| {
+                    let available_height = 150.0;
+                    TableBuilder::new(ui)
+                        .striped(true)
+                        .vscroll(true) // Enable vertical scrolling
+                        .min_scrolled_height(0.0)
+                        .max_scroll_height(available_height)
+                        .column(Column::initial(150.0).resizable(true)) // Name
+                        .column(Column::initial(80.0).resizable(true))  // Resolution
+                        .column(Column::initial(40.0).resizable(true))  // FPS
+                        .column(Column::remainder())                    // Duration
+                        .header(20.0, |mut header| {
+                            header.col(|ui| { ui.strong("Name"); });
+                            header.col(|ui| { ui.strong("Res"); });
+                            header.col(|ui| { ui.strong("FPS"); });
+                            header.col(|ui| { ui.strong("Dur"); });
+                        })
+                        .body(|mut body| {
+                            for comp in &proj_read.compositions {
+                                body.row(20.0, |mut row| {
+                                    // Name Column
+                                    row.col(|ui| {
+                                        ui.push_id(comp.id, |ui| {
+                                            let is_selected = editor_context.selection.composition_id == Some(comp.id);
+                                            let response = ui.selectable_label(is_selected, &comp.name);
+                                            
+                                            // Interactions (same as before)
+                                            response.context_menu(|ui| {
+                                            if ui.button(format!("{} Edit Properties", icons::PENCIL_SIMPLE)).clicked() {
+                                                composition_dialog.open_for_edit(comp);
+                                                ui.close();
+                                            }
+                                                if ui.button(format!("{} Delete Composition", icons::TRASH)).clicked() {
+                                                    if project_service.is_composition_used(comp.id) {
+                                                        editor_context.interaction.comp_delete_candidate = Some(comp.id);
+                                                    } else {
+                                                        comp_to_remove = Some(comp.id);
+                                                    }
+                                                    ui.close();
+                                                }
+                                            });
+    
+                                            if response.clicked() {
+                                                editor_context.selection.composition_id = Some(comp.id);
+                                                editor_context.selection.track_id = None;
+                                                editor_context.selection.entity_id = None;
+                                            }
+    
+                                            if response.drag_started() {
+                                                editor_context.interaction.dragged_item = Some(DraggedItem::Composition(comp.id));
+                                            }
+                                            response.on_hover_text(format!("Comp ID: {}", comp.id));
+                                        });
+                                    });
+                                    
+                                    // Resolution Column
+                                    row.col(|ui| {
+                                        ui.label(format!("{}x{}", comp.width, comp.height));
+                                    });
+    
+                                    // FPS Column
+                                    row.col(|ui| {
+                                        ui.label(format!("{:.2}", comp.fps));
+                                    });
+    
+                                    // Duration Column
+                                    row.col(|ui| {
+                                        ui.label(format!("{:.2}s", comp.duration));
+                                    });
                                 });
-
-                                if response.clicked() {
-                                    editor_context.selection.composition_id = Some(comp.id);
-                                    editor_context.selection.track_id = None;
-                                    editor_context.selection.entity_id = None;
-                                }
-
-                                if response.drag_started() {
-                                    editor_context.interaction.dragged_item =
-                                        Some(DraggedItem::Composition(comp.id));
-                                }
-                                response.on_hover_text(format!("Comp ID: {}", comp.id));
-                            });
-                        }
-                    }
+                            }
+                        });
                 });
+            }
 
             ui.separator();
             ui.add_space(5.0);
 
             // 2. Other Assets
             ui.heading("Other Assets");
-            egui::ScrollArea::vertical()
-                .id_salt("assets_other_scroll_area")
-                .show(ui, |ui| {
-                    if let Ok(proj_read) = project.read() {
-                        for asset in &proj_read.assets {
-                            let duration_text = if let Some(d) = asset.duration {
-                                format!("({:.1}s)", d)
-                            } else {
-                                "".to_string()
-                            };
-                            let label_text = format!("{} {}", asset.name, duration_text);
-                            let icon = match asset.kind {
-                                AssetKind::Video => icons::FILE_VIDEO,
-                                AssetKind::Audio => icons::FILE_AUDIO,
-                                AssetKind::Image => icons::FILE_IMAGE,
-                                AssetKind::Model3D => icons::CUBE,
-                                AssetKind::Other => icons::FILE,
-                            };
-
-                            let is_dragged = match editor_context.interaction.dragged_item {
-                                Some(DraggedItem::Asset(id)) => id == asset.id,
-                                _ => false,
-                            };
-
-                            // Custom rendering for Asset Item
-                            // We allocate space and draw manually
-                            let item_height = 24.0;
-                            let width = ui.available_width();
-                            let (rect, response) = ui.allocate_exact_size(
-                                egui::vec2(width, item_height),
-                                egui::Sense::click().union(egui::Sense::drag()),
-                            );
-
-                            // Interactions
-                            if response.drag_started() {
-                                editor_context.interaction.dragged_item =
-                                    Some(DraggedItem::Asset(asset.id));
+            
+            if let Ok(proj_read) = project.read() {
+                ui.push_id("assets_table_scope", |ui| {
+                    TableBuilder::new(ui)
+                        .striped(true)
+                        .vscroll(true)
+                        .column(Column::auto())                         // Type Icon
+                        .column(Column::initial(150.0).resizable(true)) // Name
+                        .column(Column::initial(80.0).resizable(true))  // Type Text
+                        .column(Column::initial(80.0).resizable(true))  // Duration
+                        .column(Column::remainder())                    // Resolution
+                        .header(20.0, |mut header| {
+                            header.col(|_| {}); // Icon header empty
+                            header.col(|ui| { ui.strong("Name"); });
+                            header.col(|ui| { ui.strong("Type"); });
+                            header.col(|ui| { ui.strong("Duration"); });
+                            header.col(|ui| { ui.strong("Res"); });
+                        })
+                        .body(|mut body| {
+                            for asset in &proj_read.assets {
+                                 body.row(20.0, |mut row| {
+                                    let icon = match asset.kind {
+                                        AssetKind::Video => icons::FILE_VIDEO,
+                                        AssetKind::Audio => icons::FILE_AUDIO,
+                                        AssetKind::Image => icons::FILE_IMAGE,
+                                        AssetKind::Model3D => icons::CUBE,
+                                        AssetKind::Other => icons::FILE,
+                                    };
+                                    let type_text = format!("{:?}", asset.kind); // e.g. "Video", "Image"
+                                    
+                                    // Icon Column
+                                    row.col(|ui| {
+                                        let c = asset.color.clone();
+                                        let icon_color = egui::Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a);
+                                        ui.label(egui::RichText::new(icon).color(icon_color).size(16.0));
+                                    });
+    
+                                        // Name Column (Interactive)
+                                        row.col(|ui| {
+                                            ui.push_id(asset.id, |ui| {
+                                                let _is_dragged = match editor_context.interaction.dragged_item {
+                                                    Some(DraggedItem::Asset(id)) => id == asset.id,
+                                                    _ => false,
+                                                };
+                                            
+                                                // Use selectable_label logic or custom logic
+                                                // We want it to be selectable? Maybe not strictly "selected" as current selection model is Comp/Track/Entity.
+                                                // But we need context menu and drag.
+                                                
+                                                let response = ui.add(egui::Label::new(&asset.name).sense(egui::Sense::click().union(egui::Sense::drag())));
+    
+                                                // Context Menu
+                                                response.context_menu(|ui| {
+                                                    if ui.button(format!("{} Delete Asset", icons::TRASH)).clicked() {
+                                                        if project_service.is_asset_used(asset.id) {
+                                                            editor_context.interaction.asset_delete_candidate = Some(asset.id);
+                                                        } else {
+                                                            asset_to_remove = Some(asset.id);
+                                                        }
+                                                        ui.close();
+                                                    }
+                                                });
+    
+                                                // Drag
+                                                if response.drag_started() {
+                                                    editor_context.interaction.dragged_item = Some(DraggedItem::Asset(asset.id));
+                                                }
+                                                
+                                                response.on_hover_text(format!("Asset ID: {}", asset.id));
+                                            });
+                                        });
+    
+                                    // Type Text Column
+                                    row.col(|ui| {
+                                        ui.label(type_text);
+                                    });
+    
+                                    // Duration Column
+                                    row.col(|ui| {
+                                        if let Some(d) = asset.duration {
+                                            ui.label(format!("{:.1}s", d));
+                                        }
+                                    });
+                                    
+                                    // Resolution Column
+                                    row.col(|ui| {
+                                        if let (Some(w), Some(h)) = (asset.width, asset.height) {
+                                            ui.label(format!("{}x{}", w, h));
+                                        }
+                                    });
+                                 });
                             }
-
-                            response.context_menu(|ui| {
-                                if ui
-                                    .button(format!("{} Delete Asset", icons::TRASH))
-                                    .clicked()
-                                {
-                                    if project_service.is_asset_used(asset.id) {
-                                        editor_context.interaction.asset_delete_candidate =
-                                            Some(asset.id);
-                                    } else {
-                                        asset_to_remove = Some(asset.id);
-                                    }
-                                    ui.close();
-                                }
-                            });
-
-                            // Drawing
-                            if ui.is_rect_visible(rect) {
-                                let visuals = ui.style().interact(&response);
-
-                                // Background
-                                if response.hovered() || is_dragged {
-                                    ui.painter().rect(
-                                        rect,
-                                        2.0,
-                                        visuals.bg_fill,
-                                        egui::Stroke::NONE,
-                                        egui::StrokeKind::Inside,
-                                    );
-                                }
-
-                                // Icon
-                                let icon_rect = egui::Rect::from_min_size(
-                                    rect.min + egui::vec2(4.0, 4.0),
-                                    egui::vec2(16.0, 16.0),
-                                );
-                                let c = asset.color.clone();
-                                let icon_color =
-                                    egui::Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a);
-
-                                ui.painter().text(
-                                    icon_rect.min,
-                                    egui::Align2::LEFT_TOP,
-                                    icon,
-                                    egui::FontId::proportional(16.0),
-                                    icon_color,
-                                );
-
-                                // Text
-                                let text_pos = rect.min + egui::vec2(24.0, 4.0);
-                                ui.painter().text(
-                                    text_pos,
-                                    egui::Align2::LEFT_TOP,
-                                    &label_text,
-                                    egui::FontId::proportional(14.0),
-                                    visuals.text_color(),
-                                );
-                            }
-
-                            response.on_hover_text(format!("Asset ID: {:?}", asset.id));
-                        }
-                    }
+                        });
                 });
+            }
         });
     });
 
