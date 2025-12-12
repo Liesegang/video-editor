@@ -14,6 +14,7 @@ enum Action {
     Add(String, f64, f64),         // prop_key, time, value
     SetEasing(String, usize, EasingFunction),
     Remove(String, usize),
+    EditKeyframe(String, usize),
     None,
 }
 
@@ -113,7 +114,7 @@ pub fn graph_editor_panel(
 
         // Allocate Graph Area (Covers everything including ruler)
         // We use Sense::hover() here so the painter allocation doesn't steal inputs from manual interact calls below.
-        let (base_response, painter) = ui.allocate_painter(available_rect.size(), Sense::hover());
+        let (_base_response, painter) = ui.allocate_painter(available_rect.size(), Sense::hover());
 
         // Explicitly handle interactions for disjoint areas
         let ruler_response =
@@ -156,7 +157,7 @@ pub fn graph_editor_panel(
         // `base_response` covers all, but `graph_response` is where we want "add keyframe" to happen (not on ruler).
         // So `let response = graph_response;` seems appropriate.
 
-        let response = graph_response; // Shadowing the tuple variable if I extracted it? No, `response` from allocate_painter.
+        let _response = graph_response; // Shadowing the tuple variable if I extracted it? No, `response` from allocate_painter.
                                        // Wait, allocate_painter returned `response`. I named it `base_response`.
                                        // So I can just define `let response = graph_response;` here.
 
@@ -626,7 +627,7 @@ pub fn graph_editor_panel(
                                     action = Action::SetEasing(
                                         name.clone(),
                                         i,
-                                        EasingFunction::EaseInBack,
+                                        EasingFunction::EaseInBack { c1: 1.70158 },
                                     );
                                     ui.close_kind(UiKind::Menu);
                                 }
@@ -634,7 +635,7 @@ pub fn graph_editor_panel(
                                     action = Action::SetEasing(
                                         name.clone(),
                                         i,
-                                        EasingFunction::EaseOutBack,
+                                        EasingFunction::EaseOutBack { c1: 1.70158 },
                                     );
                                     ui.close_kind(UiKind::Menu);
                                 }
@@ -642,7 +643,7 @@ pub fn graph_editor_panel(
                                     action = Action::SetEasing(
                                         name.clone(),
                                         i,
-                                        EasingFunction::EaseInOutBack,
+                                        EasingFunction::EaseInOutBack { c1: 1.70158 },
                                     );
                                     ui.close_kind(UiKind::Menu);
                                 }
@@ -652,7 +653,7 @@ pub fn graph_editor_panel(
                                     action = Action::SetEasing(
                                         name.clone(),
                                         i,
-                                        EasingFunction::EaseInElastic,
+                                        EasingFunction::EaseInElastic { period: 3.0 },
                                     );
                                     ui.close_kind(UiKind::Menu);
                                 }
@@ -660,7 +661,7 @@ pub fn graph_editor_panel(
                                     action = Action::SetEasing(
                                         name.clone(),
                                         i,
-                                        EasingFunction::EaseOutElastic,
+                                        EasingFunction::EaseOutElastic { period: 3.0 },
                                     );
                                     ui.close_kind(UiKind::Menu);
                                 }
@@ -668,7 +669,7 @@ pub fn graph_editor_panel(
                                     action = Action::SetEasing(
                                         name.clone(),
                                         i,
-                                        EasingFunction::EaseInOutElastic,
+                                        EasingFunction::EaseInOutElastic { period: 4.5 },
                                     );
                                     ui.close_kind(UiKind::Menu);
                                 }
@@ -678,7 +679,10 @@ pub fn graph_editor_panel(
                                     action = Action::SetEasing(
                                         name.clone(),
                                         i,
-                                        EasingFunction::EaseInBounce,
+                                        EasingFunction::EaseInBounce {
+                                            n1: 7.5625,
+                                            d1: 2.75,
+                                        },
                                     );
                                     ui.close_kind(UiKind::Menu);
                                 }
@@ -686,7 +690,10 @@ pub fn graph_editor_panel(
                                     action = Action::SetEasing(
                                         name.clone(),
                                         i,
-                                        EasingFunction::EaseOutBounce,
+                                        EasingFunction::EaseOutBounce {
+                                            n1: 7.5625,
+                                            d1: 2.75,
+                                        },
                                     );
                                     ui.close_kind(UiKind::Menu);
                                 }
@@ -694,11 +701,32 @@ pub fn graph_editor_panel(
                                     action = Action::SetEasing(
                                         name.clone(),
                                         i,
-                                        EasingFunction::EaseInOutBounce,
+                                        EasingFunction::EaseInOutBounce {
+                                            n1: 7.5625,
+                                            d1: 2.75,
+                                        },
                                     );
                                     ui.close_kind(UiKind::Menu);
                                 }
                             });
+                            ui.menu_button("Custom", |ui| {
+                                if ui.button("Expression").clicked() {
+                                    action = Action::SetEasing(
+                                        name.clone(),
+                                        i,
+                                        EasingFunction::Expression {
+                                            text: "t".to_string(),
+                                        },
+                                    );
+                                    ui.close_kind(UiKind::Menu);
+                                }
+                            });
+
+                            ui.separator();
+                            if ui.button("Edit Keyframe...").clicked() {
+                                action = Action::EditKeyframe(name.clone(), i);
+                                ui.close_kind(UiKind::Menu);
+                            }
 
                             ui.separator();
                             if ui
@@ -836,6 +864,31 @@ pub fn graph_editor_panel(
         }
         Action::Remove(name, idx) => {
             let _ = project_service.remove_keyframe(comp_id, track_id, entity_id, &name, idx);
+        }
+        Action::EditKeyframe(name, idx) => {
+             if let Ok(project) = project.read() {
+                 if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
+                     if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
+                         if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
+                             if let Some(prop) = clip.properties.get(&name) {
+                                 if prop.evaluator == "keyframe" {
+                                     let keyframes = prop.keyframes();
+                                     if let Some(kf) = keyframes.get(idx) {
+                                        editor_context.keyframe_dialog.is_open = true;
+                                        editor_context.keyframe_dialog.track_id = Some(track_id);
+                                        editor_context.keyframe_dialog.entity_id = Some(entity_id);
+                                        editor_context.keyframe_dialog.property_name = name.clone();
+                                        editor_context.keyframe_dialog.keyframe_index = idx;
+                                        editor_context.keyframe_dialog.time = kf.time.into_inner();
+                                        editor_context.keyframe_dialog.value = kf.value.get_as::<f64>().unwrap_or(0.0);
+                                        editor_context.keyframe_dialog.easing = kf.easing.clone();
+                                     }
+                                 }
+                             }
+                         }
+                     }
+                 }
+             }
         }
         Action::None => {}
     }

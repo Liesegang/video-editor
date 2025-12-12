@@ -3,6 +3,37 @@ use uuid::Uuid;
 
 use crate::model::ui_types::{DraggedItem, GizmoHandle, TimelineDisplayMode, Vec2Def};
 
+use library::animation::EasingFunction; // Added import
+
+
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct KeyframeDialogState {
+    pub is_open: bool,
+    pub track_id: Option<Uuid>,
+    pub entity_id: Option<Uuid>,
+    pub property_name: String,
+    pub keyframe_index: usize,
+    pub time: f64,
+    pub value: f64,
+    pub easing: EasingFunction,
+}
+
+impl Default for KeyframeDialogState {
+    fn default() -> Self {
+        Self {
+            is_open: false,
+            track_id: None,
+            entity_id: None,
+            property_name: String::new(),
+            keyframe_index: 0,
+            time: 0.0,
+            value: 0.0,
+            easing: EasingFunction::Linear,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TimelineState {
     pub current_time: f32,
