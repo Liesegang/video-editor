@@ -14,8 +14,8 @@ pub use error::LibraryError;
 pub use crate::loader::image::Image;
 pub use crate::plugin::ExportSettings; // Added
 // Re-export the services and models that the app will need.
+pub use rendering::render_server::{RenderResult, RenderServer};
 pub use rendering::skia_renderer::SkiaRenderer;
-pub use rendering::render_server::{RenderServer, RenderResult};
 pub use service::{ExportService, ProjectModel, RenderService};
 
 // use crate::plugin::load_plugins; // Removed
@@ -100,6 +100,8 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         composition.width as u32,
         composition.height as u32,
         composition.background_color.clone(),
+        false,
+        None,
     );
 
     let cache_manager = Arc::new(crate::cache::CacheManager::new());

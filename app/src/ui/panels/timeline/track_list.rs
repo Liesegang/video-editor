@@ -1,9 +1,9 @@
 use egui::Ui;
-use log::error;
 use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use library::model::project::Track;
 use library::service::project_service::ProjectService;
+use log::error;
 use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
@@ -65,7 +65,10 @@ pub fn show_track_list(
 
             track_interaction_response.context_menu(|ui| {
                 if let Some(comp_id) = editor_context.selected_composition_id {
-                     if ui.button(format!("{} Remove Track", icons::TRASH)).clicked() {
+                    if ui
+                        .button(format!("{} Remove Track", icons::TRASH))
+                        .clicked()
+                    {
                         if let Err(e) = project_service.remove_track(comp_id, track.id) {
                             error!("Failed to remove track: {:?}", e);
                         } else {
@@ -122,7 +125,6 @@ pub fn show_track_list(
                 history_manager.push_project_state(current_state);
                 ui_content.close();
             }
-
         } else {
             ui_content.label("Select a Composition first");
         }

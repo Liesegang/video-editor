@@ -108,7 +108,6 @@ pub fn inspector_panel(
 ) {
     let mut needs_refresh = false;
 
-
     // Display properties of selected entity
     if let (Some(selected_entity_id), Some(comp_id), Some(track_id)) = (
         editor_context.selected_entity_id,
@@ -120,16 +119,20 @@ pub fn inspector_panel(
         let entity_data = if let Ok(proj_read) = project.read() {
             if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
                 if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                    track.clips.iter().find(|e| e.id == selected_entity_id).map(|e| {
-                        (
-                            e.kind.clone(),
-                            e.properties.clone(),
-                            e.in_frame,
-                            e.out_frame,
-                            e.source_begin_frame,
-                            e.duration_frame,
-                        )
-                    })
+                    track
+                        .clips
+                        .iter()
+                        .find(|e| e.id == selected_entity_id)
+                        .map(|e| {
+                            (
+                                e.kind.clone(),
+                                e.properties.clone(),
+                                e.in_frame,
+                                e.out_frame,
+                                e.source_begin_frame,
+                                e.duration_frame,
+                            )
+                        })
                 } else {
                     None
                 }
@@ -140,14 +143,8 @@ pub fn inspector_panel(
             None
         };
 
-        if let Some((
-            kind,
-            properties,
-            in_frame,
-            out_frame,
-            source_begin_frame,
-            duration_frame,
-        )) = entity_data
+        if let Some((kind, properties, in_frame, out_frame, source_begin_frame, duration_frame)) =
+            entity_data
         {
             ui.heading("Clip Properties");
             ui.separator();
@@ -163,7 +160,11 @@ pub fn inspector_panel(
                         ui.selectable_value(&mut current_kind, TrackClipKind::Audio, "Audio");
                         ui.selectable_value(&mut current_kind, TrackClipKind::Text, "Text");
                         ui.selectable_value(&mut current_kind, TrackClipKind::Shape, "Shape");
-                        ui.selectable_value(&mut current_kind, TrackClipKind::Composition, "Composition");
+                        ui.selectable_value(
+                            &mut current_kind,
+                            TrackClipKind::Composition,
+                            "Composition",
+                        );
                     });
 
                 if current_kind != kind {
@@ -208,9 +209,7 @@ pub fn inspector_panel(
                          entity: Uuid,
                          name: &str,
                          value: PropertyValue| {
-                            Ok(service.update_clip_property(
-                                comp, track, entity, name, value,
-                            )?)
+                            Ok(service.update_clip_property(comp, track, entity, name, value)?)
                         },
                         &mut needs_refresh,
                     );
@@ -237,9 +236,7 @@ pub fn inspector_panel(
                          entity: Uuid,
                          name: &str,
                          value: PropertyValue| {
-                            Ok(service.update_clip_property(
-                                comp, track, entity, name, value,
-                            )?)
+                            Ok(service.update_clip_property(comp, track, entity, name, value)?)
                         },
                         &mut needs_refresh,
                     );
@@ -266,9 +263,7 @@ pub fn inspector_panel(
                          entity: Uuid,
                          name: &str,
                          value: PropertyValue| {
-                            Ok(service.update_clip_property(
-                                comp, track, entity, name, value,
-                            )?)
+                            Ok(service.update_clip_property(comp, track, entity, name, value)?)
                         },
                         &mut needs_refresh,
                     );
@@ -295,9 +290,7 @@ pub fn inspector_panel(
                          entity: Uuid,
                          name: &str,
                          value: PropertyValue| {
-                            Ok(service.update_clip_property(
-                                comp, track, entity, name, value,
-                            )?)
+                            Ok(service.update_clip_property(comp, track, entity, name, value)?)
                         },
                         &mut needs_refresh,
                     );
@@ -324,9 +317,7 @@ pub fn inspector_panel(
                          entity: Uuid,
                          name: &str,
                          value: PropertyValue| {
-                            Ok(service.update_clip_property(
-                                comp, track, entity, name, value,
-                            )?)
+                            Ok(service.update_clip_property(comp, track, entity, name, value)?)
                         },
                         &mut needs_refresh,
                     );
@@ -355,7 +346,9 @@ pub fn inspector_panel(
                          value: PropertyValue| {
                             if let PropertyValue::Number(new_val_f64) = value {
                                 let new_in_frame = new_val_f64.0 as u64;
-                                service.update_clip_time(comp, track, entity, new_in_frame, out_frame).map_err(|e| anyhow::anyhow!(e))
+                                service
+                                    .update_clip_time(comp, track, entity, new_in_frame, out_frame)
+                                    .map_err(|e| anyhow::anyhow!(e))
                             } else {
                                 Err(anyhow::anyhow!("Expected Number for In Frame"))
                             }
@@ -387,7 +380,9 @@ pub fn inspector_panel(
                          value: PropertyValue| {
                             if let PropertyValue::Number(new_val_f64) = value {
                                 let new_out_frame = new_val_f64.0 as u64;
-                                service.update_clip_time(comp, track, entity, in_frame, new_out_frame).map_err(|e| anyhow::anyhow!(e))
+                                service
+                                    .update_clip_time(comp, track, entity, in_frame, new_out_frame)
+                                    .map_err(|e| anyhow::anyhow!(e))
                             } else {
                                 Err(anyhow::anyhow!("Expected Number for Out Frame"))
                             }
@@ -419,7 +414,15 @@ pub fn inspector_panel(
                          value: PropertyValue| {
                             if let PropertyValue::Number(new_val_f64) = value {
                                 let new_source_begin_frame = new_val_f64.0 as u64;
-                                service.update_clip_source_frames(comp, track, entity, new_source_begin_frame, duration_frame).map_err(|e| anyhow::anyhow!(e))
+                                service
+                                    .update_clip_source_frames(
+                                        comp,
+                                        track,
+                                        entity,
+                                        new_source_begin_frame,
+                                        duration_frame,
+                                    )
+                                    .map_err(|e| anyhow::anyhow!(e))
                             } else {
                                 Err(anyhow::anyhow!("Expected Number for Source Begin Frame"))
                             }
@@ -441,20 +444,18 @@ pub fn inspector_panel(
                     });
                     ui.end_row();
                 });
-
-
         } else {
-             ui.label("Clip not found (it may have been deleted).");
-             // Deselect if not found
-             editor_context.selected_entity_id = None;
+            ui.label("Clip not found (it may have been deleted).");
+            // Deselect if not found
+            editor_context.selected_entity_id = None;
         }
     } else {
         if editor_context.selected_composition_id.is_none() {
-             ui.label("No composition selected.");
+            ui.label("No composition selected.");
         } else if editor_context.selected_track_id.is_none() {
-             ui.label("No track selected.");
+            ui.label("No track selected.");
         } else {
-             ui.label("Select a clip to edit");
+            ui.label("Select a clip to edit");
         }
     }
 

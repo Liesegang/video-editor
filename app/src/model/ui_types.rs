@@ -19,7 +19,7 @@ pub struct TimelineClip {
     pub opacity: f32,
     pub rotation: f32,
     pub asset_id: Option<Uuid>, // Changed from asset_index to asset_id
-    // Add other UI-specific properties here (is_selected, etc. if needed in future)
+                                // Add other UI-specific properties here (is_selected, etc. if needed in future)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,12 +39,7 @@ pub enum Tab {
 
 impl Tab {
     pub fn all() -> &'static [Tab] {
-        &[
-            Tab::Preview,
-            Tab::Timeline,
-            Tab::Inspector,
-            Tab::Assets,
-        ]
+        &[Tab::Preview, Tab::Timeline, Tab::Inspector, Tab::Assets]
     }
 
     pub fn name(&self) -> &'static str {

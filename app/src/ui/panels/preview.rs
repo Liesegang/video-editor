@@ -101,59 +101,164 @@ pub fn preview_panel(
     let frame_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1920.0, 1080.0));
     let screen_frame_min = to_screen(frame_rect.min);
     let screen_frame_max = to_screen(frame_rect.max);
-    
+
     // Calculate current frame and Request Render
     if let Ok(proj_read) = project.read() {
         if let Some(comp) = editor_context.get_current_composition(&proj_read) {
             let current_frame = (editor_context.current_time as f64 * comp.fps).round() as u64;
-            
+
             if let Some(comp_idx) = proj_read.compositions.iter().position(|c| c.id == comp.id) {
-                 let plugin_manager = project_service.get_plugin_manager();
-                 let property_evaluators = plugin_manager.get_property_evaluators();
-                 let entity_converter_registry = plugin_manager.get_entity_converter_registry();
-                 
-                 let frame_info = library::framing::get_frame_from_project(
-                     &proj_read,
-                     comp_idx,
-                     current_frame,
-                     &property_evaluators,
-                     &entity_converter_registry
-                 );
-                 
-                 render_server.send_request(frame_info);
+                let plugin_manager = project_service.get_plugin_manager();
+                let property_evaluators = plugin_manager.get_property_evaluators();
+                let entity_converter_registry = plugin_manager.get_entity_converter_registry();
+
+                let frame_info = library::framing::get_frame_from_project(
+                    &proj_read,
+                    comp_idx,
+                    current_frame,
+                    &property_evaluators,
+                    &entity_converter_registry,
+                );
+
+                render_server.send_request(frame_info);
             }
         }
     }
 
     // 2. Poll for results and update texture
-    let mut latest_image = None;
     while let Ok(result) = render_server.poll_result() {
-         latest_image = Some(result.image);
+        match result.output {
+            library::rendering::renderer::RenderOutput::Image(image) => {
+                let size = [image.width as usize, image.height as usize];
+                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &image.data);
+
+                if let Some(texture) = &mut editor_context.preview_texture {
+                    texture.set(color_image, Default::default());
+                } else {
+                    editor_context.preview_texture = Some(ui.ctx().load_texture(
+                        "preview_texture",
+                        color_image,
+                        Default::default(),
+                    ));
+                }
+                editor_context.preview_texture_id = None;
+            }
+            library::rendering::renderer::RenderOutput::Texture(id) => {
+                editor_context.preview_texture_id = Some(id);
+                editor_context.preview_texture = None; // Invalidate CPU texture
+            }
+        }
     }
-    
-    if let Some(image) = latest_image {
-         let size = [image.width as usize, image.height as usize];
-         let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &image.data);
-         
-         if let Some(texture) = &mut editor_context.preview_texture {
-             texture.set(color_image, Default::default());
-         } else {
-             editor_context.preview_texture = Some(ui.ctx().load_texture(
-                 "preview_texture",
-                 color_image,
-                 Default::default()
-             ));
-         }
-    }
-    
+
     // 3. Draw Texture
     if let Some(texture) = &editor_context.preview_texture {
-         painter.image(
-             texture.id(),
-             egui::Rect::from_min_max(screen_frame_min, screen_frame_max),
-             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-             egui::Color32::WHITE
-         );
+        painter.image(
+            texture.id(),
+            egui::Rect::from_min_max(screen_frame_min, screen_frame_max),
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else if let Some(texture_id) = editor_context.preview_texture_id {
+        // Zero-copy path: Draw using PaintCallback and skia (or raw GL)
+        let rect = egui::Rect::from_min_max(screen_frame_min, screen_frame_max);
+
+        let callback = egui::PaintCallback {
+            rect,
+            callback: std::sync::Arc::new(eframe::egui_glow::CallbackFn::new(
+                move |_info, painter| {
+                    use eframe::glow::HasContext;
+                    let gl = painter.gl();
+
+                    // Simple texture draw using raw GL to avoid heavy Skia context creation
+                    // We assume immediate mode or cached shaders would be better, but for now simple draw.
+                    // Actually, Skia is easier to write than raw GL shaders here.
+
+                    // Note: Heavy context creation every frame. Optimization: Persistence.
+                    if let Some(interface) = skia_safe::gpu::gl::Interface::new_native() {
+                        if let Some(mut context) =
+                            skia_safe::gpu::direct_contexts::make_gl(interface, None)
+                        {
+                            // Wrap the texture
+                            let backend_texture = unsafe {
+                                skia_safe::gpu::backend_textures::make_gl(
+                                    (1920, 1080),
+                                    skia_safe::gpu::Mipmapped::No,
+                                    skia_safe::gpu::gl::TextureInfo {
+                                        target: eframe::glow::TEXTURE_2D,
+                                        id: texture_id,
+                                        format: 0x8058, // GL_RGBA8
+                                        protected: skia_safe::gpu::Protected::No,
+                                    },
+                                    "Texture",
+                                )
+                            };
+
+                            // We need to draw *to* the current framebuffer (screen).
+                            // Get current FBO from GL
+                            let fbo_id = unsafe {
+                                gl.get_parameter_i32(eframe::glow::DRAW_FRAMEBUFFER_BINDING)
+                            } as u32;
+                            // Get viewport
+                            // _info.viewport_in_pixels();
+
+                            // Create surface for FBO
+                            // use skia_safe::gpu::backend_render_targets::make_gl for 0.82+
+                            let backend_render_target =
+                                skia_safe::gpu::backend_render_targets::make_gl(
+                                    (1920, 1080),
+                                    0, // sample count
+                                    0, // stencil bits
+                                    skia_safe::gpu::gl::FramebufferInfo {
+                                        fboid: fbo_id,
+                                        format: 0x8058, // GL_RGBA8
+                                        protected: skia_safe::gpu::Protected::No,
+                                    },
+                                );
+
+                            let mut frame_surface =
+                                skia_safe::gpu::surfaces::wrap_backend_render_target(
+                                    &mut context,
+                                    &backend_render_target,
+                                    skia_safe::gpu::SurfaceOrigin::BottomLeft,
+                                    skia_safe::ColorType::RGBA8888,
+                                    None,
+                                    None,
+                                );
+
+                            if let Some(mut surface) = frame_surface {
+                                let canvas = surface.canvas();
+                                // Draw the texture image
+                                // borrow_texture_from_context missing in 0.82?
+                                // Workaround: Wrap backend texture as surface and snapshot (if possible)
+                                if let Some(mut texture_surface) =
+                                    skia_safe::gpu::surfaces::wrap_backend_texture(
+                                        &mut context,
+                                        &backend_texture,
+                                        skia_safe::gpu::SurfaceOrigin::TopLeft,
+                                        1,
+                                        skia_safe::ColorType::RGBA8888,
+                                        None,
+                                        None,
+                                    )
+                                {
+                                    let img = texture_surface.image_snapshot();
+                                    // Draw image to fill surface
+                                    canvas.draw_image(
+                                        &img,
+                                        (0, 0),
+                                        Some(&skia_safe::Paint::default()),
+                                    );
+                                }
+                                // Flush
+                                context.flush_and_submit();
+                            }
+                        }
+                    }
+                },
+            )),
+        };
+
+        ui.painter().add(callback);
     }
 
     // Draw outline
@@ -167,7 +272,6 @@ pub fn preview_panel(
         StrokeKind::Middle,
     );
 
-
     let mut hovered_entity_id = None;
     let mut gui_clips: Vec<crate::model::ui_types::TimelineClip> = Vec::new();
 
@@ -180,16 +284,18 @@ pub fn preview_panel(
                     // In a real implementation this might be more robust.
                     // For now, if it has a file_path, we try to find the asset by path.
                     let asset_opt = if let Some(path) = entity.properties.get_string("file_path") {
-                         proj_read.assets.iter().find(|a| a.path == path)
+                        proj_read.assets.iter().find(|a| a.path == path)
                     } else {
-                         None
+                        None
                     };
 
                     let asset_id = asset_opt.map(|a| a.id);
-                    let asset_color = asset_opt.map(|a| {
-                        let c = a.color.clone();
-                        egui::Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
-                    }).unwrap_or(egui::Color32::GRAY);
+                    let asset_color = asset_opt
+                        .map(|a| {
+                            let c = a.color.clone();
+                            egui::Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
+                        })
+                        .unwrap_or(egui::Color32::GRAY);
 
                     let gc = crate::model::ui_types::TimelineClip {
                         id: entity.id,
@@ -199,7 +305,7 @@ pub fn preview_panel(
                         out_frame: entity.out_frame, // u64
                         timeline_duration_frames: entity.out_frame.saturating_sub(entity.in_frame), // u64
                         source_begin_frame: entity.source_begin_frame, // u64
-                        duration_frame: entity.duration_frame, // Option<u64>
+                        duration_frame: entity.duration_frame,         // Option<u64>
                         color: asset_color,
                         position: [
                             entity.properties.get_f32("position_x").unwrap_or(960.0),
@@ -220,9 +326,9 @@ pub fn preview_panel(
                     let mut sorted_clips: Vec<&crate::model::ui_types::TimelineClip> = gui_clips
                         .iter()
                         .filter(|gc| {
-                             let current_frame =
+                            let current_frame =
                                 (editor_context.current_time as f64 * comp.fps).round() as u64; // Convert current_time (f32) to frame (u64)
-                             current_frame >= gc.in_frame && current_frame < gc.out_frame
+                            current_frame >= gc.in_frame && current_frame < gc.out_frame
                         })
                         .collect();
                     // Sort by track index for consistent Z-order hit testing
@@ -235,10 +341,15 @@ pub fn preview_panel(
 
                     for gc in sorted_clips.iter().rev() {
                         // Iterate in reverse to hit top-most clips first
-                        
-                        // Check if audio 
+
+                        // Check if audio
                         let is_audio = if let Some(aid) = gc.asset_id {
-                             proj_read.assets.iter().find(|a| a.id == aid).map(|a| a.kind == AssetKind::Audio).unwrap_or(false)
+                            proj_read
+                                .assets
+                                .iter()
+                                .find(|a| a.id == aid)
+                                .map(|a| a.kind == AssetKind::Audio)
+                                .unwrap_or(false)
                         } else {
                             false
                         };
@@ -272,8 +383,6 @@ pub fn preview_panel(
         }
     }
 
-
-
     let interacted_with_gizmo = false; // Placeholder
 
     if !is_panning_input && !interacted_with_gizmo {
@@ -295,17 +404,21 @@ pub fn preview_panel(
                                 entity_id,
                                 "position_x",
                                 library::model::project::property::PropertyValue::Number(
-                                    ordered_float::OrderedFloat(project_service
-                                        .with_track_mut(comp_id, track_id, |track| {
-                                            track
-                                                .clips
-                                                .iter()
-                                                .find(|e| e.id == entity_id)
-                                                .and_then(|e| e.properties.get_f64("position_x"))
-                                                .unwrap_or(0.0)
-                                        })
-                                        .unwrap_or(0.0)
-                                        + world_delta.x as f64),
+                                    ordered_float::OrderedFloat(
+                                        project_service
+                                            .with_track_mut(comp_id, track_id, |track| {
+                                                track
+                                                    .clips
+                                                    .iter()
+                                                    .find(|e| e.id == entity_id)
+                                                    .and_then(|e| {
+                                                        e.properties.get_f64("position_x")
+                                                    })
+                                                    .unwrap_or(0.0)
+                                            })
+                                            .unwrap_or(0.0)
+                                            + world_delta.x as f64,
+                                    ),
                                 ),
                             )
                             .ok(); // Handle error
@@ -316,17 +429,21 @@ pub fn preview_panel(
                                 entity_id,
                                 "position_y",
                                 library::model::project::property::PropertyValue::Number(
-                                    ordered_float::OrderedFloat(project_service
-                                        .with_track_mut(comp_id, track_id, |track| {
-                                            track
-                                                .clips
-                                                .iter()
-                                                .find(|e| e.id == entity_id)
-                                                .and_then(|e| e.properties.get_f64("position_y"))
-                                                .unwrap_or(0.0)
-                                        })
-                                        .unwrap_or(0.0)
-                                        + world_delta.y as f64),
+                                    ordered_float::OrderedFloat(
+                                        project_service
+                                            .with_track_mut(comp_id, track_id, |track| {
+                                                track
+                                                    .clips
+                                                    .iter()
+                                                    .find(|e| e.id == entity_id)
+                                                    .and_then(|e| {
+                                                        e.properties.get_f64("position_y")
+                                                    })
+                                                    .unwrap_or(0.0)
+                                            })
+                                            .unwrap_or(0.0)
+                                            + world_delta.y as f64,
+                                    ),
                                 ),
                             )
                             .ok(); // Handle error

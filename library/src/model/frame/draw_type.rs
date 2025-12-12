@@ -1,6 +1,6 @@
 use crate::model::frame::color::Color;
-use serde::{Deserialize, Serialize};
 use ordered_float::OrderedFloat;
+use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
@@ -53,7 +53,13 @@ impl Hash for DrawStyle {
         std::mem::discriminant(self).hash(state);
         match self {
             DrawStyle::Fill { color } => color.hash(state),
-            DrawStyle::Stroke { color, width, cap, join, miter } => {
+            DrawStyle::Stroke {
+                color,
+                width,
+                cap,
+                join,
+                miter,
+            } => {
                 color.hash(state);
                 OrderedFloat(*width).hash(state);
                 cap.hash(state);
@@ -77,14 +83,31 @@ impl Default for DrawStyle {
     }
 }
 
-
 impl PartialEq for DrawStyle {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (DrawStyle::Stroke { width: w1, color: c1, join: j1, cap: cp1, miter: m1 },
-             DrawStyle::Stroke { width: w2, color: c2, join: j2, cap: cp2, miter: m2 }) => {
-                 OrderedFloat(*w1) == OrderedFloat(*w2) && c1 == c2 && j1 == j2 && cp1 == cp2 && OrderedFloat(*m1) == OrderedFloat(*m2)
-             },
+            (
+                DrawStyle::Stroke {
+                    width: w1,
+                    color: c1,
+                    join: j1,
+                    cap: cp1,
+                    miter: m1,
+                },
+                DrawStyle::Stroke {
+                    width: w2,
+                    color: c2,
+                    join: j2,
+                    cap: cp2,
+                    miter: m2,
+                },
+            ) => {
+                OrderedFloat(*w1) == OrderedFloat(*w2)
+                    && c1 == c2
+                    && j1 == j2
+                    && cp1 == cp2
+                    && OrderedFloat(*m1) == OrderedFloat(*m2)
+            }
             (DrawStyle::Fill { color: c1 }, DrawStyle::Fill { color: c2 }) => c1 == c2,
             _ => false,
         }
@@ -126,7 +149,11 @@ impl Hash for PathEffect {
             PathEffect::Corner { radius } => {
                 OrderedFloat(*radius).hash(state);
             }
-            PathEffect::Discrete { seg_length, deviation, seed } => {
+            PathEffect::Discrete {
+                seg_length,
+                deviation,
+                seed,
+            } => {
                 OrderedFloat(*seg_length).hash(state);
                 OrderedFloat(*deviation).hash(state);
                 seed.hash(state);
@@ -142,17 +169,45 @@ impl Hash for PathEffect {
 impl PartialEq for PathEffect {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (PathEffect::Dash { intervals: i1, phase: p1 }, PathEffect::Dash { intervals: i2, phase: p2 }) => {
-                 i1.iter().zip(i2.iter()).all(|(a, b)| OrderedFloat(*a) == OrderedFloat(*b)) && i1.len() == i2.len() && OrderedFloat(*p1) == OrderedFloat(*p2)
-            },
-            (PathEffect::Corner { radius: r1 }, PathEffect::Corner { radius: r2 }) => OrderedFloat(*r1) == OrderedFloat(*r2),
-            (PathEffect::Discrete { seg_length: s1, deviation: d1, seed: seed1 }, PathEffect::Discrete { seg_length: s2, deviation: d2, seed: seed2 }) => {
-                OrderedFloat(*s1) == OrderedFloat(*s2) && OrderedFloat(*d1) == OrderedFloat(*d2) && seed1 == seed2
-            },
-             (PathEffect::Trim { start: s1, end: e1 }, PathEffect::Trim { start: s2, end: e2 }) => {
+            (
+                PathEffect::Dash {
+                    intervals: i1,
+                    phase: p1,
+                },
+                PathEffect::Dash {
+                    intervals: i2,
+                    phase: p2,
+                },
+            ) => {
+                i1.iter()
+                    .zip(i2.iter())
+                    .all(|(a, b)| OrderedFloat(*a) == OrderedFloat(*b))
+                    && i1.len() == i2.len()
+                    && OrderedFloat(*p1) == OrderedFloat(*p2)
+            }
+            (PathEffect::Corner { radius: r1 }, PathEffect::Corner { radius: r2 }) => {
+                OrderedFloat(*r1) == OrderedFloat(*r2)
+            }
+            (
+                PathEffect::Discrete {
+                    seg_length: s1,
+                    deviation: d1,
+                    seed: seed1,
+                },
+                PathEffect::Discrete {
+                    seg_length: s2,
+                    deviation: d2,
+                    seed: seed2,
+                },
+            ) => {
+                OrderedFloat(*s1) == OrderedFloat(*s2)
+                    && OrderedFloat(*d1) == OrderedFloat(*d2)
+                    && seed1 == seed2
+            }
+            (PathEffect::Trim { start: s1, end: e1 }, PathEffect::Trim { start: s2, end: e2 }) => {
                 OrderedFloat(*s1) == OrderedFloat(*s2) && OrderedFloat(*e1) == OrderedFloat(*e2)
-            },
-            _ => false
+            }
+            _ => false,
         }
     }
 }

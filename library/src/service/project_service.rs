@@ -16,9 +16,9 @@ pub struct ProjectService {
 
 impl ProjectService {
     pub fn new(project: Arc<RwLock<Project>>, plugin_manager: Arc<PluginManager>) -> Self {
-        ProjectService { 
-            project, 
-            plugin_manager 
+        ProjectService {
+            project,
+            plugin_manager,
         }
     }
 
@@ -80,17 +80,19 @@ impl ProjectService {
         let mut project_write = self.project.write().map_err(|e| {
             LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
         })?;
-        
+
         // Remove clips referencing the asset
         for comp in &mut project_write.compositions {
             for track in &mut comp.tracks {
-                track.clips.retain(|clip| clip.reference_id != Some(asset_id));
+                track
+                    .clips
+                    .retain(|clip| clip.reference_id != Some(asset_id));
             }
         }
 
         // Remove the asset itself
         project_write.assets.retain(|a| a.id != asset_id);
-        
+
         Ok(())
     }
 
@@ -109,15 +111,15 @@ impl ProjectService {
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or("New Asset".to_string());
-        
+
         let kind = self.plugin_manager.probe_asset_kind(path);
-        
+
         // TODO: In the future, we can load metadata (duration, width, height) here using plugins
-        let duration = None; 
-        
+        let duration = None;
+
         let mut asset = Asset::new(&name, path, kind);
         asset.duration = duration;
-        
+
         self.add_asset(asset)
     }
 
@@ -149,7 +151,10 @@ impl ProjectService {
             .iter()
             .find(|c| c.id == id)
             .cloned()
-            .ok_or(LibraryError::Project(format!("Composition not found: {}", id)))
+            .ok_or(LibraryError::Project(format!(
+                "Composition not found: {}",
+                id
+            )))
     }
 
     pub fn is_composition_used(&self, comp_id: Uuid) -> bool {
@@ -176,7 +181,9 @@ impl ProjectService {
         // Remove clips referencing the composition from ALL compositions
         for comp in &mut project_write.compositions {
             for track in &mut comp.tracks {
-                track.clips.retain(|clip| clip.reference_id != Some(comp_id));
+                track
+                    .clips
+                    .retain(|clip| clip.reference_id != Some(comp_id));
             }
         }
 
@@ -219,7 +226,8 @@ impl ProjectService {
         Ok(f(composition))
     }
 
-    pub fn remove_composition_old(&self, id: Uuid) -> Result<(), LibraryError> { // Renamed to avoid conflict
+    pub fn remove_composition_old(&self, id: Uuid) -> Result<(), LibraryError> {
+        // Renamed to avoid conflict
         let mut project_write = self.project.write().map_err(|e| {
             LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
         })?;
@@ -342,8 +350,8 @@ impl ProjectService {
         composition_id: Uuid,
         track_id: Uuid,
         clip: TrackClip, // Pass a fully formed TrackClip object
-        in_frame: u64,  // Timeline start frame
-        out_frame: u64, // Timeline end frame
+        in_frame: u64,   // Timeline start frame
+        out_frame: u64,  // Timeline end frame
     ) -> Result<Uuid, LibraryError> {
         // Validation: Prevent circular references if adding a composition
         if clip.kind == TrackClipKind::Composition {
@@ -381,38 +389,40 @@ impl ProjectService {
             if let Some(child_comp) = project.compositions.iter().find(|c| c.id == child_id) {
                 // BFS/DFS Traversal of child_comp's dependencies
                 let mut stack = vec![child_comp];
-                
+
                 while let Some(current_comp) = stack.pop() {
-                     for track in &current_comp.tracks {
-                         for clip in &track.clips {
-                             if clip.kind == TrackClipKind::Composition {
-                                 if let Some(ref_id) = clip.reference_id {
-                                     if ref_id == parent_id {
-                                         // Found parent inside child's hierarchy -> Cycle!
-                                         return false;
-                                     }
-                                     
-                                     // Continue searching strictly deeper? 
-                                     // Actually, we just need to traverse the graph of compositions.
-                                     // We need to look up the comp definition for 'ref_id'.
-                                     if let Some(_next_comp) = project.compositions.iter().find(|c| c.id == ref_id) {
-                                         // Prevent infinite loop in traversal if there's already a cycle elsewhere (safeguard)
-                                         // But simple tree traversal is fine if we assume existing graph is DAG.
-                                         // Just push to stack.
-                                         // Use simple recursion check.
-                                     }
-                                     
-                                     // Optimization: We actually need to traverse deeper.
-                                     // But we can't easily push references to stack if we are iterating.
-                                     // Let's implement a simple recursive helper or stack of IDs.
-                                 }
-                             }
-                         }
-                     }
+                    for track in &current_comp.tracks {
+                        for clip in &track.clips {
+                            if clip.kind == TrackClipKind::Composition {
+                                if let Some(ref_id) = clip.reference_id {
+                                    if ref_id == parent_id {
+                                        // Found parent inside child's hierarchy -> Cycle!
+                                        return false;
+                                    }
+
+                                    // Continue searching strictly deeper?
+                                    // Actually, we just need to traverse the graph of compositions.
+                                    // We need to look up the comp definition for 'ref_id'.
+                                    if let Some(_next_comp) =
+                                        project.compositions.iter().find(|c| c.id == ref_id)
+                                    {
+                                        // Prevent infinite loop in traversal if there's already a cycle elsewhere (safeguard)
+                                        // But simple tree traversal is fine if we assume existing graph is DAG.
+                                        // Just push to stack.
+                                        // Use simple recursion check.
+                                    }
+
+                                    // Optimization: We actually need to traverse deeper.
+                                    // But we can't easily push references to stack if we are iterating.
+                                    // Let's implement a simple recursive helper or stack of IDs.
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
-        
+
         // Re-implementing traversal cleanly using ID stack to avoid lifetime hell
         let project_read = match self.project.read() {
             Ok(p) => p,
@@ -428,16 +438,20 @@ impl ProjectService {
                 continue;
             }
 
-            if let Some(comp) = project_read.compositions.iter().find(|c| c.id == current_id) {
+            if let Some(comp) = project_read
+                .compositions
+                .iter()
+                .find(|c| c.id == current_id)
+            {
                 for track in &comp.tracks {
                     for clip in &track.clips {
                         if clip.kind == TrackClipKind::Composition {
-                             if let Some(ref_id) = clip.reference_id {
-                                 if ref_id == parent_id {
-                                     return false; // Found parent in child's descendants
-                                 }
-                                 stack.push(ref_id);
-                             }
+                            if let Some(ref_id) = clip.reference_id {
+                                if ref_id == parent_id {
+                                    return false; // Found parent in child's descendants
+                                }
+                                stack.push(ref_id);
+                            }
                         }
                     }
                 }
@@ -476,7 +490,8 @@ impl ProjectService {
     ) -> Result<(), LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
             if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
-                clip.properties.set(key.to_string(), Property::constant(value));
+                clip.properties
+                    .set(key.to_string(), Property::constant(value));
                 Ok(())
             } else {
                 Err(LibraryError::Project(format!(
@@ -553,7 +568,7 @@ impl ProjectService {
                 clip_to_move = Some(track.clips.remove(pos));
                 Ok(())
             } else {
-                 Err(LibraryError::Project(format!(
+                Err(LibraryError::Project(format!(
                     "Clip with ID {} not found in source Track {}",
                     clip_id, source_track_id
                 )))
@@ -561,7 +576,9 @@ impl ProjectService {
         })??; // Double question mark because with_track_mut returns Result, and closure returns Result
 
         let moved_clip = clip_to_move.ok_or_else(|| {
-             LibraryError::Runtime("Unexpected error: Clip not found after position check".to_string())
+            LibraryError::Runtime(
+                "Unexpected error: Clip not found after position check".to_string(),
+            )
         })?;
 
         // 2. Add clip to target track

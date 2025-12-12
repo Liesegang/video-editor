@@ -19,6 +19,10 @@ pub struct Image {
 
 impl Image {
     pub fn new(width: u32, height: u32, data: Vec<u8>) -> Self {
-        Self { width, height, data }
+        Self {
+            width,
+            height,
+            data,
+        }
     }
 }

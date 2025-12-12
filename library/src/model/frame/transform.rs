@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use ordered_float::OrderedFloat;
+use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 #[derive(Serialize, Deserialize, Debug, Clone)] // Removed PartialEq, Eq (manual impl below)
 pub struct Transform {
@@ -10,7 +10,6 @@ pub struct Transform {
     #[serde(default)]
     pub anchor: Position,
     #[serde(default)]
-
     pub rotation: f64,
 }
 
@@ -74,24 +73,26 @@ impl Default for Scale {
 
 impl PartialEq for Transform {
     fn eq(&self, other: &Self) -> bool {
-        self.position == other.position && 
-        self.scale == other.scale && 
-        OrderedFloat(self.rotation) == OrderedFloat(other.rotation) && 
-        self.anchor == other.anchor
+        self.position == other.position
+            && self.scale == other.scale
+            && OrderedFloat(self.rotation) == OrderedFloat(other.rotation)
+            && self.anchor == other.anchor
     }
 }
 impl Eq for Transform {}
 
 impl PartialEq for Position {
     fn eq(&self, other: &Self) -> bool {
-        OrderedFloat(self.x) == OrderedFloat(other.x) && OrderedFloat(self.y) == OrderedFloat(other.y)
+        OrderedFloat(self.x) == OrderedFloat(other.x)
+            && OrderedFloat(self.y) == OrderedFloat(other.y)
     }
 }
 impl Eq for Position {}
 
 impl PartialEq for Scale {
     fn eq(&self, other: &Self) -> bool {
-        OrderedFloat(self.x) == OrderedFloat(other.x) && OrderedFloat(self.y) == OrderedFloat(other.y)
+        OrderedFloat(self.x) == OrderedFloat(other.x)
+            && OrderedFloat(self.y) == OrderedFloat(other.y)
     }
 }
 impl Eq for Scale {}

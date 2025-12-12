@@ -81,7 +81,7 @@ pub trait LoadPlugin: Plugin {
         request: &LoadRequest,
         cache: &CacheManager,
     ) -> Result<LoadResponse, LibraryError>;
-    
+
     fn get_asset_kind(&self, _path: &str) -> Option<AssetKind> {
         None
     }

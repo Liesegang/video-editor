@@ -2,9 +2,9 @@ use super::super::{Plugin, PluginCategory, PropertyPlugin};
 use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
 use crate::model::project::property::{Property, PropertyValue, Vec2, Vec3};
-use ordered_float::OrderedFloat;
 use crate::plugin::{EvaluationContext, PropertyEvaluator};
 use log::debug;
+use ordered_float::OrderedFloat;
 use std::sync::Arc;
 
 pub struct KeyframePropertyPlugin;
@@ -92,8 +92,16 @@ fn interpolate_property_values(
             y: OrderedFloat(sy.0 + (ey.0 - sy.0) * t),
         }),
         (
-            PropertyValue::Vec3(Vec3 { x: sx, y: sy, z: sz }),
-            PropertyValue::Vec3(Vec3 { x: ex, y: ey, z: ez }),
+            PropertyValue::Vec3(Vec3 {
+                x: sx,
+                y: sy,
+                z: sz,
+            }),
+            PropertyValue::Vec3(Vec3 {
+                x: ex,
+                y: ey,
+                z: ez,
+            }),
         ) => PropertyValue::Vec3(Vec3 {
             x: OrderedFloat(sx.0 + (ex.0 - sx.0) * t),
             y: OrderedFloat(sy.0 + (ey.0 - sy.0) * t),

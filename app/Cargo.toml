@@ -22,6 +22,7 @@ egui-phosphor = "0.11"
 once_cell = "1.18.0"
 regex = "1.10"
 ordered-float = { version = "4.2.1", features = ["serde"] }
+skia-safe = { version = "0.82.0", features = ["gpu", "gl"] }
 
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

@@ -39,7 +39,7 @@ impl<T: Renderer> RenderService<T> {
         &mut self,
         project_model: &ProjectModel,
         time: f64,
-    ) -> Result<Image, LibraryError> {
+    ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
         let frame_info = self.get_frame(project_model, time);
         self.render_from_frame_info(&frame_info)
     }
@@ -47,7 +47,7 @@ impl<T: Renderer> RenderService<T> {
     pub fn render_from_frame_info(
         &mut self,
         frame_info: &FrameInfo,
-    ) -> Result<Image, LibraryError> {
+    ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
         self.clear()?;
         let object_count = frame_info.objects.len();
         let _timer = ScopedTimer::debug(format!(

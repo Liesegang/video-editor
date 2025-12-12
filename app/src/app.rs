@@ -1,8 +1,8 @@
 use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, Style};
 use library::model::project::project::{Composition, Project};
-use log::{error, info, warn};
 use library::service::project_service::ProjectService;
+use log::{error, info, warn};
 use std::fs;
 use std::io::Write;
 use std::sync::{Arc, RwLock};
@@ -59,7 +59,8 @@ impl MyApp {
 
         let plugin_manager = library::create_plugin_manager();
         let cache_manager = Arc::new(library::cache::CacheManager::new());
-        let project_service = ProjectService::new(Arc::clone(&default_project), plugin_manager.clone());
+        let project_service =
+            ProjectService::new(Arc::clone(&default_project), plugin_manager.clone());
 
         let mut editor_context = EditorContext::new(default_comp_id); // Pass default_comp_id
         editor_context.selected_composition_id = Some(default_comp_id); // Select the default composition
@@ -109,7 +110,6 @@ impl MyApp {
         self.editor_context.selected_entity_id = None;
         self.editor_context.current_time = 0.0;
 
-
         self.history_manager = HistoryManager::new();
 
         if let Ok(proj_read) = self.project_service.get_project().read() {
@@ -124,8 +124,6 @@ impl eframe::App for MyApp {
         let mut is_listening_for_shortcut = false;
 
         // --- Draw UI and Collect Inputs ---
-
-
 
         // 2. Menu Bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
@@ -334,7 +332,6 @@ impl eframe::App for MyApp {
                     if let Some(comp_id) = self.editor_context.selected_composition_id {
                         if let Some(track_id) = self.editor_context.selected_track_id {
                             if let Some(entity_id) = self.editor_context.selected_entity_id {
-
                                 if let Err(e) = self
                                     .project_service
                                     .remove_clip_from_track(comp_id, track_id, entity_id)
@@ -342,7 +339,8 @@ impl eframe::App for MyApp {
                                     error!("Failed to remove entity: {:?}", e);
                                 } else {
                                     self.editor_context.selected_entity_id = None;
-                                    let current_state = self.project_service.get_project().read().unwrap().clone();
+                                    let current_state =
+                                        self.project_service.get_project().read().unwrap().clone();
                                     self.history_manager.push_project_state(current_state);
                                 }
                             }

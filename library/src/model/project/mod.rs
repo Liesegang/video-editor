@@ -1,11 +1,11 @@
+pub mod asset;
 pub mod project;
 pub mod property;
-pub mod asset;
 
 use crate::model::project::property::PropertyMap;
+use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use ordered_float::OrderedFloat;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct Track {
@@ -52,7 +52,7 @@ impl std::fmt::Display for TrackClipKind {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct TrackClip {
-    pub id: Uuid, // Added UUID field
+    pub id: Uuid,                   // Added UUID field
     pub reference_id: Option<Uuid>, // ID of the referenced Asset or Composition
     #[serde(rename = "type")]
     pub kind: TrackClipKind,
@@ -117,15 +117,55 @@ impl TrackClip {
         duration_frame: u64,
     ) -> Self {
         let mut props = PropertyMap::new();
-        props.set("file_path".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::String(file_path.to_string())));
+        props.set(
+            "file_path".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::String(file_path.to_string()),
+            ),
+        );
         // Default transform
-        props.set("position_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(960.0))));
-        props.set("position_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(540.0))));
-        props.set("scale_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0))));
-        props.set("scale_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0))));
-        props.set("rotation".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))));
-        props.set("anchor_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))));
-        props.set("anchor_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))));
+        props.set(
+            "position_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(960.0)),
+            ),
+        );
+        props.set(
+            "position_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(540.0)),
+            ),
+        );
+        props.set(
+            "scale_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+            ),
+        );
+        props.set(
+            "scale_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+            ),
+        );
+        props.set(
+            "rotation".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
+        props.set(
+            "anchor_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
+        props.set(
+            "anchor_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
 
         TrackClip::new(
             Uuid::new_v4(),
@@ -143,21 +183,61 @@ impl TrackClip {
 
     pub fn create_image(
         reference_id: Option<Uuid>,
-        file_path: &str, 
-        in_frame: u64, 
-        out_frame: u64
+        file_path: &str,
+        in_frame: u64,
+        out_frame: u64,
     ) -> Self {
         let mut props = PropertyMap::new();
-        props.set("file_path".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::String(file_path.to_string())));
-        
+        props.set(
+            "file_path".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::String(file_path.to_string()),
+            ),
+        );
+
         // Default transform
-        props.set("position_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(960.0))));
-        props.set("position_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(540.0))));
-        props.set("scale_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0))));
-        props.set("scale_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0))));
-        props.set("rotation".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))));
-        props.set("anchor_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))));
-        props.set("anchor_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))));
+        props.set(
+            "position_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(960.0)),
+            ),
+        );
+        props.set(
+            "position_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(540.0)),
+            ),
+        );
+        props.set(
+            "scale_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+            ),
+        );
+        props.set(
+            "scale_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+            ),
+        );
+        props.set(
+            "rotation".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
+        props.set(
+            "anchor_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
+        props.set(
+            "anchor_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
 
         TrackClip::new(
             Uuid::new_v4(),
@@ -175,15 +255,55 @@ impl TrackClip {
 
     pub fn create_text(text: &str, in_frame: u64, out_frame: u64) -> Self {
         let mut props = PropertyMap::new();
-        props.set("text".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::String(text.to_string())));
+        props.set(
+            "text".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::String(text.to_string()),
+            ),
+        );
         // Default transform
-        props.set("position_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(960.0))));
-        props.set("position_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(540.0))));
-        props.set("scale_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0))));
-        props.set("scale_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0))));
-        props.set("rotation".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))));
-        props.set("anchor_x".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))));
-        props.set("anchor_y".to_string(), crate::model::project::property::Property::constant(crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))));
+        props.set(
+            "position_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(960.0)),
+            ),
+        );
+        props.set(
+            "position_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(540.0)),
+            ),
+        );
+        props.set(
+            "scale_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+            ),
+        );
+        props.set(
+            "scale_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(1.0)),
+            ),
+        );
+        props.set(
+            "rotation".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
+        props.set(
+            "anchor_x".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
+        props.set(
+            "anchor_y".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
 
         TrackClip::new(
             Uuid::new_v4(),
@@ -200,8 +320,15 @@ impl TrackClip {
     }
 
     // Helper for consistency with Entity
-    pub fn set_constant_property(&mut self, key: &str, value: crate::model::project::property::PropertyValue) {
-        self.properties.set(key.to_string(), crate::model::project::property::Property::constant(value));
+    pub fn set_constant_property(
+        &mut self,
+        key: &str,
+        value: crate::model::project::property::PropertyValue,
+    ) {
+        self.properties.set(
+            key.to_string(),
+            crate::model::project::property::Property::constant(value),
+        );
     }
 }
 

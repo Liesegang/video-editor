@@ -223,7 +223,13 @@ impl RenderQueue {
 
             let handle = thread::spawn(move || {
                 let mut render_service = RenderService::new(
-                    SkiaRenderer::new(surface_width, surface_height, background_color_clone),
+                    SkiaRenderer::new(
+                        surface_width,
+                        surface_height,
+                        background_color_clone,
+                        false,
+                        None,
+                    ),
                     plugin_manager,
                     cache_manager_for_thread,
                     entity_converter_registry_clone,
@@ -266,7 +272,14 @@ impl RenderQueue {
                     );
 
                     let image = match render_result {
-                        Ok(img) => img,
+                        Ok(crate::rendering::renderer::RenderOutput::Image(img)) => img,
+                        Ok(crate::rendering::renderer::RenderOutput::Texture(_)) => {
+                            error!(
+                                "Worker {} received Texture output (unsupported for export)",
+                                worker_id
+                            );
+                            continue;
+                        }
                         Err(err) => {
                             error!(
                                 "Worker {} failed to render frame {}: {}",
