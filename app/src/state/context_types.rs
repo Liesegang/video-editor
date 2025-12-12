@@ -51,6 +51,7 @@ impl Default for ViewState {
 // Added GraphEditorState
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GraphEditorState {
+    #[serde(with = "Vec2Def")]
     pub pan: egui::Vec2, // Pan offset
     pub zoom_x: f32, // Pixels per second
     pub zoom_y: f32, // Pixels per unit value

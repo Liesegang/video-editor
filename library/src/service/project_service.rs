@@ -597,42 +597,76 @@ impl ProjectService {
     }
 
     pub fn update_keyframe(
-        &self,
+        &mut self,
         composition_id: Uuid,
         track_id: Uuid,
         clip_id: Uuid,
         property_key: &str,
-        index: usize,
-        new_time: f64,
+        keyframe_index: usize,
+        new_time: Option<f64>,
         new_value: Option<PropertyValue>,
+        new_easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        self.with_track_mut(composition_id, track_id, |track| {
-             if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
-                if let Some(prop) = clip.properties.get_mut(property_key) {
-                    if prop.evaluator == "keyframe" {
-                         use crate::model::project::property::Property;
-                         use ordered_float::OrderedFloat;
-                         let mut current_keyframes = prop.keyframes();
-                         if index < current_keyframes.len() {
-                             if let Some(kf) = current_keyframes.get_mut(index) {
-                                 kf.time = OrderedFloat(new_time);
-                                 if let Some(v) = new_value {
-                                     kf.value = v;
-                                 }
-                             }
-                             // Re-sort needed as time changed
-                             current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
-                             *prop = Property::keyframe(current_keyframes);
-                         }
-                    }
-                    Ok(())
-                } else {
-                     Err(LibraryError::Project(format!("Property {} not found", property_key)))
+        use crate::animation::EasingFunction;
+        use crate::model::project::property::{Keyframe, PropertyValue};
+        use ordered_float::OrderedFloat;
+
+        let mut project = self.project.write().unwrap();
+        let composition = project
+            .compositions
+            .iter_mut()
+            .find(|c| c.id == composition_id)
+            .ok_or(LibraryError::Project(format!("Composition {} not found", composition_id)))?;
+        let track = composition
+            .tracks
+            .iter_mut()
+            .find(|t| t.id == track_id)
+            .ok_or(LibraryError::Project(format!("Track {} not found", track_id)))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|c| c.id == clip_id)
+            .ok_or(LibraryError::Project(format!("Clip {} not found", clip_id)))?;
+
+        let property = clip
+            .properties
+            .get_mut(property_key)
+            .ok_or(LibraryError::Project(format!("Property {} not found", property_key)))?;
+
+        if let Some(PropertyValue::Array(promoted_array)) = property.properties.get_mut("keyframes") {
+            let mut keyframes: Vec<Keyframe> = promoted_array
+                .iter()
+                .filter_map(|v| serde_json::from_value(serde_json::Value::from(v)).ok())
+                .collect();
+
+            if let Some(kf) = keyframes.get_mut(keyframe_index) {
+                if let Some(t) = new_time {
+                    kf.time = OrderedFloat(t);
                 }
-             } else {
-                 Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
-             }
-        })?
+                if let Some(val) = new_value {
+                    kf.value = val;
+                }
+                if let Some(easing) = new_easing {
+                    kf.easing = easing;
+                }
+            } else {
+                 return Err(LibraryError::Project("Keyframe index out of bounds".to_string()));
+            }
+
+            // Resort
+            keyframes.sort_by(|a, b| a.time.cmp(&b.time));
+
+            let new_array: Vec<PropertyValue> = keyframes
+                .into_iter()
+                .filter_map(|kf| serde_json::to_value(kf).ok())
+                .map(PropertyValue::from)
+                .collect();
+
+            promoted_array.clear();
+            promoted_array.extend(new_array);
+        }
+
+        Ok(())
     }
 
     pub fn update_clip_time(
