@@ -47,6 +47,8 @@ pub struct EditorContext {
     pub dragged_entity_has_moved: bool, // Track if entity was actually moved during drag
     #[serde(skip)]
     pub is_resizing_entity: bool,
+    #[serde(skip)]
+    pub is_moving_selected_entity: bool,
 
     #[serde(skip)]
     pub current_time_text_input: String,
@@ -100,11 +102,11 @@ impl EditorContext {
             selected_track_id: None,
             selected_entity_id: None,
 
-
             dragged_entity_original_track_id: None,
             dragged_entity_hovered_track_id: None,
             dragged_entity_has_moved: false,
             is_resizing_entity: false,
+            is_moving_selected_entity: false, // Initialize new field
 
             current_time_text_input: "".to_string(), // Initialize new field
             is_editing_current_time: false,          // Initialize new field
@@ -117,5 +119,10 @@ impl EditorContext {
     pub fn get_current_composition<'a>(&self, project: &'a Project) -> Option<&'a Composition> {
         self.selected_composition_id
             .and_then(|id| project.compositions.iter().find(|&c| c.id == id))
+    }
+
+    pub fn select_clip(&mut self, entity_id: Uuid, track_id: Uuid) {
+        self.selected_entity_id = Some(entity_id);
+        self.selected_track_id = Some(track_id);
     }
 }

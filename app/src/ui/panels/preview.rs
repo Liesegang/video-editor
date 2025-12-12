@@ -1,4 +1,4 @@
-use egui::{epaint::StrokeKind, Ui};
+use egui::Ui;
 use std::sync::{Arc, RwLock};
 
 use library::model::project::project::Project;
@@ -384,7 +384,7 @@ pub fn preview_panel(
                         let cos = angle_rad.cos();
                         let sin = angle_rad.sin();
                         
-                        let transform_point = |local_x: f32, local_y: f32| -> egui::Pos2 {
+                        let _transform_point = |local_x: f32, local_y: f32| -> egui::Pos2 {
                             let ox = local_x - gc.anchor_x;
                             let oy = local_y - gc.anchor_y;
                             let sx_ox = ox * sx;
@@ -394,10 +394,7 @@ pub fn preview_panel(
                             center_curr + egui::vec2(rx, ry)
                         };
 
-                        let p1 = transform_point(0.0, 0.0);       // Top-Left in Texture
-                        let p2 = transform_point(base_w, 0.0);    // Top-Right
-                        let p3 = transform_point(base_w, base_h); // Bottom-Right
-                        let p4 = transform_point(0.0, base_h);    // Bottom-Left
+
                         
                         // Check if mouse_world_pos is inside the quad defined by p1, p2, p3, p4
                         // Using barycentric coordinates or separating axis theorem.
@@ -437,10 +434,10 @@ pub fn preview_panel(
         None
     };
 
-    if let Some((start_mouse_pos, active_handle, orig_pos, orig_sx, orig_sy, orig_rot, orig_w, orig_h, orig_ax, orig_ay)) = gizmo_drag_data {
+    if let Some((start_mouse_pos, active_handle, orig_pos, orig_sx, orig_sy, orig_rot, orig_w, orig_h, _orig_ax, _orig_ay)) = gizmo_drag_data {
         if ui.input(|i| i.pointer.any_released()) {
             editor_context.gizmo_state = None;
-
+            interacted_with_gizmo = true; // Prevent click-through to selection logic on release
         } else if let Some(mouse_pos) = pointer_pos {
             interacted_with_gizmo = true;
             
@@ -523,48 +520,70 @@ pub fn preview_panel(
                             let current_w = base_w * orig_sx / 100.0;
                             let current_h = base_h * orig_sy / 100.0;
                             
-                            let (d_w, d_h, anchor_shift_x, anchor_shift_y) = match active_handle {
-                                crate::model::ui_types::GizmoHandle::Right => (dx, 0.0, dx/2.0, 0.0),
-                                crate::model::ui_types::GizmoHandle::Left => (-dx, 0.0, dx/2.0, 0.0),
-                                crate::model::ui_types::GizmoHandle::Bottom => (0.0, dy, 0.0, dy/2.0),
-                                crate::model::ui_types::GizmoHandle::Top => (0.0, -dy, 0.0, dy/2.0),
-                                crate::model::ui_types::GizmoHandle::BottomRight => (dx, dy, dx/2.0, dy/2.0),
-                                crate::model::ui_types::GizmoHandle::TopLeft => (-dx, -dy, dx/2.0, dy/2.0),
-                                crate::model::ui_types::GizmoHandle::TopRight => (dx, -dy, dx/2.0, dy/2.0),
-                                crate::model::ui_types::GizmoHandle::BottomLeft => (-dx, dy, dx/2.0, dy/2.0),
-                                _ => (0.0, 0.0, 0.0, 0.0),
-                            };
-                            
-                            let mut next_w = current_w + d_w;
-                            let mut next_h = current_h + d_h;
-                            
+                             // Determine Handle Signs (-1, 0, 1) for X and Y axes
+                             // X: -1 (Left), 1 (Right), 0 (Center/None)
+                             // Y: -1 (Top), 1 (Bottom), 0 (Center/None)
+                             let (sign_x, sign_y) = match active_handle {
+                                 crate::model::ui_types::GizmoHandle::TopLeft => (-1.0, -1.0),
+                                 crate::model::ui_types::GizmoHandle::Top => (0.0, -1.0),
+                                 crate::model::ui_types::GizmoHandle::TopRight => (1.0, -1.0),
+                                 crate::model::ui_types::GizmoHandle::Left => (-1.0, 0.0),
+                                 crate::model::ui_types::GizmoHandle::Right => (1.0, 0.0),
+                                 crate::model::ui_types::GizmoHandle::BottomLeft => (-1.0, 1.0),
+                                 crate::model::ui_types::GizmoHandle::Bottom => (0.0, 1.0),
+                                 crate::model::ui_types::GizmoHandle::BottomRight => (1.0, 1.0),
+                                 _ => (0.0, 0.0),
+                             };
+
+                             // Calculate intended change in dimensions based on handle movement
+                             // If sign is 0 (e.g. Top handle), dx contributes 0 to width change.
+                             // If Center Scale (Alt), we need to double the delta because we are growing in both directions.
+                             let scale_factor = if center_scale { 2.0 } else { 1.0 };
+                             let raw_d_w = if sign_x != 0.0 { dx * sign_x * scale_factor } else { 0.0 };
+                             let raw_d_h = if sign_y != 0.0 { dy * sign_y * scale_factor } else { 0.0 };
+
+                             let mut next_w = current_w + raw_d_w;
+                             let mut next_h = current_h + raw_d_h;
+
                              if keep_aspect_ratio {
                                  // Simple aspect ratio constraint
-                                 let ratio = current_w / current_h;
-                                 if d_w.abs() > d_h.abs() {
+                                 let ratio = if current_h != 0.0 { current_w / current_h } else { 1.0 };
+                                 
+                                 // Determine dominant axis
+                                 // If dragging corner, pick larger change.
+                                 // If dragging side, force non-dragged axis to follow.
+                                 if sign_x != 0.0 && sign_y != 0.0 {
+                                     // Corner
+                                     if raw_d_w.abs() > raw_d_h.abs() {
+                                         next_h = next_w / ratio;
+                                     } else {
+                                         next_w = next_h * ratio;
+                                     }
+                                 } else if sign_x != 0.0 {
+                                     // Left/Right: Width is dominant
                                      next_h = next_w / ratio;
-                                 } else {
+                                 } else if sign_y != 0.0 {
+                                     // Top/Bottom: Height is dominant
                                      next_w = next_h * ratio;
                                  }
                              }
                              
+                             // Calculate actual resize delta applied
+                             let final_d_w = next_w - current_w;
+                             let final_d_h = next_h - current_h;
+
                              // Update Scale
                              if base_w > 0.0 { new_scale_x = next_w / base_w * 100.0; }
                              if base_h > 0.0 { new_scale_y = next_h / base_h * 100.0; }
                              
-                             // Update Position (Anchor compensation)
-                             // If we grow right, the center moves right by delta/2.
-                             // Wait, logic depends on anchor.
-                             // If resizing Right handle, pivot is Left edge? No, pivot is Anchor (0.0, 0.0).
-                             // If Anchor is 0,0 (Center), then dragging Right handle increases width.
-                             // The center of the new rect shifts by d/2.
-                             // BUT, we want "Alt" to resize around center (no position shift).
-                             // If NOT Alt, we should shift position so the opposite edge stays put.
-                             
                              if !center_scale {
-                                 // Shift position to simulate corner pinning
-                                 // Rotate local shift back to world
-                                 let shift = rotate_vec(egui::vec2(anchor_shift_x, anchor_shift_y), orig_rot);
+                                 // Compensate position to simulate corner pinning
+                                 // Shift = (Sign * Delta) / 2.0
+                                 // e.g. Left Handle (SignX -1). Growing (+Delta). Shift X = -1 * Delta / 2 = -Delta/2. Matches logic.
+                                 let shift_x = sign_x * final_d_w / 2.0;
+                                 let shift_y = sign_y * final_d_h / 2.0;
+                                 
+                                 let shift = rotate_vec(egui::vec2(shift_x, shift_y), orig_rot);
                                  new_pos_x += shift.x;
                                  new_pos_y += shift.y;
                              }
@@ -587,11 +606,36 @@ pub fn preview_panel(
         }
     }
 
+    if ui.input(|i| i.pointer.any_released()) {
+        editor_context.is_moving_selected_entity = false;
+    }
+
     if !is_panning_input && !interacted_with_gizmo {
+        // Allow selecting on drag start so we can move unselected items immediately
+        if response.drag_started() {
+            if let Some(hovered) = hovered_entity_id {
+                if let Some(gc) = gui_clips.iter().find(|gc| gc.id == hovered) {
+                    editor_context.select_clip(hovered, gc.track_id);
+                    editor_context.is_moving_selected_entity = true; // Started drag on entity
+                }
+            } else {
+                 editor_context.is_moving_selected_entity = false; // Started drag on background
+            }
+        }
+
         if response.clicked() {
-            editor_context.selected_entity_id = hovered_entity_id;
+            if let Some(hovered) = hovered_entity_id {
+                if let Some(gc) = gui_clips.iter().find(|gc| gc.id == hovered) {
+                    editor_context.select_clip(hovered, gc.track_id);
+                }
+            } else {
+                 // Deselect if clicked on background
+                 editor_context.selected_entity_id = None;
+            }
         } else if response.dragged() {
-            if let Some(entity_id) = editor_context.selected_entity_id {
+            // Guard: Only move if we started the drag on the entity
+            if editor_context.is_moving_selected_entity {
+                if let Some(entity_id) = editor_context.selected_entity_id {
                 let current_zoom = editor_context.view_zoom;
                 if let Some(comp_id) = editor_context.selected_composition_id {
                     if let Some(track_id) = editor_context.selected_track_id {
@@ -653,6 +697,7 @@ pub fn preview_panel(
                 }
             }
         }
+        }
     }
 
     // Draw Gizmo for selected entity
@@ -692,7 +737,7 @@ pub fn preview_panel(
             
             // Rotation Handle (sticking out top)
             // Center top is p_t.
-            let rot_handle_dist = 40.0 / editor_context.view_zoom; // Fixed screen distance
+            let rot_handle_dist = 10.0 / editor_context.view_zoom; // Fixed screen distance 20px
             let s_rot = to_screen(p_t) + egui::vec2(sin * rot_handle_dist, -cos * rot_handle_dist); // Approx visual up
             // Let's use fixed screen offset logic for rotation handle drawing.
             
