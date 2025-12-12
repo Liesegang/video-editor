@@ -426,7 +426,166 @@ pub fn preview_panel(
         }
     }
 
-    let interacted_with_gizmo = false; // Placeholder
+    let mut interacted_with_gizmo = false;
+
+    // Handle Gizmo Interaction (Drag)
+    // Handle Gizmo Interaction (Drag)
+    // Extract Gizmo Information first to avoid double borrow of editor_context
+    let gizmo_drag_data = if let Some(state) = &editor_context.gizmo_state {
+        Some((state.start_mouse_pos, state.active_handle, state.original_position, state.original_scale_x, state.original_scale_y, state.original_rotation, state.original_width, state.original_height, state.original_anchor_x, state.original_anchor_y))
+    } else {
+        None
+    };
+
+    if let Some((start_mouse_pos, active_handle, orig_pos, orig_sx, orig_sy, orig_rot, orig_w, orig_h, orig_ax, orig_ay)) = gizmo_drag_data {
+        if ui.input(|i| i.pointer.any_released()) {
+            editor_context.gizmo_state = None;
+
+        } else if let Some(mouse_pos) = pointer_pos {
+            interacted_with_gizmo = true;
+            
+            // Re-acquire selected entity data
+            if let Some(selected_id) = editor_context.selected_entity_id {
+                 // Clone needed properties to avoid borrow issues
+                 let (comp_id, track_id, current_props) = if let Ok(proj_read) = project.read() {
+                        if let Some(comp) = editor_context.get_current_composition(&proj_read) {
+                            if let Some(track) = comp.tracks.iter().find(|t| t.clips.iter().any(|c| c.id == selected_id)) {
+                                if let Some(clip) = track.clips.iter().find(|c| c.id == selected_id) {
+                                    (Some(comp.id), Some(track.id), Some(clip.properties.clone()))
+                                } else { (None, None, None) }
+                            } else { (None, None, None) }
+                        } else { (None, None, None) }
+                 } else { (None, None, None) };
+
+                 if let (Some(comp_id), Some(track_id), Some(_)) = (comp_id, track_id, current_props) {
+                     // Calculate Delta (World Space)
+                     let start_world = to_world(start_mouse_pos);
+                     let current_world = to_world(mouse_pos);
+                     let delta_world = current_world - start_world;
+
+                     let modifiers = ui.input(|i| i.modifiers);
+                     let keep_aspect_ratio = modifiers.shift;
+                     let center_scale = modifiers.alt;
+
+                     // Logic depends on handle
+                     let mut new_scale_x = orig_sx;
+                     let mut new_scale_y = orig_sy;
+                     let mut new_pos_x = orig_pos[0];
+                     let mut new_pos_y = orig_pos[1];
+                     let mut new_rotation = orig_rot;
+
+                     let base_w = orig_w;
+                     let base_h = orig_h;
+                     
+                     // Helper: Rotate vector by angle
+                     let rotate_vec = |v: egui::Vec2, angle_deg: f32| -> egui::Vec2 {
+                         let rad = angle_deg.to_radians();
+                         let c = rad.cos();
+                         let s = rad.sin();
+                         egui::vec2(v.x * c - v.y * s, v.x * s + v.y * c)
+                     };
+
+                     match active_handle {
+                         crate::model::ui_types::GizmoHandle::Rotation => {
+                             // Rotation Logic
+                             // Center of rotation
+                             let center = egui::pos2(orig_pos[0], orig_pos[1]);
+                             let start_vec = start_world - center;
+                             let current_vec = current_world - center;
+                             
+                             let angle_start = start_vec.y.atan2(start_vec.x).to_degrees();
+                             let angle_current = current_vec.y.atan2(current_vec.x).to_degrees();
+                             
+                             new_rotation = orig_rot + (angle_current - angle_start);
+                         }
+                         _ => {
+                            // Resize Logic
+                            // Convert delta to Local Space (relative to un-rotated object)
+                            // We need to project the world delta onto the local axes.
+                            // Local X axis: Rotated (cos, sin)
+                            // Local Y axis: Rotated (-sin, cos)
+                            
+                            let rad = orig_rot.to_radians();
+                            let c = rad.cos();
+                            let s = rad.sin();
+                            
+                            // Delta in aligned space
+                            let dx = delta_world.x * c + delta_world.y * s;
+                            let dy = -delta_world.x * s + delta_world.y * c;
+                            
+                            // Calculate resize factor
+                            // We assume default anchor (center) for logic simplicity, then compensate?
+                            // No, let's just adjust scale based on edge movement.
+                            // Scale = NewDimension / BaseDimension * 100.
+                            // CurrentDimension = Base * Scale / 100.
+                            // NewDimension = CurrentDimension + delta.
+                            
+                            let current_w = base_w * orig_sx / 100.0;
+                            let current_h = base_h * orig_sy / 100.0;
+                            
+                            let (d_w, d_h, anchor_shift_x, anchor_shift_y) = match active_handle {
+                                crate::model::ui_types::GizmoHandle::Right => (dx, 0.0, dx/2.0, 0.0),
+                                crate::model::ui_types::GizmoHandle::Left => (-dx, 0.0, dx/2.0, 0.0),
+                                crate::model::ui_types::GizmoHandle::Bottom => (0.0, dy, 0.0, dy/2.0),
+                                crate::model::ui_types::GizmoHandle::Top => (0.0, -dy, 0.0, dy/2.0),
+                                crate::model::ui_types::GizmoHandle::BottomRight => (dx, dy, dx/2.0, dy/2.0),
+                                crate::model::ui_types::GizmoHandle::TopLeft => (-dx, -dy, dx/2.0, dy/2.0),
+                                crate::model::ui_types::GizmoHandle::TopRight => (dx, -dy, dx/2.0, dy/2.0),
+                                crate::model::ui_types::GizmoHandle::BottomLeft => (-dx, dy, dx/2.0, dy/2.0),
+                                _ => (0.0, 0.0, 0.0, 0.0),
+                            };
+                            
+                            let mut next_w = current_w + d_w;
+                            let mut next_h = current_h + d_h;
+                            
+                             if keep_aspect_ratio {
+                                 // Simple aspect ratio constraint
+                                 let ratio = current_w / current_h;
+                                 if d_w.abs() > d_h.abs() {
+                                     next_h = next_w / ratio;
+                                 } else {
+                                     next_w = next_h * ratio;
+                                 }
+                             }
+                             
+                             // Update Scale
+                             if base_w > 0.0 { new_scale_x = next_w / base_w * 100.0; }
+                             if base_h > 0.0 { new_scale_y = next_h / base_h * 100.0; }
+                             
+                             // Update Position (Anchor compensation)
+                             // If we grow right, the center moves right by delta/2.
+                             // Wait, logic depends on anchor.
+                             // If resizing Right handle, pivot is Left edge? No, pivot is Anchor (0.0, 0.0).
+                             // If Anchor is 0,0 (Center), then dragging Right handle increases width.
+                             // The center of the new rect shifts by d/2.
+                             // BUT, we want "Alt" to resize around center (no position shift).
+                             // If NOT Alt, we should shift position so the opposite edge stays put.
+                             
+                             if !center_scale {
+                                 // Shift position to simulate corner pinning
+                                 // Rotate local shift back to world
+                                 let shift = rotate_vec(egui::vec2(anchor_shift_x, anchor_shift_y), orig_rot);
+                                 new_pos_x += shift.x;
+                                 new_pos_y += shift.y;
+                             }
+                         }
+                     }
+
+                     // Apply Updates
+                     // Note: We use update_clip_property to push changes.
+                     // This might flood history if we track every frame?
+                     // Ideally we only commit history on release. For now, direct update.
+                     
+                     let _ = project_service.update_clip_property(comp_id, track_id, selected_id, "scale_x", library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(new_scale_x as f64)));
+                     let _ = project_service.update_clip_property(comp_id, track_id, selected_id, "scale_y", library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(new_scale_y as f64)));
+                     let _ = project_service.update_clip_property(comp_id, track_id, selected_id, "position_x", library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(new_pos_x as f64)));
+                     let _ = project_service.update_clip_property(comp_id, track_id, selected_id, "position_y", library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(new_pos_y as f64)));
+                     let _ = project_service.update_clip_property(comp_id, track_id, selected_id, "rotation", library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(new_rotation as f64)));
+                     
+                 }
+            }
+        }
+    }
 
     if !is_panning_input && !interacted_with_gizmo {
         if response.clicked() {
@@ -519,32 +678,97 @@ pub fn preview_panel(
                 center + egui::vec2(rx, ry)
             };
 
-            // 4 Corners in World Space relative to texture 0,0
-            let p1 = transform_point(0.0, 0.0);
-            let p2 = transform_point(base_w, 0.0);
-            let p3 = transform_point(base_w, base_h);
-            let p4 = transform_point(0.0, base_h);
-
-            // To Screen Space
-            let s1 = to_screen(p1);
-            let s2 = to_screen(p2);
-            let s3 = to_screen(p3);
-            let s4 = to_screen(p4);
+            // Calculate Corners
+            let p_tl = transform_point(0.0, 0.0);
+            let p_tr = transform_point(base_w, 0.0);
+            let p_br = transform_point(base_w, base_h);
+            let p_bl = transform_point(0.0, base_h);
+            
+            // Midpoints
+            let p_t = transform_point(base_w / 2.0, 0.0);
+            let p_b = transform_point(base_w / 2.0, base_h);
+            let p_l = transform_point(0.0, base_h / 2.0);
+            let p_r = transform_point(base_w, base_h / 2.0);
+            
+            // Rotation Handle (sticking out top)
+            // Center top is p_t.
+            let rot_handle_dist = 40.0 / editor_context.view_zoom; // Fixed screen distance
+            let s_rot = to_screen(p_t) + egui::vec2(sin * rot_handle_dist, -cos * rot_handle_dist); // Approx visual up
+            // Let's use fixed screen offset logic for rotation handle drawing.
+            
+            // Screen Coords
+            let s_tl = to_screen(p_tl);
+            let s_tr = to_screen(p_tr);
+            let s_br = to_screen(p_br);
+            let s_bl = to_screen(p_bl);
+            let s_t = to_screen(p_t);
+            let s_b = to_screen(p_b);
+            let s_l = to_screen(p_l);
+            let s_r = to_screen(p_r);
             let s_center = to_screen(center);
+
 
             // Draw Box
             let gizmo_color = egui::Color32::from_rgb(0, 200, 255);
             let stroke = egui::Stroke::new(2.0, gizmo_color);
 
-            painter.line_segment([s1, s2], stroke);
-            painter.line_segment([s2, s3], stroke);
-            painter.line_segment([s3, s4], stroke);
-            painter.line_segment([s4, s1], stroke);
+            painter.line_segment([s_tl, s_tr], stroke);
+            painter.line_segment([s_tr, s_br], stroke);
+            painter.line_segment([s_br, s_bl], stroke);
+            painter.line_segment([s_bl, s_tl], stroke);
+            
+            // Draw Rotation Stick
+            painter.line_segment([s_t, s_rot], stroke);
+            painter.circle_filled(s_rot, 5.0, gizmo_color);
 
-            // Draw dots at corners
-            let handle_radius = 4.0;
-            for p in [s1, s2, s3, s4] {
-                painter.circle_filled(p, handle_radius, gizmo_color);
+            // Draw Handles
+            let handle_radius = 5.0;
+            // Define handles structure
+            let handles = [
+                (s_tl, crate::model::ui_types::GizmoHandle::TopLeft, egui::CursorIcon::ResizeNwSe),
+                (s_tr, crate::model::ui_types::GizmoHandle::TopRight, egui::CursorIcon::ResizeNeSw),
+                (s_bl, crate::model::ui_types::GizmoHandle::BottomLeft, egui::CursorIcon::ResizeNeSw),
+                (s_br, crate::model::ui_types::GizmoHandle::BottomRight, egui::CursorIcon::ResizeNwSe),
+                (s_t, crate::model::ui_types::GizmoHandle::Top, egui::CursorIcon::ResizeVertical),
+                (s_b, crate::model::ui_types::GizmoHandle::Bottom, egui::CursorIcon::ResizeVertical),
+                (s_l, crate::model::ui_types::GizmoHandle::Left, egui::CursorIcon::ResizeHorizontal),
+                (s_r, crate::model::ui_types::GizmoHandle::Right, egui::CursorIcon::ResizeHorizontal),
+                (s_rot, crate::model::ui_types::GizmoHandle::Rotation, egui::CursorIcon::Grab),
+            ];
+            
+            for (pos, handle_type, cursor) in &handles {
+                 painter.circle_filled(*pos, handle_radius, egui::Color32::WHITE);
+                 painter.circle_stroke(*pos, handle_radius, stroke);
+                 
+                 // Hit Test for Start Drag
+                 if editor_context.gizmo_state.is_none() && !is_panning_input {
+                     if let Some(mouse_pos) = pointer_pos {
+                         if pos.distance(mouse_pos) <= handle_radius + 2.0 {
+                             ui.ctx().set_cursor_icon(*cursor);
+                             if ui.input(|i| i.pointer.primary_pressed()) {
+                                 // Start Drag
+                                 use crate::state::context::GizmoState;
+                                 editor_context.gizmo_state = Some(GizmoState {
+                                     start_mouse_pos: mouse_pos, // Screen space start? or World? We used world in logic.
+                                     // Let's store Screen for simple delta or convert to World?
+                                     // Context struct uses `start_mouse_pos: egui::Pos2`.
+                                     // Drag logic used `to_world(state.start_mouse_pos)`.
+                                     // So storing SCREEN pos is fine if we convert later.
+                                     
+                                     active_handle: *handle_type,
+                                     original_position: gc.position,
+                                     original_scale_x: gc.scale_x,
+                                     original_scale_y: gc.scale_y,
+                                     original_rotation: gc.rotation,
+                                     original_anchor_x: gc.anchor_x,
+                                     original_anchor_y: gc.anchor_y,
+                                     original_width: base_w,
+                                     original_height: base_h,
+                                 });
+                             }
+                         }
+                     }
+                 }
             }
 
             // Draw Anchor (Pivot used for rotation/position) - this is 'center' in our logic
