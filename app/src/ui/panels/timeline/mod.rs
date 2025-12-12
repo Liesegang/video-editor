@@ -9,7 +9,7 @@ use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
 
 use crate::{
-    action::HistoryManager, model::ui_types::TimelineDisplayMode, state::context::EditorContext,
+    action::HistoryManager, state::context::EditorContext,
 };
 
 // Re-export functions for easier access
@@ -36,15 +36,7 @@ pub fn timeline_panel(
     } // `project_lock` is dropped here, releasing the read lock.
 
     const TRACK_LIST_SIDEBAR_WIDTH: f32 = 100.0;
-    let pixels_per_unit = match editor_context.timeline.display_mode {
-        TimelineDisplayMode::Seconds => {
-            editor_context.timeline.pixels_per_second * editor_context.timeline.h_zoom
-        }
-        TimelineDisplayMode::Frames | TimelineDisplayMode::SecondsAndFrames => {
-            (editor_context.timeline.pixels_per_second / current_composition_fps as f32) // Use the extracted fps
-                * editor_context.timeline.h_zoom
-        }
-    };
+    let pixels_per_unit = editor_context.timeline.pixels_per_second * editor_context.timeline.h_zoom;
     let scroll_offset_x = editor_context.timeline.scroll_offset.x;
 
     egui::TopBottomPanel::top("timeline_ruler_panel")
@@ -91,7 +83,7 @@ pub fn timeline_panel(
 
                 ui_content.separator();
 
-                show_clip_area(
+                let (clip_area_rect, _) = show_clip_area(
                     ui_content,
                     editor_context,
                     history_manager,
@@ -103,44 +95,36 @@ pub fn timeline_panel(
                     track_spacing,
                     current_composition_fps,
                 );
+                
+                // Draw cursor after all panels are laid out
+                let cx = clip_area_rect.min.x
+                  - scroll_offset_x
+                    + editor_context.timeline.current_time * pixels_per_unit; // Locked to clip area start
+                
+                
+                // Constants for Playhead Display
+                const RULER_HEIGHT_ESTIMATE: f32 = 28.0; // Approximation of Ruler Height + Gap
+                const VISIBILITY_BUFFER_PX: f32 = 20.0;  // Extra buffer for visibility check
+
+                // Draw overlay line
+                let line_top = clip_area_rect.min.y - RULER_HEIGHT_ESTIMATE; 
+                let line_bottom = clip_area_rect.max.y;
+                
+                // Draw if visible in clip area horizontal range (extended slightly for safety)
+                if cx >= clip_area_rect.min.x - VISIBILITY_BUFFER_PX && cx <= clip_area_rect.max.x {
+                    // Use a foreground layer to draw over the ruler (which is in a higher panel) 
+                    // and bypass clipping of the current central panel
+                    let painter = ui_content.ctx().layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("timeline_cursor"),
+                    ));
+                    
+                    painter.line_segment(
+                        [egui::pos2(cx, line_top), egui::pos2(cx, line_bottom)],
+                        egui::Stroke::new(2.0, egui::Color32::RED),
+                    );
+                }
             },
         );
     });
-
-    // Draw cursor after all panels are laid out
-    let cx = central_panel_rect.min.x
-      + TRACK_LIST_SIDEBAR_WIDTH // Add the width of the track list sidebar
-      - scroll_offset_x
-        + editor_context.timeline.current_time * pixels_per_unit
-        + 24.0; // This offset might need to be adjusted
-
-    let full_timeline_area = ui.available_rect_before_wrap();
-
-    let ruler_y_min = ui.clip_rect().min.y;
-    let ruler_y_max = ruler_y_min + 20.0;
-
-    let central_panel_y_min = central_panel_rect.min.y;
-    let central_panel_y_max = central_panel_rect.max.y;
-
-    if cx >= full_timeline_area.min.x + 132.0 && cx <= full_timeline_area.max.x {
-        ui.painter().line_segment(
-            [
-                egui::pos2(cx, ruler_y_min),
-                egui::pos2(cx, ruler_y_max + 12.0),
-            ],
-            egui::Stroke::new(2.0, egui::Color32::RED),
-        );
-    }
-
-    if cx >= central_panel_rect.min.x + TRACK_LIST_SIDEBAR_WIDTH + 24.0
-        && cx <= central_panel_rect.max.x
-    {
-        ui.painter().line_segment(
-            [
-                egui::pos2(cx, central_panel_y_min - 12.0),
-                egui::pos2(cx, central_panel_y_max + 8.0),
-            ],
-            egui::Stroke::new(2.0, egui::Color32::RED),
-        );
-    }
 }
