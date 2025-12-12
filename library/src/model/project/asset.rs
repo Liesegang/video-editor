@@ -1,6 +1,6 @@
+use crate::model::frame::color::Color;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use crate::model::frame::color::Color;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Asset {
@@ -9,7 +9,7 @@ pub struct Asset {
     pub path: String, // Path to the file
     pub kind: AssetKind,
     pub duration: Option<f64>, // Duration in seconds, if applicable
-    
+
     // Metadata
     #[serde(default)]
     pub color: Color,
@@ -32,7 +32,12 @@ impl Asset {
             path: path.to_string(),
             kind,
             duration: None,
-            color: Color { r: 100, g: 100, b: 100, a: 255 }, // Default gray
+            color: Color {
+                r: 100,
+                g: 100,
+                b: 100,
+                a: 255,
+            }, // Default gray
         }
     }
 }

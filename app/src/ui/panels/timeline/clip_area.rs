@@ -1,17 +1,17 @@
 use egui::{epaint::StrokeKind, Ui};
 use egui_phosphor::regular as icons;
+use library::model::project::asset::AssetKind;
 use library::model::project::project::Project;
+use library::model::project::property::PropertyValue;
 use library::model::project::TrackClip;
 use library::model::project::TrackClipKind;
 use library::service::project_service::ProjectService;
-use library::model::project::asset::AssetKind;
-use library::model::project::property::PropertyValue;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use crate::{
     action::HistoryManager,
-    model::ui_types::{TimelineClip, DraggedItem},
+    model::ui_types::{DraggedItem, TimelineClip},
     state::context::EditorContext,
 };
 
@@ -49,7 +49,8 @@ pub fn show_clip_area(
     }
 
     for track in &current_tracks {
-        for clip in &track.clips { // entity -> clip
+        for clip in &track.clips {
+            // entity -> clip
             all_clips.push((track.id, clip.clone())); // all_entities -> all_clips
         }
     }
@@ -134,16 +135,17 @@ pub fn show_clip_area(
                     let drop_in_frame = (drop_time_f64 * composition_fps).round() as u64;
 
                     if let Some(comp_id) = editor_context.selected_composition_id {
-                         // Find the track to drop onto
-                         let mut current_tracks_for_drop = Vec::new();
-                         if let Ok(proj_read) = project.read() {
-                             if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-                                 current_tracks_for_drop = comp.tracks.clone();
-                             }
-                         }
+                        // Find the track to drop onto
+                        let mut current_tracks_for_drop = Vec::new();
+                        if let Ok(proj_read) = project.read() {
+                            if let Some(comp) =
+                                proj_read.compositions.iter().find(|c| c.id == comp_id)
+                            {
+                                current_tracks_for_drop = comp.tracks.clone();
+                            }
+                        }
 
-                         if let Some(track) = current_tracks_for_drop.get(drop_track_index) {
-                            
+                        if let Some(track) = current_tracks_for_drop.get(drop_track_index) {
                             let mut new_clip_opt: Option<TrackClip> = None;
                             let mut drop_out_frame_opt: Option<u64> = None;
 
@@ -151,16 +153,18 @@ pub fn show_clip_area(
                                 DraggedItem::Asset(asset_id) => {
                                     // Retrieve asset
                                     if let Ok(proj_read) = project.read() {
-                                        if let Some(asset) = proj_read.assets.iter().find(|a| a.id == *asset_id) {
-                                            
+                                        if let Some(asset) =
+                                            proj_read.assets.iter().find(|a| a.id == *asset_id)
+                                        {
                                             let duration_sec = asset.duration.unwrap_or(5.0); // Default 5s if unknown
-                                            let duration_frames = (duration_sec * composition_fps).round() as u64;
+                                            let duration_frames =
+                                                (duration_sec * composition_fps).round() as u64;
                                             let drop_out = drop_in_frame + duration_frames;
                                             drop_out_frame_opt = Some(drop_out);
 
                                             new_clip_opt = match asset.kind {
                                                 AssetKind::Video => {
-                                                     Some(TrackClip::create_video(
+                                                    Some(TrackClip::create_video(
                                                         Some(asset.id),
                                                         &asset.path,
                                                         drop_in_frame,
@@ -168,18 +172,16 @@ pub fn show_clip_area(
                                                         0,
                                                         duration_frames, // Use asset duration
                                                     ))
-                                                },
-                                                AssetKind::Image => {
-                                                     Some(TrackClip::create_image(
-                                                        Some(asset.id),
-                                                        &asset.path,
-                                                        drop_in_frame,
-                                                        drop_out,
-                                                    ))
-                                                },
+                                                }
+                                                AssetKind::Image => Some(TrackClip::create_image(
+                                                    Some(asset.id),
+                                                    &asset.path,
+                                                    drop_in_frame,
+                                                    drop_out,
+                                                )),
 
                                                 AssetKind::Audio => {
-                                                     let mut audio_entity = TrackClip::new(
+                                                    let mut audio_entity = TrackClip::new(
                                                         Uuid::new_v4(),
                                                         Some(asset.id),
                                                         TrackClipKind::Audio,
@@ -189,39 +191,49 @@ pub fn show_clip_area(
                                                     );
                                                     audio_entity.in_frame = drop_in_frame;
                                                     audio_entity.out_frame = drop_out;
-                                                    audio_entity.duration_frame = Some(duration_frames);
-                                                     audio_entity.set_constant_property(
+                                                    audio_entity.duration_frame =
+                                                        Some(duration_frames);
+                                                    audio_entity.set_constant_property(
                                                         "file_path",
                                                         PropertyValue::String(asset.path.clone()),
                                                     );
                                                     Some(audio_entity)
-                                                },
-                                                 _ => None // Not yet supported or 'Other'
+                                                }
+                                                _ => None, // Not yet supported or 'Other'
                                             };
                                         }
                                     }
-                                },
+                                }
                                 DraggedItem::Composition(target_comp_id) => {
-                                     // Create Composition Clip
-                                     // We should check duration of that composition
-                                     let mut duration_sec = 10.0;
-                                     if let Ok(proj_read) = project.read() {
-                                         if let Some(c) = proj_read.compositions.iter().find(|c| c.id == *target_comp_id) {
-                                             duration_sec = c.duration;
-                                         }
-                                     }
+                                    // Create Composition Clip
+                                    // We should check duration of that composition
+                                    let mut duration_sec = 10.0;
+                                    if let Ok(proj_read) = project.read() {
+                                        if let Some(c) = proj_read
+                                            .compositions
+                                            .iter()
+                                            .find(|c| c.id == *target_comp_id)
+                                        {
+                                            duration_sec = c.duration;
+                                        }
+                                    }
 
-                                     let duration_frames = (duration_sec * composition_fps).round() as u64;
-                                     let drop_out = drop_in_frame + duration_frames;
-                                     drop_out_frame_opt = Some(drop_out);
+                                    let duration_frames =
+                                        (duration_sec * composition_fps).round() as u64;
+                                    let drop_out = drop_in_frame + duration_frames;
+                                    drop_out_frame_opt = Some(drop_out);
 
-                                      let mut comp_entity = TrackClip::new(
+                                    let mut comp_entity = TrackClip::new(
                                         Uuid::new_v4(),
                                         Some(*target_comp_id),
                                         TrackClipKind::Composition,
-                                        0, 0, 0, None, 0.0,
+                                        0,
+                                        0,
+                                        0,
+                                        None,
+                                        0.0,
                                         library::model::project::property::PropertyMap::new(),
-                                        Vec::new()
+                                        Vec::new(),
                                     );
                                     comp_entity.in_frame = drop_in_frame;
                                     comp_entity.out_frame = drop_out;
@@ -234,8 +246,10 @@ pub fn show_clip_area(
                                 }
                             }
 
-                            if let (Some(new_clip), Some(drop_out)) = (new_clip_opt, drop_out_frame_opt) {
-                                 if let Err(e) = project_service.add_clip_to_track(
+                            if let (Some(new_clip), Some(drop_out)) =
+                                (new_clip_opt, drop_out_frame_opt)
+                            {
+                                if let Err(e) = project_service.add_clip_to_track(
                                     comp_id,
                                     track.id,
                                     new_clip,
@@ -245,11 +259,12 @@ pub fn show_clip_area(
                                     log::error!("Failed to add entity to track: {:?}", e);
                                     editor_context.active_modal_error = Some(e.to_string());
                                 } else {
-                                    let current_state = project_service.get_project().read().unwrap().clone();
+                                    let current_state =
+                                        project_service.get_project().read().unwrap().clone();
                                     history_manager.push_project_state(current_state);
                                 }
                             }
-                         }
+                        }
                     }
                 }
             }
@@ -275,7 +290,7 @@ pub fn show_clip_area(
                 TrackClipKind::Audio => egui::Color32::from_rgb(100, 255, 150), // Green
                 TrackClipKind::Image => egui::Color32::from_rgb(255, 100, 150), // Pink
                 TrackClipKind::Composition => egui::Color32::from_rgb(255, 150, 255), // Magenta
-                TrackClipKind::Text => egui::Color32::from_rgb(255, 200, 100), // Orange/Yellow
+                TrackClipKind::Text => egui::Color32::from_rgb(255, 200, 100),  // Orange/Yellow
                 _ => egui::Color32::GRAY,
             };
 
@@ -308,8 +323,7 @@ pub fn show_clip_area(
             let initial_clip_rect = egui::Rect::from_min_size(
                 egui::pos2(initial_x, initial_y),
                 egui::vec2(
-                    (gc.timeline_duration_frames as f32 / composition_fps as f32)
-                        * pixels_per_unit,
+                    (gc.timeline_duration_frames as f32 / composition_fps as f32) * pixels_per_unit,
                     row_height,
                 ),
             );
@@ -324,16 +338,15 @@ pub fn show_clip_area(
 
             clip_resp.context_menu(|ui| {
                 if ui.button(format!("{} Remove", icons::TRASH)).clicked() {
-                     if let Some(comp_id) = editor_context.selected_composition_id {
-                        if let Err(e) = project_service.remove_clip_from_track(
-                            comp_id,
-                            gc.track_id,
-                            gc.id,
-                        ) {
+                    if let Some(comp_id) = editor_context.selected_composition_id {
+                        if let Err(e) =
+                            project_service.remove_clip_from_track(comp_id, gc.track_id, gc.id)
+                        {
                             log::error!("Failed to remove entity: {:?}", e);
                         } else {
                             editor_context.selected_entity_id = None;
-                            let current_state = project_service.get_project().read().unwrap().clone();
+                            let current_state =
+                                project_service.get_project().read().unwrap().clone();
                             history_manager.push_project_state(current_state);
                             ui.ctx().request_repaint();
                             ui.close();
@@ -371,11 +384,9 @@ pub fn show_clip_area(
                 editor_context.is_resizing_entity = true;
                 editor_context.selected_entity_id = Some(gc.id);
                 editor_context.selected_track_id = Some(gc.track_id);
-
             }
 
-            if editor_context.is_resizing_entity
-                && editor_context.selected_entity_id == Some(gc.id)
+            if editor_context.is_resizing_entity && editor_context.selected_entity_id == Some(gc.id)
             {
                 let mut new_in_frame = gc.in_frame;
                 let mut new_out_frame = gc.out_frame;
@@ -404,10 +415,9 @@ pub fn show_clip_area(
                         .max(gc.source_begin_frame) // Cannot go before source begin frame
                         .min(new_out_frame.saturating_sub(1)); // Minimum 1 frame duration
                 } else if right_edge_resp.dragged() {
-                    new_out_frame = ((new_out_frame as i64 + dt_frames)
-                        .max(new_in_frame as i64 + 1)
-                        as u64) // Minimum 1 frame duration
-                        .min(source_max_out_frame); // Cannot go beyond source duration
+                    new_out_frame =
+                        ((new_out_frame as i64 + dt_frames).max(new_in_frame as i64 + 1) as u64) // Minimum 1 frame duration
+                            .min(source_max_out_frame); // Cannot go beyond source duration
                 }
 
                 // Update if there's an actual change
@@ -417,13 +427,7 @@ pub fn show_clip_area(
                         editor_context.selected_track_id,
                     ) {
                         project_service
-                            .update_clip_time(
-                                comp_id,
-                                track_id,
-                                gc.id,
-                                new_in_frame,
-                                new_out_frame,
-                            )
+                            .update_clip_time(comp_id, track_id, gc.id, new_in_frame, new_out_frame)
                             .ok();
                     }
                 }
@@ -459,8 +463,7 @@ pub fn show_clip_area(
             let drawing_clip_rect = egui::Rect::from_min_size(
                 egui::pos2(display_x, display_y),
                 egui::vec2(
-                    (gc.timeline_duration_frames as f32 / composition_fps as f32)
-                        * pixels_per_unit,
+                    (gc.timeline_duration_frames as f32 / composition_fps as f32) * pixels_per_unit,
                     row_height,
                 ),
             );
@@ -504,41 +507,36 @@ pub fn show_clip_area(
             if !editor_context.is_resizing_entity && clip_resp.drag_started() {
                 editor_context.selected_entity_id = Some(gc.id);
                 editor_context.selected_track_id = Some(gc.track_id);
-                        editor_context.dragged_entity_original_track_id = Some(gc.track_id); // Store original track
-                        editor_context.dragged_entity_hovered_track_id = Some(gc.track_id); // Initially hovered is original track
-                        editor_context.dragged_entity_has_moved = false; // Reset move flag
-                    }
-                    if !editor_context.is_resizing_entity
-                        && clip_resp.dragged()
-                        && editor_context.selected_entity_id == Some(gc.id)
-                    {
-                        // Mark as moved if drag delta is non-zero
-                        if clip_resp.drag_delta().length_sq() > 0.0 {
-                            editor_context.dragged_entity_has_moved = true;
-                        }
-                        // Handle horizontal movement (frame change)
-                        let dt_frames_f32 =
-                            clip_resp.drag_delta().x / pixels_per_unit * composition_fps as f32;
-                        let dt_frames = dt_frames_f32.round() as i64;
+                editor_context.dragged_entity_original_track_id = Some(gc.track_id); // Store original track
+                editor_context.dragged_entity_hovered_track_id = Some(gc.track_id); // Initially hovered is original track
+                editor_context.dragged_entity_has_moved = false; // Reset move flag
+            }
+            if !editor_context.is_resizing_entity
+                && clip_resp.dragged()
+                && editor_context.selected_entity_id == Some(gc.id)
+            {
+                // Mark as moved if drag delta is non-zero
+                if clip_resp.drag_delta().length_sq() > 0.0 {
+                    editor_context.dragged_entity_has_moved = true;
+                }
+                // Handle horizontal movement (frame change)
+                let dt_frames_f32 =
+                    clip_resp.drag_delta().x / pixels_per_unit * composition_fps as f32;
+                let dt_frames = dt_frames_f32.round() as i64;
 
-                        if let Some(comp_id) = editor_context.selected_composition_id {
-                            if let Some(track_id) = editor_context.selected_track_id {
-                                let new_in_frame = (gc.in_frame as i64 + dt_frames).max(0) as u64;
+                if let Some(comp_id) = editor_context.selected_composition_id {
+                    if let Some(track_id) = editor_context.selected_track_id {
+                        let new_in_frame = (gc.in_frame as i64 + dt_frames).max(0) as u64;
                         let new_out_frame =
                             (gc.out_frame as i64 + dt_frames).max(new_in_frame as i64) as u64;
 
                         project_service
-                            .update_clip_time(
-                                comp_id,
-                                track_id,
-                                gc.id,
-                                new_in_frame,
-                                new_out_frame,
-                            )
+                            .update_clip_time(comp_id, track_id, gc.id, new_in_frame, new_out_frame)
                             .ok();
 
                         // Also update source_begin_frame to shift the source content
-                        let new_source_begin_frame = (gc.source_begin_frame as i64 + dt_frames).max(0) as u64;
+                        let new_source_begin_frame =
+                            (gc.source_begin_frame as i64 + dt_frames).max(0) as u64;
                         project_service
                             .update_clip_source_frames(
                                 comp_id,
@@ -557,18 +555,15 @@ pub fn show_clip_area(
                         - content_rect_for_clip_area.min.y
                         - editor_context.timeline_scroll_offset.y;
 
-                    let hovered_track_index = (current_y_in_clip_area
-                        / (row_height + track_spacing))
-                        .floor() as usize;
+                    let hovered_track_index =
+                        (current_y_in_clip_area / (row_height + track_spacing)).floor() as usize;
 
                     if let Some(comp_id) = editor_context.selected_composition_id {
                         if let Ok(proj_read) = project.read() {
                             if let Some(comp) =
                                 proj_read.compositions.iter().find(|c| c.id == comp_id)
                             {
-                                if let Some(hovered_track) =
-                                    comp.tracks.get(hovered_track_index)
-                                {
+                                if let Some(hovered_track) = comp.tracks.get(hovered_track_index) {
                                     if editor_context.dragged_entity_hovered_track_id
                                         != Some(hovered_track.id)
                                     {
@@ -609,8 +604,8 @@ pub fn show_clip_area(
 
                 // Push history if time changed or track moves (dragged)
                 if moved_track || editor_context.dragged_entity_has_moved {
-                        let current_state = project_service.get_project().read().unwrap().clone();
-                        history_manager.push_project_state(current_state);
+                    let current_state = project_service.get_project().read().unwrap().clone();
+                    history_manager.push_project_state(current_state);
                 }
 
                 // Clear drag related states

@@ -115,5 +115,3 @@ impl Composition {
         Some(removed_track)
     }
 }
-
-

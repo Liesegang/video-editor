@@ -71,7 +71,7 @@ impl<'a> FrameEvaluator<'a> {
                 composition: self.composition,
                 property_evaluators: &self.property_evaluators,
             },
-            track_clip, // Pass track_clip
+            track_clip,   // Pass track_clip
             frame_number, // Changed to frame_number
         )
     }
@@ -186,10 +186,10 @@ mod tests {
             id: uuid::Uuid::new_v4(), // Added ID
             reference_id: None,
             kind: TrackClipKind::Text,
-            in_frame: 0, // Renamed
-            out_frame: 150, // Renamed
+            in_frame: 0,           // Renamed
+            out_frame: 150,        // Renamed
             source_begin_frame: 0, // Added
-            duration_frame: None, // Added
+            duration_frame: None,  // Added
             fps: 30.0,
             properties: text_props,
             effects: Vec::new(),
@@ -242,7 +242,7 @@ mod tests {
             id: uuid::Uuid::new_v4(), // Added ID
             reference_id: None,
             kind: TrackClipKind::Image,
-            in_frame: 0, // Renamed
+            in_frame: 0,   // Renamed
             out_frame: 30, // Renamed (1.0 sec at 30fps)
             source_begin_frame: 0,
             duration_frame: None,
@@ -255,7 +255,7 @@ mod tests {
             id: uuid::Uuid::new_v4(), // Added ID
             reference_id: None,
             kind: TrackClipKind::Image,
-            in_frame: 150, // Renamed (5.0 sec at 30fps)
+            in_frame: 150,  // Renamed (5.0 sec at 30fps)
             out_frame: 180, // Renamed (6.0 sec at 30fps)
             source_begin_frame: 0,
             duration_frame: None,

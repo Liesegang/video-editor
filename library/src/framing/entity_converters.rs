@@ -10,8 +10,8 @@ use crate::model::frame::{
     entity::{FrameContent, FrameObject, ImageSurface},
     transform::{Position, Scale, Transform},
 };
-use crate::model::project::TrackClip; // Add this
 use crate::model::project::EffectConfig;
+use crate::model::project::TrackClip; // Add this
 use crate::model::project::project::Composition;
 use crate::model::project::property::{PropertyMap, PropertyValue};
 use crate::plugin::Plugin;
@@ -22,7 +22,7 @@ pub trait EntityConverter: Send + Sync {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext, // Pass context instead of individual fields
-        track_clip: &TrackClip,         // Changed to TrackClip
+        track_clip: &TrackClip,             // Changed to TrackClip
         frame_number: u64,                  // Changed to u64
     ) -> Option<FrameObject>;
 }
@@ -151,29 +151,31 @@ impl<'a> FrameEvaluationContext<'a> {
         default_y: f64,
     ) -> (f64, f64) {
         // Initialize with default or Vec2 value
-        let (mut vx, mut vy) = if let Some(PropertyValue::Vec2(v)) = self.evaluate_property_value(properties, key, time) {
+        let (mut vx, mut vy) = if let Some(PropertyValue::Vec2(v)) =
+            self.evaluate_property_value(properties, key, time)
+        {
             (*v.x, *v.y)
         } else {
             (default_x, default_y)
         };
-        
+
         // Override with split keys (e.g. position_x, position_y) if they exist
         let key_x = format!("{}_x", key);
         if let Some(val) = self.evaluate_property_value(properties, &key_x, time) {
-             match val {
-                 PropertyValue::Number(n) => vx = n.0,
-                 PropertyValue::Integer(i) => vx = i as f64,
-                 _ => {}
-             }
+            match val {
+                PropertyValue::Number(n) => vx = n.0,
+                PropertyValue::Integer(i) => vx = i as f64,
+                _ => {}
+            }
         }
 
         let key_y = format!("{}_y", key);
         if let Some(val) = self.evaluate_property_value(properties, &key_y, time) {
-             match val {
-                 PropertyValue::Number(n) => vy = n.0,
-                 PropertyValue::Integer(i) => vy = i as f64,
-                 _ => {}
-             }
+            match val {
+                PropertyValue::Number(n) => vy = n.0,
+                PropertyValue::Integer(i) => vy = i as f64,
+                _ => {}
+            }
         }
 
         (vx, vy)
@@ -240,7 +242,7 @@ impl EntityConverter for VideoEntityConverter {
         &self,
         evaluator: &FrameEvaluationContext,
         track_clip: &TrackClip, // Changed to TrackClip
-        frame_number: u64,          // Changed to u64
+        frame_number: u64,      // Changed to u64
     ) -> Option<FrameObject> {
         let props = &track_clip.properties; // Use track_clip.properties
         let file_path =
@@ -281,7 +283,7 @@ impl EntityConverter for ImageEntityConverter {
         &self,
         evaluator: &FrameEvaluationContext,
         track_clip: &TrackClip, // Changed to TrackClip
-        frame_number: u64,          // Changed to u64
+        frame_number: u64,      // Changed to u64
     ) -> Option<FrameObject> {
         let props = &track_clip.properties; // Use track_clip.properties
         let file_path =
@@ -308,7 +310,7 @@ impl EntityConverter for TextEntityConverter {
         &self,
         evaluator: &FrameEvaluationContext,
         track_clip: &TrackClip, // Changed to TrackClip
-        frame_number: u64,          // Changed to u64
+        frame_number: u64,      // Changed to u64
     ) -> Option<FrameObject> {
         let props = &track_clip.properties; // Use track_clip.properties
         let text = evaluator.require_string(props, "text", frame_number as f64, "text")?;
@@ -351,7 +353,7 @@ impl EntityConverter for ShapeEntityConverter {
         &self,
         evaluator: &FrameEvaluationContext,
         track_clip: &TrackClip, // Changed to TrackClip
-        frame_number: u64,          // Changed to u64
+        frame_number: u64,      // Changed to u64
     ) -> Option<FrameObject> {
         let props = &track_clip.properties; // Use track_clip.properties
         let path = evaluator.require_string(props, "path", frame_number as f64, "shape")?;
@@ -403,17 +405,14 @@ impl EntityConverterRegistry {
         &self,
         evaluator: &FrameEvaluationContext,
         track_clip: &TrackClip, // Changed to TrackClip
-        frame_number: u64,          // Changed to u64
+        frame_number: u64,      // Changed to u64
     ) -> Option<FrameObject> {
         let kind_str = track_clip.kind.to_string();
         match self.converters.get(&kind_str) {
-             // Use track_clip.kind.to_string()
+            // Use track_clip.kind.to_string()
             Some(converter) => converter.convert_entity(evaluator, track_clip, frame_number),
             None => {
-                warn!(
-                    "No converter registered for entity type '{}'",
-                    kind_str
-                );
+                warn!("No converter registered for entity type '{}'", kind_str);
                 None
             }
         }

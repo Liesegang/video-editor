@@ -87,19 +87,19 @@ fn view_menu(
             if let Some(cmd) = command_registry.find(cmd_id) {
                 // Determine if tab is open by checking if it exists in the dock state
                 let mut is_open = dock_state.find_tab(tab).is_some();
-                
-                // Show checkbox with command text. 
+
+                // Show checkbox with command text.
                 // Note: Checkbox doesn't inherently support right-aligned shortcut text like Button.
                 // We rely on the Command system being the source of truth.
                 if ui.checkbox(&mut is_open, &cmd.text).changed() {
                     *triggered_action = Some(cmd_id);
                 }
-                
+
                 // Optional: Tooltip for shortcut hint if needed
                 if !cmd.shortcut_text.is_empty() {
                     ui.ctx().set_cursor_icon(eframe::egui::CursorIcon::Default);
-                    // This is hard to attach to the checkbox without complex layout. 
-                    // Skipping visual shortcut for now as per standard egui usage, 
+                    // This is hard to attach to the checkbox without complex layout.
+                    // Skipping visual shortcut for now as per standard egui usage,
                     // or user can inspect settings.
                 }
             }

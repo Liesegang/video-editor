@@ -131,7 +131,10 @@ impl From<serde_json::Value> for PropertyValue {
                         o.get("x").and_then(|v| v.as_f64()),
                         o.get("y").and_then(|v| v.as_f64()),
                     ) {
-                        return PropertyValue::Vec2(Vec2 { x: OrderedFloat(x_val), y: OrderedFloat(y_val) });
+                        return PropertyValue::Vec2(Vec2 {
+                            x: OrderedFloat(x_val),
+                            y: OrderedFloat(y_val),
+                        });
                     }
                 }
 
@@ -193,8 +196,12 @@ impl From<&PropertyValue> for serde_json::Value {
             PropertyValue::Integer(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
             PropertyValue::String(s) => serde_json::Value::String(s.clone()),
             PropertyValue::Boolean(b) => serde_json::Value::Bool(*b),
-            PropertyValue::Vec2(v) => serde_json::json!({ "x": v.x.into_inner(), "y": v.y.into_inner() }),
-            PropertyValue::Vec3(v) => serde_json::json!({ "x": v.x.into_inner(), "y": v.y.into_inner(), "z": v.z.into_inner() }),
+            PropertyValue::Vec2(v) => {
+                serde_json::json!({ "x": v.x.into_inner(), "y": v.y.into_inner() })
+            }
+            PropertyValue::Vec3(v) => {
+                serde_json::json!({ "x": v.x.into_inner(), "y": v.y.into_inner(), "z": v.z.into_inner() })
+            }
             PropertyValue::Color(c) => {
                 serde_json::json!({ "r": c.r, "g": c.g, "b": c.b, "a": c.a })
             }
@@ -242,7 +249,9 @@ impl TryGetProperty<i64> for i64 {
             PropertyValue::Integer(v) => Some(*v),
             PropertyValue::Number(v) => {
                 // Only convert if it's a whole number and fits in i64
-                if v.fract().abs() < f64::EPSILON && *v >= OrderedFloat(i64::MIN as f64) && *v <= OrderedFloat(i64::MAX as f64)
+                if v.fract().abs() < f64::EPSILON
+                    && *v >= OrderedFloat(i64::MIN as f64)
+                    && *v <= OrderedFloat(i64::MAX as f64)
                 {
                     Some(v.into_inner() as i64)
                 } else {

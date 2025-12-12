@@ -8,22 +8,48 @@ use skia_safe::surfaces;
 use skia_safe::{AlphaType, ColorType, Data, ISize, Image as SkImage, ImageInfo, Surface};
 
 #[cfg(feature = "gl")]
-use glutin::PossiblyCurrent;
+use glutin::context::ContextAttributesBuilder;
 #[cfg(feature = "gl")]
-use glutin::dpi::PhysicalSize;
+use glutin::prelude::*;
 #[cfg(feature = "gl")]
-use glutin::event_loop::EventLoop;
+use glutin::config::ConfigSurfaceTypes;
 #[cfg(feature = "gl")]
-use glutin::{Context, ContextBuilder};
+use raw_window_handle::{RawWindowHandle, Win32WindowHandle, RawDisplayHandle, WindowsDisplayHandle};
+#[cfg(feature = "gl")]
+use glutin::surface::WindowSurface;
+
+#[cfg(feature = "gl")]
+use windows_sys::Win32::Foundation::{HWND, LRESULT, LPARAM, WPARAM};
+#[cfg(feature = "gl")]
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, RegisterClassExW, WNDCLASSEXW,
+    CW_USEDEFAULT, WS_OVERLAPPEDWINDOW, CS_OWNDC,
+};
+#[cfg(feature = "gl")]
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(feature = "gl")]
+use std::ffi::c_void;
 
 pub struct GpuContext {
-    #[cfg(feature = "gl")]
-    #[allow(dead_code)]
-    event_loop: &'static EventLoop<()>,
-    #[cfg(feature = "gl")]
-    #[allow(dead_code)]
-    gl_context: &'static Context<PossiblyCurrent>,
-    pub direct_context: DirectContext,
+    pub(crate) _display: glutin::display::Display,
+    pub(crate) _surface: glutin::surface::Surface<WindowSurface>,
+    pub context: glutin::context::PossiblyCurrentContext,
+    pub direct_context: skia_safe::gpu::DirectContext,
+    // We hold the HWND indirectly? Or need to destroy it? 
+    // For now we leak it (it's hidden message-only, OS cleans up on process exit).
+    // Storing handle is enough.
+    pub(crate) _hwnd: usize, 
+}
+
+impl GpuContext {
+    // Resize works on WindowSurface!
+    pub fn resize(&mut self, width: u32, height: u32) {
+         self._surface.resize(
+            &self.context,
+            std::num::NonZeroU32::new(width.max(1)).unwrap(),
+            std::num::NonZeroU32::new(height.max(1)).unwrap(),
+        );
+    }
 }
 
 pub fn create_gpu_context() -> Option<GpuContext> {
@@ -47,27 +73,126 @@ pub fn create_gpu_context() -> Option<GpuContext> {
 }
 
 #[cfg(feature = "gl")]
+unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+#[cfg(feature = "gl")]
+fn create_dummy_window() -> Result<RawWindowHandle, String> {
+    unsafe {
+        let hinstance = GetModuleHandleW(std::ptr::null());
+        let class_name = "VideoEditorDummyClass\0".encode_utf16().collect::<Vec<u16>>();
+        
+        let wnd_class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_OWNDC,
+            lpfnWndProc: Some(window_proc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: hinstance,
+            hIcon: 0,
+            hCursor: 0,
+            hbrBackground: 0,
+            lpszMenuName: std::ptr::null(),
+            lpszClassName: class_name.as_ptr(),
+            hIconSm: 0,
+        };
+
+        RegisterClassExW(&wnd_class);
+
+        let hwnd = CreateWindowExW(
+            0,
+            class_name.as_ptr(),
+            class_name.as_ptr(),
+            WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT, CW_USEDEFAULT,
+            CW_USEDEFAULT, CW_USEDEFAULT,
+            0,
+            0,
+            hinstance,
+            std::ptr::null(),
+        );
+
+        if hwnd == 0 {
+            return Err("Failed to create dummy window".to_string());
+        }
+
+        let mut handle = Win32WindowHandle::empty();
+        handle.hwnd = hwnd as *mut c_void;
+        handle.hinstance = hinstance as *mut c_void;
+        
+        Ok(RawWindowHandle::Win32(handle))
+    }
+}
+
+#[cfg(feature = "gl")]
 fn init_glutin_headless() -> Result<GpuContext, String> {
-    let event_loop = Box::leak(Box::new(EventLoop::new()));
-    let size = PhysicalSize::new(16, 16);
-    let context = ContextBuilder::new()
-        .build_headless(event_loop, size)
-        .map_err(|e| e.to_string())?;
-    let context = Box::leak(Box::new(unsafe {
-        context.make_current().map_err(|(_, e)| e.to_string())?
-    }));
+    // 1. Create Dummy Window
+    let raw_window_handle = create_dummy_window()?;
+    let hwnd = match raw_window_handle {
+        RawWindowHandle::Win32(h) => h.hwnd as usize,
+        _ => return Err("Invalid window handle type".to_string()),
+    };
 
-    let interface =
-        Interface::new_native().ok_or_else(|| "Failed to create Skia GL interface".to_string())?;
-    let direct_context = direct_contexts::make_gl(interface, None)
-        .ok_or_else(|| "Failed to create Skia DirectContext".to_string())?;
+    // 2. Create Display
+    // We can use the window handle to create display? 
+    // Or just empty display handle. Glutin works with empty.
+    let raw_display_handle = RawDisplayHandle::Windows(WindowsDisplayHandle::empty());
+    let display = unsafe { glutin::display::Display::new(
+        raw_display_handle, 
+        glutin::display::DisplayApiPreference::Wgl(None)
+    ) }.map_err(|e| format!("Display creation failed: {}", e))?;
 
-    debug!("SkiaRenderer: initialized headless OpenGL context via glutin");
+    // 3. Find Config (WINDOW)
+    let template = glutin::config::ConfigTemplateBuilder::new()
+        .with_surface_type(ConfigSurfaceTypes::WINDOW)
+        .build();
 
+    let config = unsafe { display.find_configs(template) }
+        .map_err(|e| format!("Failed to find configs: {}", e))?
+        .reduce(|accum, config| {
+             if config.num_samples() == 0 && accum.num_samples() > 0 { return config; }
+             if config.num_samples() > 0 && accum.num_samples() == 0 { return accum; }
+             if config.alpha_size() > accum.alpha_size() { config } else { accum }
+        })
+        .ok_or("No matching GL config found")?;
+
+    debug!("init_glutin_headless: Selected config. Alpha: {}, Samples: {}", 
+        config.alpha_size(), config.num_samples()
+    );
+
+    // 4. Create Context
+    // Pass window handle
+    let context_attributes = ContextAttributesBuilder::new()
+        .with_context_api(glutin::context::ContextApi::OpenGl(None))
+        .build(Some(raw_window_handle));
+
+    let not_current_context = unsafe { display.create_context(&config, &context_attributes) }
+        .map_err(|e| format!("Failed to create GL context: {}", e))?;
+
+    // 5. Create Window Surface
+    let attrs = glutin::surface::SurfaceAttributesBuilder::<WindowSurface>::new().build(
+        raw_window_handle,
+        std::num::NonZeroU32::new(1920).unwrap(), // Initial Size
+        std::num::NonZeroU32::new(1080).unwrap(),
+    );
+    
+    let surface = unsafe { display.create_window_surface(&config, &attrs) }
+        .map_err(|e| format!("Failed to create window surface: {}", e))?;
+    
+    // 6. Make Current
+    let context = not_current_context.make_current(&surface)
+        .map_err(|e| format!("Make current failed: {}", e))?;
+
+    let interface = Interface::new_native().ok_or("Failed to create native interface")?;
+    let direct_context = direct_contexts::make_gl(interface, None).ok_or("Failed to create DirectContext")?;
+    
     Ok(GpuContext {
-        event_loop,
-        gl_context: context,
+        _display: display, 
+        _surface: surface, 
+        context,    
         direct_context,
+        _hwnd: hwnd,
     })
 }
 
@@ -97,6 +222,25 @@ pub fn create_raster_surface(width: u32, height: u32) -> Result<Surface, Library
     let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
     surfaces::raster(&info, None, None)
         .ok_or_else(|| LibraryError::Render("Cannot create Skia surface".to_string()))
+}
+
+pub fn create_texture_surface(
+    width: u32,
+    height: u32,
+    context: &mut DirectContext,
+) -> Result<Surface, LibraryError> {
+    let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
+    gpu::surfaces::render_target(
+        context,
+        gpu::Budgeted::Yes,
+        &info,
+        None,
+        SurfaceOrigin::TopLeft,
+        None,
+        false,
+        false,
+    )
+    .ok_or_else(|| LibraryError::Render("Cannot create buffer Skia surface".to_string()))
 }
 
 pub fn image_to_skia(image: &Image) -> Result<SkImage, LibraryError> {

@@ -37,7 +37,6 @@ pub struct EditorContext {
     #[serde(skip)]
     pub selected_entity_id: Option<Uuid>,
 
-
     #[serde(skip)]
     pub drag_start_property_name: Option<String>,
     #[serde(skip)]
@@ -58,6 +57,8 @@ pub struct EditorContext {
     pub is_editing_current_time: bool,
     #[serde(skip)]
     pub preview_texture: Option<egui::TextureHandle>,
+    #[serde(skip)]
+    pub preview_texture_id: Option<u32>, // Raw GL texture ID
 }
 
 impl EditorContext {
@@ -93,6 +94,7 @@ impl EditorContext {
             current_time_text_input: "".to_string(), // Initialize new field
             is_editing_current_time: false,          // Initialize new field
             preview_texture: None,
+            preview_texture_id: None,
         }
     }
 

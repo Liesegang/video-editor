@@ -8,7 +8,6 @@ pub struct ImageEffect {
     #[serde(rename = "type")]
     pub effect_type: String,
     #[serde(default)]
-
     pub properties: HashMap<String, PropertyValue>, // Changed PropertyValue to Property
 }
 

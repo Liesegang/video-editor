@@ -5,7 +5,7 @@ use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
 use crate::model::frame::transform::Transform;
 use crate::rendering::renderer::Renderer;
 use crate::rendering::skia_utils::{
-    GpuContext, create_surface, image_to_skia, surface_to_image,
+    GpuContext, create_gpu_context, create_surface, image_to_skia, surface_to_image,
 };
 use crate::util::timing::ScopedTimer;
 use log::{debug, trace};
@@ -25,15 +25,77 @@ pub struct SkiaRenderer {
     gpu_context: Option<GpuContext>,
 }
 
+pub struct TextureInfo {
+    pub texture_id: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
 impl SkiaRenderer {
-    pub fn new(width: u32, height: u32, background_color: Color) -> Self {
-        // let mut gpu_context = create_gpu_context();
-        let mut gpu_context: Option<GpuContext> = None; // Force CPU for now
-        
+    pub fn render_to_texture(&mut self) -> Result<TextureInfo, LibraryError> {
+        let _timer = ScopedTimer::debug("SkiaRenderer::render_to_texture");
+        if let Some(context) = self.gpu_context.as_mut() {
+            context.direct_context.flush_and_submit();
+
+            // Get the backend texture from the surface if possible
+            // use skia_safe::gpu::surfaces::get_backend_texture if available
+            // Try 'backend_texture' method if 'get_backend_texture' is gone
+            if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
+                &mut self.surface,
+                skia_safe::surface::BackendHandleAccess::FlushRead,
+            ) {
+                if let Some(gl_info) = texture.gl_texture_info() {
+                    return Ok(TextureInfo {
+                        texture_id: gl_info.id,
+                        width: self.width,
+                        height: self.height,
+                    });
+                }
+            }
+            Err(LibraryError::Render(
+                "Failed to get GL texture info".to_string(),
+            ))
+        } else {
+            Err(LibraryError::Render(
+                "GPU context not available".to_string(),
+            ))
+        }
+    }
+}
+
+impl SkiaRenderer {
+    pub fn take_context(&mut self) -> Option<GpuContext> {
+        self.gpu_context.take()
+    }
+
+    pub fn new(
+        width: u32,
+        height: u32,
+        background_color: Color,
+        use_gpu: bool,
+        existing_context: Option<GpuContext>,
+    ) -> Self {
+        let mut gpu_context = if use_gpu {
+            if let Some(mut ctx) = existing_context {
+                debug!("SkiaRenderer: Reusing existing GPU context");
+                ctx.resize(width, height);
+                Some(ctx)
+            } else if let Some(mut ctx) = create_gpu_context() {
+                debug!("SkiaRenderer: Created new GPU context");
+                ctx.resize(width, height);
+                Some(ctx)
+            } else {
+                debug!("SkiaRenderer: GPU context creation failed, falling back to CPU");
+                None
+            }
+        } else {
+            None
+        };
+
         if gpu_context.is_some() {
             debug!("SkiaRenderer: GPU context enabled");
         } else {
-            debug!("SkiaRenderer: GPU context unavailable, using CPU raster surfaces");
+            debug!("SkiaRenderer: using CPU raster surfaces");
         }
 
         let surface = create_surface(
@@ -315,17 +377,22 @@ impl Renderer for SkiaRenderer {
         surface_to_image(&mut layer, self.width, self.height)
     }
 
-    fn finalize(&mut self) -> Result<Image, LibraryError> {
+    fn finalize(&mut self) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
         let _timer = ScopedTimer::debug(format!(
             "SkiaRenderer::finalize {}x{}",
             self.width, self.height
         ));
+
         if let Some(context) = self.gpu_context.as_mut() {
             context.direct_context.flush_and_submit();
         }
+
+        // Always use CPU Path (ReadPixels) to ensure valid data transfer to Main Thread
+        // This bypasses OpenGL Context Sharing issues (Main Thread vs Render Thread).
         let width = self.width;
         let height = self.height;
-        surface_to_image(&mut self.surface, width, height)
+        let image = surface_to_image(&mut self.surface, width, height)?;
+        Ok(crate::rendering::renderer::RenderOutput::Image(image))
     }
 
     fn clear(&mut self) -> Result<(), LibraryError> {

@@ -87,9 +87,18 @@ impl ExportService {
             let _frame_scope = ScopedTimer::info(format!("Frame {} total", frame_index));
 
             let frame_time = frame_index as f64 / fps;
-            let image = measure_info(format!("Frame {}: renderer pass", frame_index), || {
+            let output = measure_info(format!("Frame {}: renderer pass", frame_index), || {
                 render_service.render_frame(project_model, frame_time)
             })?;
+
+            let image = match output {
+                crate::rendering::renderer::RenderOutput::Image(img) => img,
+                crate::rendering::renderer::RenderOutput::Texture(_) => {
+                    return Err(LibraryError::Render(
+                        "Export received Texture output (unsupported)".to_string(),
+                    ));
+                }
+            };
 
             let output_path = match export_format {
                 ExportFormat::Png => format!("{}_{:03}.png", output_stem, frame_index),

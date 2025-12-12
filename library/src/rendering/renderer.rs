@@ -4,6 +4,12 @@ use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::transform::Transform;
 
+#[derive(Clone)]
+pub enum RenderOutput {
+    Image(Image),
+    Texture(u32), // Texture ID
+}
+
 pub trait Renderer {
     fn draw_image(&mut self, image: &Image, transform: &Transform) -> Result<(), LibraryError>;
 
@@ -24,6 +30,6 @@ pub trait Renderer {
         transform: &Transform,
     ) -> Result<Image, LibraryError>;
 
-    fn finalize(&mut self) -> Result<Image, LibraryError>;
+    fn finalize(&mut self) -> Result<RenderOutput, LibraryError>;
     fn clear(&mut self) -> Result<(), LibraryError>;
 }

@@ -67,13 +67,20 @@ impl LoadPlugin for FfmpegVideoLoader {
     }
 
     fn get_asset_kind(&self, path: &str) -> Option<crate::model::project::asset::AssetKind> {
-        let ext = std::path::Path::new(path).extension()?.to_str()?.to_lowercase();
-        // ffmpeg supports audio too, but here we currently assume video loader. 
+        let ext = std::path::Path::new(path)
+            .extension()?
+            .to_str()?
+            .to_lowercase();
+        // ffmpeg supports audio too, but here we currently assume video loader.
         // Ideally we should distinguish or support both.
         match ext.as_str() {
-            "mp4" | "mov" | "avi" | "mkv" | "webm" => Some(crate::model::project::asset::AssetKind::Video),
-            "mp3" | "wav" | "aac" | "flac" | "ogg" => Some(crate::model::project::asset::AssetKind::Audio),
-             _ => None,
+            "mp4" | "mov" | "avi" | "mkv" | "webm" => {
+                Some(crate::model::project::asset::AssetKind::Video)
+            }
+            "mp3" | "wav" | "aac" | "flac" | "ogg" => {
+                Some(crate::model::project::asset::AssetKind::Audio)
+            }
+            _ => None,
         }
     }
 }

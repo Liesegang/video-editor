@@ -51,10 +51,13 @@ impl LoadPlugin for NativeImageLoader {
     }
 
     fn get_asset_kind(&self, path: &str) -> Option<crate::model::project::asset::AssetKind> {
-        let ext = std::path::Path::new(path).extension()?.to_str()?.to_lowercase();
+        let ext = std::path::Path::new(path)
+            .extension()?
+            .to_str()?
+            .to_lowercase();
         match ext.as_str() {
             "png" | "jpg" | "jpeg" | "bmp" => Some(crate::model::project::asset::AssetKind::Image),
-             _ => None,
+            _ => None,
         }
     }
 }

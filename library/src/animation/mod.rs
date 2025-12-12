@@ -310,7 +310,6 @@ impl EasingFunction {
     }
 }
 
-
 impl PartialEq for EasingFunction {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -345,17 +344,23 @@ impl PartialEq for EasingFunction {
             (EasingFunction::EaseInBounce, EasingFunction::EaseInBounce) => true,
             (EasingFunction::EaseOutBounce, EasingFunction::EaseOutBounce) => true,
             (EasingFunction::EaseInOutBounce, EasingFunction::EaseInOutBounce) => true,
-            (EasingFunction::SimpleBezier { start: s1, end: e1 }, 
-             EasingFunction::SimpleBezier { start: s2, end: e2 }) => {
-                OrderedFloat(s1.0) == OrderedFloat(s2.0) && OrderedFloat(s1.1) == OrderedFloat(s2.1) &&
-                OrderedFloat(e1.0) == OrderedFloat(e2.0) && OrderedFloat(e1.1) == OrderedFloat(e2.1)
-            },
+            (
+                EasingFunction::SimpleBezier { start: s1, end: e1 },
+                EasingFunction::SimpleBezier { start: s2, end: e2 },
+            ) => {
+                OrderedFloat(s1.0) == OrderedFloat(s2.0)
+                    && OrderedFloat(s1.1) == OrderedFloat(s2.1)
+                    && OrderedFloat(e1.0) == OrderedFloat(e2.0)
+                    && OrderedFloat(e1.1) == OrderedFloat(e2.1)
+            }
             (EasingFunction::Bezier { points: p1 }, EasingFunction::Bezier { points: p2 }) => {
-                p1.len() == p2.len() && p1.iter().zip(p2.iter()).all(|(a, b)| {
-                    OrderedFloat(a.0) == OrderedFloat(b.0) && OrderedFloat(a.1) == OrderedFloat(b.1)
-                })
-            },
-            _ => false
+                p1.len() == p2.len()
+                    && p1.iter().zip(p2.iter()).all(|(a, b)| {
+                        OrderedFloat(a.0) == OrderedFloat(b.0)
+                            && OrderedFloat(a.1) == OrderedFloat(b.1)
+                    })
+            }
+            _ => false,
         }
     }
 }
