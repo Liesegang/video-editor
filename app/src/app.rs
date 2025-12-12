@@ -396,7 +396,8 @@ impl eframe::App for MyApp {
         }
 
         if self.editor_context.is_playing {
-            self.editor_context.current_time += 0.016; // Assuming 60fps
+            self.editor_context.current_time += ctx.input(|i| i.stable_dt);
+            ctx.request_repaint();
         }
     }
 }
