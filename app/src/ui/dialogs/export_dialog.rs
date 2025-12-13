@@ -424,12 +424,22 @@ impl ExportDialog {
                  settings.parameters = json_params;
                   settings.container = match property_values_owned.get("container") {
                       Some(library::model::project::property::PropertyValue::String(s)) => s.clone(),
-                      _ => "mp4".to_string(),
+                      _ => {
+                           if exporter_id_owned == "png_export" {
+                               "png".to_string()
+                           } else {
+                               "mp4".to_string()
+                           }
+                      }
                   };
 
                   settings.codec = match property_values_owned.get("codec") {
                       Some(library::model::project::property::PropertyValue::String(s)) => s.clone(),
-                      _ => "libx264".to_string(),
+                      _ => if exporter_id_owned == "png_export" {
+                          "png".to_string()
+                      } else {
+                          "libx264".to_string()
+                      },
                   };
 
                   settings.pixel_format = match property_values_owned.get("pixel_format") {
