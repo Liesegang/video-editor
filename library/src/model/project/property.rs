@@ -495,4 +495,9 @@ impl PropertyMap {
         self.get_constant_value(key)
             .and_then(|pv| pv.get_as::<String>())
     }
+
+    pub fn get_bool(&self, key: &str) -> Option<bool> {
+        self.get_constant_value(key)
+            .and_then(|pv| pv.get_as::<bool>())
+    }
 }

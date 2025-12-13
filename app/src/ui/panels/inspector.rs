@@ -550,7 +550,6 @@ pub fn inspector_panel(
                             project_service
                                 .add_effect_to_clip(comp_id, track_id, selected_entity_id, &eff)
                                 .ok();
-                            ui.close_menu();
                             needs_refresh = true;
                         }
                     }
