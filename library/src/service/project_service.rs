@@ -206,6 +206,8 @@ impl ProjectService {
         Ok(())
     }
 
+
+
     pub fn import_file(&self, path: &str) -> Result<Uuid, LibraryError> {
         let path_buf = std::path::Path::new(path);
         let name = path_buf
@@ -222,9 +224,11 @@ impl ProjectService {
             }
         }
         let dimensions = self.plugin_manager.get_dimensions(path);
+        let fps = self.plugin_manager.get_fps(path);
 
         let mut asset = Asset::new(&name, path, kind.clone());
         asset.duration = duration;
+        asset.fps = fps;
         if let Some((w, h)) = dimensions {
             asset.width = Some(w);
             asset.height = Some(h);
@@ -233,9 +237,23 @@ impl ProjectService {
         let asset_id = asset.id;
         self.add_asset(asset)?;
         
-        // Background load audio
+        // Background load audio for pure Audio assets
         if kind == crate::model::project::asset::AssetKind::Audio {
              self.trigger_audio_loading(asset_id, path.to_string());
+        }
+
+        // Check for separate Audio stream in Video files
+        if kind == crate::model::project::asset::AssetKind::Video {
+             if crate::audio::loader::AudioLoader::has_audio(path) {
+                 // Create separate Audio asset
+                 let audio_name = format!("{} (Audio)", name);
+                 let mut audio_asset = Asset::new(&audio_name, path, crate::model::project::asset::AssetKind::Audio);
+                 audio_asset.duration = duration; // Assume sync with video for now
+                 
+                 let audio_id = audio_asset.id;
+                 self.add_asset(audio_asset)?;
+                 self.trigger_audio_loading(audio_id, path.to_string());
+             }
         }
 
         Ok(asset_id)

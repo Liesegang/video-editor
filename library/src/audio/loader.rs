@@ -169,4 +169,28 @@ impl AudioLoader {
              Err(anyhow::anyhow!("Duration not available in header"))
         } 
     }
+
+    pub fn has_audio(path: &str) -> bool {
+        let path = Path::new(path);
+        if !path.exists() {
+            return false;
+        }
+        let src = match File::open(path) {
+            Ok(f) => f,
+            Err(_) => return false,
+        };
+        let mss = MediaSourceStream::new(Box::new(src), Default::default());
+        
+        match symphonia::default::get_probe().format(
+            &Default::default(),
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default()
+        ) {
+            Ok(probe) => {
+                probe.format.tracks().iter().any(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+            },
+            Err(_) => false,
+        }
+    }
 }

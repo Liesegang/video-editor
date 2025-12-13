@@ -11,6 +11,7 @@ pub struct Asset {
     pub duration: Option<f64>, // Duration in seconds, if applicable
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub fps: Option<f64>,
 
     // Metadata
     #[serde(default)]
@@ -36,6 +37,7 @@ impl Asset {
             duration: None,
             width: None,
             height: None,
+            fps: None,
             color: Color {
                 r: 100,
                 g: 100,

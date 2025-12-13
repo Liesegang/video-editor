@@ -146,6 +146,10 @@ pub trait LoadPlugin: Plugin {
         None
     }
 
+    fn get_fps(&self, _path: &str) -> Option<f64> {
+        None
+    }
+
     fn get_dimensions(&self, _path: &str) -> Option<(u32, u32)> {
         None
     }
@@ -499,6 +503,16 @@ impl PluginManager {
         for plugin in inner.load_plugins.plugins.values() {
             if let Some(duration) = plugin.get_duration(path) {
                 return Some(duration);
+            }
+        }
+        None
+    }
+
+    pub fn get_fps(&self, path: &str) -> Option<f64> {
+        let inner = self.inner.read().unwrap();
+        for plugin in inner.load_plugins.plugins.values() {
+            if let Some(fps) = plugin.get_fps(path) {
+                return Some(fps);
             }
         }
         None

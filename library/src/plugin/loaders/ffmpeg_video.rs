@@ -113,6 +113,22 @@ impl LoadPlugin for FfmpegVideoLoader {
         }
     }
 
+    fn get_fps(&self, path: &str) -> Option<f64> {
+        let mut readers = self.readers.lock().unwrap();
+        if let Some(reader) = readers.get(path) {
+            return Some(reader.get_fps());
+        }
+
+        match VideoReader::new(path) {
+            Ok(reader) => {
+                let fps = reader.get_fps();
+                readers.insert(path.to_string(), reader);
+                Some(fps)
+            }
+            Err(_) => None,
+        }
+    }
+
     fn get_dimensions(&self, path: &str) -> Option<(u32, u32)> {
         let mut readers = self.readers.lock().unwrap();
         if let Some(reader) = readers.get(path) {

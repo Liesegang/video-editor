@@ -252,7 +252,10 @@ impl EntityConverter for VideoEntityConverter {
 
         let file_path = evaluator.require_string(props, "file_path", time, "video")?;
 
-        let source_frame_number = frame_number.saturating_sub(track_clip.source_begin_frame);
+        let delta_comp_frames = frame_number.saturating_sub(track_clip.in_frame);
+        let delta_seconds = delta_comp_frames as f64 / fps;
+        let source_delta_frames = delta_seconds * track_clip.fps;
+        let source_frame_number = track_clip.source_begin_frame + source_delta_frames.round() as u64;
 
         let transform = evaluator.build_transform(props, time);
         let effects = evaluator.build_image_effects(&track_clip.effects, time);
