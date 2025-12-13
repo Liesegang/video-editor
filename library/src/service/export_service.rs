@@ -73,10 +73,30 @@ impl ExportService {
             "Save queue is already closed".to_string(),
         ))?;
         let export_format = self.export_settings.export_format();
+        // Pre-process static tokens
+        let mut base_template = output_stem.replace("{project}", &project_model.project().name);
+        base_template = base_template.replace("{composition}", &composition.name);
+
+        let has_frame_token = base_template.contains("{frame");
+
         let video_output = if matches!(export_format, ExportFormat::Video) {
+            // For video, we typically ignore frame tokens unless we are doing something weird like one file per frame?
+            // Usually valid video export ignores {frame}, but if we want to support it (maybe user wants {frame} in video name?)
+            // let's just process it for start frame? or maybe just clean it?
+            // For now, let's just stick to the stem. If user put {frame} in video name, it might be weird.
+            // But let's assume video output is just one file.
+            let clean_stem = if has_frame_token {
+                 // Remove {frame...} tokens for video filename or replace with start frame?
+                 // Simple approach: replace with "video" or just keep it?
+                 // Let's replace with start frame if present
+                 Self::format_frame_token_in_string(&base_template, frame_range.start)
+            } else {
+                 base_template.clone()
+            };
+
             Some(format!(
                 "{}.{}",
-                output_stem, self.export_settings.container
+                clean_stem, self.export_settings.container
             ))
         } else {
             None
@@ -105,9 +125,16 @@ impl ExportService {
             };
 
             let output_path = match export_format {
-                ExportFormat::Png => format!("{}_{:03}.png", output_stem, frame_index),
+                ExportFormat::Png => {
+                    if has_frame_token {
+                         let name = Self::format_frame_token_in_string(&base_template, frame_index);
+                         format!("{}.png", name)
+                    } else {
+                         format!("{}_{:03}.png", base_template, frame_index)
+                    }
+                },
                 ExportFormat::Video => video_output.clone().unwrap_or_else(|| {
-                    format!("{}.{}", output_stem, self.export_settings.container)
+                    format!("{}.{}", base_template, self.export_settings.container)
                 }),
             };
             sender
@@ -132,6 +159,47 @@ impl ExportService {
                 .map_err(|_| LibraryError::Render("Failed to join save worker".to_string()))?;
         }
         Ok(())
+    }
+    fn format_frame_token_in_string(path: &str, frame: u64) -> String {
+        let mut result = String::new();
+        let mut chars = path.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                // Potential token start
+                let mut token_buffer = String::new();
+                let mut is_token = false;
+                
+                // Clone the iterator to check ahead without consuming if it's not a token
+                let mut check_chars = chars.clone();
+                while let Some(tc) = check_chars.next() {
+                    if tc == '}' {
+                        is_token = true;
+                        break;
+                    }
+                    token_buffer.push(tc);
+                }
+
+                if is_token {
+                    if token_buffer == "frame" {
+                        result.push_str(&frame.to_string());
+                        // Advance main iterator past the token
+                        for _ in 0..token_buffer.len() + 1 { chars.next(); } 
+                        continue;
+                    } else if token_buffer.starts_with("frame:") {
+                        let spec = &token_buffer["frame:".len()..];
+                        // Parse "0N" or just "N"
+                        if let Ok(width) = spec.parse::<usize>() {
+                             result.push_str(&format!("{:0width$}", frame, width = width));
+                             for _ in 0..token_buffer.len() + 1 { chars.next(); }
+                             continue;
+                        }
+                    }
+                }
+            }
+            result.push(c);
+        }
+        result
     }
 }
 
