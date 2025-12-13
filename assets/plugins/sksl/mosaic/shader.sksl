@@ -1,0 +1,7 @@
+uniform shader content;
+uniform float pixel_size;
+
+half4 main(float2 coord) {
+    float2 p = floor(coord / pixel_size) * pixel_size;
+    return content.eval(p);
+}

@@ -50,7 +50,7 @@ impl EffectPlugin for DilateEffectPlugin {
 
         use crate::plugin::effects::utils::apply_skia_filter;
 
-        apply_skia_filter(input, gpu_context, |_width, _height| {
+        apply_skia_filter(input, gpu_context, |_image, _width, _height| {
             image_filters::dilate((radius_x as f32, radius_y as f32), None, None)
                 .ok_or(LibraryError::Render(
                     "Failed to create dilate filter".to_string(),

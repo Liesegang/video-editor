@@ -66,7 +66,7 @@ impl EffectPlugin for MagnifierEffectPlugin {
 
         use crate::plugin::effects::utils::apply_skia_filter;
 
-        apply_skia_filter(input, gpu_context, |_width, _height| {
+        apply_skia_filter(input, gpu_context, |_image, width, height| {
             let lens_bounds = Rect::from_xywh(x as f32, y as f32, width as f32, height as f32);
             image_filters::magnifier(
                 lens_bounds,

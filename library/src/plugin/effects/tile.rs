@@ -58,7 +58,7 @@ impl EffectPlugin for TileEffectPlugin {
 
         use crate::plugin::effects::utils::apply_skia_filter;
 
-        apply_skia_filter(input, gpu_context, |canvas_width, canvas_height| {
+        apply_skia_filter(input, gpu_context, |_image, canvas_width, canvas_height| {
              let src_rect = Rect::from_xywh(x as f32, y as f32, width as f32, height as f32);
              // Destination is the full canvas
              let dst_rect = Rect::from_wh(canvas_width as f32, canvas_height as f32);

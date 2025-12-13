@@ -1,0 +1,12 @@
+id = "mosaic"
+name = "Mosaic"
+category = "Effect"
+
+[[properties]]
+name = "pixel_size"
+label = "Pixel Size"
+type = "Float"
+min = 1.0
+max = 200.0
+step = 1.0
+default = 10.0
