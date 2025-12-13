@@ -251,6 +251,57 @@ fn apply_path_effects(
     Ok(())
 }
 
+fn preprocess_shader(code: &str) -> String {
+    // 1. Inject Standard Uniforms
+    let standard_uniforms = r#"
+uniform float3 iResolution;
+uniform float iTime;
+uniform float iTimeDelta;
+uniform float iFrame;
+uniform float4 iMouse;
+uniform float4 iDate;
+"#;
+    // 2. Preprocess using shaderc
+    let compiler = shaderc::Compiler::new().unwrap();
+    let mut options = shaderc::CompileOptions::new().unwrap();
+    
+    // Shaderc requires a version directive. SkSL usually doesn't have it.
+    // We inject one for preprocessing, then strip directives from the output.
+    let version_directive = "#version 310 es\n";
+    let full_source = if code.trim().starts_with("#version") {
+        format!("{}\n{}", standard_uniforms, code)
+    } else {
+        format!("{}{}\n{}", version_directive, standard_uniforms, code)
+    };
+    
+    // Try to preprocess
+    match compiler.preprocess(
+        &full_source,
+        "shader.glsl",
+        "main",
+        Some(&options),
+    ) {
+        Ok(artifact) => {
+            let output = artifact.as_text();
+            // Clean up output: remove #version, #line, #extension which might confuse SkSL
+            output.lines()
+                .filter(|l| {
+                    let t = l.trim();
+                    !t.starts_with("#version") && !t.starts_with("#extension") && !t.starts_with("#line") && !t.starts_with("#pragma")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        },
+        Err(e) => {
+            // Fallback: log error and return original code (with injected uniforms)
+            // This allows non-macro code to likely work even if shaderc fails (e.g. valid SkSL but invalid GLSL?)
+            // But SkSL is mostly GLSL.
+            // We prepend standard uniforms manually in fallback.
+            format!("// Preprocessing failed: {}\n{}\n{}", e, standard_uniforms, code)
+        }
+    }
+}
+
 impl Renderer for SkiaRenderer {
     fn draw_layer(
         &mut self,
@@ -309,11 +360,12 @@ impl Renderer for SkiaRenderer {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::TRANSPARENT);
 
-             let result = skia_safe::RuntimeEffect::make_for_shader(shader_code, None);
+            let preprocessed_code = preprocess_shader(shader_code);
+             let result = skia_safe::RuntimeEffect::make_for_shader(&preprocessed_code, None);
             
             // Handle shader compilation errors
             if let Err(error) = result {
-                 log::error!("SkSL Compilation Error: {}", error);
+                 log::error!("SkSL Compilation Error: {}\nCode:\n{}", error, preprocessed_code);
                  // Fallback: Red background to indicate error
                  canvas.clear(skia_safe::Color::RED);
             } else if let Ok(effect) = result {
@@ -385,8 +437,8 @@ impl Renderer for SkiaRenderer {
                  
                  let mut paint = Paint::default();
                  paint.set_shader(shader);
-                 // Opacity is 0.0-100.0, set_alpha_f expects 0.0-1.0
-                 paint.set_alpha_f((transform.opacity as f32 / 100.0).clamp(0.0, 1.0));
+                 // Opacity is 0.0-1.0 (already normalized by EntityConverter)
+                 paint.set_alpha_f(transform.opacity as f32);
                  
                  let matrix = build_transform_matrix(transform);
                  canvas.save();
