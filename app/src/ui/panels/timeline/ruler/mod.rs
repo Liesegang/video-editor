@@ -11,7 +11,7 @@ mod time_input;
 pub fn show_timeline_ruler(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
-    _project_service: &ProjectService,
+    project_service: &ProjectService,
     project: &Arc<RwLock<Project>>,
     pixels_per_unit: f32,
     scroll_offset_x: f32,
@@ -54,7 +54,9 @@ pub fn show_timeline_ruler(
                     / pixels_per_unit)
                     .max(0.0);
                 let snapped = (raw_time * composition_fps as f32).round() / composition_fps as f32;
-                editor_context.timeline.current_time = snapped.min(current_comp_duration as f32);
+                let new_time = snapped.min(current_comp_duration as f32);
+                editor_context.timeline.current_time = new_time;
+                project_service.reset_audio_pump(new_time as f64);
             }
         }
 

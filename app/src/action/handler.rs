@@ -165,8 +165,19 @@ pub fn handle_command(
             *context.dock_state = crate::ui::tab_viewer::create_initial_dock_state();
         }
         CommandId::TogglePlayback => {
-            context.editor_context.timeline.is_playing =
-                !context.editor_context.timeline.is_playing;
+            let is_playing = !context.editor_context.timeline.is_playing;
+            context.editor_context.timeline.is_playing = is_playing;
+            
+            if is_playing {
+                context.project_service.reset_audio_pump(context.editor_context.timeline.current_time as f64);
+                if let Err(e) = context.project_service.audio_engine.play() {
+                    log::error!("Failed to play audio: {}", e);
+                }
+            } else {
+                 if let Err(e) = context.project_service.audio_engine.pause() {
+                    log::error!("Failed to pause audio: {}", e);
+                }
+            }
         }
         CommandId::TogglePanel(tab) => {
             if let Some(index) = context.dock_state.find_tab(&tab) {

@@ -1,11 +1,11 @@
 use crate::error::LibraryError;
 use crate::model::project::property::PropertyValue;
 use crate::plugin::{EffectPlugin, Plugin, PluginCategory};
-use crate::rendering::renderer::{RenderOutput, TextureInfo};
+use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::{
-    GpuContext, image_to_skia, surface_to_image,
+    GpuContext,
 };
-use skia_safe::{Paint, TileMode, image_filters};
+use skia_safe::{TileMode, image_filters};
 use std::collections::HashMap;
 
 pub struct BlurEffectPlugin;

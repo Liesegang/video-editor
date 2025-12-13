@@ -103,7 +103,7 @@ impl EffectPlugin for SkslEffectPlugin {
     ) -> Result<RenderOutput, LibraryError> {
         use crate::plugin::effects::utils::apply_skia_filter;
         
-        use skia_safe::runtime_effect::{RuntimeShaderBuilder, ChildPtr};
+        use skia_safe::runtime_effect::ChildPtr;
         use skia_safe::{TileMode, SamplingOptions};
 
         apply_skia_filter(input, gpu_context, |image, _canvas_width, _canvas_height| {

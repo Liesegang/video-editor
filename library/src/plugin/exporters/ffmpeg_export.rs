@@ -199,8 +199,22 @@ impl FfmpegSession {
             .arg("-r")
             .arg(format!("{}", settings.fps))
             .arg("-i")
-            .arg("-")
-            .arg("-c:v")
+            .arg("-");
+
+        // Audio Input
+        let mut has_audio = false;
+        if let Some(audio_path) = settings.parameter_string("audio_source") {
+            let channels = settings.parameter_u64("audio_channels").unwrap_or(2);
+            let rate = settings.parameter_u64("audio_sample_rate").unwrap_or(48000);
+            
+            cmd.arg("-f").arg("f32le")
+               .arg("-ar").arg(format!("{}", rate))
+               .arg("-ac").arg(format!("{}", channels))
+               .arg("-i").arg(audio_path);
+            has_audio = true;
+        }
+
+        cmd.arg("-c:v")
             .arg(&settings.codec);
 
         if let Some(bitrate) = settings.parameter_u64("bitrate") {
@@ -219,6 +233,13 @@ impl FfmpegSession {
 
         if let Some(profile) = settings.parameter_string("profile") {
             cmd.arg("-profile:v").arg(profile);
+        }
+
+        if has_audio {
+            cmd.arg("-c:a").arg("aac")
+               .arg("-b:a").arg("192k")
+               .arg("-map").arg("0:v")
+               .arg("-map").arg("1:a");
         }
 
         cmd.arg("-pix_fmt")

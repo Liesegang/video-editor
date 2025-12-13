@@ -1,4 +1,5 @@
 pub mod animation;
+pub mod audio;
 pub mod cache;
 pub mod error;
 pub mod framing;
@@ -24,6 +25,7 @@ use crate::framing::entity_converters::BuiltinEntityConverterPlugin;
 use crate::plugin::PluginManager;
 use log::info;
 use std::fs;
+use std::io::Write;
 use std::ops::Range;
 use std::sync::Arc; // Added
 
@@ -128,17 +130,58 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         entity_converter_registry.clone(),
     );
 
-    let export_settings = Arc::new(ExportSettings::from_project(
+    let mut export_settings = Arc::new(ExportSettings::from_project(
         project_model.project().as_ref(),
         project_model.composition(),
     )?);
-
-    let mut export_service =
-        ExportService::new(plugin_manager, "png_export".to_string(), export_settings, 4);
-
+    
     let total_frames = composition.duration.ceil().max(0.0) as u64;
     let final_frame_range = frame_range.unwrap_or(0..total_frames);
     let output_stem = format!("./rendered/{}", composition.name);
+    
+    // Audio Pre-rendering
+    let mut audio_temp_path: Option<String> = None;
+    if matches!(export_settings.export_format(), crate::plugin::ExportFormat::Video) {
+         let fps = composition.fps;
+         let start_time = final_frame_range.start as f64 / fps;
+         let duration_frames = (final_frame_range.end - final_frame_range.start).max(1);
+         let duration = duration_frames as f64 / fps;
+         
+         // CLI currently defaults to 48000 as ProjectService is not initialized here
+         let sample_rate = 48000;
+         
+         let start_sample = (start_time * sample_rate as f64).round() as u64;
+         let frames = (duration * sample_rate as f64).round() as usize;
+
+         let audio_data = crate::audio::mixer::mix_samples(
+             &project_model.project().assets,
+             project_model.composition(),
+             &cache_manager,
+             start_sample,
+             frames,
+             sample_rate,
+             2
+         );
+         
+         if !audio_data.is_empty() {
+             let audio_path = format!("{}_audio.raw", output_stem);
+             if let Ok(mut file) = std::fs::File::create(&audio_path) {
+                 for sample in audio_data {
+                     let _ = file.write_all(&sample.to_le_bytes());
+                 }
+                 
+                 if let Some(settings_mut) = Arc::get_mut(&mut export_settings) {
+                     settings_mut.parameters.insert("audio_source".to_string(), serde_json::Value::String(audio_path.clone()));
+                     settings_mut.parameters.insert("audio_channels".to_string(), serde_json::Value::Number(serde_json::Number::from(2)));
+                     settings_mut.parameters.insert("audio_sample_rate".to_string(), serde_json::Value::Number(serde_json::Number::from(sample_rate)));
+                 }
+                 audio_temp_path = Some(audio_path);
+             }
+         }
+    }
+
+    let mut export_service =
+        ExportService::new(plugin_manager.clone(), "png_export".to_string(), export_settings, 4);
 
     export_service.render_range(
         &mut render_service,
@@ -149,6 +192,11 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
     info!("All frames rendered.");
 
     export_service.shutdown()?;
+
+    // Cleanup audio temp file
+    if let Some(path) = audio_temp_path {
+        let _ = std::fs::remove_file(path);
+    }
 
     Ok(())
 }

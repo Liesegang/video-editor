@@ -1,6 +1,6 @@
 use crate::model::ui_types::{GizmoHandle, TimelineClip};
 use crate::state::context::EditorContext;
-use egui::{Color32, CursorIcon, Pos2, Rect, Sense, Stroke, Ui, Vec2};
+use egui::{CursorIcon, Pos2, Rect, Sense, Ui, Vec2};
 use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
 use ordered_float::OrderedFloat;

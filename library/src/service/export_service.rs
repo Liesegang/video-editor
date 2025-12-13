@@ -6,6 +6,7 @@ use crate::service::project_model::ProjectModel;
 use crate::service::render_service::RenderService;
 use crate::util::timing::{ScopedTimer, measure_info};
 use log::{error, info};
+use std::io::Write;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::mpsc::{self, SyncSender};
@@ -24,6 +25,7 @@ pub struct ExportService {
     saver_handle: Option<JoinHandle<()>>,
     export_settings: Arc<ExportSettings>,
     exporter_id: String,
+    temp_files: Vec<String>,
 }
 
 impl ExportService {
@@ -57,6 +59,8 @@ impl ExportService {
             saver_handle: Some(saver_handle),
             export_settings,
             exporter_id,
+            temp_files: Vec::new(),
+            // ...
         }
     }
 
@@ -75,32 +79,34 @@ impl ExportService {
         let sender = self.save_tx.as_ref().ok_or(LibraryError::Render(
             "Save queue is already closed".to_string(),
         ))?;
-        let export_format = self.export_settings.export_format();
-        // Pre-process static tokens
+        
+        // Prepare Settings (Potentially with Audio)
+        let mut settings_struct = (*self.export_settings).clone();
+        let export_format = settings_struct.export_format();
+        
+        // Setup Output Paths
         let mut base_template = output_stem.replace("{project}", &project_model.project().name);
         base_template = base_template.replace("{composition}", &composition.name);
-
         let has_frame_token = base_template.contains("{frame");
 
         let video_output = if matches!(export_format, ExportFormat::Video) {
-            // For video, we typically ignore frame tokens unless we are doing something weird like one file per frame?
-            // Usually valid video export ignores {frame}, but if we want to support it (maybe user wants {frame} in video name?)
-            // let's just process it for start frame? or maybe just clean it?
-            // For now, let's just stick to the stem. If user put {frame} in video name, it might be weird.
-            // But let's assume video output is just one file.
+            
+            // Audio is now handled by the caller (ExportDialog/lib.rs) who pre-renders it
+            // and adds "audio_source" to ExportSettings.
+            
+            // Render Video
             let clean_stem = if has_frame_token {
-                // Remove {frame...} tokens for video filename or replace with start frame?
-                // Simple approach: replace with "video" or just keep it?
-                // Let's replace with start frame if present
                 Self::format_frame_token_in_string(&base_template, frame_range.start)
             } else {
                 base_template.clone()
             };
 
-            Some(format!("{}.{}", clean_stem, self.export_settings.container))
+            Some(format!("{}.{}", clean_stem, settings_struct.container))
         } else {
             None
         };
+        
+        let settings_arc = Arc::new(settings_struct);
 
         for frame_index in frame_range {
             if frame_index >= total_frames {
@@ -143,7 +149,7 @@ impl ExportService {
                     frame_index,
                     output_path,
                     image,
-                    export_settings: Arc::clone(&self.export_settings),
+                    export_settings: Arc::clone(&settings_arc), // Use the modified settings
                 })
                 .map_err(|_| LibraryError::Render("Save queue disconnected".to_string()))?;
         }
@@ -212,6 +218,11 @@ impl Drop for ExportService {
         self.save_tx.take();
         if let Some(handle) = self.saver_handle.take() {
             let _ = handle.join();
+        }
+        for path in &self.temp_files {
+            if let Err(e) = std::fs::remove_file(path) {
+                error!("Failed to remove temp file {}: {}", path, e);
+            }
         }
     }
 }

@@ -10,7 +10,7 @@ pub fn show_timeline_controls(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     _history_manager: &mut HistoryManager,
-    _project_service: &ProjectService,
+    project_service: &ProjectService,
     _project: &Arc<RwLock<Project>>,
 ) {
     ui.horizontal(|ui| {
@@ -24,7 +24,20 @@ pub fn show_timeline_controls(
             .add(egui::Button::new(egui::RichText::new(play_icon_enum)))
             .clicked()
         {
-            editor_context.timeline.is_playing = !editor_context.timeline.is_playing;
+            let is_playing = !editor_context.timeline.is_playing;
+            editor_context.timeline.is_playing = is_playing;
+            
+            if is_playing {
+                // Sync audio engine to current timeline time before starting
+                project_service.reset_audio_pump(editor_context.timeline.current_time as f64);
+                if let Err(e) = project_service.audio_engine.play() {
+                    log::error!("Failed to start audio playback: {}", e);
+                }
+            } else {
+                if let Err(e) = project_service.audio_engine.pause() {
+                     log::error!("Failed to pause audio playback: {}", e);
+                }
+            }
         }
 
         // Time display

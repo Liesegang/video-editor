@@ -4,7 +4,7 @@ use log::debug;
 
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::frame::FrameInfo;
-use crate::model::project::TrackClip; // Add explicit import
+use crate::model::project::{TrackClip, TrackClipKind}; // Add explicit import
 use crate::model::project::project::{Composition, Project};
 use crate::util::timing::ScopedTimer;
 
@@ -62,7 +62,9 @@ impl<'a> FrameEvaluator<'a> {
             .iter()
             .flat_map(|track| track.clips.iter())
             .filter(move |track_clip| {
-                track_clip.in_frame <= frame_number && track_clip.out_frame >= frame_number
+                track_clip.kind != TrackClipKind::Audio
+                    && track_clip.in_frame <= frame_number
+                    && track_clip.out_frame >= frame_number
             })
     }
 

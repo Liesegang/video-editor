@@ -21,7 +21,6 @@ use raw_window_handle::{
 };
 
 #[cfg(feature = "gl")]
-use std::ffi::c_void;
 #[cfg(feature = "gl")]
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 #[cfg(feature = "gl")]

@@ -69,7 +69,7 @@ impl MyApp {
         let plugin_manager = library::create_plugin_manager();
         let cache_manager = Arc::new(library::cache::CacheManager::new());
         let project_service =
-            ProjectService::new(Arc::clone(&default_project), plugin_manager.clone());
+            ProjectService::new(Arc::clone(&default_project), plugin_manager.clone(), cache_manager.clone());
 
         let mut editor_context = EditorContext::new(default_comp_id); // Pass default_comp_id
         editor_context.selection.composition_id = Some(default_comp_id); // Select the default composition
@@ -148,7 +148,7 @@ impl eframe::App for MyApp {
 
         if self.export_dialog.is_open {
             let active_comp_id = self.editor_context.selection.composition_id;
-            self.export_dialog.show(ctx, &self.project, active_comp_id);
+            self.export_dialog.show(ctx, &self.project, &self.project_service, active_comp_id);
         }
 
         if self.editor_context.keyframe_dialog.is_open {
@@ -256,28 +256,20 @@ impl eframe::App for MyApp {
             self.editor_context.interaction.dragged_item = None;
         }
 
+        // Always pump audio to keep buffer full if playing (or pre-buffer)
         if self.editor_context.timeline.is_playing {
-            let fps = if let Ok(proj_read) = self.project.read() {
-                self.editor_context
-                    .get_current_composition(&proj_read)
-                    .map(|c| c.fps)
-                    .unwrap_or(30.0)
-            } else {
-                30.0
-            };
-            let frame_duration = 1.0 / fps as f32;
+            self.project_service.pump_audio();
+        }
 
-            self.editor_context.timeline.playback_accumulator += ctx.input(|i| i.stable_dt);
-
-            // Limit the accumulator to prevent spiraling if lag occurs (e.g. max 10 frames catchup)
-            if self.editor_context.timeline.playback_accumulator > frame_duration * 10.0 {
-                self.editor_context.timeline.playback_accumulator = frame_duration;
-            }
-
-            while self.editor_context.timeline.playback_accumulator >= frame_duration {
-                self.editor_context.timeline.current_time += frame_duration;
-                self.editor_context.timeline.playback_accumulator -= frame_duration;
-            }
+        if self.editor_context.timeline.is_playing {
+            // Audio Master Clock Sync
+            // We trust the audio engine's time as the source of truth.
+            let audio_time = self.project_service.audio_engine.get_current_time();
+            
+            // Cast to f32 for UI text/logic, but careful with precision for long videos? 
+            // editor_context uses f32 for current_time.
+            self.editor_context.timeline.current_time = audio_time as f32;
+            
             ctx.request_repaint();
         } else {
             // Reset accumulator when not playing to avoid jump on resume
