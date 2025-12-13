@@ -65,6 +65,9 @@ pub enum PropertyUiType {
     Bool,
     Vec2,
     Vec3,
+    Dropdown {
+        options: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +148,14 @@ pub trait ExportPlugin: Plugin {
         image: &Image,
         settings: &ExportSettings,
     ) -> Result<(), LibraryError>;
+
+    fn finish_export(&self, _path: &str) -> Result<(), LibraryError> {
+        Ok(())
+    }
+
+    fn properties(&self) -> Vec<PropertyDefinition> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -507,6 +518,19 @@ impl PluginManager {
             "Exporter '{}' not found",
             exporter_id
         )))
+    }
+
+    pub fn get_export_plugin_properties(&self, exporter_id: &str) -> Option<Vec<PropertyDefinition>> {
+        let inner = self.inner.read().unwrap();
+        inner.export_plugins.get(exporter_id).map(|p| p.properties())
+    }
+
+    pub fn finish_export(&self, exporter_id: &str, path: &str) -> Result<(), LibraryError> {
+        let inner = self.inner.read().unwrap();
+        if let Some(plugin) = inner.export_plugins.get(exporter_id) {
+            return plugin.finish_export(path);
+        }
+        Err(LibraryError::Plugin(format!("Exporter '{}' not found", exporter_id)))
     }
 
     pub fn load_property_plugin_from_file<P: AsRef<Path>>(

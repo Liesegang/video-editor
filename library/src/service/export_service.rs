@@ -12,6 +12,7 @@ use std::sync::mpsc::{self, SyncSender};
 use std::thread::{self, JoinHandle};
 
 struct SaveTask {
+    exporter_id: String,
     frame_index: u64,
     output_path: String,
     image: Image,
@@ -22,11 +23,13 @@ pub struct ExportService {
     save_tx: Option<SyncSender<SaveTask>>,
     saver_handle: Option<JoinHandle<()>>,
     export_settings: Arc<ExportSettings>,
+    exporter_id: String,
 }
 
 impl ExportService {
     pub fn new(
         plugin_manager: Arc<PluginManager>,
+        exporter_id: String,
         export_settings: Arc<ExportSettings>,
         save_queue_bound: usize,
     ) -> Self {
@@ -35,7 +38,7 @@ impl ExportService {
         let saver_handle = thread::spawn(move || {
             while let Ok(task) = save_rx.recv() {
                 if let Err(err) = plugin_manager.export_image(
-                    "png_export", // Hardcoded exporter_id
+                    &task.exporter_id,
                     &task.output_path,
                     &task.image,
                     &task.export_settings,
@@ -53,6 +56,7 @@ impl ExportService {
             save_tx: Some(save_tx),
             saver_handle: Some(saver_handle),
             export_settings,
+            exporter_id,
         }
     }
 
@@ -64,7 +68,7 @@ impl ExportService {
         output_stem: &str,
     ) -> Result<(), LibraryError> {
         let composition = project_model.composition();
-        let (fps, total_frames) = (composition.fps, composition.duration.ceil().max(0.0) as u64);
+        let (fps, total_frames) = (composition.fps, (composition.duration * composition.fps).ceil().max(0.0) as u64);
         let sender = self.save_tx.as_ref().ok_or(LibraryError::Render(
             "Save queue is already closed".to_string(),
         ))?;
@@ -108,6 +112,7 @@ impl ExportService {
             };
             sender
                 .send(SaveTask {
+                    exporter_id: self.exporter_id.clone(),
                     frame_index,
                     output_path,
                     image,

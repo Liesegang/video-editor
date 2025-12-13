@@ -15,9 +15,12 @@ use crate::shortcut::ShortcutManager;
 use crate::state::context::EditorContext;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::ui::dialogs::settings_dialog::SettingsDialog;
+use crate::ui::dialogs::export_dialog::ExportDialog;
 use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
 use crate::utils;
 use library::RenderServer;
+use library::plugin::PluginManager;
+use library::cache::SharedCacheManager;
 
 pub struct MyApp {
     pub editor_context: EditorContext,
@@ -31,9 +34,14 @@ pub struct MyApp {
     // Dialogs
     pub settings_dialog: SettingsDialog,
     pub composition_dialog: CompositionDialog,
+    pub export_dialog: ExportDialog,
 
     pub triggered_action: Option<CommandId>,
     pub render_server: Arc<RenderServer>,
+    
+    // Dependencies
+    plugin_manager: Arc<PluginManager>,
+    cache_manager: SharedCacheManager,
 }
 
 impl MyApp {
@@ -68,9 +76,9 @@ impl MyApp {
 
         let entity_converter_registry = plugin_manager.get_entity_converter_registry();
         let render_server = Arc::new(RenderServer::new(
-            plugin_manager,
-            cache_manager,
-            entity_converter_registry,
+            plugin_manager.clone(),
+            cache_manager.clone(),
+            entity_converter_registry.clone(),
         ));
 
         let mut app = Self {
@@ -84,7 +92,14 @@ impl MyApp {
             settings_dialog: SettingsDialog::new(command_registry),
             triggered_action: None,
             composition_dialog: CompositionDialog::new(),
+            export_dialog: ExportDialog::new(
+                plugin_manager.clone(),
+                cache_manager.clone(),
+                entity_converter_registry,
+            ),
             render_server,
+            plugin_manager,
+            cache_manager,
         };
         if let Ok(proj_read) = app.project_service.get_project().read() {
             app.history_manager.push_project_state(proj_read.clone());
@@ -125,6 +140,11 @@ impl eframe::App for MyApp {
             self.composition_dialog.show(ctx);
         }
 
+        if self.export_dialog.is_open {
+             let active_comp_id = self.editor_context.selection.composition_id;
+             self.export_dialog.show(ctx, &self.project, active_comp_id);
+        }
+
         if self.editor_context.keyframe_dialog.is_open {
             crate::ui::dialogs::keyframe_dialog::show_keyframe_dialog(
                 ctx,
@@ -162,6 +182,7 @@ impl eframe::App for MyApp {
         let main_ui_enabled = !self.settings_dialog.is_open
             && !self.settings_dialog.show_close_warning
             && !self.composition_dialog.is_open
+            && !self.export_dialog.is_open
             && !self.editor_context.keyframe_dialog.is_open;
         if main_ui_enabled && !is_listening_for_shortcut {
             if let Some(action_id) = self
@@ -181,6 +202,10 @@ impl eframe::App for MyApp {
                 history_manager: &mut self.history_manager,
                 dock_state: &mut self.dock_state,
             };
+
+            if action == CommandId::Export {
+                self.export_dialog.open();
+            }
 
             handle_command(ctx, action, context, &mut trigger_settings);
 
