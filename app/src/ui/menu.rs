@@ -29,6 +29,7 @@ fn file_menu(
             CommandId::LoadProject,
             CommandId::Save,
             CommandId::SaveAs,
+            CommandId::Export,
             CommandId::Quit,
         ] {
             if let Some(cmd) = command_registry.find(cmd_id) {
@@ -37,6 +38,7 @@ fn file_menu(
                     CommandId::LoadProject => icons::FOLDER_OPEN,
                     CommandId::Save => icons::FLOPPY_DISK,
                     CommandId::SaveAs => icons::FLOPPY_DISK_BACK,
+                    CommandId::Export => icons::EXPORT,
                     CommandId::Quit => icons::SIGN_OUT,
                     _ => unreachable!(), // Should not happen
                 };

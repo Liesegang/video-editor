@@ -77,6 +77,10 @@ pub struct Composition {
     pub duration: f64,
     pub background_color: Color,
     pub color_profile: String,
+    #[serde(default)]
+    pub work_area_in: u64,
+    #[serde(default)]
+    pub work_area_out: u64,
 
     pub tracks: Vec<Track>,
 }
@@ -97,6 +101,8 @@ impl Composition {
                 a: 255,
             },
             color_profile: "sRGB".to_string(),
+            work_area_in: 0,
+            work_area_out: (duration * fps).ceil() as u64,
             tracks: Vec::new(),
         }
     }

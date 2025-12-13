@@ -9,6 +9,7 @@ pub enum CommandId {
     LoadProject,
     Save,
     SaveAs,
+    Export,
     Quit,
 
     // Edit Menu
@@ -90,6 +91,11 @@ impl CommandRegistry {
                 CommandId::SaveAs,
                 "Save As...",
                 Some((Modifiers::COMMAND | Modifiers::SHIFT, Key::S)),
+            ),
+            Command::new(
+                CommandId::Export,
+                "Export...",
+                Some((Modifiers::COMMAND, Key::E)),
             ),
             Command::new(CommandId::Quit, "Quit", Some((Modifiers::COMMAND, Key::Q))),
             // Edit Menu

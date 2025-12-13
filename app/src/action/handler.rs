@@ -30,6 +30,9 @@ pub fn handle_command(
         CommandId::Settings => {
             *trigger_settings = true;
         }
+        CommandId::Export => {
+            // Handled in MyApp::update explicitly to open dialog
+        }
         CommandId::NewProject => {
             // Logic to request new project - strictly speaking, this modifies MyApp state heavily.
             // For now, let's keep it simple or bubble up specific requests?

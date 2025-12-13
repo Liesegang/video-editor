@@ -546,10 +546,10 @@ pub fn preview_panel(
     );
 
     // Draw Bottom Bar
-    ui.allocate_ui_at_rect(bottom_bar_rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(bottom_bar_rect), |ui| {
         ui.horizontal(|ui| {
             ui.label("Resolution:");
-            egui::ComboBox::from_id_source("preview_resolution")
+            egui::ComboBox::from_id_salt("preview_resolution")
                 .selected_text(format!(
                     "{}%",
                     (editor_context.view.preview_resolution * 100.0) as i32
