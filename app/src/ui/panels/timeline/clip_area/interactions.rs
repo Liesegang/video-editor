@@ -154,6 +154,7 @@ pub fn handle_area_interaction(
                                                         drop_out,
                                                         drop_in_frame, // source_begin_frame = drop_in_frame
                                                         duration_frames, // Use asset duration
+                                                        asset.fps.unwrap_or(30.0), // Use asset fps or default
                                                     );
                                                     if let (Some(w), Some(h)) =
                                                         (asset.width, asset.height)

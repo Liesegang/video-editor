@@ -7,6 +7,7 @@ pub struct VideoReader {
     video_stream_index: usize,
     decoder: ffmpeg::decoder::Video,
     next_frame_number: Option<u64>,
+    fps: f64,
 }
 
 impl VideoReader {
@@ -25,12 +26,29 @@ impl VideoReader {
         let context_decoder = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
         let decoder = context_decoder.decoder().video()?;
 
+        let stream = input_context
+            .stream(video_stream_index)
+            .ok_or(LibraryError::FfmpegOther(
+                "ストリームが見つかりません".to_string(),
+            ))?;
+        let avg_frame_rate = stream.avg_frame_rate();
+        let fps = if avg_frame_rate.denominator() > 0 {
+            avg_frame_rate.numerator() as f64 / avg_frame_rate.denominator() as f64
+        } else {
+            30.0
+        };
+
         Ok(Self {
             input_context,
             video_stream_index,
             decoder,
             next_frame_number: None,
+            fps,
         })
+    }
+
+    pub fn get_fps(&self) -> f64 {
+        self.fps
     }
 
     pub fn get_duration(&self) -> Option<f64> {
@@ -54,12 +72,7 @@ impl VideoReader {
                     "ストリームが見つかりません".to_string(),
                 ))?;
         let time_base = stream.time_base();
-        let avg_frame_rate = stream.avg_frame_rate();
-        let fps = if avg_frame_rate.denominator() > 0 {
-            avg_frame_rate.numerator() as f64 / avg_frame_rate.denominator() as f64
-        } else {
-            30.0
-        };
+        let fps = self.fps;
 
         // Determine if we need to seek
         let need_seek = match self.next_frame_number {

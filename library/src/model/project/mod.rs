@@ -118,6 +118,7 @@ impl TrackClip {
         out_frame: u64,
         source_begin_frame: u64,
         duration_frame: u64,
+        fps: f64,
     ) -> Self {
         let mut props = PropertyMap::new();
         props.set(
@@ -178,7 +179,7 @@ impl TrackClip {
             out_frame,
             source_begin_frame,
             Some(duration_frame),
-            0.0,
+            fps,
             props,
             Vec::new(),
         )
