@@ -279,7 +279,7 @@ impl EasingFunction {
                 x
             }
             Self::Expression { text } => {
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     let locals = PyDict::new(py);
                     if let Err(e) = locals.set_item("t", t) {
                         log::error!("Failed to set 't' in python context: {}", e);

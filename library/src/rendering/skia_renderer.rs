@@ -263,7 +263,7 @@ uniform float4 iDate;
 "#;
     // 2. Preprocess using shaderc
     let compiler = shaderc::Compiler::new().unwrap();
-    let mut options = shaderc::CompileOptions::new().unwrap();
+    let options = shaderc::CompileOptions::new().unwrap();
     
     // Shaderc requires a version directive. SkSL usually doesn't have it.
     // We inject one for preprocessing, then strip directives from the output.
