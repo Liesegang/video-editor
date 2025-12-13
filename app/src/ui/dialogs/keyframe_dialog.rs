@@ -27,13 +27,21 @@ pub fn show_keyframe_dialog(
         .show(ctx, |ui| {
             let state = &mut editor_context.keyframe_dialog;
 
+            // Sanitize values to prevent panics
+            if !state.time.is_finite() {
+                state.time = 0.0;
+            }
+            if !state.value.is_finite() {
+                state.value = 0.0;
+            }
+
             egui::Grid::new("keyframe_grid")
                 .num_columns(2)
                 .spacing([10.0, 10.0])
                 .show(ui, |ui| {
                     ui.label("Time:");
                     let time_response =
-                        ui.add(DragValue::new(&mut state.time).speed(0.01).suffix(" s"));
+                        ui.add(DragValue::new(&mut state.time).speed(0.01).suffix(" s").range(0.0..=f64::MAX));
                     if time_response.changed() {
                         should_update = true;
                     }
@@ -43,7 +51,7 @@ pub fn show_keyframe_dialog(
                     ui.end_row();
 
                     ui.label("Value:");
-                    let val_response = ui.add(DragValue::new(&mut state.value).speed(0.1));
+                    let val_response = ui.add(DragValue::new(&mut state.value).speed(0.1)); // Range is implicitly infinite, but value is sanitized
                     if val_response.changed() {
                         should_update = true;
                     }
@@ -298,7 +306,6 @@ pub fn show_keyframe_dialog(
                                 should_update = true;
                                 should_push_history = true;
                             }
-
                             ui.separator();
                             if ui
                                 .selectable_label(
@@ -325,6 +332,9 @@ pub fn show_keyframe_dialog(
                 EasingFunction::EaseInBack { c1 }
                 | EasingFunction::EaseOutBack { c1 }
                 | EasingFunction::EaseInOutBack { c1 } => {
+                    // Sanitize c1
+                    if !c1.is_finite() { *c1 = 1.70158; }
+                    
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.label("Overshoot (c1):");
@@ -340,6 +350,9 @@ pub fn show_keyframe_dialog(
                 EasingFunction::EaseInElastic { period }
                 | EasingFunction::EaseOutElastic { period }
                 | EasingFunction::EaseInOutElastic { period } => {
+                     // Sanitize period? Range prevents bad values from UI, but init might be bad.
+                     if !period.is_finite() { *period = 3.0; }
+
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.label("Period:");
@@ -356,6 +369,9 @@ pub fn show_keyframe_dialog(
                 EasingFunction::EaseInBounce { n1, d1 }
                 | EasingFunction::EaseOutBounce { n1, d1 }
                 | EasingFunction::EaseInOutBounce { n1, d1 } => {
+                    if !n1.is_finite() { *n1 = 7.5625; }
+                    if !d1.is_finite() { *d1 = 2.75; }
+
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.label("Amplitude (n1):");
