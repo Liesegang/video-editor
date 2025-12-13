@@ -490,12 +490,8 @@ impl TrackClip {
         let mut props = PropertyMap::new();
 
         // Default ShaderToy-compatible shader
+        // Note: Uniforms (iResolution, iTime, etc.) are automatically injected by the renderer.
         let default_shader = r#"
-uniform float3 iResolution;
-uniform float iTime;
-uniform float4 iMouse;
-uniform float4 iDate;
-
 half4 main(float2 fragCoord) {
     float2 uv = fragCoord / iResolution.xy;
     float3 col = 0.5 + 0.5*cos(iTime+uv.xyx+float3(0,2,4));
