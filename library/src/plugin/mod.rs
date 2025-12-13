@@ -30,6 +30,11 @@ pub mod properties;
 
 // Publicly re-export plugin types from their sub-modules
 pub use crate::plugin::effects::blur::BlurEffectPlugin;
+pub use crate::plugin::effects::dilate::DilateEffectPlugin;
+pub use crate::plugin::effects::drop_shadow::DropShadowEffectPlugin;
+pub use crate::plugin::effects::erode::ErodeEffectPlugin;
+pub use crate::plugin::effects::magnifier::MagnifierEffectPlugin;
+pub use crate::plugin::effects::tile::TileEffectPlugin;
 pub use crate::plugin::exporters::ffmpeg_export::FfmpegExportPlugin;
 pub use crate::plugin::exporters::png_export::PngExportPlugin;
 pub use crate::plugin::loaders::ffmpeg_video::FfmpegVideoLoader;

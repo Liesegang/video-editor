@@ -62,84 +62,14 @@ impl EffectPlugin for BlurEffectPlugin {
             return Ok(input.clone());
         }
 
-        let perform_blur = |image: &skia_safe::Image,
-                            width: u32,
-                            height: u32,
-                            context: Option<&mut skia_safe::gpu::DirectContext>|
-         -> Result<RenderOutput, LibraryError> {
-            let mut surface = crate::rendering::skia_utils::create_surface(width, height, context)?;
-            let canvas = surface.canvas();
-            canvas.clear(skia_safe::Color::TRANSPARENT);
+        use crate::plugin::effects::utils::apply_skia_filter;
 
-            let mut paint = Paint::default();
-            let filter =
-                image_filters::blur((sigma_x as f32, sigma_y as f32), Some(tile_mode), None, None)
-                    .ok_or(LibraryError::Render(
+        apply_skia_filter(input, gpu_context, |_width, _height| {
+            image_filters::blur((sigma_x as f32, sigma_y as f32), Some(tile_mode), None, None)
+                .ok_or(LibraryError::Render(
                     "Failed to create blur filter".to_string(),
-                ))?;
-            paint.set_image_filter(filter);
-            canvas.draw_image(image, (0, 0), Some(&paint));
-
-            // If we have a context, try to return a texture
-            let ctx_opt = surface.recording_context();
-            if let Some(mut ctx) = ctx_opt {
-                if let Some(mut dctx) = ctx.as_direct_context() {
-                    dctx.flush_and_submit();
-                }
-                
-                if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
-                    &mut surface,
-                    skia_safe::surface::BackendHandleAccess::FlushRead,
-                ) {
-                    if let Some(gl_info) = texture.gl_texture_info() {
-                        return Ok(RenderOutput::Texture(TextureInfo {
-                            texture_id: gl_info.id,
-                            width,
-                            height,
-                        }));
-                    }
-                }
-            }
-            // Fallback to Image
-            let image = surface_to_image(&mut surface, width, height)?;
-            Ok(RenderOutput::Image(image))
-        };
-
-        match input {
-            RenderOutput::Texture(info) => {
-                if let Some(ctx) = gpu_context {
-                    let image = crate::rendering::skia_utils::create_image_from_texture(
-                        &mut ctx.direct_context,
-                        info.texture_id,
-                        info.width,
-                        info.height,
-                    )?;
-                    perform_blur(
-                        &image,
-                        info.width,
-                        info.height,
-                        Some(&mut ctx.direct_context),
-                    )
-                } else {
-                    Err(LibraryError::Render(
-                        "Texture input without GPU context".to_string(),
-                    ))
-                }
-            }
-            RenderOutput::Image(img) => {
-                let sk_image = image_to_skia(img)?;
-                if let Some(ctx) = gpu_context {
-                    perform_blur(
-                        &sk_image,
-                        img.width,
-                        img.height,
-                        Some(&mut ctx.direct_context),
-                    )
-                } else {
-                    perform_blur(&sk_image, img.width, img.height, None)
-                }
-            }
-        }
+                ))
+        })
     }
 
     fn properties(&self) -> Vec<crate::plugin::PropertyDefinition> {
