@@ -6,6 +6,7 @@ use library::service::project_service::ProjectService;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 
+use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 
 enum Action {
@@ -21,6 +22,7 @@ enum Action {
 pub fn graph_editor_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
+    history_manager: &mut HistoryManager,
     project_service: &mut ProjectService,
     project: &Arc<RwLock<Project>>,
 ) {
@@ -37,6 +39,7 @@ pub fn graph_editor_panel(
     };
 
     let mut action = Action::None;
+    let mut should_push_history = false;
 
     {
         let proj_read = if let Ok(p) = project.read() {
@@ -428,6 +431,11 @@ pub fn graph_editor_panel(
                         if point_response.clicked() {
                             action = Action::Select(name.clone(), i);
                         }
+                        
+                        // History: drag stopped
+                        if point_response.drag_stopped() {
+                            should_push_history = true;
+                        }
 
                         // Context Menu
                         point_response.context_menu(|ui| {
@@ -437,6 +445,7 @@ pub fn graph_editor_panel(
 
                             if ui.button("Linear").clicked() {
                                 action = Action::SetEasing(name.clone(), i, EasingFunction::Linear);
+                                should_push_history = true;
                                 ui.close_kind(UiKind::Menu);
                             }
 
@@ -447,6 +456,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInSine,
                                     );
+                                    should_push_history = true;
                                     ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease Out").clicked() {
@@ -455,6 +465,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseOutSine,
                                     );
+                                    should_push_history = true;
                                     ui.close_kind(UiKind::Menu);
                                 }
                                 if ui.button("Ease In Out").clicked() {
@@ -463,6 +474,7 @@ pub fn graph_editor_panel(
                                         i,
                                         EasingFunction::EaseInOutSine,
                                     );
+                                    should_push_history = true;
                                     ui.close_kind(UiKind::Menu);
                                 }
                             });
@@ -734,6 +746,7 @@ pub fn graph_editor_panel(
                                 .clicked()
                             {
                                 action = Action::Remove(name.clone(), i);
+                                should_push_history = true;
                                 ui.close_kind(UiKind::Menu);
                             }
                         });
@@ -782,6 +795,7 @@ pub fn graph_editor_panel(
                                 if best_dist < 10.0 {
                                     if let Action::None = action {
                                         action = Action::Add(name.clone(), t.max(0.0), v);
+                                        should_push_history = true;
                                     }
                                 }
                             }
@@ -891,5 +905,11 @@ pub fn graph_editor_panel(
              }
         }
         Action::None => {}
+    }
+
+    if should_push_history {
+        if let Ok(proj_read) = project.read() {
+            history_manager.push_project_state(proj_read.clone());
+        }
     }
 }
