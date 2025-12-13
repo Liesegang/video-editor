@@ -658,4 +658,8 @@ impl Renderer for SkiaRenderer {
         canvas.clear(color);
         Ok(())
     }
+
+    fn get_gpu_context(&mut self) -> Option<&mut crate::rendering::skia_utils::GpuContext> {
+        self.gpu_context.as_mut()
+    }
 }

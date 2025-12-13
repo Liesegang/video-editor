@@ -818,6 +818,277 @@ impl ProjectService {
         })?
     }
 
+    pub fn add_effect_to_clip(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effect_id: &str,
+    ) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+            if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                // Initialize defaults
+                let defs = self.plugin_manager.get_effect_properties(effect_id);
+                let mut props = crate::model::project::property::PropertyMap::new();
+                for def in defs {
+                    props.set(
+                        def.name,
+                        crate::model::project::property::Property::constant(def.default_value),
+                    );
+                }
+
+                let config = crate::model::project::EffectConfig {
+                    effect_type: effect_id.to_string(),
+                    properties: props,
+                };
+                clip.effects.push(config);
+                Ok(())
+            } else {
+                Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+            }
+        })?
+    }
+
+    pub fn remove_effect_from_clip(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effect_index: usize,
+    ) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+            if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                if effect_index < clip.effects.len() {
+                    clip.effects.remove(effect_index);
+                    Ok(())
+                } else {
+                    Err(LibraryError::Project(
+                        "Effect index out of bounds".to_string(),
+                    ))
+                }
+            } else {
+                Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+            }
+        })?
+    }
+
+    pub fn update_effect_property_or_keyframe(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effect_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+            if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                if let Some(effect) = clip.effects.get_mut(effect_index) {
+                    // Logic similar to update_property_or_keyframe
+                    let (evaluator, _is_new) =
+                        if let Some(prop) = effect.properties.get(property_key) {
+                            (prop.evaluator.clone(), false)
+                        } else {
+                            ("constant".to_string(), true)
+                        };
+
+                    if evaluator == "keyframe" {
+                        use crate::model::project::property::{Keyframe, Property};
+                        use ordered_float::OrderedFloat;
+
+                        if let Some(prop) = effect.properties.get_mut(property_key) {
+                            let mut current_keyframes = prop.keyframes();
+
+                            // Check for collision to preserve easing
+                            let mut preserved_easing = crate::animation::EasingFunction::Linear;
+                            if let Some(idx) = current_keyframes
+                                .iter()
+                                .position(|k| (k.time.into_inner() - time).abs() < 0.001)
+                            {
+                                preserved_easing = current_keyframes[idx].easing.clone();
+                                current_keyframes.remove(idx);
+                            }
+
+                            let final_easing = easing.unwrap_or(preserved_easing);
+
+                            current_keyframes.push(Keyframe {
+                                time: OrderedFloat(time),
+                                value,
+                                easing: final_easing,
+                            });
+                            current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
+                            *prop = Property::keyframe(current_keyframes);
+                        }
+                    } else {
+                        use crate::model::project::property::Property;
+                        effect
+                            .properties
+                            .set(property_key.to_string(), Property::constant(value));
+                    }
+                    Ok(())
+                } else {
+                    Err(LibraryError::Project(
+                        "Effect index out of bounds".to_string(),
+                    ))
+                }
+            } else {
+                Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+            }
+        })?
+    }
+
+    pub fn update_effect_keyframe_by_index(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effect_index: usize,
+        property_key: &str,
+        keyframe_index: usize,
+        new_time: Option<f64>,
+        new_value: Option<PropertyValue>,
+        new_easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+            if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                if let Some(effect) = clip.effects.get_mut(effect_index) {
+                    if let Some(prop) = effect.properties.get_mut(property_key) {
+                        let mut keyframes = prop.keyframes();
+                        if let Some(kf) = keyframes.get_mut(keyframe_index) {
+                            if let Some(t) = new_time {
+                                kf.time = ordered_float::OrderedFloat(t);
+                            }
+                            if let Some(v) = new_value {
+                                kf.value = v;
+                            }
+                            if let Some(e) = new_easing {
+                                kf.easing = e;
+                            }
+                        }
+                        // Re-sort after potential time change
+                        keyframes.sort_by(|a, b| a.time.cmp(&b.time));
+                        use crate::model::project::property::Property;
+                        *prop = Property::keyframe(keyframes);
+                        Ok(())
+                    } else {
+                         Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                    }
+                } else {
+                    Err(LibraryError::Project("Effect index out of bounds".to_string()))
+                }
+            } else {
+                Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+            }
+        })?
+    }
+
+    pub fn remove_effect_keyframe_by_index(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effect_index: usize,
+        property_key: &str,
+        keyframe_index: usize,
+    ) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+             if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                if let Some(effect) = clip.effects.get_mut(effect_index) {
+                    if let Some(prop) = effect.properties.get_mut(property_key) {
+                        let mut keyframes = prop.keyframes();
+                        if keyframe_index < keyframes.len() {
+                            keyframes.remove(keyframe_index);
+                            use crate::model::project::property::Property;
+                            *prop = Property::keyframe(keyframes);
+                            Ok(())
+                        } else {
+                            Err(LibraryError::Project("Keyframe index out of bounds".to_string()))
+                        }
+                    } else {
+                         Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                    }
+                } else {
+                    Err(LibraryError::Project("Effect index out of bounds".to_string()))
+                }
+            } else {
+                Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+            }
+        })?
+    }
+    pub fn add_effect_keyframe(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effect_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+            if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                if let Some(effect) = clip.effects.get_mut(effect_index) {
+                    if let Some(prop) = effect.properties.get_mut(property_key) {
+                        use crate::model::project::property::{Keyframe, Property};
+                        use ordered_float::OrderedFloat;
+
+                        if prop.evaluator == "constant" {
+                            let initial_val = prop
+                                .properties
+                                .get("value")
+                                .cloned()
+                                .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
+                            
+                            let kf0 = Keyframe {
+                                time: OrderedFloat(0.0),
+                                value: initial_val,
+                                easing: crate::animation::EasingFunction::Linear,
+                            };
+
+                            let kf_new = Keyframe {
+                                time: OrderedFloat(time),
+                                value: value.clone(),
+                                easing: easing.unwrap_or(crate::animation::EasingFunction::Linear),
+                            };
+
+                            let keyframes = vec![kf0, kf_new];
+                            *prop = Property::keyframe(keyframes);
+                        } else if prop.evaluator == "keyframe" {
+                            let mut current_keyframes = prop.keyframes();
+                            
+                            // Check for collision
+                            if let Some(idx) = current_keyframes
+                                .iter()
+                                .position(|k| (k.time.into_inner() - time).abs() < 0.001)
+                            {
+                                current_keyframes.remove(idx);
+                            }
+
+                            current_keyframes.push(Keyframe {
+                                time: OrderedFloat(time),
+                                value: value.clone(),
+                                easing: easing.unwrap_or(crate::animation::EasingFunction::Linear),
+                            });
+                            
+                            current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
+                            *prop = Property::keyframe(current_keyframes);
+                        }
+                        Ok(())
+                    } else {
+                         Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                    }
+                } else {
+                    Err(LibraryError::Project("Effect index out of bounds".to_string()))
+                }
+            } else {
+                Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+            }
+        })?
+    }
+
     pub fn move_clip_to_track(
         &self,
         composition_id: Uuid,
