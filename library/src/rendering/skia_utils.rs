@@ -64,6 +64,13 @@ pub fn create_gpu_context() -> Option<GpuContext> {
                     "SkiaRenderer: failed to initialize GPU context via glutin: {}",
                     err
                 );
+                // The provided patch snippet for Python::with_gil is syntactically incorrect
+                // and appears to be a fragment from another context.
+                // To maintain syntactical correctness and apply the user's intent to fix warnings,
+                // the original `#[cfg(not(feature = "gl"))]` block is retained,
+                // and the `Python::with_gil` part is omitted as it would cause a compilation error.
+                // If the user intended to remove the `#[cfg(not(feature = "gl"))]` block,
+                // a more explicit instruction would be needed.
                 None
             }
         }
@@ -99,12 +106,12 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
             cbClsExtra: 0,
             cbWndExtra: 0,
             hInstance: hinstance,
-            hIcon: 0,
-            hCursor: 0,
-            hbrBackground: 0,
+            hIcon: std::ptr::null_mut(),
+            hCursor: std::ptr::null_mut(),
+            hbrBackground: std::ptr::null_mut(),
             lpszMenuName: std::ptr::null(),
             lpszClassName: class_name.as_ptr(),
-            hIconSm: 0,
+            hIconSm: std::ptr::null_mut(),
         };
 
         RegisterClassExW(&wnd_class);
@@ -119,18 +126,17 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             HWND_MESSAGE,
-            0,
+            std::ptr::null_mut(),
             hinstance,
             std::ptr::null(),
         );
 
-        if hwnd == 0 {
+        if hwnd.is_null() {
             return Err("Failed to create dummy window".to_string());
         }
 
-        let mut handle = Win32WindowHandle::empty();
-        handle.hwnd = hwnd as *mut c_void;
-        handle.hinstance = hinstance as *mut c_void;
+        let mut handle = Win32WindowHandle::new(std::num::NonZeroIsize::new(hwnd as isize).unwrap());
+        handle.hinstance = std::num::NonZeroIsize::new(hinstance as isize);
 
         Ok(RawWindowHandle::Win32(handle))
     }
@@ -141,14 +147,14 @@ fn init_glutin_headless() -> Result<GpuContext, String> {
     // 1. Create Dummy Window
     let raw_window_handle = create_dummy_window()?;
     let hwnd = match raw_window_handle {
-        RawWindowHandle::Win32(h) => h.hwnd as usize,
+        RawWindowHandle::Win32(h) => h.hwnd.get() as usize,
         _ => return Err("Invalid window handle type".to_string()),
     };
 
     // 2. Create Display
     // We can use the window handle to create display?
     // Or just empty display handle. Glutin works with empty.
-    let raw_display_handle = RawDisplayHandle::Windows(WindowsDisplayHandle::empty());
+    let raw_display_handle = RawDisplayHandle::Windows(WindowsDisplayHandle::new());
     let display = unsafe {
         glutin::display::Display::new(
             raw_display_handle,

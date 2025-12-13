@@ -1,79 +1,41 @@
 [package]
 name = "library"
-version = "0.6.0"
+version = "0.1.0"
 edition = "2024"
 description = "Core library for video editor."
-
-# Changelog
-# 0.6.0
-# - Plugin-ified entity converters:
-#   - Defined `EntityConverterPlugin` trait.
-#   - Created `BuiltinEntityConverterPlugin`.
-#   - Modified `PluginManager` to manage `EntityConverterPlugin`s and provide `EntityConverterRegistry`.
-#   - Updated `lib.rs` and `framing/frame.rs` to use the plugin system for entity converters.
-#   - Made `EntityConverterRegistry` cloneable for Arc handling.
-
-# 0.5.0
-# - Plugin-ified entity converters:
-#   - Defined `EntityConverterPlugin` trait.
-#   - Created `BuiltinEntityConverterPlugin`.
-#   - Modified `PluginManager` to manage `EntityConverterPlugin`s and provide `EntityConverterRegistry`.
-#   - Updated `lib.rs` to use the plugin system for entity converters.
-#   - Made `EntityConverterRegistry` cloneable for Arc handling.
-
-# 0.4.0
-# - Added `load_plugins_from_directory` function to `PluginManager` for dynamic loading of all plugin types.
-# - Moved built-in plugin registration logic from `plugin/mod.rs` to `lib.rs` (into `create_plugin_manager` function).
-
-# 0.3.1
-# - Removed `get_evaluator_id` from `PropertyPlugin` trait and use `Plugin::id()` instead.
-
-# 0.3.0
-# - Removed `register` method from `PropertyPlugin` trait.
-# - Split `BuiltinPropertyPlugin` into individual `ConstantPropertyPlugin`, `KeyframePropertyPlugin`, and `ExpressionPropertyPlugin`.
-# - `PropertyPlugin` now requires `get_evaluator_instance` and `get_evaluator_id` methods.
-# - Updated `PluginManager` and `load_plugins()` to reflect these changes.
-
-# 0.2.0
-# - Refactored PluginManager to use XxxRepository structs for plugin management.
-# - PluginRepository now directly holds PropertyEvaluatorRegistry.
-# - Exporter selection is now by ID instead of checking 'supports'.
-# - All plugin types are now dynamically loadable.
-# - Updated all related code to reflect these architectural changes.
-
 
 [features]
 default = ["gl"]
 gl = []
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
-ffmpeg-next = "7.1.0"
-image = "0.25.5"
-skia-safe = { version = "0.82.0", features = ["gpu", "gl"] }
+ffmpeg-next = "8.0.0"
+image = "0.25.9"
+skia-safe = { version = "0.91.0", features = ["gpu", "gl"] }
 log = "0.4.26"
-env_logger = "0.11.7"
-lru = "0.12.3"
-ordered-float = { version = "4.2.1", features = ["serde"] }
-libloading = "0.8"
-glutin = "0.31"
-glutin-winit = "0.4"
-winit = { version = "0.29", features = ["rwh_05"] }
-raw-window-handle = "0.5"
-windows-sys = { version = "0.52", features = [
+env_logger = "0.11.8"
+lru = "0.16.2"
+ordered-float = { version = "5.1.0", features = ["serde"] }
+libloading = "0.9"
+glutin = "0.32.3"
+glutin-winit = "0.5.0"
+winit = { version = "0.30.12", features = ["rwh_06"] }
+raw-window-handle = "0.6"
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_LibraryLoader",
     "Win32_Graphics_Gdi"
 ] }
-thiserror = "1.0"
+thiserror = "2.0"
 tokio = { version = "1", features = ["full"] }
 rayon = "1.9.0"
-uuid = { version = "1.16.0", features = ["serde", "v4"] }
-bincode = "1.3.3"
+uuid = { version = "1.19.0", features = ["serde", "v4"] }
+bincode = "2.0.1"
 #opencv = "0.94.2"
-pyo3 = { version = "0.23", features = ["auto-initialize"] }
+pyo3 = { version = "0.27.2", features = ["auto-initialize"] }
 shaderc = "0.10.1"
 
 [profile.release]
