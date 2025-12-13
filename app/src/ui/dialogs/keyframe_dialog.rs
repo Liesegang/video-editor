@@ -40,8 +40,12 @@ pub fn show_keyframe_dialog(
                 .spacing([10.0, 10.0])
                 .show(ui, |ui| {
                     ui.label("Time:");
-                    let time_response =
-                        ui.add(DragValue::new(&mut state.time).speed(0.01).suffix(" s").range(0.0..=f64::MAX));
+                    let time_response = ui.add(
+                        DragValue::new(&mut state.time)
+                            .speed(0.01)
+                            .suffix(" s")
+                            .range(0.0..=f64::MAX),
+                    );
                     if time_response.changed() {
                         should_update = true;
                     }
@@ -333,8 +337,10 @@ pub fn show_keyframe_dialog(
                 | EasingFunction::EaseOutBack { c1 }
                 | EasingFunction::EaseInOutBack { c1 } => {
                     // Sanitize c1
-                    if !c1.is_finite() { *c1 = 1.70158; }
-                    
+                    if !c1.is_finite() {
+                        *c1 = 1.70158;
+                    }
+
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.label("Overshoot (c1):");
@@ -350,8 +356,10 @@ pub fn show_keyframe_dialog(
                 EasingFunction::EaseInElastic { period }
                 | EasingFunction::EaseOutElastic { period }
                 | EasingFunction::EaseInOutElastic { period } => {
-                     // Sanitize period? Range prevents bad values from UI, but init might be bad.
-                     if !period.is_finite() { *period = 3.0; }
+                    // Sanitize period? Range prevents bad values from UI, but init might be bad.
+                    if !period.is_finite() {
+                        *period = 3.0;
+                    }
 
                     ui.separator();
                     ui.horizontal(|ui| {
@@ -369,8 +377,12 @@ pub fn show_keyframe_dialog(
                 EasingFunction::EaseInBounce { n1, d1 }
                 | EasingFunction::EaseOutBounce { n1, d1 }
                 | EasingFunction::EaseInOutBounce { n1, d1 } => {
-                    if !n1.is_finite() { *n1 = 7.5625; }
-                    if !d1.is_finite() { *d1 = 2.75; }
+                    if !n1.is_finite() {
+                        *n1 = 7.5625;
+                    }
+                    if !d1.is_finite() {
+                        *d1 = 2.75;
+                    }
 
                     ui.separator();
                     ui.horizontal(|ui| {
@@ -440,16 +452,45 @@ pub fn show_keyframe_dialog(
 
                     let new_value = PropertyValue::Number(OrderedFloat(state.value));
 
-                    if let Err(e) = project_service.update_keyframe(
-                        comp_id,
-                        track_id,
-                        entity_id,
-                        &state.property_name,
-                        state.keyframe_index,
-                        Some(new_time),
-                        Some(new_value),
-                        Some(state.easing.clone()),
-                    ) {
+                    // Helper to parse key
+                    let parse_key = |key: &str| -> Option<(usize, String)> {
+                        if key.starts_with("effect:") {
+                            let parts: Vec<&str> = key.splitn(3, ':').collect();
+                            if parts.len() == 3 {
+                                if let Ok(idx) = parts[1].parse::<usize>() {
+                                    return Some((idx, parts[2].to_string()));
+                                }
+                            }
+                        }
+                        None
+                    };
+
+                    let result = if let Some((eff_idx, prop_key)) = parse_key(&state.property_name) {
+                        project_service.update_effect_keyframe_by_index(
+                            comp_id,
+                            track_id,
+                            entity_id,
+                            eff_idx,
+                            &prop_key,
+                            state.keyframe_index,
+                            Some(new_time),
+                            Some(new_value),
+                            Some(state.easing.clone()),
+                        )
+                    } else {
+                        project_service.update_keyframe(
+                            comp_id,
+                            track_id,
+                            entity_id,
+                            &state.property_name,
+                            state.keyframe_index,
+                            Some(new_time),
+                            Some(new_value),
+                            Some(state.easing.clone()),
+                        )
+                    };
+
+                    if let Err(_e) = result {
                         // Only show error on final interaction to avoid spamming?
                         // Or show generic error.
                         // editor_context.interaction.active_modal_error = Some(format!("Failed to update keyframe: {}", e));

@@ -32,9 +32,10 @@ impl Plugin for PixelSorterPlugin {
 impl EffectPlugin for PixelSorterPlugin {
     fn apply(
         &self,
-        image: &Image,
+        input: &crate::rendering::renderer::RenderOutput,
         params: &HashMap<String, PropertyValue>,
-    ) -> Result<Image, LibraryError> {
+        gpu_context: Option<&mut crate::rendering::skia_utils::GpuContext>,
+    ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
         let threshold_value = params
             .get("threshold")
             .and_then(|pv| pv.get_as::<f64>())
@@ -62,6 +63,49 @@ impl EffectPlugin for PixelSorterPlugin {
                 debug!("PixelSorterPlugin: 'sort_criteria' parameter not found, defaulting to 'brightness'");
                 "brightness".to_string()
             });
+
+        // Resolve Image
+        let image = match input {
+            crate::rendering::renderer::RenderOutput::Image(img) => img.clone(),
+            crate::rendering::renderer::RenderOutput::Texture(info) => {
+                if let Some(ctx) = gpu_context {
+                    let sk_image = crate::rendering::skia_utils::create_image_from_texture(
+                        &mut ctx.direct_context,
+                        info.texture_id,
+                        info.width,
+                        info.height,
+                    )?;
+                    let row_bytes = (info.width * 4) as usize;
+                    let mut buffer = vec![0u8; (info.height as usize) * row_bytes];
+                    let image_info = skia_safe::ImageInfo::new(
+                        skia_safe::ISize::new(info.width as i32, info.height as i32),
+                        skia_safe::ColorType::RGBA8888,
+                        skia_safe::AlphaType::Premul,
+                        None,
+                    );
+                    if !sk_image.read_pixels(
+                        &image_info,
+                        &mut buffer,
+                        row_bytes,
+                        (0, 0),
+                        skia_safe::image::CachingHint::Disallow,
+                    ) {
+                        return Err(LibraryError::Render(
+                            "Failed to read texture pixels".to_string(),
+                        ));
+                    }
+                    Image {
+                        width: info.width,
+                        height: info.height,
+                        data: buffer,
+                    }
+                } else {
+                    return Err(LibraryError::Render(
+                        "Cannot read texture without GPU context".to_string(),
+                    ));
+                }
+            }
+        };
 
         let mut processed_data = image.data.clone(); // Start with a mutable copy of the original data
 
@@ -191,11 +235,55 @@ impl EffectPlugin for PixelSorterPlugin {
             }
         }
 
-        Ok(Image {
+        Ok(crate::rendering::renderer::RenderOutput::Image(Image {
             width: image.width,
             height: image.height,
             data: processed_data,
-        })
+        }))
+    }
+
+    fn properties(&self) -> Vec<crate::plugin::PropertyDefinition> {
+        use crate::model::project::property::PropertyValue;
+        use crate::plugin::{PropertyDefinition, PropertyUiType};
+        use ordered_float::OrderedFloat;
+
+        vec![
+            PropertyDefinition {
+                name: "threshold".to_string(),
+                label: "Threshold".to_string(),
+                ui_type: PropertyUiType::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    step: 0.01,
+                    suffix: "".to_string(),
+                },
+                default_value: PropertyValue::Number(OrderedFloat(0.5)),
+                category: "Settings".to_string(),
+            },
+            PropertyDefinition {
+                name: "direction".to_string(),
+                label: "Direction".to_string(),
+                ui_type: PropertyUiType::Dropdown {
+                    options: vec!["horizontal".to_string(), "vertical".to_string()],
+                },
+                default_value: PropertyValue::String("horizontal".to_string()),
+                category: "Settings".to_string(),
+            },
+            PropertyDefinition {
+                name: "sort_criteria".to_string(),
+                label: "Criteria".to_string(),
+                ui_type: PropertyUiType::Dropdown {
+                    options: vec![
+                        "brightness".to_string(),
+                        "red".to_string(),
+                        "green".to_string(),
+                        "blue".to_string(),
+                    ],
+                },
+                default_value: PropertyValue::String("brightness".to_string()),
+                category: "Settings".to_string(),
+            },
+        ]
     }
 }
 

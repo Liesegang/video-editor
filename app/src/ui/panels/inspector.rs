@@ -88,6 +88,7 @@ pub fn inspector_panel(
                                 e.out_frame,
                                 e.source_begin_frame,
                                 e.duration_frame,
+                                e.effects.clone(),
                             )
                         })
                 } else {
@@ -100,8 +101,15 @@ pub fn inspector_panel(
             None
         };
 
-        if let Some((kind, properties, in_frame, out_frame, source_begin_frame, duration_frame)) =
-            entity_data
+        if let Some((
+            kind,
+            properties,
+            in_frame,
+            out_frame,
+            source_begin_frame,
+            duration_frame,
+            effects,
+        )) = entity_data
         {
             ui.heading("Clip Properties");
             ui.separator();
@@ -322,6 +330,191 @@ pub fn inspector_panel(
                     }
                 }
             }
+
+            ui.add_space(10.0);
+            ui.heading("Effects");
+            ui.separator();
+
+            for (effect_index, effect) in effects.iter().enumerate() {
+                ui.push_id(format!("effect_{}", effect_index), |ui| {
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&effect.effect_type).strong());
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.button("❌").clicked() {
+                                        project_service
+                                            .remove_effect_from_clip(
+                                                comp_id,
+                                                track_id,
+                                                selected_entity_id,
+                                                effect_index,
+                                            )
+                                            .ok();
+                                        needs_refresh = true;
+                                    }
+                                },
+                            );
+                        });
+
+                        let defs = project_service
+                            .get_plugin_manager()
+                            .get_effect_properties(&effect.effect_type);
+
+                        egui::Grid::new(format!("effect_grid_{}", effect_index))
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for def in defs {
+                                    match &def.ui_type {
+                                        PropertyUiType::Float { step, suffix, .. } => {
+                                            let current_val =
+                                                effect.properties.get_f32(&def.name).unwrap_or(
+                                                    def.default_value
+                                                        .get_as::<f32>()
+                                                        .unwrap_or(0.0),
+                                                );
+                                            let mut val_mut = current_val;
+                                            handle_drag_value_property(
+                                                ui,
+                                                history_manager,
+                                                editor_context,
+                                                project_service,
+                                                comp_id,
+                                                track_id,
+                                                selected_entity_id,
+                                                &def.label,
+                                                &def.name,
+                                                &mut val_mut,
+                                                *step as f32,
+                                                suffix,
+                                                move |service, c, t, e, n, v| {
+                                                    Ok(service.update_effect_property_or_keyframe(
+                                                        c,
+                                                        t,
+                                                        e,
+                                                        effect_index,
+                                                        n,
+                                                        current_time,
+                                                        v,
+                                                        None,
+                                                    )?)
+                                                },
+                                                &mut needs_refresh,
+                                            );
+                                            ui.end_row();
+                                        }
+                                        PropertyUiType::Text => {
+                                            ui.label(&def.label);
+                                            let current_val =
+                                                effect.properties.get_string(&def.name).unwrap_or(
+                                                    def.default_value
+                                                        .get_as::<String>()
+                                                        .unwrap_or_default(),
+                                                );
+                                            let mut buffer = current_val.clone();
+                                            let response = ui.text_edit_singleline(&mut buffer);
+                                            if response.changed() {
+                                                project_service
+                                                    .update_effect_property_or_keyframe(
+                                                        comp_id,
+                                                        track_id,
+                                                        selected_entity_id,
+                                                        effect_index,
+                                                        &def.name,
+                                                        current_time,
+                                                        PropertyValue::String(buffer),
+                                                        None,
+                                                    )
+                                                    .ok();
+                                                needs_refresh = true;
+                                            }
+                                            if response.lost_focus() {
+                                                let current_state = project_service
+                                                    .get_project()
+                                                    .read()
+                                                    .unwrap()
+                                                    .clone();
+                                                history_manager.push_project_state(current_state);
+                                            }
+                                            ui.end_row();
+                                        }
+                                        PropertyUiType::Dropdown { options } => {
+                                            ui.label(&def.label);
+                                            let current_val =
+                                                effect.properties.get_string(&def.name).unwrap_or(
+                                                    def.default_value
+                                                        .get_as::<String>()
+                                                        .unwrap_or_default(),
+                                                );
+                                            let mut selected = current_val.clone();
+                                            egui::ComboBox::from_id_source(format!(
+                                                "combo_{}_{}",
+                                                effect_index, def.name
+                                            ))
+                                            .selected_text(&selected)
+                                            .show_ui(
+                                                ui,
+                                                |ui| {
+                                                    for opt in options {
+                                                        ui.selectable_value(
+                                                            &mut selected,
+                                                            opt.clone(),
+                                                            opt,
+                                                        );
+                                                    }
+                                                },
+                                            );
+                                            if selected != current_val {
+                                                project_service
+                                                    .update_effect_property_or_keyframe(
+                                                        comp_id,
+                                                        track_id,
+                                                        selected_entity_id,
+                                                        effect_index,
+                                                        &def.name,
+                                                        current_time,
+                                                        PropertyValue::String(selected),
+                                                        None,
+                                                    )
+                                                    .ok();
+                                                needs_refresh = true;
+                                                let current_state = project_service
+                                                    .get_project()
+                                                    .read()
+                                                    .unwrap()
+                                                    .clone();
+                                                history_manager.push_project_state(current_state);
+                                            }
+                                            ui.end_row();
+                                        }
+                                        _ => {
+                                            ui.label(&def.label);
+                                            ui.label("UI type not implemented for effect");
+                                            ui.end_row();
+                                        }
+                                    }
+                                }
+                            });
+                    });
+                });
+                ui.add_space(5.0);
+            }
+
+            ui.horizontal(|ui| {
+                ui.menu_button("Add Effect", |ui| {
+                    let available = project_service.get_plugin_manager().get_available_effects();
+                    for eff in available {
+                        if ui.button(&eff).clicked() {
+                            project_service
+                                .add_effect_to_clip(comp_id, track_id, selected_entity_id, &eff)
+                                .ok();
+                            ui.close_menu();
+                            needs_refresh = true;
+                        }
+                    }
+                });
+            });
 
             ui.add_space(10.0);
             ui.heading("Timing");

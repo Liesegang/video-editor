@@ -354,3 +354,5 @@ tags
 
 # End of https://www.toptal.com/developers/gitignore/api/rust,jetbrains,jetbrains+all,jetbrains+iml,vim,emacs,visualstudiocode,git
 /repomix-output.xml
+
+ToDo.md

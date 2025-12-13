@@ -238,23 +238,24 @@ impl<T: Renderer> RenderService<T> {
         if effects.is_empty() {
             Ok(layer)
         } else {
-            let mut image = match layer {
-                RenderOutput::Image(img) => img,
-                output => self.renderer.read_surface(&output)?,
-            };
-
+            let mut current_layer = layer;
+            // Iterate over effects
             for effect in effects {
-                // The 'ImageEffect' struct already holds evaluated 'PropertyValue's.
-                // We just need to pass them to the plugin manager.
-                image = measure_debug(format!("Apply effect '{}'", effect.effect_type), || {
+                let effect_type = effect.effect_type.as_str();
+                let properties = &effect.properties;
+                let gpu_context = self.renderer.get_gpu_context();
+
+                // Use the PluginManager to apply the effect
+                current_layer = measure_debug(format!("Apply effect '{}'", effect_type), || {
                     self.plugin_manager.apply_effect(
-                        effect.effect_type.as_str(),
-                        &image,
-                        &effect.properties,
+                        effect_type,
+                        &current_layer,
+                        properties,
+                        gpu_context,
                     )
                 })?;
             }
-            Ok(RenderOutput::Image(image))
+            Ok(current_layer)
         }
     }
 } // Added closing brace for impl RenderService

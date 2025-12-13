@@ -1,5 +1,5 @@
 use egui::{
-    vec2, Color32, CursorIcon, Id, PointerButton, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2,
+    Color32, PointerButton, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2,
 };
 use library::animation::EasingFunction;
 use library::model::project::project::Project;
@@ -68,7 +68,7 @@ pub fn graph_editor_panel(
             return;
         };
 
-        let properties_to_plot: Vec<(&String, &Property)> = entity
+        let mut properties_to_plot: Vec<(String, &Property)> = entity
             .properties
             .iter()
             .filter(|(_, p)| match p.evaluator.as_str() {
@@ -76,7 +76,23 @@ pub fn graph_editor_panel(
                 "constant" => matches!(p.value(), Some(PropertyValue::Number(_))),
                 _ => false,
             })
+            .map(|(k, p)| (k.clone(), p))
             .collect();
+
+        // Add Effect Properties
+
+        for (effect_idx, effect) in entity.effects.iter().enumerate() {
+            for (prop_key, prop) in effect.properties.iter() {
+                let should_plot = match prop.evaluator.as_str() {
+                    "keyframe" => true,
+                    "constant" => matches!(prop.value(), Some(PropertyValue::Number(_))),
+                    _ => false,
+                };
+                if should_plot {
+                    properties_to_plot.push((format!("effect:{}:{}", effect_idx, prop_key), prop));
+                }
+            }
+        }
 
         if properties_to_plot.is_empty() {
             // We still want to show empty graph? no, return?
@@ -414,7 +430,7 @@ pub fn graph_editor_panel(
 
                         // Interaction area
                         let point_rect = Rect::from_center_size(kf_pos, Vec2::splat(12.0));
-                        let point_id = response.id.with(name).with(i);
+                        let point_id = response.id.with(&name).with(i);
                         let point_response =
                             ui.interact(point_rect, point_id, Sense::click_and_drag());
 
@@ -422,7 +438,7 @@ pub fn graph_editor_panel(
                             .interaction
                             .selected_keyframe
                             .as_ref()
-                            .map_or(false, |(s_name, s_idx)| s_name == name && *s_idx == i);
+                            .map_or(false, |(s_name, s_idx)| s_name == &name && *s_idx == i);
 
                         // Draw Dot
                         let dot_color = if is_selected { Color32::WHITE } else { color };
@@ -440,13 +456,14 @@ pub fn graph_editor_panel(
                         }
 
                         // Context Menu
+                        let name_for_menu = name.clone();
                         point_response.context_menu(|ui| {
-                            ui.label(format!("Keyframe {} - {}", i, name));
+                            ui.label(format!("Keyframe {} - {}", i, name_for_menu));
                             ui.separator();
                             ui.label("Easing:");
 
                             if ui.button("Linear").clicked() {
-                                action = Action::SetEasing(name.clone(), i, EasingFunction::Linear);
+                                action = Action::SetEasing(name_for_menu.clone(), i, EasingFunction::Linear);
                                 should_push_history = true;
                                 ui.close_kind(UiKind::Menu);
                             }
@@ -454,7 +471,7 @@ pub fn graph_editor_panel(
                             ui.menu_button("Sine", |ui| {
                                 if ui.button("Ease In").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInSine,
                                     );
@@ -463,7 +480,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseOutSine,
                                     );
@@ -472,7 +489,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInOutSine,
                                     );
@@ -483,7 +500,7 @@ pub fn graph_editor_panel(
                             ui.menu_button("Quad", |ui| {
                                 if ui.button("Ease In").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInQuad,
                                     );
@@ -491,7 +508,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseOutQuad,
                                     );
@@ -499,7 +516,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInOutQuad,
                                     );
@@ -509,7 +526,7 @@ pub fn graph_editor_panel(
                             ui.menu_button("Cubic", |ui| {
                                 if ui.button("Ease In").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInCubic,
                                     );
@@ -517,7 +534,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseOutCubic,
                                     );
@@ -525,7 +542,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInOutCubic,
                                     );
@@ -535,7 +552,7 @@ pub fn graph_editor_panel(
                             ui.menu_button("Quart", |ui| {
                                 if ui.button("Ease In").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInQuart,
                                     );
@@ -543,7 +560,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseOutQuart,
                                     );
@@ -551,7 +568,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInOutQuart,
                                     );
@@ -561,7 +578,7 @@ pub fn graph_editor_panel(
                             ui.menu_button("Quint", |ui| {
                                 if ui.button("Ease In").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInQuint,
                                     );
@@ -569,7 +586,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseOutQuint,
                                     );
@@ -577,7 +594,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInOutQuint,
                                     );
@@ -587,7 +604,7 @@ pub fn graph_editor_panel(
                             ui.menu_button("Expo", |ui| {
                                 if ui.button("Ease In").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInExpo,
                                     );
@@ -595,7 +612,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseOutExpo,
                                     );
@@ -603,7 +620,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInOutExpo,
                                     );
@@ -613,7 +630,7 @@ pub fn graph_editor_panel(
                             ui.menu_button("Circ", |ui| {
                                 if ui.button("Ease In").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInCirc,
                                     );
@@ -621,7 +638,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseOutCirc,
                                     );
@@ -629,7 +646,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInOutCirc,
                                     );
@@ -639,7 +656,7 @@ pub fn graph_editor_panel(
                             ui.menu_button("Back", |ui| {
                                 if ui.button("Ease In").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInBack { c1: 1.70158 },
                                     );
@@ -647,7 +664,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseOutBack { c1: 1.70158 },
                                     );
@@ -655,7 +672,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInOutBack { c1: 1.70158 },
                                     );
@@ -665,7 +682,7 @@ pub fn graph_editor_panel(
                             ui.menu_button("Elastic", |ui| {
                                 if ui.button("Ease In").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInElastic { period: 3.0 },
                                     );
@@ -673,7 +690,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseOutElastic { period: 3.0 },
                                     );
@@ -681,7 +698,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInOutElastic { period: 4.5 },
                                     );
@@ -691,7 +708,7 @@ pub fn graph_editor_panel(
                             ui.menu_button("Bounce", |ui| {
                                 if ui.button("Ease In").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInBounce {
                                             n1: 7.5625,
@@ -702,7 +719,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseOutBounce {
                                             n1: 7.5625,
@@ -713,7 +730,7 @@ pub fn graph_editor_panel(
                                 }
                                 if ui.button("Ease In Out").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::EaseInOutBounce {
                                             n1: 7.5625,
@@ -726,7 +743,7 @@ pub fn graph_editor_panel(
                             ui.menu_button("Custom", |ui| {
                                 if ui.button("Expression").clicked() {
                                     action = Action::SetEasing(
-                                        name.clone(),
+                                        name_for_menu.clone(),
                                         i,
                                         EasingFunction::Expression {
                                             text: "t".to_string(),
@@ -738,7 +755,7 @@ pub fn graph_editor_panel(
 
                             ui.separator();
                             if ui.button("Edit Keyframe...").clicked() {
-                                action = Action::EditKeyframe(name.clone(), i);
+                                action = Action::EditKeyframe(name_for_menu.clone(), i);
                                 ui.close_kind(UiKind::Menu);
                             }
 
@@ -747,7 +764,7 @@ pub fn graph_editor_panel(
                                 .button(egui::RichText::new("Delete Keyframe").color(Color32::RED))
                                 .clicked()
                             {
-                                action = Action::Remove(name.clone(), i);
+                                action = Action::Remove(name_for_menu.clone(), i);
                                 should_push_history = true;
                                 ui.close_kind(UiKind::Menu);
                             }
@@ -839,54 +856,153 @@ pub fn graph_editor_panel(
     } // End Read Lock Scope
 
     // Process Actions
+    // Helper to parse key
+    let parse_key = |key: &str| -> Option<(usize, String)> {
+        if key.starts_with("effect:") {
+            let parts: Vec<&str> = key.splitn(3, ':').collect();
+            if parts.len() == 3 {
+                if let Ok(idx) = parts[1].parse::<usize>() {
+                    return Some((idx, parts[2].to_string()));
+                }
+            }
+        }
+        None
+    };
+
     match action {
         Action::Select(name, idx) => {
             editor_context.interaction.selected_keyframe = Some((name, idx));
         }
         Action::Move(name, idx, new_time, new_val) => {
-            let _ = project_service.update_keyframe(
-                comp_id,
-                track_id,
-                entity_id,
-                &name,
-                idx,
-                Some(new_time),
-                Some(PropertyValue::Number(OrderedFloat(new_val))),
-                None,
-            );
+            if let Some((eff_idx, prop_key)) = parse_key(&name) {
+                let _ = project_service.update_effect_keyframe_by_index(
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    eff_idx,
+                    &prop_key,
+                    idx,
+                    Some(new_time),
+                    Some(PropertyValue::Number(OrderedFloat(new_val))),
+                    None,
+                );
+            } else {
+                let _ = project_service.update_keyframe(
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    &name,
+                    idx,
+                    Some(new_time),
+                    Some(PropertyValue::Number(OrderedFloat(new_val))),
+                    None,
+                );
+            }
         }
         Action::Add(name, time, val) => {
-            let _ = project_service.add_keyframe(
-                comp_id,
-                track_id,
-                entity_id,
-                &name,
-                time,
-                PropertyValue::Number(OrderedFloat(val)),
-                Some(EasingFunction::Linear),
-            );
+            if let Some((eff_idx, prop_key)) = parse_key(&name) {
+                // Use add_effect_keyframe to add keyframe and handle constant->keyframe conversion
+                let _ = project_service.add_effect_keyframe(
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    eff_idx,
+                    &prop_key,
+                    time,
+                    PropertyValue::Number(OrderedFloat(val)),
+                    Some(EasingFunction::Linear),
+                );
+            } else {
+                let _ = project_service.add_keyframe(
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    &name,
+                    time,
+                    PropertyValue::Number(OrderedFloat(val)),
+                    Some(EasingFunction::Linear),
+                );
+            }
         }
         Action::SetEasing(name, idx, easing) => {
-            let _ = project_service.update_keyframe(
-                comp_id,
-                track_id,
-                entity_id,
-                &name,
-                idx,
-                None, // Keep existing time
-                None, // Keep existing value
-                Some(easing),
-            );
+            if let Some((eff_idx, prop_key)) = parse_key(&name) {
+                let _ = project_service.update_effect_keyframe_by_index(
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    eff_idx,
+                    &prop_key,
+                    idx,
+                    None,
+                    None,
+                    Some(easing),
+                );
+            } else {
+                let _ = project_service.update_keyframe(
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    &name,
+                    idx,
+                    None, // Keep existing time
+                    None, // Keep existing value
+                    Some(easing),
+                );
+            }
         }
         Action::Remove(name, idx) => {
-            let _ = project_service.remove_keyframe(comp_id, track_id, entity_id, &name, idx);
+            if let Some((eff_idx, prop_key)) = parse_key(&name) {
+                let _ = project_service.remove_effect_keyframe_by_index(
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    eff_idx,
+                    &prop_key,
+                    idx,
+                );
+            } else {
+                let _ = project_service.remove_keyframe(comp_id, track_id, entity_id, &name, idx);
+            }
         }
         Action::EditKeyframe(name, idx) => {
             if let Ok(project) = project.read() {
                 if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
                     if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
                         if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
-                            if let Some(prop) = clip.properties.get(&name) {
+                            // Effect Property
+                            if let Some((eff_idx, prop_key)) = parse_key(&name) {
+                                if let Some(effect) = clip.effects.get(eff_idx) {
+                                    if let Some(prop) = effect.properties.get(&prop_key) {
+                                        if prop.evaluator == "keyframe" {
+                                            let keyframes = prop.keyframes();
+                                            if let Some(kf) = keyframes.get(idx) {
+                                                editor_context.keyframe_dialog.is_open = true;
+                                                editor_context.keyframe_dialog.track_id =
+                                                    Some(track_id);
+                                                editor_context.keyframe_dialog.entity_id =
+                                                    Some(entity_id);
+                                                editor_context.keyframe_dialog.property_name =
+                                                    name.clone(); // Use full key name? Dialog likely re-uses it for display?
+                                                                  // Or does dialog use it to call update?
+                                                                  // If dialog calls `update_keyframe`, it won't work for effects unless we update dialog too.
+                                                                  // Ah, Keyframe Dialog needs to know if it's an effect.
+                                                                  // Right now KeyframeDialog uses `update_keyframe`.
+                                                                  // So we might need to patch KeyframeDialog too if we want full support.
+                                                                  // But let's populate it for now.
+                                                editor_context.keyframe_dialog.keyframe_index = idx;
+                                                editor_context.keyframe_dialog.time =
+                                                    kf.time.into_inner();
+                                                editor_context.keyframe_dialog.value =
+                                                    kf.value.get_as::<f64>().unwrap_or(0.0);
+                                                editor_context.keyframe_dialog.easing =
+                                                    kf.easing.clone();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Clip Property
+                            else if let Some(prop) = clip.properties.get(&name) {
                                 if prop.evaluator == "keyframe" {
                                     let keyframes = prop.keyframes();
                                     if let Some(kf) = keyframes.get(idx) {

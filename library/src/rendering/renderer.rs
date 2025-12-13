@@ -53,4 +53,7 @@ pub trait Renderer {
 
     fn finalize(&mut self) -> Result<RenderOutput, LibraryError>;
     fn clear(&mut self) -> Result<(), LibraryError>;
+    fn get_gpu_context(&mut self) -> Option<&mut crate::rendering::skia_utils::GpuContext> {
+        None
+    }
 }

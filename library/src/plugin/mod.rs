@@ -14,6 +14,8 @@ use log::debug;
 use serde_json::Value;
 
 use crate::framing::entity_converters::{EntityConverterPlugin, EntityConverterRegistry}; // Added this line
+use crate::rendering::renderer::RenderOutput;
+use crate::rendering::skia_utils::GpuContext;
 
 pub type PropertyPluginCreateFn = unsafe extern "C" fn() -> *mut dyn PropertyPlugin;
 pub type EffectPluginCreateFn = unsafe extern "C" fn() -> *mut dyn EffectPlugin;
@@ -100,9 +102,12 @@ pub trait Plugin: Send + Sync {
 pub trait EffectPlugin: Plugin {
     fn apply(
         &self,
-        image: &Image,
+        input: &RenderOutput,
         params: &HashMap<String, PropertyValue>,
-    ) -> Result<Image, LibraryError>;
+        gpu_context: Option<&mut GpuContext>,
+    ) -> Result<RenderOutput, LibraryError>;
+
+    fn properties(&self) -> Vec<PropertyDefinition>;
 }
 
 pub trait PropertyPlugin: Plugin {
@@ -443,16 +448,17 @@ impl PluginManager {
     pub fn apply_effect(
         &self,
         key: &str,
-        image: &Image,
+        input: &RenderOutput,
         params: &HashMap<String, PropertyValue>,
-    ) -> Result<Image, LibraryError> {
+        gpu_context: Option<&mut GpuContext>,
+    ) -> Result<RenderOutput, LibraryError> {
         let inner = self.inner.read().unwrap();
         if let Some(plugin) = inner.effect_plugins.get(key) {
             debug!("PluginManager: Applying effect '{}'", key);
-            plugin.apply(image, params)
+            plugin.apply(input, params, gpu_context)
         } else {
             log::warn!("Effect '{}' not found", key);
-            Ok(image.clone())
+            Ok(input.clone())
         }
     }
 
@@ -765,6 +771,20 @@ impl PluginManager {
             definitions.extend(plugin.get_definitions(kind));
         }
         definitions
+    }
+
+    pub fn get_available_effects(&self) -> Vec<String> {
+        let inner = self.inner.read().unwrap();
+        inner.effect_plugins.plugins.keys().cloned().collect()
+    }
+
+    pub fn get_effect_properties(&self, effect_id: &str) -> Vec<PropertyDefinition> {
+        let inner = self.inner.read().unwrap();
+        if let Some(plugin) = inner.effect_plugins.get(effect_id) {
+            plugin.properties()
+        } else {
+            Vec::new()
+        }
     }
 } // Correct closing brace for impl PluginManager
 
