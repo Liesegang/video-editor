@@ -149,6 +149,7 @@ impl eframe::App for MyApp {
             crate::ui::dialogs::keyframe_dialog::show_keyframe_dialog(
                 ctx,
                 &mut self.editor_context,
+                &mut self.history_manager,
                 &mut self.project_service,
                 &self.project,
             );

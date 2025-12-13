@@ -82,6 +82,7 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                 crate::ui::panels::graph_editor::graph_editor_panel(
                     ui,
                     self.editor_context,
+                    self.history_manager,
                     self.project_service,
                     self.project,
                 );

@@ -4,16 +4,20 @@ use library::service::project_service::ProjectService;
 use library::model::project::project::Project;
 use std::sync::{Arc, RwLock};
 
+use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 
 pub fn show_keyframe_dialog(
     ctx: &egui::Context,
     editor_context: &mut EditorContext,
+    history_manager: &mut HistoryManager,
     project_service: &mut ProjectService,
     _project: &Arc<RwLock<Project>>,
 ) {
     let mut open = editor_context.keyframe_dialog.is_open;
     let mut should_close = false;
+    let mut should_update = false;
+    let mut should_push_history = false;
 
     Window::new("Edit Keyframe")
         .open(&mut open)
@@ -28,11 +32,15 @@ pub fn show_keyframe_dialog(
                 .spacing([10.0, 10.0])
                 .show(ui, |ui| {
                     ui.label("Time:");
-                    ui.add(DragValue::new(&mut state.time).speed(0.01).suffix(" s"));
+                    let time_response = ui.add(DragValue::new(&mut state.time).speed(0.01).suffix(" s"));
+                    if time_response.changed() { should_update = true; }
+                    if time_response.drag_stopped() { should_push_history = true; }
                     ui.end_row();
 
                     ui.label("Value:");
-                    ui.add(DragValue::new(&mut state.value).speed(0.1));
+                    let val_response = ui.add(DragValue::new(&mut state.value).speed(0.1));
+                    if val_response.changed() { should_update = true; }
+                    if val_response.drag_stopped() { should_push_history = true; }
                     ui.end_row();
 
                     ui.label("Easing:");
@@ -86,38 +94,39 @@ pub fn show_keyframe_dialog(
                     ComboBox::from_id_salt("easing_selector")
                         .selected_text(current_variant_name)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut state.easing, EasingFunction::Linear, "Linear");
+                            if ui.selectable_value(&mut state.easing, EasingFunction::Linear, "Linear").clicked() { should_update = true; should_push_history = true; }
                             ui.separator();
                             ui.label("Sine");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseInSine, "Ease In Sine");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseOutSine, "Ease Out Sine");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseInOutSine, "Ease In Out Sine");
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseInSine, "Ease In Sine").clicked() { should_update = true; should_push_history = true; }
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseOutSine, "Ease Out Sine").clicked() { should_update = true; should_push_history = true; }
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseInOutSine, "Ease In Out Sine").clicked() { should_update = true; should_push_history = true; }
                              ui.separator();
                             ui.label("Quad");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseInQuad, "Ease In Quad");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseOutQuad, "Ease Out Quad");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseInOutQuad, "Ease In Out Quad");
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseInQuad, "Ease In Quad").clicked() { should_update = true; should_push_history = true; }
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseOutQuad, "Ease Out Quad").clicked() { should_update = true; should_push_history = true; }
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseInOutQuad, "Ease In Out Quad").clicked() { should_update = true; should_push_history = true; }
                             ui.separator();
                             ui.label("Back");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseInBack { c1: 1.70158 }, "Ease In Back");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseOutBack { c1: 1.70158 }, "Ease Out Back");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseInOutBack { c1: 1.70158 }, "Ease In Out Back");
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseInBack { c1: 1.70158 }, "Ease In Back").clicked() { should_update = true; should_push_history = true; }
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseOutBack { c1: 1.70158 }, "Ease Out Back").clicked() { should_update = true; should_push_history = true; }
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseInOutBack { c1: 1.70158 }, "Ease In Out Back").clicked() { should_update = true; should_push_history = true; }
                             ui.separator();
                             ui.label("Elastic");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseInElastic { period: 3.0 }, "Ease In Elastic");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseOutElastic { period: 3.0 }, "Ease Out Elastic");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseInOutElastic { period: 4.5 }, "Ease In Out Elastic");
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseInElastic { period: 3.0 }, "Ease In Elastic").clicked() { should_update = true; should_push_history = true; }
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseOutElastic { period: 3.0 }, "Ease Out Elastic").clicked() { should_update = true; should_push_history = true; }
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseInOutElastic { period: 4.5 }, "Ease In Out Elastic").clicked() { should_update = true; should_push_history = true; }
                             ui.separator();
                             ui.label("Bounce");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseInBounce { n1: 7.5625, d1: 2.75 }, "Ease In Bounce");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseOutBounce { n1: 7.5625, d1: 2.75 }, "Ease Out Bounce");
-                            ui.selectable_value(&mut state.easing, EasingFunction::EaseInOutBounce { n1: 7.5625, d1: 2.75 }, "Ease In Out Bounce");
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseInBounce { n1: 7.5625, d1: 2.75 }, "Ease In Bounce").clicked() { should_update = true; should_push_history = true; }
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseOutBounce { n1: 7.5625, d1: 2.75 }, "Ease Out Bounce").clicked() { should_update = true; should_push_history = true; }
+                            if ui.selectable_value(&mut state.easing, EasingFunction::EaseInOutBounce { n1: 7.5625, d1: 2.75 }, "Ease In Out Bounce").clicked() { should_update = true; should_push_history = true; }
                             
                             ui.separator();
                             if ui.selectable_label(matches!(state.easing, EasingFunction::Expression{..}), "Expression").clicked() {
                                 // Preserve text if already expression, otherwise default
                                 if !matches!(state.easing, EasingFunction::Expression{..}) {
                                     state.easing = EasingFunction::Expression{ text: "t".to_string() };
+                                    should_update = true; should_push_history = true;
                                 }
                             }
                         });
@@ -132,7 +141,9 @@ pub fn show_keyframe_dialog(
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.label("Overshoot (c1):");
-                        ui.add(DragValue::new(c1).speed(0.01));
+                        let c1_res = ui.add(DragValue::new(c1).speed(0.01));
+                        if c1_res.changed() { should_update = true; }
+                        if c1_res.drag_stopped() { should_push_history = true; }
                     });
                 }
                 EasingFunction::EaseInElastic { period }
@@ -141,7 +152,9 @@ pub fn show_keyframe_dialog(
                     ui.separator();
                      ui.horizontal(|ui| {
                         ui.label("Period:");
-                        ui.add(DragValue::new(period).speed(0.01).range(0.1..=100.0));
+                        let period_res = ui.add(DragValue::new(period).speed(0.01).range(0.1..=100.0));
+                        if period_res.changed() { should_update = true; }
+                        if period_res.drag_stopped() { should_push_history = true; }
                     });
                 }
                 EasingFunction::EaseInBounce { n1, d1 }
@@ -150,22 +163,29 @@ pub fn show_keyframe_dialog(
                     ui.separator();
                     ui.horizontal(|ui| {
                          ui.label("Amplitude (n1):");
-                        ui.add(DragValue::new(n1).speed(0.01));
+                        let n1_res = ui.add(DragValue::new(n1).speed(0.01));
+                        if n1_res.changed() { should_update = true; }
+                        if n1_res.drag_stopped() { should_push_history = true; }
+                        
                         ui.add_space(10.0);
                         ui.label("Duration Factor (d1):");
-                        ui.add(DragValue::new(d1).speed(0.01));
+                        let d1_res = ui.add(DragValue::new(d1).speed(0.01));
+                        if d1_res.changed() { should_update = true; }
+                        if d1_res.drag_stopped() { should_push_history = true; }
                     });
                 }
                  EasingFunction::Expression { text } => {
                     ui.separator();
                     ui.label("Expression (Python):");
-                    ui.add(
+                    let response = ui.add(
                         TextEdit::multiline(text)
                             .code_editor()
                             .desired_rows(3)
                             .lock_focus(true)
                             .text_color(Color32::LIGHT_GRAY)
                     );
+                    if response.changed() { should_update = true; }
+                    if response.lost_focus() { should_push_history = true; } // Push only when done editing expression
 
                     ui.label(egui::RichText::new("Variables: t (0.0 to 1.0)").size(10.0).weak());
                 }
@@ -174,47 +194,48 @@ pub fn show_keyframe_dialog(
 
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                 if ui.button("Apply").clicked() {
-                     let comp_id = match editor_context.selection.composition_id {
-                         Some(id) => id,
-                         None => {
-                             // Should be impossible if editing keyframe, but fail safe
-                             return; 
-                         }
-                     };
-                     
-                    if let (Some(track_id), Some(entity_id)) = (state.track_id, state.entity_id) {
-                         // ProjectService uses internal lock, but update_keyframe takes &mut self.
-                         // However, the signature I saw takes &mut self and locks internally?
-                         // Checked signature: pub fn update_keyframe(&mut self, ...)
-                         // Yes, it takes &mut self.
-                         
-                         let new_time = state.time;
-                         use library::model::project::property::PropertyValue;
-                         use ordered_float::OrderedFloat;
-                         
-                         let new_value = PropertyValue::Number(OrderedFloat(state.value));
-                         
-                         if let Err(e) = project_service.update_keyframe(
-                             comp_id,
-                             track_id, 
-                             entity_id,
-                             &state.property_name,
-                             state.keyframe_index,
-                             Some(new_time),
-                             Some(new_value),
-                             Some(state.easing.clone())
-                         ) {
-                             editor_context.interaction.active_modal_error = Some(format!("Failed to update keyframe: {}", e));
-                         }
-                    }
+                 if ui.button("Close").clicked() {
                      should_close = true; 
                  }
-                if ui.button("Cancel").clicked() {
-                    should_close = true;
-                }
             });
+
+            if should_update {
+                 let comp_id = match editor_context.selection.composition_id {
+                     Some(id) => id,
+                     None => return, 
+                 };
+                 
+                if let (Some(track_id), Some(entity_id)) = (state.track_id, state.entity_id) {
+                     let new_time = state.time;
+                     use library::model::project::property::PropertyValue;
+                     use ordered_float::OrderedFloat;
+                     
+                     let new_value = PropertyValue::Number(OrderedFloat(state.value));
+                     
+                     if let Err(e) = project_service.update_keyframe(
+                         comp_id,
+                         track_id, 
+                         entity_id,
+                         &state.property_name,
+                         state.keyframe_index,
+                         Some(new_time),
+                         Some(new_value),
+                         Some(state.easing.clone())
+                     ) {
+                         // Only show error on final interaction to avoid spamming? 
+                         // Or show generic error.
+                         // editor_context.interaction.active_modal_error = Some(format!("Failed to update keyframe: {}", e));
+                     }
+                }
+            }
+
+            if should_push_history {
+                if let Ok(proj_read) = project_service.get_project().read() {
+                    history_manager.push_project_state(proj_read.clone());
+                }
+            }
         });
+
 
     editor_context.keyframe_dialog.is_open = open && !should_close;
 }
