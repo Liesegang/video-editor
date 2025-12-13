@@ -264,7 +264,7 @@ uniform float4 iDate;
     // 2. Preprocess using shaderc
     let compiler = shaderc::Compiler::new().unwrap();
     let options = shaderc::CompileOptions::new().unwrap();
-    
+
     // Shaderc requires a version directive. SkSL usually doesn't have it.
     // We inject one for preprocessing, then strip directives from the output.
     let version_directive = "#version 310 es\n";
@@ -273,31 +273,33 @@ uniform float4 iDate;
     } else {
         format!("{}{}\n{}", version_directive, standard_uniforms, code)
     };
-    
+
     // Try to preprocess
-    match compiler.preprocess(
-        &full_source,
-        "shader.glsl",
-        "main",
-        Some(&options),
-    ) {
+    match compiler.preprocess(&full_source, "shader.glsl", "main", Some(&options)) {
         Ok(artifact) => {
             let output = artifact.as_text();
             // Clean up output: remove #version, #line, #extension which might confuse SkSL
-            output.lines()
+            output
+                .lines()
                 .filter(|l| {
                     let t = l.trim();
-                    !t.starts_with("#version") && !t.starts_with("#extension") && !t.starts_with("#line") && !t.starts_with("#pragma")
+                    !t.starts_with("#version")
+                        && !t.starts_with("#extension")
+                        && !t.starts_with("#line")
+                        && !t.starts_with("#pragma")
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
-        },
+        }
         Err(e) => {
             // Fallback: log error and return original code (with injected uniforms)
             // This allows non-macro code to likely work even if shaderc fails (e.g. valid SkSL but invalid GLSL?)
             // But SkSL is mostly GLSL.
             // We prepend standard uniforms manually in fallback.
-            format!("// Preprocessing failed: {}\n{}\n{}", e, standard_uniforms, code)
+            format!(
+                "// Preprocessing failed: {}\n{}\n{}",
+                e, standard_uniforms, code
+            )
         }
     }
 }
@@ -361,96 +363,105 @@ impl Renderer for SkiaRenderer {
             canvas.clear(skia_safe::Color::TRANSPARENT);
 
             let preprocessed_code = preprocess_shader(shader_code);
-             let result = skia_safe::RuntimeEffect::make_for_shader(&preprocessed_code, None);
-            
+            let result = skia_safe::RuntimeEffect::make_for_shader(&preprocessed_code, None);
+
             // Handle shader compilation errors
             if let Err(error) = result {
-                 log::error!("SkSL Compilation Error: {}\nCode:\n{}", error, preprocessed_code);
-                 // Fallback: Red background to indicate error
-                 canvas.clear(skia_safe::Color::RED);
+                log::error!(
+                    "SkSL Compilation Error: {}\nCode:\n{}",
+                    error,
+                    preprocessed_code
+                );
+                // Fallback: Red background to indicate error
+                canvas.clear(skia_safe::Color::RED);
             } else if let Ok(effect) = result {
                 // Dynamic Uniform Binding
                 let uniform_size = effect.uniform_size();
                 let mut data: Vec<u8> = vec![0; uniform_size];
-                
+
                 // Inspect uniforms expected by the shader
                 for uniform in effect.uniforms() {
-                     let offset = uniform.offset();
-                     let name = uniform.name();
-                     
-                     // Helper helper to write f32 to data at offset
-                     let mut write_f32 = |offset: usize, val: f32| {
-                         if offset + 4 <= data.len() {
-                             let bytes = val.to_le_bytes();
-                             data[offset..offset+4].copy_from_slice(&bytes);
-                         }
-                     };
+                    let offset = uniform.offset();
+                    let name = uniform.name();
 
-                     match name {
-                         "iResolution" => {
-                             // float3
-                             write_f32(offset, resolution.0);
-                             write_f32(offset + 4, resolution.1);
-                             write_f32(offset + 8, 1.0);
-                         }
-                         "iTime" => {
-                             write_f32(offset, time);
-                         }
-                         "iTimeDelta" => {
-                             write_f32(offset, 1.0/60.0); // Approx
-                         }
-                         "iFrame" => {
-                             write_f32(offset, (time * 60.0).floor());
-                         }
-                         "iMouse" => {
-                             // float4
-                             write_f32(offset, 0.0);
-                             write_f32(offset + 4, 0.0);
-                             write_f32(offset + 8, 0.0);
-                             write_f32(offset + 12, 0.0);
-                         }
-                         "iDate" => {
-                             // float4, year, month, day, seconds
-                             write_f32(offset, 2024.0);
-                             write_f32(offset + 4, 1.0);
-                             write_f32(offset + 8, 1.0);
-                             write_f32(offset + 12, 0.0);
-                         }
-                          "iChannelTime" => {
-                             // float[4] ? 
-                             // If it's an array, we might need to be careful.
-                             // For now assume 0.0s
-                             write_f32(offset, time);
-                             write_f32(offset + 4, time);
-                             write_f32(offset + 8, time);
-                             write_f32(offset + 12, time);
-                         }
-                         _ => {
+                    // Helper helper to write f32 to data at offset
+                    let mut write_f32 = |offset: usize, val: f32| {
+                        if offset + 4 <= data.len() {
+                            let bytes = val.to_le_bytes();
+                            data[offset..offset + 4].copy_from_slice(&bytes);
+                        }
+                    };
+
+                    match name {
+                        "iResolution" => {
+                            // float3
+                            write_f32(offset, resolution.0);
+                            write_f32(offset + 4, resolution.1);
+                            write_f32(offset + 8, 1.0);
+                        }
+                        "iTime" => {
+                            write_f32(offset, time);
+                        }
+                        "iTimeDelta" => {
+                            write_f32(offset, 1.0 / 60.0); // Approx
+                        }
+                        "iFrame" => {
+                            write_f32(offset, (time * 60.0).floor());
+                        }
+                        "iMouse" => {
+                            // float4
+                            write_f32(offset, 0.0);
+                            write_f32(offset + 4, 0.0);
+                            write_f32(offset + 8, 0.0);
+                            write_f32(offset + 12, 0.0);
+                        }
+                        "iDate" => {
+                            // float4, year, month, day, seconds
+                            write_f32(offset, 2024.0);
+                            write_f32(offset + 4, 1.0);
+                            write_f32(offset + 8, 1.0);
+                            write_f32(offset + 12, 0.0);
+                        }
+                        "iChannelTime" => {
+                            // float[4] ?
+                            // If it's an array, we might need to be careful.
+                            // For now assume 0.0s
+                            write_f32(offset, time);
+                            write_f32(offset + 4, time);
+                            write_f32(offset + 8, time);
+                            write_f32(offset + 12, time);
+                        }
+                        _ => {
                             // trace!("Unknown uniform: {}", name);
-                         }
-                     }
+                        }
+                    }
                 }
 
                 let uniforms = skia_safe::Data::new_copy(&data);
 
-                 let shader = effect.make_shader(uniforms, &[], None).ok_or(LibraryError::Render("Failed to create SkSL shader".to_string()))?;
-                 
-                 let mut paint = Paint::default();
-                 paint.set_shader(shader);
-                 // Opacity is 0.0-1.0 (already normalized by EntityConverter)
-                 paint.set_alpha_f(transform.opacity as f32);
-                 
-                 let matrix = build_transform_matrix(transform);
-                 canvas.save();
-                 canvas.concat(&matrix);
-                 // We will fill the configured resolution rect (0,0, width, height)
-                 let rect = skia_safe::Rect::from_wh(resolution.0, resolution.1);
-                 canvas.draw_rect(rect, &paint);
-                 canvas.restore();
+                let shader =
+                    effect
+                        .make_shader(uniforms, &[], None)
+                        .ok_or(LibraryError::Render(
+                            "Failed to create SkSL shader".to_string(),
+                        ))?;
+
+                let mut paint = Paint::default();
+                paint.set_shader(shader);
+                // Opacity is 0.0-1.0 (already normalized by EntityConverter)
+                paint.set_alpha_f(transform.opacity as f32);
+
+                let matrix = build_transform_matrix(transform);
+                canvas.save();
+                canvas.concat(&matrix);
+                // We will fill the configured resolution rect (0,0, width, height)
+                let rect = skia_safe::Rect::from_wh(resolution.0, resolution.1);
+                canvas.draw_rect(rect, &paint);
+                canvas.restore();
             }
         }
-        
-         if let Some(ctx) = self.gpu_context.as_mut() {
+
+        if let Some(ctx) = self.gpu_context.as_mut() {
             ctx.direct_context.flush_and_submit();
             if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
                 &mut layer,

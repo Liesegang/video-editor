@@ -5,8 +5,6 @@ use crate::model::ui_types::{DraggedItem, GizmoHandle, TimelineDisplayMode, Vec2
 
 use library::animation::EasingFunction; // Added import
 
-
-
 #[derive(Clone, Serialize, Deserialize)]
 pub struct KeyframeDialogState {
     pub is_open: bool,

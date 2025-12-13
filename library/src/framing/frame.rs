@@ -44,7 +44,7 @@ impl<'a> FrameEvaluator<'a> {
     }
 
     fn initialize_frame(&self, frame_number: u64, render_scale: f64) -> FrameInfo {
-         let time = frame_number as f64 / self.composition.fps;
+        let time = frame_number as f64 / self.composition.fps;
         FrameInfo {
             width: self.composition.width,
             height: self.composition.height,

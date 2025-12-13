@@ -520,9 +520,15 @@ impl PluginManager {
         )))
     }
 
-    pub fn get_export_plugin_properties(&self, exporter_id: &str) -> Option<Vec<PropertyDefinition>> {
+    pub fn get_export_plugin_properties(
+        &self,
+        exporter_id: &str,
+    ) -> Option<Vec<PropertyDefinition>> {
         let inner = self.inner.read().unwrap();
-        inner.export_plugins.get(exporter_id).map(|p| p.properties())
+        inner
+            .export_plugins
+            .get(exporter_id)
+            .map(|p| p.properties())
     }
 
     pub fn finish_export(&self, exporter_id: &str, path: &str) -> Result<(), LibraryError> {
@@ -530,7 +536,10 @@ impl PluginManager {
         if let Some(plugin) = inner.export_plugins.get(exporter_id) {
             return plugin.finish_export(path);
         }
-        Err(LibraryError::Plugin(format!("Exporter '{}' not found", exporter_id)))
+        Err(LibraryError::Plugin(format!(
+            "Exporter '{}' not found",
+            exporter_id
+        )))
     }
 
     pub fn load_property_plugin_from_file<P: AsRef<Path>>(

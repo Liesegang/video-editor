@@ -135,7 +135,8 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
             return Err("Failed to create dummy window".to_string());
         }
 
-        let mut handle = Win32WindowHandle::new(std::num::NonZeroIsize::new(hwnd as isize).unwrap());
+        let mut handle =
+            Win32WindowHandle::new(std::num::NonZeroIsize::new(hwnd as isize).unwrap());
         handle.hinstance = std::num::NonZeroIsize::new(hinstance as isize);
 
         Ok(RawWindowHandle::Win32(handle))

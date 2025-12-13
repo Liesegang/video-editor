@@ -121,7 +121,10 @@ pub fn preview_panel(
                     egui::vec2(comp_width as f32, comp_height as f32)
                 };
 
-                let render_scale = ((editor_context.view.zoom * ui.ctx().pixels_per_point() * editor_context.view.preview_resolution) as f64)
+                let render_scale = ((editor_context.view.zoom
+                    * ui.ctx().pixels_per_point()
+                    * editor_context.view.preview_resolution)
+                    as f64)
                     .max(0.01)
                     .min(1.0);
 
