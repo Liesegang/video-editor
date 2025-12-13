@@ -1,11 +1,9 @@
-use serde::{Deserialize, Serialize};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use serde::{Deserialize, Serialize};
 
 use ordered_float::OrderedFloat;
 use std::hash::{Hash, Hasher};
-
-
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)] // Removed PartialEq, Eq, Hash, Copy; Added Default
 pub enum EasingFunction {
@@ -40,17 +38,38 @@ pub enum EasingFunction {
     EaseOutCirc,
     EaseInOutCirc,
     // Back
-    EaseInBack { c1: f64 },
-    EaseOutBack { c1: f64 },
-    EaseInOutBack { c1: f64 },
+    EaseInBack {
+        c1: f64,
+    },
+    EaseOutBack {
+        c1: f64,
+    },
+    EaseInOutBack {
+        c1: f64,
+    },
     // Elastic
-    EaseInElastic { period: f64 },
-    EaseOutElastic { period: f64 },
-    EaseInOutElastic { period: f64 },
+    EaseInElastic {
+        period: f64,
+    },
+    EaseOutElastic {
+        period: f64,
+    },
+    EaseInOutElastic {
+        period: f64,
+    },
     // Bounce
-    EaseInBounce { n1: f64, d1: f64 },
-    EaseOutBounce { n1: f64, d1: f64 },
-    EaseInOutBounce { n1: f64, d1: f64 },
+    EaseInBounce {
+        n1: f64,
+        d1: f64,
+    },
+    EaseOutBounce {
+        n1: f64,
+        d1: f64,
+    },
+    EaseInOutBounce {
+        n1: f64,
+        d1: f64,
+    },
     // Custom
     SimpleBezier {
         start: (f64, f64),
@@ -278,61 +297,57 @@ impl EasingFunction {
                 let (x, _) = EasingFunction::evaluate_bezier(&all_points, current_t);
                 x
             }
-            Self::Expression { text } => {
-                Python::attach(|py| {
-                    let locals = PyDict::new(py);
-                    if let Err(e) = locals.set_item("t", t) {
-                        log::error!("Failed to set 't' in python context: {}", e);
+            Self::Expression { text } => Python::attach(|py| {
+                let locals = PyDict::new(py);
+                if let Err(e) = locals.set_item("t", t) {
+                    log::error!("Failed to set 't' in python context: {}", e);
+                    return t;
+                }
+
+                let builtins = match PyModule::import(py, "builtins") {
+                    Ok(m) => m,
+                    Err(e) => {
+                        log::error!("Failed to import builtins: {}", e);
                         return t;
                     }
-                    
-                    let builtins = match PyModule::import(py, "builtins") {
-                        Ok(m) => m,
-                        Err(e) => {
-                            log::error!("Failed to import builtins: {}", e);
-                            return t;
-                        }
-                    };
+                };
 
-                    let eval_func = match builtins.getattr("eval") {
-                        Ok(f) => f,
-                        Err(e) => {
-                            log::error!("Failed to get eval: {}", e);
-                            return t;
-                        }
-                    };
-
-                    let globals = PyDict::new(py);
-                    
-                    if let Ok(math_mod) = PyModule::import(py, "math") {
-                        let _ = globals.set_item("math", math_mod);
-                    } else {
-                        log::warn!("Failed to import math module for expression");
+                let eval_func = match builtins.getattr("eval") {
+                    Ok(f) => f,
+                    Err(e) => {
+                        log::error!("Failed to get eval: {}", e);
+                        return t;
                     }
+                };
 
-                    if let Ok(random_mod) = PyModule::import(py, "random") {
-                         let _ = globals.set_item("random", random_mod);
-                    } else {
-                        log::warn!("Failed to import random module for expression");
-                    }
-                    
-                    match eval_func.call1((text.as_str(), Some(&globals), Some(&locals))) {
-                        Ok(result) => {
-                             match result.extract::<f64>() {
-                                Ok(val) => val,
-                                Err(e) => {
-                                    log::error!("Expression result is not a float: {}", e);
-                                    t
-                                }
-                            }
-                        }
+                let globals = PyDict::new(py);
+
+                if let Ok(math_mod) = PyModule::import(py, "math") {
+                    let _ = globals.set_item("math", math_mod);
+                } else {
+                    log::warn!("Failed to import math module for expression");
+                }
+
+                if let Ok(random_mod) = PyModule::import(py, "random") {
+                    let _ = globals.set_item("random", random_mod);
+                } else {
+                    log::warn!("Failed to import random module for expression");
+                }
+
+                match eval_func.call1((text.as_str(), Some(&globals), Some(&locals))) {
+                    Ok(result) => match result.extract::<f64>() {
+                        Ok(val) => val,
                         Err(e) => {
-                            log::error!("Failed to evaluate expression: {}", e);
+                            log::error!("Expression result is not a float: {}", e);
                             t
                         }
+                    },
+                    Err(e) => {
+                        log::error!("Failed to evaluate expression: {}", e);
+                        t
                     }
-                })
-            }
+                }
+            }),
         }
     }
 

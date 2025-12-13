@@ -1,4 +1,6 @@
-use egui::{vec2, Color32, CursorIcon, Id, PointerButton, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2};
+use egui::{
+    vec2, Color32, CursorIcon, Id, PointerButton, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2,
+};
 use library::animation::EasingFunction;
 use library::model::project::project::Project;
 use library::model::project::property::{Property, PropertyValue};
@@ -161,8 +163,8 @@ pub fn graph_editor_panel(
         // So `let response = graph_response;` seems appropriate.
 
         let _response = graph_response; // Shadowing the tuple variable if I extracted it? No, `response` from allocate_painter.
-                                       // Wait, allocate_painter returned `response`. I named it `base_response`.
-                                       // So I can just define `let response = graph_response;` here.
+                                        // Wait, allocate_painter returned `response`. I named it `base_response`.
+                                        // So I can just define `let response = graph_response;` here.
 
         // Paint Background
         painter.rect_filled(graph_rect, 0.0, Color32::from_gray(30));
@@ -431,7 +433,7 @@ pub fn graph_editor_panel(
                         if point_response.clicked() {
                             action = Action::Select(name.clone(), i);
                         }
-                        
+
                         // History: drag stopped
                         if point_response.drag_stopped() {
                             should_push_history = true;
@@ -880,29 +882,30 @@ pub fn graph_editor_panel(
             let _ = project_service.remove_keyframe(comp_id, track_id, entity_id, &name, idx);
         }
         Action::EditKeyframe(name, idx) => {
-             if let Ok(project) = project.read() {
-                 if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
-                     if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                         if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
-                             if let Some(prop) = clip.properties.get(&name) {
-                                 if prop.evaluator == "keyframe" {
-                                     let keyframes = prop.keyframes();
-                                     if let Some(kf) = keyframes.get(idx) {
+            if let Ok(project) = project.read() {
+                if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
+                    if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
+                        if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
+                            if let Some(prop) = clip.properties.get(&name) {
+                                if prop.evaluator == "keyframe" {
+                                    let keyframes = prop.keyframes();
+                                    if let Some(kf) = keyframes.get(idx) {
                                         editor_context.keyframe_dialog.is_open = true;
                                         editor_context.keyframe_dialog.track_id = Some(track_id);
                                         editor_context.keyframe_dialog.entity_id = Some(entity_id);
                                         editor_context.keyframe_dialog.property_name = name.clone();
                                         editor_context.keyframe_dialog.keyframe_index = idx;
                                         editor_context.keyframe_dialog.time = kf.time.into_inner();
-                                        editor_context.keyframe_dialog.value = kf.value.get_as::<f64>().unwrap_or(0.0);
+                                        editor_context.keyframe_dialog.value =
+                                            kf.value.get_as::<f64>().unwrap_or(0.0);
                                         editor_context.keyframe_dialog.easing = kf.easing.clone();
-                                     }
-                                 }
-                             }
-                         }
-                     }
-                 }
-             }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         Action::None => {}
     }

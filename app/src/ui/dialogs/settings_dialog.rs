@@ -44,8 +44,9 @@ impl SettingsDialog {
         self.show_close_warning = false;
     }
 
-    pub fn show(&mut self, ctx: &egui::Context) -> bool {
+    pub fn show(&mut self, ctx: &egui::Context) -> (bool, Option<SettingsResult>) {
         let mut is_listening_for_shortcut = false;
+        let mut returned_result: Option<SettingsResult> = None;
 
         if self.is_open {
             let mut still_open = true;
@@ -59,6 +60,7 @@ impl SettingsDialog {
                     is_listening_for_shortcut = output.is_listening;
 
                     if let Some(result) = output.result {
+                        returned_result = Some(result); // Capture result for return
                         match result {
                             SettingsResult::Save => {
                                 self.command_registry = self.editing_registry.clone();
@@ -123,7 +125,7 @@ impl SettingsDialog {
                 });
         }
 
-        is_listening_for_shortcut
+        (is_listening_for_shortcut, returned_result)
     }
 }
 

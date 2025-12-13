@@ -506,7 +506,7 @@ half4 main(float2 fragCoord) {
             ),
         );
 
-       // Default transform
+        // Default transform
         props.set(
             "position_x".to_string(),
             crate::model::project::property::Property::constant(
@@ -531,7 +531,7 @@ half4 main(float2 fragCoord) {
                 crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
             ),
         );
-         props.set(
+        props.set(
             "rotation".to_string(),
             crate::model::project::property::Property::constant(
                 crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),

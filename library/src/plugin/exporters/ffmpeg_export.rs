@@ -43,10 +43,16 @@ impl ExportPlugin for FfmpegExportPlugin {
     ) -> Result<(), LibraryError> {
         // ... (check dimensions) ...
         if image.width != settings.width {
-             warn!("FFmpeg exporter: frame width {} does not match {}; resizing not supported", image.width, settings.width);
+            warn!(
+                "FFmpeg exporter: frame width {} does not match {}; resizing not supported",
+                image.width, settings.width
+            );
         }
         if image.height != settings.height {
-             warn!("FFmpeg exporter: frame height {} does not match {}; resizing not supported", image.height, settings.height);
+            warn!(
+                "FFmpeg exporter: frame height {} does not match {}; resizing not supported",
+                image.height, settings.height
+            );
         }
 
         let mut sessions = self.sessions.lock().unwrap();
@@ -70,12 +76,12 @@ impl ExportPlugin for FfmpegExportPlugin {
     fn finish_export(&self, path: &str) -> Result<(), LibraryError> {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(_session) = sessions.remove(path) {
-             info!("Finishing ffmpeg export session for {}", path);
-             // session is dropped here, which closes stdin and waits for child
-             Ok(())
+            info!("Finishing ffmpeg export session for {}", path);
+            // session is dropped here, which closes stdin and waits for child
+            Ok(())
         } else {
-             // It's possible it was never started or already finished
-             Ok(())
+            // It's possible it was never started or already finished
+            Ok(())
         }
     }
 

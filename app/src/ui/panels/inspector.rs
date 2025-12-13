@@ -144,39 +144,48 @@ pub fn inspector_panel(
                 ui.heading(&category);
 
                 if let Some(defs) = grouped.get(&category) {
-                   // Split into chunks of (is_grid, vecs)
-                   // But simpler: just iterate and flush grid when needed?
-                   // No, Grid::new takes a closure. We can't interrupt it.
-                   // So we must group them.
-                   
-                   struct Chunk<'a> {
-                       is_grid: bool,
-                       defs: Vec<&'a library::plugin::PropertyDefinition>,
-                   }
-                   
-                   let mut chunks: Vec<Chunk> = Vec::new();
-                   let mut current_grid_defs = Vec::new();
-                   
-                   for def in defs {
-                       let is_multiline = matches!(def.ui_type, PropertyUiType::MultilineText);
-                       if is_multiline {
-                           // Push existing grid chunk if any
-                           if !current_grid_defs.is_empty() {
-                               chunks.push(Chunk { is_grid: true, defs: current_grid_defs.clone() });
-                               current_grid_defs.clear();
-                           }
-                           // Push this as full width chunk
-                           chunks.push(Chunk { is_grid: false, defs: vec![def] });
-                       } else {
-                           current_grid_defs.push(def);
-                       }
-                   }
-                   if !current_grid_defs.is_empty() {
-                       chunks.push(Chunk { is_grid: true, defs: current_grid_defs });
-                   }
-                   
-                   for (chunk_idx, chunk) in chunks.iter().enumerate() {
-                       if chunk.is_grid {
+                    // Split into chunks of (is_grid, vecs)
+                    // But simpler: just iterate and flush grid when needed?
+                    // No, Grid::new takes a closure. We can't interrupt it.
+                    // So we must group them.
+
+                    struct Chunk<'a> {
+                        is_grid: bool,
+                        defs: Vec<&'a library::plugin::PropertyDefinition>,
+                    }
+
+                    let mut chunks: Vec<Chunk> = Vec::new();
+                    let mut current_grid_defs = Vec::new();
+
+                    for def in defs {
+                        let is_multiline = matches!(def.ui_type, PropertyUiType::MultilineText);
+                        if is_multiline {
+                            // Push existing grid chunk if any
+                            if !current_grid_defs.is_empty() {
+                                chunks.push(Chunk {
+                                    is_grid: true,
+                                    defs: current_grid_defs.clone(),
+                                });
+                                current_grid_defs.clear();
+                            }
+                            // Push this as full width chunk
+                            chunks.push(Chunk {
+                                is_grid: false,
+                                defs: vec![def],
+                            });
+                        } else {
+                            current_grid_defs.push(def);
+                        }
+                    }
+                    if !current_grid_defs.is_empty() {
+                        chunks.push(Chunk {
+                            is_grid: true,
+                            defs: current_grid_defs,
+                        });
+                    }
+
+                    for (chunk_idx, chunk) in chunks.iter().enumerate() {
+                        if chunk.is_grid {
                             egui::Grid::new(format!("cat_{}_{}", category, chunk_idx))
                                 .striped(true)
                                 .show(ui, |ui| {
@@ -267,42 +276,50 @@ pub fn inspector_panel(
                                         }
                                     }
                                 });
-                       } else {
-                           // Full Width Render
-                           for def in &chunk.defs {
-                               // Assuming MultilineText
-                               if let PropertyUiType::MultilineText = &def.ui_type {
+                        } else {
+                            // Full Width Render
+                            for def in &chunk.defs {
+                                // Assuming MultilineText
+                                if let PropertyUiType::MultilineText = &def.ui_type {
                                     ui.add_space(5.0);
                                     ui.label(&def.label);
                                     let current_val = properties.get_string(&def.name).unwrap_or(
                                         def.default_value.get_as::<String>().unwrap_or_default(),
                                     );
                                     let mut buffer = current_val.clone();
-                                    
+
                                     // Use a scroll area for code ideally, or just a large text edit
                                     let response = ui.add(
                                         egui::TextEdit::multiline(&mut buffer)
                                             .code_editor()
                                             .desired_rows(15)
                                             .desired_width(f32::INFINITY)
-                                            .lock_focus(true) // prevent losing focus easily
+                                            .lock_focus(true), // prevent losing focus easily
                                     );
                                     if response.changed() {
                                         use library::model::project::property::PropertyValue;
-                                        project_service.update_property_or_keyframe(
-                                            comp_id, track_id, selected_entity_id, &def.name, current_time,
-                                            PropertyValue::String(buffer), None,
-                                        ).ok();
+                                        project_service
+                                            .update_property_or_keyframe(
+                                                comp_id,
+                                                track_id,
+                                                selected_entity_id,
+                                                &def.name,
+                                                current_time,
+                                                PropertyValue::String(buffer),
+                                                None,
+                                            )
+                                            .ok();
                                         needs_refresh = true;
                                     }
                                     if response.lost_focus() {
-                                         let current_state = project_service.get_project().read().unwrap().clone();
+                                        let current_state =
+                                            project_service.get_project().read().unwrap().clone();
                                         history_manager.push_project_state(current_state);
                                     }
-                               }
-                           }
-                       }
-                   }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

@@ -14,13 +14,13 @@ use crate::model::ui_types::Tab;
 use crate::shortcut::ShortcutManager;
 use crate::state::context::EditorContext;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
-use crate::ui::dialogs::settings_dialog::SettingsDialog;
 use crate::ui::dialogs::export_dialog::ExportDialog;
+use crate::ui::dialogs::settings_dialog::SettingsDialog;
 use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
 use crate::utils;
-use library::RenderServer;
-use library::plugin::PluginManager;
 use library::cache::SharedCacheManager;
+use library::plugin::PluginManager;
+use library::RenderServer;
 
 pub struct MyApp {
     pub editor_context: EditorContext,
@@ -38,7 +38,7 @@ pub struct MyApp {
 
     pub triggered_action: Option<CommandId>,
     pub render_server: Arc<RenderServer>,
-    
+
     // Dependencies
     plugin_manager: Arc<PluginManager>,
     cache_manager: SharedCacheManager,
@@ -118,8 +118,9 @@ impl eframe::App for MyApp {
 
         // 2. Menu Bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            let main_ui_enabled =
-                !self.settings_dialog.is_open && !self.settings_dialog.show_close_warning && !self.editor_context.keyframe_dialog.is_open;
+            let main_ui_enabled = !self.settings_dialog.is_open
+                && !self.settings_dialog.show_close_warning
+                && !self.editor_context.keyframe_dialog.is_open;
             // Disable menu bar if a modal is open
             ui.add_enabled_ui(main_ui_enabled, |ui| {
                 crate::ui::menu::menu_bar(
@@ -132,8 +133,13 @@ impl eframe::App for MyApp {
         });
 
         // 3. Settings Window & Unsaved Changes Dialog
-        if self.settings_dialog.show(ctx) {
+        // 3. Settings Window & Unsaved Changes Dialog
+        let (is_listening, result) = self.settings_dialog.show(ctx);
+        if is_listening {
             is_listening_for_shortcut = true;
+        }
+        if let Some(crate::ui::dialogs::settings_dialog::SettingsResult::Save) = result {
+            self.command_registry = self.settings_dialog.command_registry.clone();
         }
 
         if self.composition_dialog.is_open {
@@ -141,8 +147,8 @@ impl eframe::App for MyApp {
         }
 
         if self.export_dialog.is_open {
-             let active_comp_id = self.editor_context.selection.composition_id;
-             self.export_dialog.show(ctx, &self.project, active_comp_id);
+            let active_comp_id = self.editor_context.selection.composition_id;
+            self.export_dialog.show(ctx, &self.project, active_comp_id);
         }
 
         if self.editor_context.keyframe_dialog.is_open {

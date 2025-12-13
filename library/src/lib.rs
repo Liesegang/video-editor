@@ -122,7 +122,8 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         project_model.composition(),
     )?);
 
-    let mut export_service = ExportService::new(plugin_manager, "png_export".to_string(), export_settings, 4);
+    let mut export_service =
+        ExportService::new(plugin_manager, "png_export".to_string(), export_settings, 4);
 
     let total_frames = composition.duration.ceil().max(0.0) as u64;
     let final_frame_range = frame_range.unwrap_or(0..total_frames);

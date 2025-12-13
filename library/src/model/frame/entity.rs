@@ -172,7 +172,7 @@ impl PartialEq for FrameContent {
                     transform: tr2,
                 },
             ) => p1 == p2 && st1 == st2 && pe1 == pe2 && e1 == e2 && tr1 == tr2,
-           (
+            (
                 FrameContent::SkSL {
                     shader: s1,
                     resolution: r1,
@@ -185,11 +185,13 @@ impl PartialEq for FrameContent {
                     effects: e2,
                     transform: tr2,
                 },
-            ) => s1 == s2
-                && OrderedFloat(r1.0) == OrderedFloat(r2.0)
-                && OrderedFloat(r1.1) == OrderedFloat(r2.1)
-                && e1 == e2
-                && tr1 == tr2,
+            ) => {
+                s1 == s2
+                    && OrderedFloat(r1.0) == OrderedFloat(r2.0)
+                    && OrderedFloat(r1.1) == OrderedFloat(r2.1)
+                    && e1 == e2
+                    && tr1 == tr2
+            }
             _ => false,
         }
     }

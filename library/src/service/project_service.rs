@@ -1011,15 +1011,13 @@ impl ProjectService {
         }
 
         if kind == crate::model::project::TrackClipKind::SkSL {
-            let shader_defs = vec![
-                PropertyDefinition {
-                    name: "shader".to_string(),
-                    label: "Shader Code".to_string(),
-                    ui_type: PropertyUiType::MultilineText,
-                    default_value: PropertyValue::String("".to_string()),
-                    category: "Shader".to_string(),
-                },
-            ];
+            let shader_defs = vec![PropertyDefinition {
+                name: "shader".to_string(),
+                label: "Shader Code".to_string(),
+                ui_type: PropertyUiType::MultilineText,
+                default_value: PropertyValue::String("".to_string()),
+                category: "Shader".to_string(),
+            }];
             definitions.extend(shader_defs);
         }
 
