@@ -1,6 +1,7 @@
 use eframe::egui;
-use log::{error, info};
+use log::error;
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, RwLock};
 use std::thread;
@@ -9,7 +10,7 @@ use library::cache::SharedCacheManager;
 use library::framing::entity_converters::EntityConverterRegistry;
 use library::model::project::project::Project;
 use library::model::project::property::PropertyValue;
-use library::plugin::{ExportSettings, PluginManager, PropertyDefinition, PropertyUiType};
+use library::plugin::{ExportSettings, PluginManager, PropertyUiType};
 use library::rendering::skia_renderer::SkiaRenderer;
 use library::service::{ExportService, ProjectModel, RenderService};
 
@@ -79,6 +80,7 @@ impl ExportDialog {
         &mut self,
         ctx: &egui::Context,
         project: &Arc<RwLock<Project>>,
+        project_service: &library::service::project_service::ProjectService,
         active_composition_id: Option<uuid::Uuid>,
     ) {
         self.active_composition_id = active_composition_id;
@@ -117,7 +119,7 @@ impl ExportDialog {
                 if self.is_exporting {
                     self.show_export_progress(ui);
                 } else {
-                    self.show_configuration(ui, project);
+                    self.show_configuration(ui, project, project_service);
                 }
             });
 
@@ -140,7 +142,7 @@ impl ExportDialog {
         }
     }
 
-    fn show_configuration(&mut self, ui: &mut egui::Ui, project: &Arc<RwLock<Project>>) {
+    fn show_configuration(&mut self, ui: &mut egui::Ui, project: &Arc<RwLock<Project>>, project_service: &library::service::project_service::ProjectService) {
         ui.heading("Export Settings");
 
         // 1. Composition Selection
@@ -251,7 +253,7 @@ impl ExportDialog {
             ui.label("Output Path:");
             ui.text_edit_singleline(&mut self.output_path);
             if ui.button("Browse...").clicked() {
-                let mut dialog = rfd::FileDialog::new().set_file_name(&self.output_path);
+                let dialog = rfd::FileDialog::new().set_file_name(&self.output_path);
                 if let Some(path) = dialog.save_file() {
                     let path_str = path.display().to_string();
                     self.output_path = path_str;
@@ -368,7 +370,7 @@ impl ExportDialog {
                 .add_enabled(enabled, egui::Button::new("Export"))
                 .clicked()
             {
-                self.start_export(project);
+                self.start_export(project, project_service);
             }
             if ui.button("Close").clicked() {
                 self.is_open = false;
@@ -388,7 +390,7 @@ impl ExportDialog {
         Ok(())
     }
 
-    fn start_export(&mut self, project_lock: &Arc<RwLock<Project>>) {
+    fn start_export(&mut self, project_lock: &Arc<RwLock<Project>>, project_service: &library::service::project_service::ProjectService) {
         let exporter_id = if let Some(id) = &self.selected_exporter_id {
             id.clone()
         } else {
@@ -416,7 +418,12 @@ impl ExportDialog {
         let entity_converter_registry = self.entity_converter_registry.clone();
         let export_range = self.export_range;
         let custom_start = self.custom_start_frame;
+        let export_range = self.export_range;
+        let custom_start = self.custom_start_frame;
         let custom_end = self.custom_end_frame;
+
+        // Capture Audio Engine Sample Rate
+        let engine_sample_rate = project_service.audio_engine.get_sample_rate();
 
         // Find composition index
         let comp_index = match project_snapshot
@@ -441,7 +448,7 @@ impl ExportDialog {
         thread::spawn(move || {
             // Initialize Renderer inside thread (requires context)
             let composition = &project_snapshot.compositions[comp_index];
-            let mut renderer = SkiaRenderer::new(
+            let renderer = SkiaRenderer::new(
                 composition.width as u32,
                 composition.height as u32,
                 composition.background_color.clone(),
@@ -453,7 +460,7 @@ impl ExportDialog {
             let mut render_service = RenderService::new(
                 renderer,
                 render_service_plugin_manager,
-                cache_manager,
+                cache_manager.clone(),
                 entity_converter_registry,
             );
 
@@ -515,15 +522,6 @@ impl ExportDialog {
                 _ => "rgba".to_string(),
             };
 
-            let settings_arc = Arc::new(settings.clone());
-
-            let mut export_service = ExportService::new(
-                plugin_manager.clone(),
-                exporter_id_owned.clone(),
-                settings_arc,
-                4,
-            );
-
             // Range Calculation
             let (start_frame, end_frame_total) = match export_range {
                 ExportRange::EntireComposition => {
@@ -533,6 +531,58 @@ impl ExportDialog {
                 ExportRange::Custom => (custom_start, custom_end),
             };
             let duration_frames = end_frame_total.saturating_sub(start_frame).max(1);
+
+            // Audio Pre-rendering
+            let mut audio_temp_path: Option<String> = None;
+            if matches!(settings.export_format(), library::plugin::ExportFormat::Video) {
+                 let fps = composition.fps;
+                 let start_time = start_frame as f64 / fps;
+                 let duration = duration_frames as f64 / fps;
+                 let sample_rate = engine_sample_rate; // Use correct rate
+                 let start_sample = (start_time * sample_rate as f64).round() as u64;
+                 let frames = (duration * sample_rate as f64).round() as usize;
+                 
+                 let audio_data = library::audio::mixer::mix_samples(
+                     &project_model.project().assets,
+                     project_model.composition(),
+                     &cache_manager,
+                     start_sample,
+                     frames,
+                     sample_rate,
+                     2
+                 );
+                 
+                 if !audio_data.is_empty() {
+                     // Prepare path helpers
+                     let mut stem_path = std::path::PathBuf::from(&output_path_owned);
+                     if stem_path.extension().is_some() {
+                         stem_path.set_extension("");
+                     }
+                     let stem_str = stem_path.to_str().unwrap_or("output");
+                     
+                     let audio_path = format!("{}_audio.raw", stem_str);
+                     if let Ok(mut file) = std::fs::File::create(&audio_path) {
+                         for sample in audio_data {
+                             let _ = file.write_all(&sample.to_le_bytes());
+                         }
+                         
+                         settings.parameters.insert("audio_source".to_string(), serde_json::Value::String(audio_path.clone()));
+                         settings.parameters.insert("audio_channels".to_string(), serde_json::Value::Number(serde_json::Number::from(2)));
+                         settings.parameters.insert("audio_sample_rate".to_string(), serde_json::Value::Number(serde_json::Number::from(sample_rate)));
+                         audio_temp_path = Some(audio_path);
+                     }
+                 }
+            }
+
+            let settings_arc = Arc::new(settings.clone());
+
+            let mut export_service = ExportService::new(
+                plugin_manager.clone(),
+                exporter_id_owned.clone(),
+                settings_arc,
+                4,
+            );
+
 
             // Prepare path helpers
             let mut stem_path = std::path::PathBuf::from(&output_path_owned);
@@ -578,6 +628,11 @@ impl ExportDialog {
             }
 
             let _ = export_service.shutdown();
+
+            // Cleanup audio temp file
+            if let Some(path) = audio_temp_path {
+                let _ = std::fs::remove_file(path);
+            }
 
             // Finalize export
             if let Err(e) = plugin_manager.finish_export(&exporter_id_owned, &final_output_path) {

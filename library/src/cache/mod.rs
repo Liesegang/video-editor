@@ -11,6 +11,7 @@ pub type SharedCacheManager = Arc<CacheManager>;
 pub struct CacheManager {
     image_cache: Mutex<LruCache<String, Image>>,
     video_cache: Mutex<LruCache<String, Image>>,
+    audio_cache: Mutex<std::collections::HashMap<uuid::Uuid, Arc<Vec<f32>>>>,
 }
 
 impl CacheManager {
@@ -23,6 +24,7 @@ impl CacheManager {
         Self {
             image_cache: Mutex::new(LruCache::new(image_capacity)),
             video_cache: Mutex::new(LruCache::new(video_capacity)),
+            audio_cache: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -49,5 +51,13 @@ impl CacheManager {
 
     fn video_key(path: &str, frame_number: u64) -> String {
         format!("{}::{}", path, frame_number)
+    }
+
+    pub fn get_audio(&self, id: uuid::Uuid) -> Option<Arc<Vec<f32>>> {
+        self.audio_cache.lock().unwrap().get(&id).cloned()
+    }
+
+    pub fn put_audio(&self, id: uuid::Uuid, data: Vec<f32>) {
+        self.audio_cache.lock().unwrap().insert(id, Arc::new(data));
     }
 }

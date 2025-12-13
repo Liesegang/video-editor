@@ -9,17 +9,106 @@ use uuid::Uuid;
 
 use crate::plugin::PluginManager;
 
+use crate::audio::engine::AudioEngine;
+
+use crate::cache::CacheManager;
+
 pub struct ProjectService {
     project: Arc<RwLock<Project>>,
     plugin_manager: Arc<PluginManager>,
+    pub audio_engine: Arc<AudioEngine>,
+    cache_manager: Arc<CacheManager>,
+    next_write_sample: std::sync::atomic::AtomicU64,
+}
+
+impl Clone for ProjectService {
+    fn clone(&self) -> Self {
+        Self {
+            project: self.project.clone(),
+            plugin_manager: self.plugin_manager.clone(),
+            audio_engine: self.audio_engine.clone(),
+            cache_manager: self.cache_manager.clone(),
+            next_write_sample: std::sync::atomic::AtomicU64::new(self.next_write_sample.load(std::sync::atomic::Ordering::Relaxed)),
+        }
+    }
 }
 
 impl ProjectService {
-    pub fn new(project: Arc<RwLock<Project>>, plugin_manager: Arc<PluginManager>) -> Self {
+    pub fn new(project: Arc<RwLock<Project>>, plugin_manager: Arc<PluginManager>, cache_manager: Arc<CacheManager>) -> Self {
+        // Initialize Audio Engine
+        let audio_engine = Arc::new(AudioEngine::new().expect("Failed to initialize Audio Engine")); 
+                                                                                                    
         ProjectService {
             project,
             plugin_manager,
+            audio_engine,
+            cache_manager,
+            next_write_sample: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+    
+    pub fn reset_audio_pump(&self, time: f64) {
+        self.audio_engine.set_time(time);
+        
+        let sample_rate = self.audio_engine.get_sample_rate();
+        let channels = self.audio_engine.get_channels();
+        let sample_pos = (time * sample_rate as f64).round() as u64;
+        
+        // Zapping: Generate 50ms preview
+        let preview_duration = 0.05;
+        let frames = (preview_duration * sample_rate as f64) as usize;
+        let scrub_samples = if let Ok(project) = self.project.read() {
+            if let Some(comp) = project.compositions.first() {
+                crate::audio::mixer::mix_samples(&project.assets, comp, &self.cache_manager, sample_pos, frames, sample_rate, channels as u32)
+            } else {
+                vec![0.0; frames * channels as usize]
+            }
+        } else {
+             vec![0.0; frames * channels as usize]
+        };
+        
+        // Push and advance
+        self.audio_engine.push_samples(&scrub_samples);
+        self.next_write_sample.store(sample_pos + frames as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+    
+    pub fn pump_audio(&self) {
+        let available = self.audio_engine.available_slots();
+        if available == 0 {
+            return;
+        }
+        
+        // Limit chunk size to avoid stalling the UI thread with massive mixing
+        let chunk_size = available.min(4096); // ~85ms at 48kHz
+        
+        let sample_rate = self.audio_engine.get_sample_rate();
+        let channels = self.audio_engine.get_channels();
+        
+        let start_sample = self.next_write_sample.load(std::sync::atomic::Ordering::Relaxed);
+        
+        // Safety check
+        if chunk_size < (channels as usize) {
+            return;
+        }
+        
+        let frames_to_write = chunk_size / (channels as usize);
+        
+        // Use shared mixing logic
+        let mix_buffer = if let Ok(project) = self.project.read() {
+             if let Some(comp) = project.compositions.first() {
+                crate::audio::mixer::mix_samples(&project.assets, comp, &self.cache_manager, start_sample, frames_to_write, sample_rate, channels as u32)
+             } else {
+                vec![0.0; frames_to_write * channels as usize]
+             }
+        } else {
+            vec![0.0; frames_to_write * channels as usize]
+        };
+        
+        // Push to Engine
+        self.audio_engine.push_samples(&mix_buffer);
+        
+        // Advance cursor
+        self.next_write_sample.fetch_add(frames_to_write as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn get_project(&self) -> Arc<RwLock<Project>> {
@@ -28,6 +117,10 @@ impl ProjectService {
 
     pub fn get_plugin_manager(&self) -> Arc<PluginManager> {
         Arc::clone(&self.plugin_manager)
+    }
+
+    pub fn get_cache_manager(&self) -> Arc<CacheManager> {
+        Arc::clone(&self.cache_manager)
     }
 
     pub fn set_project(&self, new_project: Project) {
@@ -39,6 +132,14 @@ impl ProjectService {
 
     pub fn load_project(&self, json_str: &str) -> Result<(), LibraryError> {
         let new_project = Project::load(json_str)?;
+        
+        // Hydrate Audio Cache
+        for asset in &new_project.assets {
+            if asset.kind == crate::model::project::asset::AssetKind::Audio {
+                self.trigger_audio_loading(asset.id, asset.path.clone());
+            }
+        }
+
         let mut project_write = self.project.write().map_err(|e| {
             LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
         })?;
@@ -113,18 +214,72 @@ impl ProjectService {
             .unwrap_or("New Asset".to_string());
 
         let kind = self.plugin_manager.probe_asset_kind(path);
-        let duration = self.plugin_manager.get_duration(path);
+        let mut duration = self.plugin_manager.get_duration(path);
+
+        if kind == crate::model::project::asset::AssetKind::Audio {
+            if let Ok(d) = crate::audio::loader::AudioLoader::get_duration(path) {
+                duration = Some(d);
+            }
+        }
         let dimensions = self.plugin_manager.get_dimensions(path);
 
-        let mut asset = Asset::new(&name, path, kind);
+        let mut asset = Asset::new(&name, path, kind.clone());
         asset.duration = duration;
         if let Some((w, h)) = dimensions {
             asset.width = Some(w);
             asset.height = Some(h);
         }
 
-        self.add_asset(asset)
+        let asset_id = asset.id;
+        self.add_asset(asset)?;
+        
+        // Background load audio
+        if kind == crate::model::project::asset::AssetKind::Audio {
+             self.trigger_audio_loading(asset_id, path.to_string());
+        }
+
+        Ok(asset_id)
     }
+
+    fn trigger_audio_loading(&self, asset_id: Uuid, path: String) {
+        let cache_manager = self.cache_manager.clone();
+        let target_sample_rate = self.audio_engine.get_sample_rate();
+        
+        std::thread::spawn(move || {
+             use crate::audio::loader::AudioLoader;
+             // Log start?
+             match AudioLoader::load_entire_file(&path, target_sample_rate) {
+                 Ok(data) => {
+                     cache_manager.put_audio(asset_id, data);
+                     log::info!("Loaded audio for asset {}", asset_id);
+                 }
+                 Err(e) => {
+                     log::error!("Failed to load audio for asset {}: {}", asset_id, e);
+                 }
+             }
+        });
+    }
+
+    pub fn render_audio(&self, start_time: f64, duration: f64) -> Vec<f32> {
+        let sample_rate = self.audio_engine.get_sample_rate();
+        let channels = self.audio_engine.get_channels();
+        
+        // Calculate samples
+        let start_sample = (start_time * sample_rate as f64).round() as u64;
+        let frames = (duration * sample_rate as f64).round() as usize;
+        
+        if let Ok(project) = self.project.read() {
+            if let Some(comp) = project.compositions.first() {
+                crate::audio::mixer::mix_samples(&project.assets, comp, &self.cache_manager, start_sample, frames, sample_rate, channels as u32)
+            } else {
+                vec![0.0; frames * channels as usize]
+            }
+        } else {
+            vec![0.0; frames * channels as usize]
+        }
+    }
+
+    // mix_samples removed (logic moved to mixer.rs)
 
     // --- Composition Operations ---
 
@@ -493,6 +648,26 @@ impl ProjectService {
     ) -> Result<(), LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
             if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                // Sync struct fields with property updates
+                match key {
+                    "in_frame" => {
+                        if let PropertyValue::Number(n) = &value {
+                            clip.in_frame = n.into_inner().round() as u64;
+                        }
+                    }
+                    "out_frame" => {
+                        if let PropertyValue::Number(n) = &value {
+                            clip.out_frame = n.into_inner().round() as u64;
+                        }
+                    }
+                    "source_begin_frame" => {
+                        if let PropertyValue::Number(n) = &value {
+                             clip.source_begin_frame = n.into_inner().round() as u64;
+                        }
+                    }
+                    _ => {}
+                }
+
                 clip.properties
                     .set(key.to_string(), Property::constant(value));
                 Ok(())

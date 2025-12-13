@@ -90,3 +90,8 @@ Video Editorの開発に参加したい方は、IssueやPull Requestを歓迎し
   「Big Buck Bunny」
   ライセンス: CC BY 3.0
   https://peach.blender.org/
+
+- **test_sound.mp3**
+  「作業中のテーマ -Working now-」
+  ライセンス: CC BY 3.0
+  https://soundcloud.com/user-80857924/working-now
