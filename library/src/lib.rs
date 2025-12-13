@@ -32,6 +32,17 @@ pub fn create_plugin_manager() -> Arc<PluginManager> {
     let manager = Arc::new(PluginManager::new());
     manager.register_effect(Arc::new(crate::plugin::effects::BlurEffectPlugin::new()));
     manager.register_effect(Arc::new(crate::plugin::effects::PixelSorterPlugin::new()));
+    manager.register_effect(Arc::new(crate::plugin::effects::DilateEffectPlugin::new()));
+    manager.register_effect(Arc::new(crate::plugin::effects::ErodeEffectPlugin::new()));
+    manager.register_effect(Arc::new(crate::plugin::effects::DropShadowEffectPlugin::new()));
+    manager.register_effect(Arc::new(crate::plugin::effects::MagnifierEffectPlugin::new()));
+    manager.register_effect(Arc::new(crate::plugin::effects::TileEffectPlugin::new()));
+    
+    // Load SkSL plugins from directory
+    if let Err(e) = manager.load_sksl_plugins_from_directory("./assets/plugins/sksl") {
+        log::error!("Failed to load SkSL plugins: {}", e);
+    }
+
     manager.register_load_plugin(Arc::new(crate::plugin::loaders::NativeImageLoader::new()));
     manager.register_load_plugin(Arc::new(crate::plugin::loaders::FfmpegVideoLoader::new()));
     manager.register_export_plugin(Arc::new(crate::plugin::exporters::PngExportPlugin::new()));

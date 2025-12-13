@@ -488,6 +488,47 @@ pub fn inspector_panel(
                                             }
                                             ui.end_row();
                                         }
+                                        PropertyUiType::Color => {
+                                            ui.label(&def.label);
+                                            let current_val = effect.properties.get_constant_value(&def.name)
+                                                .and_then(|v| v.get_as::<library::model::frame::color::Color>())
+                                                .unwrap_or(def.default_value.get_as::<library::model::frame::color::Color>().unwrap_or_default());
+
+                                            let mut color32 = egui::Color32::from_rgba_premultiplied(
+                                                current_val.r, current_val.g, current_val.b, current_val.a,
+                                            );
+                                            let response = ui.color_edit_button_srgba(&mut color32);
+                                            if response.changed() {
+                                                use library::model::project::property::PropertyValue;
+                                                let new_color = library::model::frame::color::Color {
+                                                    r: color32.r(), g: color32.g(), b: color32.b(), a: color32.a(),
+                                                };
+                                                project_service.update_effect_property_or_keyframe(
+                                                    comp_id, track_id, selected_entity_id, effect_index, &def.name, current_time, PropertyValue::Color(new_color), None,
+                                                ).ok();
+                                                needs_refresh = true;
+                                                let current_state = project_service.get_project().read().unwrap().clone();
+                                                history_manager.push_project_state(current_state);
+                                            }
+                                            ui.end_row();
+                                        }
+                                        PropertyUiType::Bool => {
+                                            ui.label(&def.label);
+                                            let current_val = effect.properties.get_bool(&def.name)
+                                                .unwrap_or(def.default_value.get_as::<bool>().unwrap_or(false));
+                                            
+                                            let mut val_mut = current_val;
+                                            let response = ui.checkbox(&mut val_mut, "");
+                                            if response.changed() {
+                                                 project_service.update_effect_property_or_keyframe(
+                                                    comp_id, track_id, selected_entity_id, effect_index, &def.name, current_time, PropertyValue::Boolean(val_mut), None,
+                                                ).ok();
+                                                needs_refresh = true;
+                                                let current_state = project_service.get_project().read().unwrap().clone();
+                                                history_manager.push_project_state(current_state);
+                                            }
+                                            ui.end_row();
+                                        }
                                         _ => {
                                             ui.label(&def.label);
                                             ui.label("UI type not implemented for effect");

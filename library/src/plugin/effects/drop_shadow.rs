@@ -71,7 +71,7 @@ impl EffectPlugin for DropShadowEffectPlugin {
         // Convert internal Color to Skia Color
         let skia_color = Color::from_argb(color_val.a, color_val.r, color_val.g, color_val.b);
 
-        apply_skia_filter(input, gpu_context, |_width, _height| {
+        apply_skia_filter(input, gpu_context, |_image, _width, _height| {
             if shadow_only {
                  image_filters::drop_shadow_only((dx as f32, dy as f32), (sigma_x as f32, sigma_y as f32), skia_color, None, None, None)
                     .ok_or(LibraryError::Render(

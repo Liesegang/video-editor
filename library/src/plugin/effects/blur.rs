@@ -64,7 +64,7 @@ impl EffectPlugin for BlurEffectPlugin {
 
         use crate::plugin::effects::utils::apply_skia_filter;
 
-        apply_skia_filter(input, gpu_context, |_width, _height| {
+        apply_skia_filter(input, gpu_context, |_image, _width, _height| {
             image_filters::blur((sigma_x as f32, sigma_y as f32), Some(tile_mode), None, None)
                 .ok_or(LibraryError::Render(
                     "Failed to create blur filter".to_string(),

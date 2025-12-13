@@ -753,6 +753,45 @@ impl PluginManager {
         Ok(())
     }
 
+    pub fn load_sksl_plugins_from_directory<P: AsRef<Path>>(
+        &self,
+        dir_path: P,
+    ) -> Result<(), LibraryError> {
+        let dir = dir_path.as_ref();
+        if !dir.exists() {
+            log::warn!("SkSL plugin directory not found: {}", dir.display());
+            return Ok(());
+        }
+
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                // Check for config.toml and shader.sksl
+                let config_path = path.join("config.toml");
+                let shader_path = path.join("shader.sksl");
+
+                if config_path.exists() && shader_path.exists() {
+                    log::info!("Loading SkSL plugin from: {}", path.display());
+                    let toml_content = std::fs::read_to_string(&config_path)
+                        .map_err(|e| LibraryError::Io(e))?;
+                    let sksl_content = std::fs::read_to_string(&shader_path)
+                        .map_err(|e| LibraryError::Io(e))?;
+
+                    match crate::plugin::effects::SkslEffectPlugin::new(&toml_content, &sksl_content) {
+                        Ok(plugin) => {
+                            self.register_effect(Arc::new(plugin));
+                        },
+                        Err(e) => {
+                            log::error!("Failed to load SkSL plugin at {}: {}", path.display(), e);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn get_property_evaluators(&self) -> Arc<PropertyEvaluatorRegistry> {
         let inner = self.inner.read().unwrap();
         Arc::new(inner.property_evaluators.clone())

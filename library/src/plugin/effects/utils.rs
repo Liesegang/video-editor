@@ -9,7 +9,7 @@ pub fn apply_skia_filter<F>(
     filter_factory: F,
 ) -> Result<RenderOutput, LibraryError>
 where
-    F: Fn(u32, u32) -> Result<ImageFilter, LibraryError>,
+    F: Fn(&skia_safe::Image, u32, u32) -> Result<ImageFilter, LibraryError>,
 {
     let perform_filter = |image: &skia_safe::Image,
                           width: u32,
@@ -21,7 +21,7 @@ where
         canvas.clear(skia_safe::Color::TRANSPARENT);
 
         let mut paint = Paint::default();
-        let filter = filter_factory(width, height)?;
+        let filter = filter_factory(image, width, height)?;
         paint.set_image_filter(filter);
         canvas.draw_image(image, (0, 0), Some(&paint));
 
