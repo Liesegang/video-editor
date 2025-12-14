@@ -1,7 +1,6 @@
 use egui::Ui;
 use std::sync::{Arc, RwLock};
 
-use library::model::project::asset::AssetKind;
 use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
 use library::RenderServer;
@@ -12,6 +11,7 @@ use crate::{action::HistoryManager, state::context::EditorContext};
 
 mod gizmo;
 mod grid;
+mod interaction;
 
 struct PreviewViewportState<'a> {
     pan: &'a mut egui::Vec2,
@@ -93,13 +93,13 @@ pub fn preview_panel(
         &mut editor_context.interaction.handled_hand_tool_drag,
     );
 
-    let pointer_pos = response.hover_pos();
+    let _pointer_pos = response.hover_pos();
     let is_hand_tool_active = if let Some(key) = controller.hand_tool_key {
         ui.input(|i| i.key_down(key))
     } else {
         false
     };
-    let is_panning_input = is_hand_tool_active || response.dragged_by(egui::PointerButton::Middle);
+    let _is_panning_input = is_hand_tool_active || response.dragged_by(egui::PointerButton::Middle);
 
     // Legacy logic (removed lines 36-64)
 
@@ -324,7 +324,6 @@ pub fn preview_panel(
         ui.painter().add(callback);
     }
 
-    let mut hovered_entity_id = None;
     let mut gui_clips: Vec<crate::model::ui_types::TimelineClip> = Vec::new();
 
     if let Ok(proj_read) = project.read() {
@@ -377,199 +376,21 @@ pub fn preview_panel(
                     gui_clips.push(gc);
                 }
             }
-
-            // Clip hit test
-            if let Some(mouse_screen_pos) = pointer_pos {
-                if rect.contains(mouse_screen_pos) {
-                    let mut sorted_clips: Vec<&crate::model::ui_types::TimelineClip> = gui_clips
-                        .iter()
-                        .filter(|gc| {
-                            let current_frame = (editor_context.timeline.current_time as f64
-                                * comp.fps)
-                                .round() as u64; // Convert current_time (f32) to frame (u64)
-                            current_frame >= gc.in_frame && current_frame < gc.out_frame
-                        })
-                        .collect();
-                    // Sort by track index for consistent Z-order hit testing
-                    sorted_clips.sort_by_key(|gc| {
-                        comp.tracks
-                            .iter()
-                            .position(|t| t.id == gc.track_id)
-                            .unwrap_or(0)
-                    });
-
-                    for gc in sorted_clips.iter().rev() {
-                        // Iterate in reverse to hit top-most clips first
-
-                        // Check if audio
-                        let is_audio = if let Some(aid) = gc.asset_id {
-                            proj_read
-                                .assets
-                                .iter()
-                                .find(|a| a.id == aid)
-                                .map(|a| a.kind == AssetKind::Audio)
-                                .unwrap_or(false)
-                        } else {
-                            false
-                        };
-
-                        if is_audio {
-                            continue;
-                        }
-
-                        let base_w = gc.width.unwrap_or(1920.0);
-                        let base_h = gc.height.unwrap_or(1080.0);
-                        let sx = gc.scale_x / 100.0;
-                        let sy = gc.scale_y / 100.0;
-
-                        // Transform point from Screen to Local
-                        // World = Pos + Rot * (Local * Scale - Anchor * Scale)
-                        // This seems complex to invert. Easier to check if point is in OBB.
-
-                        // Let's use the forward transform logic to define the OBB corners
-                        let center_curr = egui::pos2(gc.position[0], gc.position[1]);
-                        let angle_rad = gc.rotation.to_radians();
-                        let cos = angle_rad.cos();
-                        let sin = angle_rad.sin();
-
-                        let _transform_point = |local_x: f32, local_y: f32| -> egui::Pos2 {
-                            let ox = local_x - gc.anchor_x;
-                            let oy = local_y - gc.anchor_y;
-                            let sx_ox = ox * sx;
-                            let sy_oy = oy * sy;
-                            let rx = sx_ox * cos - sy_oy * sin;
-                            let ry = sx_ox * sin + sy_oy * cos;
-                            center_curr + egui::vec2(rx, ry)
-                        };
-
-                        // Check if mouse_world_pos is inside the quad defined by p1, p2, p3, p4
-                        // Using barycentric coordinates or separating axis theorem.
-                        // Or simpler: Transform mouse into local un-rotated, un-scaled space.
-                        let mouse_world_pos = to_world(mouse_screen_pos);
-                        let mouse_world_vec = mouse_world_pos - center_curr;
-                        // Inverse Rotate
-                        let inv_rx = mouse_world_vec.x * cos + mouse_world_vec.y * sin;
-                        let inv_ry = -mouse_world_vec.x * sin + mouse_world_vec.y * cos;
-
-                        // Inverse Scale (Add Anchor * Scale back first? No, Scale then Anchor)
-                        // Local * Scale - Anchor * Scale = Rotated
-                        // Local * Scale = Rotated + Anchor * Scale
-                        // Local = Rotated/Scale + Anchor
-
-                        let local_x = inv_rx / sx + gc.anchor_x;
-                        let local_y = inv_ry / sy + gc.anchor_y;
-
-                        if local_x >= 0.0
-                            && local_x <= base_w
-                            && local_y >= 0.0
-                            && local_y <= base_h
-                        {
-                            hovered_entity_id = Some(gc.id);
-                            break;
-                        }
-                    }
-                }
-            }
         }
     }
 
-    // Handle Gizmo Interaction
-    let interacted_with_gizmo_from_logic = gizmo::handle_gizmo_interaction(
-        ui,
-        editor_context,
-        project,
-        project_service,
-        pointer_pos,
-        to_world,
-    );
-
-    let interacted_with_gizmo = interacted_with_gizmo_from_logic;
-
-    if ui.input(|i| i.pointer.any_released()) {
-        editor_context.interaction.is_moving_selected_entity = false;
-        editor_context.interaction.body_drag_state = None;
-    }
-
-    if !is_panning_input && !interacted_with_gizmo {
-        // Allow selecting on drag start so we can move unselected items immediately
-        if response.drag_started() {
-            if let Some(hovered) = hovered_entity_id {
-                if let Some(gc) = gui_clips.iter().find(|gc| gc.id == hovered) {
-                    editor_context.select_clip(hovered, gc.track_id);
-                    editor_context.interaction.is_moving_selected_entity = true;
-                    // Started drag on entity - Capture State
-                    if let Some(pointer_pos) = pointer_pos {
-                        editor_context.interaction.body_drag_state =
-                            Some(crate::state::context_types::BodyDragState {
-                                start_mouse_pos: pointer_pos,
-                                original_position: gc.position,
-                            });
-                    }
-                }
-            } else {
-                editor_context.interaction.is_moving_selected_entity = false; // Started drag on background
-                editor_context.interaction.body_drag_state = None;
-            }
-        }
-
-        if response.clicked() {
-            if let Some(hovered) = hovered_entity_id {
-                if let Some(gc) = gui_clips.iter().find(|gc| gc.id == hovered) {
-                    editor_context.select_clip(hovered, gc.track_id);
-                }
-            } else {
-                // Deselect if clicked on background
-                editor_context.selection.entity_id = None;
-            }
-        } else if response.dragged() {
-            // Guard: Only move if we started the drag on the entity AND we have state
-            if editor_context.interaction.is_moving_selected_entity {
-                if let Some(entity_id) = editor_context.selection.entity_id {
-                    let current_zoom = editor_context.view.zoom;
-                    if let Some(comp_id) = editor_context.selection.composition_id {
-                        if let Some(track_id) = editor_context.selection.track_id {
-                            if let Some(drag_state) = &editor_context.interaction.body_drag_state {
-                                if let Some(curr_mouse) = pointer_pos {
-                                    let screen_delta = curr_mouse - drag_state.start_mouse_pos;
-                                    let world_delta = screen_delta / current_zoom;
-
-                                    let new_x = drag_state.original_position[0] as f64
-                                        + world_delta.x as f64;
-                                    let new_y = drag_state.original_position[1] as f64
-                                        + world_delta.y as f64;
-
-                                    let current_time = editor_context.timeline.current_time as f64;
-
-                                    let _ = project_service.update_property_or_keyframe(
-                                        comp_id,
-                                        track_id,
-                                        entity_id,
-                                        "position_x",
-                                        current_time,
-                                        library::model::project::property::PropertyValue::Number(
-                                            ordered_float::OrderedFloat(new_x),
-                                        ),
-                                        None,
-                                    );
-
-                                    let _ = project_service.update_property_or_keyframe(
-                                        comp_id,
-                                        track_id,
-                                        entity_id,
-                                        "position_y",
-                                        current_time,
-                                        library::model::project::property::PropertyValue::Number(
-                                            ordered_float::OrderedFloat(new_y),
-                                        ),
-                                        None,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    // Interactions
+    {
+        let mut interactions = interaction::PreviewInteractions::new(
+            ui,
+            editor_context,
+            &project,
+            project_service,
+            &gui_clips,
+            to_screen,
+            to_world,
+        );
+        interactions.handle(&response, rect);
     }
 
     // Draw Gizmo

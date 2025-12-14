@@ -52,8 +52,9 @@ pub fn handle_command(
             context.project_service.set_project(new_project);
 
             context.editor_context.selection.composition_id = Some(new_comp_id);
-            context.editor_context.selection.track_id = None;
-            context.editor_context.selection.entity_id = None;
+            context.editor_context.selection.last_selected_track_id = None;
+            context.editor_context.selection.last_selected_entity_id = None;
+            context.editor_context.selection.selected_entities.clear();
             context.editor_context.timeline.current_time = 0.0;
 
             // history_manager reset?
@@ -140,15 +141,23 @@ pub fn handle_command(
         }
         CommandId::Delete => {
             if let Some(comp_id) = context.editor_context.selection.composition_id {
-                if let Some(track_id) = context.editor_context.selection.track_id {
-                    if let Some(entity_id) = context.editor_context.selection.entity_id {
+                if let Some(track_id) = context.editor_context.selection.last_selected_track_id {
+                    if let Some(entity_id) =
+                        context.editor_context.selection.last_selected_entity_id
+                    {
                         if let Err(e) = context
                             .project_service
                             .remove_clip_from_track(comp_id, track_id, entity_id)
                         {
                             error!("Failed to remove entity: {:?}", e);
                         } else {
-                            context.editor_context.selection.entity_id = None;
+                            context
+                                .editor_context
+                                .selection
+                                .selected_entities
+                                .remove(&entity_id);
+                            context.editor_context.selection.last_selected_entity_id = None;
+                            // context.editor_context.selection.last_selected_track_id = None; // Keep track selected?
                             let current_state = context
                                 .project_service
                                 .get_project()

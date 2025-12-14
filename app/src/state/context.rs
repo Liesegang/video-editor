@@ -54,7 +54,39 @@ impl EditorContext {
     }
 
     pub fn select_clip(&mut self, entity_id: Uuid, track_id: Uuid) {
-        self.selection.entity_id = Some(entity_id);
-        self.selection.track_id = Some(track_id);
+        self.selection.selected_entities.clear();
+        self.selection.selected_entities.insert(entity_id);
+        self.selection.last_selected_entity_id = Some(entity_id);
+        self.selection.last_selected_track_id = Some(track_id);
+    }
+
+    pub fn add_selection(&mut self, entity_id: Uuid, track_id: Uuid) {
+        self.selection.selected_entities.insert(entity_id);
+        self.selection.last_selected_entity_id = Some(entity_id);
+        self.selection.last_selected_track_id = Some(track_id);
+    }
+
+    pub fn toggle_selection(&mut self, entity_id: Uuid, track_id: Uuid) {
+        if self.selection.selected_entities.contains(&entity_id) {
+            self.selection.selected_entities.remove(&entity_id);
+            if self.selection.last_selected_entity_id == Some(entity_id) {
+                // If we removed the last selected (primary), just pick another arbitrary one or None
+                // For valid UX, ideally we pick the previous one but we don't track history.
+                // Just set to None or a random one.
+                self.selection.last_selected_entity_id =
+                    self.selection.selected_entities.iter().next().cloned();
+                // We lose track_id context if we pick random.
+                // It's acceptable for "last selected" to be None if the primary was deselected.
+                self.selection.last_selected_track_id = None;
+            }
+        } else {
+            self.selection.selected_entities.insert(entity_id);
+            self.selection.last_selected_entity_id = Some(entity_id);
+            self.selection.last_selected_track_id = Some(track_id);
+        }
+    }
+
+    pub fn is_selected(&self, entity_id: Uuid) -> bool {
+        self.selection.selected_entities.contains(&entity_id)
     }
 }

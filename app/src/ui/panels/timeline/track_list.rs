@@ -72,9 +72,10 @@ pub fn show_track_list(
                             error!("Failed to remove track: {:?}", e);
                         } else {
                             // If the removed track was selected, deselect it
-                            if editor_context.selection.track_id == Some(track.id) {
-                                editor_context.selection.track_id = None;
-                                editor_context.selection.entity_id = None;
+                            if editor_context.selection.last_selected_track_id == Some(track.id) {
+                                editor_context.selection.last_selected_track_id = None;
+                                editor_context.selection.last_selected_entity_id = None;
+                                editor_context.selection.selected_entities.clear();
                             }
                             let current_state = project.read().unwrap().clone();
                             history_manager.push_project_state(current_state);
@@ -84,13 +85,13 @@ pub fn show_track_list(
                 }
             });
             if track_interaction_response.clicked() {
-                editor_context.selection.track_id = Some(track.id);
+                editor_context.selection.last_selected_track_id = Some(track.id);
             }
 
             track_list_painter.rect_filled(
                 track_label_rect,
                 0.0,
-                if editor_context.selection.track_id == Some(track.id) {
+                if editor_context.selection.last_selected_track_id == Some(track.id) {
                     egui::Color32::from_rgb(50, 80, 120)
                 } else if i % 2 == 0 {
                     egui::Color32::from_gray(50)

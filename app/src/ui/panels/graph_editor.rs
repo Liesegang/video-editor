@@ -55,8 +55,8 @@ pub fn graph_editor_panel(
 ) {
     let (comp_id, track_id, entity_id) = match (
         editor_context.selection.composition_id,
-        editor_context.selection.track_id,
-        editor_context.selection.entity_id,
+        editor_context.selection.last_selected_track_id,
+        editor_context.selection.last_selected_entity_id,
     ) {
         (Some(c), Some(t), Some(e)) => (c, t, e),
         _ => {
