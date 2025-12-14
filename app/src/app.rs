@@ -43,8 +43,8 @@ pub struct MyApp {
     pub render_server: Arc<RenderServer>,
 
     // Dependencies
-    plugin_manager: Arc<PluginManager>,
-    cache_manager: SharedCacheManager,
+    _plugin_manager: Arc<PluginManager>,
+    _cache_manager: SharedCacheManager,
 }
 
 impl MyApp {
@@ -111,8 +111,8 @@ impl MyApp {
             ),
             command_palette: CommandPalette::new(),
             render_server,
-            plugin_manager,
-            cache_manager,
+            _plugin_manager: plugin_manager,
+            _cache_manager: cache_manager,
         };
         if let Ok(proj_read) = app.project_service.get_project().read() {
             app.history_manager.push_project_state(proj_read.clone());

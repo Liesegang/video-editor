@@ -1,4 +1,4 @@
-use super::super::{ExportPlugin, ExportSettings, Plugin, PluginCategory};
+use super::super::{ExportPlugin, ExportSettings, Plugin};
 use crate::error::LibraryError;
 use crate::loader::image::Image;
 use image::ImageEncoder;

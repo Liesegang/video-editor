@@ -1,5 +1,5 @@
 use crate::command::{Command, CommandId, CommandRegistry};
-use eframe::egui::{self, Align2, Color32, Key, RichText, Window};
+use eframe::egui::{self, Align2, Key, RichText, Window};
 
 pub struct CommandPalette {
     pub is_open: bool,
@@ -146,7 +146,7 @@ impl CommandPalette {
                             );
                         }
 
-                        ui.allocate_ui_at_rect(rect, |ui| {
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                              ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                                 ui.add_space(8.0);
                                 let text_color = if is_selected {

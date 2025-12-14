@@ -1,6 +1,6 @@
 use crate::command::{Command, CommandId, CommandRegistry};
 use crate::{config, model::ui_types::SettingsTab};
-use eframe::egui::{CollapsingHeader, ComboBox, RichText, ScrollArea, TextEdit, Ui, Key};
+use eframe::egui::{ScrollArea, TextEdit, Ui, Key};
 use egui_extras::{Column, TableBuilder};
 use crate::config::AppConfig;
 use library::plugin::PluginManager;

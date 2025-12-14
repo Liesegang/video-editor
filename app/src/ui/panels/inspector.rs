@@ -448,7 +448,7 @@ pub fn inspector_panel(
                                                         .unwrap_or_default(),
                                                 );
                                             let mut selected = current_val.clone();
-                                            egui::ComboBox::from_id_source(format!(
+                                            egui::ComboBox::from_id_salt(format!(
                                                 "combo_{}_{}",
                                                 effect_index, def.name
                                             ))
@@ -668,7 +668,7 @@ pub fn inspector_panel(
                                             }
                                             ui.end_row();
                                         }
-                                        PropertyUiType::Integer { min, max, suffix } => {
+                                        PropertyUiType::Integer { suffix, .. } => {
                                             ui.label(&def.label);
                                             let current_val = effect.properties.get_i64(&def.name)
                                                 .unwrap_or(def.default_value.get_as::<i64>().unwrap_or(0));
@@ -720,11 +720,7 @@ pub fn inspector_panel(
                                             }
                                             ui.end_row();
                                         }
-                                        _ => {
-                                            ui.label(&def.label);
-                                            ui.label("UI type not implemented for effect");
-                                            ui.end_row();
-                                        }
+
                                     }
                                 }
                             });

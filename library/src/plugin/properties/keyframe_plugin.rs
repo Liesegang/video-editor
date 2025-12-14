@@ -1,4 +1,4 @@
-use super::super::{Plugin, PluginCategory, PropertyPlugin};
+use super::super::{Plugin, PropertyPlugin};
 use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
 use crate::model::project::property::{Property, PropertyValue, Vec2, Vec3};

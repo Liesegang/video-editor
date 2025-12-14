@@ -1,7 +1,7 @@
 use crate::error::LibraryError;
 use crate::loader::image::Image;
 use crate::model::project::property::PropertyValue;
-use crate::plugin::{EffectPlugin, Plugin, PluginCategory};
+use crate::plugin::{EffectPlugin, Plugin};
 use image::Rgba;
 use log::debug;
 use rayon::prelude::*;

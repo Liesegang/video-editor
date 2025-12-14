@@ -1,9 +1,7 @@
 use egui::Ui;
 use library::model::project::project::Project;
-use library::model::project::TrackClip;
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
-use uuid::Uuid;
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 

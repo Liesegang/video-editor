@@ -1,4 +1,4 @@
-use super::super::{LoadPlugin, LoadRequest, LoadResponse, Plugin, PluginCategory};
+use super::super::{LoadPlugin, LoadRequest, LoadResponse, Plugin};
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
 use crate::loader::video::VideoReader;
