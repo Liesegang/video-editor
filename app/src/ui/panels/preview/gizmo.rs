@@ -11,6 +11,7 @@ pub fn handle_gizmo_interaction(
     editor_context: &mut EditorContext,
     project: &Arc<RwLock<Project>>,
     project_service: &ProjectService,
+    history_manager: &mut crate::action::HistoryManager,
     pointer_pos: Option<Pos2>,
     to_world: impl Fn(Pos2) -> Pos2,
 ) -> bool {
@@ -50,6 +51,11 @@ pub fn handle_gizmo_interaction(
         if ui.input(|i| i.pointer.any_released()) {
             editor_context.interaction.gizmo_state = None;
             interacted_with_gizmo = true; // Prevent click-through to selection logic on release
+
+            // Push project state to history
+            if let Ok(proj) = project.read() {
+                history_manager.push_project_state(proj.clone());
+            }
         } else if let Some(mouse_pos) = pointer_pos {
             interacted_with_gizmo = true;
 

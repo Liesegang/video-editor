@@ -12,6 +12,7 @@ pub struct PreviewInteractions<'a> {
     pub editor_context: &'a mut EditorContext,
     pub project: &'a Arc<RwLock<Project>>,
     pub project_service: &'a ProjectService,
+    pub history_manager: &'a mut crate::action::HistoryManager,
     pub gui_clips: &'a [TimelineClip],
     pub to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>, // Closure wrapper
     pub to_world: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
@@ -23,6 +24,7 @@ impl<'a> PreviewInteractions<'a> {
         editor_context: &'a mut EditorContext,
         project: &'a Arc<RwLock<Project>>,
         project_service: &'a ProjectService,
+        history_manager: &'a mut crate::action::HistoryManager,
         gui_clips: &'a [TimelineClip],
         to_screen: impl Fn(Pos2) -> Pos2 + 'a,
         to_world: impl Fn(Pos2) -> Pos2 + 'a,
@@ -32,6 +34,7 @@ impl<'a> PreviewInteractions<'a> {
             editor_context,
             project,
             project_service,
+            history_manager,
             gui_clips,
             to_screen: Box::new(to_screen),
             to_world: Box::new(to_world),
@@ -47,6 +50,7 @@ impl<'a> PreviewInteractions<'a> {
             self.editor_context,
             self.project,
             self.project_service,
+            self.history_manager,
             pointer_pos,
             &*self.to_world,
         );
@@ -115,6 +119,11 @@ impl<'a> PreviewInteractions<'a> {
 
         // Cleanup on release
         if self.ui.input(|i| i.pointer.any_released()) {
+            if self.editor_context.interaction.is_moving_selected_entity {
+                if let Ok(proj) = self.project.read() {
+                    self.history_manager.push_project_state(proj.clone());
+                }
+            }
             self.editor_context.interaction.is_moving_selected_entity = false;
             self.editor_context.interaction.body_drag_state = None;
         }

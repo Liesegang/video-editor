@@ -42,7 +42,7 @@ impl<'a> ViewportState for PreviewViewportState<'a> {
 pub fn preview_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
-    _history_manager: &mut HistoryManager, // HistoryManager is not directly used in preview, but kept for consistency
+    history_manager: &mut HistoryManager,
     project_service: &ProjectService,
     project: &Arc<RwLock<Project>>,
     render_server: &Arc<RenderServer>,
@@ -386,6 +386,7 @@ pub fn preview_panel(
             editor_context,
             &project,
             project_service,
+            history_manager,
             &gui_clips,
             to_screen,
             to_world,
