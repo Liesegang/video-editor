@@ -157,10 +157,18 @@ pub struct ThemeConfig {
     pub theme_type: ThemeType,
 }
 
+#[derive(Serialize, Deserialize)]
+struct ShortcutDefWrapper {
+    #[serde(with = "ModifiersDef")]
+    modifiers: Modifiers,
+    #[serde(with = "KeyDef")]
+    key: Key,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AppConfig {
     #[serde(with = "tuple_vec_map")]
-    pub shortcuts: HashMap<CommandId, (Modifiers, Key)>,
+    pub shortcuts: HashMap<CommandId, Option<(Modifiers, Key)>>,
     pub plugins: PluginConfig,
     pub theme: ThemeConfig,
 }
@@ -186,12 +194,11 @@ mod tuple_vec_map {
     #[derive(Serialize, Deserialize)]
     struct SerializableTuple(
         CommandId,
-        #[serde(with = "ModifiersDef")] Modifiers,
-        #[serde(with = "KeyDef")] Key,
+        Option<ShortcutDefWrapper>,
     );
 
     pub fn serialize<S>(
-        map: &HashMap<CommandId, (Modifiers, Key)>,
+        map: &HashMap<CommandId, Option<(Modifiers, Key)>>,
         serializer: S,
     ) -> Result<S::Ok, S::Error>
     where
@@ -199,21 +206,30 @@ mod tuple_vec_map {
     {
         let vec: Vec<_> = map
             .iter()
-            .map(|(id, (m, k))| SerializableTuple(*id, *m, *k))
+            .map(|(id, opt_shortcut)| {
+                let wrapped = opt_shortcut.map(|(m, k)| ShortcutDefWrapper { 
+                    modifiers: m, 
+                    key: k 
+                });
+                SerializableTuple(*id, wrapped)
+            })
             .collect();
         vec.serialize(serializer)
     }
 
     pub fn deserialize<'de, D>(
         deserializer: D,
-    ) -> Result<HashMap<CommandId, (Modifiers, Key)>, D::Error>
+    ) -> Result<HashMap<CommandId, Option<(Modifiers, Key)>>, D::Error>
     where
         D: Deserializer<'de>,
     {
         let vec: Vec<SerializableTuple> = Vec::deserialize(deserializer)?;
         Ok(vec
             .into_iter()
-            .map(|SerializableTuple(id, m, k)| (id, (m, k)))
+            .map(|SerializableTuple(id, wrapped)| {
+                let opt = wrapped.map(|w| (w.modifiers, w.key));
+                (id, opt)
+            })
             .collect())
     }
 }
@@ -267,5 +283,13 @@ pub fn load_config() -> AppConfig {
         }
     }
     // Return default if file doesn't exist or on any error
-    AppConfig::new()
+    let default_config = AppConfig::new();
+    // Verify if we should save. If path exists but failed to load, we might not want to overwrite?
+    // The user request "if config file didn't exist".
+    if let Some(path) = get_config_path() {
+        if !path.exists() {
+             save_config(&default_config);
+        }
+    }
+    default_config
 }

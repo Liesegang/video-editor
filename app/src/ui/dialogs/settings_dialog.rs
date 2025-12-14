@@ -99,10 +99,23 @@ impl SettingsDialog {
                         match result {
                             SettingsResult::Save => {
                                 // 1. Update config shortcuts from editing registry
+                                // We only save shortcuts that differ from the defaults.
+                                // This allows us to persist "Unbound" (None) if the default was "Bound" (Some),
+                                // while correctly inheriting future defaults if the user hasn't changed them.
+                                let default_config = AppConfig::new();
+                                let default_registry = CommandRegistry::new(&default_config);
+                                
                                 let mut shortcuts = std::collections::HashMap::new();
                                 for cmd in &self.editing_registry.commands {
-                                    if let Some(shortcut) = cmd.shortcut {
-                                        shortcuts.insert(cmd.id, shortcut);
+                                    let default_cmd = default_registry.find(cmd.id);
+                                    let is_different = if let Some(def) = default_cmd {
+                                        def.shortcut != cmd.shortcut
+                                    } else {
+                                        true 
+                                    };
+
+                                    if is_different {
+                                        shortcuts.insert(cmd.id, cmd.shortcut);
                                     }
                                 }
                                 self.editing_config.shortcuts = shortcuts;

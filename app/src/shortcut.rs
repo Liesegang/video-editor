@@ -1,5 +1,5 @@
 use crate::command::{CommandId, CommandRegistry};
-use eframe::egui::Context;
+use eframe::egui::{Context, Modifiers};
 
 pub struct ShortcutManager;
 
@@ -9,13 +9,65 @@ impl ShortcutManager {
     }
 
     pub fn handle_shortcuts(&self, ctx: &Context, registry: &CommandRegistry) -> Option<CommandId> {
+        let wants_keyboard_input = ctx.wants_keyboard_input();
+        
         for cmd in &registry.commands {
+            // If the UI wants input (e.g. typing in text box),
+            // ONLY trigger commands that are:
+            // 1. Explicitly allowed when focused
+            // 2. USE A "STRONG" MODIFIER (Ctrl, Alt, Cmd). 
+            //    Simple keys (A, Space) or Shift+Key should be blocked to avoid interfering with typing.
+            if wants_keyboard_input {
+                if !cmd.allow_when_focused {
+                    continue;
+                }
+                
+                // Check if the command has strong modifiers
+                let has_strong_modifiers = if let Some((modifiers, _)) = cmd.shortcut {
+                    modifiers.command || modifiers.ctrl || modifiers.alt
+                } else {
+                    false
+                };
+
+                if !has_strong_modifiers {
+                    continue;
+                }
+            }
+
             if let Some((modifiers, key)) = cmd.shortcut {
-                if ctx.input(|i| i.key_pressed(key) && i.modifiers == modifiers) {
+                if ctx.input(|i| i.key_pressed(key) && modifiers_match(i.modifiers, modifiers)) {
                     return Some(cmd.id);
                 }
             }
         }
         None
     }
+}
+
+fn modifiers_match(event_modifiers: Modifiers, expected_modifiers: Modifiers) -> bool {
+    // Exact match is ideal
+    if event_modifiers == expected_modifiers {
+        return true;
+    }
+
+    // Handle COMMAND abstraction
+    // If expected uses COMMAND, we assume it covers Ctrl (Win/Linux) or Cmd (Mac).
+    // The event_modifiers will have both COMMAND and the physical key (Ctrl/Cmd) set.
+    if expected_modifiers.command {
+        // Must have command set
+        if !event_modifiers.command {
+            return false;
+        }
+        // Must match Alt and Shift
+        if event_modifiers.alt != expected_modifiers.alt {
+            return false;
+        }
+        if event_modifiers.shift != expected_modifiers.shift {
+            return false;
+        }
+        // We ignore discrepancies in Ctrl/MacCmd because COMMAND abstracts them
+        return true;
+    }
+
+    false
 }
