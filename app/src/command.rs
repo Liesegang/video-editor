@@ -24,6 +24,9 @@ pub enum CommandId {
 
     // Playback
     TogglePlayback,
+
+    // Tools
+    ShowCommandPalette,
 }
 
 #[derive(Clone, PartialEq)]
@@ -118,6 +121,12 @@ impl CommandRegistry {
                 CommandId::TogglePlayback,
                 "Toggle Playback",
                 Some((Modifiers::NONE, Key::Space)),
+            ),
+            // Tools
+            Command::new(
+                CommandId::ShowCommandPalette,
+                "Command Palette",
+                Some((Modifiers::COMMAND | Modifiers::SHIFT, Key::P)),
             ),
         ];
 
