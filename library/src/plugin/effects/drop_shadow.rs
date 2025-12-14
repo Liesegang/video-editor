@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
 use crate::model::project::property::PropertyValue;
-use crate::plugin::{EffectPlugin, Plugin, PluginCategory};
+use crate::plugin::{EffectPlugin, Plugin};
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
 use skia_safe::{image_filters, Color};

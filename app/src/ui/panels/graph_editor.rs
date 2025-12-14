@@ -1,5 +1,5 @@
 use egui::{
-    Color32, PointerButton, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2,
+    Color32, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2,
 };
 use library::animation::EasingFunction;
 use library::model::project::project::Project;

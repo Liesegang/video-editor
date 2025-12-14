@@ -417,8 +417,7 @@ impl ExportDialog {
         let plugin_manager = self.plugin_manager.clone();
         let cache_manager = self.cache_manager.clone();
         let entity_converter_registry = self.entity_converter_registry.clone();
-        let export_range = self.export_range;
-        let custom_start = self.custom_start_frame;
+
         let export_range = self.export_range;
         let custom_start = self.custom_start_frame;
         let custom_end = self.custom_end_frame;

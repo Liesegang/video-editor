@@ -1,11 +1,9 @@
 use egui::{epaint::StrokeKind, Ui};
 use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
-use library::model::project::TrackClip;
 use library::model::project::TrackClipKind;
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
-use uuid::Uuid;
 
 use crate::{action::HistoryManager, model::ui_types::TimelineClip, state::context::EditorContext};
 
@@ -28,7 +26,7 @@ pub fn draw_clips(
 ) -> bool {
     let mut clicked_on_entity = false;
 
-    let mut clicked_on_entity = false;
+    let _clicked_on_entity = false;
 
     // Iterate tracks directly
     for (i, track) in current_tracks.iter().enumerate() {

@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
 use crate::model::project::property::PropertyValue;
-use crate::plugin::{EffectPlugin, Plugin, PluginCategory, PropertyDefinition, PropertyUiType};
+use crate::plugin::{EffectPlugin, Plugin, PropertyDefinition, PropertyUiType};
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
 use serde::Deserialize;

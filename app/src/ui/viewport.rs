@@ -61,6 +61,7 @@ impl<'a> ViewportController<'a> {
         self
     }
 
+    #[allow(dead_code)]
     pub fn interact(
         &mut self,
         state: &mut impl ViewportState,
@@ -84,11 +85,11 @@ impl<'a> ViewportController<'a> {
             .interact(rect, self.id, egui::Sense::click_and_drag());
 
         // --- 1. Hand Tool Logic ---
-        let mut is_hand_tool_active = false;
+        let mut _is_hand_tool_active = false;
         if let Some(key) = self.hand_tool_key {
             // Check if key is pressed (not necessarily just pressed this frame)
             if self.ui.input(|i| i.key_down(key)) {
-                is_hand_tool_active = true;
+                _is_hand_tool_active = true;
 
                 // Set initial cursor (can be overridden by dragging)
                 self.ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
@@ -243,7 +244,7 @@ impl<'a> ViewportController<'a> {
         let old_pan = state.get_pan();
         // Be careful with Vec2 division, it's component-wise
         let ratio = new_zoom / old_zoom;
-        let p_vec = pivot.to_vec2(); // Pivot as vector from origin
+        let _p_vec = pivot.to_vec2(); // Pivot as vector from origin
         
         // Note: Pivot is in UI coordinates (absolute screen).
         // But Pan is usually relative to the "Content Top-Left" in standard ScrollArea?
