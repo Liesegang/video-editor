@@ -79,7 +79,6 @@ impl VideoReader {
             Some(next) => next != frame_number,
             None => true,
         };
-
         if need_seek {
             let timestamp = (frame_number as f64 / fps / f64::from(time_base.numerator())
                 * f64::from(time_base.denominator())) as i64;
