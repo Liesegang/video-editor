@@ -9,7 +9,7 @@ use crate::model::frame::color::Color;
 
 use crate::model::project::asset::Asset;
 
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Project {
     pub name: String,
     pub compositions: Vec<Composition>,
@@ -19,7 +19,7 @@ pub struct Project {
     pub export: ExportConfig,
 }
 
-#[derive(Serialize, Deserialize, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)]
 pub struct ExportConfig {
     #[serde(default)]
     pub container: Option<String>,
@@ -67,7 +67,7 @@ impl Project {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Composition {
     pub id: Uuid, // Added UUID field
     pub name: String,

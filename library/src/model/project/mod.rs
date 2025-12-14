@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Track {
     pub id: Uuid, // Added UUID field
     pub name: String,
@@ -53,7 +53,7 @@ impl std::fmt::Display for TrackClipKind {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct TrackClip {
     pub id: Uuid,                   // Added UUID field
     pub reference_id: Option<Uuid>, // ID of the referenced Asset or Composition
