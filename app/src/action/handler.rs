@@ -171,14 +171,16 @@ pub fn handle_command(
         CommandId::TogglePlayback => {
             let is_playing = !context.editor_context.timeline.is_playing;
             context.editor_context.timeline.is_playing = is_playing;
-            
+
             if is_playing {
-                context.project_service.reset_audio_pump(context.editor_context.timeline.current_time as f64);
+                context
+                    .project_service
+                    .reset_audio_pump(context.editor_context.timeline.current_time as f64);
                 if let Err(e) = context.project_service.audio_engine.play() {
                     log::error!("Failed to play audio: {}", e);
                 }
             } else {
-                 if let Err(e) = context.project_service.audio_engine.pause() {
+                if let Err(e) = context.project_service.audio_engine.pause() {
                     log::error!("Failed to pause audio: {}", e);
                 }
             }

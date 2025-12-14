@@ -33,7 +33,7 @@ pub fn draw_clips(
         let clip_track_index = i as f32; // Tracks are rendered in order
 
         for clip in &track.clips {
-             // Determine Color based on kind
+            // Determine Color based on kind
             let clip_color = match clip.kind {
                 TrackClipKind::Video => egui::Color32::from_rgb(100, 150, 255), // Blue
                 TrackClipKind::Audio => egui::Color32::from_rgb(100, 255, 150), // Green
@@ -310,8 +310,7 @@ pub fn draw_clips(
 
                 // Handle vertical movement (track change detection)
                 if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
-                    let current_y_in_clip_area = mouse_pos.y
-                        - content_rect_for_clip_area.min.y
+                    let current_y_in_clip_area = mouse_pos.y - content_rect_for_clip_area.min.y
                         + editor_context.timeline.scroll_offset.y;
 
                     let hovered_track_index =

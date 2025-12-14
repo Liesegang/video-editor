@@ -76,11 +76,15 @@ pub fn preview_panel(
         zoom: &mut editor_context.view.zoom,
     };
 
-    let mut controller = ViewportController::new(ui, ui.make_persistent_id("unique_preview_viewport_controller_id"), hand_tool_key)
-        .with_config(ViewportConfig {
-            zoom_uniform: true,
-            ..Default::default()
-        });
+    let mut controller = ViewportController::new(
+        ui,
+        ui.make_persistent_id("unique_preview_viewport_controller_id"),
+        hand_tool_key,
+    )
+    .with_config(ViewportConfig {
+        zoom_uniform: true,
+        ..Default::default()
+    });
 
     // Provide specific rect to controller (excluding bottom bar)
     let (_changed, response) = controller.interact_with_rect(
@@ -91,12 +95,13 @@ pub fn preview_panel(
 
     let pointer_pos = response.hover_pos();
     let is_hand_tool_active = if let Some(key) = controller.hand_tool_key {
-         ui.input(|i| i.key_down(key))
-    } else { false };
+        ui.input(|i| i.key_down(key))
+    } else {
+        false
+    };
     let is_panning_input = is_hand_tool_active || response.dragged_by(egui::PointerButton::Middle);
 
     // Legacy logic (removed lines 36-64)
-
 
     let view_offset = rect.min + editor_context.view.pan;
     let view_zoom = editor_context.view.zoom;

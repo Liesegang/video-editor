@@ -465,7 +465,8 @@ pub fn show_keyframe_dialog(
                         None
                     };
 
-                    let result = if let Some((eff_idx, prop_key)) = parse_key(&state.property_name) {
+                    let result = if let Some((eff_idx, prop_key)) = parse_key(&state.property_name)
+                    {
                         project_service.update_effect_keyframe_by_index(
                             comp_id,
                             track_id,

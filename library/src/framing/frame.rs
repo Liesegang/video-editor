@@ -4,8 +4,8 @@ use log::debug;
 
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::frame::FrameInfo;
-use crate::model::project::{TrackClip, TrackClipKind}; // Add explicit import
 use crate::model::project::project::{Composition, Project};
+use crate::model::project::{TrackClip, TrackClipKind}; // Add explicit import
 use crate::util::timing::ScopedTimer;
 
 use super::entity_converters::{EntityConverterRegistry, FrameEvaluationContext};

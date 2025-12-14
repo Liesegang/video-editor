@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
 use crate::rendering::renderer::{RenderOutput, TextureInfo};
-use crate::rendering::skia_utils::{image_to_skia, surface_to_image, GpuContext};
+use crate::rendering::skia_utils::{GpuContext, image_to_skia, surface_to_image};
 use skia_safe::{ImageFilter, Paint};
 
 pub fn apply_skia_filter<F>(
@@ -28,7 +28,7 @@ where
         // If we have a context, try to return a texture
         let ctx_opt = surface.recording_context();
         if let Some(mut ctx) = ctx_opt {
-             if let Some(mut dctx) = ctx.as_direct_context() {
+            if let Some(mut dctx) = ctx.as_direct_context() {
                 dctx.flush_and_submit();
             }
 

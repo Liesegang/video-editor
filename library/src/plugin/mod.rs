@@ -143,8 +143,6 @@ pub trait PropertyPlugin: Plugin {
     }
 }
 
-
-
 #[derive(Debug, Clone)]
 pub enum LoadRequest {
     Image { path: String },
@@ -822,22 +820,28 @@ impl PluginManager {
 
                 if config_path.exists() && shader_path.exists() {
                     log::info!("Loading SkSL plugin from: {}", path.display());
-                    let toml_content = std::fs::read_to_string(&config_path)
-                        .map_err(|e| LibraryError::Io(e))?;
-                    let sksl_content = std::fs::read_to_string(&shader_path)
-                        .map_err(|e| LibraryError::Io(e))?;
+                    let toml_content =
+                        std::fs::read_to_string(&config_path).map_err(|e| LibraryError::Io(e))?;
+                    let sksl_content =
+                        std::fs::read_to_string(&shader_path).map_err(|e| LibraryError::Io(e))?;
 
-                    match crate::plugin::effects::SkslEffectPlugin::new(&toml_content, &sksl_content) {
+                    match crate::plugin::effects::SkslEffectPlugin::new(
+                        &toml_content,
+                        &sksl_content,
+                    ) {
                         Ok(plugin) => {
                             log::info!("Successfully registered SkSL plugin: {}", plugin.id());
                             self.register_effect(Arc::new(plugin));
-                        },
+                        }
                         Err(e) => {
                             log::error!("Failed to load SkSL plugin at {}: {}", path.display(), e);
                         }
                     }
                 } else {
-                    log::warn!("Skipping directory {}, missing config.toml or shader.sksl", path.display());
+                    log::warn!(
+                        "Skipping directory {}, missing config.toml or shader.sksl",
+                        path.display()
+                    );
                 }
             }
         }
@@ -871,7 +875,10 @@ impl PluginManager {
 
     pub fn get_available_effects(&self) -> Vec<(String, String, String)> {
         let inner = self.inner.read().unwrap();
-        inner.effect_plugins.plugins.values()
+        inner
+            .effect_plugins
+            .plugins
+            .values()
             .map(|p| (p.id().to_string(), p.name(), p.category()))
             .collect()
     }
@@ -887,7 +894,10 @@ impl PluginManager {
 
     pub fn get_available_exporters(&self) -> Vec<(String, String)> {
         let inner = self.inner.read().unwrap();
-        inner.export_plugins.plugins.values()
+        inner
+            .export_plugins
+            .plugins
+            .values()
             .map(|p| (p.id().to_string(), p.name()))
             .collect()
     }
@@ -901,7 +911,7 @@ pub struct PluginInfo {
     pub plugin_type: PluginCategory, // Was category
     pub category: String,            // New field
     pub version: String,
-    pub impl_type: String,           // Was plugin_type
+    pub impl_type: String, // Was plugin_type
 }
 
 // ... existing code ...
@@ -926,7 +936,7 @@ impl PluginManager {
         }
         for p in inner.load_plugins.plugins.values() {
             let v = p.version();
-             plugins.push(PluginInfo {
+            plugins.push(PluginInfo {
                 id: p.id().to_string(),
                 name: p.name(),
                 plugin_type: p.plugin_type(),
@@ -937,7 +947,7 @@ impl PluginManager {
         }
         for p in inner.export_plugins.plugins.values() {
             let v = p.version();
-             plugins.push(PluginInfo {
+            plugins.push(PluginInfo {
                 id: p.id().to_string(),
                 name: p.name(),
                 plugin_type: p.plugin_type(),
@@ -948,7 +958,7 @@ impl PluginManager {
         }
         for p in inner.entity_converter_plugins.plugins.values() {
             let v = p.version();
-             plugins.push(PluginInfo {
+            plugins.push(PluginInfo {
                 id: p.id().to_string(),
                 name: p.name(),
                 plugin_type: p.plugin_type(),
@@ -959,7 +969,7 @@ impl PluginManager {
         }
         for p in inner.inspector_plugins.plugins.values() {
             let v = p.version();
-             plugins.push(PluginInfo {
+            plugins.push(PluginInfo {
                 id: p.id().to_string(),
                 name: p.name(),
                 plugin_type: p.plugin_type(),
@@ -968,7 +978,7 @@ impl PluginManager {
                 impl_type: p.impl_type(),
             });
         }
-        
+
         // Sorting?
         plugins.sort_by(|a, b| a.id.cmp(&b.id));
         plugins
@@ -976,7 +986,6 @@ impl PluginManager {
 
     // ... existing methods ...
 }
-
 
 // Trait and structs moved from framing/property.rs
 use crate::model::project::property::{Property, PropertyMap, PropertyValue};

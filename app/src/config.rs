@@ -177,7 +177,7 @@ impl AppConfig {
     pub fn new() -> Self {
         Self {
             shortcuts: HashMap::new(),
-            plugins: PluginConfig { 
+            plugins: PluginConfig {
                 paths: vec!["./assets/plugins/sksl".to_string()],
             },
             theme: ThemeConfig {
@@ -192,10 +192,7 @@ mod tuple_vec_map {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     #[derive(Serialize, Deserialize)]
-    struct SerializableTuple(
-        CommandId,
-        Option<ShortcutDefWrapper>,
-    );
+    struct SerializableTuple(CommandId, Option<ShortcutDefWrapper>);
 
     pub fn serialize<S>(
         map: &HashMap<CommandId, Option<(Modifiers, Key)>>,
@@ -207,9 +204,9 @@ mod tuple_vec_map {
         let vec: Vec<_> = map
             .iter()
             .map(|(id, opt_shortcut)| {
-                let wrapped = opt_shortcut.map(|(m, k)| ShortcutDefWrapper { 
-                    modifiers: m, 
-                    key: k 
+                let wrapped = opt_shortcut.map(|(m, k)| ShortcutDefWrapper {
+                    modifiers: m,
+                    key: k,
                 });
                 SerializableTuple(*id, wrapped)
             })
@@ -288,7 +285,7 @@ pub fn load_config() -> AppConfig {
     // The user request "if config file didn't exist".
     if let Some(path) = get_config_path() {
         if !path.exists() {
-             save_config(&default_config);
+            save_config(&default_config);
         }
     }
     default_config

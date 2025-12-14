@@ -3,10 +3,10 @@ use crate::loader::image::Image;
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use log::{debug, warn};
 #[cfg(all(feature = "gl", target_os = "windows"))]
+use skia_safe::gpu::direct_contexts;
+#[cfg(all(feature = "gl", target_os = "windows"))]
 use skia_safe::gpu::gl::Interface;
 use skia_safe::gpu::{self, DirectContext, SurfaceOrigin};
-#[cfg(all(feature = "gl", target_os = "windows"))]
-use skia_safe::gpu::direct_contexts;
 use skia_safe::images::raster_from_data;
 use skia_safe::surfaces;
 use skia_safe::{AlphaType, ColorType, Data, ISize, Image as SkImage, ImageInfo, Surface};

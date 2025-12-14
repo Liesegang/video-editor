@@ -8,8 +8,8 @@ use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
 
-use crate::{action::HistoryManager, state::context::EditorContext};
 use crate::command::CommandRegistry;
+use crate::{action::HistoryManager, state::context::EditorContext};
 
 // Re-export functions for easier access
 pub use clip_area::show_clip_area;

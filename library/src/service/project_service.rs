@@ -28,16 +28,23 @@ impl Clone for ProjectService {
             plugin_manager: self.plugin_manager.clone(),
             audio_engine: self.audio_engine.clone(),
             cache_manager: self.cache_manager.clone(),
-            next_write_sample: std::sync::atomic::AtomicU64::new(self.next_write_sample.load(std::sync::atomic::Ordering::Relaxed)),
+            next_write_sample: std::sync::atomic::AtomicU64::new(
+                self.next_write_sample
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
         }
     }
 }
 
 impl ProjectService {
-    pub fn new(project: Arc<RwLock<Project>>, plugin_manager: Arc<PluginManager>, cache_manager: Arc<CacheManager>) -> Self {
+    pub fn new(
+        project: Arc<RwLock<Project>>,
+        plugin_manager: Arc<PluginManager>,
+        cache_manager: Arc<CacheManager>,
+    ) -> Self {
         // Initialize Audio Engine
-        let audio_engine = Arc::new(AudioEngine::new().expect("Failed to initialize Audio Engine")); 
-                                                                                                    
+        let audio_engine = Arc::new(AudioEngine::new().expect("Failed to initialize Audio Engine"));
+
         ProjectService {
             project,
             plugin_manager,
@@ -46,69 +53,91 @@ impl ProjectService {
             next_write_sample: std::sync::atomic::AtomicU64::new(0),
         }
     }
-    
+
     pub fn reset_audio_pump(&self, time: f64) {
         self.audio_engine.set_time(time);
-        
+
         let sample_rate = self.audio_engine.get_sample_rate();
         let channels = self.audio_engine.get_channels();
         let sample_pos = (time * sample_rate as f64).round() as u64;
-        
+
         // Zapping: Generate 50ms preview
         let preview_duration = 0.05;
         let frames = (preview_duration * sample_rate as f64) as usize;
         let scrub_samples = if let Ok(project) = self.project.read() {
             if let Some(comp) = project.compositions.first() {
-                crate::audio::mixer::mix_samples(&project.assets, comp, &self.cache_manager, sample_pos, frames, sample_rate, channels as u32)
+                crate::audio::mixer::mix_samples(
+                    &project.assets,
+                    comp,
+                    &self.cache_manager,
+                    sample_pos,
+                    frames,
+                    sample_rate,
+                    channels as u32,
+                )
             } else {
                 vec![0.0; frames * channels as usize]
             }
         } else {
-             vec![0.0; frames * channels as usize]
+            vec![0.0; frames * channels as usize]
         };
-        
+
         // Push and advance
         self.audio_engine.push_samples(&scrub_samples);
-        self.next_write_sample.store(sample_pos + frames as u64, std::sync::atomic::Ordering::Relaxed);
+        self.next_write_sample.store(
+            sample_pos + frames as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
-    
+
     pub fn pump_audio(&self) {
         let available = self.audio_engine.available_slots();
         if available == 0 {
             return;
         }
-        
+
         // Limit chunk size to avoid stalling the UI thread with massive mixing
         let chunk_size = available.min(4096); // ~85ms at 48kHz
-        
+
         let sample_rate = self.audio_engine.get_sample_rate();
         let channels = self.audio_engine.get_channels();
-        
-        let start_sample = self.next_write_sample.load(std::sync::atomic::Ordering::Relaxed);
-        
+
+        let start_sample = self
+            .next_write_sample
+            .load(std::sync::atomic::Ordering::Relaxed);
+
         // Safety check
         if chunk_size < (channels as usize) {
             return;
         }
-        
+
         let frames_to_write = chunk_size / (channels as usize);
-        
+
         // Use shared mixing logic
         let mix_buffer = if let Ok(project) = self.project.read() {
-             if let Some(comp) = project.compositions.first() {
-                crate::audio::mixer::mix_samples(&project.assets, comp, &self.cache_manager, start_sample, frames_to_write, sample_rate, channels as u32)
-             } else {
+            if let Some(comp) = project.compositions.first() {
+                crate::audio::mixer::mix_samples(
+                    &project.assets,
+                    comp,
+                    &self.cache_manager,
+                    start_sample,
+                    frames_to_write,
+                    sample_rate,
+                    channels as u32,
+                )
+            } else {
                 vec![0.0; frames_to_write * channels as usize]
-             }
+            }
         } else {
             vec![0.0; frames_to_write * channels as usize]
         };
-        
+
         // Push to Engine
         self.audio_engine.push_samples(&mix_buffer);
-        
+
         // Advance cursor
-        self.next_write_sample.fetch_add(frames_to_write as u64, std::sync::atomic::Ordering::Relaxed);
+        self.next_write_sample
+            .fetch_add(frames_to_write as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn get_project(&self) -> Arc<RwLock<Project>> {
@@ -132,7 +161,7 @@ impl ProjectService {
 
     pub fn load_project(&self, json_str: &str) -> Result<(), LibraryError> {
         let new_project = Project::load(json_str)?;
-        
+
         // Hydrate Audio Cache
         for asset in &new_project.assets {
             if asset.kind == crate::model::project::asset::AssetKind::Audio {
@@ -206,8 +235,6 @@ impl ProjectService {
         Ok(())
     }
 
-
-
     pub fn import_file(&self, path: &str) -> Result<Uuid, LibraryError> {
         let path_buf = std::path::Path::new(path);
         let name = path_buf
@@ -236,24 +263,28 @@ impl ProjectService {
 
         let asset_id = asset.id;
         self.add_asset(asset)?;
-        
+
         // Background load audio for pure Audio assets
         if kind == crate::model::project::asset::AssetKind::Audio {
-             self.trigger_audio_loading(asset_id, path.to_string());
+            self.trigger_audio_loading(asset_id, path.to_string());
         }
 
         // Check for separate Audio stream in Video files
         if kind == crate::model::project::asset::AssetKind::Video {
-             if crate::audio::loader::AudioLoader::has_audio(path) {
-                 // Create separate Audio asset
-                 let audio_name = format!("{} (Audio)", name);
-                 let mut audio_asset = Asset::new(&audio_name, path, crate::model::project::asset::AssetKind::Audio);
-                 audio_asset.duration = duration; // Assume sync with video for now
-                 
-                 let audio_id = audio_asset.id;
-                 self.add_asset(audio_asset)?;
-                 self.trigger_audio_loading(audio_id, path.to_string());
-             }
+            if crate::audio::loader::AudioLoader::has_audio(path) {
+                // Create separate Audio asset
+                let audio_name = format!("{} (Audio)", name);
+                let mut audio_asset = Asset::new(
+                    &audio_name,
+                    path,
+                    crate::model::project::asset::AssetKind::Audio,
+                );
+                audio_asset.duration = duration; // Assume sync with video for now
+
+                let audio_id = audio_asset.id;
+                self.add_asset(audio_asset)?;
+                self.trigger_audio_loading(audio_id, path.to_string());
+            }
         }
 
         Ok(asset_id)
@@ -262,33 +293,41 @@ impl ProjectService {
     fn trigger_audio_loading(&self, asset_id: Uuid, path: String) {
         let cache_manager = self.cache_manager.clone();
         let target_sample_rate = self.audio_engine.get_sample_rate();
-        
+
         std::thread::spawn(move || {
-             use crate::audio::loader::AudioLoader;
-             // Log start?
-             match AudioLoader::load_entire_file(&path, target_sample_rate) {
-                 Ok(data) => {
-                     cache_manager.put_audio(asset_id, data);
-                     log::info!("Loaded audio for asset {}", asset_id);
-                 }
-                 Err(e) => {
-                     log::error!("Failed to load audio for asset {}: {}", asset_id, e);
-                 }
-             }
+            use crate::audio::loader::AudioLoader;
+            // Log start?
+            match AudioLoader::load_entire_file(&path, target_sample_rate) {
+                Ok(data) => {
+                    cache_manager.put_audio(asset_id, data);
+                    log::info!("Loaded audio for asset {}", asset_id);
+                }
+                Err(e) => {
+                    log::error!("Failed to load audio for asset {}: {}", asset_id, e);
+                }
+            }
         });
     }
 
     pub fn render_audio(&self, start_time: f64, duration: f64) -> Vec<f32> {
         let sample_rate = self.audio_engine.get_sample_rate();
         let channels = self.audio_engine.get_channels();
-        
+
         // Calculate samples
         let start_sample = (start_time * sample_rate as f64).round() as u64;
         let frames = (duration * sample_rate as f64).round() as usize;
-        
+
         if let Ok(project) = self.project.read() {
             if let Some(comp) = project.compositions.first() {
-                crate::audio::mixer::mix_samples(&project.assets, comp, &self.cache_manager, start_sample, frames, sample_rate, channels as u32)
+                crate::audio::mixer::mix_samples(
+                    &project.assets,
+                    comp,
+                    &self.cache_manager,
+                    start_sample,
+                    frames,
+                    sample_rate,
+                    channels as u32,
+                )
             } else {
                 vec![0.0; frames * channels as usize]
             }
@@ -680,7 +719,7 @@ impl ProjectService {
                     }
                     "source_begin_frame" => {
                         if let PropertyValue::Number(n) = &value {
-                             clip.source_begin_frame = n.into_inner().round() as u64;
+                            clip.source_begin_frame = n.into_inner().round() as u64;
                         }
                     }
                     _ => {}
@@ -1166,10 +1205,15 @@ impl ProjectService {
                         *prop = Property::keyframe(keyframes);
                         Ok(())
                     } else {
-                         Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                        Err(LibraryError::Project(format!(
+                            "Property {} not found",
+                            property_key
+                        )))
                     }
                 } else {
-                    Err(LibraryError::Project("Effect index out of bounds".to_string()))
+                    Err(LibraryError::Project(
+                        "Effect index out of bounds".to_string(),
+                    ))
                 }
             } else {
                 Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
@@ -1187,7 +1231,7 @@ impl ProjectService {
         keyframe_index: usize,
     ) -> Result<(), LibraryError> {
         self.with_track_mut(composition_id, track_id, |track| {
-             if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+            if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
                 if let Some(effect) = clip.effects.get_mut(effect_index) {
                     if let Some(prop) = effect.properties.get_mut(property_key) {
                         let mut keyframes = prop.keyframes();
@@ -1197,13 +1241,20 @@ impl ProjectService {
                             *prop = Property::keyframe(keyframes);
                             Ok(())
                         } else {
-                            Err(LibraryError::Project("Keyframe index out of bounds".to_string()))
+                            Err(LibraryError::Project(
+                                "Keyframe index out of bounds".to_string(),
+                            ))
                         }
                     } else {
-                         Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                        Err(LibraryError::Project(format!(
+                            "Property {} not found",
+                            property_key
+                        )))
                     }
                 } else {
-                    Err(LibraryError::Project("Effect index out of bounds".to_string()))
+                    Err(LibraryError::Project(
+                        "Effect index out of bounds".to_string(),
+                    ))
                 }
             } else {
                 Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
@@ -1234,7 +1285,7 @@ impl ProjectService {
                                 .get("value")
                                 .cloned()
                                 .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
-                            
+
                             let kf0 = Keyframe {
                                 time: OrderedFloat(0.0),
                                 value: initial_val,
@@ -1251,7 +1302,7 @@ impl ProjectService {
                             *prop = Property::keyframe(keyframes);
                         } else if prop.evaluator == "keyframe" {
                             let mut current_keyframes = prop.keyframes();
-                            
+
                             // Check for collision
                             if let Some(idx) = current_keyframes
                                 .iter()
@@ -1265,16 +1316,21 @@ impl ProjectService {
                                 value: value.clone(),
                                 easing: easing.unwrap_or(crate::animation::EasingFunction::Linear),
                             });
-                            
+
                             current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
                             *prop = Property::keyframe(current_keyframes);
                         }
                         Ok(())
                     } else {
-                         Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                        Err(LibraryError::Project(format!(
+                            "Property {} not found",
+                            property_key
+                        )))
                     }
                 } else {
-                    Err(LibraryError::Project("Effect index out of bounds".to_string()))
+                    Err(LibraryError::Project(
+                        "Effect index out of bounds".to_string(),
+                    ))
                 }
             } else {
                 Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
