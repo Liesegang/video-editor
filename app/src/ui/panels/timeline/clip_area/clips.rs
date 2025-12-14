@@ -72,6 +72,7 @@ pub fn draw_clips(
                 asset_id: None, // We don't have asset_id stored on clip yet
                 width: None,
                 height: None,
+                kind: entity.kind.clone(),
             };
 
             let initial_x = content_rect_for_clip_area.min.x
