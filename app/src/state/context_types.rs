@@ -146,6 +146,9 @@ pub struct InteractionState {
 
     // Body Drag State for absolute delta calculation
     pub body_drag_state: Option<BodyDragState>,
+
+    // Hand Tool Logic
+    pub handled_hand_tool_drag: bool,
 }
 
 #[derive(Debug, Clone)]

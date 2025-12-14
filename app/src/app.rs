@@ -286,7 +286,7 @@ impl eframe::App for MyApp {
         if main_ui_enabled && !is_listening_for_shortcut {
             if let Some(action_id) = self
                 .shortcut_manager
-                .handle_shortcuts(ctx, &self.command_registry)
+                .handle_shortcuts(ctx, &self.command_registry, &mut self.editor_context)
             {
                 self.triggered_action = Some(action_id);
             }
@@ -338,6 +338,7 @@ impl eframe::App for MyApp {
                     &self.project,
                     &mut self.composition_dialog,
                     &self.render_server,
+                    &self.command_registry,
                 );
                 DockArea::new(&mut self.dock_state)
                     .style(Style::from_egui(ui.style().as_ref()))

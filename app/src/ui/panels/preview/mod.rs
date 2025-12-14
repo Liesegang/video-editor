@@ -6,10 +6,38 @@ use library::model::project::project::Project;
 use library::service::project_service::ProjectService;
 use library::RenderServer;
 
+use crate::command::{CommandId, CommandRegistry};
+use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 use crate::{action::HistoryManager, state::context::EditorContext};
 
 mod gizmo;
 mod grid;
+
+struct PreviewViewportState<'a> {
+    pan: &'a mut egui::Vec2,
+    zoom: &'a mut f32,
+}
+
+impl<'a> ViewportState for PreviewViewportState<'a> {
+    // Preview Pan is Translation. Positive Pan = Content Right.
+    // Viewport Pan is Scroll Offset. Positive Pan (+Delta) = Content Left.
+    // So we Invert.
+    fn get_pan(&self) -> egui::Vec2 {
+        -(*self.pan)
+    }
+
+    fn set_pan(&mut self, pan: egui::Vec2) {
+        *self.pan = -pan;
+    }
+
+    fn get_zoom(&self) -> egui::Vec2 {
+        egui::vec2(*self.zoom, *self.zoom)
+    }
+
+    fn set_zoom(&mut self, zoom: egui::Vec2) {
+        *self.zoom = zoom.x;
+    }
+}
 
 pub fn preview_panel(
     ui: &mut Ui,
@@ -18,6 +46,7 @@ pub fn preview_panel(
     project_service: &ProjectService,
     project: &Arc<RwLock<Project>>,
     render_server: &Arc<RenderServer>,
+    registry: &CommandRegistry,
 ) {
     let bottom_bar_height = 24.0;
     let available_rect = ui.available_rect_before_wrap();
@@ -32,36 +61,42 @@ pub fn preview_panel(
         egui::pos2(available_rect.min.x, preview_rect.max.y),
         available_rect.max,
     );
-
-    let response = ui.allocate_rect(preview_rect, egui::Sense::click_and_drag());
     let rect = preview_rect;
 
-    let pointer_pos = ui.input(|i| i.pointer.hover_pos());
-    let space_down = ui.input(|i| i.key_down(egui::Key::Space));
-    let middle_down = ui
-        .ctx()
-        .input(|i| i.pointer.button_down(egui::PointerButton::Middle));
-    let is_panning_input = space_down || middle_down;
+    // Viewport Controller Integration
+    let hand_tool_key = registry
+        .commands
+        .iter()
+        .find(|c| c.id == CommandId::HandTool)
+        .and_then(|c| c.shortcut)
+        .map(|(_, key)| key);
 
-    if is_panning_input && response.dragged() {
-        editor_context.view.pan += response.drag_delta();
-    }
+    let mut state = PreviewViewportState {
+        pan: &mut editor_context.view.pan,
+        zoom: &mut editor_context.view.zoom,
+    };
 
-    if response.hovered() {
-        let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
-        if scroll_delta != 0.0 {
-            let zoom_factor = if scroll_delta > 0.0 { 1.1 } else { 0.9 };
-            let old_zoom = editor_context.view.zoom;
-            editor_context.view.zoom *= zoom_factor;
+    let mut controller = ViewportController::new(ui, ui.make_persistent_id("unique_preview_viewport_controller_id"), hand_tool_key)
+        .with_config(ViewportConfig {
+            zoom_uniform: true,
+            ..Default::default()
+        });
 
-            if let Some(mouse_pos) = pointer_pos {
-                let mouse_in_canvas = mouse_pos - rect.min;
-                editor_context.view.pan = mouse_in_canvas
-                    - (mouse_in_canvas - editor_context.view.pan)
-                        * (editor_context.view.zoom / old_zoom);
-            }
-        }
-    }
+    // Provide specific rect to controller (excluding bottom bar)
+    let (_changed, response) = controller.interact_with_rect(
+        preview_rect,
+        &mut state,
+        &mut editor_context.interaction.handled_hand_tool_drag,
+    );
+
+    let pointer_pos = response.hover_pos();
+    let is_hand_tool_active = if let Some(key) = controller.hand_tool_key {
+         ui.input(|i| i.key_down(key))
+    } else { false };
+    let is_panning_input = is_hand_tool_active || response.dragged_by(egui::PointerButton::Middle);
+
+    // Legacy logic (removed lines 36-64)
+
 
     let view_offset = rect.min + editor_context.view.pan;
     let view_zoom = editor_context.view.zoom;

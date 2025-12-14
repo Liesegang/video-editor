@@ -24,8 +24,9 @@ pub enum CommandId {
 
     // Playback
     TogglePlayback,
-
+    
     // Tools
+    HandTool,
     ShowCommandPalette,
 }
 
@@ -36,6 +37,27 @@ pub struct Command {
     pub shortcut: Option<(Modifiers, Key)>,
     pub shortcut_text: String,
     pub allow_when_focused: bool,
+    pub trigger_on_release: bool,
+}
+
+#[derive(Clone)]
+pub struct CommandRegistry {
+    pub commands: Vec<Command>,
+}
+
+fn get_shortcut_text(shortcut: &Option<(Modifiers, Key)>) -> String {
+    if let Some((m, k)) = shortcut {
+        let mut parts = Vec::new();
+        if m.command { parts.push("Ctrl"); }
+        if m.ctrl && !m.command { parts.push("Ctrl"); }
+        if m.shift { parts.push("Shift"); }
+        if m.alt { parts.push("Alt"); }
+        let key_str = format!("{:?}", k);
+        parts.push(&key_str);
+        parts.join("+")
+    } else {
+        "".to_string()
+    }
 }
 
 impl Command {
@@ -44,6 +66,7 @@ impl Command {
         text: &str,
         shortcut: Option<(Modifiers, Key)>,
         allow_when_focused: bool,
+        trigger_on_release: bool,
     ) -> Self {
         let shortcut_text = get_shortcut_text(&shortcut);
         Self {
@@ -52,36 +75,11 @@ impl Command {
             shortcut,
             shortcut_text,
             allow_when_focused,
+            trigger_on_release,
         }
     }
 }
-
-#[derive(Clone, PartialEq)]
-pub struct CommandRegistry {
-    pub commands: Vec<Command>,
-}
-
-// Helper to create the text representation of a shortcut
-fn get_shortcut_text(shortcut: &Option<(Modifiers, Key)>) -> String {
-    if let Some((mods, key)) = shortcut {
-        let mut parts = Vec::new();
-        if mods.command {
-            parts.push("Ctrl");
-        }
-        if mods.shift {
-            parts.push("Shift");
-        }
-        if mods.alt {
-            parts.push("Alt");
-        }
-        let key_str = format!("{:?}", key);
-        parts.push(&key_str.as_str());
-        parts.join("+")
-    } else {
-        String::new()
-    }
-}
-
+// ...
 impl CommandRegistry {
     pub fn new(config: &AppConfig) -> Self {
         let mut commands = vec![
@@ -91,33 +89,38 @@ impl CommandRegistry {
                 "New Project",
                 Some((Modifiers::COMMAND, Key::N)),
                 true,
+                false,
             ),
             Command::new(
                 CommandId::LoadProject,
                 "Load Project...",
                 Some((Modifiers::COMMAND, Key::O)),
                 true,
+                false,
             ),
-            Command::new(CommandId::Save, "Save", Some((Modifiers::COMMAND, Key::S)), true),
+            Command::new(CommandId::Save, "Save", Some((Modifiers::COMMAND, Key::S)), true, false),
             Command::new(
                 CommandId::SaveAs,
                 "Save As...",
                 Some((Modifiers::COMMAND | Modifiers::SHIFT, Key::S)),
                 true,
+                false,
             ),
             Command::new(
                 CommandId::Export,
                 "Export...",
                 Some((Modifiers::COMMAND, Key::E)),
                 true,
+                false,
             ),
-            Command::new(CommandId::Quit, "Quit", Some((Modifiers::COMMAND, Key::Q)), true),
+            Command::new(CommandId::Quit, "Quit", Some((Modifiers::COMMAND, Key::Q)), true, false),
             // Edit Menu
-            Command::new(CommandId::Undo, "Undo", Some((Modifiers::COMMAND, Key::Z)), false),
+            Command::new(CommandId::Undo, "Undo", Some((Modifiers::COMMAND, Key::Z)), false, false),
             Command::new(
                 CommandId::Redo,
                 "Redo",
                 Some((Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)),
+                false,
                 false,
             ),
             Command::new(
@@ -125,28 +128,39 @@ impl CommandRegistry {
                 "Delete",
                 Some((Modifiers::NONE, Key::Delete)),
                 false,
+                false,
             ),
             Command::new(
                 CommandId::Settings,
                 "Settings...",
                 Some((Modifiers::COMMAND, Key::Comma)),
                 true,
+                false,
             ),
             // View Menu
-            Command::new(CommandId::ResetLayout, "Reset Layout", None, true),
+            Command::new(CommandId::ResetLayout, "Reset Layout", None, true, false),
             // Playback (no menu item, but still a command)
             Command::new(
                 CommandId::TogglePlayback,
                 "Toggle Playback",
                 Some((Modifiers::NONE, Key::Space)),
                 false,
+                true, // Trigger on release
             ),
             // Tools
+            Command::new(
+                CommandId::HandTool,
+                "Hand Tool (Hold)",
+                Some((Modifiers::NONE, Key::Space)),
+                true, // Allow focused for panning in text fields? Maybe no.
+                false,
+            ),
             Command::new(
                 CommandId::ShowCommandPalette,
                 "Command Palette",
                 Some((Modifiers::COMMAND | Modifiers::SHIFT, Key::P)),
                 true,
+                false,
             ),
         ];
 
@@ -154,9 +168,10 @@ impl CommandRegistry {
         for tab in Tab::all() {
             commands.push(Command::new(
                 CommandId::TogglePanel(*tab),
-                tab.name(), // Use tab name as command text
-                None,       // No default shortcut for now, users can assign one
-                true,       // Toggling panels should work even when focused
+                tab.name(), 
+                None,       
+                true,       
+                false,
             ));
         }
         // Override defaults with user config

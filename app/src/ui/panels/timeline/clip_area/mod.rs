@@ -7,9 +7,42 @@ use uuid::Uuid;
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 
+use crate::command::{CommandId, CommandRegistry};
+use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
+
 mod background;
 mod clips;
 mod interactions;
+
+struct TimelineViewportState<'a> {
+    scroll_offset: &'a mut egui::Vec2,
+    h_zoom: &'a mut f32,
+    v_zoom: &'a mut f32,
+    min_h_zoom: f32,
+    max_h_zoom: f32,
+    min_v_zoom: f32,
+    max_v_zoom: f32,
+    max_scroll_y: f32,
+}
+
+impl<'a> ViewportState for TimelineViewportState<'a> {
+    fn get_pan(&self) -> egui::Vec2 {
+        *self.scroll_offset
+    }
+    fn set_pan(&mut self, pan: egui::Vec2) {
+        let mut new_offset = pan;
+        new_offset.x = new_offset.x.max(0.0);
+        new_offset.y = new_offset.y.clamp(0.0, self.max_scroll_y);
+        *self.scroll_offset = new_offset;
+    }
+    fn get_zoom(&self) -> egui::Vec2 {
+        egui::vec2(*self.h_zoom, *self.v_zoom)
+    }
+    fn set_zoom(&mut self, zoom: egui::Vec2) {
+        *self.h_zoom = zoom.x.clamp(self.min_h_zoom, self.max_h_zoom);
+        *self.v_zoom = zoom.y.clamp(self.min_v_zoom, self.max_v_zoom); // Basic vertical zoom limits
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn show_clip_area(
@@ -23,14 +56,15 @@ pub fn show_clip_area(
     row_height: f32,
     track_spacing: f32,
     composition_fps: f64,
+    registry: &CommandRegistry,
 ) -> (egui::Rect, egui::Response) {
+// ...
     let (content_rect_for_clip_area, response) =
-        ui_content.allocate_at_least(ui_content.available_size(), egui::Sense::click_and_drag());
+        ui_content.allocate_at_least(ui_content.available_size(), egui::Sense::hover()); // Changed to hover()
 
     let is_dragging_item = editor_context.interaction.dragged_item.is_some();
 
     // --- Data collection for entities ---
-    let mut all_clips: Vec<(Uuid, TrackClip)> = Vec::new(); // all_entities -> all_clips
     let mut current_tracks: Vec<library::model::project::Track> = Vec::new();
     let selected_composition_id = editor_context.selection.composition_id;
     if let Some(comp_id) = selected_composition_id {
@@ -38,13 +72,6 @@ pub fn show_clip_area(
             if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
                 current_tracks = comp.tracks.clone();
             }
-        }
-    }
-
-    for track in &current_tracks {
-        for clip in &track.clips {
-            // entity -> clip
-            all_clips.push((track.id, clip.clone())); // all_entities -> all_clips
         }
     }
     // --- End Data collection for entities ---
@@ -75,9 +102,45 @@ pub fn show_clip_area(
     );
 
     // --- Main Interaction Block (for overall clip area, e.g., scroll, zoom, asset drop) ---
-    interactions::handle_area_interaction(
+    // --- Viewport Controller for Zoom/Pan ---
+    // Calculate Constraints
+    const MAX_PIXELS_PER_FRAME_DESIRED: f32 = 20.0;
+    let max_h_zoom = (MAX_PIXELS_PER_FRAME_DESIRED * composition_fps as f32) / editor_context.timeline.pixels_per_second;
+    let min_possible_zoom = content_rect_for_clip_area.width() / (current_comp_duration as f32 * editor_context.timeline.pixels_per_second);
+    let min_h_zoom = min_possible_zoom.min(0.01);
+    
+    // Hand Tool Key
+    let hand_tool_key = registry.commands.iter().find(|c| c.id == CommandId::HandTool).and_then(|c| c.shortcut).map(|(_, k)| k);
+    
+    let mut state = TimelineViewportState {
+        scroll_offset: &mut editor_context.timeline.scroll_offset,
+        h_zoom: &mut editor_context.timeline.h_zoom,
+        v_zoom: &mut editor_context.timeline.v_zoom,
+        min_h_zoom,
+        max_h_zoom,
+        min_v_zoom: 0.1,
+        max_v_zoom: 10.0,
+        max_scroll_y: (num_tracks as f32 * (row_height + track_spacing) - content_rect_for_clip_area.height()).max(0.0),
+    };
+    
+    let mut controller = ViewportController::new(ui_content, ui_content.make_persistent_id("unique_timeline_viewport_controller_id"), hand_tool_key)
+        .with_config(ViewportConfig {
+            zoom_uniform: false,
+            allow_zoom_x: true,
+            allow_zoom_y: true,
+            allow_pan_x: true,
+            allow_pan_y: true, // Enable all
+             min_zoom: 0.0001,
+             max_zoom: 10000.0,
+            ..Default::default()
+        });
+        
+    let (_changed, vp_response) = controller.interact_with_rect(content_rect_for_clip_area, &mut state, &mut editor_context.interaction.handled_hand_tool_drag);
+
+    // Call legacy interaction (drag drop / context menu)
+    interactions::handle_drag_drop_and_context_menu(
         ui_content,
-        &response,
+        &vp_response,
         content_rect_for_clip_area,
         editor_context,
         project,
@@ -98,7 +161,7 @@ pub fn show_clip_area(
         project_service,
         history_manager,
         &current_tracks,
-        &all_clips,
+
         project,
         pixels_per_unit,
         row_height,

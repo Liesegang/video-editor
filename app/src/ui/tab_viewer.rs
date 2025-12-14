@@ -5,6 +5,7 @@ use library::model::project::project::Project;
 use std::sync::{Arc, RwLock};
 
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
+use crate::command::CommandRegistry;
 use crate::{
     action::HistoryManager,
     model::ui_types::Tab,
@@ -21,6 +22,7 @@ pub struct AppTabViewer<'a> {
     project: &'a Arc<RwLock<Project>>,
     composition_dialog: &'a mut CompositionDialog,
     render_server: &'a Arc<RenderServer>,
+    command_registry: &'a CommandRegistry,
 }
 
 impl<'a> AppTabViewer<'a> {
@@ -31,6 +33,7 @@ impl<'a> AppTabViewer<'a> {
         project: &'a Arc<RwLock<Project>>,
         composition_dialog: &'a mut CompositionDialog,
         render_server: &'a Arc<RenderServer>,
+        command_registry: &'a CommandRegistry,
     ) -> Self {
         Self {
             editor_context,
@@ -39,6 +42,7 @@ impl<'a> AppTabViewer<'a> {
             project,
             composition_dialog,
             render_server,
+            command_registry,
         }
     }
 }
@@ -55,6 +59,7 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                 self.project_service,
                 self.project,
                 self.render_server,
+                self.command_registry,
             ),
             Tab::Timeline => timeline::timeline_panel(
                 ui,
@@ -62,6 +67,7 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                 self.history_manager,
                 self.project_service,
                 self.project,
+                self.command_registry,
             ),
             Tab::Inspector => inspector::inspector_panel(
                 ui,
@@ -85,6 +91,7 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                     self.history_manager,
                     self.project_service,
                     self.project,
+                    self.command_registry,
                 );
             }
         }

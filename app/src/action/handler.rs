@@ -164,6 +164,10 @@ pub fn handle_command(
         CommandId::ResetLayout => {
             *context.dock_state = crate::ui::tab_viewer::create_initial_dock_state();
         }
+        CommandId::HandTool => {
+            // HandTool is an interaction state command, handled by ViewportController.
+            // No direct action needed here.
+        }
         CommandId::TogglePlayback => {
             let is_playing = !context.editor_context.timeline.is_playing;
             context.editor_context.timeline.is_playing = is_playing;
