@@ -6,7 +6,7 @@ use crate::service::project_model::ProjectModel;
 use crate::service::render_service::RenderService;
 use crate::util::timing::{ScopedTimer, measure_info};
 use log::{error, info};
-use std::io::Write;
+
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::mpsc::{self, SyncSender};
@@ -81,7 +81,7 @@ impl ExportService {
         ))?;
         
         // Prepare Settings (Potentially with Audio)
-        let mut settings_struct = (*self.export_settings).clone();
+        let settings_struct = (*self.export_settings).clone();
         let export_format = settings_struct.export_format();
         
         // Setup Output Paths

@@ -1,31 +1,35 @@
 use crate::error::LibraryError;
 use crate::loader::image::Image;
+#[cfg(all(feature = "gl", target_os = "windows"))]
 use log::{debug, warn};
+#[cfg(all(feature = "gl", target_os = "windows"))]
 use skia_safe::gpu::gl::Interface;
-use skia_safe::gpu::{self, DirectContext, SurfaceOrigin, direct_contexts};
+use skia_safe::gpu::{self, DirectContext, SurfaceOrigin};
+#[cfg(all(feature = "gl", target_os = "windows"))]
+use skia_safe::gpu::direct_contexts;
 use skia_safe::images::raster_from_data;
 use skia_safe::surfaces;
 use skia_safe::{AlphaType, ColorType, Data, ISize, Image as SkImage, ImageInfo, Surface};
 
-#[cfg(feature = "gl")]
+#[cfg(all(feature = "gl", target_os = "windows"))]
 use glutin::config::ConfigSurfaceTypes;
-#[cfg(feature = "gl")]
+#[cfg(all(feature = "gl", target_os = "windows"))]
 use glutin::context::ContextAttributesBuilder;
 #[cfg(feature = "gl")]
 use glutin::prelude::*;
 #[cfg(feature = "gl")]
 use glutin::surface::WindowSurface;
-#[cfg(feature = "gl")]
+#[cfg(all(feature = "gl", target_os = "windows"))]
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle,
 };
 
-#[cfg(feature = "gl")]
+#[cfg(all(feature = "gl", target_os = "windows"))]
 #[cfg(feature = "gl")]
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-#[cfg(feature = "gl")]
+#[cfg(all(feature = "gl", target_os = "windows"))]
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-#[cfg(feature = "gl")]
+#[cfg(all(feature = "gl", target_os = "windows"))]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CS_OWNDC, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, HWND_MESSAGE, RegisterClassExW,
     WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
@@ -54,7 +58,7 @@ impl GpuContext {
 }
 
 pub fn create_gpu_context() -> Option<GpuContext> {
-    #[cfg(feature = "gl")]
+    #[cfg(all(feature = "gl", target_os = "windows"))]
     {
         match init_glutin_headless() {
             Ok(ctx) => Some(ctx),
@@ -74,13 +78,17 @@ pub fn create_gpu_context() -> Option<GpuContext> {
             }
         }
     }
+    #[cfg(all(feature = "gl", not(target_os = "windows")))]
+    {
+        None
+    }
     #[cfg(not(feature = "gl"))]
     {
         None
     }
 }
 
-#[cfg(feature = "gl")]
+#[cfg(all(feature = "gl", target_os = "windows"))]
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
     msg: u32,
@@ -90,7 +98,7 @@ unsafe extern "system" fn window_proc(
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
-#[cfg(feature = "gl")]
+#[cfg(all(feature = "gl", target_os = "windows"))]
 fn create_dummy_window() -> Result<RawWindowHandle, String> {
     unsafe {
         let hinstance = GetModuleHandleW(std::ptr::null());
@@ -142,7 +150,7 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
     }
 }
 
-#[cfg(feature = "gl")]
+#[cfg(all(feature = "gl", target_os = "windows"))]
 fn init_glutin_headless() -> Result<GpuContext, String> {
     // 1. Create Dummy Window
     let raw_window_handle = create_dummy_window()?;
