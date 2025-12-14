@@ -16,7 +16,13 @@ impl HistoryManager {
     }
 
     /// Pushes a new project state onto the undo stack. Clears the redo stack.
+    /// If the new state is identical to the current top of the stack, the push is ignored (heuristically deduplicated).
     pub fn push_project_state(&mut self, project: Project) {
+        if let Some(last) = self.undo_stack.last() {
+            if last == &project {
+                return;
+            }
+        }
         self.undo_stack.push(project);
         self.redo_stack.clear();
     }

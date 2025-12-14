@@ -49,7 +49,7 @@ fn handle_drag_value_property(
         *needs_refresh = true; // Update needs_refresh internally
     }
 
-    if response.drag_stopped() {
+    if response.drag_stopped() || response.lost_focus() {
         // Post-Operation Push: Push the current state (which includes the change)
         let current_state = project_service.get_project().read().unwrap().clone();
         history_manager.push_project_state(current_state);
