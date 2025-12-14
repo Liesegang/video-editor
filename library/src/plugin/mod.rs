@@ -1,3 +1,4 @@
+#![allow(improper_ctypes_definitions)]
 use ordered_float::OrderedFloat;
 use std::collections::HashMap;
 use std::path::Path;
