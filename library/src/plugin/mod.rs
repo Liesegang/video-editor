@@ -71,8 +71,15 @@ pub enum PropertyUiType {
     Text,
     MultilineText,
     Bool,
-    Vec2,
-    Vec3,
+    Vec2 {
+        suffix: String,
+    },
+    Vec3 {
+        suffix: String,
+    },
+    Vec4 {
+        suffix: String,
+    },
     Dropdown {
         options: Vec<String>,
     },
@@ -822,12 +829,15 @@ impl PluginManager {
 
                     match crate::plugin::effects::SkslEffectPlugin::new(&toml_content, &sksl_content) {
                         Ok(plugin) => {
+                            log::info!("Successfully registered SkSL plugin: {}", plugin.id());
                             self.register_effect(Arc::new(plugin));
                         },
                         Err(e) => {
                             log::error!("Failed to load SkSL plugin at {}: {}", path.display(), e);
                         }
                     }
+                } else {
+                    log::warn!("Skipping directory {}, missing config.toml or shader.sksl", path.display());
                 }
             }
         }
