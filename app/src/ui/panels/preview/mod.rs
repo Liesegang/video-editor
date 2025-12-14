@@ -1,3 +1,4 @@
+use egui_phosphor::regular as icons;
 use egui::Ui;
 use std::sync::{Arc, RwLock};
 
@@ -6,6 +7,7 @@ use library::service::project_service::ProjectService;
 use library::RenderServer;
 
 use crate::command::{CommandId, CommandRegistry};
+use crate::state::context_types::PreviewTool;
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 use crate::{action::HistoryManager, state::context::EditorContext};
 
@@ -49,12 +51,20 @@ pub fn preview_panel(
     registry: &CommandRegistry,
 ) {
     let bottom_bar_height = 24.0;
+    let top_bar_height = 32.0; // Added top bar
     let available_rect = ui.available_rect_before_wrap();
-    let preview_rect = egui::Rect::from_min_size(
+    
+    // Top Bar area
+    let top_bar_rect = egui::Rect::from_min_size(
         available_rect.min,
+        egui::vec2(available_rect.width(), top_bar_height),
+    );
+
+    let preview_rect = egui::Rect::from_min_size(
+        egui::pos2(available_rect.min.x, available_rect.min.y + top_bar_height),
         egui::vec2(
             available_rect.width(),
-            available_rect.height() - bottom_bar_height,
+            available_rect.height() - bottom_bar_height - top_bar_height,
         ),
     );
     let bottom_bar_rect = egui::Rect::from_min_max(
@@ -62,6 +72,43 @@ pub fn preview_panel(
         available_rect.max,
     );
     let rect = preview_rect;
+
+    // Draw Top Bar
+    ui.scope_builder(egui::UiBuilder::new().max_rect(top_bar_rect), |ui| {
+        ui.horizontal(|ui| {
+             ui.style_mut().spacing.item_spacing = egui::vec2(4.0, 0.0);
+             
+             let select_btn = ui.add(egui::Button::new(egui::RichText::new(icons::CURSOR).size(18.0)).selected(editor_context.view.active_tool == PreviewTool::Select));
+             if select_btn.clicked() {
+                 editor_context.view.active_tool = PreviewTool::Select;
+             }
+             select_btn.on_hover_text("Select Tool");
+
+             let pan_btn = ui.add(egui::Button::new(egui::RichText::new(icons::HAND).size(18.0)).selected(editor_context.view.active_tool == PreviewTool::Pan));
+             if pan_btn.clicked() {
+                 editor_context.view.active_tool = PreviewTool::Pan;
+             }
+             pan_btn.on_hover_text("Pan Tool");
+
+             let zoom_btn = ui.add(egui::Button::new(egui::RichText::new(icons::MAGNIFYING_GLASS).size(18.0)).selected(editor_context.view.active_tool == PreviewTool::Zoom));
+             if zoom_btn.clicked() {
+                 editor_context.view.active_tool = PreviewTool::Zoom;
+             }
+             zoom_btn.on_hover_text("Zoom Tool");
+
+             let text_btn = ui.add(egui::Button::new(egui::RichText::new(icons::TEXT_T).size(18.0)).selected(editor_context.view.active_tool == PreviewTool::Text));
+             if text_btn.clicked() {
+                 editor_context.view.active_tool = PreviewTool::Text;
+             }
+             text_btn.on_hover_text("Text Tool");
+
+             let shape_btn = ui.add(egui::Button::new(egui::RichText::new(icons::SQUARE).size(18.0)).selected(editor_context.view.active_tool == PreviewTool::Shape));
+             if shape_btn.clicked() {
+                 editor_context.view.active_tool = PreviewTool::Shape;
+             }
+             shape_btn.on_hover_text("Shape Tool");
+        });
+    });
 
     // Viewport Controller Integration
     let hand_tool_key = registry
@@ -84,7 +131,9 @@ pub fn preview_panel(
     .with_config(ViewportConfig {
         zoom_uniform: true,
         ..Default::default()
-    });
+    })
+    .with_pan_tool_active(editor_context.view.active_tool == PreviewTool::Pan)
+    .with_zoom_tool_active(editor_context.view.active_tool == PreviewTool::Zoom);
 
     // Provide specific rect to controller (excluding bottom bar)
     let (_changed, response) = controller.interact_with_rect(
@@ -395,7 +444,9 @@ pub fn preview_panel(
     }
 
     // Draw Gizmo
-    gizmo::draw_gizmo(ui, editor_context, &gui_clips, to_screen);
+    if editor_context.view.active_tool == PreviewTool::Select {
+        gizmo::draw_gizmo(ui, editor_context, &gui_clips, to_screen);
+    }
 
     // Info text
     let info_text = format!(

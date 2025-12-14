@@ -40,6 +40,8 @@ pub struct ViewportController<'a> {
     pub id: egui::Id,
     pub config: ViewportConfig,
     pub hand_tool_key: Option<egui::Key>,
+    pub pan_tool_active: bool,
+    pub zoom_tool_active: bool,
 }
 
 impl<'a> ViewportController<'a> {
@@ -49,11 +51,23 @@ impl<'a> ViewportController<'a> {
             id,
             config: ViewportConfig::default(),
             hand_tool_key,
+            pan_tool_active: false,
+            zoom_tool_active: false,
         }
     }
 
     pub fn with_config(mut self, config: ViewportConfig) -> Self {
         self.config = config;
+        self
+    }
+    
+    pub fn with_pan_tool_active(mut self, active: bool) -> Self {
+        self.pan_tool_active = active;
+        self
+    }
+    
+    pub fn with_zoom_tool_active(mut self, active: bool) -> Self {
+        self.zoom_tool_active = active;
         self
     }
 
@@ -80,29 +94,62 @@ impl<'a> ViewportController<'a> {
             .ui
             .interact(rect, self.id, egui::Sense::click_and_drag());
 
+        // --- 0. Zoom Tool Logic ---
+        if self.zoom_tool_active {
+            // Set Cursor
+            self.ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ZoomIn); // Or generic Zoom if available
+
+            if response.dragged_by(egui::PointerButton::Primary) {
+                // Scrubby Zoom
+                // Drag Up (Neg Y) -> Zoom In
+                // Drag Down (Pos Y) -> Zoom Out
+                let delta = response.drag_delta();
+                
+                // Sensitivity
+                let sensitivity = 0.01;
+                let zoom_change = 1.0 - (delta.y * sensitivity);
+                
+                if zoom_change != 1.0 {
+                    let pivot = response.drag_start_pos().unwrap_or(rect.center());
+                    let local_pivot = pivot - rect.min; // Relative to rect, as apply_zoom_at expects logic derived from screen-rect.min
+                    
+                    self.apply_zoom_at(state, local_pivot, egui::vec2(zoom_change, zoom_change));
+                    changed = true;
+                    // Mark handled?
+                }
+                
+                // Don't process other tools if zooming
+                return (changed, response);
+            }
+        }
+
         // --- 1. Hand Tool Logic ---
         let mut _is_hand_tool_active = false;
-        if let Some(key) = self.hand_tool_key {
-            // Check if key is pressed (not necessarily just pressed this frame)
-            if self.ui.input(|i| i.key_down(key)) {
-                _is_hand_tool_active = true;
+        
+        let key_active = if let Some(key) = self.hand_tool_key {
+             self.ui.input(|i| i.key_down(key))
+        } else {
+            false
+        };
 
-                // Set initial cursor (can be overridden by dragging)
-                self.ui
-                    .output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+        if key_active || self.pan_tool_active {
+            _is_hand_tool_active = true;
 
-                if response.dragged_by(egui::PointerButton::Primary) {
-                    let delta = response.drag_delta();
-                    if delta != egui::Vec2::ZERO {
-                        self.apply_pan(state, -delta);
-                        changed = true;
+            // Set initial cursor (can be overridden by dragging)
+            self.ui
+                .output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
 
-                        // Mark as handled to prevent 'Short Press' action on release
-                        *handled_hand_tool_drag = true;
+            if response.dragged_by(egui::PointerButton::Primary) {
+                let delta = response.drag_delta();
+                if delta != egui::Vec2::ZERO {
+                    self.apply_pan(state, -delta);
+                    changed = true;
 
-                        self.ui
-                            .output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
-                    }
+                    // Mark as handled to prevent 'Short Press' action on release
+                    *handled_hand_tool_drag = true;
+
+                    self.ui
+                        .output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
                 }
             }
         }

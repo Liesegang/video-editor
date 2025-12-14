@@ -43,20 +43,33 @@ impl<'a> PreviewInteractions<'a> {
 
     pub fn handle(&mut self, response: &Response, content_rect: Rect) {
         let pointer_pos = self.ui.input(|i| i.pointer.hover_pos());
+        let active_tool = self.editor_context.view.active_tool.clone();
+
+        // If Pan tool is active, ViewportController handles interaction.
+        if active_tool == crate::state::context_types::PreviewTool::Pan {
+            return;
+        }
 
         // 1. Gizmo Interaction
-        let interacted_with_gizmo = gizmo::handle_gizmo_interaction(
-            self.ui,
-            self.editor_context,
-            self.project,
-            self.project_service,
-            self.history_manager,
-            pointer_pos,
-            &*self.to_world,
-        );
+        let mut interacted_with_gizmo = false;
+        if active_tool == crate::state::context_types::PreviewTool::Select {
+            interacted_with_gizmo = gizmo::handle_gizmo_interaction(
+                self.ui,
+                self.editor_context,
+                self.project,
+                self.project_service,
+                self.history_manager,
+                pointer_pos,
+                &*self.to_world,
+            );
+        }
 
         // 2. Hit Testing (Hover)
-        let hovered_entity_id = self.check_hit_test(pointer_pos, content_rect);
+        let hovered_entity_id = if active_tool == crate::state::context_types::PreviewTool::Select {
+             self.check_hit_test(pointer_pos, content_rect)
+        } else {
+             None
+        };
 
         // Check panning input (Middle mouse OR Shift+LeftDrag is handled elsewhere? No, user wants Shift+Left to be MultiSelect usually)
         // Hand tool logic is in ViewportController. checking response.dragged_by(Middle) covers middle mouse.
