@@ -152,6 +152,26 @@ pub fn show_clip_area(
         &mut editor_context.interaction.handled_hand_tool_drag,
     );
 
+    // Handle Box Selection State Update
+    // If not panning (hand tool), and dragging Primary on background
+    if !editor_context.interaction.handled_hand_tool_drag {
+        // We check input directly because ViewportController might consume interactions if we aren't careful,
+        // but here we used interact_with_rect which returns response.
+
+        // Wait, controller.interact_with_rect calls ui.interact.
+        // If we want to override or check drags on that same rect, we can use vp_response.
+
+        if vp_response.drag_started_by(egui::PointerButton::Primary) {
+            // Check modifiers?
+            if !ui_content.input(|i| i.modifiers.alt) {
+                // Assuming Alt is not for selection
+                if let Some(pos) = vp_response.interact_pointer_pos() {
+                    editor_context.interaction.timeline_selection_drag_start = Some(pos);
+                }
+            }
+        }
+    }
+
     // Call legacy interaction (drag drop / context menu)
     interactions::handle_drag_drop_and_context_menu(
         ui_content,
@@ -183,13 +203,93 @@ pub fn show_clip_area(
         composition_fps,
     );
 
+    // Box Selection Logic (Draw & Commit)
+    if let Some(start_pos) = editor_context.interaction.timeline_selection_drag_start {
+        if ui_content.input(|i| i.pointer.primary_down()) {
+            if let Some(current_pos) = ui_content.input(|i| i.pointer.interact_pos()) {
+                let selection_rect = egui::Rect::from_two_pos(start_pos, current_pos);
+
+                // Draw selection box
+                let painter = ui_content.painter_at(content_rect_for_clip_area);
+                painter.rect_stroke(
+                    selection_rect,
+                    0.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 255)),
+                    egui::StrokeKind::Middle,
+                );
+                painter.rect_filled(
+                    selection_rect,
+                    0.0,
+                    egui::Color32::from_rgba_premultiplied(100, 200, 255, 30),
+                );
+            }
+        } else {
+            // Released
+            if let Some(current_pos) = ui_content.input(|i| i.pointer.interact_pos()) {
+                let selection_rect = egui::Rect::from_two_pos(start_pos, current_pos);
+                // Commit selection
+                let found_clips = clips::get_clips_in_box(
+                    selection_rect,
+                    editor_context,
+                    &current_tracks,
+                    pixels_per_unit,
+                    row_height,
+                    track_spacing,
+                    composition_fps,
+                    content_rect_for_clip_area.min.to_vec2(),
+                );
+
+                let action = crate::ui::selection::get_box_action(
+                    &ui_content.input(|i| i.modifiers),
+                    found_clips,
+                );
+
+                match action {
+                    crate::ui::selection::BoxAction::Replace(items) => {
+                        editor_context.selection.selected_entities.clear();
+                        editor_context.selection.last_selected_entity_id = None;
+                        editor_context.selection.last_selected_track_id = None;
+
+                        let mut last_id = None;
+                        let mut last_track = None;
+                        for (id, tid) in items {
+                            editor_context.selection.selected_entities.insert(id);
+                            last_id = Some(id);
+                            last_track = Some(tid);
+                        }
+                        if let Some(lid) = last_id {
+                            editor_context.selection.last_selected_entity_id = Some(lid);
+                            editor_context.selection.last_selected_track_id = last_track;
+                        }
+                    }
+                    crate::ui::selection::BoxAction::Add(items) => {
+                        let mut last_id = None;
+                        let mut last_track = None;
+                        for (id, tid) in items {
+                            editor_context.selection.selected_entities.insert(id);
+                            last_id = Some(id);
+                            last_track = Some(tid);
+                        }
+                        if let Some(lid) = last_id {
+                            editor_context.selection.last_selected_entity_id = Some(lid);
+                            editor_context.selection.last_selected_track_id = last_track;
+                        }
+                    }
+                }
+            }
+            editor_context.interaction.timeline_selection_drag_start = None;
+        }
+    }
+
     // Final selection clearing logic
     if !editor_context.interaction.is_resizing_entity
-        && response.clicked()
+        && vp_response.clicked()
         && !clicked_on_entity
         && !is_dragging_item
     {
-        editor_context.selection.entity_id = None;
+        editor_context.selection.selected_entities.clear();
+        editor_context.selection.last_selected_entity_id = None;
+        editor_context.selection.last_selected_track_id = None;
     }
 
     (content_rect_for_clip_area, response)

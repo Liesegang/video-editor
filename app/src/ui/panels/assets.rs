@@ -198,8 +198,11 @@ pub fn assets_panel(
                                             if response.clicked() {
                                                 editor_context.selection.composition_id =
                                                     Some(comp.id);
-                                                editor_context.selection.track_id = None;
-                                                editor_context.selection.entity_id = None;
+                                                editor_context.selection.last_selected_track_id =
+                                                    None;
+                                                editor_context.selection.last_selected_entity_id =
+                                                    None;
+                                                editor_context.selection.selected_entities.clear();
                                             }
 
                                             if response.drag_started() {
@@ -365,8 +368,9 @@ pub fn assets_panel(
         if let Some(selected_id) = editor_context.selection.composition_id {
             if selected_id == comp_id {
                 editor_context.selection.composition_id = None;
-                editor_context.selection.track_id = None;
-                editor_context.selection.entity_id = None;
+                editor_context.selection.last_selected_track_id = None;
+                editor_context.selection.last_selected_entity_id = None;
+                editor_context.selection.selected_entities.clear();
             }
         }
 
@@ -413,8 +417,9 @@ pub fn assets_panel(
                                 // Clear selection if we just deleted the selected comp
                                 if editor_context.selection.composition_id == Some(comp_id) {
                                     editor_context.selection.composition_id = None;
-                                    editor_context.selection.track_id = None;
-                                    editor_context.selection.entity_id = None;
+                                    editor_context.selection.last_selected_track_id = None;
+                                    editor_context.selection.last_selected_entity_id = None;
+                                    editor_context.selection.selected_entities.clear();
                                 }
 
                                 let current_state =

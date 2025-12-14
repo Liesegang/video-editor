@@ -68,9 +68,9 @@ pub fn inspector_panel(
 
     // Display properties of selected entity
     if let (Some(selected_entity_id), Some(comp_id), Some(track_id)) = (
-        editor_context.selection.entity_id,
+        editor_context.selection.last_selected_entity_id,
         editor_context.selection.composition_id,
-        editor_context.selection.track_id,
+        editor_context.selection.last_selected_track_id,
     ) {
         // Fetch entity data directly from project
         let entity_data = if let Ok(proj_read) = project.read() {
@@ -111,6 +111,18 @@ pub fn inspector_panel(
             effects,
         )) = entity_data
         {
+            if editor_context.selection.selected_entities.len() > 1 {
+                ui.heading(format!(
+                    "{} Items Selected",
+                    editor_context.selection.selected_entities.len()
+                ));
+                ui.label(
+                    egui::RichText::new("(Editing Primary Item)")
+                        .italics()
+                        .small(),
+                );
+                ui.separator();
+            }
             ui.heading("Clip Properties");
             ui.separator();
 
@@ -898,12 +910,16 @@ pub fn inspector_panel(
         } else {
             ui.label("Clip not found (it may have been deleted).");
             // Deselect if not found
-            editor_context.selection.entity_id = None;
+            editor_context.selection.last_selected_entity_id = None;
+            editor_context
+                .selection
+                .selected_entities
+                .remove(&selected_entity_id);
         }
     } else {
         if editor_context.selection.composition_id.is_none() {
             ui.label("No composition selected.");
-        } else if editor_context.selection.track_id.is_none() {
+        } else if editor_context.selection.last_selected_track_id.is_none() {
             ui.label("No track selected.");
         } else {
             ui.label("Select a clip to edit");

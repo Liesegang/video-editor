@@ -103,11 +103,14 @@ impl Default for GraphEditorState {
     }
 }
 
+use std::collections::HashSet;
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct SelectionState {
     pub composition_id: Option<Uuid>,
-    pub track_id: Option<Uuid>,
-    pub entity_id: Option<Uuid>,
+    pub selected_entities: HashSet<Uuid>,
+    pub last_selected_entity_id: Option<Uuid>,
+    pub last_selected_track_id: Option<Uuid>,
 }
 
 #[derive(Default, Clone)]
@@ -147,14 +150,19 @@ pub struct InteractionState {
     // Body Drag State for absolute delta calculation
     pub body_drag_state: Option<BodyDragState>,
 
+    // Drag-to-select state
+    pub timeline_selection_drag_start: Option<egui::Pos2>,
+    pub preview_selection_drag_start: Option<egui::Pos2>,
+
     // Hand Tool Logic
     pub handled_hand_tool_drag: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BodyDragState {
     pub start_mouse_pos: egui::Pos2,
-    pub original_position: [f32; 2],
+    // Map of Entity ID -> Original Position [x, y]
+    pub original_positions: std::collections::HashMap<Uuid, [f32; 2]>,
 }
 
 #[derive(Debug, Clone)]

@@ -54,7 +54,7 @@ pub fn handle_gizmo_interaction(
             interacted_with_gizmo = true;
 
             // Re-acquire selected entity data
-            if let Some(selected_id) = editor_context.selection.entity_id {
+            if let Some(selected_id) = editor_context.selection.last_selected_entity_id {
                 // Clone needed properties to avoid borrow issues
                 let (comp_id, track_id, current_props) = if let Ok(proj_read) = project.read() {
                     if let Some(comp) = editor_context.get_current_composition(&proj_read) {
@@ -276,80 +276,61 @@ pub fn draw_gizmo(
     gui_clips: &[TimelineClip],
     to_screen: impl Fn(Pos2) -> Pos2,
 ) {
-    if let Some(selected_id) = editor_context.selection.entity_id {
+    // Draw outlines for ALL selected entities to show multi-selection
+    for selected_id in &editor_context.selection.selected_entities {
+        // Skip the primary one if it will be drawn by the main gizmo logic.
+        // However, the helper we are about to make only draws the outline, not the handles.
+        // The main gizmo logic draws outline AND handles.
+        // We can just rely on the main logic to overdraw the outline for the primary item.
+        let is_primary = Some(*selected_id) == editor_context.selection.last_selected_entity_id;
+        if is_primary {
+            continue;
+        }
+
+        if let Some(gc) = gui_clips.iter().find(|gc| gc.id == *selected_id) {
+            if gc.kind == library::model::project::TrackClipKind::Audio {
+                continue;
+            }
+
+            let gizmo_color = egui::Color32::from_rgb(0, 200, 255).linear_multiply(0.5); // Dimmer for secondary
+            draw_clip_box(ui, gc, |p| to_screen(p), gizmo_color, 1.0);
+        }
+    }
+
+    if let Some(selected_id) = editor_context.selection.last_selected_entity_id {
         if let Some(gc) = gui_clips.iter().find(|gc| gc.id == selected_id) {
             if gc.kind == library::model::project::TrackClipKind::Audio {
                 return;
             }
-            let painter = ui.painter();
 
-            let base_w = gc.width.unwrap_or(1920.0);
-            let base_h = gc.height.unwrap_or(1080.0);
-            let sx = gc.scale_x / 100.0;
-            let sy = gc.scale_y / 100.0;
-
-            let center = egui::pos2(gc.position[0], gc.position[1]);
-            let angle_rad = gc.rotation.to_radians();
-            let cos = angle_rad.cos();
-            let sin = angle_rad.sin();
-
-            let transform_point = |local_x: f32, local_y: f32| -> egui::Pos2 {
-                let ox = local_x - gc.anchor_x;
-                let oy = local_y - gc.anchor_y;
-                let sx_ox = ox * sx;
-                let sy_oy = oy * sy;
-                let rx = sx_ox * cos - sy_oy * sin;
-                let ry = sx_ox * sin + sy_oy * cos;
-                center + egui::vec2(rx, ry)
-            };
-
-            // Calculate Corners
-            let p_tl = transform_point(0.0, 0.0);
-            let p_tr = transform_point(base_w, 0.0);
-            let p_br = transform_point(base_w, base_h);
-            let p_bl = transform_point(0.0, base_h);
-
-            // Midpoints
-            let p_t = transform_point(base_w / 2.0, 0.0);
-            let p_b = transform_point(base_w / 2.0, base_h);
-            let p_l = transform_point(0.0, base_h / 2.0);
-            let p_r = transform_point(base_w, base_h / 2.0);
-
-            // Rotation Handle
-            let rot_handle_dist = 10.0 / editor_context.view.zoom;
-            let s_rot = to_screen(p_t) + egui::vec2(sin * rot_handle_dist, -cos * rot_handle_dist);
-
-            // Screen Coords
-            let s_tl = to_screen(p_tl);
-            let s_tr = to_screen(p_tr);
-            let s_br = to_screen(p_br);
-            let s_bl = to_screen(p_bl);
-            let s_t = to_screen(p_t);
-            let s_b = to_screen(p_b);
-            let s_l = to_screen(p_l);
-            let s_r = to_screen(p_r);
-            // let s_center = to_screen(center);
-
-            // Draw Box
+            // Draw Box (Primary)
             let gizmo_color = egui::Color32::from_rgb(0, 200, 255);
-            let stroke = egui::Stroke::new(2.0, gizmo_color);
-
-            painter.line_segment([s_tl, s_tr], stroke);
-            painter.line_segment([s_tr, s_br], stroke);
-            painter.line_segment([s_br, s_bl], stroke);
-            painter.line_segment([s_bl, s_tl], stroke);
+            let (corners, _center, rotation_rad, s_t) =
+                draw_clip_box(ui, gc, |p| to_screen(p), gizmo_color, 2.0);
 
             // Draw Rotation Stick
-            painter.line_segment([s_t, s_rot], stroke);
+            let painter = ui.painter();
+            let rot_handle_dist = 10.0 / editor_context.view.zoom;
+            let sin = rotation_rad.sin();
+            let cos = rotation_rad.cos();
+            let s_rot = s_t + egui::vec2(sin * rot_handle_dist, -cos * rot_handle_dist);
+
+            painter.line_segment([s_t, s_rot], egui::Stroke::new(2.0, gizmo_color));
             painter.circle_filled(s_rot, 5.0, gizmo_color);
 
             // Draw Handles
             let handle_radius = 5.0;
+
+            // Midpoints
+            let s_b = corners[2].lerp(corners[3], 0.5);
+            let s_l = corners[0].lerp(corners[3], 0.5);
+            let s_r = corners[1].lerp(corners[2], 0.5);
+
             let handles = [
-                (s_tl, GizmoHandle::TopLeft, CursorIcon::ResizeNwSe),
-                (s_tr, GizmoHandle::TopRight, CursorIcon::ResizeNeSw),
-                (s_bl, GizmoHandle::BottomLeft, CursorIcon::ResizeNeSw),
-                (s_br, GizmoHandle::BottomRight, CursorIcon::ResizeNwSe),
+                (corners[0], GizmoHandle::TopLeft, CursorIcon::ResizeNwSe), // TL: 0
+                (corners[1], GizmoHandle::TopRight, CursorIcon::ResizeNeSw), // TR: 1
+                (corners[3], GizmoHandle::BottomLeft, CursorIcon::ResizeNeSw), // BL: 3
+                (corners[2], GizmoHandle::BottomRight, CursorIcon::ResizeNwSe), // BR: 2
                 (s_t, GizmoHandle::Top, CursorIcon::ResizeVertical),
                 (s_b, GizmoHandle::Bottom, CursorIcon::ResizeVertical),
                 (s_l, GizmoHandle::Left, CursorIcon::ResizeHorizontal),
@@ -369,6 +350,9 @@ pub fn draw_gizmo(
                 }
 
                 if response.drag_started() {
+                    let base_w = gc.width.unwrap_or(1920.0);
+                    let base_h = gc.height.unwrap_or(1080.0);
+
                     editor_context.interaction.gizmo_state =
                         Some(crate::state::context::GizmoState {
                             start_mouse_pos: response.hover_pos().unwrap_or(pos),
@@ -386,4 +370,57 @@ pub fn draw_gizmo(
             }
         }
     }
+}
+
+fn draw_clip_box(
+    ui: &Ui,
+    gc: &TimelineClip,
+    to_screen: impl Fn(Pos2) -> Pos2,
+    color: egui::Color32,
+    thickness: f32,
+) -> ([Pos2; 4], Pos2, f32, Pos2) {
+    let base_w = gc.width.unwrap_or(1920.0);
+    let base_h = gc.height.unwrap_or(1080.0);
+    let sx = gc.scale_x / 100.0;
+    let sy = gc.scale_y / 100.0;
+
+    let center = egui::pos2(gc.position[0], gc.position[1]);
+    let angle_rad = gc.rotation.to_radians();
+    let cos = angle_rad.cos();
+    let sin = angle_rad.sin();
+
+    let transform_point = |local_x: f32, local_y: f32| -> egui::Pos2 {
+        let ox = local_x - gc.anchor_x;
+        let oy = local_y - gc.anchor_y;
+        let sx_ox = ox * sx;
+        let sy_oy = oy * sy;
+        let rx = sx_ox * cos - sy_oy * sin;
+        let ry = sx_ox * sin + sy_oy * cos;
+        center + egui::vec2(rx, ry)
+    };
+
+    // Calculate Corners
+    let p_tl = transform_point(0.0, 0.0);
+    let p_tr = transform_point(base_w, 0.0);
+    let p_br = transform_point(base_w, base_h);
+    let p_bl = transform_point(0.0, base_h);
+
+    // Midpoints (for matching handles)
+    let p_t = transform_point(base_w / 2.0, 0.0);
+
+    let s_tl = to_screen(p_tl);
+    let s_tr = to_screen(p_tr);
+    let s_br = to_screen(p_br);
+    let s_bl = to_screen(p_bl);
+    let s_t = to_screen(p_t);
+
+    let painter = ui.painter();
+    let stroke = egui::Stroke::new(thickness, color);
+
+    painter.line_segment([s_tl, s_tr], stroke);
+    painter.line_segment([s_tr, s_br], stroke);
+    painter.line_segment([s_br, s_bl], stroke);
+    painter.line_segment([s_bl, s_tl], stroke);
+
+    ([s_tl, s_tr, s_br, s_bl], center, angle_rad, s_t)
 }

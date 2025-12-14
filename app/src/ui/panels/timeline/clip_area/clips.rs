@@ -4,6 +4,7 @@ use library::model::project::project::Project;
 use library::model::project::TrackClipKind;
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
+use uuid::Uuid;
 
 use crate::{action::HistoryManager, model::ui_types::TimelineClip, state::context::EditorContext};
 
@@ -107,7 +108,11 @@ pub fn draw_clips(
                         {
                             log::error!("Failed to remove entity: {:?}", e);
                         } else {
-                            editor_context.selection.entity_id = None;
+                            editor_context.selection.selected_entities.remove(&gc.id);
+                            if editor_context.selection.last_selected_entity_id == Some(gc.id) {
+                                editor_context.selection.last_selected_entity_id = None;
+                                editor_context.selection.last_selected_track_id = None;
+                            }
                             let current_state =
                                 project_service.get_project().read().unwrap().clone();
                             history_manager.push_project_state(current_state);
@@ -145,12 +150,11 @@ pub fn draw_clips(
             // Handle edge dragging (resize)
             if left_edge_resp.drag_started() || right_edge_resp.drag_started() {
                 editor_context.interaction.is_resizing_entity = true;
-                editor_context.selection.entity_id = Some(gc.id);
-                editor_context.selection.track_id = Some(gc.track_id);
+                editor_context.select_clip(gc.id, gc.track_id);
             }
 
             if editor_context.interaction.is_resizing_entity
-                && editor_context.selection.entity_id == Some(gc.id)
+                && editor_context.selection.last_selected_entity_id == Some(gc.id)
             {
                 let mut new_in_frame = gc.in_frame;
                 let mut new_out_frame = gc.out_frame;
@@ -187,7 +191,7 @@ pub fn draw_clips(
                 if new_in_frame != gc.in_frame || new_out_frame != gc.out_frame {
                     if let (Some(comp_id), Some(track_id)) = (
                         editor_context.selection.composition_id,
-                        editor_context.selection.track_id,
+                        editor_context.selection.last_selected_track_id,
                     ) {
                         project_service
                             .update_clip_time(comp_id, track_id, gc.id, new_in_frame, new_out_frame)
@@ -207,7 +211,7 @@ pub fn draw_clips(
             let mut display_y = initial_y;
 
             // Adjust position for dragged entity preview
-            if editor_context.selection.entity_id == Some(gc.id) && clip_resp.dragged() {
+            if editor_context.is_selected(gc.id) && clip_resp.dragged() {
                 display_x += clip_resp.drag_delta().x;
 
                 if let Some(hovered_track_id) =
@@ -229,7 +233,7 @@ pub fn draw_clips(
             );
 
             // --- Drawing for clips (always) ---
-            let is_sel_entity = editor_context.selection.entity_id == Some(gc.id);
+            let is_sel_entity = editor_context.is_selected(gc.id);
             let color = gc.color;
             let transparent_color =
                 egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 150);
@@ -260,21 +264,36 @@ pub fn draw_clips(
                     .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
             if !editor_context.interaction.is_resizing_entity && clip_resp.clicked() {
-                editor_context.selection.entity_id = Some(gc.id);
-                editor_context.selection.track_id = Some(gc.track_id);
+                let action = crate::ui::selection::get_click_action(
+                    &ui_content.input(|i| i.modifiers),
+                    Some(gc.id),
+                );
+                match action {
+                    crate::ui::selection::ClickAction::Select(id) => {
+                        editor_context.select_clip(id, gc.track_id);
+                    }
+                    crate::ui::selection::ClickAction::Toggle(id) => {
+                        editor_context.toggle_selection(id, gc.track_id);
+                    }
+                    _ => {}
+                }
                 clicked_on_entity = true;
             }
 
             if !editor_context.interaction.is_resizing_entity && clip_resp.drag_started() {
-                editor_context.selection.entity_id = Some(gc.id);
-                editor_context.selection.track_id = Some(gc.track_id);
+                if !editor_context.is_selected(gc.id) {
+                    editor_context.select_clip(gc.id, gc.track_id);
+                }
+                // Update primary selection for drag logic usually, but keep multi-selection
+                editor_context.selection.last_selected_entity_id = Some(gc.id);
+                editor_context.selection.last_selected_track_id = Some(gc.track_id);
                 editor_context.interaction.dragged_entity_original_track_id = Some(gc.track_id);
                 editor_context.interaction.dragged_entity_hovered_track_id = Some(gc.track_id);
                 editor_context.interaction.dragged_entity_has_moved = false;
             }
             if !editor_context.interaction.is_resizing_entity
                 && clip_resp.dragged()
-                && editor_context.selection.entity_id == Some(gc.id)
+                && editor_context.is_selected(gc.id)
             {
                 if clip_resp.drag_delta().length_sq() > 0.0 {
                     editor_context.interaction.dragged_entity_has_moved = true;
@@ -284,27 +303,61 @@ pub fn draw_clips(
                     clip_resp.drag_delta().x / pixels_per_unit * composition_fps as f32;
                 let dt_frames = dt_frames_f32.round() as i64;
 
-                if let Some(comp_id) = editor_context.selection.composition_id {
-                    if let Some(track_id) = editor_context.selection.track_id {
-                        let new_in_frame = (gc.in_frame as i64 + dt_frames).max(0) as u64;
-                        let new_out_frame =
-                            (gc.out_frame as i64 + dt_frames).max(new_in_frame as i64) as u64;
+                if dt_frames != 0 {
+                    if let Some(comp_id) = editor_context.selection.composition_id {
+                        // Iterate all selected entities to apply delta
+                        let selected_ids: Vec<Uuid> = editor_context
+                            .selection
+                            .selected_entities
+                            .iter()
+                            .cloned()
+                            .collect();
 
-                        project_service
-                            .update_clip_time(comp_id, track_id, gc.id, new_in_frame, new_out_frame)
-                            .ok();
+                        for entity_id in selected_ids {
+                            // Find the clip data in current_tracks to get current time
+                            let mut clip_data = None;
+                            let mut track_id_found = None;
 
-                        let new_source_begin_frame =
-                            (gc.source_begin_frame as i64 + dt_frames).max(0) as u64;
-                        project_service
-                            .update_clip_source_frames(
-                                comp_id,
-                                track_id,
-                                gc.id,
-                                new_source_begin_frame,
-                                gc.duration_frame,
-                            )
-                            .ok();
+                            // Efficiency: we iterate tracks every time.
+                            // Since number of tracks/clips is usually small, this is okay.
+                            // Map lookup would be faster but requires building map every frame?
+                            for track in current_tracks {
+                                if let Some(c) = track.clips.iter().find(|c| c.id == entity_id) {
+                                    clip_data = Some(c.clone());
+                                    track_id_found = Some(track.id);
+                                    break;
+                                }
+                            }
+
+                            if let (Some(c), Some(tid)) = (clip_data, track_id_found) {
+                                let new_in_frame = (c.in_frame as i64 + dt_frames).max(0) as u64;
+                                let new_out_frame = (c.out_frame as i64 + dt_frames)
+                                    .max(new_in_frame as i64)
+                                    as u64;
+
+                                project_service
+                                    .update_clip_time(
+                                        comp_id,
+                                        tid,
+                                        c.id,
+                                        new_in_frame,
+                                        new_out_frame,
+                                    )
+                                    .ok();
+
+                                let new_source_begin_frame =
+                                    (c.source_begin_frame as i64 + dt_frames).max(0) as u64;
+                                project_service
+                                    .update_clip_source_frames(
+                                        comp_id,
+                                        tid,
+                                        c.id,
+                                        new_source_begin_frame,
+                                        c.duration_frame,
+                                    )
+                                    .ok();
+                            }
+                        }
                     }
                 }
 
@@ -338,7 +391,7 @@ pub fn draw_clips(
             }
             if !editor_context.interaction.is_resizing_entity
                 && clip_resp.drag_stopped()
-                && editor_context.selection.entity_id == Some(gc.id)
+                && editor_context.is_selected(gc.id)
             {
                 let mut moved_track = false;
                 if let (Some(original_track_id), Some(hovered_track_id), Some(comp_id)) = (
@@ -356,7 +409,8 @@ pub fn draw_clips(
                         ) {
                             log::error!("Failed to move entity to new track: {:?}", e);
                         } else {
-                            editor_context.selection.track_id = Some(hovered_track_id);
+                            editor_context.selection.last_selected_track_id =
+                                Some(hovered_track_id);
                             moved_track = true;
                         }
                     }
@@ -374,4 +428,49 @@ pub fn draw_clips(
     }
 
     clicked_on_entity
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn get_clips_in_box(
+    rect: egui::Rect,
+    editor_context: &EditorContext, // Access scroll_offset
+    current_tracks: &[library::model::project::Track],
+    pixels_per_unit: f32,
+    row_height: f32,
+    track_spacing: f32,
+    composition_fps: f64,
+    rect_offset: egui::Vec2,
+) -> Vec<(Uuid, Uuid)> {
+    // Returns (EntityId, TrackId)
+    let mut found_clips = Vec::new();
+
+    for (i, track) in current_tracks.iter().enumerate() {
+        let clip_track_index = i as f32;
+
+        for clip in &track.clips {
+            let timeline_duration_frames = clip.out_frame.saturating_sub(clip.in_frame);
+
+            let initial_x = (clip.in_frame as f32 / composition_fps as f32) * pixels_per_unit
+                - editor_context.timeline.scroll_offset.x;
+            let initial_y = -editor_context.timeline.scroll_offset.y
+                + clip_track_index * (row_height + track_spacing);
+
+            let real_x = rect_offset.x + initial_x;
+            let real_y = rect_offset.y + initial_y;
+
+            let width =
+                (timeline_duration_frames as f32 / composition_fps as f32) * pixels_per_unit;
+            let safe_width = width.max(1.0);
+
+            let clip_rect = egui::Rect::from_min_size(
+                egui::pos2(real_x, real_y),
+                egui::vec2(safe_width, row_height),
+            );
+
+            if rect.intersects(clip_rect) {
+                found_clips.push((clip.id, track.id));
+            }
+        }
+    }
+    found_clips
 }
