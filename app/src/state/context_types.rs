@@ -61,6 +61,21 @@ impl Default for TimelineState {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub enum PreviewTool {
+    Select,
+    Pan,
+    Zoom,
+    Text,
+    Shape,
+}
+
+impl Default for PreviewTool {
+    fn default() -> Self {
+        Self::Select
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ViewState {
     #[serde(with = "Vec2Def")]
@@ -68,6 +83,8 @@ pub struct ViewState {
     pub zoom: f32,
     #[serde(default = "default_preview_resolution")]
     pub preview_resolution: f32,
+    #[serde(default)]
+    pub active_tool: PreviewTool,
 }
 
 fn default_preview_resolution() -> f32 {
@@ -80,6 +97,7 @@ impl Default for ViewState {
             pan: egui::vec2(20.0, 20.0),
             zoom: 0.3,
             preview_resolution: 1.0,
+            active_tool: PreviewTool::default(),
         }
     }
 }
