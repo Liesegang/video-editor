@@ -30,7 +30,7 @@ pub fn handle_command(
         CommandId::Settings => {
             *trigger_settings = true;
         }
-        CommandId::Export => {
+        CommandId::Export | CommandId::ShowCommandPalette => {
             // Handled in MyApp::update explicitly to open dialog
         }
         CommandId::NewProject => {

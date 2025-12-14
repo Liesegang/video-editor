@@ -109,6 +109,16 @@ fn view_menu(
 
         ui.separator();
 
+        if let Some(cmd) = command_registry.find(CommandId::ShowCommandPalette) {
+             let button = Button::new(&cmd.text).shortcut_text(cmd.shortcut_text.clone());
+            if ui.add(button).clicked() {
+                *triggered_action = Some(cmd.id);
+                ui.close();
+            }
+        }
+
+        ui.separator();
+
         if let Some(cmd) = command_registry.find(CommandId::ResetLayout) {
             let button = Button::new(&cmd.text).shortcut_text(cmd.shortcut_text.clone());
             if ui.add(button).clicked() {

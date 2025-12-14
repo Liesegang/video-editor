@@ -16,6 +16,7 @@ use crate::state::context::EditorContext;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::ui::dialogs::export_dialog::ExportDialog;
 use crate::ui::dialogs::settings_dialog::SettingsDialog;
+use crate::ui::command_palette::CommandPalette;
 use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
 use crate::utils;
 use library::cache::SharedCacheManager;
@@ -36,6 +37,7 @@ pub struct MyApp {
     pub settings_dialog: SettingsDialog,
     pub composition_dialog: CompositionDialog,
     pub export_dialog: ExportDialog,
+    pub command_palette: CommandPalette,
 
     pub triggered_action: Option<CommandId>,
     pub render_server: Arc<RenderServer>,
@@ -107,6 +109,7 @@ impl MyApp {
                 cache_manager.clone(),
                 entity_converter_registry,
             ),
+            command_palette: CommandPalette::new(),
             render_server,
             plugin_manager,
             cache_manager,
@@ -244,6 +247,11 @@ impl eframe::App for MyApp {
             );
         }
 
+        // Palette
+        if let Some(cmd_id) = self.command_palette.show(ctx, &self.command_registry) {
+             self.triggered_action = Some(cmd_id);
+        }
+
         // 6. Generic Error Modal
         if let Some(error_msg) = self.editor_context.interaction.active_modal_error.clone() {
             let mut open = true;
@@ -273,7 +281,8 @@ impl eframe::App for MyApp {
             && !self.settings_dialog.show_close_warning
             && !self.composition_dialog.is_open
             && !self.export_dialog.is_open
-            && !self.editor_context.keyframe_dialog.is_open;
+            && !self.editor_context.keyframe_dialog.is_open
+            && !self.command_palette.is_open;
         if main_ui_enabled && !is_listening_for_shortcut {
             if let Some(action_id) = self
                 .shortcut_manager
@@ -295,6 +304,8 @@ impl eframe::App for MyApp {
 
             if action == CommandId::Export {
                 self.export_dialog.open();
+            } else if action == CommandId::ShowCommandPalette {
+                self.command_palette.toggle();
             }
 
             handle_command(ctx, action, context, &mut trigger_settings);
