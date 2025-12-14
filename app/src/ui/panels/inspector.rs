@@ -731,31 +731,40 @@ pub fn inspector_panel(
 
             ui.horizontal(|ui| {
                 ui.menu_button("Add Effect", |ui| {
-                        let available_effects = project_service.get_plugin_manager().get_available_effects();
-                        
-                        // Group by category
-                        let mut grouped_effects: std::collections::BTreeMap<String, Vec<(String, String)>> = std::collections::BTreeMap::new();
-                        for (id, name, category) in available_effects {
-                            grouped_effects.entry(category).or_default().push((id, name));
-                        }
+                    let available_effects =
+                        project_service.get_plugin_manager().get_available_effects();
 
-                        for (category, effects) in grouped_effects {
-                            ui.menu_button(&category, |ui| {
-                                for (effect_id, effect_name) in effects {
-                                    if ui.button(&effect_name).clicked() {
-                                        project_service.add_effect_to_clip(
+                    // Group by category
+                    let mut grouped_effects: std::collections::BTreeMap<
+                        String,
+                        Vec<(String, String)>,
+                    > = std::collections::BTreeMap::new();
+                    for (id, name, category) in available_effects {
+                        grouped_effects
+                            .entry(category)
+                            .or_default()
+                            .push((id, name));
+                    }
+
+                    for (category, effects) in grouped_effects {
+                        ui.menu_button(&category, |ui| {
+                            for (effect_id, effect_name) in effects {
+                                if ui.button(&effect_name).clicked() {
+                                    project_service
+                                        .add_effect_to_clip(
                                             comp_id,
                                             track_id,
                                             selected_entity_id,
                                             &effect_id,
-                                        ).ok();
-                                        ui.close();
-                                        needs_refresh = true;
-                                    }
+                                        )
+                                        .ok();
+                                    ui.close();
+                                    needs_refresh = true;
                                 }
-                            });
-                        }
-                    });
+                            }
+                        });
+                    }
+                });
             });
 
             ui.add_space(10.0);

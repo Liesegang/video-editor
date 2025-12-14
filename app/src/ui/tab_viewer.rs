@@ -4,8 +4,8 @@ use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use std::sync::{Arc, RwLock};
 
-use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::command::CommandRegistry;
+use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::{
     action::HistoryManager,
     model::ui_types::Tab,

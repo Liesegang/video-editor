@@ -1,36 +1,36 @@
-use std::sync::Arc;
-use library::model::project::project::Composition;
+use library::framing::entity_converters::{
+    EntityConverter, FrameEvaluationContext, VideoEntityConverter,
+};
+use library::model::frame::entity::FrameContent;
 use library::model::project::TrackClip;
-use library::framing::entity_converters::{VideoEntityConverter, EntityConverter, FrameEvaluationContext};
+use library::model::project::project::Composition;
 use library::plugin::PropertyEvaluatorRegistry;
 use library::plugin::properties::ConstantEvaluator;
-use library::model::frame::entity::FrameContent;
+use std::sync::Arc;
 
 #[test]
 fn test_video_converter_frame_calculation() {
     let comp_fps = 30.0;
     let comp = Composition::new("Test Comp", 1920, 1080, comp_fps, 10.0);
-    
+
     let mut registry = PropertyEvaluatorRegistry::new();
     registry.register("constant", Arc::new(ConstantEvaluator));
     let registry = Arc::new(registry);
-    
+
     let context = FrameEvaluationContext {
         composition: &comp,
         property_evaluators: &registry,
     };
-    
+
     let video_fps = 60.0;
     let clip = TrackClip::create_video(
-        None,
-        "test.mp4",
-        0, // in_frame
+        None, "test.mp4", 0,   // in_frame
         100, // out_frame
         100, // source_begin_frame
         100, // duration_frame
-        video_fps
+        video_fps,
     );
-    
+
     println!("Clip FPS: {}", clip.fps);
 
     // Test Frame 0 (at 0 sec)
@@ -53,7 +53,7 @@ fn test_video_converter_frame_calculation() {
     } else {
         panic!("Result is not video content");
     }
-    
+
     // Test Frame 15 (at 0.5 sec)
     // Expected: source_frame = 100 + (15/30 * 60) = 130
     let result = converter.convert_entity(&context, &clip, 15);

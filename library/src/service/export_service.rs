@@ -79,21 +79,20 @@ impl ExportService {
         let sender = self.save_tx.as_ref().ok_or(LibraryError::Render(
             "Save queue is already closed".to_string(),
         ))?;
-        
+
         // Prepare Settings (Potentially with Audio)
         let settings_struct = (*self.export_settings).clone();
         let export_format = settings_struct.export_format();
-        
+
         // Setup Output Paths
         let mut base_template = output_stem.replace("{project}", &project_model.project().name);
         base_template = base_template.replace("{composition}", &composition.name);
         let has_frame_token = base_template.contains("{frame");
 
         let video_output = if matches!(export_format, ExportFormat::Video) {
-            
             // Audio is now handled by the caller (ExportDialog/lib.rs) who pre-renders it
             // and adds "audio_source" to ExportSettings.
-            
+
             // Render Video
             let clean_stem = if has_frame_token {
                 Self::format_frame_token_in_string(&base_template, frame_range.start)
@@ -105,7 +104,7 @@ impl ExportService {
         } else {
             None
         };
-        
+
         let settings_arc = Arc::new(settings_struct);
 
         for frame_index in frame_range {

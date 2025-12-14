@@ -3,7 +3,7 @@ use crate::model::project::property::PropertyValue;
 use crate::plugin::{EffectPlugin, Plugin};
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
-use skia_safe::{image_filters, Rect};
+use skia_safe::{Rect, image_filters};
 use std::collections::HashMap;
 
 pub struct TileEffectPlugin;
@@ -57,23 +57,24 @@ impl EffectPlugin for TileEffectPlugin {
             .unwrap_or(100.0);
 
         if width <= 0.0 || height <= 0.0 {
-             return Ok(input.clone());
+            return Ok(input.clone());
         }
 
         use crate::plugin::effects::utils::apply_skia_filter;
 
         apply_skia_filter(input, gpu_context, |_image, canvas_width, canvas_height| {
-             let src_rect = Rect::from_xywh(x as f32, y as f32, width as f32, height as f32);
-             // Destination is the full canvas
-             let dst_rect = Rect::from_wh(canvas_width as f32, canvas_height as f32);
-             
-             image_filters::tile(src_rect, dst_rect, None)
-                .ok_or(LibraryError::Render("Failed to create tile filter".to_string()))
+            let src_rect = Rect::from_xywh(x as f32, y as f32, width as f32, height as f32);
+            // Destination is the full canvas
+            let dst_rect = Rect::from_wh(canvas_width as f32, canvas_height as f32);
+
+            image_filters::tile(src_rect, dst_rect, None).ok_or(LibraryError::Render(
+                "Failed to create tile filter".to_string(),
+            ))
         })
     }
 
     fn properties(&self) -> Vec<crate::plugin::PropertyDefinition> {
-         use crate::plugin::{PropertyDefinition, PropertyUiType};
+        use crate::plugin::{PropertyDefinition, PropertyUiType};
         use ordered_float::OrderedFloat;
 
         vec![
@@ -113,7 +114,7 @@ impl EffectPlugin for TileEffectPlugin {
                 default_value: PropertyValue::Number(OrderedFloat(100.0)),
                 category: "Tile".to_string(),
             },
-             PropertyDefinition {
+            PropertyDefinition {
                 name: "height".to_string(),
                 label: "Height".to_string(),
                 ui_type: PropertyUiType::Float {

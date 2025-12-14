@@ -56,7 +56,7 @@ pub fn show_clip_area(
     composition_fps: f64,
     registry: &CommandRegistry,
 ) -> (egui::Rect, egui::Response) {
-// ...
+    // ...
     let (content_rect_for_clip_area, response) =
         ui_content.allocate_at_least(ui_content.available_size(), egui::Sense::hover()); // Changed to hover()
 
@@ -103,13 +103,20 @@ pub fn show_clip_area(
     // --- Viewport Controller for Zoom/Pan ---
     // Calculate Constraints
     const MAX_PIXELS_PER_FRAME_DESIRED: f32 = 20.0;
-    let max_h_zoom = (MAX_PIXELS_PER_FRAME_DESIRED * composition_fps as f32) / editor_context.timeline.pixels_per_second;
-    let min_possible_zoom = content_rect_for_clip_area.width() / (current_comp_duration as f32 * editor_context.timeline.pixels_per_second);
+    let max_h_zoom = (MAX_PIXELS_PER_FRAME_DESIRED * composition_fps as f32)
+        / editor_context.timeline.pixels_per_second;
+    let min_possible_zoom = content_rect_for_clip_area.width()
+        / (current_comp_duration as f32 * editor_context.timeline.pixels_per_second);
     let min_h_zoom = min_possible_zoom.min(0.01);
-    
+
     // Hand Tool Key
-    let hand_tool_key = registry.commands.iter().find(|c| c.id == CommandId::HandTool).and_then(|c| c.shortcut).map(|(_, k)| k);
-    
+    let hand_tool_key = registry
+        .commands
+        .iter()
+        .find(|c| c.id == CommandId::HandTool)
+        .and_then(|c| c.shortcut)
+        .map(|(_, k)| k);
+
     let mut state = TimelineViewportState {
         scroll_offset: &mut editor_context.timeline.scroll_offset,
         h_zoom: &mut editor_context.timeline.h_zoom,
@@ -118,22 +125,32 @@ pub fn show_clip_area(
         max_h_zoom,
         min_v_zoom: 0.1,
         max_v_zoom: 10.0,
-        max_scroll_y: (num_tracks as f32 * (row_height + track_spacing) - content_rect_for_clip_area.height()).max(0.0),
+        max_scroll_y: (num_tracks as f32 * (row_height + track_spacing)
+            - content_rect_for_clip_area.height())
+        .max(0.0),
     };
-    
-    let mut controller = ViewportController::new(ui_content, ui_content.make_persistent_id("unique_timeline_viewport_controller_id"), hand_tool_key)
-        .with_config(ViewportConfig {
-            zoom_uniform: false,
-            allow_zoom_x: true,
-            allow_zoom_y: true,
-            allow_pan_x: true,
-            allow_pan_y: true, // Enable all
-             min_zoom: 0.0001,
-             max_zoom: 10000.0,
-            ..Default::default()
-        });
-        
-    let (_changed, vp_response) = controller.interact_with_rect(content_rect_for_clip_area, &mut state, &mut editor_context.interaction.handled_hand_tool_drag);
+
+    let mut controller = ViewportController::new(
+        ui_content,
+        ui_content.make_persistent_id("unique_timeline_viewport_controller_id"),
+        hand_tool_key,
+    )
+    .with_config(ViewportConfig {
+        zoom_uniform: false,
+        allow_zoom_x: true,
+        allow_zoom_y: true,
+        allow_pan_x: true,
+        allow_pan_y: true, // Enable all
+        min_zoom: 0.0001,
+        max_zoom: 10000.0,
+        ..Default::default()
+    });
+
+    let (_changed, vp_response) = controller.interact_with_rect(
+        content_rect_for_clip_area,
+        &mut state,
+        &mut editor_context.interaction.handled_hand_tool_drag,
+    );
 
     // Call legacy interaction (drag drop / context menu)
     interactions::handle_drag_drop_and_context_menu(
@@ -159,7 +176,6 @@ pub fn show_clip_area(
         project_service,
         history_manager,
         &current_tracks,
-
         project,
         pixels_per_unit,
         row_height,

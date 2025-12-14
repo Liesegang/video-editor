@@ -46,8 +46,7 @@ pub fn show_track_list(
     let num_tracks = current_tracks.len();
 
     for (i, track) in current_tracks.iter().enumerate() {
-        let y = track_list_rect.min.y
-            + (i as f32 * (row_height + track_spacing))
+        let y = track_list_rect.min.y + (i as f32 * (row_height + track_spacing))
             - editor_context.timeline.scroll_offset.y;
         let track_label_rect = egui::Rect::from_min_size(
             egui::pos2(track_list_rect.min.x, y),

@@ -172,7 +172,12 @@ impl From<serde_json::Value> for PropertyValue {
                     }
                 }
 
-                if o.len() == 4 && o.contains_key("x") && o.contains_key("y") && o.contains_key("z") && o.contains_key("w") {
+                if o.len() == 4
+                    && o.contains_key("x")
+                    && o.contains_key("y")
+                    && o.contains_key("z")
+                    && o.contains_key("w")
+                {
                     if let (Some(x_val), Some(y_val), Some(z_val), Some(w_val)) = (
                         o.get("x").and_then(|v| v.as_f64()),
                         o.get("y").and_then(|v| v.as_f64()),

@@ -142,7 +142,12 @@ impl ExportDialog {
         }
     }
 
-    fn show_configuration(&mut self, ui: &mut egui::Ui, project: &Arc<RwLock<Project>>, project_service: &library::service::project_service::ProjectService) {
+    fn show_configuration(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &Arc<RwLock<Project>>,
+        project_service: &library::service::project_service::ProjectService,
+    ) {
         ui.heading("Export Settings");
 
         // 1. Composition Selection
@@ -179,7 +184,12 @@ impl ExportDialog {
             let current_selection_name = self
                 .selected_exporter_id
                 .as_ref()
-                .and_then(|id| known_exporters.iter().find(|(e_id, _)| e_id == id).map(|(_, name)| name.clone()))
+                .and_then(|id| {
+                    known_exporters
+                        .iter()
+                        .find(|(e_id, _)| e_id == id)
+                        .map(|(_, name)| name.clone())
+                })
                 .unwrap_or_else(|| "Select...".to_string());
 
             egui::ComboBox::from_id_salt("exporter_select")
@@ -187,7 +197,10 @@ impl ExportDialog {
                 .show_ui(ui, |ui| {
                     for (id, name) in known_exporters {
                         if ui
-                            .selectable_label(self.selected_exporter_id.as_deref() == Some(&id), &name)
+                            .selectable_label(
+                                self.selected_exporter_id.as_deref() == Some(&id),
+                                &name,
+                            )
                             .clicked()
                         {
                             self.selected_exporter_id = Some(id.clone());
@@ -391,7 +404,11 @@ impl ExportDialog {
         Ok(())
     }
 
-    fn start_export(&mut self, project_lock: &Arc<RwLock<Project>>, project_service: &library::service::project_service::ProjectService) {
+    fn start_export(
+        &mut self,
+        project_lock: &Arc<RwLock<Project>>,
+        project_service: &library::service::project_service::ProjectService,
+    ) {
         let exporter_id = if let Some(id) = &self.selected_exporter_id {
             id.clone()
         } else {
@@ -534,44 +551,56 @@ impl ExportDialog {
 
             // Audio Pre-rendering
             let mut audio_temp_path: Option<String> = None;
-            if matches!(settings.export_format(), library::plugin::ExportFormat::Video) {
-                 let fps = composition.fps;
-                 let start_time = start_frame as f64 / fps;
-                 let duration = duration_frames as f64 / fps;
-                 let sample_rate = engine_sample_rate; // Use correct rate
-                 let start_sample = (start_time * sample_rate as f64).round() as u64;
-                 let frames = (duration * sample_rate as f64).round() as usize;
-                 
-                 let audio_data = library::audio::mixer::mix_samples(
-                     &project_model.project().assets,
-                     project_model.composition(),
-                     &cache_manager,
-                     start_sample,
-                     frames,
-                     sample_rate,
-                     2
-                 );
-                 
-                 if !audio_data.is_empty() {
-                     // Prepare path helpers
-                     let mut stem_path = std::path::PathBuf::from(&output_path_owned);
-                     if stem_path.extension().is_some() {
-                         stem_path.set_extension("");
-                     }
-                     let stem_str = stem_path.to_str().unwrap_or("output");
-                     
-                     let audio_path = format!("{}_audio.raw", stem_str);
-                     if let Ok(mut file) = std::fs::File::create(&audio_path) {
-                         for sample in audio_data {
-                             let _ = file.write_all(&sample.to_le_bytes());
-                         }
-                         
-                         settings.parameters.insert("audio_source".to_string(), serde_json::Value::String(audio_path.clone()));
-                         settings.parameters.insert("audio_channels".to_string(), serde_json::Value::Number(serde_json::Number::from(2)));
-                         settings.parameters.insert("audio_sample_rate".to_string(), serde_json::Value::Number(serde_json::Number::from(sample_rate)));
-                         audio_temp_path = Some(audio_path);
-                     }
-                 }
+            if matches!(
+                settings.export_format(),
+                library::plugin::ExportFormat::Video
+            ) {
+                let fps = composition.fps;
+                let start_time = start_frame as f64 / fps;
+                let duration = duration_frames as f64 / fps;
+                let sample_rate = engine_sample_rate; // Use correct rate
+                let start_sample = (start_time * sample_rate as f64).round() as u64;
+                let frames = (duration * sample_rate as f64).round() as usize;
+
+                let audio_data = library::audio::mixer::mix_samples(
+                    &project_model.project().assets,
+                    project_model.composition(),
+                    &cache_manager,
+                    start_sample,
+                    frames,
+                    sample_rate,
+                    2,
+                );
+
+                if !audio_data.is_empty() {
+                    // Prepare path helpers
+                    let mut stem_path = std::path::PathBuf::from(&output_path_owned);
+                    if stem_path.extension().is_some() {
+                        stem_path.set_extension("");
+                    }
+                    let stem_str = stem_path.to_str().unwrap_or("output");
+
+                    let audio_path = format!("{}_audio.raw", stem_str);
+                    if let Ok(mut file) = std::fs::File::create(&audio_path) {
+                        for sample in audio_data {
+                            let _ = file.write_all(&sample.to_le_bytes());
+                        }
+
+                        settings.parameters.insert(
+                            "audio_source".to_string(),
+                            serde_json::Value::String(audio_path.clone()),
+                        );
+                        settings.parameters.insert(
+                            "audio_channels".to_string(),
+                            serde_json::Value::Number(serde_json::Number::from(2)),
+                        );
+                        settings.parameters.insert(
+                            "audio_sample_rate".to_string(),
+                            serde_json::Value::Number(serde_json::Number::from(sample_rate)),
+                        );
+                        audio_temp_path = Some(audio_path);
+                    }
+                }
             }
 
             let settings_arc = Arc::new(settings.clone());
@@ -582,7 +611,6 @@ impl ExportDialog {
                 settings_arc,
                 4,
             );
-
 
             // Prepare path helpers
             let mut stem_path = std::path::PathBuf::from(&output_path_owned);

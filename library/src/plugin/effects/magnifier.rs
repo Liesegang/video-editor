@@ -3,7 +3,7 @@ use crate::model::project::property::PropertyValue;
 use crate::plugin::{EffectPlugin, Plugin};
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
-use skia_safe::{image_filters, Rect};
+use skia_safe::{Rect, image_filters};
 use std::collections::HashMap;
 
 pub struct MagnifierEffectPlugin;
@@ -64,7 +64,7 @@ impl EffectPlugin for MagnifierEffectPlugin {
             .and_then(|pv| pv.get_as::<f64>())
             .unwrap_or(0.0);
 
-         if width <= 0.0 || height <= 0.0 {
+        if width <= 0.0 || height <= 0.0 {
             return Ok(input.clone());
         }
 
@@ -79,7 +79,10 @@ impl EffectPlugin for MagnifierEffectPlugin {
                 skia_safe::SamplingOptions::default(),
                 None, // input
                 None, // crop
-            ).ok_or(LibraryError::Render("Failed to create magnifier filter".to_string()))
+            )
+            .ok_or(LibraryError::Render(
+                "Failed to create magnifier filter".to_string(),
+            ))
         })
     }
 
@@ -124,7 +127,7 @@ impl EffectPlugin for MagnifierEffectPlugin {
                 default_value: PropertyValue::Number(OrderedFloat(100.0)),
                 category: "Magnifier".to_string(),
             },
-             PropertyDefinition {
+            PropertyDefinition {
                 name: "height".to_string(),
                 label: "Height".to_string(),
                 ui_type: PropertyUiType::Float {

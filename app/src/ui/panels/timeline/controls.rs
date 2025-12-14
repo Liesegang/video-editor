@@ -26,7 +26,7 @@ pub fn show_timeline_controls(
         {
             let is_playing = !editor_context.timeline.is_playing;
             editor_context.timeline.is_playing = is_playing;
-            
+
             if is_playing {
                 // Sync audio engine to current timeline time before starting
                 project_service.reset_audio_pump(editor_context.timeline.current_time as f64);
@@ -35,7 +35,7 @@ pub fn show_timeline_controls(
                 }
             } else {
                 if let Err(e) = project_service.audio_engine.pause() {
-                     log::error!("Failed to pause audio playback: {}", e);
+                    log::error!("Failed to pause audio playback: {}", e);
                 }
             }
         }

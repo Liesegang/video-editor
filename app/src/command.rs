@@ -24,7 +24,7 @@ pub enum CommandId {
 
     // Playback
     TogglePlayback,
-    
+
     // Tools
     HandTool,
     ShowCommandPalette,
@@ -48,10 +48,18 @@ pub struct CommandRegistry {
 fn get_shortcut_text(shortcut: &Option<(Modifiers, Key)>) -> String {
     if let Some((m, k)) = shortcut {
         let mut parts = Vec::new();
-        if m.command { parts.push("Ctrl"); }
-        if m.ctrl && !m.command { parts.push("Ctrl"); }
-        if m.shift { parts.push("Shift"); }
-        if m.alt { parts.push("Alt"); }
+        if m.command {
+            parts.push("Ctrl");
+        }
+        if m.ctrl && !m.command {
+            parts.push("Ctrl");
+        }
+        if m.shift {
+            parts.push("Shift");
+        }
+        if m.alt {
+            parts.push("Alt");
+        }
         let key_str = format!("{:?}", k);
         parts.push(&key_str);
         parts.join("+")
@@ -98,7 +106,13 @@ impl CommandRegistry {
                 true,
                 false,
             ),
-            Command::new(CommandId::Save, "Save", Some((Modifiers::COMMAND, Key::S)), true, false),
+            Command::new(
+                CommandId::Save,
+                "Save",
+                Some((Modifiers::COMMAND, Key::S)),
+                true,
+                false,
+            ),
             Command::new(
                 CommandId::SaveAs,
                 "Save As...",
@@ -113,9 +127,21 @@ impl CommandRegistry {
                 true,
                 false,
             ),
-            Command::new(CommandId::Quit, "Quit", Some((Modifiers::COMMAND, Key::Q)), true, false),
+            Command::new(
+                CommandId::Quit,
+                "Quit",
+                Some((Modifiers::COMMAND, Key::Q)),
+                true,
+                false,
+            ),
             // Edit Menu
-            Command::new(CommandId::Undo, "Undo", Some((Modifiers::COMMAND, Key::Z)), false, false),
+            Command::new(
+                CommandId::Undo,
+                "Undo",
+                Some((Modifiers::COMMAND, Key::Z)),
+                false,
+                false,
+            ),
             Command::new(
                 CommandId::Redo,
                 "Redo",
@@ -168,9 +194,9 @@ impl CommandRegistry {
         for tab in Tab::all() {
             commands.push(Command::new(
                 CommandId::TogglePanel(*tab),
-                tab.name(), 
-                None,       
-                true,       
+                tab.name(),
+                None,
+                true,
                 false,
             ));
         }

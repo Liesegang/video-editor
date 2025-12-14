@@ -2,9 +2,7 @@ use crate::error::LibraryError;
 use crate::model::project::property::PropertyValue;
 use crate::plugin::{EffectPlugin, Plugin};
 use crate::rendering::renderer::RenderOutput;
-use crate::rendering::skia_utils::{
-    GpuContext,
-};
+use crate::rendering::skia_utils::GpuContext;
 use skia_safe::{TileMode, image_filters};
 use std::collections::HashMap;
 
@@ -69,16 +67,21 @@ impl EffectPlugin for BlurEffectPlugin {
         use crate::plugin::effects::utils::apply_skia_filter;
 
         apply_skia_filter(input, gpu_context, |_image, _width, _height| {
-            image_filters::blur((sigma_x as f32, sigma_y as f32), Some(tile_mode), None, None)
-                .ok_or(LibraryError::Render(
-                    "Failed to create blur filter".to_string(),
-                ))
+            image_filters::blur(
+                (sigma_x as f32, sigma_y as f32),
+                Some(tile_mode),
+                None,
+                None,
+            )
+            .ok_or(LibraryError::Render(
+                "Failed to create blur filter".to_string(),
+            ))
         })
     }
 
     fn properties(&self) -> Vec<crate::plugin::PropertyDefinition> {
-        use crate::plugin::{PropertyDefinition, PropertyUiType};
         use crate::model::project::property::PropertyValue;
+        use crate::plugin::{PropertyDefinition, PropertyUiType};
         use ordered_float::OrderedFloat;
 
         vec![

@@ -16,7 +16,11 @@ fn test_video_reader_creation() {
     assert!(path.exists(), "Test file test.mp4 does not exist");
 
     let reader = VideoReader::new(path.to_str().unwrap());
-    assert!(reader.is_ok(), "Failed to create VideoReader: {:?}", reader.err());
+    assert!(
+        reader.is_ok(),
+        "Failed to create VideoReader: {:?}",
+        reader.err()
+    );
 }
 
 #[test]
@@ -46,7 +50,8 @@ fn test_video_reader_metadata() {
 #[test]
 fn test_video_reader_decode_frame() {
     let path = get_test_file_path("test.mp4");
-    let mut reader = VideoReader::new(path.to_str().unwrap()).expect("Failed to create VideoReader");
+    let mut reader =
+        VideoReader::new(path.to_str().unwrap()).expect("Failed to create VideoReader");
 
     // Decode frame 0
     let frame0 = reader.decode_frame(0);

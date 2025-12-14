@@ -1,8 +1,8 @@
 use crate::command::{Command, CommandId, CommandRegistry};
-use crate::{config, model::ui_types::SettingsTab};
-use eframe::egui::{ScrollArea, TextEdit, Ui, Key};
-use egui_extras::{Column, TableBuilder};
 use crate::config::AppConfig;
+use crate::{config, model::ui_types::SettingsTab};
+use eframe::egui::{Key, ScrollArea, TextEdit, Ui};
+use egui_extras::{Column, TableBuilder};
 use library::plugin::PluginManager;
 use std::sync::Arc;
 
@@ -39,7 +39,7 @@ pub struct SettingsOutput {
 pub struct SettingsDialog {
     pub is_open: bool,
     pub show_close_warning: bool,
-    
+
     pub command_registry: CommandRegistry,
     pub config: AppConfig,
     pub plugin_manager: Arc<PluginManager>, // Added
@@ -49,7 +49,11 @@ pub struct SettingsDialog {
 }
 
 impl SettingsDialog {
-    pub fn new(initial_registry: CommandRegistry, initial_config: AppConfig, plugin_manager: Arc<PluginManager>) -> Self {
+    pub fn new(
+        initial_registry: CommandRegistry,
+        initial_config: AppConfig,
+        plugin_manager: Arc<PluginManager>,
+    ) -> Self {
         Self {
             is_open: false,
             show_close_warning: false,
@@ -64,10 +68,10 @@ impl SettingsDialog {
     pub fn open(&mut self, current_registry: &CommandRegistry, current_config: &AppConfig) {
         self.command_registry = current_registry.clone();
         self.config = current_config.clone();
-        
+
         self.editing_registry = current_registry.clone();
         self.editing_config = current_config.clone();
-        
+
         self.is_open = true;
         self.show_close_warning = false;
     }
@@ -87,10 +91,10 @@ impl SettingsDialog {
                 .resizable(true)
                 .show(ctx, |ui| {
                     let output = settings_panel(
-                        ui, 
+                        ui,
                         &mut self.editing_registry,
                         &mut self.editing_config,
-                        &self.plugin_manager
+                        &self.plugin_manager,
                     );
                     is_listening_for_shortcut = output.is_listening;
 
@@ -104,14 +108,14 @@ impl SettingsDialog {
                                 // while correctly inheriting future defaults if the user hasn't changed them.
                                 let default_config = AppConfig::new();
                                 let default_registry = CommandRegistry::new(&default_config);
-                                
+
                                 let mut shortcuts = std::collections::HashMap::new();
                                 for cmd in &self.editing_registry.commands {
                                     let default_cmd = default_registry.find(cmd.id);
                                     let is_different = if let Some(def) = default_cmd {
                                         def.shortcut != cmd.shortcut
                                     } else {
-                                        true 
+                                        true
                                     };
 
                                     if is_different {
@@ -122,11 +126,11 @@ impl SettingsDialog {
 
                                 // 2. Save
                                 config::save_config(&self.editing_config);
-                                
+
                                 // 3. Commit
                                 self.command_registry = self.editing_registry.clone();
                                 self.config = self.editing_config.clone();
-                                
+
                                 close_confirmed = true;
                             }
                             SettingsResult::Cancel => {
@@ -142,7 +146,7 @@ impl SettingsDialog {
                 });
 
             if !still_open {
-               close_confirmed = true;
+                close_confirmed = true;
             }
 
             if close_confirmed {
@@ -150,18 +154,18 @@ impl SettingsDialog {
                 self.show_close_warning = false;
             }
         }
-        
+
         (is_listening_for_shortcut, returned_result)
     }
 }
 
-use egui_extras::{StripBuilder, Size};
+use egui_extras::{Size, StripBuilder};
 
 // ... (existing helper functions)
 
 fn settings_panel(
-    ui: &mut Ui, 
-    registry: &mut CommandRegistry, 
+    ui: &mut Ui,
+    registry: &mut CommandRegistry,
     config: &mut AppConfig,
     plugin_manager: &PluginManager,
 ) -> SettingsOutput {
@@ -303,17 +307,17 @@ fn plugins_paths_tab(ui: &mut Ui, config: &mut AppConfig) {
 
     ui.horizontal(|ui| {
         if ui.button("Add Path").clicked() {
-             if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                 let path_str = folder.to_string_lossy().to_string();
-                 if !config.plugins.paths.contains(&path_str) {
-                     config.plugins.paths.push(path_str);
-                 }
-             }
+            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                let path_str = folder.to_string_lossy().to_string();
+                if !config.plugins.paths.contains(&path_str) {
+                    config.plugins.paths.push(path_str);
+                }
+            }
         }
     });
 
     ui.separator();
-    
+
     let mut to_remove = None;
     ScrollArea::vertical().show(ui, |ui| {
         for (i, path) in config.plugins.paths.iter().enumerate() {
@@ -331,7 +335,12 @@ fn plugins_paths_tab(ui: &mut Ui, config: &mut AppConfig) {
     }
 }
 
-fn plugins_list_tab(ui: &mut Ui, plugin_manager: &PluginManager, category: library::plugin::PluginCategory, filter: Option<String>) {
+fn plugins_list_tab(
+    ui: &mut Ui,
+    plugin_manager: &PluginManager,
+    category: library::plugin::PluginCategory,
+    filter: Option<String>,
+) {
     ui.heading(format!("Loaded Plugins: {:?}", category));
     if let Some(f) = &filter {
         ui.label(format!("Filter: {}", f));
@@ -339,19 +348,22 @@ fn plugins_list_tab(ui: &mut Ui, plugin_manager: &PluginManager, category: libra
     ui.add_space(10.0);
 
     let all_plugins = plugin_manager.get_all_plugins();
-    
+
     // Filter logic
-    let filtered_plugins: Vec<_> = all_plugins.iter().filter(|p| {
-        if p.plugin_type != category {
-            return false;
-        }
-        if let Some(f) = &filter {
-            if &p.impl_type != f {
+    let filtered_plugins: Vec<_> = all_plugins
+        .iter()
+        .filter(|p| {
+            if p.plugin_type != category {
                 return false;
             }
-        }
-        true
-    }).collect();
+            if let Some(f) = &filter {
+                if &p.impl_type != f {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
 
     TableBuilder::new(ui)
         .striped(true)
@@ -361,25 +373,49 @@ fn plugins_list_tab(ui: &mut Ui, plugin_manager: &PluginManager, category: libra
         .column(Column::auto().at_least(150.0)) // Name
         .column(Column::auto().at_least(100.0)) // Type (Enum)
         .column(Column::auto().at_least(100.0)) // Category (String)
-        .column(Column::auto().at_least(80.0))  // Impl (String)
-        .column(Column::remainder())            // Version
+        .column(Column::auto().at_least(80.0)) // Impl (String)
+        .column(Column::remainder()) // Version
         .header(20.0, |mut header| {
-            header.col(|ui| { ui.strong("ID"); });
-            header.col(|ui| { ui.strong("Name"); });
-            header.col(|ui| { ui.strong("Type"); });
-            header.col(|ui| { ui.strong("Category"); });
-            header.col(|ui| { ui.strong("Impl"); });
-            header.col(|ui| { ui.strong("Version"); });
+            header.col(|ui| {
+                ui.strong("ID");
+            });
+            header.col(|ui| {
+                ui.strong("Name");
+            });
+            header.col(|ui| {
+                ui.strong("Type");
+            });
+            header.col(|ui| {
+                ui.strong("Category");
+            });
+            header.col(|ui| {
+                ui.strong("Impl");
+            });
+            header.col(|ui| {
+                ui.strong("Version");
+            });
         })
         .body(|mut body| {
             for plugin in filtered_plugins {
-                 body.row(18.0, |mut row| {
-                    row.col(|ui| { ui.label(&plugin.id); });
-                    row.col(|ui| { ui.label(&plugin.name); });
-                    row.col(|ui| { ui.label(format!("{:?}", plugin.plugin_type)); });
-                    row.col(|ui| { ui.label(&plugin.category); });
-                    row.col(|ui| { ui.label(&plugin.impl_type); });
-                    row.col(|ui| { ui.label(&plugin.version); });
+                body.row(18.0, |mut row| {
+                    row.col(|ui| {
+                        ui.label(&plugin.id);
+                    });
+                    row.col(|ui| {
+                        ui.label(&plugin.name);
+                    });
+                    row.col(|ui| {
+                        ui.label(format!("{:?}", plugin.plugin_type));
+                    });
+                    row.col(|ui| {
+                        ui.label(&plugin.category);
+                    });
+                    row.col(|ui| {
+                        ui.label(&plugin.impl_type);
+                    });
+                    row.col(|ui| {
+                        ui.label(&plugin.version);
+                    });
                 });
             }
         });
@@ -388,7 +424,7 @@ fn plugins_list_tab(ui: &mut Ui, plugin_manager: &PluginManager, category: libra
 fn shortcuts_tab(ui: &mut Ui, commands: &mut Vec<Command>, state: &mut SettingsState) {
     ui.heading("Shortcut Settings");
     ui.add_space(10.0);
-    
+
     ui.horizontal(|ui| {
         ui.label("Search:");
         ui.add(TextEdit::singleline(&mut state.search_query).hint_text("Search commands..."));
@@ -399,15 +435,19 @@ fn shortcuts_tab(ui: &mut Ui, commands: &mut Vec<Command>, state: &mut SettingsS
     let mut new_shortcut: Option<(CommandId, eframe::egui::Modifiers, Key)> = None;
 
     if let Some(command_id) = listening_for_id {
-         ui.ctx().input(|i| {
+        ui.ctx().input(|i| {
             // Filter keys so we don't catch modifiers alone
-            if i.keys_down.is_empty() { return; }
-             
-            for event in &i.events {
-                if let egui::Event::Key { key, pressed: true, .. } = event {
+            if i.keys_down.is_empty() {
+                return;
+            }
 
-                     new_shortcut = Some((command_id, i.modifiers, *key));
-                     break; 
+            for event in &i.events {
+                if let egui::Event::Key {
+                    key, pressed: true, ..
+                } = event
+                {
+                    new_shortcut = Some((command_id, i.modifiers, *key));
+                    break;
                 }
             }
         });
@@ -415,9 +455,9 @@ fn shortcuts_tab(ui: &mut Ui, commands: &mut Vec<Command>, state: &mut SettingsS
 
     if let Some((id, mods, key)) = new_shortcut {
         if let Some(cmd) = commands.iter_mut().find(|c| c.id == id) {
-             let new_shortcut_val = Some((mods, key));
-             cmd.shortcut = new_shortcut_val;
-             cmd.shortcut_text = get_shortcut_text(&new_shortcut_val);
+            let new_shortcut_val = Some((mods, key));
+            cmd.shortcut = new_shortcut_val;
+            cmd.shortcut_text = get_shortcut_text(&new_shortcut_val);
         }
         state.listening_for = None;
     }
@@ -428,14 +468,18 @@ fn shortcuts_tab(ui: &mut Ui, commands: &mut Vec<Command>, state: &mut SettingsS
         .resizable(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .column(Column::auto().at_least(200.0)) // Command Name
-        .column(Column::remainder())             // Shortcut
+        .column(Column::remainder()) // Shortcut
         .header(20.0, |mut header| {
-            header.col(|ui| { ui.strong("Command"); });
-            header.col(|ui| { ui.strong("Shortcut"); });
+            header.col(|ui| {
+                ui.strong("Command");
+            });
+            header.col(|ui| {
+                ui.strong("Shortcut");
+            });
         })
         .body(|mut body| {
             let query = state.search_query.to_lowercase();
-            // Filter commands first to know row count? 
+            // Filter commands first to know row count?
             // TableBuilder body iterates dynamically or we can feed it rows.
             // Using logic inside rows:
 
@@ -450,7 +494,7 @@ fn shortcuts_tab(ui: &mut Ui, commands: &mut Vec<Command>, state: &mut SettingsS
                     });
                     row.col(|ui| {
                         let is_listening = state.listening_for == Some(command.id);
-                        
+
                         let button_text = if is_listening {
                             "Press keys...".to_string()
                         } else if !command.shortcut_text.is_empty() {
@@ -486,25 +530,54 @@ fn theme_tab(ui: &mut Ui, config: &mut AppConfig) {
     egui::ComboBox::from_label("Theme Mode")
         .selected_text(format!("{:?}", config.theme.theme_type))
         .show_ui(ui, |ui| {
-            ui.selectable_value(&mut config.theme.theme_type, crate::config::ThemeType::Dark, "Dark");
-            ui.selectable_value(&mut config.theme.theme_type, crate::config::ThemeType::Light, "Light");
-            ui.selectable_value(&mut config.theme.theme_type, crate::config::ThemeType::Latte, "Latte");
-            ui.selectable_value(&mut config.theme.theme_type, crate::config::ThemeType::Frappe, "Frappe");
-            ui.selectable_value(&mut config.theme.theme_type, crate::config::ThemeType::Macchiato, "Macchiato");
-            ui.selectable_value(&mut config.theme.theme_type, crate::config::ThemeType::Mocha, "Mocha");
+            ui.selectable_value(
+                &mut config.theme.theme_type,
+                crate::config::ThemeType::Dark,
+                "Dark",
+            );
+            ui.selectable_value(
+                &mut config.theme.theme_type,
+                crate::config::ThemeType::Light,
+                "Light",
+            );
+            ui.selectable_value(
+                &mut config.theme.theme_type,
+                crate::config::ThemeType::Latte,
+                "Latte",
+            );
+            ui.selectable_value(
+                &mut config.theme.theme_type,
+                crate::config::ThemeType::Frappe,
+                "Frappe",
+            );
+            ui.selectable_value(
+                &mut config.theme.theme_type,
+                crate::config::ThemeType::Macchiato,
+                "Macchiato",
+            );
+            ui.selectable_value(
+                &mut config.theme.theme_type,
+                crate::config::ThemeType::Mocha,
+                "Mocha",
+            );
         });
-
-
 }
-
 
 fn get_shortcut_text(shortcut: &Option<(eframe::egui::Modifiers, Key)>) -> String {
     if let Some((m, k)) = shortcut {
         let mut parts = Vec::new();
-        if m.command { parts.push("Ctrl"); } // Simplified for cross-platform visual
-        if m.ctrl && !m.command { parts.push("Ctrl"); }
-        if m.shift { parts.push("Shift"); }
-        if m.alt { parts.push("Alt"); }
+        if m.command {
+            parts.push("Ctrl");
+        } // Simplified for cross-platform visual
+        if m.ctrl && !m.command {
+            parts.push("Ctrl");
+        }
+        if m.shift {
+            parts.push("Shift");
+        }
+        if m.alt {
+            parts.push("Alt");
+        }
         let key_str = format!("{:?}", k);
         parts.push(&key_str);
         parts.join("+")
@@ -512,4 +585,3 @@ fn get_shortcut_text(shortcut: &Option<(eframe::egui::Modifiers, Key)>) -> Strin
         String::new()
     }
 }
-

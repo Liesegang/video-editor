@@ -29,7 +29,7 @@ pub trait ViewportState {
     // (0,0) means top-left of content is at top-left of viewport.
     fn get_pan(&self) -> egui::Vec2;
     fn set_pan(&mut self, pan: egui::Vec2);
-    
+
     // Zoom is scale factor. 1.0 = 100%.
     fn get_zoom(&self) -> egui::Vec2;
     fn set_zoom(&mut self, zoom: egui::Vec2);
@@ -43,11 +43,7 @@ pub struct ViewportController<'a> {
 }
 
 impl<'a> ViewportController<'a> {
-    pub fn new(
-        ui: &'a mut egui::Ui,
-        id: egui::Id,
-        hand_tool_key: Option<egui::Key>,
-    ) -> Self {
+    pub fn new(ui: &'a mut egui::Ui, id: egui::Id, hand_tool_key: Option<egui::Key>) -> Self {
         Self {
             ui,
             id,
@@ -92,7 +88,8 @@ impl<'a> ViewportController<'a> {
                 _is_hand_tool_active = true;
 
                 // Set initial cursor (can be overridden by dragging)
-                self.ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+                self.ui
+                    .output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
 
                 if response.dragged_by(egui::PointerButton::Primary) {
                     let delta = response.drag_delta();
@@ -116,7 +113,8 @@ impl<'a> ViewportController<'a> {
             if delta != egui::Vec2::ZERO {
                 self.apply_pan(state, -delta); // Invert delta for "dragging content" feel
                 changed = true;
-                self.ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                self.ui
+                    .output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
             }
         }
 
@@ -125,13 +123,16 @@ impl<'a> ViewportController<'a> {
             let scroll_delta = self.ui.input(|i| i.raw_scroll_delta);
             // egui scroll delta: Y is vertical scroll. X is horizontal.
             // Usually Y is dominant on simple mouse wheels.
-            
+
             // Only process if there is scroll interaction
             if scroll_delta != egui::Vec2::ZERO {
                 changed = true;
-                
+
                 let modifiers = self.ui.input(|i| i.modifiers);
-                let pointer_pos = self.ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center());
+                let pointer_pos = self
+                    .ui
+                    .input(|i| i.pointer.hover_pos())
+                    .unwrap_or(rect.center());
                 // Relative position within the viewport (not content space)
                 // This is needed for "Zoom around mouse"
                 // Screen Point P = (World Point W * Zoom) - Pan
@@ -139,14 +140,19 @@ impl<'a> ViewportController<'a> {
                 // New Pan = W * NewZoom - P
                 //         = ((P + Pan) / OldZoom) * NewZoom - P
                 //         = (P + Pan) * (NewZoom / OldZoom) - P
-                
+
                 // Determine Action
-                let local_pivot = egui::pos2(pointer_pos.x - rect.min.x, pointer_pos.y - rect.min.y);
+                let local_pivot =
+                    egui::pos2(pointer_pos.x - rect.min.x, pointer_pos.y - rect.min.y);
 
                 if self.config.zoom_uniform {
                     // --- PREVIEW MODE (Always Uniform Zoom) ---
                     // Any scroll = Zoom
-                    let delta = if scroll_delta.y != 0.0 { scroll_delta.y } else { scroll_delta.x };
+                    let delta = if scroll_delta.y != 0.0 {
+                        scroll_delta.y
+                    } else {
+                        scroll_delta.x
+                    };
                     let zoom_factor = if delta > 0.0 { 1.1 } else { 0.9 };
                     self.apply_zoom_at(state, local_pivot, egui::vec2(zoom_factor, zoom_factor));
                 } else {
@@ -155,10 +161,10 @@ impl<'a> ViewportController<'a> {
                     // Shift: Scroll X
                     // Ctrl: Zoom X
                     // Ctrl+Shift: Zoom Y
-                    
+
                     let is_ctrl = modifiers.command || modifiers.ctrl;
                     let is_shift = modifiers.shift;
-                    
+
                     if is_ctrl && is_shift {
                         // Zoom Y
                         let zoom_factor = if scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
@@ -168,23 +174,26 @@ impl<'a> ViewportController<'a> {
                     } else if is_ctrl {
                         // Zoom X
                         let zoom_factor = if scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
-                         if self.config.allow_zoom_x {
+                        if self.config.allow_zoom_x {
                             self.apply_zoom_at(state, local_pivot, egui::vec2(zoom_factor, 1.0));
                         }
                     } else if is_shift {
                         // Pan X (Horizontal Scroll)
                         // Map scroll Y to Pan X usually, or take X if trackpad
-                        let pan_x = if scroll_delta.x != 0.0 { scroll_delta.x } else { scroll_delta.y };
+                        let pan_x = if scroll_delta.x != 0.0 {
+                            scroll_delta.x
+                        } else {
+                            scroll_delta.y
+                        };
                         // Scroll up/down typically means move view up/down. moves CONTENT down/up.
                         // Pan increase = move view down/right (scroll down/right).
                         // If I scroll "down" (delta.y negative?), I want to go down.
                         // egui: scroll down is typically POSITIVE delta in some contexts, negative in others?
-                        // raw_scroll_delta: standard mouse wheel down is NEGATIVE Y? No, checking docs... 
+                        // raw_scroll_delta: standard mouse wheel down is NEGATIVE Y? No, checking docs...
                         // Usually up is positive.
                         // If I scroll UP, I want to see TOP. Pan decreases.
                         // So pan -= delta.
                         if self.config.allow_pan_x {
-
                             // Let's assume scroll_delta is "content movement".
                             // If scroll UP (pos), content moves DOWN.
                             // If we apply pan -= delta:
@@ -219,15 +228,21 @@ impl<'a> ViewportController<'a> {
     fn apply_zoom_at(&self, state: &mut impl ViewportState, pivot: egui::Pos2, factor: egui::Vec2) {
         let old_zoom = state.get_zoom();
         let mut new_zoom = old_zoom * factor;
-        
+
         // Clamp
         new_zoom.x = new_zoom.x.clamp(self.config.min_zoom, self.config.max_zoom);
         new_zoom.y = new_zoom.y.clamp(self.config.min_zoom, self.config.max_zoom);
-        
-        if !self.config.allow_zoom_x { new_zoom.x = old_zoom.x; }
-        if !self.config.allow_zoom_y { new_zoom.y = old_zoom.y; }
 
-        if new_zoom == old_zoom { return; }
+        if !self.config.allow_zoom_x {
+            new_zoom.x = old_zoom.x;
+        }
+        if !self.config.allow_zoom_y {
+            new_zoom.y = old_zoom.y;
+        }
+
+        if new_zoom == old_zoom {
+            return;
+        }
 
         // Adjust Pan to keep pivot stable
         // Formula: NewPan = (Pivot + OldPan) * (NewZoom / OldZoom) - Pivot
@@ -240,12 +255,12 @@ impl<'a> ViewportController<'a> {
         // (Pivot + OldPan) / OldZoom = (Pivot + NewPan) / NewZoom
         // Pivot + NewPan = ((Pivot + OldPan) / OldZoom) * NewZoom
         // NewPan = (Pivot + OldPan) * (NewZoom / OldZoom) - Pivot
-        
+
         let old_pan = state.get_pan();
         // Be careful with Vec2 division, it's component-wise
         let ratio = new_zoom / old_zoom;
         let _p_vec = pivot.to_vec2(); // Pivot as vector from origin
-        
+
         // Note: Pivot is in UI coordinates (absolute screen).
         // But Pan is usually relative to the "Content Top-Left" in standard ScrollArea?
         // OR Pan is the offset applied to translation.
@@ -253,57 +268,57 @@ impl<'a> ViewportController<'a> {
         // S = (C * Zoom) - Pan  <-- This is standard "Camera" pan.
         // OR S = (C - Pan) * Zoom
         // We need to know the Model used by panels.
-        
+
         // Case 1: Preview Panel
         // transform = translate(pan) * scale(zoom) ? No, usually translate then scale or scale then translate.
         // Preview usually: Pan is translation. Zoom is scale.
         // If I Pan (20, 20), content shifts by (20, 20).
         // So S = C * Zoom + Pan.
         // Let's check Preview implementation later.
-        
+
         // Case 2: Timeline
         // Scroll Offset.
         // S = (C - ScrollOffset) * Zoom. (Usually local coords).
-        
+
         // This discrepancy is TRICKY.
         // "Pan" in Preview might be "Offset of Image". S = Image * Z + Pan.
         // "Scroll" in Timeline is "Offset of View". S = (Time * Scale) - Scroll.
-        
+
         // If Pan = ScrollOffset:
         // S = C * Zoom - Pan
         // W = (S + Pan) / Zoom
         // NewPan = (S + Pan) * (NewZ/OldZ) - S
-        
+
         // If Pan = ImageOffset (Preview):
         // S = C * Zoom + Pan
         // W = (S - Pan) / Zoom
         // NewPan = S - (S - Pan) * (NewZ/OldZ)
-        
+
         // We need `ViewportState` to clarify or handle this?
         // Or we standardize.
         // User wants "Unified Logic".
         // Timeline uses `scroll_offset`. Positive scroll = view moved right (seeing later time).
         // So S = T * Zoom - Scroll.
-        
+
         // Preview uses `pan`.
         // `app/src/ui/panels/preview/mod.rs` checks:
         // `let transform = TSTransform::from_translation(self.pan) * TSTransform::from_scale(self.zoom);`
         // So S = C * Zoom + Pan. (Scale then Translate).
         // This is opposite direction!
-        
+
         // Controller needs to know this?
         // Or we implement `ViewportState` such that `get_pan()` always returns "Scroll Offset" style?
         // Preview `pan` is effectively negative scroll offset?
         // If I drag image Right, Pan increases. I see Left part of image.
         // If I scroll Timeline Right (increase offset), I see Right part of timeline.
-        
+
         // We should normalize in the Adapter impls!
-        
+
         // DECISION: ViewportState works with "View Position" (Scroll Offset).
         // Positive Pan X = Camera moved Right = Content moves LEFT.
         // Preview Adapter: get_pan() returns -view.pan. set_pan(p) sets view.pan = -p.
         // Timeline Adapter: get_pan() returns scroll_offset. set_pan(p) sets scroll_offset = p.
-        
+
         // Wait, "Drag Pan".
         // If I drag Mouse RIGHT (Delta > 0).
         // Paper moves RIGHT.
@@ -311,13 +326,13 @@ impl<'a> ViewportController<'a> {
         // Camera moves LEFT.
         // Scroll Offset DECREASES.
         // Pan -= Delta. (Matches my previous code).
-        
+
         // So if ViewportState is Scroll Offset:
         // Preview Adapter:
         //   Scroll Offset = -ImagePosition.
         //   get_pan() -> -view.pan
         //   set_pan(p) -> view.pan = -p
-        
+
         // Let's verify Formula for Scroll Offset model.
         // S = C * Zoom - Pan
         // Piv = C * OldZ - OldPan
@@ -326,11 +341,11 @@ impl<'a> ViewportController<'a> {
         // Piv = ((Piv + OldPan) / OldZ) * NewZ - NewPan
         // NewPan = ((Piv + OldPan) / OldZ) * NewZ - Piv
         // NewPan = (Piv + OldPan) * (NewZ/OldZ) - Piv.
-        // This matches the formula derived earlier! 
-        
+        // This matches the formula derived earlier!
+
         let new_pan_x = (pivot.x + old_pan.x) * ratio.x - pivot.x;
         let new_pan_y = (pivot.y + old_pan.y) * ratio.y - pivot.y;
-        
+
         state.set_zoom(new_zoom);
         state.set_pan(egui::vec2(new_pan_x, new_pan_y));
     }

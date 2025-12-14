@@ -13,10 +13,10 @@ use crate::config;
 use crate::model::ui_types::Tab;
 use crate::shortcut::ShortcutManager;
 use crate::state::context::EditorContext;
+use crate::ui::command_palette::CommandPalette;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::ui::dialogs::export_dialog::ExportDialog;
 use crate::ui::dialogs::settings_dialog::SettingsDialog;
-use crate::ui::command_palette::CommandPalette;
 use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
 use crate::utils;
 use library::cache::SharedCacheManager;
@@ -70,7 +70,7 @@ impl MyApp {
             .add_composition(default_comp);
 
         let plugin_manager = library::create_plugin_manager();
-        
+
         // Load plugins from configured paths
         for path in &app_config.plugins.paths {
             if let Err(e) = plugin_manager.load_sksl_plugins_from_directory(path) {
@@ -79,8 +79,11 @@ impl MyApp {
         }
 
         let cache_manager = Arc::new(library::cache::CacheManager::new());
-        let project_service =
-            ProjectService::new(Arc::clone(&default_project), plugin_manager.clone(), cache_manager.clone());
+        let project_service = ProjectService::new(
+            Arc::clone(&default_project),
+            plugin_manager.clone(),
+            cache_manager.clone(),
+        );
 
         let mut editor_context = EditorContext::new(default_comp_id); // Pass default_comp_id
         editor_context.selection.composition_id = Some(default_comp_id); // Select the default composition
@@ -101,7 +104,11 @@ impl MyApp {
             shortcut_manager: ShortcutManager::new(),
             command_registry: command_registry.clone(),
             app_config: app_config.clone(),
-            settings_dialog: SettingsDialog::new(command_registry.clone(), app_config.clone(), plugin_manager.clone()),
+            settings_dialog: SettingsDialog::new(
+                command_registry.clone(),
+                app_config.clone(),
+                plugin_manager.clone(),
+            ),
             triggered_action: None,
             composition_dialog: CompositionDialog::new(),
             export_dialog: ExportDialog::new(
@@ -154,14 +161,14 @@ impl eframe::App for MyApp {
         if let Some(crate::ui::dialogs::settings_dialog::SettingsResult::Save) = result {
             self.command_registry = self.settings_dialog.command_registry.clone();
             self.app_config = self.settings_dialog.config.clone();
-            
+
             // Apply new config
             config::save_config(&self.app_config);
         }
-        
+
         // Define theme applicator
         let apply_theme = |ctx: &egui::Context, config: &config::AppConfig| {
-             match config.theme.theme_type {
+            match config.theme.theme_type {
                 crate::config::ThemeType::Dark => ctx.set_visuals(egui::Visuals::dark()),
                 crate::config::ThemeType::Light => ctx.set_visuals(egui::Visuals::light()),
                 _ => {
@@ -172,46 +179,48 @@ impl eframe::App for MyApp {
                         crate::config::ThemeType::Mocha => catppuccin::PALETTE.mocha,
                         _ => catppuccin::PALETTE.mocha,
                     };
-                    
+
                     let colors = flavor.colors;
-                    
-                    let mut visuals = if config.theme.theme_type == crate::config::ThemeType::Latte { 
-                        egui::Visuals::light() 
-                    } else { 
-                        egui::Visuals::dark() 
+
+                    let mut visuals = if config.theme.theme_type == crate::config::ThemeType::Latte
+                    {
+                        egui::Visuals::light()
+                    } else {
+                        egui::Visuals::dark()
                     };
-                    
-                    let c = |c: catppuccin::Color| egui::Color32::from_rgb(c.rgb.r, c.rgb.g, c.rgb.b);
-                    
+
+                    let c =
+                        |c: catppuccin::Color| egui::Color32::from_rgb(c.rgb.r, c.rgb.g, c.rgb.b);
+
                     visuals.panel_fill = c(colors.base);
                     visuals.window_fill = c(colors.mantle);
                     visuals.faint_bg_color = c(colors.surface0);
                     visuals.extreme_bg_color = c(colors.crust);
-                    
+
                     visuals.widgets.noninteractive.bg_fill = c(colors.surface0);
                     visuals.widgets.noninteractive.fg_stroke.color = c(colors.text);
                     visuals.widgets.noninteractive.bg_stroke.color = c(colors.surface1);
-                    
+
                     visuals.widgets.inactive.bg_fill = c(colors.surface0); // Button normal
                     visuals.widgets.inactive.fg_stroke.color = c(colors.text);
-                    
+
                     visuals.widgets.hovered.bg_fill = c(colors.surface2);
                     visuals.widgets.hovered.fg_stroke.color = c(colors.text);
-                    
+
                     visuals.widgets.active.bg_fill = c(colors.surface1); // Pressed
                     visuals.widgets.active.fg_stroke.color = c(colors.text);
-                    
+
                     visuals.widgets.open.bg_fill = c(colors.surface1);
-                    
+
                     visuals.selection.bg_fill = c(colors.blue);
                     visuals.selection.stroke.color = c(colors.base); // Contrast text on selection? usually white or base
-                    
+
                     visuals.hyperlink_color = c(colors.rosewater);
                     visuals.warn_fg_color = c(colors.yellow);
                     visuals.error_fg_color = c(colors.red);
-                    
+
                     visuals.window_stroke.color = c(colors.overlay1);
-                    
+
                     ctx.set_visuals(visuals);
                 }
             }
@@ -220,13 +229,12 @@ impl eframe::App for MyApp {
         // Apply theme initially
         apply_theme(ctx, &self.app_config);
 
-        // TODO: Optimize this to not run every frame. 
-        // For now, we rely on the fact that set_visuals might be cheap if unchanged? 
-        // Actually set_visuals triggers repaint. 
+        // TODO: Optimize this to not run every frame.
+        // For now, we rely on the fact that set_visuals might be cheap if unchanged?
+        // Actually set_visuals triggers repaint.
         // We really should only do this when config changes.
         // We update `app_config` when SettingsDialog closes with Save.
         // So we can do it inside the Save block.
-
 
         if self.composition_dialog.is_open {
             self.composition_dialog.show(ctx);
@@ -234,7 +242,8 @@ impl eframe::App for MyApp {
 
         if self.export_dialog.is_open {
             let active_comp_id = self.editor_context.selection.composition_id;
-            self.export_dialog.show(ctx, &self.project, &self.project_service, active_comp_id);
+            self.export_dialog
+                .show(ctx, &self.project, &self.project_service, active_comp_id);
         }
 
         if self.editor_context.keyframe_dialog.is_open {
@@ -249,7 +258,7 @@ impl eframe::App for MyApp {
 
         // Palette
         if let Some(cmd_id) = self.command_palette.show(ctx, &self.command_registry) {
-             self.triggered_action = Some(cmd_id);
+            self.triggered_action = Some(cmd_id);
         }
 
         // 6. Generic Error Modal
@@ -284,10 +293,11 @@ impl eframe::App for MyApp {
             && !self.editor_context.keyframe_dialog.is_open
             && !self.command_palette.is_open;
         if main_ui_enabled && !is_listening_for_shortcut {
-            if let Some(action_id) = self
-                .shortcut_manager
-                .handle_shortcuts(ctx, &self.command_registry, &mut self.editor_context)
-            {
+            if let Some(action_id) = self.shortcut_manager.handle_shortcuts(
+                ctx,
+                &self.command_registry,
+                &mut self.editor_context,
+            ) {
                 self.triggered_action = Some(action_id);
             }
         }
@@ -311,7 +321,8 @@ impl eframe::App for MyApp {
             handle_command(ctx, action, context, &mut trigger_settings);
 
             if trigger_settings {
-                self.settings_dialog.open(&self.command_registry, &self.app_config);
+                self.settings_dialog
+                    .open(&self.command_registry, &self.app_config);
             }
             ctx.request_repaint();
         }
@@ -360,11 +371,11 @@ impl eframe::App for MyApp {
             // Audio Master Clock Sync
             // We trust the audio engine's time as the source of truth.
             let audio_time = self.project_service.audio_engine.get_current_time();
-            
-            // Cast to f32 for UI text/logic, but careful with precision for long videos? 
+
+            // Cast to f32 for UI text/logic, but careful with precision for long videos?
             // editor_context uses f32 for current_time.
             self.editor_context.timeline.current_time = audio_time as f32;
-            
+
             ctx.request_repaint();
         } else {
             // Reset accumulator when not playing to avoid jump on resume

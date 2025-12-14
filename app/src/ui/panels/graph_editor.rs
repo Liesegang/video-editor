@@ -1,6 +1,4 @@
-use egui::{
-    Color32, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2,
-};
+use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2};
 use library::animation::EasingFunction;
 use library::model::project::project::Project;
 use library::model::project::property::{Property, PropertyValue};
@@ -9,8 +7,8 @@ use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 
 use crate::action::HistoryManager;
-use crate::state::context::EditorContext;
 use crate::command::CommandRegistry;
+use crate::state::context::EditorContext;
 
 use crate::command::CommandId;
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
@@ -129,8 +127,6 @@ pub fn graph_editor_panel(
             return;
         }
 
-
-
         let pixels_per_second = editor_context.graph_editor.zoom_x;
         let pixels_per_unit = editor_context.graph_editor.zoom_y;
 
@@ -195,8 +191,6 @@ pub fn graph_editor_panel(
         }
 
         // Graph Interaction (Pan)
-
-
 
         // We use graph_response for Keyframe/Curve interactions in the loop as well?
         // The keyframe loop uses `ui.interact(point_rect, ...)` which is fine (on top).
@@ -501,7 +495,11 @@ pub fn graph_editor_panel(
                             ui.label("Easing:");
 
                             if ui.button("Linear").clicked() {
-                                action = Action::SetEasing(name_for_menu.clone(), i, EasingFunction::Linear);
+                                action = Action::SetEasing(
+                                    name_for_menu.clone(),
+                                    i,
+                                    EasingFunction::Linear,
+                                );
                                 should_push_history = true;
                                 ui.close_kind(UiKind::Menu);
                             }
@@ -991,12 +989,7 @@ pub fn graph_editor_panel(
         Action::Remove(name, idx) => {
             if let Some((eff_idx, prop_key)) = parse_key(&name) {
                 let _ = project_service.remove_effect_keyframe_by_index(
-                    comp_id,
-                    track_id,
-                    entity_id,
-                    eff_idx,
-                    &prop_key,
-                    idx,
+                    comp_id, track_id, entity_id, eff_idx, &prop_key, idx,
                 );
             } else {
                 let _ = project_service.remove_keyframe(comp_id, track_id, entity_id, &name, idx);

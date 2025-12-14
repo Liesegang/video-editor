@@ -3,7 +3,7 @@ use crate::model::project::property::PropertyValue;
 use crate::plugin::{EffectPlugin, Plugin};
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
-use skia_safe::{image_filters, Color};
+use skia_safe::{Color, image_filters};
 use std::collections::HashMap;
 
 pub struct DropShadowEffectPlugin;
@@ -58,7 +58,12 @@ impl EffectPlugin for DropShadowEffectPlugin {
         let color_val = params
             .get("color")
             .and_then(|pv| pv.get_as::<crate::model::frame::color::Color>())
-            .unwrap_or(crate::model::frame::color::Color { r: 0, g: 0, b: 0, a: 255 });
+            .unwrap_or(crate::model::frame::color::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            });
         let shadow_only = params
             .get("shadow_only")
             .and_then(|pv| pv.get_as::<bool>())
@@ -66,26 +71,40 @@ impl EffectPlugin for DropShadowEffectPlugin {
 
         if dx == 0.0 && dy == 0.0 && sigma_x == 0.0 && sigma_y == 0.0 {
             if !shadow_only {
-                 return Ok(input.clone());
+                return Ok(input.clone());
             }
         }
 
         use crate::plugin::effects::utils::apply_skia_filter;
-        
+
         // Convert internal Color to Skia Color
         let skia_color = Color::from_argb(color_val.a, color_val.r, color_val.g, color_val.b);
 
         apply_skia_filter(input, gpu_context, |_image, _width, _height| {
             if shadow_only {
-                 image_filters::drop_shadow_only((dx as f32, dy as f32), (sigma_x as f32, sigma_y as f32), skia_color, None, None, None)
-                    .ok_or(LibraryError::Render(
-                        "Failed to create drop shadow only filter".to_string(),
-                    ))
+                image_filters::drop_shadow_only(
+                    (dx as f32, dy as f32),
+                    (sigma_x as f32, sigma_y as f32),
+                    skia_color,
+                    None,
+                    None,
+                    None,
+                )
+                .ok_or(LibraryError::Render(
+                    "Failed to create drop shadow only filter".to_string(),
+                ))
             } else {
-                image_filters::drop_shadow((dx as f32, dy as f32), (sigma_x as f32, sigma_y as f32), skia_color, None, None, None)
-                    .ok_or(LibraryError::Render(
-                        "Failed to create drop shadow filter".to_string(),
-                    ))
+                image_filters::drop_shadow(
+                    (dx as f32, dy as f32),
+                    (sigma_x as f32, sigma_y as f32),
+                    skia_color,
+                    None,
+                    None,
+                    None,
+                )
+                .ok_or(LibraryError::Render(
+                    "Failed to create drop shadow filter".to_string(),
+                ))
             }
         })
     }
@@ -131,7 +150,7 @@ impl EffectPlugin for DropShadowEffectPlugin {
                 default_value: PropertyValue::Number(OrderedFloat(3.0)),
                 category: "Drop Shadow".to_string(),
             },
-             PropertyDefinition {
+            PropertyDefinition {
                 name: "sigma_y".to_string(),
                 label: "Blur Y".to_string(),
                 ui_type: PropertyUiType::Float {
@@ -147,7 +166,12 @@ impl EffectPlugin for DropShadowEffectPlugin {
                 name: "color".to_string(),
                 label: "Color".to_string(),
                 ui_type: PropertyUiType::Color,
-                default_value: PropertyValue::Color(crate::model::frame::color::Color { r: 0, g: 0, b: 0, a: 255 }),
+                default_value: PropertyValue::Color(crate::model::frame::color::Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }),
                 category: "Drop Shadow".to_string(),
             },
             PropertyDefinition {

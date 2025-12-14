@@ -19,24 +19,23 @@ impl AudioEngine {
             .default_output_device()
             .ok_or_else(|| anyhow::anyhow!("No default audio output device available"))?;
 
-
         let config: cpal::StreamConfig = device.default_output_config()?.into();
-        
+
         let sample_rate = config.sample_rate.0;
         let channels = config.channels;
 
         // Create RingBuffer (Wait-free SPSC)
         // Capacity: 1 second buffer (approx)
-        let buffer_size = (sample_rate as usize) * (channels as usize) * 1; 
+        let buffer_size = (sample_rate as usize) * (channels as usize) * 1;
         let (producer, mut consumer) = RingBuffer::new(buffer_size);
 
         let current_sample_count = Arc::new(AtomicU64::new(0));
         let counter_clone = current_sample_count.clone();
-        
+
         let generation = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let generation_clone = generation.clone();
         let mut local_generation = 0;
-        
+
         // This closure runs on the high-priority audio thread.
         // No IO, no locking (mostly), no expensive ops.
         let stream = device.build_output_stream(
@@ -45,7 +44,7 @@ impl AudioEngine {
                 let global_gen = generation_clone.load(Ordering::Relaxed);
                 if global_gen > local_generation {
                     // Seek detected: Flush buffer
-                    while consumer.pop().is_ok() {} 
+                    while consumer.pop().is_ok() {}
                     local_generation = global_gen;
                 }
                 Self::write_audio_data(data, channels as usize, &mut consumer, &counter_clone);
@@ -75,7 +74,7 @@ impl AudioEngine {
         // Fill the output buffer with data from the ring buffer
         // Or silence if empty
         let mut frames_written = 0;
-        
+
         for frame in output.chunks_mut(channels) {
             for sample in frame.iter_mut() {
                 if let Ok(value) = consumer.pop() {
@@ -84,12 +83,12 @@ impl AudioEngine {
                     *sample = 0.0;
                 }
             }
-            
+
             // Only advance time if we successfully popped a full frame?
             // Actually, audio device TIME advances regardless of whether we have data.
             // "Current Time" should be "how much we have played".
             // So we always increment.
-           
+
             frames_written += 1;
         }
 
@@ -99,7 +98,7 @@ impl AudioEngine {
     pub fn get_sample_rate(&self) -> u32 {
         self.sample_rate
     }
-    
+
     pub fn get_channels(&self) -> u16 {
         self.channels
     }
@@ -109,7 +108,7 @@ impl AudioEngine {
         let mut producer = self.producer.lock().unwrap();
         // Since Producer is SPSC, we need to lock if multiple writers, but we should have one AssetWorker.
         // We use Mutex here just for safety in 'library' context.
-        
+
         let mut written = 0;
         for &sample in samples {
             if producer.push(sample).is_ok() {
@@ -125,11 +124,11 @@ impl AudioEngine {
         let samples = self.current_sample_count.load(Ordering::Relaxed);
         samples as f64 / self.sample_rate as f64
     }
-    
+
     // Playback control
     pub fn play(&self) -> Result<(), anyhow::Error> {
         // Stream remains active for scrubbing
-        // self._stream.play()?; 
+        // self._stream.play()?;
         Ok(())
     }
 
@@ -142,24 +141,24 @@ impl AudioEngine {
     pub fn set_time(&self, time: f64) {
         let samples = (time * self.sample_rate as f64).round() as u64;
         self.current_sample_count.store(samples, Ordering::Relaxed);
-        
+
         // Signal flush to clear old buffered audio
         self.generation.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn free_capacity(&self) -> usize {
         if let Ok(producer) = self.producer.lock() {
-             producer.slots()
+            producer.slots()
         } else {
             0
         }
     }
-    
+
     pub fn available_slots(&self) -> usize {
-         if let Ok(producer) = self.producer.lock() {
-             producer.slots()
-         } else {
-             0
-         }
+        if let Ok(producer) = self.producer.lock() {
+            producer.slots()
+        } else {
+            0
+        }
     }
 }
