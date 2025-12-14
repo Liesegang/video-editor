@@ -278,6 +278,9 @@ pub fn draw_gizmo(
 ) {
     if let Some(selected_id) = editor_context.selection.entity_id {
         if let Some(gc) = gui_clips.iter().find(|gc| gc.id == selected_id) {
+            if gc.kind == library::model::project::TrackClipKind::Audio {
+                return;
+            }
             let painter = ui.painter();
 
             let base_w = gc.width.unwrap_or(1920.0);

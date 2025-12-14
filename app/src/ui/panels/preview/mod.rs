@@ -332,6 +332,7 @@ pub fn preview_panel(
                         asset_id: asset_id,
                         width: asset_opt.and_then(|a| a.width.map(|w| w as f32)),
                         height: asset_opt.and_then(|a| a.height.map(|h| h as f32)),
+                        kind: entity.kind.clone(),
                     };
                     gui_clips.push(gc);
                 }
