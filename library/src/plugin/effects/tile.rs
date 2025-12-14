@@ -19,8 +19,12 @@ impl Plugin for TileEffectPlugin {
         "tile"
     }
 
-    fn category(&self) -> PluginCategory {
-        PluginCategory::Effect
+    fn name(&self) -> String {
+        "Tile".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Distortion".to_string()
     }
 
     fn version(&self) -> (u32, u32, u32) {

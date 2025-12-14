@@ -119,3 +119,13 @@ pub enum TimelineDisplayMode {
     Frames,
     SecondsAndFrames,
 }
+
+use library::plugin::PluginCategory;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsTab {
+    Shortcuts,
+    PluginPaths,
+    PluginList(PluginCategory, Option<String>), // Category, Type Filter
+    Theme,
+}

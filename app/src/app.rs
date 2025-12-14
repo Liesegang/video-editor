@@ -30,6 +30,7 @@ pub struct MyApp {
     pub history_manager: HistoryManager,
     shortcut_manager: ShortcutManager,
     command_registry: CommandRegistry,
+    pub app_config: config::AppConfig,
 
     // Dialogs
     pub settings_dialog: SettingsDialog,
@@ -54,8 +55,8 @@ impl MyApp {
         // Setup fonts
         utils::setup_fonts(&cc.egui_ctx);
 
-        let shortcut_config = config::load_config();
-        let command_registry = CommandRegistry::new(&shortcut_config);
+        let app_config = config::load_config();
+        let command_registry = CommandRegistry::new(&app_config);
 
         let default_project = Arc::new(RwLock::new(Project::new("Default Project")));
         // Add a default composition when the app starts
@@ -67,6 +68,14 @@ impl MyApp {
             .add_composition(default_comp);
 
         let plugin_manager = library::create_plugin_manager();
+        
+        // Load plugins from configured paths
+        for path in &app_config.plugins.paths {
+            if let Err(e) = plugin_manager.load_sksl_plugins_from_directory(path) {
+                log::error!("Failed to load SkSL plugins from {}: {}", path, e);
+            }
+        }
+
         let cache_manager = Arc::new(library::cache::CacheManager::new());
         let project_service =
             ProjectService::new(Arc::clone(&default_project), plugin_manager.clone(), cache_manager.clone());
@@ -89,7 +98,8 @@ impl MyApp {
             history_manager: HistoryManager::new(),
             shortcut_manager: ShortcutManager::new(),
             command_registry: command_registry.clone(),
-            settings_dialog: SettingsDialog::new(command_registry),
+            app_config: app_config.clone(),
+            settings_dialog: SettingsDialog::new(command_registry.clone(), app_config.clone(), plugin_manager.clone()),
             triggered_action: None,
             composition_dialog: CompositionDialog::new(),
             export_dialog: ExportDialog::new(
@@ -140,7 +150,80 @@ impl eframe::App for MyApp {
         }
         if let Some(crate::ui::dialogs::settings_dialog::SettingsResult::Save) = result {
             self.command_registry = self.settings_dialog.command_registry.clone();
+            self.app_config = self.settings_dialog.config.clone();
+            
+            // Apply new config
+            config::save_config(&self.app_config);
         }
+        
+        // Define theme applicator
+        let apply_theme = |ctx: &egui::Context, config: &config::AppConfig| {
+             match config.theme.theme_type {
+                crate::config::ThemeType::Dark => ctx.set_visuals(egui::Visuals::dark()),
+                crate::config::ThemeType::Light => ctx.set_visuals(egui::Visuals::light()),
+                _ => {
+                    let flavor = match config.theme.theme_type {
+                        crate::config::ThemeType::Latte => catppuccin::PALETTE.latte,
+                        crate::config::ThemeType::Frappe => catppuccin::PALETTE.frappe,
+                        crate::config::ThemeType::Macchiato => catppuccin::PALETTE.macchiato,
+                        crate::config::ThemeType::Mocha => catppuccin::PALETTE.mocha,
+                        _ => catppuccin::PALETTE.mocha,
+                    };
+                    
+                    let colors = flavor.colors;
+                    
+                    let mut visuals = if config.theme.theme_type == crate::config::ThemeType::Latte { 
+                        egui::Visuals::light() 
+                    } else { 
+                        egui::Visuals::dark() 
+                    };
+                    
+                    let c = |c: catppuccin::Color| egui::Color32::from_rgb(c.rgb.r, c.rgb.g, c.rgb.b);
+                    
+                    visuals.panel_fill = c(colors.base);
+                    visuals.window_fill = c(colors.mantle);
+                    visuals.faint_bg_color = c(colors.surface0);
+                    visuals.extreme_bg_color = c(colors.crust);
+                    
+                    visuals.widgets.noninteractive.bg_fill = c(colors.surface0);
+                    visuals.widgets.noninteractive.fg_stroke.color = c(colors.text);
+                    visuals.widgets.noninteractive.bg_stroke.color = c(colors.surface1);
+                    
+                    visuals.widgets.inactive.bg_fill = c(colors.surface0); // Button normal
+                    visuals.widgets.inactive.fg_stroke.color = c(colors.text);
+                    
+                    visuals.widgets.hovered.bg_fill = c(colors.surface2);
+                    visuals.widgets.hovered.fg_stroke.color = c(colors.text);
+                    
+                    visuals.widgets.active.bg_fill = c(colors.surface1); // Pressed
+                    visuals.widgets.active.fg_stroke.color = c(colors.text);
+                    
+                    visuals.widgets.open.bg_fill = c(colors.surface1);
+                    
+                    visuals.selection.bg_fill = c(colors.blue);
+                    visuals.selection.stroke.color = c(colors.base); // Contrast text on selection? usually white or base
+                    
+                    visuals.hyperlink_color = c(colors.rosewater);
+                    visuals.warn_fg_color = c(colors.yellow);
+                    visuals.error_fg_color = c(colors.red);
+                    
+                    visuals.window_stroke.color = c(colors.overlay1);
+                    
+                    ctx.set_visuals(visuals);
+                }
+            }
+        };
+
+        // Apply theme initially
+        apply_theme(ctx, &self.app_config);
+
+        // TODO: Optimize this to not run every frame. 
+        // For now, we rely on the fact that set_visuals might be cheap if unchanged? 
+        // Actually set_visuals triggers repaint. 
+        // We really should only do this when config changes.
+        // We update `app_config` when SettingsDialog closes with Save.
+        // So we can do it inside the Save block.
+
 
         if self.composition_dialog.is_open {
             self.composition_dialog.show(ctx);
@@ -217,7 +300,7 @@ impl eframe::App for MyApp {
             handle_command(ctx, action, context, &mut trigger_settings);
 
             if trigger_settings {
-                self.settings_dialog.open(&self.command_registry);
+                self.settings_dialog.open(&self.command_registry, &self.app_config);
             }
             ctx.request_repaint();
         }

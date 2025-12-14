@@ -1,4 +1,4 @@
-use crate::config::ShortcutConfig;
+use crate::config::AppConfig;
 use crate::model::ui_types::Tab;
 use eframe::egui::{Key, Modifiers};
 
@@ -73,7 +73,7 @@ fn get_shortcut_text(shortcut: &Option<(Modifiers, Key)>) -> String {
 }
 
 impl CommandRegistry {
-    pub fn new(config: &ShortcutConfig) -> Self {
+    pub fn new(config: &AppConfig) -> Self {
         let mut commands = vec![
             // File Menu
             Command::new(

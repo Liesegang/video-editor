@@ -19,8 +19,12 @@ impl Plugin for PngExportPlugin {
         "png_export"
     }
 
-    fn category(&self) -> PluginCategory {
-        PluginCategory::Export
+    fn name(&self) -> String {
+        "PNG Export".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Export".to_string()
     }
 
     fn version(&self) -> (u32, u32, u32) {

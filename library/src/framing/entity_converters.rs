@@ -30,6 +30,10 @@ pub trait EntityConverter: Send + Sync {
 // New trait for entity converter plugins
 pub trait EntityConverterPlugin: Plugin {
     fn register_converters(&self, registry: &mut EntityConverterRegistry);
+
+    fn plugin_type(&self) -> crate::plugin::PluginCategory {
+        crate::plugin::PluginCategory::EntityConverter
+    }
 }
 
 /// Context passed to EntityConverters, encapsulating common FrameEvaluator methods
@@ -439,8 +443,12 @@ impl crate::plugin::Plugin for BuiltinEntityConverterPlugin {
         "builtin_entity_converters"
     }
 
-    fn category(&self) -> crate::plugin::PluginCategory {
-        crate::plugin::PluginCategory::EntityConverter
+    fn name(&self) -> String {
+        "Builtin Entity Converter".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Converter".to_string()
     }
 
     fn version(&self) -> (u32, u32, u32) {

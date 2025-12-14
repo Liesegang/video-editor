@@ -20,8 +20,12 @@ impl Plugin for PixelSorterPlugin {
         "pixel_sorter"
     }
 
-    fn category(&self) -> PluginCategory {
-        PluginCategory::Effect
+    fn name(&self) -> String {
+        "Pixel Sorter".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Glitch".to_string()
     }
 
     fn version(&self) -> (u32, u32, u32) {

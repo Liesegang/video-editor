@@ -16,8 +16,12 @@ impl Plugin for NativeImageLoader {
         "native_image_loader"
     }
 
-    fn category(&self) -> PluginCategory {
-        PluginCategory::Load
+    fn name(&self) -> String {
+        "Native Image Loader".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Media".to_string()
     }
 
     fn version(&self) -> (u32, u32, u32) {

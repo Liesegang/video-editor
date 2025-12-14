@@ -19,8 +19,12 @@ impl Plugin for DilateEffectPlugin {
         "dilate"
     }
 
-    fn category(&self) -> PluginCategory {
-        PluginCategory::Effect
+    fn name(&self) -> String {
+        "Dilate".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Morphology".to_string()
     }
 
     fn version(&self) -> (u32, u32, u32) {

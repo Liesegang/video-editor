@@ -43,7 +43,7 @@ pub use crate::plugin::properties::{
     ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginCategory {
     Effect,
     Load,
@@ -93,6 +93,10 @@ pub trait InspectorPlugin: Plugin {
         &self,
         kind: &crate::model::project::TrackClipKind,
     ) -> Vec<PropertyDefinition>;
+
+    fn plugin_type(&self) -> PluginCategory {
+        PluginCategory::Inspector
+    }
 }
 
 // Re-export this if needed?
@@ -100,8 +104,12 @@ pub type InspectorPluginCreateFn = unsafe extern "C" fn() -> *mut dyn InspectorP
 
 pub trait Plugin: Send + Sync {
     fn id(&self) -> &'static str;
-    fn category(&self) -> PluginCategory;
+    fn name(&self) -> String;
+    fn category(&self) -> String; // New category grouping
     fn version(&self) -> (u32, u32, u32);
+    fn impl_type(&self) -> String {
+        "Native".to_string()
+    }
 }
 
 pub trait EffectPlugin: Plugin {
@@ -113,11 +121,22 @@ pub trait EffectPlugin: Plugin {
     ) -> Result<RenderOutput, LibraryError>;
 
     fn properties(&self) -> Vec<PropertyDefinition>;
+
+    fn plugin_type(&self) -> PluginCategory {
+        PluginCategory::Effect
+    }
 }
 
 pub trait PropertyPlugin: Plugin {
     fn get_evaluator_instance(&self) -> Arc<dyn PropertyEvaluator>;
+
+    fn plugin_type(&self) -> PluginCategory {
+        PluginCategory::Property
+    }
 }
+
+
+
 #[derive(Debug, Clone)]
 pub enum LoadRequest {
     Image { path: String },
@@ -150,6 +169,10 @@ pub trait LoadPlugin: Plugin {
         None
     }
 
+    fn plugin_type(&self) -> PluginCategory {
+        PluginCategory::Load
+    }
+
     fn get_dimensions(&self, _path: &str) -> Option<(u32, u32)> {
         None
     }
@@ -169,6 +192,10 @@ pub trait ExportPlugin: Plugin {
 
     fn properties(&self) -> Vec<PropertyDefinition> {
         Vec::new()
+    }
+
+    fn plugin_type(&self) -> PluginCategory {
+        PluginCategory::Export
     }
 }
 
@@ -831,9 +858,11 @@ impl PluginManager {
         definitions
     }
 
-    pub fn get_available_effects(&self) -> Vec<String> {
+    pub fn get_available_effects(&self) -> Vec<(String, String, String)> {
         let inner = self.inner.read().unwrap();
-        inner.effect_plugins.plugins.keys().cloned().collect()
+        inner.effect_plugins.plugins.values()
+            .map(|p| (p.id().to_string(), p.name(), p.category()))
+            .collect()
     }
 
     pub fn get_effect_properties(&self, effect_id: &str) -> Vec<PropertyDefinition> {
@@ -844,7 +873,99 @@ impl PluginManager {
             Vec::new()
         }
     }
-} // Correct closing brace for impl PluginManager
+
+    pub fn get_available_exporters(&self) -> Vec<(String, String)> {
+        let inner = self.inner.read().unwrap();
+        inner.export_plugins.plugins.values()
+            .map(|p| (p.id().to_string(), p.name()))
+            .collect()
+    }
+}
+// ... existing imports ...
+
+#[derive(Debug, Clone)]
+pub struct PluginInfo {
+    pub id: String,
+    pub name: String,
+    pub plugin_type: PluginCategory, // Was category
+    pub category: String,            // New field
+    pub version: String,
+    pub impl_type: String,           // Was plugin_type
+}
+
+// ... existing code ...
+
+impl PluginManager {
+    // ... existing new() ...
+
+    pub fn get_all_plugins(&self) -> Vec<PluginInfo> {
+        let inner = self.inner.read().unwrap();
+        let mut plugins = Vec::new();
+
+        for p in inner.effect_plugins.plugins.values() {
+            let v = p.version();
+            plugins.push(PluginInfo {
+                id: p.id().to_string(),
+                name: p.name(),
+                plugin_type: p.plugin_type(),
+                category: p.category(), // New field
+                version: format!("{}.{}.{}", v.0, v.1, v.2),
+                impl_type: p.impl_type(),
+            });
+        }
+        for p in inner.load_plugins.plugins.values() {
+            let v = p.version();
+             plugins.push(PluginInfo {
+                id: p.id().to_string(),
+                name: p.name(),
+                plugin_type: p.plugin_type(),
+                category: p.category(),
+                version: format!("{}.{}.{}", v.0, v.1, v.2),
+                impl_type: p.impl_type(),
+            });
+        }
+        for p in inner.export_plugins.plugins.values() {
+            let v = p.version();
+             plugins.push(PluginInfo {
+                id: p.id().to_string(),
+                name: p.name(),
+                plugin_type: p.plugin_type(),
+                category: p.category(),
+                version: format!("{}.{}.{}", v.0, v.1, v.2),
+                impl_type: p.impl_type(),
+            });
+        }
+        for p in inner.entity_converter_plugins.plugins.values() {
+            let v = p.version();
+             plugins.push(PluginInfo {
+                id: p.id().to_string(),
+                name: p.name(),
+                plugin_type: p.plugin_type(),
+                category: p.category(),
+                version: format!("{}.{}.{}", v.0, v.1, v.2),
+                impl_type: p.impl_type(),
+            });
+        }
+        for p in inner.inspector_plugins.plugins.values() {
+            let v = p.version();
+             plugins.push(PluginInfo {
+                id: p.id().to_string(),
+                name: p.name(),
+                plugin_type: p.plugin_type(),
+                category: p.category(),
+                version: format!("{}.{}.{}", v.0, v.1, v.2),
+                impl_type: p.impl_type(),
+            });
+        }
+        
+        // Sorting?
+        plugins.sort_by(|a, b| a.id.cmp(&b.id));
+        plugins
+    }
+
+    // ... existing methods ...
+}
+
 
 // Trait and structs moved from framing/property.rs
 use crate::model::project::property::{Property, PropertyMap, PropertyValue};
