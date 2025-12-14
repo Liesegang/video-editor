@@ -14,7 +14,7 @@ pub fn draw_track_backgrounds(
 ) {
     // 1. Draw Track Rows
     for i in 0..num_tracks {
-        let y = content_rect.min.y + (i as f32 * (row_height + track_spacing)) + scroll_offset_y;
+        let y = content_rect.min.y + (i as f32 * (row_height + track_spacing)) - scroll_offset_y;
         let track_rect = Rect::from_min_size(
             egui::pos2(content_rect.min.x, y),
             egui::vec2(content_rect.width(), row_height),

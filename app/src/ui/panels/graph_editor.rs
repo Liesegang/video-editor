@@ -10,6 +10,10 @@ use std::sync::{Arc, RwLock};
 
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
+use crate::command::CommandRegistry;
+
+use crate::command::CommandId;
+use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 
 enum Action {
     Select(String, usize),
@@ -21,12 +25,35 @@ enum Action {
     None,
 }
 
+struct GraphViewportState<'a> {
+    pan: &'a mut Vec2,
+    zoom_x: &'a mut f32,
+    zoom_y: &'a mut f32,
+}
+
+impl<'a> ViewportState for GraphViewportState<'a> {
+    fn get_pan(&self) -> Vec2 {
+        -(*self.pan)
+    }
+    fn set_pan(&mut self, pan: Vec2) {
+        *self.pan = -pan;
+    }
+    fn get_zoom(&self) -> Vec2 {
+        Vec2::new(*self.zoom_x, *self.zoom_y)
+    }
+    fn set_zoom(&mut self, zoom: Vec2) {
+        *self.zoom_x = zoom.x;
+        *self.zoom_y = zoom.y;
+    }
+}
+
 pub fn graph_editor_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     history_manager: &mut HistoryManager,
     project_service: &mut ProjectService,
     project: &Arc<RwLock<Project>>,
+    registry: &CommandRegistry,
 ) {
     let (comp_id, track_id, entity_id) = match (
         editor_context.selection.composition_id,
@@ -102,21 +129,7 @@ pub fn graph_editor_panel(
             return;
         }
 
-        ui.input(|i| {
-            // Independent Zoom
-            let scroll_delta = i.raw_scroll_delta.y / 50.0; // Basic scaling factor
-            if scroll_delta != 0.0 {
-                if i.modifiers.alt {
-                    // Zoom Y (Value)
-                    let zoom_factor = if scroll_delta > 0.0 { 1.1 } else { 0.9 };
-                    editor_context.graph_editor.zoom_y *= zoom_factor;
-                } else if i.modifiers.ctrl {
-                    // Zoom X (Time)
-                    let zoom_factor = if scroll_delta > 0.0 { 1.1 } else { 0.9 };
-                    editor_context.graph_editor.zoom_x *= zoom_factor;
-                }
-            }
-        });
+
 
         let pixels_per_second = editor_context.graph_editor.zoom_x;
         let pixels_per_unit = editor_context.graph_editor.zoom_y;
@@ -140,8 +153,34 @@ pub fn graph_editor_panel(
         // Explicitly handle interactions for disjoint areas
         let ruler_response =
             ui.interact(ruler_rect, ui.id().with("ruler"), Sense::click_and_drag());
-        let graph_response =
-            ui.interact(graph_rect, ui.id().with("graph"), Sense::click_and_drag());
+
+        // Viewport Controller Logic
+        let mut state = GraphViewportState {
+            pan: &mut editor_context.graph_editor.pan,
+            zoom_x: &mut editor_context.graph_editor.zoom_x,
+            zoom_y: &mut editor_context.graph_editor.zoom_y,
+        };
+
+        let hand_tool_key = registry
+            .commands
+            .iter()
+            .find(|c| c.id == CommandId::HandTool)
+            .and_then(|c| c.shortcut)
+            .map(|(_, k)| k);
+
+        let mut controller = ViewportController::new(ui, ui.id().with("graph"), hand_tool_key)
+            .with_config(ViewportConfig {
+                zoom_uniform: false,
+                allow_zoom_x: true,
+                allow_zoom_y: true,
+                ..Default::default()
+            });
+
+        let (_changed, graph_response) = controller.interact_with_rect(
+            graph_rect,
+            &mut state,
+            &mut editor_context.interaction.handled_hand_tool_drag,
+        );
 
         // Interaction Handling
 
@@ -156,9 +195,8 @@ pub fn graph_editor_panel(
         }
 
         // Graph Interaction (Pan)
-        if graph_response.dragged_by(PointerButton::Middle) {
-            editor_context.graph_editor.pan += graph_response.drag_delta();
-        }
+
+
 
         // We use graph_response for Keyframe/Curve interactions in the loop as well?
         // The keyframe loop uses `ui.interact(point_rect, ...)` which is fine (on top).

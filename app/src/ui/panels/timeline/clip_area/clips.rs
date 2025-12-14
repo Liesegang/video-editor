@@ -19,7 +19,7 @@ pub fn draw_clips(
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
     current_tracks: &[library::model::project::Track],
-    all_clips: &[(Uuid, TrackClip)],
+
     project: &Arc<RwLock<Project>>,
     pixels_per_unit: f32,
     row_height: f32,
@@ -28,19 +28,15 @@ pub fn draw_clips(
 ) -> bool {
     let mut clicked_on_entity = false;
 
-    for track_in_all_entities in current_tracks {
-        let clip_track_index = current_tracks
-            .iter()
-            .position(|t| t.id == track_in_all_entities.id)
-            .map(|idx| idx as f32)
-            .unwrap_or(0.0);
+    let mut clicked_on_entity = false;
 
-        for (entity_track_id, entity) in all_clips
-            .iter()
-            .filter(|(t_id, _)| *t_id == track_in_all_entities.id)
-        {
-            // Determine Color based on kind
-            let clip_color = match entity.kind {
+    // Iterate tracks directly
+    for (i, track) in current_tracks.iter().enumerate() {
+        let clip_track_index = i as f32; // Tracks are rendered in order
+
+        for clip in &track.clips {
+             // Determine Color based on kind
+            let clip_color = match clip.kind {
                 TrackClipKind::Video => egui::Color32::from_rgb(100, 150, 255), // Blue
                 TrackClipKind::Audio => egui::Color32::from_rgb(100, 255, 150), // Green
                 TrackClipKind::Image => egui::Color32::from_rgb(255, 100, 150), // Pink
@@ -50,36 +46,36 @@ pub fn draw_clips(
             };
 
             let gc = TimelineClip {
-                id: entity.id,
-                name: entity.kind.to_string(), // Use Display impl
-                track_id: *entity_track_id,
-                in_frame: entity.in_frame,   // u64
-                out_frame: entity.out_frame, // u64
-                timeline_duration_frames: entity.out_frame.saturating_sub(entity.in_frame), // u64
-                source_begin_frame: entity.source_begin_frame, // u64
-                duration_frame: entity.duration_frame, // Option<u64>
+                id: clip.id,
+                name: clip.kind.to_string(), // Use Display impl
+                track_id: track.id,
+                in_frame: clip.in_frame,   // u64
+                out_frame: clip.out_frame, // u64
+                timeline_duration_frames: clip.out_frame.saturating_sub(clip.in_frame), // u64
+                source_begin_frame: clip.source_begin_frame, // u64
+                duration_frame: clip.duration_frame, // Option<u64>
                 color: clip_color,
                 position: [
-                    entity.properties.get_f32("position_x").unwrap_or(960.0),
-                    entity.properties.get_f32("position_y").unwrap_or(540.0),
+                    clip.properties.get_f32("position_x").unwrap_or(960.0),
+                    clip.properties.get_f32("position_y").unwrap_or(540.0),
                 ],
-                scale_x: entity.properties.get_f32("scale_x").unwrap_or(100.0),
-                scale_y: entity.properties.get_f32("scale_y").unwrap_or(100.0),
-                anchor_x: entity.properties.get_f32("anchor_x").unwrap_or(0.0),
-                anchor_y: entity.properties.get_f32("anchor_y").unwrap_or(0.0),
-                opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
-                rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
+                scale_x: clip.properties.get_f32("scale_x").unwrap_or(100.0),
+                scale_y: clip.properties.get_f32("scale_y").unwrap_or(100.0),
+                anchor_x: clip.properties.get_f32("anchor_x").unwrap_or(0.0),
+                anchor_y: clip.properties.get_f32("anchor_y").unwrap_or(0.0),
+                opacity: clip.properties.get_f32("opacity").unwrap_or(100.0),
+                rotation: clip.properties.get_f32("rotation").unwrap_or(0.0),
                 asset_id: None, // We don't have asset_id stored on clip yet
                 width: None,
                 height: None,
-                kind: entity.kind.clone(),
+                kind: clip.kind.clone(),
             };
 
             let initial_x = content_rect_for_clip_area.min.x
                 + (gc.in_frame as f32 / composition_fps as f32) * pixels_per_unit
                 - editor_context.timeline.scroll_offset.x;
             let initial_y = content_rect_for_clip_area.min.y
-                + editor_context.timeline.scroll_offset.y
+                - editor_context.timeline.scroll_offset.y
                 + clip_track_index * (row_height + track_spacing);
 
             let width =
@@ -91,6 +87,11 @@ pub fn draw_clips(
                 egui::pos2(initial_x, initial_y),
                 egui::vec2(safe_width, row_height),
             );
+
+            // Visibility Culling
+            if !content_rect_for_clip_area.intersects(initial_clip_rect) {
+                continue;
+            }
 
             // --- Interaction for clips ---
             // Define clip_resp using the initial_clip_rect for hit detection
@@ -313,7 +314,7 @@ pub fn draw_clips(
                 if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
                     let current_y_in_clip_area = mouse_pos.y
                         - content_rect_for_clip_area.min.y
-                        - editor_context.timeline.scroll_offset.y;
+                        + editor_context.timeline.scroll_offset.y;
 
                     let hovered_track_index =
                         (current_y_in_clip_area / (row_height + track_spacing)).floor() as usize;

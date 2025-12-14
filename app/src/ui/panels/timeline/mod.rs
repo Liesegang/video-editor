@@ -9,6 +9,7 @@ use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
+use crate::command::CommandRegistry;
 
 // Re-export functions for easier access
 pub use clip_area::show_clip_area;
@@ -22,6 +23,7 @@ pub fn timeline_panel(
     history_manager: &mut HistoryManager,
     project_service: &mut ProjectService,
     project: &Arc<RwLock<Project>>,
+    registry: &CommandRegistry,
 ) {
     let current_composition_fps: f64;
     // CRITICAL CHANGE: Scope the read lock to only where `project_lock` is needed.
@@ -93,6 +95,7 @@ pub fn timeline_panel(
                     row_height,
                     track_spacing,
                     current_composition_fps,
+                    registry,
                 );
 
                 // Draw cursor after all panels are laid out
