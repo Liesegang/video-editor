@@ -175,23 +175,24 @@ impl ExportDialog {
         // 2. Exporter Selection
         ui.horizontal(|ui| {
             ui.label("Exporter:");
-            let known_exporters = ["ffmpeg_export", "png_export"];
-            let current_selection = self
+            let known_exporters = self.plugin_manager.get_available_exporters();
+            let current_selection_name = self
                 .selected_exporter_id
-                .clone()
+                .as_ref()
+                .and_then(|id| known_exporters.iter().find(|(e_id, _)| e_id == id).map(|(_, name)| name.clone()))
                 .unwrap_or_else(|| "Select...".to_string());
 
             egui::ComboBox::from_id_salt("exporter_select")
-                .selected_text(current_selection)
+                .selected_text(current_selection_name)
                 .show_ui(ui, |ui| {
-                    for id in known_exporters {
+                    for (id, name) in known_exporters {
                         if ui
-                            .selectable_label(self.selected_exporter_id.as_deref() == Some(id), id)
+                            .selectable_label(self.selected_exporter_id.as_deref() == Some(&id), &name)
                             .clicked()
                         {
-                            self.selected_exporter_id = Some(id.to_string());
+                            self.selected_exporter_id = Some(id.clone());
                             self.property_values.clear();
-                            if let Ok(()) = self.load_defaults(id) {
+                            if let Ok(()) = self.load_defaults(&id) {
                                 // Defaults loaded
                             }
                         }

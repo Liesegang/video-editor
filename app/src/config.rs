@@ -1,3 +1,4 @@
+// ... (keep imports)
 use crate::command::CommandId;
 use directories::ProjectDirs;
 use eframe::egui::{Key, Modifiers};
@@ -136,16 +137,44 @@ enum KeyDef {
     BrowserBack,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct ShortcutConfig {
-    #[serde(with = "tuple_vec_map")]
-    pub shortcuts: HashMap<CommandId, (Modifiers, Key)>,
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PluginConfig {
+    pub paths: Vec<String>,
 }
 
-impl ShortcutConfig {
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum ThemeType {
+    Dark,
+    Light,
+    Latte,
+    Frappe,
+    Macchiato,
+    Mocha,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ThemeConfig {
+    pub theme_type: ThemeType,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AppConfig {
+    #[serde(with = "tuple_vec_map")]
+    pub shortcuts: HashMap<CommandId, (Modifiers, Key)>,
+    pub plugins: PluginConfig,
+    pub theme: ThemeConfig,
+}
+
+impl AppConfig {
     pub fn new() -> Self {
         Self {
             shortcuts: HashMap::new(),
+            plugins: PluginConfig { 
+                paths: vec!["./assets/plugins/sksl".to_string()],
+            },
+            theme: ThemeConfig {
+                theme_type: ThemeType::Dark,
+            },
         }
     }
 }
@@ -198,20 +227,20 @@ fn get_config_path() -> Option<PathBuf> {
                 return None;
             }
         }
-        let config_path = config_dir.join("shortcuts.toml");
+        let config_path = config_dir.join("config.toml");
         return Some(config_path);
     }
     None
 }
 
-pub fn save_config(config: &ShortcutConfig) {
+pub fn save_config(config: &AppConfig) {
     if let Some(path) = get_config_path() {
         match toml::to_string_pretty(config) {
             Ok(toml_str) => {
                 if let Err(e) = fs::write(&path, toml_str) {
                     error!("Failed to write config file: {}", e);
                 } else {
-                    info!("Shortcuts saved to {}", path.display());
+                    info!("Config saved to {}", path.display());
                 }
             }
             Err(e) => {
@@ -221,7 +250,7 @@ pub fn save_config(config: &ShortcutConfig) {
     }
 }
 
-pub fn load_config() -> ShortcutConfig {
+pub fn load_config() -> AppConfig {
     if let Some(path) = get_config_path() {
         if path.exists() {
             match fs::read_to_string(&path) {
@@ -238,5 +267,5 @@ pub fn load_config() -> ShortcutConfig {
         }
     }
     // Return default if file doesn't exist or on any error
-    ShortcutConfig::new()
+    AppConfig::new()
 }

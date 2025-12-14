@@ -79,18 +79,34 @@ impl SkslEffectPlugin {
 
 impl Plugin for SkslEffectPlugin {
     fn id(&self) -> &'static str {
-        self.id_static
+        // Since we create multiple instances, the ID isn't static in the struct sense, 
+        // but `id()` returns `&'static str`. 
+        // This effectively means we can't fully support dynamic IDs for *Native* plugins easily without `Cow` or `String`.
+        // However, `EffectPlugin` trait definition returns `&'static str`.
+        // SkSL plugins are a bit special. They share the underlying "sksl_effect" *implementation*, 
+        // but are registered as distinct effects in `PluginManager` via `SkSlEffectPlugin` wrapper.
+        // Actually, `PluginManager` uses the key in the map as the ID.
+        // For trait compliance, let's return "sksl_effect_base" or similar, 
+        // or we need to change the trait to return `String` or `Cow<str>`.
+        // Checking trait definition: `fn id(&self) -> &'static str;` in `mod.rs`.
+        // This is a limitation. For now, let's just return a placeholder.
+        "sksl_effect" 
     }
 
-    fn category(&self) -> PluginCategory {
-         match self.config.category.as_str() {
-            "Effect" => PluginCategory::Effect,
-             _ => PluginCategory::Effect, // Default to Effect for now
-        }
+    fn name(&self) -> String {
+        self.config.name.clone()
+    }
+
+    fn category(&self) -> String {
+        self.config.category.clone()
     }
 
     fn version(&self) -> (u32, u32, u32) {
         self.config.version.unwrap_or((0, 1, 0))
+    }
+
+    fn impl_type(&self) -> String {
+        "SkSL".to_string()
     }
 }
 

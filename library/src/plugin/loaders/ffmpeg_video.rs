@@ -22,8 +22,12 @@ impl Plugin for FfmpegVideoLoader {
         "ffmpeg_video_loader"
     }
 
-    fn category(&self) -> PluginCategory {
-        PluginCategory::Load
+    fn name(&self) -> String {
+        "FFmpeg Video Loader".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Media".to_string()
     }
 
     fn version(&self) -> (u32, u32, u32) {

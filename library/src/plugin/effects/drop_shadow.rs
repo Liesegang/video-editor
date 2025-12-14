@@ -19,8 +19,12 @@ impl Plugin for DropShadowEffectPlugin {
         "drop_shadow"
     }
 
-    fn category(&self) -> PluginCategory {
-        PluginCategory::Effect
+    fn name(&self) -> String {
+        "Drop Shadow".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Perspective".to_string()
     }
 
     fn version(&self) -> (u32, u32, u32) {

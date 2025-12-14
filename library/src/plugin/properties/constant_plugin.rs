@@ -18,8 +18,12 @@ impl Plugin for ConstantPropertyPlugin {
         "constant"
     }
 
-    fn category(&self) -> PluginCategory {
-        PluginCategory::Property
+    fn category(&self) -> String {
+        "Property".to_string()
+    }
+
+    fn name(&self) -> String {
+        "Constant Property".to_string()
     }
 
     fn version(&self) -> (u32, u32, u32) {

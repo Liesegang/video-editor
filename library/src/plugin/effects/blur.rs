@@ -21,8 +21,12 @@ impl Plugin for BlurEffectPlugin {
         "blur"
     }
 
-    fn category(&self) -> PluginCategory {
-        PluginCategory::Effect
+    fn name(&self) -> String {
+        "Blur".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Blur & Sharpen".to_string()
     }
 
     fn version(&self) -> (u32, u32, u32) {
