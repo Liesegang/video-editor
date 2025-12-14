@@ -32,19 +32,26 @@ pub enum CommandId {
 #[derive(Clone, PartialEq)]
 pub struct Command {
     pub id: CommandId,
-    pub text: String, // Changed to String to support dynamic text
+    pub text: String,
     pub shortcut: Option<(Modifiers, Key)>,
-    pub shortcut_text: String, // Made mutable
+    pub shortcut_text: String,
+    pub allow_when_focused: bool,
 }
 
 impl Command {
-    fn new(id: CommandId, text: &str, shortcut: Option<(Modifiers, Key)>) -> Self {
+    fn new(
+        id: CommandId,
+        text: &str,
+        shortcut: Option<(Modifiers, Key)>,
+        allow_when_focused: bool,
+    ) -> Self {
         let shortcut_text = get_shortcut_text(&shortcut);
         Self {
             id,
             text: text.to_string(),
             shortcut,
             shortcut_text,
+            allow_when_focused,
         }
     }
 }
@@ -83,50 +90,63 @@ impl CommandRegistry {
                 CommandId::NewProject,
                 "New Project",
                 Some((Modifiers::COMMAND, Key::N)),
+                true,
             ),
             Command::new(
                 CommandId::LoadProject,
                 "Load Project...",
                 Some((Modifiers::COMMAND, Key::O)),
+                true,
             ),
-            Command::new(CommandId::Save, "Save", Some((Modifiers::COMMAND, Key::S))),
+            Command::new(CommandId::Save, "Save", Some((Modifiers::COMMAND, Key::S)), true),
             Command::new(
                 CommandId::SaveAs,
                 "Save As...",
                 Some((Modifiers::COMMAND | Modifiers::SHIFT, Key::S)),
+                true,
             ),
             Command::new(
                 CommandId::Export,
                 "Export...",
                 Some((Modifiers::COMMAND, Key::E)),
+                true,
             ),
-            Command::new(CommandId::Quit, "Quit", Some((Modifiers::COMMAND, Key::Q))),
+            Command::new(CommandId::Quit, "Quit", Some((Modifiers::COMMAND, Key::Q)), true),
             // Edit Menu
-            Command::new(CommandId::Undo, "Undo", Some((Modifiers::COMMAND, Key::Z))),
+            Command::new(CommandId::Undo, "Undo", Some((Modifiers::COMMAND, Key::Z)), false),
             Command::new(
                 CommandId::Redo,
                 "Redo",
                 Some((Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)),
+                false,
             ),
             Command::new(
                 CommandId::Delete,
                 "Delete",
                 Some((Modifiers::NONE, Key::Delete)),
+                false,
             ),
-            Command::new(CommandId::Settings, "Settings...", None),
+            Command::new(
+                CommandId::Settings,
+                "Settings...",
+                Some((Modifiers::COMMAND, Key::Comma)),
+                true,
+            ),
             // View Menu
-            Command::new(CommandId::ResetLayout, "Reset Layout", None),
+            Command::new(CommandId::ResetLayout, "Reset Layout", None, true),
             // Playback (no menu item, but still a command)
             Command::new(
                 CommandId::TogglePlayback,
                 "Toggle Playback",
                 Some((Modifiers::NONE, Key::Space)),
+                false,
             ),
             // Tools
             Command::new(
                 CommandId::ShowCommandPalette,
                 "Command Palette",
                 Some((Modifiers::COMMAND | Modifiers::SHIFT, Key::P)),
+                true,
             ),
         ];
 
@@ -136,12 +156,16 @@ impl CommandRegistry {
                 CommandId::TogglePanel(*tab),
                 tab.name(), // Use tab name as command text
                 None,       // No default shortcut for now, users can assign one
+                true,       // Toggling panels should work even when focused
             ));
         }
         // Override defaults with user config
         for cmd in &mut commands {
-            if let Some(loaded_shortcut) = config.shortcuts.get(&cmd.id) {
-                cmd.shortcut = Some(*loaded_shortcut);
+            if let Some(loaded_shortcut_opt) = config.shortcuts.get(&cmd.id) {
+                // If the key is present in the config map:
+                // - Some(shortcut) -> Override with new shortcut
+                // - None           -> Explicitly unbound (user cleared it)
+                cmd.shortcut = *loaded_shortcut_opt;
                 cmd.shortcut_text = get_shortcut_text(&cmd.shortcut);
             }
         }
