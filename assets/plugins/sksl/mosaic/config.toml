@@ -1,6 +1,6 @@
 id = "mosaic"
 name = "Mosaic"
-category = "Effect"
+category = "Stylize"
 
 [[properties]]
 name = "pixel_size"

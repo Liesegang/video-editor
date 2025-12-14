@@ -24,6 +24,7 @@ pub struct SkslPropertyConfig {
     pub min: Option<f64>,
     pub max: Option<f64>,
     pub step: Option<f64>,
+    pub suffix: Option<String>,
     pub default: Option<ValueWrapper>,
 }
 
@@ -34,6 +35,9 @@ pub enum ValueWrapper {
     Int(i64),
     Bool(bool),
     String(String),
+    Vec2([f64; 2]),
+    Vec3([f64; 3]),
+    Vec4([f64; 4]),
 }
 
 #[derive(Clone)]
@@ -79,18 +83,7 @@ impl SkslEffectPlugin {
 
 impl Plugin for SkslEffectPlugin {
     fn id(&self) -> &'static str {
-        // Since we create multiple instances, the ID isn't static in the struct sense, 
-        // but `id()` returns `&'static str`. 
-        // This effectively means we can't fully support dynamic IDs for *Native* plugins easily without `Cow` or `String`.
-        // However, `EffectPlugin` trait definition returns `&'static str`.
-        // SkSL plugins are a bit special. They share the underlying "sksl_effect" *implementation*, 
-        // but are registered as distinct effects in `PluginManager` via `SkSlEffectPlugin` wrapper.
-        // Actually, `PluginManager` uses the key in the map as the ID.
-        // For trait compliance, let's return "sksl_effect_base" or similar, 
-        // or we need to change the trait to return `String` or `Cow<str>`.
-        // Checking trait definition: `fn id(&self) -> &'static str;` in `mod.rs`.
-        // This is a limitation. For now, let's just return a placeholder.
-        "sksl_effect" 
+        self.id_static
     }
 
     fn name(&self) -> String {
@@ -127,6 +120,15 @@ impl EffectPlugin for SkslEffectPlugin {
              let mut uniform_bytes: Vec<u8> = Vec::new();
              
              for prop in &self.config.properties {
+                 if prop.name == "u_resolution" {
+                     // Auto-inject resolution
+                     let w = _canvas_width as f32;
+                     let h = _canvas_height as f32;
+                     uniform_bytes.extend_from_slice(&w.to_le_bytes());
+                     uniform_bytes.extend_from_slice(&h.to_le_bytes());
+                     continue;
+                 }
+
                  if let Some(val) = params.get(&prop.name) {
                      match val {
                          PropertyValue::Number(n) => {
@@ -141,27 +143,101 @@ impl EffectPlugin for SkslEffectPlugin {
                              let v = if *b { 1i32 } else { 0i32 };
                              uniform_bytes.extend_from_slice(&v.to_le_bytes());
                          },
-                         _ => {}
-                     }
-                 } else if let Some(def) = &prop.default {
-                     match def {
-                         ValueWrapper::Float(f) => {
-                             let v = *f as f32;
-                             uniform_bytes.extend_from_slice(&v.to_le_bytes());
-                         },
-                         ValueWrapper::Int(i) => {
-                             let v = *i as i32;
-                             uniform_bytes.extend_from_slice(&v.to_le_bytes());
-                         },
-                         ValueWrapper::Bool(b) => {
-                             let v = if *b { 1i32 } else { 0i32 };
-                             uniform_bytes.extend_from_slice(&v.to_le_bytes());
-                         },
-                         _ => {}
-                     }
+                        PropertyValue::Vec2(v) => {
+                            let x = v.x.into_inner() as f32;
+                            let y = v.y.into_inner() as f32;
+                            uniform_bytes.extend_from_slice(&x.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&y.to_le_bytes());
+                        },
+                        PropertyValue::Vec3(v) => {
+                            let x = v.x.into_inner() as f32;
+                            let y = v.y.into_inner() as f32;
+                            let z = v.z.into_inner() as f32;
+                            uniform_bytes.extend_from_slice(&x.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&y.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&z.to_le_bytes());
+                        },
+                        PropertyValue::Vec4(v) => {
+                            let x = v.x.into_inner() as f32;
+                            let y = v.y.into_inner() as f32;
+                            let z = v.z.into_inner() as f32;
+                            let w = v.w.into_inner() as f32;
+                            uniform_bytes.extend_from_slice(&x.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&y.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&z.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&w.to_le_bytes());
+                        },
+                        PropertyValue::Color(c) => {
+                            let r = c.r as f32 / 255.0;
+                            let g = c.g as f32 / 255.0;
+                            let b = c.b as f32 / 255.0;
+                            let a = c.a as f32 / 255.0;
+                            uniform_bytes.extend_from_slice(&r.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&g.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&b.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&a.to_le_bytes());
+                        },
+                        _ => {}
+                    }
+                } else if let Some(def) = &prop.default {
+                    match def {
+                        ValueWrapper::Float(f) => {
+                            let v = *f as f32;
+                            uniform_bytes.extend_from_slice(&v.to_le_bytes());
+                        },
+                        ValueWrapper::Int(i) => {
+                            let v = *i as i32;
+                            uniform_bytes.extend_from_slice(&v.to_le_bytes());
+                        },
+                        ValueWrapper::Bool(b) => {
+                            let v = if *b { 1i32 } else { 0i32 };
+                            uniform_bytes.extend_from_slice(&v.to_le_bytes());
+                        },
+                        ValueWrapper::Vec2(v) => {
+                            let x = v[0] as f32;
+                            let y = v[1] as f32;
+                            uniform_bytes.extend_from_slice(&x.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&y.to_le_bytes());
+                        },
+                        ValueWrapper::Vec3(v) => {
+                            let x = v[0] as f32;
+                            let y = v[1] as f32;
+                            let z = v[2] as f32;
+                            uniform_bytes.extend_from_slice(&x.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&y.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&z.to_le_bytes());
+                        },
+                        ValueWrapper::Vec4(v) => {
+                            let x = v[0] as f32;
+                            let y = v[1] as f32;
+                            let z = v[2] as f32;
+                            let w = v[3] as f32;
+                            uniform_bytes.extend_from_slice(&x.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&y.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&z.to_le_bytes());
+                            uniform_bytes.extend_from_slice(&w.to_le_bytes());
+                        },
+                        _ => {}
+                    }
                  } else {
-                     // Default zero if no value and no default
-                     uniform_bytes.extend_from_slice(&0.0f32.to_le_bytes());
+                     // Default zero if no value and no default. 
+                     // For Vec2 we need 2 floats? Handle basic types first.
+                     // If type is Vec2, we should push 2 zeros.
+                     if prop.r#type == "Vec2" {
+                         uniform_bytes.extend_from_slice(&0.0f32.to_le_bytes());
+                         uniform_bytes.extend_from_slice(&0.0f32.to_le_bytes());
+                     } else if prop.r#type == "Vec3" {
+                         uniform_bytes.extend_from_slice(&0.0f32.to_le_bytes());
+                         uniform_bytes.extend_from_slice(&0.0f32.to_le_bytes());
+                         uniform_bytes.extend_from_slice(&0.0f32.to_le_bytes());
+                     } else if prop.r#type == "Vec4" {
+                         uniform_bytes.extend_from_slice(&0.0f32.to_le_bytes());
+                         uniform_bytes.extend_from_slice(&0.0f32.to_le_bytes());
+                         uniform_bytes.extend_from_slice(&0.0f32.to_le_bytes());
+                         uniform_bytes.extend_from_slice(&0.0f32.to_le_bytes());
+                     } else {
+                         uniform_bytes.extend_from_slice(&0.0f32.to_le_bytes());
+                     }
                  }
             }
 
@@ -190,7 +266,7 @@ impl EffectPlugin for SkslEffectPlugin {
     fn properties(&self) -> Vec<PropertyDefinition> {
         use ordered_float::OrderedFloat;
 
-        self.config.properties.iter().map(|p| {
+        self.config.properties.iter().filter(|p| p.name != "u_resolution").map(|p| {
             let ui_type = match p.r#type.as_str() {
                 "Float" => PropertyUiType::Float { 
                     min: p.min.unwrap_or(0.0), 
@@ -205,6 +281,15 @@ impl EffectPlugin for SkslEffectPlugin {
                 },
                 "Bool" => PropertyUiType::Bool,
                 "Color" => PropertyUiType::Color,
+                "Vec2" => PropertyUiType::Vec2 {
+                    suffix: p.suffix.clone().unwrap_or_default()
+                },
+                "Vec3" => PropertyUiType::Vec3 {
+                    suffix: p.suffix.clone().unwrap_or_default()
+                },
+                "Vec4" => PropertyUiType::Vec4 {
+                    suffix: p.suffix.clone().unwrap_or_default()
+                },
                 _ => PropertyUiType::Text, // Fallback
             };
 
@@ -213,6 +298,21 @@ impl EffectPlugin for SkslEffectPlugin {
                 Some(ValueWrapper::Int(i)) => PropertyValue::Integer(*i),
                 Some(ValueWrapper::Bool(b)) => PropertyValue::Boolean(*b),
                 Some(ValueWrapper::String(s)) => PropertyValue::String(s.clone()),
+                Some(ValueWrapper::Vec2(v)) => PropertyValue::Vec2(crate::model::project::property::Vec2 {
+                    x: OrderedFloat(v[0]),
+                    y: OrderedFloat(v[1]),
+                }),
+                Some(ValueWrapper::Vec3(v)) => PropertyValue::Vec3(crate::model::project::property::Vec3 {
+                    x: OrderedFloat(v[0]),
+                    y: OrderedFloat(v[1]),
+                    z: OrderedFloat(v[2]),
+                }),
+                Some(ValueWrapper::Vec4(v)) => PropertyValue::Vec4(crate::model::project::property::Vec4 {
+                    x: OrderedFloat(v[0]),
+                    y: OrderedFloat(v[1]),
+                    z: OrderedFloat(v[2]),
+                    w: OrderedFloat(v[3]),
+                }),
                 None => PropertyValue::Number(OrderedFloat(0.0)), // Safe default
             };
 

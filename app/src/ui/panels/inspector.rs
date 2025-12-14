@@ -529,6 +529,197 @@ pub fn inspector_panel(
                                             }
                                             ui.end_row();
                                         }
+                                        PropertyUiType::Vec2 { suffix } => {
+                                            ui.label(&def.label);
+                                            let current_val = effect.properties.get_constant_value(&def.name)
+                                                .and_then(|v| v.get_as::<library::model::project::property::Vec2>())
+                                                .unwrap_or_else(|| {
+                                                    def.default_value.get_as::<library::model::project::property::Vec2>()
+                                                        .unwrap_or(library::model::project::property::Vec2 { 
+                                                            x: ordered_float::OrderedFloat(0.0), 
+                                                            y: ordered_float::OrderedFloat(0.0) 
+                                                        })
+                                                });
+                                            
+                                            let mut x = current_val.x.into_inner() as f32;
+                                            let mut y = current_val.y.into_inner() as f32;
+                                            
+                                            ui.horizontal(|ui| {
+                                                ui.label("X");
+                                                if ui.add(egui::DragValue::new(&mut x).speed(0.1).suffix(suffix)).changed() {
+                                                    needs_refresh = true;
+                                                }
+                                                ui.label("Y");
+                                                if ui.add(egui::DragValue::new(&mut y).speed(0.1).suffix(suffix)).changed() {
+                                                    needs_refresh = true;
+                                                }
+                                            });
+
+                                            if needs_refresh {
+                                                 use library::model::project::property::Vec2;
+                                                 use ordered_float::OrderedFloat;
+                                                 
+                                                 let new_val = Vec2 {
+                                                     x: OrderedFloat(x as f64),
+                                                     y: OrderedFloat(y as f64),
+                                                 };
+                                                 
+                                                 project_service.update_effect_property_or_keyframe(
+                                                    comp_id, track_id, selected_entity_id, effect_index, &def.name, current_time, PropertyValue::Vec2(new_val), None,
+                                                ).ok();
+                                                
+                                                let current_state = project_service.get_project().read().unwrap().clone();
+                                                history_manager.push_project_state(current_state);
+                                            }
+                                            ui.end_row();
+                                        }
+                                        PropertyUiType::Vec3 { suffix } => {
+                                            ui.label(&def.label);
+                                            let current_val = effect.properties.get_constant_value(&def.name)
+                                                .and_then(|v| v.get_as::<library::model::project::property::Vec3>())
+                                                .unwrap_or_else(|| {
+                                                    def.default_value.get_as::<library::model::project::property::Vec3>()
+                                                        .unwrap_or(library::model::project::property::Vec3 { 
+                                                            x: ordered_float::OrderedFloat(0.0), 
+                                                            y: ordered_float::OrderedFloat(0.0),
+                                                            z: ordered_float::OrderedFloat(0.0) 
+                                                        })
+                                                });
+                                            
+                                            let mut x = current_val.x.into_inner() as f32;
+                                            let mut y = current_val.y.into_inner() as f32;
+                                            let mut z = current_val.z.into_inner() as f32;
+                                            
+                                            ui.horizontal(|ui| {
+                                                ui.label("X");
+                                                if ui.add(egui::DragValue::new(&mut x).speed(0.1).suffix(suffix)).changed() { needs_refresh = true; }
+                                                ui.label("Y");
+                                                if ui.add(egui::DragValue::new(&mut y).speed(0.1).suffix(suffix)).changed() { needs_refresh = true; }
+                                                ui.label("Z");
+                                                if ui.add(egui::DragValue::new(&mut z).speed(0.1).suffix(suffix)).changed() { needs_refresh = true; }
+                                            });
+
+                                            if needs_refresh {
+                                                 use library::model::project::property::Vec3;
+                                                 use ordered_float::OrderedFloat;
+                                                 
+                                                 let new_val = Vec3 {
+                                                     x: OrderedFloat(x as f64),
+                                                     y: OrderedFloat(y as f64),
+                                                     z: OrderedFloat(z as f64),
+                                                 };
+                                                 
+                                                 project_service.update_effect_property_or_keyframe(
+                                                    comp_id, track_id, selected_entity_id, effect_index, &def.name, current_time, PropertyValue::Vec3(new_val), None,
+                                                ).ok();
+                                                
+                                                let current_state = project_service.get_project().read().unwrap().clone();
+                                                history_manager.push_project_state(current_state);
+                                            }
+                                            ui.end_row();
+                                        }
+                                        PropertyUiType::Vec4 { suffix } => {
+                                            ui.label(&def.label);
+                                            let current_val = effect.properties.get_constant_value(&def.name)
+                                                .and_then(|v| v.get_as::<library::model::project::property::Vec4>())
+                                                .unwrap_or_else(|| {
+                                                    def.default_value.get_as::<library::model::project::property::Vec4>()
+                                                        .unwrap_or(library::model::project::property::Vec4 { 
+                                                            x: ordered_float::OrderedFloat(0.0), 
+                                                            y: ordered_float::OrderedFloat(0.0),
+                                                            z: ordered_float::OrderedFloat(0.0),
+                                                            w: ordered_float::OrderedFloat(0.0) 
+                                                        })
+                                                });
+                                            
+                                            let mut x = current_val.x.into_inner() as f32;
+                                            let mut y = current_val.y.into_inner() as f32;
+                                            let mut z = current_val.z.into_inner() as f32;
+                                            let mut w = current_val.w.into_inner() as f32;
+                                            
+                                            ui.horizontal(|ui| {
+                                                ui.label("X");
+                                                if ui.add(egui::DragValue::new(&mut x).speed(0.1).suffix(suffix)).changed() { needs_refresh = true; }
+                                                ui.label("Y");
+                                                if ui.add(egui::DragValue::new(&mut y).speed(0.1).suffix(suffix)).changed() { needs_refresh = true; }
+                                                ui.label("Z");
+                                                if ui.add(egui::DragValue::new(&mut z).speed(0.1).suffix(suffix)).changed() { needs_refresh = true; }
+                                                ui.label("W");
+                                                if ui.add(egui::DragValue::new(&mut w).speed(0.1).suffix(suffix)).changed() { needs_refresh = true; }
+                                            });
+
+                                            if needs_refresh {
+                                                 use library::model::project::property::Vec4;
+                                                 use ordered_float::OrderedFloat;
+                                                 
+                                                 let new_val = Vec4 {
+                                                     x: OrderedFloat(x as f64),
+                                                     y: OrderedFloat(y as f64),
+                                                     z: OrderedFloat(z as f64),
+                                                     w: OrderedFloat(w as f64),
+                                                 };
+                                                 
+                                                 project_service.update_effect_property_or_keyframe(
+                                                    comp_id, track_id, selected_entity_id, effect_index, &def.name, current_time, PropertyValue::Vec4(new_val), None,
+                                                ).ok();
+                                                
+                                                let current_state = project_service.get_project().read().unwrap().clone();
+                                                history_manager.push_project_state(current_state);
+                                            }
+                                            ui.end_row();
+                                        }
+                                        PropertyUiType::Integer { min, max, suffix } => {
+                                            ui.label(&def.label);
+                                            let current_val = effect.properties.get_i64(&def.name)
+                                                .unwrap_or(def.default_value.get_as::<i64>().unwrap_or(0));
+                                            
+                                            let mut val_mut = current_val;
+                                            // Handle range if needed, for now just open range
+                                            let response = ui.add(egui::DragValue::new(&mut val_mut).speed(1.0).suffix(suffix));
+                                            
+                                            if response.changed() {
+                                                // Clamp if min/max are set? The definition has them.
+                                                // Simplified implementation
+                                                project_service.update_effect_property_or_keyframe(
+                                                    comp_id, track_id, selected_entity_id, effect_index, &def.name, current_time, PropertyValue::Integer(val_mut), None,
+                                                ).ok();
+                                                needs_refresh = true;
+                                                let current_state = project_service.get_project().read().unwrap().clone();
+                                                history_manager.push_project_state(current_state);
+                                            }
+                                            ui.end_row();
+                                        }
+                                        PropertyUiType::MultilineText => {
+                                             ui.label(&def.label);
+                                            let current_val =
+                                                effect.properties.get_string(&def.name).unwrap_or(
+                                                    def.default_value
+                                                        .get_as::<String>()
+                                                        .unwrap_or_default(),
+                                                );
+                                            let mut buffer = current_val.clone();
+                                            let response = ui.text_edit_multiline(&mut buffer);
+                                            if response.changed() {
+                                                project_service
+                                                    .update_effect_property_or_keyframe(
+                                                        comp_id,
+                                                        track_id,
+                                                        selected_entity_id,
+                                                        effect_index,
+                                                        &def.name,
+                                                        current_time,
+                                                        PropertyValue::String(buffer),
+                                                        None,
+                                                    )
+                                                    .ok();
+                                                needs_refresh = true;
+                                            }
+                                            if response.lost_focus() {
+                                                let current_state = project_service.get_project().read().unwrap().clone();
+                                                history_manager.push_project_state(current_state);
+                                            }
+                                            ui.end_row();
+                                        }
                                         _ => {
                                             ui.label(&def.label);
                                             ui.label("UI type not implemented for effect");

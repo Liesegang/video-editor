@@ -21,6 +21,14 @@ pub struct Vec3 {
     pub z: OrderedFloat<f64>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Vec4 {
+    pub x: OrderedFloat<f64>,
+    pub y: OrderedFloat<f64>,
+    pub z: OrderedFloat<f64>,
+    pub w: OrderedFloat<f64>,
+}
+
 impl Hash for Vec2 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.x.hash(state);
@@ -36,6 +44,15 @@ impl Hash for Vec3 {
     }
 }
 
+impl Hash for Vec4 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.x.hash(state);
+        self.y.hash(state);
+        self.z.hash(state);
+        self.w.hash(state);
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(untagged)]
 pub enum PropertyValue {
@@ -45,6 +62,7 @@ pub enum PropertyValue {
     Boolean(bool),
     Vec2(Vec2),
     Vec3(Vec3),
+    Vec4(Vec4),
     Color(Color),
     Array(Vec<PropertyValue>),
     Map(HashMap<String, PropertyValue>),
@@ -60,6 +78,7 @@ impl Hash for PropertyValue {
             PropertyValue::Boolean(b) => b.hash(state),
             PropertyValue::Vec2(v) => v.hash(state),
             PropertyValue::Vec3(v) => v.hash(state),
+            PropertyValue::Vec4(v) => v.hash(state),
             PropertyValue::Color(c) => c.hash(state),
             PropertyValue::Array(arr) => arr.hash(state),
             PropertyValue::Map(map) => {
@@ -153,6 +172,22 @@ impl From<serde_json::Value> for PropertyValue {
                     }
                 }
 
+                if o.len() == 4 && o.contains_key("x") && o.contains_key("y") && o.contains_key("z") && o.contains_key("w") {
+                    if let (Some(x_val), Some(y_val), Some(z_val), Some(w_val)) = (
+                        o.get("x").and_then(|v| v.as_f64()),
+                        o.get("y").and_then(|v| v.as_f64()),
+                        o.get("z").and_then(|v| v.as_f64()),
+                        o.get("w").and_then(|v| v.as_f64()),
+                    ) {
+                        return PropertyValue::Vec4(Vec4 {
+                            x: OrderedFloat(x_val),
+                            y: OrderedFloat(y_val),
+                            z: OrderedFloat(z_val),
+                            w: OrderedFloat(w_val),
+                        });
+                    }
+                }
+
                 if o.len() == 4
                     && o.contains_key("r")
                     && o.contains_key("g")
@@ -201,6 +236,9 @@ impl From<&PropertyValue> for serde_json::Value {
             }
             PropertyValue::Vec3(v) => {
                 serde_json::json!({ "x": v.x.into_inner(), "y": v.y.into_inner(), "z": v.z.into_inner() })
+            }
+            PropertyValue::Vec4(v) => {
+                serde_json::json!({ "x": v.x.into_inner(), "y": v.y.into_inner(), "z": v.z.into_inner(), "w": v.w.into_inner() })
             }
             PropertyValue::Color(c) => {
                 serde_json::json!({ "r": c.r, "g": c.g, "b": c.b, "a": c.a })
@@ -318,6 +356,16 @@ impl TryGetProperty<Vec3> for Vec3 {
     fn try_get(p: &PropertyValue) -> Option<Vec3> {
         match p {
             PropertyValue::Vec3(v) => Some(*v),
+            _ => None,
+        }
+    }
+}
+
+// Implement for Vec4
+impl TryGetProperty<Vec4> for Vec4 {
+    fn try_get(p: &PropertyValue) -> Option<Vec4> {
+        match p {
+            PropertyValue::Vec4(v) => Some(*v),
             _ => None,
         }
     }
