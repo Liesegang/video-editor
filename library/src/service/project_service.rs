@@ -1511,7 +1511,7 @@ impl ProjectService {
                         step: 1.0,
                         suffix: "px".to_string(),
                     },
-                    default_value: PropertyValue::Number(OrderedFloat(48.0)),
+                    default_value: PropertyValue::Number(OrderedFloat(100.0)),
                     category: "Text".to_string(),
                 },
                 PropertyDefinition {
