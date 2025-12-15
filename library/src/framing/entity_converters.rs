@@ -383,7 +383,8 @@ impl EntityConverter for TextEntityConverter {
         font.set_typeface(typeface);
         font.set_size(size as f32);
 
-        let width = crate::rendering::text_layout::measure_text_width(&text, &font_name, size as f32);
+        let width =
+            crate::rendering::text_layout::measure_text_width(&text, &font_name, size as f32);
         let (_, metrics) = font.metrics();
         // Text is rendered with a y-offset of -ascent in skia_renderer.
         // This shifts the text down so that the 'top' (ascent) aligns with the local origin (0,0).

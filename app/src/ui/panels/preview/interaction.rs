@@ -62,11 +62,140 @@ impl<'a> PreviewInteractions<'a> {
                 pointer_pos,
                 &*self.to_world,
             );
+        } else if active_tool == crate::state::context_types::PreviewTool::Shape {
+            // 1. Ensure State is Loaded
+            let mut ensure_loaded = false;
+            if self
+                .editor_context
+                .interaction
+                .vector_editor_state
+                .is_none()
+            {
+                if let Some(id) = self
+                    .editor_context
+                    .selection
+                    .selected_entities
+                    .iter()
+                    .next()
+                {
+                    // Check if it is a shape and get path
+                    if let Ok(proj) = self.project.read() {
+                        if let Some(comp) = self.editor_context.get_current_composition(&proj) {
+                            // Find the clip to get path.
+                            // use gui_clips to get track_id
+                            if let Some(gc) = self.gui_clips.iter().find(|c| c.id == *id) {
+                                if matches!(gc.kind, library::model::project::TrackClipKind::Shape)
+                                {
+                                    if let Some(track) =
+                                        comp.tracks.iter().find(|t| t.id == gc.track_id)
+                                    {
+                                        if let Some(clip) = track.clips.iter().find(|c| c.id == *id)
+                                        {
+                                            if let Some(path_str) =
+                                                clip.properties.get_string("path")
+                                            {
+                                                let state = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
+                                                self.editor_context
+                                                    .interaction
+                                                    .vector_editor_state = Some(state);
+                                                ensure_loaded = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                ensure_loaded = true;
+            }
+
+            // 2. Handle Interaction
+            if ensure_loaded {
+                // Get Transform for the edited entity
+                // We need to know WHICH entity is being edited.
+                // We rely on selection.
+                if let Some(id) = self
+                    .editor_context
+                    .selection
+                    .selected_entities
+                    .iter()
+                    .next()
+                {
+                    if let Some(gc) = self.gui_clips.iter().find(|c| c.id == *id) {
+                        // Build Transform
+                        let transform = library::model::frame::transform::Transform {
+                            position: library::model::frame::transform::Position {
+                                x: gc.position[0] as f64,
+                                y: gc.position[1] as f64,
+                            },
+                            scale: library::model::frame::transform::Scale {
+                                x: gc.scale_x as f64,
+                                y: gc.scale_y as f64,
+                            },
+                            rotation: gc.rotation as f64,
+                            anchor: library::model::frame::transform::Position {
+                                x: gc.anchor_x as f64,
+                                y: gc.anchor_y as f64,
+                            },
+                            opacity: gc.opacity as f64,
+                        };
+
+                        let mut changed = false;
+                        if let Some(state) =
+                            &mut self.editor_context.interaction.vector_editor_state
+                        {
+                            let mut interaction = crate::ui::panels::preview::vector_editor::interaction::VectorEditorInteraction {
+                                  state,
+                                  transform,
+                                  to_screen: Box::new(|p| (self.to_screen)(p)),
+                                  to_world: Box::new(|p| (self.to_world)(p)),
+                               };
+                            let (changed_state, captured) = interaction.handle(self.ui, response);
+                            changed = changed_state;
+                            if captured {
+                                interacted_with_gizmo = true;
+                            }
+                        }
+
+                        if changed {
+                            // Save back
+                            if let Some(state) =
+                                &self.editor_context.interaction.vector_editor_state
+                            {
+                                let new_path = crate::ui::panels::preview::vector_editor::svg_writer::to_svg_path(state);
+
+                                // Update property
+                                if let Some(comp_id) = self.editor_context.selection.composition_id
+                                {
+                                    let current_time =
+                                        self.editor_context.timeline.current_time as f64;
+                                    let _ = self.project_service.update_property_or_keyframe(
+                                        comp_id,
+                                        gc.track_id,
+                                        *id,
+                                        "path",
+                                        current_time,
+                                        library::model::project::property::PropertyValue::String(
+                                            new_path,
+                                        ),
+                                        None,
+                                    );
+                                }
+                            }
+                        }
+                        interacted_with_gizmo = changed; // Consume event if we interacted
+                    }
+                }
+            }
         }
 
         // 2. Hit Testing (Hover)
         let hovered_entity_id = if active_tool == crate::state::context_types::PreviewTool::Select
             || active_tool == crate::state::context_types::PreviewTool::Text
+            || active_tool == crate::state::context_types::PreviewTool::Shape
+        // Allow selection when in Shape tool
         {
             self.check_hit_test(pointer_pos, content_rect)
         } else {

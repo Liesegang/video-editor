@@ -500,8 +500,6 @@ impl Renderer for SkiaRenderer {
             canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
             // FontMgr::default() removed
 
-
-
             // let mut paint = Paint::default(); // Unused with Paragraph
 
             let matrix = build_transform_matrix(transform);
@@ -510,21 +508,22 @@ impl Renderer for SkiaRenderer {
 
             let mut font_collection = skia_safe::textlayout::FontCollection::new();
             font_collection.set_default_font_manager(skia_safe::FontMgr::default(), None);
-            
+
             let mut text_style = skia_safe::textlayout::TextStyle::new();
             text_style.set_font_families(&[font_name]);
             text_style.set_font_size(size as f32);
             text_style.set_color(skia_safe::Color::from_argb(
                 color.a, color.r, color.g, color.b,
             ));
-            
+
             let mut paragraph_style = skia_safe::textlayout::ParagraphStyle::new();
             paragraph_style.set_text_style(&text_style);
 
-            let mut builder = skia_safe::textlayout::ParagraphBuilder::new(&paragraph_style, font_collection);
-            
+            let mut builder =
+                skia_safe::textlayout::ParagraphBuilder::new(&paragraph_style, font_collection);
+
             builder.add_text(text);
-            
+
             let mut paragraph = builder.build();
             paragraph.layout(f32::MAX); // Layout on a single line (infinite width)
             paragraph.paint(canvas, (0.0, 0.0));

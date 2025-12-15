@@ -14,6 +14,7 @@ use crate::{action::HistoryManager, state::context::EditorContext};
 mod gizmo;
 mod grid;
 mod interaction;
+pub mod vector_editor;
 
 struct PreviewViewportState<'a> {
     pan: &'a mut egui::Vec2,
@@ -522,6 +523,37 @@ pub fn preview_panel(
     // Draw Gizmo
     if editor_context.view.active_tool == PreviewTool::Select {
         gizmo::draw_gizmo(ui, editor_context, &gui_clips, to_screen);
+    } else if editor_context.view.active_tool == PreviewTool::Shape {
+        if let Some(state) = &editor_context.interaction.vector_editor_state {
+            if let Some(id) = editor_context.selection.selected_entities.iter().next() {
+                if let Some(gc) = gui_clips.iter().find(|c| c.id == *id) {
+                    let transform = library::model::frame::transform::Transform {
+                        position: library::model::frame::transform::Position {
+                            x: gc.position[0] as f64,
+                            y: gc.position[1] as f64,
+                        },
+                        scale: library::model::frame::transform::Scale {
+                            x: gc.scale_x as f64,
+                            y: gc.scale_y as f64,
+                        },
+                        rotation: gc.rotation as f64,
+                        anchor: library::model::frame::transform::Position {
+                            x: gc.anchor_x as f64,
+                            y: gc.anchor_y as f64,
+                        },
+                        opacity: gc.opacity as f64,
+                    };
+
+                    let renderer =
+                        crate::ui::panels::preview::vector_editor::renderer::VectorEditorRenderer {
+                            state,
+                            transform,
+                            to_screen: Box::new(|p| to_screen(p)),
+                        };
+                    renderer.draw(ui.painter());
+                }
+            }
+        }
     }
 
     // Info text
