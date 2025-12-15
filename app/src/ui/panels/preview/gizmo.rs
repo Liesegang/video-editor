@@ -405,14 +405,20 @@ fn draw_clip_box(
         center + egui::vec2(rx, ry)
     };
 
+    let (off_x, off_y) = if let Some(pt) = gc.content_point {
+        (pt[0], pt[1])
+    } else {
+        (0.0, 0.0)
+    };
+
     // Calculate Corners
-    let p_tl = transform_point(0.0, 0.0);
-    let p_tr = transform_point(base_w, 0.0);
-    let p_br = transform_point(base_w, base_h);
-    let p_bl = transform_point(0.0, base_h);
+    let p_tl = transform_point(off_x, off_y);
+    let p_tr = transform_point(off_x + base_w, off_y);
+    let p_br = transform_point(off_x + base_w, off_y + base_h);
+    let p_bl = transform_point(off_x, off_y + base_h);
 
     // Midpoints (for matching handles)
-    let p_t = transform_point(base_w / 2.0, 0.0);
+    let p_t = transform_point(off_x + base_w / 2.0, off_y);
 
     let s_tl = to_screen(p_tl);
     let s_tr = to_screen(p_tr);

@@ -309,7 +309,8 @@ impl TrackClip {
         font.set_typeface(typeface);
         font.set_size(font_size as f32);
 
-        let width = crate::rendering::text_layout::measure_text_width(text, "Arial", font_size as f32);
+        let width =
+            crate::rendering::text_layout::measure_text_width(text, "Arial", font_size as f32);
         let (_, metrics) = font.metrics();
         // Calculate height consistent with entity_converters logic
         let height = metrics.descent - metrics.ascent;

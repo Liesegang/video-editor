@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::model::ui_types::{DraggedItem, GizmoHandle, TimelineDisplayMode, Vec2Def};
+use crate::model::vector::VectorEditorState;
 
 use library::animation::EasingFunction; // Added import
 
@@ -154,6 +155,9 @@ pub struct InteractionState {
     // Based on previous file read, GizmoState is in context.rs.
     // I will MOVE GizmoState to this file to avoid circular dependency.
     pub gizmo_state: Option<GizmoState>,
+
+    // Vector Editor State
+    pub vector_editor_state: Option<VectorEditorState>,
 
     // Text Input
     pub current_time_text_input: String,
