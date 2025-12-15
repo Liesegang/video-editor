@@ -260,7 +260,7 @@ impl TrackClip {
     pub fn create_text(text: &str, in_frame: u64, out_frame: u64) -> Self {
         let mut props = PropertyMap::new();
         // User requested default: "this is sample text", Arial, White
-        
+
         let font_size = 100.0;
 
         props.set(
@@ -299,17 +299,21 @@ impl TrackClip {
         let font_mgr = skia_safe::FontMgr::default();
         let typeface = font_mgr
             .match_family_style("Arial", skia_safe::FontStyle::normal())
-            .unwrap_or_else(|| font_mgr.match_family_style("Arial", skia_safe::FontStyle::normal()).expect("Failed to load default font")); // Fallback
+            .unwrap_or_else(|| {
+                font_mgr
+                    .match_family_style("Arial", skia_safe::FontStyle::normal())
+                    .expect("Failed to load default font")
+            }); // Fallback
 
         let mut font = skia_safe::Font::default();
         font.set_typeface(typeface);
         font.set_size(font_size as f32);
 
-        let width = font.measure_text(text, None).1.width();
+        let width = crate::rendering::text_layout::measure_text_width(text, "Arial", font_size as f32);
         let (_, metrics) = font.metrics();
         // Calculate height consistent with entity_converters logic
         let height = metrics.descent - metrics.ascent;
-        
+
         let anchor_x = width as f64 / 2.0;
         let anchor_y = height as f64 / 2.0;
 

@@ -264,6 +264,32 @@ pub fn inspector_panel(
                                                 }
                                                 ui.end_row();
                                             }
+                                            PropertyUiType::Font => {
+                                                ui.label(&def.label);
+                                                let current_val = properties.get_string(&def.name).unwrap_or(
+                                                    def.default_value.get_as::<String>().unwrap_or_default(),
+                                                );
+                                                let mut selected = current_val.clone();
+                                                egui::ComboBox::from_id_salt(format!("combo_font_{}", def.name))
+                                                    .selected_text(&selected)
+                                                    .width(200.0)
+                                                    .show_ui(ui, |ui| {
+                                                        for font in &editor_context.available_fonts {
+                                                            ui.selectable_value(&mut selected, font.clone(), font);
+                                                        }
+                                                    });
+
+                                                if selected != current_val {
+                                                    use library::model::project::property::PropertyValue;
+                                                    project_service.update_property_or_keyframe(
+                                                        comp_id, track_id, selected_entity_id, &def.name, current_time, PropertyValue::String(selected), None,
+                                                    ).ok();
+                                                    needs_refresh = true;
+                                                    let current_state = project_service.get_project().read().unwrap().clone();
+                                                    history_manager.push_project_state(current_state);
+                                                }
+                                                ui.end_row();
+                                            }
                                             PropertyUiType::Color => {
                                                 ui.label(&def.label);
                                                 let current_val = properties.get_constant_value(&def.name)
@@ -477,6 +503,47 @@ pub fn inspector_panel(
                                                     }
                                                 },
                                             );
+                                            if selected != current_val {
+                                                project_service
+                                                    .update_effect_property_or_keyframe(
+                                                        comp_id,
+                                                        track_id,
+                                                        selected_entity_id,
+                                                        effect_index,
+                                                        &def.name,
+                                                        current_time,
+                                                        PropertyValue::String(selected),
+                                                        None,
+                                                    )
+                                                    .ok();
+                                                needs_refresh = true;
+                                                let current_state = project_service
+                                                    .get_project()
+                                                    .read()
+                                                    .unwrap()
+                                                    .clone();
+                                                history_manager.push_project_state(current_state);
+                                            }
+                                            ui.end_row();
+                                        }
+                                        PropertyUiType::Font => {
+                                            ui.label(&def.label);
+                                            let current_val =
+                                                effect.properties.get_string(&def.name).unwrap_or(
+                                                    def.default_value
+                                                        .get_as::<String>()
+                                                        .unwrap_or_default(),
+                                                );
+                                            let mut selected = current_val.clone();
+                                            egui::ComboBox::from_id_salt(format!("combo_effect_font_{}_{}", effect_index, def.name))
+                                                .selected_text(&selected)
+                                                .width(200.0)
+                                                .show_ui(ui, |ui| {
+                                                    for font in &editor_context.available_fonts {
+                                                        ui.selectable_value(&mut selected, font.clone(), font);
+                                                    }
+                                                });
+
                                             if selected != current_val {
                                                 project_service
                                                     .update_effect_property_or_keyframe(

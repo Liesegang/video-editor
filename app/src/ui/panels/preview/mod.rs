@@ -1,5 +1,5 @@
-use egui_phosphor::regular as icons;
 use egui::Ui;
+use egui_phosphor::regular as icons;
 use std::sync::{Arc, RwLock};
 
 use library::model::project::project::Project;
@@ -53,7 +53,7 @@ pub fn preview_panel(
     let bottom_bar_height = 24.0;
     let top_bar_height = 32.0; // Added top bar
     let available_rect = ui.available_rect_before_wrap();
-    
+
     // Top Bar area
     let top_bar_rect = egui::Rect::from_min_size(
         available_rect.min,
@@ -76,37 +76,52 @@ pub fn preview_panel(
     // Draw Top Bar
     ui.scope_builder(egui::UiBuilder::new().max_rect(top_bar_rect), |ui| {
         ui.horizontal(|ui| {
-             ui.style_mut().spacing.item_spacing = egui::vec2(4.0, 0.0);
-             
-             let select_btn = ui.add(egui::Button::new(egui::RichText::new(icons::CURSOR).size(18.0)).selected(editor_context.view.active_tool == PreviewTool::Select));
-             if select_btn.clicked() {
-                 editor_context.view.active_tool = PreviewTool::Select;
-             }
-             select_btn.on_hover_text("Select Tool");
+            ui.style_mut().spacing.item_spacing = egui::vec2(4.0, 0.0);
 
-             let pan_btn = ui.add(egui::Button::new(egui::RichText::new(icons::HAND).size(18.0)).selected(editor_context.view.active_tool == PreviewTool::Pan));
-             if pan_btn.clicked() {
-                 editor_context.view.active_tool = PreviewTool::Pan;
-             }
-             pan_btn.on_hover_text("Pan Tool");
+            let select_btn = ui.add(
+                egui::Button::new(egui::RichText::new(icons::CURSOR).size(18.0))
+                    .selected(editor_context.view.active_tool == PreviewTool::Select),
+            );
+            if select_btn.clicked() {
+                editor_context.view.active_tool = PreviewTool::Select;
+            }
+            select_btn.on_hover_text("Select Tool");
 
-             let zoom_btn = ui.add(egui::Button::new(egui::RichText::new(icons::MAGNIFYING_GLASS).size(18.0)).selected(editor_context.view.active_tool == PreviewTool::Zoom));
-             if zoom_btn.clicked() {
-                 editor_context.view.active_tool = PreviewTool::Zoom;
-             }
-             zoom_btn.on_hover_text("Zoom Tool");
+            let pan_btn = ui.add(
+                egui::Button::new(egui::RichText::new(icons::HAND).size(18.0))
+                    .selected(editor_context.view.active_tool == PreviewTool::Pan),
+            );
+            if pan_btn.clicked() {
+                editor_context.view.active_tool = PreviewTool::Pan;
+            }
+            pan_btn.on_hover_text("Pan Tool");
 
-             let text_btn = ui.add(egui::Button::new(egui::RichText::new(icons::TEXT_T).size(18.0)).selected(editor_context.view.active_tool == PreviewTool::Text));
-             if text_btn.clicked() {
-                 editor_context.view.active_tool = PreviewTool::Text;
-             }
-             text_btn.on_hover_text("Text Tool");
+            let zoom_btn = ui.add(
+                egui::Button::new(egui::RichText::new(icons::MAGNIFYING_GLASS).size(18.0))
+                    .selected(editor_context.view.active_tool == PreviewTool::Zoom),
+            );
+            if zoom_btn.clicked() {
+                editor_context.view.active_tool = PreviewTool::Zoom;
+            }
+            zoom_btn.on_hover_text("Zoom Tool");
 
-             let shape_btn = ui.add(egui::Button::new(egui::RichText::new(icons::SQUARE).size(18.0)).selected(editor_context.view.active_tool == PreviewTool::Shape));
-             if shape_btn.clicked() {
-                 editor_context.view.active_tool = PreviewTool::Shape;
-             }
-             shape_btn.on_hover_text("Shape Tool");
+            let text_btn = ui.add(
+                egui::Button::new(egui::RichText::new(icons::TEXT_T).size(18.0))
+                    .selected(editor_context.view.active_tool == PreviewTool::Text),
+            );
+            if text_btn.clicked() {
+                editor_context.view.active_tool = PreviewTool::Text;
+            }
+            text_btn.on_hover_text("Text Tool");
+
+            let shape_btn = ui.add(
+                egui::Button::new(egui::RichText::new(icons::SQUARE).size(18.0))
+                    .selected(editor_context.view.active_tool == PreviewTool::Shape),
+            );
+            if shape_btn.clicked() {
+                editor_context.view.active_tool = PreviewTool::Shape;
+            }
+            shape_btn.on_hover_text("Shape Tool");
         });
     });
 
@@ -401,8 +416,8 @@ pub fn preview_panel(
 
                     // If dimensions are missing (e.g. Text, Shape), calculate them
                     if width.is_none() || height.is_none() {
-                        use std::hash::{Hash, Hasher};
                         use std::collections::hash_map::DefaultHasher;
+                        use std::hash::{Hash, Hasher};
 
                         let mut hasher = DefaultHasher::new();
                         entity.properties.hash(&mut hasher);
@@ -410,7 +425,12 @@ pub fn preview_panel(
 
                         // Check cache
                         let mut cached = None;
-                        if let Some((cached_hash, bounds)) = editor_context.interaction.bounds_cache.bounds.get(&entity.id) {
+                        if let Some((cached_hash, bounds)) = editor_context
+                            .interaction
+                            .bounds_cache
+                            .bounds
+                            .get(&entity.id)
+                        {
                             if *cached_hash == hash {
                                 cached = Some(*bounds);
                             }
@@ -425,20 +445,28 @@ pub fn preview_panel(
                             let plugin_manager = project_service.get_plugin_manager();
                             let converter_registry = plugin_manager.get_entity_converter_registry();
                             let property_evaluators = plugin_manager.get_property_evaluators();
-                            
-                            let current_frame = (editor_context.timeline.current_time as f64 * comp.fps).round() as u64;
-                            
+
+                            let current_frame = (editor_context.timeline.current_time as f64
+                                * comp.fps)
+                                .round() as u64;
+
                             let ctx = library::framing::entity_converters::FrameEvaluationContext {
                                 composition: comp,
                                 property_evaluators: &property_evaluators,
                             };
 
-                            if let Some((x, y, w, h)) = converter_registry.get_entity_bounds(&ctx, entity, current_frame) {
+                            if let Some((x, y, w, h)) =
+                                converter_registry.get_entity_bounds(&ctx, entity, current_frame)
+                            {
                                 width = Some(w);
                                 height = Some(h);
                                 content_point = Some([x, y]);
                                 // Update Cache
-                                editor_context.interaction.bounds_cache.bounds.insert(entity.id, (hash, (x, y, w, h)));
+                                editor_context
+                                    .interaction
+                                    .bounds_cache
+                                    .bounds
+                                    .insert(entity.id, (hash, (x, y, w, h)));
                             }
                         }
                     }
@@ -488,6 +516,7 @@ pub fn preview_panel(
             to_world,
         );
         interactions.handle(&response, rect);
+        interactions.draw_text_overlay();
     }
 
     // Draw Gizmo

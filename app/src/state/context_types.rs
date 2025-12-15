@@ -177,6 +177,10 @@ pub struct InteractionState {
 
     // Caching for Text/Shape bounds
     pub bounds_cache: BoundsCache,
+
+    // Text Editing State
+    pub editing_text_entity_id: Option<uuid::Uuid>,
+    pub text_edit_buffer: String,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -498,27 +498,37 @@ impl Renderer for SkiaRenderer {
         {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
-            let font_mgr = FontMgr::default();
-            let typeface = font_mgr
-                .match_family_style(font_name, FontStyle::normal())
-                .ok_or(LibraryError::Render("Failed to match typeface".to_string()))?;
-            let mut font = Font::default();
-            font.set_typeface(typeface);
-            font.set_size(size as f32);
+            // FontMgr::default() removed
 
-            let mut paint = Paint::default();
-            paint.set_anti_alias(true);
-            paint.set_color(skia_safe::Color::from_argb(
-                color.a, color.r, color.g, color.b,
-            ));
 
-            let (_scaled, metrics) = font.metrics();
-            let y_offset = -metrics.ascent;
+
+            // let mut paint = Paint::default(); // Unused with Paragraph
 
             let matrix = build_transform_matrix(transform);
             canvas.save();
             canvas.concat(&matrix);
-            canvas.draw_str(text, (0.0, y_offset), &font, &paint);
+
+            let mut font_collection = skia_safe::textlayout::FontCollection::new();
+            font_collection.set_default_font_manager(skia_safe::FontMgr::default(), None);
+            
+            let mut text_style = skia_safe::textlayout::TextStyle::new();
+            text_style.set_font_families(&[font_name]);
+            text_style.set_font_size(size as f32);
+            text_style.set_color(skia_safe::Color::from_argb(
+                color.a, color.r, color.g, color.b,
+            ));
+            
+            let mut paragraph_style = skia_safe::textlayout::ParagraphStyle::new();
+            paragraph_style.set_text_style(&text_style);
+
+            let mut builder = skia_safe::textlayout::ParagraphBuilder::new(&paragraph_style, font_collection);
+            
+            builder.add_text(text);
+            
+            let mut paragraph = builder.build();
+            paragraph.layout(f32::MAX); // Layout on a single line (infinite width)
+            paragraph.paint(canvas, (0.0, 0.0));
+
             canvas.restore();
         }
         if let Some(ctx) = self.gpu_context.as_mut() {
