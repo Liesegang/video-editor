@@ -260,11 +260,8 @@ impl TrackClip {
     pub fn create_text(text: &str, in_frame: u64, out_frame: u64) -> Self {
         let mut props = PropertyMap::new();
         // User requested default: "this is sample text", Arial, White
-        // If 'text' arg is provided, use it, but caller from interactions uses "New Text".
-        // I should update interactions.rs to pass "this is sample text" OR just ignore the arg?
-        // Better to respect the arg and update interactions.rs, OR just force it here if the arg is generic.
-        // The user said "text is this is sample text".
-        // I will change the caller in interactions.rs to pass "this is sample text" and here just set properties.
+        
+        let font_size = 100.0;
 
         props.set(
             "text".to_string(),
@@ -276,6 +273,12 @@ impl TrackClip {
             "font_family".to_string(),
             crate::model::project::property::Property::constant(
                 crate::model::project::property::PropertyValue::String("Arial".to_string()),
+            ),
+        );
+        props.set(
+            "size".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(font_size)),
             ),
         );
         props.set(
@@ -291,6 +294,24 @@ impl TrackClip {
                 ),
             ),
         );
+
+        // Measure text for anchor centering
+        let font_mgr = skia_safe::FontMgr::default();
+        let typeface = font_mgr
+            .match_family_style("Arial", skia_safe::FontStyle::normal())
+            .unwrap_or_else(|| font_mgr.match_family_style("Arial", skia_safe::FontStyle::normal()).expect("Failed to load default font")); // Fallback
+
+        let mut font = skia_safe::Font::default();
+        font.set_typeface(typeface);
+        font.set_size(font_size as f32);
+
+        let width = font.measure_text(text, None).1.width();
+        let (_, metrics) = font.metrics();
+        // Calculate height consistent with entity_converters logic
+        let height = metrics.descent - metrics.ascent;
+        
+        let anchor_x = width as f64 / 2.0;
+        let anchor_y = height as f64 / 2.0;
 
         // Default transform
         props.set(
@@ -326,13 +347,13 @@ impl TrackClip {
         props.set(
             "anchor_x".to_string(),
             crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(anchor_x)),
             ),
         );
         props.set(
             "anchor_y".to_string(),
             crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(anchor_y)),
             ),
         );
         props.set(
