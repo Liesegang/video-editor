@@ -1,4 +1,4 @@
-use log::{debug, warn}; // Ensure debug is imported
+use log::{debug, warn};
 use serde_json;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,20 +11,29 @@ use crate::model::frame::{
     transform::{Position, Scale, Transform},
 };
 use crate::model::project::EffectConfig;
-use crate::model::project::TrackClip; // Add this
+use crate::model::project::TrackClip;
 use crate::model::project::project::Composition;
 use crate::model::project::property::{PropertyMap, PropertyValue};
 use crate::plugin::Plugin;
-use crate::plugin::{EvaluationContext, PropertyEvaluatorRegistry}; // Added this line
+use crate::plugin::{EvaluationContext, PropertyEvaluatorRegistry};
 
 /// Trait for converting an Entity into a FrameObject.
 pub trait EntityConverter: Send + Sync {
     fn convert_entity(
         &self,
-        evaluator: &FrameEvaluationContext, // Pass context instead of individual fields
-        track_clip: &TrackClip,             // Changed to TrackClip
-        frame_number: u64,                  // Changed to u64
+        evaluator: &FrameEvaluationContext,
+        track_clip: &TrackClip,
+        frame_number: u64,
     ) -> Option<FrameObject>;
+
+    fn get_bounds(
+        &self,
+        _evaluator: &FrameEvaluationContext,
+        _track_clip: &TrackClip,
+        _frame_number: u64,
+    ) -> Option<(f32, f32, f32, f32)> {
+        None
+    }
 }
 
 // New trait for entity converter plugins
@@ -40,11 +49,9 @@ pub trait EntityConverterPlugin: Plugin {
 pub struct FrameEvaluationContext<'a> {
     pub composition: &'a Composition,
     pub property_evaluators: &'a Arc<PropertyEvaluatorRegistry>,
-    // Add other common methods or fields from FrameEvaluator if needed
 }
 
 impl<'a> FrameEvaluationContext<'a> {
-    // Re-implement helper methods previously in FrameEvaluator
     fn build_image_effects(&self, configs: &[EffectConfig], time: f64) -> Vec<ImageEffect> {
         configs
             .iter()
@@ -100,10 +107,7 @@ impl<'a> FrameEvaluationContext<'a> {
             property_map: properties,
         };
         let evaluated_value = self.property_evaluators.evaluate(property, time, &ctx);
-        debug!(
-            "Evaluated property '{}' at time {} to {:?}",
-            key, time, evaluated_value
-        ); // Added debug log
+        // debug!("Evaluated property '{}' at time {} to {:?}", key, time, evaluated_value);
         Some(evaluated_value)
     }
 
@@ -156,7 +160,6 @@ impl<'a> FrameEvaluationContext<'a> {
         default_x: f64,
         default_y: f64,
     ) -> (f64, f64) {
-        // Initialize with default or Vec2 value
         let (mut vx, mut vy) = if let Some(PropertyValue::Vec2(v)) =
             self.evaluate_property_value(properties, key, time)
         {
@@ -165,7 +168,6 @@ impl<'a> FrameEvaluationContext<'a> {
             (default_x, default_y)
         };
 
-        // Override with split keys (e.g. position_x, position_y) if they exist
         let key_x = format!("{}_x", key);
         if let Some(val) = self.evaluate_property_value(properties, &key_x, time) {
             match val {
@@ -238,8 +240,6 @@ impl<'a> FrameEvaluationContext<'a> {
         }
     }
 }
-
-// Concrete EntityConverter implementations
 
 pub struct VideoEntityConverter;
 
@@ -353,6 +353,42 @@ impl EntityConverter for TextEntityConverter {
             properties: props.clone(),
         })
     }
+
+    fn get_bounds(
+        &self,
+        evaluator: &FrameEvaluationContext,
+        track_clip: &TrackClip,
+        frame_number: u64,
+    ) -> Option<(f32, f32, f32, f32)> {
+        let props = &track_clip.properties;
+        let fps = evaluator.composition.fps;
+        let time = frame_number as f64 / fps;
+
+        let text = evaluator.require_string(props, "text", time, "text")?;
+        let font_name = evaluator
+            .optional_string(props, "font", time)
+            .unwrap_or_else(|| "Arial".to_string());
+        let size = evaluator.evaluate_number(props, "size", time, 12.0);
+
+        let font_mgr = skia_safe::FontMgr::default();
+        let typeface = font_mgr
+            .match_family_style(&font_name, skia_safe::FontStyle::normal())
+            .unwrap_or_else(|| font_mgr.match_family_style("Arial", skia_safe::FontStyle::normal()).expect("Failed to load default font"));
+
+        let mut font = skia_safe::Font::default();
+        font.set_typeface(typeface);
+        font.set_size(size as f32);
+
+        let width = font.measure_text(&text, None).1.width();
+        let (_, metrics) = font.metrics();
+        // Text is rendered with a y-offset of -ascent in skia_renderer.
+        // This shifts the text down so that the 'top' (ascent) aligns with the local origin (0,0).
+        // Therefore, the bounding box relative to the local origin starts at 0.0.
+        let top = 0.0;
+        let height = metrics.descent - metrics.ascent;
+        
+        Some((0.0, top, width, height))
+    }
 }
 
 pub struct ShapeEntityConverter;
@@ -393,12 +429,72 @@ impl EntityConverter for ShapeEntityConverter {
             properties: props.clone(),
         })
     }
+
+    fn get_bounds(
+        &self,
+        evaluator: &FrameEvaluationContext,
+        track_clip: &TrackClip,
+        frame_number: u64,
+    ) -> Option<(f32, f32, f32, f32)> {
+        let props = &track_clip.properties;
+        let fps = evaluator.composition.fps;
+        let time = frame_number as f64 / fps;
+
+        let path_str = evaluator.require_string(props, "path", time, "shape")?;
+        
+        if let Some(path) = skia_safe::utils::parse_path::from_svg(&path_str) {
+             let bounds = path.compute_tight_bounds();
+             Some((bounds.left, bounds.top, bounds.width(), bounds.height()))
+        } else {
+            None
+        }
+    }
+}
+
+pub struct SkSLEntityConverter;
+
+impl EntityConverter for SkSLEntityConverter {
+    fn convert_entity(
+        &self,
+        evaluator: &FrameEvaluationContext,
+        track_clip: &TrackClip,
+        frame_number: u64,
+    ) -> Option<FrameObject> {
+        let props = &track_clip.properties;
+        let fps = evaluator.composition.fps;
+        let time = frame_number as f64 / fps;
+
+        let shader = evaluator.require_string(props, "shader", time, "sksl")?;
+
+        // let width = evaluator.evaluate_number(props, "width", time, 1920.0);
+        // let height = evaluator.evaluate_number(props, "height", time, 1080.0);
+        
+        // Use composition size for SkSL resolution if explicit size not present
+        let comp_width = evaluator.composition.width as f64;
+        let comp_height = evaluator.composition.height as f64;
+        
+        let res_x = comp_width;
+        let res_y = comp_height;
+
+        let transform = evaluator.build_transform(props, time);
+        let effects = evaluator.build_image_effects(&track_clip.effects, time);
+
+        Some(FrameObject {
+            content: FrameContent::SkSL {
+                shader,
+                resolution: (res_x as f32, res_y as f32),
+                effects,
+                transform,
+            },
+            properties: props.clone(),
+        })
+    }
 }
 
 /// Registry for EntityConverter implementations.
-#[derive(Clone)] // Added derive Clone
+#[derive(Clone)]
 pub struct EntityConverterRegistry {
-    converters: HashMap<String, Arc<dyn EntityConverter>>, // Changed to Arc
+    converters: HashMap<String, Arc<dyn EntityConverter>>,
 }
 
 impl EntityConverterRegistry {
@@ -409,24 +505,35 @@ impl EntityConverterRegistry {
     }
 
     pub fn register(&mut self, entity_type: String, converter: Arc<dyn EntityConverter>) {
-        // Changed to Arc
         self.converters.insert(entity_type, converter);
     }
 
     pub fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip, // Changed to TrackClip
-        frame_number: u64,      // Changed to u64
+        track_clip: &TrackClip,
+        frame_number: u64,
     ) -> Option<FrameObject> {
         let kind_str = track_clip.kind.to_string();
         match self.converters.get(&kind_str) {
-            // Use track_clip.kind.to_string()
             Some(converter) => converter.convert_entity(evaluator, track_clip, frame_number),
             None => {
                 warn!("No converter registered for entity type '{}'", kind_str);
                 None
             }
+        }
+    }
+
+    pub fn get_entity_bounds(
+        &self,
+        evaluator: &FrameEvaluationContext,
+        track_clip: &TrackClip, 
+        frame_number: u64,     
+    ) -> Option<(f32, f32, f32, f32)> {
+        let kind_str = track_clip.kind.to_string();
+        match self.converters.get(&kind_str) {
+            Some(converter) => converter.get_bounds(evaluator, track_clip, frame_number),
+            None => None
         }
     }
 }
@@ -463,56 +570,6 @@ impl EntityConverterPlugin for BuiltinEntityConverterPlugin {
     }
 }
 
-pub struct SkSLEntityConverter;
-
-impl EntityConverter for SkSLEntityConverter {
-    fn convert_entity(
-        &self,
-        evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip,
-        frame_number: u64,
-    ) -> Option<FrameObject> {
-        let props = &track_clip.properties;
-        let fps = evaluator.composition.fps;
-        let time = frame_number as f64 / fps;
-
-        let shader = evaluator.require_string(props, "shader", time, "sksl")?;
-
-        let width = evaluator.evaluate_number(props, "width", time, 1920.0);
-        let height = evaluator.evaluate_number(props, "height", time, 1080.0);
-
-        // Use composition size as default if not specified,
-        // but for now properties "width"/"height" aren't standard on clips unless I added them?
-        // Actually, SkSL clips might not have explicit width/height properties yet.
-        // Let's use composition resolution if properties are missing/zero, or hardcode typical?
-        // Better: Use specific properties or default to 1920x1080.
-        // Wait, creating SkSL clip didn't add width/height properties.
-        // It relies on the renderer filling the screen?
-        // But the renderer needs `resolution`.
-        // Let's use the composition's width/height from context.
-        let comp_width = evaluator.composition.width as f64;
-        let comp_height = evaluator.composition.height as f64;
-
-        // Check if we want overrides, otherwise use comp size
-        let res_x = if width > 0.0 { width } else { comp_width };
-        let res_y = if height > 0.0 { height } else { comp_height };
-
-        let transform = evaluator.build_transform(props, time);
-        let effects = evaluator.build_image_effects(&track_clip.effects, time);
-
-        Some(FrameObject {
-            content: FrameContent::SkSL {
-                shader,
-                resolution: (res_x as f32, res_y as f32),
-                effects,
-                transform,
-            },
-            properties: props.clone(),
-        })
-    }
-}
-
-// Function to register built-in entity converters
 pub fn register_builtin_entity_converters(registry: &mut EntityConverterRegistry) {
     registry.register("video".to_string(), Arc::new(VideoEntityConverter));
     registry.register("image".to_string(), Arc::new(ImageEntityConverter));

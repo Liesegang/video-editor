@@ -156,6 +156,15 @@ impl<'a> PreviewInteractions<'a> {
     fn get_clip_screen_corners(&self, gc: &TimelineClip) -> [Pos2; 4] {
         let base_w = gc.width.unwrap_or(1920.0);
         let base_h = gc.height.unwrap_or(1080.0);
+        // content_point is the top-left offset of the content in local space, relative to (0,0)
+        // If present (Text, Shape), we shift the local rect by this amount.
+        // If not (Video/Image), it's typically (0,0).
+        let (off_x, off_y) = if let Some(pt) = gc.content_point {
+            (pt[0], pt[1])
+        } else {
+            (0.0, 0.0)
+        };
+        
         let sx = gc.scale_x / 100.0;
         let sy = gc.scale_y / 100.0;
         let center = egui::pos2(gc.position[0], gc.position[1]);
@@ -164,8 +173,17 @@ impl<'a> PreviewInteractions<'a> {
         let sin = angle_rad.sin();
 
         let transform_point = |local_x: f32, local_y: f32| -> egui::Pos2 {
-            let ox = local_x - gc.anchor_x;
-            let oy = local_y - gc.anchor_y;
+            // Apply Content Offset
+            let lx = local_x + off_x;
+            let ly = local_y + off_y;
+            
+            // Apply Anchor (Anchor is relative to the transformed/scaled object center usually? 
+            // Standard generic transform:
+            // World = Pos + Rot * Scale * (Local - Anchor)
+            // Here, local_x/y are inside the content rect (0..w, 0..h).
+            // So:
+            let ox = lx - gc.anchor_x;
+            let oy = ly - gc.anchor_y;
             let sx_ox = ox * sx;
             let sy_oy = oy * sy;
             let rx = sx_ox * cos - sy_oy * sin;
