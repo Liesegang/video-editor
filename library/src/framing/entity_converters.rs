@@ -324,7 +324,7 @@ impl EntityConverter for TextEntityConverter {
 
         let text = evaluator.require_string(props, "text", time, "text")?;
         let font = evaluator
-            .optional_string(props, "font", time)
+            .optional_string(props, "font_family", time)
             .unwrap_or_else(|| "Arial".to_string());
         let size = evaluator.evaluate_number(props, "size", time, 12.0);
         let color = evaluator.evaluate_color(
@@ -366,27 +366,31 @@ impl EntityConverter for TextEntityConverter {
 
         let text = evaluator.require_string(props, "text", time, "text")?;
         let font_name = evaluator
-            .optional_string(props, "font", time)
+            .optional_string(props, "font_family", time)
             .unwrap_or_else(|| "Arial".to_string());
         let size = evaluator.evaluate_number(props, "size", time, 12.0);
 
         let font_mgr = skia_safe::FontMgr::default();
         let typeface = font_mgr
             .match_family_style(&font_name, skia_safe::FontStyle::normal())
-            .unwrap_or_else(|| font_mgr.match_family_style("Arial", skia_safe::FontStyle::normal()).expect("Failed to load default font"));
+            .unwrap_or_else(|| {
+                font_mgr
+                    .match_family_style("Arial", skia_safe::FontStyle::normal())
+                    .expect("Failed to load default font")
+            });
 
         let mut font = skia_safe::Font::default();
         font.set_typeface(typeface);
         font.set_size(size as f32);
 
-        let width = font.measure_text(&text, None).1.width();
+        let width = crate::rendering::text_layout::measure_text_width(&text, &font_name, size as f32);
         let (_, metrics) = font.metrics();
         // Text is rendered with a y-offset of -ascent in skia_renderer.
         // This shifts the text down so that the 'top' (ascent) aligns with the local origin (0,0).
         // Therefore, the bounding box relative to the local origin starts at 0.0.
         let top = 0.0;
         let height = metrics.descent - metrics.ascent;
-        
+
         Some((0.0, top, width, height))
     }
 }
@@ -441,10 +445,10 @@ impl EntityConverter for ShapeEntityConverter {
         let time = frame_number as f64 / fps;
 
         let path_str = evaluator.require_string(props, "path", time, "shape")?;
-        
+
         if let Some(path) = skia_safe::utils::parse_path::from_svg(&path_str) {
-             let bounds = path.compute_tight_bounds();
-             Some((bounds.left, bounds.top, bounds.width(), bounds.height()))
+            let bounds = path.compute_tight_bounds();
+            Some((bounds.left, bounds.top, bounds.width(), bounds.height()))
         } else {
             None
         }
@@ -468,11 +472,11 @@ impl EntityConverter for SkSLEntityConverter {
 
         // let width = evaluator.evaluate_number(props, "width", time, 1920.0);
         // let height = evaluator.evaluate_number(props, "height", time, 1080.0);
-        
+
         // Use composition size for SkSL resolution if explicit size not present
         let comp_width = evaluator.composition.width as f64;
         let comp_height = evaluator.composition.height as f64;
-        
+
         let res_x = comp_width;
         let res_y = comp_height;
 
@@ -527,13 +531,13 @@ impl EntityConverterRegistry {
     pub fn get_entity_bounds(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip, 
-        frame_number: u64,     
+        track_clip: &TrackClip,
+        frame_number: u64,
     ) -> Option<(f32, f32, f32, f32)> {
         let kind_str = track_clip.kind.to_string();
         match self.converters.get(&kind_str) {
             Some(converter) => converter.get_bounds(evaluator, track_clip, frame_number),
-            None => None
+            None => None,
         }
     }
 }

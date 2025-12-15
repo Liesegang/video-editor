@@ -87,6 +87,7 @@ impl MyApp {
 
         let mut editor_context = EditorContext::new(default_comp_id); // Pass default_comp_id
         editor_context.selection.composition_id = Some(default_comp_id); // Select the default composition
+        editor_context.available_fonts = library::rendering::skia_utils::get_available_fonts();
 
         let entity_converter_registry = plugin_manager.get_entity_converter_registry();
         let render_server = Arc::new(RenderServer::new(

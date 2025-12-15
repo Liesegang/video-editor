@@ -26,6 +26,9 @@ pub struct EditorContext {
     pub preview_texture: Option<egui::TextureHandle>,
     #[serde(skip)]
     pub preview_texture_id: Option<u32>, // Raw GL texture ID
+
+    #[serde(skip)]
+    pub available_fonts: Vec<String>,
 }
 
 pub use crate::state::context_types::GizmoState; // Re-export for compatibility if needed, though better to import from context_types
@@ -44,6 +47,7 @@ impl EditorContext {
             interaction: InteractionState::default(),
             preview_texture: None,
             preview_texture_id: None,
+            available_fonts: Vec::new(),
         }
     }
 

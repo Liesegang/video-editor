@@ -65,10 +65,12 @@ impl<'a> PreviewInteractions<'a> {
         }
 
         // 2. Hit Testing (Hover)
-        let hovered_entity_id = if active_tool == crate::state::context_types::PreviewTool::Select {
-             self.check_hit_test(pointer_pos, content_rect)
+        let hovered_entity_id = if active_tool == crate::state::context_types::PreviewTool::Select
+            || active_tool == crate::state::context_types::PreviewTool::Text
+        {
+            self.check_hit_test(pointer_pos, content_rect)
         } else {
-             None
+            None
         };
 
         // Check panning input (Middle mouse OR Shift+LeftDrag is handled elsewhere? No, user wants Shift+Left to be MultiSelect usually)
@@ -164,7 +166,7 @@ impl<'a> PreviewInteractions<'a> {
         } else {
             (0.0, 0.0)
         };
-        
+
         let sx = gc.scale_x / 100.0;
         let sy = gc.scale_y / 100.0;
         let center = egui::pos2(gc.position[0], gc.position[1]);
@@ -176,8 +178,8 @@ impl<'a> PreviewInteractions<'a> {
             // Apply Content Offset
             let lx = local_x + off_x;
             let ly = local_y + off_y;
-            
-            // Apply Anchor (Anchor is relative to the transformed/scaled object center usually? 
+
+            // Apply Anchor (Anchor is relative to the transformed/scaled object center usually?
             // Standard generic transform:
             // World = Pos + Rot * Scale * (Local - Anchor)
             // Here, local_x/y are inside the content rect (0..w, 0..h).
@@ -274,6 +276,43 @@ impl<'a> PreviewInteractions<'a> {
     }
 
     fn handle_click_selection(&mut self, hovered_id: Option<Uuid>) {
+        if self.editor_context.view.active_tool == crate::state::context_types::PreviewTool::Text {
+            if let Some(id) = hovered_id {
+                let is_text = self.gui_clips.iter().any(|c| {
+                    c.id == id && matches!(c.kind, library::model::project::TrackClipKind::Text)
+                });
+                if is_text {
+                    self.editor_context.interaction.editing_text_entity_id = Some(id);
+                    // Fetch existing text
+                    if let Ok(proj) = self.project.read() {
+                        if let Some(comp_id) = self.editor_context.selection.composition_id {
+                            if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
+                                // We need to find the clip to get text.
+                                // Use gui_clips to get track_id
+                                if let Some(gc) = self.gui_clips.iter().find(|c| c.id == id) {
+                                    if let Some(track) =
+                                        comp.tracks.iter().find(|t| t.id == gc.track_id)
+                                    {
+                                        if let Some(clip) = track.clips.iter().find(|c| c.id == id)
+                                        {
+                                            if let Some(text) = clip.properties.get_string("text") {
+                                                self.editor_context.interaction.text_edit_buffer =
+                                                    text;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    self.editor_context.interaction.editing_text_entity_id = None;
+                }
+            } else {
+                self.editor_context.interaction.editing_text_entity_id = None;
+            }
+        }
+
         let modifiers = self.ui.input(|i| i.modifiers);
 
         let action = crate::ui::selection::get_click_action(&modifiers, hovered_id);
@@ -296,7 +335,6 @@ impl<'a> PreviewInteractions<'a> {
         }
     }
 
-    // ... (drag handle logic unchanged) ...
     fn handle_drag_move(&self, pointer_pos: Option<Pos2>) {
         let current_zoom = self.editor_context.view.zoom;
         if let Some(comp_id) = self.editor_context.selection.composition_id {
@@ -463,5 +501,76 @@ impl<'a> PreviewInteractions<'a> {
             .iter()
             .find(|gc| gc.id == entity_id)
             .map(|gc| gc.track_id)
+    }
+    pub fn draw_text_overlay(&mut self) {
+        if let Some(id) = self.editor_context.interaction.editing_text_entity_id {
+            if let Some(gc) = self.gui_clips.iter().find(|c| c.id == id) {
+                let corners = self.get_clip_screen_corners(gc);
+                let min_x = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+                let min_y = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+                let max_x = corners
+                    .iter()
+                    .map(|p| p.x)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let max_y = corners
+                    .iter()
+                    .map(|p| p.y)
+                    .fold(f32::NEG_INFINITY, f32::max);
+
+                let rect = Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y));
+
+                // Calculate Font Size
+                let mut font_size = 100.0;
+                if let Ok(proj) = self.project.read() {
+                    if let Some(comp_id) = self.editor_context.selection.composition_id {
+                        if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
+                            if let Some(track) = comp.tracks.iter().find(|t| t.id == gc.track_id) {
+                                if let Some(clip) = track.clips.iter().find(|c| c.id == id) {
+                                    font_size = clip.properties.get_f32("size").unwrap_or(100.0);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let zoom = self.editor_context.view.zoom;
+                // Assuming uniform scale or using scale_y for height
+                let scale_factor = (gc.scale_y / 100.0) * zoom;
+                let effective_size = font_size * scale_factor;
+
+                let mut text = self.editor_context.interaction.text_edit_buffer.clone();
+                let widget_id = self.ui.make_persistent_id(id).with("text_edit");
+
+                let response = self.ui.put(
+                    rect,
+                    egui::TextEdit::multiline(&mut text)
+                        .id(widget_id)
+                        .frame(false)
+                        .text_color(egui::Color32::TRANSPARENT)
+                        .font(egui::FontId::proportional(effective_size))
+                        .desired_width(rect.width()),
+                );
+
+                if !response.has_focus() {
+                    response.request_focus();
+                }
+
+                if response.changed() {
+                    self.editor_context.interaction.text_edit_buffer = text.clone();
+
+                    if let Some(comp_id) = self.editor_context.selection.composition_id {
+                        let _ = self.project_service.update_property_or_keyframe(
+                            comp_id,
+                            gc.track_id,
+                            id,
+                            "text",
+                            self.editor_context.timeline.current_time as f64,
+                            library::model::project::property::PropertyValue::String(text),
+                            None,
+                        );
+                    }
+                }
+            }
+        }
     }
 }

@@ -1496,9 +1496,9 @@ impl ProjectService {
                     category: "Text".to_string(),
                 },
                 PropertyDefinition {
-                    name: "font".to_string(),
+                    name: "font_family".to_string(), // Corrected name matching TrackClip::create_text
                     label: "Font".to_string(),
-                    ui_type: PropertyUiType::Text, // Ideally a dropdown, but text for now
+                    ui_type: PropertyUiType::Font, // New Font type
                     default_value: PropertyValue::String("Arial".to_string()),
                     category: "Text".to_string(),
                 },

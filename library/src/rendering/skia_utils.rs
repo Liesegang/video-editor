@@ -359,3 +359,18 @@ pub fn create_image_from_texture(
         Err(LibraryError::Render("GL feature not enabled".to_string()))
     }
 }
+
+pub fn get_available_fonts() -> Vec<String> {
+    let font_mgr = skia_safe::FontMgr::default();
+    let count = font_mgr.count_families();
+    let mut families = Vec::with_capacity(count);
+
+    for i in 0..count {
+        let name = font_mgr.family_name(i);
+        families.push(name);
+    }
+
+    families.sort();
+    families.dedup();
+    families
+}

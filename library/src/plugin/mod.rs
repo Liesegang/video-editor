@@ -83,6 +83,7 @@ pub enum PropertyUiType {
     Dropdown {
         options: Vec<String>,
     },
+    Font,
 }
 
 #[derive(Debug, Clone)]

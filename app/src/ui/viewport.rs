@@ -60,12 +60,12 @@ impl<'a> ViewportController<'a> {
         self.config = config;
         self
     }
-    
+
     pub fn with_pan_tool_active(mut self, active: bool) -> Self {
         self.pan_tool_active = active;
         self
     }
-    
+
     pub fn with_zoom_tool_active(mut self, active: bool) -> Self {
         self.zoom_tool_active = active;
         self
@@ -97,27 +97,32 @@ impl<'a> ViewportController<'a> {
         // --- 0. Zoom Tool Logic ---
         if self.zoom_tool_active {
             // Set Cursor
-            self.ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ZoomIn); // Or generic Zoom if available
+            self.ui
+                .output_mut(|o| o.cursor_icon = egui::CursorIcon::ZoomIn); // Or generic Zoom if available
 
             if response.dragged_by(egui::PointerButton::Primary) {
                 // Scrubby Zoom
                 // Drag Up (Neg Y) -> Zoom In
                 // Drag Down (Pos Y) -> Zoom Out
                 let delta = response.drag_delta();
-                
+
                 // Sensitivity
                 let sensitivity = 0.01;
                 let zoom_change = 1.0 - (delta.y * sensitivity);
-                
+
                 if zoom_change != 1.0 {
                     let pivot = response.interact_pointer_pos().unwrap_or(rect.center());
                     let local_pivot = pivot - rect.min; // Relative to rect, as apply_zoom_at expects logic derived from screen-rect.min
-                    
-                    self.apply_zoom_at(state, egui::Pos2::new(local_pivot.x, local_pivot.y), egui::vec2(zoom_change, zoom_change));
+
+                    self.apply_zoom_at(
+                        state,
+                        egui::Pos2::new(local_pivot.x, local_pivot.y),
+                        egui::vec2(zoom_change, zoom_change),
+                    );
                     changed = true;
                     // Mark handled?
                 }
-                
+
                 // Don't process other tools if zooming
                 return (changed, response);
             }
@@ -125,9 +130,9 @@ impl<'a> ViewportController<'a> {
 
         // --- 1. Hand Tool Logic ---
         let mut _is_hand_tool_active = false;
-        
+
         let key_active = if let Some(key) = self.hand_tool_key {
-             self.ui.input(|i| i.key_down(key))
+            self.ui.input(|i| i.key_down(key))
         } else {
             false
         };
