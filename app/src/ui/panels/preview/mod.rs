@@ -381,8 +381,6 @@ pub fn preview_panel(
             for track in &comp.tracks {
                 for entity in &track.clips {
                     // Try to resolve asset ID from file_path property or similar
-                    // In a real implementation this might be more robust.
-                    // For now, if it has a file_path, we try to find the asset by path.
                     let asset_opt = if let Some(path) = entity.properties.get_string("file_path") {
                         proj_read.assets.iter().find(|a| a.path == path)
                     } else {
@@ -396,6 +394,54 @@ pub fn preview_panel(
                             egui::Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
                         })
                         .unwrap_or(egui::Color32::GRAY);
+
+                    let mut width = asset_opt.and_then(|a| a.width.map(|w| w as f32));
+                    let mut height = asset_opt.and_then(|a| a.height.map(|h| h as f32));
+                    let mut content_point: Option<[f32; 2]> = None;
+
+                    // If dimensions are missing (e.g. Text, Shape), calculate them
+                    if width.is_none() || height.is_none() {
+                        use std::hash::{Hash, Hasher};
+                        use std::collections::hash_map::DefaultHasher;
+
+                        let mut hasher = DefaultHasher::new();
+                        entity.properties.hash(&mut hasher);
+                        let hash = hasher.finish();
+
+                        // Check cache
+                        let mut cached = None;
+                        if let Some((cached_hash, bounds)) = editor_context.interaction.bounds_cache.bounds.get(&entity.id) {
+                            if *cached_hash == hash {
+                                cached = Some(*bounds);
+                            }
+                        }
+
+                        if let Some((x, y, w, h)) = cached {
+                            width = Some(w);
+                            height = Some(h);
+                            content_point = Some([x, y]);
+                        } else {
+                            // Calculate
+                            let plugin_manager = project_service.get_plugin_manager();
+                            let converter_registry = plugin_manager.get_entity_converter_registry();
+                            let property_evaluators = plugin_manager.get_property_evaluators();
+                            
+                            let current_frame = (editor_context.timeline.current_time as f64 * comp.fps).round() as u64;
+                            
+                            let ctx = library::framing::entity_converters::FrameEvaluationContext {
+                                composition: comp,
+                                property_evaluators: &property_evaluators,
+                            };
+
+                            if let Some((x, y, w, h)) = converter_registry.get_entity_bounds(&ctx, entity, current_frame) {
+                                width = Some(w);
+                                height = Some(h);
+                                content_point = Some([x, y]);
+                                // Update Cache
+                                editor_context.interaction.bounds_cache.bounds.insert(entity.id, (hash, (x, y, w, h)));
+                            }
+                        }
+                    }
 
                     let gc = crate::model::ui_types::TimelineClip {
                         id: entity.id,
@@ -418,8 +464,9 @@ pub fn preview_panel(
                         opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
                         rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
                         asset_id: asset_id,
-                        width: asset_opt.and_then(|a| a.width.map(|w| w as f32)),
-                        height: asset_opt.and_then(|a| a.height.map(|h| h as f32)),
+                        width: width,
+                        height: height,
+                        content_point: content_point,
                         kind: entity.kind.clone(),
                     };
                     gui_clips.push(gc);

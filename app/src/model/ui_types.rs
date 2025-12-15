@@ -24,6 +24,7 @@ pub struct TimelineClip {
     pub asset_id: Option<Uuid>, // Changed from asset_index to asset_id
     pub width: Option<f32>,
     pub height: Option<f32>,
+    pub content_point: Option<[f32; 2]>,
     pub kind: library::model::project::TrackClipKind,
 }
 

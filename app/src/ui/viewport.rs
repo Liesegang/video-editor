@@ -110,10 +110,10 @@ impl<'a> ViewportController<'a> {
                 let zoom_change = 1.0 - (delta.y * sensitivity);
                 
                 if zoom_change != 1.0 {
-                    let pivot = response.drag_start_pos().unwrap_or(rect.center());
+                    let pivot = response.interact_pointer_pos().unwrap_or(rect.center());
                     let local_pivot = pivot - rect.min; // Relative to rect, as apply_zoom_at expects logic derived from screen-rect.min
                     
-                    self.apply_zoom_at(state, local_pivot, egui::vec2(zoom_change, zoom_change));
+                    self.apply_zoom_at(state, egui::Pos2::new(local_pivot.x, local_pivot.y), egui::vec2(zoom_change, zoom_change));
                     changed = true;
                     // Mark handled?
                 }

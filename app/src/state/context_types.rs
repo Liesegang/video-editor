@@ -174,6 +174,16 @@ pub struct InteractionState {
 
     // Hand Tool Logic
     pub handled_hand_tool_drag: bool,
+
+    // Caching for Text/Shape bounds
+    pub bounds_cache: BoundsCache,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BoundsCache {
+    // Key: Entity ID
+    // Value: (Property Hash, (X, Y, Width, Height))
+    pub bounds: std::collections::HashMap<Uuid, (u64, (f32, f32, f32, f32))>,
 }
 
 #[derive(Debug, Clone, Default)]

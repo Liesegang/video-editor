@@ -64,10 +64,11 @@ pub fn draw_clips(
                 anchor_y: clip.properties.get_f32("anchor_y").unwrap_or(0.0),
                 opacity: clip.properties.get_f32("opacity").unwrap_or(100.0),
                 rotation: clip.properties.get_f32("rotation").unwrap_or(0.0),
-                asset_id: None, // We don't have asset_id stored on clip yet
+                asset_id: None, // We don't have asset_id                asset_id: None,
                 width: None,
                 height: None,
-                kind: clip.kind.clone(),
+                content_point: None,
+                kind: library::model::project::TrackClipKind::Video,
             };
 
             let initial_x = content_rect_for_clip_area.min.x
