@@ -265,7 +265,7 @@ pub fn render_styles_property(
                 egui::Grid::new(format!("style_props_{}", item_read.id))
                     .striped(true)
                     .show(ui, |ui| {
-                         render_property_rows(ui, &defs,
+                         let actions = render_property_rows(ui, &defs,
                             |name| {
                                  match &item_read.style {
                                     DrawStyle::Fill { color, expand } => match name {
@@ -287,42 +287,51 @@ pub fn render_styles_property(
                                     }
                                  }
                             },
-                            |name, val| {
-                                 match &mut item.style {
-                                     DrawStyle::Fill { color, expand } => match name {
-                                         "color" => if let PropertyValue::Color(c) = val { *color = c; },
-                                         "expand" => if let PropertyValue::Number(n) = val { *expand = n.0; },
-                                         _ => {}
-                                     },
-                                     DrawStyle::Stroke { color, width, cap, join, miter, dash_array, dash_offset } => match name {
-                                         "color" => if let PropertyValue::Color(c) = val { *color = c; },
-                                         "width" => if let PropertyValue::Number(n) = val { *width = n.0; },
-                                         "cap" => if let PropertyValue::String(s) = val {
-                                             *cap = match s.as_str() {
-                                                 "Square" => CapType::Square,
-                                                 "Butt" => CapType::Butt,
-                                                 _ => CapType::Round,
-                                             };
-                                         },
-                                         "join" => if let PropertyValue::String(s) = val {
-                                             *join = match s.as_str() {
-                                                 "Bevel" => JoinType::Bevel,
-                                                 "Miter" => JoinType::Miter,
-                                                 _ => JoinType::Round,
-                                             };
-                                         },
-                                         "miter" => if let PropertyValue::Number(n) = val { *miter = n.0; },
-                                         "dash_offset" => if let PropertyValue::Number(n) = val { *dash_offset = n.0; },
-                                         "dash_array" => if let PropertyValue::String(s) = val {
-                                             *dash_array = s.split_whitespace().filter_map(|x| x.parse().ok()).collect();
-                                         },
-                                         _ => {}
-                                     }
-                                 }
-                            },
-                            |_| committed = true,
-                            &PropertyRenderContext { available_fonts: &[], in_grid: true } 
+                            |_| None,
+                            &PropertyRenderContext { available_fonts: &[], in_grid: true, current_time } 
                         );
+
+                        for action in actions {
+                            match action {
+                                crate::ui::panels::inspector::properties::PropertyAction::Update(name, val) => {
+                                     match &mut item.style {
+                                         DrawStyle::Fill { color, expand } => match name.as_str() {
+                                             "color" => if let PropertyValue::Color(c) = val { *color = c; },
+                                             "expand" => if let PropertyValue::Number(n) = val { *expand = n.0; },
+                                             _ => {}
+                                         },
+                                         DrawStyle::Stroke { color, width, cap, join, miter, dash_array, dash_offset } => match name.as_str() {
+                                             "color" => if let PropertyValue::Color(c) = val { *color = c; },
+                                             "width" => if let PropertyValue::Number(n) = val { *width = n.0; },
+                                             "cap" => if let PropertyValue::String(s) = val {
+                                                 *cap = match s.as_str() {
+                                                     "Square" => CapType::Square,
+                                                     "Butt" => CapType::Butt,
+                                                     _ => CapType::Round,
+                                                 };
+                                             },
+                                             "join" => if let PropertyValue::String(s) = val {
+                                                 *join = match s.as_str() {
+                                                     "Bevel" => JoinType::Bevel,
+                                                     "Miter" => JoinType::Miter,
+                                                     _ => JoinType::Round,
+                                                 };
+                                             },
+                                             "miter" => if let PropertyValue::Number(n) = val { *miter = n.0; },
+                                             "dash_offset" => if let PropertyValue::Number(n) = val { *dash_offset = n.0; },
+                                             "dash_array" => if let PropertyValue::String(s) = val {
+                                                 *dash_array = s.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+                                             },
+                                             _ => {}
+                                         }
+                                     }
+                                },
+                                crate::ui::panels::inspector::properties::PropertyAction::Commit(_) => {
+                                    committed = true;
+                                },
+                                _ => {}
+                            }
+                        }
                     });
             });
         }

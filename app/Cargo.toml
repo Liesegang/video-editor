@@ -34,3 +34,12 @@ egui_dnd = "0.14.0"
 # web:
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4.50"
+
+[package.metadata.bundle]
+name = "My Video Editor App"
+identifier = "me.liesegang.videoeditorapp"
+icon = ["assets/icon_32x32.png", "assets/icon_128x128.png"]
+version = "0.1.0"
+copyright = "Copyright (c) 2025 Liesegang"
+category = "Productivity"
+short_description = "A video production software."

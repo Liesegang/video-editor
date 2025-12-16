@@ -167,22 +167,34 @@ pub fn inspector_panel(
                             egui::Grid::new(format!("cat_{}_{}", category, chunk_idx))
                                 .striped(true)
                                 .show(ui, |ui| {
-                                    render_property_rows(
+                                    let actions = render_property_rows(
                                         ui,
                                         &chunk.defs,
-                                            |name| properties.get_constant_value(name).cloned(),
-                                        |name, value| {
-                                            project_service.update_property_or_keyframe(
-                                                comp_id, track_id, selected_entity_id, name, current_time, value, None
-                                            ).ok();
-                                            needs_refresh = true;
-                                        },
-                                        |_| {
-                                            let current_state = project_service.get_project().read().unwrap().clone();
-                                            history_manager.push_project_state(current_state);
-                                        },
-                                        &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true }
+                                        |name| properties.get_constant_value(name).cloned(),
+                                        |name| properties.get(name).cloned(),
+                                        &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true, current_time }
                                     );
+
+                                    for action in actions {
+                                        match action {
+                                            crate::ui::panels::inspector::properties::PropertyAction::Update(name, val) => {
+                                                project_service.update_property_or_keyframe(
+                                                    comp_id, track_id, selected_entity_id, &name, current_time, val, None
+                                                ).ok();
+                                                needs_refresh = true;
+                                            }
+                                            crate::ui::panels::inspector::properties::PropertyAction::Commit(_) => {
+                                                let current_state = project_service.get_project().read().unwrap().clone();
+                                                history_manager.push_project_state(current_state);
+                                            }
+                                            crate::ui::panels::inspector::properties::PropertyAction::ToggleKeyframe(name, val) => {
+                                                project_service.add_keyframe(
+                                                    comp_id, track_id, selected_entity_id, &name, current_time, val, None
+                                                ).ok();
+                                                needs_refresh = true;
+                                            }
+                                        }
+                                    }
                                 });
                         } else {
                             // Full Width Render
@@ -206,22 +218,33 @@ pub fn inspector_panel(
                                     }
                                     _ => {
                                         ui.add_space(5.0);
-                                         render_property_rows(
+                                        let actions = render_property_rows(
                                             ui,
                                             std::slice::from_ref(def),
-                                                |name| properties.get_constant_value(name).cloned(),
-                                            |name, value| {
-                                                project_service.update_property_or_keyframe(
-                                                    comp_id, track_id, selected_entity_id, name, current_time, value, None
-                                                ).ok();
-                                                needs_refresh = true;
-                                            },
-                                            |_| {
-                                                let current_state = project_service.get_project().read().unwrap().clone();
-                                                history_manager.push_project_state(current_state);
-                                            },
-                                            &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: false }
+                                            |name| properties.get_constant_value(name).cloned(),
+                                            |name| properties.get(name).cloned(),
+                                            &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: false, current_time }
                                         );
+                                         for action in actions {
+                                            match action {
+                                                crate::ui::panels::inspector::properties::PropertyAction::Update(name, val) => {
+                                                    project_service.update_property_or_keyframe(
+                                                        comp_id, track_id, selected_entity_id, &name, current_time, val, None
+                                                    ).ok();
+                                                    needs_refresh = true;
+                                                }
+                                                crate::ui::panels::inspector::properties::PropertyAction::Commit(_) => {
+                                                    let current_state = project_service.get_project().read().unwrap().clone();
+                                                    history_manager.push_project_state(current_state);
+                                                }
+                                                crate::ui::panels::inspector::properties::PropertyAction::ToggleKeyframe(name, val) => {
+                                                    project_service.add_keyframe(
+                                                        comp_id, track_id, selected_entity_id, &name, current_time, val, None
+                                                    ).ok();
+                                                    needs_refresh = true;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
