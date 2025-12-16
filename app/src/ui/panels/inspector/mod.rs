@@ -1,23 +1,23 @@
-use egui::{Ui, Id};
+use egui::{Id, Ui};
 
 use library::model::project::project::Project;
 use library::model::project::property::PropertyValue;
 
-use std::sync::{Arc, RwLock};
 use library::service::project_service::ProjectService;
+use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 use uuid::Uuid;
 
 use library::plugin::PropertyUiType;
 
+pub mod effects;
 pub mod properties;
 pub mod styles;
-pub mod effects;
 
+use effects::render_effects_section;
 use properties::{render_property_rows, PropertyRenderContext};
 use styles::render_styles_property;
-use effects::render_effects_section;
 
 pub fn inspector_panel(
     ui: &mut Ui,
@@ -223,9 +223,13 @@ pub fn inspector_panel(
                                             std::slice::from_ref(def),
                                             |name| properties.get_constant_value(name).cloned(),
                                             |name| properties.get(name).cloned(),
-                                            &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: false, current_time }
+                                            &PropertyRenderContext {
+                                                available_fonts: &editor_context.available_fonts,
+                                                in_grid: false,
+                                                current_time,
+                                            },
                                         );
-                                         for action in actions {
+                                        for action in actions {
                                             match action {
                                                 crate::ui::panels::inspector::properties::PropertyAction::Update(name, val) => {
                                                     project_service.update_property_or_keyframe(
@@ -252,7 +256,7 @@ pub fn inspector_panel(
                     }
                 }
             }
-            
+
             // --- Effects Section ---
             render_effects_section(
                 ui,
@@ -263,9 +267,8 @@ pub fn inspector_panel(
                 track_id,
                 selected_entity_id,
                 current_time,
-                &mut needs_refresh
+                &mut needs_refresh,
             );
-
 
             ui.add_space(10.0);
             ui.heading("Timing");
@@ -277,14 +280,24 @@ pub fn inspector_panel(
                     // In Frame
                     ui.label("In Frame");
                     let mut current_in_frame_f32 = in_frame as f32;
-                    let response = ui.add(egui::DragValue::new(&mut current_in_frame_f32).speed(1.0).suffix("fr"));
+                    let response = ui.add(
+                        egui::DragValue::new(&mut current_in_frame_f32)
+                            .speed(1.0)
+                            .suffix("fr"),
+                    );
                     if response.changed() {
-                         project_service.update_clip_time(
-                            comp_id, track_id, selected_entity_id, current_in_frame_f32 as u64, out_frame
-                         ).ok();
-                         needs_refresh = true;
+                        project_service
+                            .update_clip_time(
+                                comp_id,
+                                track_id,
+                                selected_entity_id,
+                                current_in_frame_f32 as u64,
+                                out_frame,
+                            )
+                            .ok();
+                        needs_refresh = true;
                     }
-                     if response.drag_stopped() || response.lost_focus() {
+                    if response.drag_stopped() || response.lost_focus() {
                         let current_state = project.read().unwrap().clone();
                         history_manager.push_project_state(current_state);
                     }
@@ -293,14 +306,24 @@ pub fn inspector_panel(
                     // Out Frame
                     ui.label("Out Frame");
                     let mut current_out_frame_f32 = out_frame as f32;
-                    let response = ui.add(egui::DragValue::new(&mut current_out_frame_f32).speed(1.0).suffix("fr"));
+                    let response = ui.add(
+                        egui::DragValue::new(&mut current_out_frame_f32)
+                            .speed(1.0)
+                            .suffix("fr"),
+                    );
                     if response.changed() {
-                         project_service.update_clip_time(
-                            comp_id, track_id, selected_entity_id, in_frame, current_out_frame_f32 as u64
-                         ).ok();
-                         needs_refresh = true;
+                        project_service
+                            .update_clip_time(
+                                comp_id,
+                                track_id,
+                                selected_entity_id,
+                                in_frame,
+                                current_out_frame_f32 as u64,
+                            )
+                            .ok();
+                        needs_refresh = true;
                     }
-                     if response.drag_stopped() || response.lost_focus() {
+                    if response.drag_stopped() || response.lost_focus() {
                         let current_state = project.read().unwrap().clone();
                         history_manager.push_project_state(current_state);
                     }
@@ -309,14 +332,24 @@ pub fn inspector_panel(
                     // Source Begin Frame
                     ui.label("Source Begin Frame");
                     let mut current_source_begin_frame_f32 = source_begin_frame as f32;
-                    let response = ui.add(egui::DragValue::new(&mut current_source_begin_frame_f32).speed(1.0).suffix("fr"));
+                    let response = ui.add(
+                        egui::DragValue::new(&mut current_source_begin_frame_f32)
+                            .speed(1.0)
+                            .suffix("fr"),
+                    );
                     if response.changed() {
-                         project_service.update_clip_source_frames(
-                            comp_id, track_id, selected_entity_id, current_source_begin_frame_f32 as u64, duration_frame
-                         ).ok();
-                         needs_refresh = true;
+                        project_service
+                            .update_clip_source_frames(
+                                comp_id,
+                                track_id,
+                                selected_entity_id,
+                                current_source_begin_frame_f32 as u64,
+                                duration_frame,
+                            )
+                            .ok();
+                        needs_refresh = true;
                     }
-                     if response.drag_stopped() || response.lost_focus() {
+                    if response.drag_stopped() || response.lost_focus() {
                         let current_state = project.read().unwrap().clone();
                         history_manager.push_project_state(current_state);
                     }

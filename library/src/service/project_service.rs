@@ -1591,52 +1591,52 @@ impl ProjectService {
                     label: "Styles".to_string(),
                     ui_type: PropertyUiType::Styles,
                     default_value: {
-        // Styles: Fill Red (#FF0000), Stroke White (#FFFFFF, width 2.0)
-        let styles = vec![
-            crate::model::frame::draw_type::DrawStyle::Fill {
-                color: crate::model::frame::color::Color {
-                    r: 255,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                },
-                offset: 0.0,
-            },
-            crate::model::frame::draw_type::DrawStyle::Stroke {
-                color: crate::model::frame::color::Color {
-                    r: 255,
-                    g: 255,
-                    b: 255,
-                    a: 255,
-                },
-                width: 5.0,
-                cap: Default::default(),
-                join: Default::default(),
-                miter: 4.0,
-                dash_array: Vec::new(),
-                dash_offset: 0.0,
-                offset: 0.0,
-            },
-        ];
-        let style_configs: Vec<crate::model::frame::entity::StyleConfig> = styles
-            .into_iter()
-            .map(|style| crate::model::frame::entity::StyleConfig {
-                id: Uuid::new_v4(),
-                style,
-            })
-            .collect();
+                        // Styles: Fill Red (#FF0000), Stroke White (#FFFFFF, width 2.0)
+                        let styles = vec![
+                            crate::model::frame::draw_type::DrawStyle::Fill {
+                                color: crate::model::frame::color::Color {
+                                    r: 255,
+                                    g: 0,
+                                    b: 0,
+                                    a: 255,
+                                },
+                                offset: 0.0,
+                            },
+                            crate::model::frame::draw_type::DrawStyle::Stroke {
+                                color: crate::model::frame::color::Color {
+                                    r: 255,
+                                    g: 255,
+                                    b: 255,
+                                    a: 255,
+                                },
+                                width: 5.0,
+                                cap: Default::default(),
+                                join: Default::default(),
+                                miter: 4.0,
+                                dash_array: Vec::new(),
+                                dash_offset: 0.0,
+                                offset: 0.0,
+                            },
+                        ];
+                        let style_configs: Vec<crate::model::frame::entity::StyleConfig> = styles
+                            .into_iter()
+                            .map(|style| crate::model::frame::entity::StyleConfig {
+                                id: Uuid::new_v4(),
+                                style,
+                            })
+                            .collect();
 
-        let style_json_array: Vec<serde_json::Value> = style_configs
-            .into_iter()
-            .map(|config| serde_json::to_value(config).unwrap())
-            .collect();
+                        let style_json_array: Vec<serde_json::Value> = style_configs
+                            .into_iter()
+                            .map(|config| serde_json::to_value(config).unwrap())
+                            .collect();
 
-        PropertyValue::Array(
-            style_json_array
-                .into_iter()
-                .map(PropertyValue::from)
-                .collect(),
-        )
+                        PropertyValue::Array(
+                            style_json_array
+                                .into_iter()
+                                .map(PropertyValue::from)
+                                .collect(),
+                        )
                     },
                     category: "Styles".to_string(),
                 },

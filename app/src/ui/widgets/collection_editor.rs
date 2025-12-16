@@ -25,30 +25,29 @@ where
         ui: &mut Ui,
         mut add_ui_impl: add_ui,
         mut item_ui_impl: item_ui,
-    )
-    where
+    ) where
         add_ui: FnMut(&mut Ui, &mut Vec<T>),
         item_ui: FnMut(&mut Ui, usize, &mut T) -> Option<bool>, // Returns Some(true) to delete
     {
         let id = self.id_salt;
         let header_name = self.header_name;
-        
+
         CollapsingHeader::new(&header_name)
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     add_ui_impl(ui, self.items);
                 });
-                
+
                 ui.add_space(4.0);
 
                 let mut delete_index = None;
                 ReorderableList::new(id, self.items).show(ui, |ui, index, item, handle| {
-                     ui.horizontal(|ui| {
+                    ui.horizontal(|ui| {
                         handle.ui(ui, |ui| {
                             ui.label("::");
                         });
-                        
+
                         // Render Item
                         // If item renderer returns Some(true), mark for deletion
                         if let Some(should_delete) = item_ui_impl(ui, index, item) {

@@ -514,10 +514,13 @@ impl PluginManager {
 
     pub fn get_effect_definition(&self, effect_id: &str) -> Option<EffectDefinition> {
         let inner = self.inner.read().unwrap();
-        inner.effect_plugins.get(effect_id).map(|plugin| EffectDefinition {
-            label: plugin.name(),
-            properties: plugin.properties(),
-        })
+        inner
+            .effect_plugins
+            .get(effect_id)
+            .map(|plugin| EffectDefinition {
+                label: plugin.name(),
+                properties: plugin.properties(),
+            })
     }
 
     pub fn load_resource(
