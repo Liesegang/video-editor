@@ -185,6 +185,16 @@ pub struct InteractionState {
     // Text Editing State
     pub editing_text_entity_id: Option<uuid::Uuid>,
     pub text_edit_buffer: String,
+
+    // Import Reporting
+    pub import_report: Option<ImportReport>,
+}
+
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+pub struct ImportReport {
+    pub successful_count: usize,
+    pub duplicates: Vec<String>,
+    pub errors: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Default)]

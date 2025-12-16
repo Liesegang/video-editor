@@ -79,25 +79,138 @@ pub fn assets_panel(
             ui.spacing_mut().item_spacing.x = 4.0; // Tighter spacing for toolbar
 
             // Add Asset Button
+            // Add Asset Button (Files)
             if ui
                 .add(egui::Button::new(
                     egui::RichText::new(icons::FILE_PLUS).size(18.0),
                 ))
-                .on_hover_text("Import Asset")
+                .on_hover_text("Import Assets (Files)")
                 .clicked()
             {
-                if let Some(path) = rfd::FileDialog::new().pick_file() {
-                    let path_str = path.to_string_lossy().to_string();
-                    match project_service.import_file(&path_str) {
-                        Ok(_) => {
-                            let current_state =
-                                project_service.get_project().read().unwrap().clone();
-                            history_manager.push_project_state(current_state);
-                            needs_refresh = true;
+                if let Some(paths) = rfd::FileDialog::new().pick_files() {
+                    let mut imported_any = false;
+                    let mut report = crate::state::context_types::ImportReport::default();
+
+                    for path in paths {
+                        let path_str = path.to_string_lossy().to_string();
+
+                        // 1. Check Duplicates
+                        if project_service.has_asset_with_path(&path_str) {
+                            report.duplicates.push(
+                                path.file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string(),
+                            );
+                            continue;
                         }
-                        Err(e) => {
-                            log::error!("Failed to import asset: {}", e);
+
+                        // 2. Try Import
+                        match project_service.import_file(&path_str) {
+                            Ok(_) => {
+                                imported_any = true;
+                                report.successful_count += 1;
+                            }
+                            Err(e) => {
+                                report.errors.push((
+                                    path.file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                        .to_string(),
+                                    e.to_string(),
+                                ));
+                                log::error!("Failed to import asset {}: {}", path_str, e)
+                            }
                         }
+                    }
+
+                    if imported_any {
+                        let current_state = project_service.get_project().read().unwrap().clone();
+                        history_manager.push_project_state(current_state);
+                        needs_refresh = true;
+                    }
+
+                    if !report.duplicates.is_empty() || !report.errors.is_empty() {
+                        editor_context.interaction.import_report = Some(report);
+                    }
+                }
+            }
+
+            // Import Folder Button
+            if ui
+                .add(egui::Button::new(
+                    egui::RichText::new(icons::FOLDER_PLUS).size(18.0),
+                ))
+                .on_hover_text("Import Folder (Recursive)")
+                .clicked()
+            {
+                if let Some(folder_path) = rfd::FileDialog::new().pick_folder() {
+                    let mut imported_any = false;
+                    let mut report = crate::state::context_types::ImportReport::default();
+
+                    // Recursive directory scanner helper
+                    fn visit_dirs(
+                        dir: &std::path::Path,
+                        cb: &mut dyn FnMut(&std::path::Path),
+                    ) -> std::io::Result<()> {
+                        if dir.is_dir() {
+                            for entry in std::fs::read_dir(dir)? {
+                                let entry = entry?;
+                                let path = entry.path();
+                                if path.is_dir() {
+                                    visit_dirs(&path, cb)?;
+                                } else {
+                                    cb(&path);
+                                }
+                            }
+                        }
+                        Ok(())
+                    }
+
+                    let _ = visit_dirs(&folder_path, &mut |path| {
+                        let path_str = path.to_string_lossy().to_string();
+
+                        // 1. Check Duplicates
+                        if project_service.has_asset_with_path(&path_str) {
+                            report.duplicates.push(
+                                path.file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string(),
+                            );
+                            return;
+                        }
+
+                        // 2. Try Import
+                        match project_service.import_file(&path_str) {
+                            Ok(_) => {
+                                imported_any = true;
+                                report.successful_count += 1;
+                            }
+                            Err(e) => {
+                                // Only log errors for supported file types to avoid spamming "unknown format" for random files
+                                // However, import_file currently returns error for unsupported types.
+                                // We can just format the error.
+                                // Filter out "unsupported" if desired, but user might want to know.
+                                report.errors.push((
+                                    path.file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                        .to_string(),
+                                    e.to_string(),
+                                ));
+                            }
+                        }
+                    });
+
+                    if imported_any {
+                        let current_state = project_service.get_project().read().unwrap().clone();
+                        history_manager.push_project_state(current_state);
+                        needs_refresh = true;
+                    }
+
+                    if !report.duplicates.is_empty() || !report.errors.is_empty() {
+                        editor_context.interaction.import_report = Some(report);
                     }
                 }
             }
@@ -471,6 +584,59 @@ pub fn assets_panel(
                     }
                 });
             });
+    }
+
+    // Import Report Modal
+    if let Some(report) = &editor_context.interaction.import_report {
+        let mut open = true;
+        let mut should_close = false;
+
+        egui::Window::new("Import Result")
+            .collapsible(false)
+            .resizable(true)
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ui.ctx(), |ui| {
+                ui.label(format!(
+                    "Successfully imported {} assets.",
+                    report.successful_count
+                ));
+
+                if !report.duplicates.is_empty() {
+                    ui.add_space(5.0);
+                    ui.heading(
+                        egui::RichText::new("Duplicates (Skipped)").color(egui::Color32::YELLOW),
+                    );
+                    egui::ScrollArea::vertical()
+                        .max_height(100.0)
+                        .show(ui, |ui| {
+                            for dup in &report.duplicates {
+                                ui.label(format!("• {}", dup));
+                            }
+                        });
+                }
+
+                if !report.errors.is_empty() {
+                    ui.add_space(5.0);
+                    ui.heading(egui::RichText::new("Errors").color(egui::Color32::RED));
+                    egui::ScrollArea::vertical()
+                        .max_height(100.0)
+                        .show(ui, |ui| {
+                            for (file, err) in &report.errors {
+                                ui.label(format!("• {}: {}", file, err));
+                            }
+                        });
+                }
+
+                ui.add_space(10.0);
+                if ui.button("OK").clicked() {
+                    should_close = true;
+                }
+            });
+
+        if !open || should_close {
+            editor_context.interaction.import_report = None;
+        }
     }
 
     if needs_refresh {
