@@ -34,13 +34,15 @@ pub enum DrawStyle {
     Fill {
         color: Color,
         #[serde(default)]
-        expand: f64,
+        offset: f64,
     },
     Stroke {
         #[serde(default)]
         color: Color,
         #[serde(default)]
         width: f64,
+        #[serde(default)]
+        offset: f64,
         #[serde(default)]
         cap: CapType,
         #[serde(default)]
@@ -58,13 +60,14 @@ impl Hash for DrawStyle {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
         match self {
-            DrawStyle::Fill { color, expand } => {
+            DrawStyle::Fill { color, offset } => {
                 color.hash(state);
-                OrderedFloat(*expand).hash(state);
+                OrderedFloat(*offset).hash(state);
             }
             DrawStyle::Stroke {
                 color,
                 width,
+                offset,
                 cap,
                 join,
                 miter,
@@ -73,6 +76,7 @@ impl Hash for DrawStyle {
             } => {
                 color.hash(state);
                 OrderedFloat(*width).hash(state);
+                OrderedFloat(*offset).hash(state);
                 cap.hash(state);
                 join.hash(state);
                 OrderedFloat(*miter).hash(state);
@@ -95,7 +99,7 @@ impl Default for DrawStyle {
                 b: 255,
                 a: 255,
             },
-            expand: 0.0,
+            offset: 0.0,
         }
     }
 }
@@ -107,6 +111,7 @@ impl PartialEq for DrawStyle {
                 DrawStyle::Stroke {
                     width: w1,
                     color: c1,
+                    offset: o1,
                     join: j1,
                     cap: cp1,
                     miter: m1,
@@ -116,6 +121,7 @@ impl PartialEq for DrawStyle {
                 DrawStyle::Stroke {
                     width: w2,
                     color: c2,
+                    offset: o2,
                     join: j2,
                     cap: cp2,
                     miter: m2,
@@ -125,6 +131,7 @@ impl PartialEq for DrawStyle {
             ) => {
                 OrderedFloat(*w1) == OrderedFloat(*w2)
                     && c1 == c2
+                    && OrderedFloat(*o1) == OrderedFloat(*o2)
                     && j1 == j2
                     && cp1 == cp2
                     && OrderedFloat(*m1) == OrderedFloat(*m2)
@@ -138,11 +145,11 @@ impl PartialEq for DrawStyle {
             (
                 DrawStyle::Fill {
                     color: c1,
-                    expand: e1,
+                    offset: e1,
                 },
                 DrawStyle::Fill {
                     color: c2,
-                    expand: e2,
+                    offset: e2,
                 },
             ) => c1 == c2 && OrderedFloat(*e1) == OrderedFloat(*e2),
             _ => false,

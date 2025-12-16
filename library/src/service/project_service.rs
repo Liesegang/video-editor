@@ -1545,7 +1545,7 @@ impl ProjectService {
                                 b: 255,
                                 a: 255,
                             },
-                            expand: 0.0,
+                            offset: 0.0,
                         };
                         let config = crate::model::frame::entity::StyleConfig {
                             id: Uuid::new_v4(),
@@ -1600,7 +1600,7 @@ impl ProjectService {
                     b: 0,
                     a: 255,
                 },
-                expand: 0.0,
+                offset: 0.0,
             },
             crate::model::frame::draw_type::DrawStyle::Stroke {
                 color: crate::model::frame::color::Color {
@@ -1615,6 +1615,7 @@ impl ProjectService {
                 miter: 4.0,
                 dash_array: Vec::new(),
                 dash_offset: 0.0,
+                offset: 0.0,
             },
         ];
         let style_configs: Vec<crate::model::frame::entity::StyleConfig> = styles

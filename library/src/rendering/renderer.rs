@@ -57,4 +57,6 @@ pub trait Renderer {
     fn get_gpu_context(&mut self) -> Option<&mut crate::rendering::skia_utils::GpuContext> {
         None
     }
+    
+    fn set_sharing_context(&mut self, _handle: usize) {}
 }

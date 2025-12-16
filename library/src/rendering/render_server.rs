@@ -22,11 +22,13 @@ pub struct RenderServer {
 
 enum RenderRequest {
     Render(FrameInfo),
+    SetSharingContext(usize),
     #[allow(dead_code)]
     Shutdown,
 }
 
 use crate::rendering::renderer::RenderOutput;
+use crate::rendering::renderer::Renderer;
 
 pub struct RenderResult {
     pub frame_hash: u64,
@@ -81,8 +83,45 @@ impl RenderServer {
                             req = RenderRequest::Shutdown;
                             break;
                         }
+                        RenderRequest::SetSharingContext(handle) => {
+                             render_service.renderer.set_sharing_context(handle);
+                             // We handled it immediately. 
+                             // We do NOT update `req` because `req` might be a pending Render request we still want to process.
+                             // If `req` was also SetSharing, it's fine, we processed it (or will process it if we don't handle `req` variants differently).
+                             // Actually, if `req` matches variants in the main loop, we should check `req`'s type.
+                             // But simplify: just apply sharing here.
+                             // NOTE: If `req` was SetSharingContext(old_handle), and we just set(new_handle), then `req` is outdated.
+                             // But executing `req` (SetSharing) again with old handle is bad.
+                             // So if `req` is SetSharing, we shound discard/update it?
+                             if let RenderRequest::SetSharingContext(_) = req {
+                                 // req is an old sharing request, superseded or just done. 
+                                 // Since we processed next_req (new handle), we should drop old req?
+                                 // But what if `req` was Render? We keep it.
+                                 // So:
+                                 // If req is SetSharing, update it to something innocuous? Or just let it run?
+                                 // Running SetSharing(old) after SetSharing(new) reverts the change!
+                                 // So we MUST NOT let `req` run if it is an old SetSharing.
+                                 // We can update `req` to `SetSharingContext(handle)` (the new one)?
+                                 // Then main loop runs it again? That's wasteful but safe-ish (idempotent check inside).
+                                 req = RenderRequest::SetSharingContext(handle);
+                             }
+                        }
                         RenderRequest::Render(_) => {
-                            req = next_req;
+                            // New render request.
+                            if let RenderRequest::SetSharingContext(h) = req {
+                                 // Previous `req` was sharing. We MUST execute it before switching to new Render.
+                                 // But we can't execute it here easily without potentially executing it TWICE if `SetSharingContext` case above also ran?
+                                 // Wait, `SetSharingContext` case only runs if `next_req` is SetSharing.
+                                 // Here `next_req` is Render.
+                                 // `req` is SetSharing.
+                                 // So `SetSharing` is pending.
+                                 // We should apply it now?
+                                 render_service.renderer.set_sharing_context(h);
+                                 req = next_req; // Now we can switch to new Render.
+                            } else {
+                                // req was Render or Shutdown.
+                                req = next_req;
+                            }
                         }
                     }
                 }
@@ -152,6 +191,14 @@ impl RenderServer {
                             }
                         }
                     }
+                    RenderRequest::SetSharingContext(handle) => {
+                         // Need to update renderer's sharing context
+                         // But RenderService holds the renderer.
+                         // Does RenderService expose mut access to renderer?
+                         // Assuming yes, or we need to add a method to RenderService.
+                         // Actually RenderService struct definition usually has `pub renderer: R`.
+                         render_service.renderer.set_sharing_context(handle);
+                    }
                     RenderRequest::Shutdown => break,
                 }
             }
@@ -170,5 +217,9 @@ impl RenderServer {
 
     pub fn poll_result(&self) -> Result<RenderResult, TryRecvError> {
         self.rx_result.try_recv()
+    }
+
+    pub fn set_sharing_context(&self, handle: usize) {
+        let _ = self.tx.send(RenderRequest::SetSharingContext(handle));
     }
 }
