@@ -189,6 +189,10 @@ pub fn handle_command(
                     log::error!("Failed to play audio: {}", e);
                 }
             } else {
+                // Flush the buffer immediately to stop sound
+                context
+                    .project_service
+                    .reset_audio_pump(context.editor_context.timeline.current_time as f64);
                 if let Err(e) = context.project_service.audio_engine.pause() {
                     log::error!("Failed to pause audio: {}", e);
                 }

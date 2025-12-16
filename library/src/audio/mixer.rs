@@ -50,14 +50,21 @@ pub fn mix_samples(
                             let source_start_sample =
                                 (source_start_time * sample_rate as f64).round() as usize;
 
-                            for i in 0..render_len_samples {
-                                let buf_idx = (render_offset_samples + i) * channels as usize;
-                                let src_idx = (source_start_sample + i) * channels as usize;
+                            // Optimized mixing loop using iterators/slices
+                            let channels_usize = channels as usize;
+                            let dest_start = render_offset_samples * channels_usize;
+                            let len = render_len_samples * channels_usize;
+                            let src_start = source_start_sample * channels_usize;
 
-                                if buf_idx + 1 < mix_buffer.len() && src_idx + 1 < audio_data.len()
-                                {
-                                    mix_buffer[buf_idx] += audio_data[src_idx];
-                                    mix_buffer[buf_idx + 1] += audio_data[src_idx + 1];
+                            // Bounds check once
+                            if dest_start + len <= mix_buffer.len()
+                                && src_start + len <= audio_data.len()
+                            {
+                                let dest_slice = &mut mix_buffer[dest_start..dest_start + len];
+                                let src_slice = &audio_data[src_start..src_start + len];
+
+                                for (d, s) in dest_slice.iter_mut().zip(src_slice.iter()) {
+                                    *d += s;
                                 }
                             }
                         }
