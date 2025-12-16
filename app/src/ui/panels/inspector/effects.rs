@@ -26,37 +26,26 @@ pub fn render_effects_section(
 
     ui.menu_button("Add Effect", |ui| {
         let available_effects = project_service.get_plugin_manager().get_available_effects();
+        let items: Vec<(String, Option<String>, String)> = available_effects.into_iter()
+            .map(|(id, name, category)| (name, Some(category), id))
+            .collect();
 
-        // Group by category
-        let mut grouped_effects: std::collections::BTreeMap<
-            String,
-            Vec<(String, String)>,
-        > = std::collections::BTreeMap::new();
-        for (id, name, category) in available_effects {
-            grouped_effects
-                .entry(category)
-                .or_default()
-                .push((id, name));
-        }
-
-        for (category, effects) in grouped_effects {
-            ui.menu_button(&category, |ui| {
-                for (effect_id, effect_name) in effects {
-                    if ui.button(&effect_name).clicked() {
-                        project_service
-                            .add_effect_to_clip(
-                                comp_id,
-                                track_id,
-                                selected_entity_id,
-                                &effect_id,
-                            )
-                            .ok();
-                        ui.close();
-                        *needs_refresh = true;
-                    }
-                }
-            });
-        }
+        crate::ui::widgets::searchable_context_menu::show_searchable_menu(
+            ui,
+            "add_effect_menu",
+            &items,
+            |effect_id| {
+                project_service
+                    .add_effect_to_clip(
+                        comp_id,
+                        track_id,
+                        selected_entity_id,
+                        &effect_id,
+                    )
+                    .ok();
+                *needs_refresh = true;
+            }
+        );
     });
 
     let track_clip_ref = project_service
@@ -109,29 +98,34 @@ pub fn render_effects_section(
                     egui::Grid::new(format!("effect_grid_{}", effect.id))
                         .striped(true)
                         .show(ui, |ui| {
-                            render_property_rows(
+                            let actions = render_property_rows(
                                 ui,
                                 &defs,
                                 |name| effect.properties.get_constant_value(name).cloned(),
-                                |name, value| {
-                                    project_service.update_effect_property_or_keyframe(
-                                        comp_id,
-                                        track_id,
-                                        selected_entity_id,
-                                        effect_index,
-                                        name,
-                                        current_time,
-                                        value,
-                                        None,
-                                    ).ok();
-                                    *needs_refresh = true;
-                                },
-                                |_| {
-                                     let current_state = project_service.get_project().read().unwrap().clone();
-                                     history_manager.push_project_state(current_state);
-                                },
-                                &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true }
+                                |name| effect.properties.get(name).cloned(),
+                                &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true, current_time }
                             );
+
+                            for action in actions {
+                                match action {
+                                    crate::ui::panels::inspector::properties::PropertyAction::Update(name, val) => {
+                                        project_service.update_effect_property_or_keyframe(
+                                             comp_id, track_id, selected_entity_id, effect_index, &name, current_time, val, None
+                                        ).ok();
+                                        *needs_refresh = true;
+                                    }
+                                    crate::ui::panels::inspector::properties::PropertyAction::Commit(_) => {
+                                         let current_state = project_service.get_project().read().unwrap().clone();
+                                         history_manager.push_project_state(current_state);
+                                    }
+                                    crate::ui::panels::inspector::properties::PropertyAction::ToggleKeyframe(name, val) => {
+                                         project_service.add_effect_keyframe(
+                                             comp_id, track_id, selected_entity_id, effect_index, &name, current_time, val, None
+                                         ).ok();
+                                         *needs_refresh = true;
+                                    }
+                                }
+                            }
                         });
             });
         });
