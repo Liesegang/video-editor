@@ -70,48 +70,48 @@ pub fn render_styles_property(
     };
     let property = properties.get(property_name); // Option<&Property>
 
+    let mut needs_upgrade = false;
+
     let mut styles: Vec<StyleConfig> = if let Some(prop) = property {
         let val = evaluator_registry.evaluate(prop, current_time, &ctx);
         if let PropertyValue::Array(arr) = val {
-            arr.into_iter()
-                .filter_map(|v| {
-                    let json: serde_json::Value = (&v).into();
-                    // Deserialize StyleConfig. Fallback to DrawStyle handled here if needed?
-                    // ProjectService now saves StyleConfig. Legacy data might fail.
-                    // Converting legacy DrawStyle:
-                    if let Ok(config) = serde_json::from_value::<StyleConfig>(json.clone()) {
-                        Some(config)
-                    } else if let Ok(style) = serde_json::from_value::<DrawStyle>(json) {
-                        Some(StyleConfig {
-                            id: Uuid::new_v4(),
-                            style,
-                        })
-                    } else {
-                        None
-                    }
-                })
-                .collect()
+            let mut extracted = Vec::new();
+            for v in arr {
+                let json: serde_json::Value = (&v).into();
+                if let Ok(config) = serde_json::from_value::<StyleConfig>(json.clone()) {
+                    extracted.push(config);
+                } else if let Ok(style) = serde_json::from_value::<DrawStyle>(json) {
+                    // Legacy DrawStyle found, upgrade it
+                    extracted.push(StyleConfig {
+                        id: Uuid::new_v4(),
+                        style,
+                    });
+                    needs_upgrade = true;
+                }
+            }
+            extracted
         } else {
             vec![]
         }
     } else {
         match def.default_value.clone() {
-            PropertyValue::Array(arr) => arr
-                .into_iter()
-                .filter_map(|v| {
+            PropertyValue::Array(arr) => {
+                 let mut extracted = Vec::new();
+                 for v in arr {
                     let json: serde_json::Value = (&v).into();
                     if let Ok(config) = serde_json::from_value::<StyleConfig>(json.clone()) {
-                        Some(config)
+                        extracted.push(config);
                     } else if let Ok(style) = serde_json::from_value::<DrawStyle>(json) {
-                        Some(StyleConfig {
+                         // Legacy DrawStyle found in default value, upgrade it
+                        extracted.push(StyleConfig {
                             id: Uuid::new_v4(),
                             style,
-                        })
-                    } else {
-                        None
+                        });
+                        needs_upgrade = true;
                     }
-                })
-                .collect(),
+                 }
+                 extracted
+            },
             _ => vec![],
         }
     };
@@ -133,7 +133,7 @@ pub fn render_styles_property(
                         b: 255,
                         a: 255,
                     },
-                    expand: 0.0,
+                    offset: 0.0,
                 },
             }));
             committed = true;
@@ -149,6 +149,7 @@ pub fn render_styles_property(
                         a: 255,
                     },
                     width: 1.0,
+                    offset: 0.0,
                     cap: Default::default(),
                     join: Default::default(),
                     miter: 4.0,
@@ -180,9 +181,9 @@ pub fn render_styles_property(
                             category: "Style".to_string(),
                         },
                         PropertyDefinition {
-                            name: "expand".to_string(),
-                            label: "Expand".to_string(),
-                            ui_type: PropertyUiType::Float { min: 0.0, max: 1000.0, step: 0.1, suffix: "px".to_string() },
+                            name: "offset".to_string(),
+                            label: "Offset".to_string(),
+                            ui_type: PropertyUiType::Float { min: -1000.0, max: 1000.0, step: 0.1, suffix: "px".to_string() },
                             default_value: PropertyValue::Number(OrderedFloat(0.0)),
                             category: "Style".to_string(),
                         },
@@ -202,6 +203,13 @@ pub fn render_styles_property(
                             label: "Width".to_string(),
                             ui_type: PropertyUiType::Float { min: 0.0, max: 1000.0, step: 0.1, suffix: "px".to_string() },
                             default_value: PropertyValue::Number(OrderedFloat(1.0)),
+                            category: "Style".to_string(),
+                        },
+                        PropertyDefinition {
+                            name: "offset".to_string(),
+                            label: "Offset".to_string(),
+                            ui_type: PropertyUiType::Float { min: -1000.0, max: 1000.0, step: 0.1, suffix: "px".to_string() },
+                            default_value: PropertyValue::Number(OrderedFloat(0.0)),
                             category: "Style".to_string(),
                         },
                         PropertyDefinition {
@@ -268,14 +276,15 @@ pub fn render_styles_property(
                          let actions = render_property_rows(ui, &defs,
                             |name| {
                                  match &item_read.style {
-                                    DrawStyle::Fill { color, expand } => match name {
+                                    DrawStyle::Fill { color, offset } => match name {
                                         "color" => Some(PropertyValue::Color(color.clone())),
-                                        "expand" => Some(PropertyValue::Number(OrderedFloat(*expand))),
+                                        "offset" => Some(PropertyValue::Number(OrderedFloat(*offset))),
                                         _ => None,
                                     },
-                                    DrawStyle::Stroke { color, width, cap, join, miter, dash_array, dash_offset } => match name {
+                                    DrawStyle::Stroke { color, width, offset, cap, join, miter, dash_array, dash_offset } => match name {
                                         "color" => Some(PropertyValue::Color(color.clone())),
                                         "width" => Some(PropertyValue::Number(OrderedFloat(*width))),
+                                        "offset" => Some(PropertyValue::Number(OrderedFloat(*offset))),
                                         "cap" => Some(PropertyValue::String(format!("{:?}", cap))),
                                         "join" => Some(PropertyValue::String(format!("{:?}", join))),
                                         "miter" => Some(PropertyValue::Number(OrderedFloat(*miter))),
@@ -295,14 +304,15 @@ pub fn render_styles_property(
                             match action {
                                 crate::ui::panels::inspector::properties::PropertyAction::Update(name, val) => {
                                      match &mut item.style {
-                                         DrawStyle::Fill { color, expand } => match name.as_str() {
+                                         DrawStyle::Fill { color, offset } => match name.as_str() {
                                              "color" => if let PropertyValue::Color(c) = val { *color = c; },
-                                             "expand" => if let PropertyValue::Number(n) = val { *expand = n.0; },
+                                             "offset" => if let PropertyValue::Number(n) = val { *offset = n.0; },
                                              _ => {}
                                          },
-                                         DrawStyle::Stroke { color, width, cap, join, miter, dash_array, dash_offset } => match name.as_str() {
+                                         DrawStyle::Stroke { color, width, offset, cap, join, miter, dash_array, dash_offset } => match name.as_str() {
                                              "color" => if let PropertyValue::Color(c) = val { *color = c; },
                                              "width" => if let PropertyValue::Number(n) = val { *width = n.0; },
+                                             "offset" => if let PropertyValue::Number(n) = val { *offset = n.0; },
                                              "cap" => if let PropertyValue::String(s) = val {
                                                  *cap = match s.as_str() {
                                                      "Square" => CapType::Square,
@@ -344,7 +354,8 @@ pub fn render_styles_property(
 
     let styles: Vec<StyleConfig> = items.into_iter().map(|w| w.0).collect();
 
-    if styles != old_styles {
+    // Persist if changes made committed OR if we performed an upgrade (new UUIDs generated)
+    if committed || styles != old_styles || needs_upgrade {
         let json_val = serde_json::to_value(&styles).unwrap();
         // Conversion back to PropertyValue
         let prop_val: PropertyValue = json_val.into();
@@ -367,7 +378,7 @@ pub fn render_styles_property(
     let old_ids: Vec<Uuid> = old_styles.iter().map(|s| s.id).collect();
     let reordered = ids != old_ids;
 
-    if committed || reordered {
+    if committed || reordered || needs_upgrade {
         let current_state = project_service.get_project().read().unwrap().clone();
         history_manager.push_project_state(current_state);
     }

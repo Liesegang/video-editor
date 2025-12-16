@@ -125,6 +125,16 @@ impl MyApp {
         if let Ok(proj_read) = app.project_service.get_project().read() {
             app.history_manager.push_project_state(proj_read.clone());
         }
+        
+        // Zero-Copy GPU Sharing: Capture the main thread's OpenGL context handle
+        // and pass it to the background render server. This enables sharing of textures.
+        if let Some(handle) = library::rendering::skia_utils::get_current_context_handle() {
+            log::info!("MyApp: Capturing main GL context handle: {}", handle);
+            app.render_server.set_sharing_context(handle);
+        } else {
+            log::warn!("MyApp: Failed to capture main GL context handle. Preview might fall back to CPU copy.");
+        }
+
         cc.egui_ctx.request_repaint(); // Request repaint after initial state setup
         app
     }

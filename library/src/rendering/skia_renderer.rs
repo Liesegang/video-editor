@@ -25,6 +25,7 @@ pub struct SkiaRenderer {
     background_color: Color,
     surface: Surface,
     gpu_context: Option<GpuContext>,
+    sharing_handle: Option<usize>,
 }
 
 impl SkiaRenderer {
@@ -34,8 +35,6 @@ impl SkiaRenderer {
             context.direct_context.flush_and_submit();
 
             // Get the backend texture from the surface if possible
-            // use skia_safe::gpu::surfaces::get_backend_texture if available
-            // Try 'backend_texture' method if 'get_backend_texture' is gone
             if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
                 &mut self.surface,
                 skia_safe::surface::BackendHandleAccess::FlushRead,
@@ -76,7 +75,7 @@ impl SkiaRenderer {
                 debug!("SkiaRenderer: Reusing existing GPU context");
                 ctx.resize(width, height);
                 Some(ctx)
-            } else if let Some(mut ctx) = create_gpu_context() {
+            } else if let Some(mut ctx) = create_gpu_context(None) {
                 debug!("SkiaRenderer: Created new GPU context");
                 ctx.resize(width, height);
                 Some(ctx)
@@ -108,6 +107,7 @@ impl SkiaRenderer {
             background_color,
             surface,
             gpu_context,
+            sharing_handle: None,
         };
         renderer
             .clear()
@@ -139,22 +139,45 @@ impl SkiaRenderer {
         path: &skia_safe::Path,
         color: &Color,
         path_effects: &Vec<PathEffect>,
-        expand: f64,
+        offset: f64,
     ) -> Result<(), LibraryError> {
-        let mut fill_paint = Paint::default();
-        fill_paint.set_anti_alias(true);
-        if expand > 0.0 {
-            fill_paint.set_style(PaintStyle::StrokeAndFill);
-            fill_paint.set_stroke_width((expand * 2.0) as f32);
-            fill_paint.set_stroke_join(skia_safe::paint::Join::Round);
-        } else {
-            fill_paint.set_style(PaintStyle::Fill);
-        }
-        fill_paint.set_color(skia_safe::Color::from_argb(
+        let mut paint = Paint::default();
+        paint.set_anti_alias(true);
+        paint.set_color(skia_safe::Color::from_argb(
             color.a, color.r, color.g, color.b,
         ));
-        apply_path_effects(path_effects, &mut fill_paint)?;
-        canvas.draw_path(path, &fill_paint);
+        apply_path_effects(path_effects, &mut paint)?;
+
+        if offset >= 0.0 {
+            // Positive offset: Stroke and Fill to expand
+            if offset > 0.0 {
+                paint.set_style(PaintStyle::StrokeAndFill);
+                paint.set_stroke_width((offset * 2.0) as f32);
+                paint.set_stroke_join(skia_safe::paint::Join::Round);
+            } else {
+                 paint.set_style(PaintStyle::Fill);
+            }
+            canvas.draw_path(path, &paint);
+        } else {
+            // Negative offset: Draw Fill, then Erase edges
+            // 1. Draw original Fill
+            paint.set_style(PaintStyle::Fill);
+            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default());
+            canvas.draw_path(path, &paint);
+
+            // 2. Erase (DstOut) the border stroke
+            let mut erase_paint = Paint::default();
+            erase_paint.set_anti_alias(true);
+            erase_paint.set_style(PaintStyle::Stroke);
+            erase_paint.set_stroke_width((-offset * 2.0) as f32);
+            erase_paint.set_stroke_join(skia_safe::paint::Join::Round);
+            erase_paint.set_blend_mode(skia_safe::BlendMode::DstOut);
+            
+            apply_path_effects(path_effects, &mut erase_paint)?;
+
+            canvas.draw_path(path, &erase_paint);
+            canvas.restore();
+        }
         Ok(())
     }
 
@@ -165,19 +188,22 @@ impl SkiaRenderer {
         color: &Color,
         path_effects: &Vec<PathEffect>,
         width: f64,
+        offset: f64,
         cap: CapType,
         join: JoinType,
         miter: f64,
         dash_array: &Vec<f64>,
         dash_offset: f64,
     ) -> Result<(), LibraryError> {
+        if width <= 0.0 { return Ok(()); }
+        
+        // Prepare base stroke paint
         let mut stroke_paint = Paint::default();
         stroke_paint.set_anti_alias(true);
-        stroke_paint.set_style(PaintStyle::Stroke);
         stroke_paint.set_color(skia_safe::Color::from_argb(
             color.a, color.r, color.g, color.b,
         ));
-        stroke_paint.set_stroke_width(width as f32);
+        
         stroke_paint.set_stroke_cap(match cap {
             CapType::Round => skia_safe::paint::Cap::Round,
             CapType::Square => skia_safe::paint::Cap::Square,
@@ -189,65 +215,8 @@ impl SkiaRenderer {
             JoinType::Miter => skia_safe::paint::Join::Miter,
         });
         stroke_paint.set_stroke_miter(miter as f32);
-        
-        // Handle Dash
-        if !dash_array.is_empty() {
-             let intervals: Vec<f32> = dash_array.iter().map(|&x| x as f32).collect();
-             if let Some(dash_effect) = SkPathEffect::dash(&intervals, dash_offset as f32) {
-                 // Clean this up: apply_path_effects composes effects. We should probably add this dash effect
-                 // to the list of effects or just set it first?
-                 // Current apply_path_effects overwrites set_path_effect if not composed correctly.
-                 // Actually apply_path_effects takes a list and composes them.
-                 // We should probably pass the dash effect as a SkPathEffect to be composed?
-                 // Or just set it here and let apply_path_effects overwrite?
-                 // Wait, apply_path_effects logic:
-                 /*
-                    composed_effect = match composed_effect {
-                        Some(e) => Some(SkPathEffect::compose(e, sk_path_effect)),
-                        None => Some(sk_path_effect),
-                    };
-                    paint.set_path_effect(...)
-                 */
-                 // So if we set it here, apply_path_effects will overwrite it.
-                 // We need to inject it into the composition chain.
-                 
-                 // Simpler approach: Create a helper that composes with existing or just set it if no other effects.
-                 // But apply_path_effects is generic.
-                 
-                 // Let's modify apply_path_effects to take optional initial effect?
-                 // Or better, let's just make a composite here.
-                 
-                 // Re-reading apply_path_effects: it iterates path_effects list.
-                 // We should probably add the dash effect manually to the paint, BUT if there are OTHER path effects, they need to play nice.
-                 // Typically dash is applied to the path geometry.
-                 
-                 // Let's rely on `apply_dash_and_effects` strategy?
-                 // Or just simpler:
-                 stroke_paint.set_path_effect(dash_effect);
-             }
-        }
-        
-        // Note: apply_path_effects currently OVERWRITES any existing path effect on the paint because it builds a new chain from scratch.
-        // We need to fix apply_path_effects or pre-pend our dash effect.
-        // For now, let's assume path_effects (from entity) and dash_array (from style) might conflict or need composition.
-        // If we want both, we need to compose.
-        // I will modify apply_path_effects to take an optional 'base' effect or just manually compose here.
-        
-        // Let's just run apply_path_effects. If it returns Ok, it *sets* the path effect.
-        // If we want to support both, we'd need to change signatures.
-        // But for now, let's just apply dash FIRST, then apply_path_effects.
-        // WAIT, apply_path_effects uses `paint.set_path_effect(...)` at the end. It will clobber.
-        
-        // Let's perform a smart update:
-        // If dash is present, we treat it as an effect.
-        // But dash comes from Style, path_effects come from Entity.
-        
-        // Actually, let's look at apply_path_effects implementation again.
-        // It takes &Vec<PathEffect>.
-        // We can just create a temporary Vec that includes the Dash effect if we converted it?
-        // But Dash in DrawStyle is raw numbers, PathEffect enum has Dash variant.
-        // We could construct a temporary PathEffect::Dash and prepend it?
-        
+
+        // Path Effects (Dash + others)
         let mut effects_to_apply = Vec::new();
         if !dash_array.is_empty() {
              effects_to_apply.push(PathEffect::Dash {
@@ -257,11 +226,45 @@ impl SkiaRenderer {
         }
         effects_to_apply.extend_from_slice(path_effects);
         
+        if offset == 0.0 {
+            // Standard Stroke
+            stroke_paint.set_style(PaintStyle::Stroke);
+            stroke_paint.set_stroke_width(width as f32);
+            apply_path_effects(&effects_to_apply, &mut stroke_paint)?;
+            canvas.draw_path(path, &stroke_paint);
+            return Ok(());
+        }
+
+        // Offset Stroke Logic
+        let outer_r = offset.abs() + width / 2.0;
+        let inner_r = offset.abs() - width / 2.0;
+
+        canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default()); // Isolate blending
+        
+        // Setup Clipping
+        if offset > 0.0 {
+             canvas.clip_path(path, skia_safe::ClipOp::Difference, true);
+        } else {
+             canvas.clip_path(path, skia_safe::ClipOp::Intersect, true);
+        }
+
+        // Apply path effects to paint before drawing
         apply_path_effects(&effects_to_apply, &mut stroke_paint)?;
-        
-        // Original logic ends here
-        
+
+        // Draw Outer (Base)
+        stroke_paint.set_style(PaintStyle::Stroke);
+        stroke_paint.set_stroke_width((outer_r * 2.0) as f32);
         canvas.draw_path(path, &stroke_paint);
+
+        // Erase Inner (Hole)
+        if inner_r > 0.0 {
+            let mut erase_paint = stroke_paint.clone();
+            erase_paint.set_blend_mode(skia_safe::BlendMode::DstOut);
+            erase_paint.set_stroke_width((inner_r * 2.0) as f32);
+            canvas.draw_path(path, &erase_paint);
+        }
+
+        canvas.restore();
         Ok(())
     }
 }
@@ -318,22 +321,26 @@ fn apply_path_effects(
         let mut composed_effect: Option<skia_safe::PathEffect> = None;
         for effect in path_effects {
             trace!("Applying path effect {:?}", effect);
-            let sk_path_effect = convert_path_effect(effect)?;
-
-            composed_effect = match composed_effect {
-                Some(e) => Some(SkPathEffect::compose(e, sk_path_effect)),
-                None => Some(sk_path_effect),
-            };
+            match convert_path_effect(effect) {
+                Ok(sk_path_effect) => {
+                    composed_effect = match composed_effect {
+                        Some(e) => Some(SkPathEffect::compose(e, sk_path_effect)),
+                        None => Some(sk_path_effect),
+                    };
+                }
+                Err(e) => {
+                    log::warn!("Failed to apply path effect {:?}: {}", effect, e);
+                }
+            }
         }
-        paint.set_path_effect(composed_effect.ok_or(LibraryError::Render(
-            "Failed to compose PathEffects".to_string(),
-        ))?);
+        if let Some(composed) = composed_effect {
+            paint.set_path_effect(composed);
+        }
     }
     Ok(())
 }
 
 fn preprocess_shader(code: &str) -> String {
-    // 1. Inject Standard Uniforms
     let standard_uniforms = r#"
 uniform float3 iResolution;
 uniform float iTime;
@@ -342,12 +349,9 @@ uniform float iFrame;
 uniform float4 iMouse;
 uniform float4 iDate;
 "#;
-    // 2. Preprocess using shaderc
     let compiler = shaderc::Compiler::new().unwrap();
     let options = shaderc::CompileOptions::new().unwrap();
 
-    // Shaderc requires a version directive. SkSL usually doesn't have it.
-    // We inject one for preprocessing, then strip directives from the output.
     let version_directive = "#version 310 es\n";
     let full_source = if code.trim().starts_with("#version") {
         format!("{}\n{}", standard_uniforms, code)
@@ -355,11 +359,9 @@ uniform float4 iDate;
         format!("{}{}\n{}", version_directive, standard_uniforms, code)
     };
 
-    // Try to preprocess
     match compiler.preprocess(&full_source, "shader.glsl", "main", Some(&options)) {
         Ok(artifact) => {
             let output = artifact.as_text();
-            // Clean up output: remove #version, #line, #extension which might confuse SkSL
             output
                 .lines()
                 .filter(|l| {
@@ -373,10 +375,6 @@ uniform float4 iDate;
                 .join("\n")
         }
         Err(e) => {
-            // Fallback: log error and return original code (with injected uniforms)
-            // This allows non-macro code to likely work even if shaderc fails (e.g. valid SkSL but invalid GLSL?)
-            // But SkSL is mostly GLSL.
-            // We prepend standard uniforms manually in fallback.
             format!(
                 "// Preprocessing failed: {}\n{}\n{}",
                 e, standard_uniforms, code
@@ -419,7 +417,6 @@ impl Renderer for SkiaRenderer {
 
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
-        // Apply opacity from transform
         paint.set_alpha_f(transform.opacity as f32);
 
         let cubic_resampler = CubicResampler::mitchell();
@@ -446,26 +443,21 @@ impl Renderer for SkiaRenderer {
             let preprocessed_code = preprocess_shader(shader_code);
             let result = skia_safe::RuntimeEffect::make_for_shader(&preprocessed_code, None);
 
-            // Handle shader compilation errors
             if let Err(error) = result {
                 log::error!(
                     "SkSL Compilation Error: {}\nCode:\n{}",
                     error,
                     preprocessed_code
                 );
-                // Fallback: Red background to indicate error
                 canvas.clear(skia_safe::Color::RED);
             } else if let Ok(effect) = result {
-                // Dynamic Uniform Binding
                 let uniform_size = effect.uniform_size();
                 let mut data: Vec<u8> = vec![0; uniform_size];
 
-                // Inspect uniforms expected by the shader
                 for uniform in effect.uniforms() {
                     let offset = uniform.offset();
                     let name = uniform.name();
 
-                    // Helper helper to write f32 to data at offset
                     let mut write_f32 = |offset: usize, val: f32| {
                         if offset + 4 <= data.len() {
                             let bytes = val.to_le_bytes();
@@ -475,7 +467,6 @@ impl Renderer for SkiaRenderer {
 
                     match name {
                         "iResolution" => {
-                            // float3
                             write_f32(offset, resolution.0);
                             write_f32(offset + 4, resolution.1);
                             write_f32(offset + 8, 1.0);
@@ -484,58 +475,48 @@ impl Renderer for SkiaRenderer {
                             write_f32(offset, time);
                         }
                         "iTimeDelta" => {
-                            write_f32(offset, 1.0 / 60.0); // Approx
+                            write_f32(offset, 1.0 / 60.0);
                         }
                         "iFrame" => {
                             write_f32(offset, (time * 60.0).floor());
                         }
                         "iMouse" => {
-                            // float4
                             write_f32(offset, 0.0);
                             write_f32(offset + 4, 0.0);
                             write_f32(offset + 8, 0.0);
                             write_f32(offset + 12, 0.0);
                         }
                         "iDate" => {
-                            // float4, year, month, day, seconds
                             write_f32(offset, 2024.0);
                             write_f32(offset + 4, 1.0);
                             write_f32(offset + 8, 1.0);
                             write_f32(offset + 12, 0.0);
                         }
                         "iChannelTime" => {
-                            // float[4] ?
-                            // If it's an array, we might need to be careful.
-                            // For now assume 0.0s
                             write_f32(offset, time);
                             write_f32(offset + 4, time);
                             write_f32(offset + 8, time);
                             write_f32(offset + 12, time);
                         }
-                        _ => {
-                            // trace!("Unknown uniform: {}", name);
-                        }
+                        _ => {}
                     }
                 }
 
                 let uniforms = skia_safe::Data::new_copy(&data);
 
-                let shader =
-                    effect
-                        .make_shader(uniforms, &[], None)
-                        .ok_or(LibraryError::Render(
-                            "Failed to create SkSL shader".to_string(),
-                        ))?;
+                let shader = effect
+                    .make_shader(uniforms, &[], None)
+                    .ok_or(LibraryError::Render(
+                        "Failed to create SkSL shader".to_string(),
+                    ))?;
 
                 let mut paint = Paint::default();
                 paint.set_shader(shader);
-                // Opacity is 0.0-1.0 (already normalized by EntityConverter)
                 paint.set_alpha_f(transform.opacity as f32);
 
                 let matrix = build_transform_matrix(transform);
                 canvas.save();
                 canvas.concat(&matrix);
-                // We will fill the configured resolution rect (0,0, width, height)
                 let rect = skia_safe::Rect::from_wh(resolution.0, resolution.1);
                 canvas.draw_rect(rect, &paint);
                 canvas.restore();
@@ -594,14 +575,15 @@ impl Renderer for SkiaRenderer {
                 text_style.set_font_size(size as f32);
 
                 match style {
-                    DrawStyle::Fill { color, expand } => {
+                    DrawStyle::Fill { color, offset } => {
                         let mut paint = Paint::default();
                         paint.set_color(skia_safe::Color::from_argb(
                             color.a, color.r, color.g, color.b,
                         ));
-                        if *expand > 0.0 {
+                         // NOTE: Simple Text Expansion is handled via StrokeAndFill.
+                        if *offset > 0.0 {
                             paint.set_style(PaintStyle::StrokeAndFill);
-                            paint.set_stroke_width((expand * 2.0) as f32);
+                            paint.set_stroke_width((*offset * 2.0) as f32);
                             paint.set_stroke_join(skia_safe::paint::Join::Round);
                         } else {
                             paint.set_style(PaintStyle::Fill);
@@ -612,6 +594,7 @@ impl Renderer for SkiaRenderer {
                     DrawStyle::Stroke {
                         color,
                         width,
+                        offset,
                         cap,
                         join,
                         miter,
@@ -623,7 +606,10 @@ impl Renderer for SkiaRenderer {
                             color.a, color.r, color.g, color.b,
                         ));
                         paint.set_style(PaintStyle::Stroke);
-                        paint.set_stroke_width(*width as f32);
+                        
+                        let effective_width = (width + offset * 2.0).max(0.0);
+                        paint.set_stroke_width(effective_width as f32);
+                        
                         paint.set_stroke_cap(match cap {
                             CapType::Round => skia_safe::paint::Cap::Round,
                             CapType::Square => skia_safe::paint::Cap::Square,
@@ -635,8 +621,7 @@ impl Renderer for SkiaRenderer {
                             JoinType::Miter => skia_safe::paint::Join::Miter,
                         });
                         paint.set_stroke_miter(*miter as f32);
-                        
-                        // Apply dash for Text
+
                         if !dash_array.is_empty() {
                             let intervals: Vec<f32> = dash_array.iter().map(|&x| x as f32).collect();
                             if let Some(effect) = SkPathEffect::dash(&intervals, *dash_offset as f32) {
@@ -705,12 +690,13 @@ impl Renderer for SkiaRenderer {
             for config in styles {
                 let style = &config.style;
                 match style {
-                    DrawStyle::Fill { color, expand } => {
-                        self.draw_shape_fill_on_canvas(canvas, &path, color, path_effects, *expand)?;
+                    DrawStyle::Fill { color, offset } => {
+                        self.draw_shape_fill_on_canvas(canvas, &path, color, path_effects, *offset)?;
                     }
                     DrawStyle::Stroke {
                         color,
                         width,
+                        offset,
                         cap,
                         join,
                         miter,
@@ -723,6 +709,7 @@ impl Renderer for SkiaRenderer {
                             color,
                             path_effects,
                             *width,
+                            *offset,
                             cap.clone(),
                             join.clone(),
                             *miter,
@@ -792,10 +779,27 @@ impl Renderer for SkiaRenderer {
         if let Some(context) = self.gpu_context.as_mut() {
             context.direct_context.flush_and_submit();
         }
-
-        let width = self.width;
-        let height = self.height;
-        let image = surface_to_image(&mut self.surface, width, height)?;
+        
+        // If sharing is enabled, attempt to return a Texture.
+        if self.sharing_handle.is_some() {
+             if let Some(context) = self.gpu_context.as_mut() {
+                 if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
+                    &mut self.surface,
+                    skia_safe::surface::BackendHandleAccess::FlushRead,
+                ) {
+                    if let Some(gl_info) = texture.gl_texture_info() {
+                        return Ok(RenderOutput::Texture(TextureInfo {
+                            texture_id: gl_info.id,
+                            width: self.width,
+                            height: self.height,
+                        }));
+                    }
+                }
+            }
+        }
+        
+        // Fallback to Image readback (slow, copy)
+        let image = surface_to_image(&mut self.surface, self.width, self.height)?;
         Ok(RenderOutput::Image(image))
     }
 
@@ -809,5 +813,37 @@ impl Renderer for SkiaRenderer {
 
     fn get_gpu_context(&mut self) -> Option<&mut crate::rendering::skia_utils::GpuContext> {
         self.gpu_context.as_mut()
+    }
+
+    fn set_sharing_context(&mut self, handle: usize) {
+        if self.sharing_handle != Some(handle) {
+            log::info!("SkiaRenderer: Setting sharing context handle: {}", handle);
+            self.sharing_handle = Some(handle);
+            
+            // Recreate context with sharing
+            let _old_context = self.gpu_context.take(); // Drop old context
+            if let Some(mut ctx) = create_gpu_context(Some(handle)) {
+                 ctx.resize(self.width, self.height);
+                 self.gpu_context = Some(ctx);
+                 
+                 // Recreate surface too!
+                 self.surface = create_surface(
+                    self.width,
+                    self.height,
+                    self.gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
+                 ).expect("Failed to recreate surface with sharing");
+                 
+                 log::info!("SkiaRenderer: Recreated GPU context with sharing enabled.");
+            } else {
+                 log::warn!("SkiaRenderer: Failed to recreate GPU context with sharing! Falling back to isolated context (CPU readback). Preview performance may be reduced.");
+                 self.sharing_handle = None; // Reset sharing handle so we fallback to CPU copy
+                 self.gpu_context = create_gpu_context(None); 
+                   self.surface = create_surface(
+                    self.width,
+                    self.height,
+                    self.gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
+                 ).expect("Failed to recreate surface fallback");
+            }
+        }
     }
 }

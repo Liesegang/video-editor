@@ -35,19 +35,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 
+#[cfg(all(feature = "gl", target_os = "windows"))]
+use windows_sys::Win32::Graphics::OpenGL::{wglShareLists, HGLRC};
+
 pub struct GpuContext {
     pub(crate) _display: glutin::display::Display,
     pub(crate) _surface: glutin::surface::Surface<WindowSurface>,
     pub context: glutin::context::PossiblyCurrentContext,
     pub direct_context: skia_safe::gpu::DirectContext,
-    // We hold the HWND indirectly? Or need to destroy it?
-    // For now we leak it (it's hidden message-only, OS cleans up on process exit).
-    // Storing handle is enough.
     pub(crate) _hwnd: usize,
 }
 
 impl GpuContext {
-    // Resize works on WindowSurface!
     pub fn resize(&mut self, width: u32, height: u32) {
         self._surface.resize(
             &self.context,
@@ -57,23 +56,16 @@ impl GpuContext {
     }
 }
 
-pub fn create_gpu_context() -> Option<GpuContext> {
+pub fn create_gpu_context(share_handle: Option<usize>) -> Option<GpuContext> {
     #[cfg(all(feature = "gl", target_os = "windows"))]
     {
-        match init_glutin_headless() {
+        match init_glutin_headless(share_handle) {
             Ok(ctx) => Some(ctx),
             Err(err) => {
                 warn!(
                     "SkiaRenderer: failed to initialize GPU context via glutin: {}",
                     err
                 );
-                // The provided patch snippet for Python::with_gil is syntactically incorrect
-                // and appears to be a fragment from another context.
-                // To maintain syntactical correctness and apply the user's intent to fix warnings,
-                // the original `#[cfg(not(feature = "gl"))]` block is retained,
-                // and the `Python::with_gil` part is omitted as it would cause a compilation error.
-                // If the user intended to remove the `#[cfg(not(feature = "gl"))]` block,
-                // a more explicit instruction would be needed.
                 None
             }
         }
@@ -87,6 +79,21 @@ pub fn create_gpu_context() -> Option<GpuContext> {
         None
     }
 }
+
+pub fn get_current_context_handle() -> Option<usize> {
+    #[cfg(all(feature = "gl", target_os = "windows"))]
+    unsafe {
+        let handle = windows_sys::Win32::Graphics::OpenGL::wglGetCurrentContext();
+        if !handle.is_null() {
+            Some(handle as usize)
+        } else {
+            None
+        }
+    }
+    #[cfg(not(all(feature = "gl", target_os = "windows")))]
+    None
+}
+
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
 unsafe extern "system" fn window_proc(
@@ -151,7 +158,7 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
 }
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
-fn init_glutin_headless() -> Result<GpuContext, String> {
+fn init_glutin_headless(share_handle: Option<usize>) -> Result<GpuContext, String> {
     // 1. Create Dummy Window
     let raw_window_handle = create_dummy_window()?;
     let hwnd = match raw_window_handle {
@@ -222,6 +229,29 @@ fn init_glutin_headless() -> Result<GpuContext, String> {
     let context = not_current_context
         .make_current(&surface)
         .map_err(|e| format!("Make current failed: {}", e))?;
+
+    // 7. Share Lists (Context Sharing)
+    if let Some(share_hglrc) = share_handle {
+        use glutin::prelude::GlConfig;
+        use glutin::prelude::GlDisplay;
+        // We need the raw HGLRC of our new context.
+        // Glutin's PossiblyCurrentContext doesn't easily expose raw handle in safe API.
+        // But we are on Windows/WGL.
+        // We can use wglGetCurrentContext right now because we just made it current!
+        unsafe {
+            let my_hglrc = windows_sys::Win32::Graphics::OpenGL::wglGetCurrentContext();
+            if my_hglrc.is_null() {
+                warn!("SkiaRenderer: wglGetCurrentContext returned null after make_current");
+            } else {
+                let success = wglShareLists(share_hglrc as HGLRC, my_hglrc);
+                if success == 0 {
+                     warn!("SkiaRenderer: wglShareLists failed! Sharing might not work.");
+                } else {
+                     debug!("SkiaRenderer: wglShareLists success! Contexts shared.");
+                }
+            }
+        }
+    }
 
     let interface = Interface::new_native().ok_or("Failed to create native interface")?;
     let direct_context =
