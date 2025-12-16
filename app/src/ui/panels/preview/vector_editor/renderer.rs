@@ -1,5 +1,5 @@
-use crate::model::vector::{HandleType, VectorEditorState};
-use egui::{Color32, Painter, Pos2, Rect, Stroke};
+use crate::model::vector::VectorEditorState;
+use egui::{Color32, Painter, Pos2, Stroke};
 
 pub struct VectorEditorRenderer<'a> {
     pub state: &'a VectorEditorState,

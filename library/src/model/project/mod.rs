@@ -77,11 +77,28 @@ pub struct TrackClip {
     pub effects: Vec<EffectConfig>,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EffectConfig {
+    pub id: Uuid,
     pub effect_type: String,
     pub properties: PropertyMap,
 }
+
+impl std::hash::Hash for EffectConfig {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl PartialEq for EffectConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.effect_type == other.effect_type
+            && self.properties == other.properties
+    }
+}
+
+impl Eq for EffectConfig {}
 
 impl TrackClip {
     pub fn new(
@@ -281,17 +298,26 @@ impl TrackClip {
                 crate::model::project::property::PropertyValue::Number(OrderedFloat(font_size)),
             ),
         );
+        let style = crate::model::frame::draw_type::DrawStyle::Fill {
+            color: crate::model::frame::color::Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            },
+            expand: 0.0,
+        };
+        let config = crate::model::frame::entity::StyleConfig {
+            id: Uuid::new_v4(),
+            style,
+        };
+        let style_json = serde_json::to_value(config).unwrap();
         props.set(
-            "color".to_string(),
+            "styles".to_string(),
             crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Color(
-                    crate::model::frame::color::Color {
-                        r: 255,
-                        g: 255,
-                        b: 255,
-                        a: 255,
-                    },
-                ),
+                crate::model::project::property::PropertyValue::Array(vec![
+                    crate::model::project::property::PropertyValue::from(style_json),
+                ]),
             ),
         );
 
@@ -404,6 +430,7 @@ impl TrackClip {
                     b: 0,
                     a: 255,
                 },
+                expand: 0.0,
             },
             crate::model::frame::draw_type::DrawStyle::Stroke {
                 color: crate::model::frame::color::Color {
@@ -416,6 +443,8 @@ impl TrackClip {
                 cap: Default::default(),
                 join: Default::default(),
                 miter: 4.0,
+                dash_array: Vec::new(),
+                dash_offset: 0.0,
             },
         ];
 

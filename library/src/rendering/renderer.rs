@@ -1,7 +1,8 @@
 use crate::error::LibraryError;
 use crate::loader::image::Image;
-use crate::model::frame::color::Color;
-use crate::model::frame::draw_type::{DrawStyle, PathEffect};
+
+use crate::model::frame::draw_type::PathEffect;
+use crate::model::frame::entity::StyleConfig;
 use crate::model::frame::transform::Transform;
 
 #[derive(Clone, Debug)]
@@ -29,14 +30,14 @@ pub trait Renderer {
         text: &str,
         size: f64,
         font_name: &String,
-        color: &Color,
+        styles: &[StyleConfig],
         transform: &Transform,
     ) -> Result<RenderOutput, LibraryError>;
 
     fn rasterize_shape_layer(
         &mut self,
         path_data: &str,
-        styles: &[DrawStyle],
+        styles: &[StyleConfig],
         path_effects: &Vec<PathEffect>,
         transform: &Transform,
     ) -> Result<RenderOutput, LibraryError>;

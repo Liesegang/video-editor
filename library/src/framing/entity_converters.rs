@@ -1,13 +1,14 @@
-use log::{debug, warn};
+use log::warn;
 use serde_json;
 use std::collections::HashMap;
 use std::sync::Arc;
+use uuid::Uuid;
 
 use crate::model::frame::{
     color::Color,
     draw_type::{DrawStyle, PathEffect},
     effect::ImageEffect,
-    entity::{FrameContent, FrameObject, ImageSurface},
+    entity::{FrameContent, FrameObject, ImageSurface, StyleConfig},
     transform::{Position, Scale, Transform},
 };
 use crate::model::project::EffectConfig;
@@ -189,27 +190,24 @@ impl<'a> FrameEvaluationContext<'a> {
         (vx, vy)
     }
 
-    fn evaluate_color(
-        &self,
-        properties: &PropertyMap,
-        key: &str,
-        time: f64,
-        default: Color,
-    ) -> Color {
-        match self.evaluate_property_value(properties, key, time) {
-            Some(PropertyValue::Color(c)) => c,
-            _ => default,
-        }
-    }
 
-    fn parse_draw_styles(&self, value: PropertyValue) -> Vec<DrawStyle> {
+
+    fn parse_draw_styles(&self, value: PropertyValue) -> Vec<StyleConfig> {
         match value {
             PropertyValue::Array(arr) => arr
                 .into_iter()
                 .filter_map(|item| {
                     let json_val: serde_json::Value = (&item).into();
-                    match serde_json::from_value(json_val) {
-                        Ok(style) => Some(style),
+                    // Try parsing as StyleConfig (new format)
+                    if let Ok(config) = serde_json::from_value::<StyleConfig>(json_val.clone()) {
+                        return Some(config);
+                    }
+                    // Fallback to DrawStyle (legacy format)
+                    match serde_json::from_value::<DrawStyle>(json_val) {
+                        Ok(style) => Some(StyleConfig {
+                            id: Uuid::new_v4(),
+                            style,
+                        }),
                         Err(err) => {
                             warn!("Failed to parse style: {}", err);
                             None
@@ -327,17 +325,10 @@ impl EntityConverter for TextEntityConverter {
             .optional_string(props, "font_family", time)
             .unwrap_or_else(|| "Arial".to_string());
         let size = evaluator.evaluate_number(props, "size", time, 12.0);
-        let color = evaluator.evaluate_color(
-            props,
-            "color",
-            time,
-            Color {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-        );
+        let styles_value = evaluator
+            .evaluate_property_value(props, "styles", time)
+            .unwrap_or(PropertyValue::Array(vec![]));
+        let styles = evaluator.parse_draw_styles(styles_value);
         let transform = evaluator.build_transform(props, time);
         let effects = evaluator.build_image_effects(&track_clip.effects, time);
 
@@ -346,7 +337,7 @@ impl EntityConverter for TextEntityConverter {
                 text,
                 font,
                 size,
-                color,
+                styles,
                 effects,
                 transform,
             },

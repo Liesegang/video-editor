@@ -1,5 +1,5 @@
 use crate::model::vector::{HandleType, PointType, VectorEditorState};
-use egui::{PointerButton, Pos2, Response, Ui};
+use egui::{Pos2, Response, Ui};
 use library::model::frame::transform::Transform;
 
 pub struct VectorEditorInteraction<'a> {

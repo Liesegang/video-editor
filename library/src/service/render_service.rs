@@ -131,7 +131,7 @@ impl<T: Renderer> RenderService<T> {
                     text,
                     font,
                     size,
-                    color,
+                    styles,
                     effects,
                     transform,
                 } => {
@@ -142,7 +142,7 @@ impl<T: Renderer> RenderService<T> {
                                 &text,
                                 *size,
                                 &font,
-                                &color,
+                                &styles,
                                 &scaled_transform,
                             )
                         })?;

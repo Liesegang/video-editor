@@ -2,6 +2,7 @@ use crate::error::LibraryError;
 use crate::loader::image::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
+use crate::model::frame::entity::StyleConfig;
 use crate::model::frame::transform::Transform;
 use crate::rendering::renderer::{RenderOutput, Renderer, TextureInfo};
 use crate::rendering::skia_utils::{
@@ -12,10 +13,10 @@ use crate::util::timing::ScopedTimer;
 use log::{debug, trace};
 use skia_safe::path_effect::PathEffect as SkPathEffect;
 use skia_safe::trim_path_effect::Mode;
-use skia_safe::utils::parse_path::from_svg;
+
 use skia_safe::{
-    AlphaType, Canvas, Color as SkColor, ColorType, CubicResampler, Font, FontMgr, FontStyle,
-    ISize, ImageInfo, Matrix, Paint, PaintStyle, Point, SamplingOptions, Surface,
+    AlphaType, Canvas, Color as SkColor, ColorType, CubicResampler, ISize, ImageInfo, Matrix,
+    Paint, PaintStyle, Point, SamplingOptions, Surface,
 };
 
 pub struct SkiaRenderer {
@@ -138,10 +139,17 @@ impl SkiaRenderer {
         path: &skia_safe::Path,
         color: &Color,
         path_effects: &Vec<PathEffect>,
+        expand: f64,
     ) -> Result<(), LibraryError> {
         let mut fill_paint = Paint::default();
         fill_paint.set_anti_alias(true);
-        fill_paint.set_style(PaintStyle::Fill);
+        if expand > 0.0 {
+            fill_paint.set_style(PaintStyle::StrokeAndFill);
+            fill_paint.set_stroke_width((expand * 2.0) as f32);
+            fill_paint.set_stroke_join(skia_safe::paint::Join::Round);
+        } else {
+            fill_paint.set_style(PaintStyle::Fill);
+        }
         fill_paint.set_color(skia_safe::Color::from_argb(
             color.a, color.r, color.g, color.b,
         ));
@@ -160,6 +168,8 @@ impl SkiaRenderer {
         cap: CapType,
         join: JoinType,
         miter: f64,
+        dash_array: &Vec<f64>,
+        dash_offset: f64,
     ) -> Result<(), LibraryError> {
         let mut stroke_paint = Paint::default();
         stroke_paint.set_anti_alias(true);
@@ -179,7 +189,78 @@ impl SkiaRenderer {
             JoinType::Miter => skia_safe::paint::Join::Miter,
         });
         stroke_paint.set_stroke_miter(miter as f32);
-        apply_path_effects(path_effects, &mut stroke_paint)?;
+        
+        // Handle Dash
+        if !dash_array.is_empty() {
+             let intervals: Vec<f32> = dash_array.iter().map(|&x| x as f32).collect();
+             if let Some(dash_effect) = SkPathEffect::dash(&intervals, dash_offset as f32) {
+                 // Clean this up: apply_path_effects composes effects. We should probably add this dash effect
+                 // to the list of effects or just set it first?
+                 // Current apply_path_effects overwrites set_path_effect if not composed correctly.
+                 // Actually apply_path_effects takes a list and composes them.
+                 // We should probably pass the dash effect as a SkPathEffect to be composed?
+                 // Or just set it here and let apply_path_effects overwrite?
+                 // Wait, apply_path_effects logic:
+                 /*
+                    composed_effect = match composed_effect {
+                        Some(e) => Some(SkPathEffect::compose(e, sk_path_effect)),
+                        None => Some(sk_path_effect),
+                    };
+                    paint.set_path_effect(...)
+                 */
+                 // So if we set it here, apply_path_effects will overwrite it.
+                 // We need to inject it into the composition chain.
+                 
+                 // Simpler approach: Create a helper that composes with existing or just set it if no other effects.
+                 // But apply_path_effects is generic.
+                 
+                 // Let's modify apply_path_effects to take optional initial effect?
+                 // Or better, let's just make a composite here.
+                 
+                 // Re-reading apply_path_effects: it iterates path_effects list.
+                 // We should probably add the dash effect manually to the paint, BUT if there are OTHER path effects, they need to play nice.
+                 // Typically dash is applied to the path geometry.
+                 
+                 // Let's rely on `apply_dash_and_effects` strategy?
+                 // Or just simpler:
+                 stroke_paint.set_path_effect(dash_effect);
+             }
+        }
+        
+        // Note: apply_path_effects currently OVERWRITES any existing path effect on the paint because it builds a new chain from scratch.
+        // We need to fix apply_path_effects or pre-pend our dash effect.
+        // For now, let's assume path_effects (from entity) and dash_array (from style) might conflict or need composition.
+        // If we want both, we need to compose.
+        // I will modify apply_path_effects to take an optional 'base' effect or just manually compose here.
+        
+        // Let's just run apply_path_effects. If it returns Ok, it *sets* the path effect.
+        // If we want to support both, we'd need to change signatures.
+        // But for now, let's just apply dash FIRST, then apply_path_effects.
+        // WAIT, apply_path_effects uses `paint.set_path_effect(...)` at the end. It will clobber.
+        
+        // Let's perform a smart update:
+        // If dash is present, we treat it as an effect.
+        // But dash comes from Style, path_effects come from Entity.
+        
+        // Actually, let's look at apply_path_effects implementation again.
+        // It takes &Vec<PathEffect>.
+        // We can just create a temporary Vec that includes the Dash effect if we converted it?
+        // But Dash in DrawStyle is raw numbers, PathEffect enum has Dash variant.
+        // We could construct a temporary PathEffect::Dash and prepend it?
+        
+        let mut effects_to_apply = Vec::new();
+        if !dash_array.is_empty() {
+             effects_to_apply.push(PathEffect::Dash {
+                 intervals: dash_array.clone(),
+                 phase: dash_offset,
+             });
+        }
+        effects_to_apply.extend_from_slice(path_effects);
+        
+        apply_path_effects(&effects_to_apply, &mut stroke_paint)?;
+        
+        // Original logic ends here
+        
         canvas.draw_path(path, &stroke_paint);
         Ok(())
     }
@@ -486,7 +567,7 @@ impl Renderer for SkiaRenderer {
         text: &str,
         size: f64,
         font_name: &String,
-        color: &Color,
+        styles: &[StyleConfig],
         transform: &Transform,
     ) -> Result<RenderOutput, LibraryError> {
         let _timer = ScopedTimer::debug(format!(
@@ -498,9 +579,6 @@ impl Renderer for SkiaRenderer {
         {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
-            // FontMgr::default() removed
-
-            // let mut paint = Paint::default(); // Unused with Paragraph
 
             let matrix = build_transform_matrix(transform);
             canvas.save();
@@ -509,24 +587,82 @@ impl Renderer for SkiaRenderer {
             let mut font_collection = skia_safe::textlayout::FontCollection::new();
             font_collection.set_default_font_manager(skia_safe::FontMgr::default(), None);
 
-            let mut text_style = skia_safe::textlayout::TextStyle::new();
-            text_style.set_font_families(&[font_name]);
-            text_style.set_font_size(size as f32);
-            text_style.set_color(skia_safe::Color::from_argb(
-                color.a, color.r, color.g, color.b,
-            ));
+            for config in styles {
+                let style = &config.style;
+                let mut text_style = skia_safe::textlayout::TextStyle::new();
+                text_style.set_font_families(&[font_name]);
+                text_style.set_font_size(size as f32);
 
-            let mut paragraph_style = skia_safe::textlayout::ParagraphStyle::new();
-            paragraph_style.set_text_style(&text_style);
+                match style {
+                    DrawStyle::Fill { color, expand } => {
+                        let mut paint = Paint::default();
+                        paint.set_color(skia_safe::Color::from_argb(
+                            color.a, color.r, color.g, color.b,
+                        ));
+                        if *expand > 0.0 {
+                            paint.set_style(PaintStyle::StrokeAndFill);
+                            paint.set_stroke_width((expand * 2.0) as f32);
+                            paint.set_stroke_join(skia_safe::paint::Join::Round);
+                        } else {
+                            paint.set_style(PaintStyle::Fill);
+                        }
+                        paint.set_anti_alias(true);
+                        text_style.set_foreground_paint(&paint);
+                    }
+                    DrawStyle::Stroke {
+                        color,
+                        width,
+                        cap,
+                        join,
+                        miter,
+                        dash_array,
+                        dash_offset,
+                    } => {
+                        let mut paint = Paint::default();
+                        paint.set_color(skia_safe::Color::from_argb(
+                            color.a, color.r, color.g, color.b,
+                        ));
+                        paint.set_style(PaintStyle::Stroke);
+                        paint.set_stroke_width(*width as f32);
+                        paint.set_stroke_cap(match cap {
+                            CapType::Round => skia_safe::paint::Cap::Round,
+                            CapType::Square => skia_safe::paint::Cap::Square,
+                            CapType::Butt => skia_safe::paint::Cap::Butt,
+                        });
+                        paint.set_stroke_join(match join {
+                            JoinType::Round => skia_safe::paint::Join::Round,
+                            JoinType::Bevel => skia_safe::paint::Join::Bevel,
+                            JoinType::Miter => skia_safe::paint::Join::Miter,
+                        });
+                        paint.set_stroke_miter(*miter as f32);
+                        
+                        // Apply dash for Text
+                        if !dash_array.is_empty() {
+                            let intervals: Vec<f32> = dash_array.iter().map(|&x| x as f32).collect();
+                            if let Some(effect) = SkPathEffect::dash(&intervals, *dash_offset as f32) {
+                                paint.set_path_effect(effect);
+                            }
+                        }
 
-            let mut builder =
-                skia_safe::textlayout::ParagraphBuilder::new(&paragraph_style, font_collection);
+                        paint.set_anti_alias(true);
+                        text_style.set_foreground_paint(&paint);
+                    }
+                }
 
-            builder.add_text(text);
+                let mut paragraph_style = skia_safe::textlayout::ParagraphStyle::new();
+                paragraph_style.set_text_style(&text_style);
 
-            let mut paragraph = builder.build();
-            paragraph.layout(f32::MAX); // Layout on a single line (infinite width)
-            paragraph.paint(canvas, (0.0, 0.0));
+                let mut builder = skia_safe::textlayout::ParagraphBuilder::new(
+                    &paragraph_style,
+                    font_collection.clone(),
+                );
+
+                builder.add_text(text);
+
+                let mut paragraph = builder.build();
+                paragraph.layout(f32::MAX); // Layout on a single line (infinite width)
+                paragraph.paint(canvas, (0.0, 0.0));
+            }
 
             canvas.restore();
         }
@@ -553,7 +689,7 @@ impl Renderer for SkiaRenderer {
     fn rasterize_shape_layer(
         &mut self,
         path_data: &str,
-        styles: &[DrawStyle],
+        styles: &[StyleConfig],
         path_effects: &Vec<PathEffect>,
         transform: &Transform,
     ) -> Result<RenderOutput, LibraryError> {
@@ -562,16 +698,15 @@ impl Renderer for SkiaRenderer {
         {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
-            let path = from_svg(path_data).ok_or(LibraryError::Render(
-                "Failed to parse SVG path data".to_string(),
-            ))?;
+            let path = skia_safe::Path::from_svg(path_data).unwrap_or_default();
             let matrix = build_transform_matrix(transform);
             canvas.save();
             canvas.concat(&matrix);
-            for style in styles {
+            for config in styles {
+                let style = &config.style;
                 match style {
-                    DrawStyle::Fill { color } => {
-                        self.draw_shape_fill_on_canvas(canvas, &path, color, path_effects)?;
+                    DrawStyle::Fill { color, expand } => {
+                        self.draw_shape_fill_on_canvas(canvas, &path, color, path_effects, *expand)?;
                     }
                     DrawStyle::Stroke {
                         color,
@@ -579,6 +714,8 @@ impl Renderer for SkiaRenderer {
                         cap,
                         join,
                         miter,
+                        dash_array,
+                        dash_offset,
                     } => {
                         self.draw_shape_stroke_on_canvas(
                             canvas,
@@ -589,6 +726,8 @@ impl Renderer for SkiaRenderer {
                             cap.clone(),
                             join.clone(),
                             *miter,
+                            dash_array,
+                            *dash_offset,
                         )?;
                     }
                 }
