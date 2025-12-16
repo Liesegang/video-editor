@@ -36,7 +36,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
-use windows_sys::Win32::Graphics::OpenGL::{wglShareLists, HGLRC};
+use windows_sys::Win32::Graphics::OpenGL::{HGLRC, wglShareLists};
 
 pub struct GpuContext {
     pub(crate) _display: glutin::display::Display,
@@ -93,7 +93,6 @@ pub fn get_current_context_handle() -> Option<usize> {
     #[cfg(not(all(feature = "gl", target_os = "windows")))]
     None
 }
-
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
 unsafe extern "system" fn window_proc(
@@ -245,9 +244,9 @@ fn init_glutin_headless(share_handle: Option<usize>) -> Result<GpuContext, Strin
             } else {
                 let success = wglShareLists(share_hglrc as HGLRC, my_hglrc);
                 if success == 0 {
-                     warn!("SkiaRenderer: wglShareLists failed! Sharing might not work.");
+                    warn!("SkiaRenderer: wglShareLists failed! Sharing might not work.");
                 } else {
-                     debug!("SkiaRenderer: wglShareLists success! Contexts shared.");
+                    debug!("SkiaRenderer: wglShareLists success! Contexts shared.");
                 }
             }
         }

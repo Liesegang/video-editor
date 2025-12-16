@@ -1,5 +1,5 @@
-use skia_safe::textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle};
 use skia_safe::FontMgr;
+use skia_safe::textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle};
 
 // create_paragraph_builder removed
 

@@ -25,12 +25,9 @@ where
         self
     }
 
-    pub fn show<F>(
-        self,
-        ui: &mut Ui,
-        mut item_ui: F,
-    ) 
-    where F: FnMut(&mut Ui, usize, &mut T, egui_dnd::Handle)
+    pub fn show<F>(self, ui: &mut Ui, mut item_ui: F)
+    where
+        F: FnMut(&mut Ui, usize, &mut T, egui_dnd::Handle),
     {
         let response =
             dnd(ui, self.id_source).show(self.items.iter_mut(), |ui, item, handle, state| {

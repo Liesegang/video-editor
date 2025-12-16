@@ -190,8 +190,6 @@ impl<'a> FrameEvaluationContext<'a> {
         (vx, vy)
     }
 
-
-
     fn parse_draw_styles(&self, value: PropertyValue) -> Vec<StyleConfig> {
         match value {
             PropertyValue::Array(arr) => arr

@@ -1,13 +1,13 @@
-use egui::{Ui, Id};
-use library::service::project_service::ProjectService;
-use uuid::Uuid;
+use super::properties::{render_property_rows, PropertyRenderContext};
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
-use egui::collapsing_header::CollapsingState;
 use crate::ui::widgets::reorderable_list::ReorderableList;
-use library::plugin::PropertyUiType;
+use egui::collapsing_header::CollapsingState;
+use egui::{Id, Ui};
 use library::model::project::property::PropertyValue;
-use super::properties::{render_property_rows, PropertyRenderContext};
+use library::plugin::PropertyUiType;
+use library::service::project_service::ProjectService;
+use uuid::Uuid;
 
 pub fn render_effects_section(
     ui: &mut Ui,
@@ -26,7 +26,8 @@ pub fn render_effects_section(
 
     ui.menu_button("Add Effect", |ui| {
         let available_effects = project_service.get_plugin_manager().get_available_effects();
-        let items: Vec<(String, Option<String>, String)> = available_effects.into_iter()
+        let items: Vec<(String, Option<String>, String)> = available_effects
+            .into_iter()
             .map(|(id, name, category)| (name, Some(category), id))
             .collect();
 
@@ -36,15 +37,10 @@ pub fn render_effects_section(
             &items,
             |effect_id| {
                 project_service
-                    .add_effect_to_clip(
-                        comp_id,
-                        track_id,
-                        selected_entity_id,
-                        &effect_id,
-                    )
+                    .add_effect_to_clip(comp_id, track_id, selected_entity_id, &effect_id)
                     .ok();
                 *needs_refresh = true;
-            }
+            },
         );
     });
 
@@ -138,9 +134,11 @@ pub fn render_effects_section(
         let ids: Vec<Uuid> = effects.iter().map(|e| e.id).collect();
         let old_ids: Vec<Uuid> = old_effects.iter().map(|e| e.id).collect();
         if ids != old_ids {
-             // Update native order
-             project_service.update_track_clip_effects(comp_id, track_id, selected_entity_id, effects).ok();
-             *needs_refresh = true;
+            // Update native order
+            project_service
+                .update_track_clip_effects(comp_id, track_id, selected_entity_id, effects)
+                .ok();
+            *needs_refresh = true;
         }
     }
 }

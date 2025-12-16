@@ -12,7 +12,6 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
 
     let iter = path.iter();
 
-
     for rec in iter {
         let verb = rec.verb();
         let pts = rec.points();
@@ -25,7 +24,6 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
                     handle_out: [0.0, 0.0],
                     point_type: PointType::Corner,
                 });
-
             }
             PathVerb::Line => {
                 let p = pts[1];
@@ -35,7 +33,6 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
                     handle_out: [0.0, 0.0],
                     point_type: PointType::Corner,
                 });
-
             }
             PathVerb::Quad => {
                 let p0 = pts[0];
@@ -55,7 +52,6 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
                     handle_out: [0.0, 0.0],
                     point_type: PointType::Smooth,
                 });
-
             }
             PathVerb::Conic => {
                 let p = pts.last().unwrap();
@@ -65,7 +61,6 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
                     handle_out: [0.0, 0.0],
                     point_type: PointType::Corner,
                 });
-
             }
             PathVerb::Cubic => {
                 let p0 = pts[0];
@@ -83,7 +78,6 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
                     handle_out: [0.0, 0.0],
                     point_type: PointType::Smooth,
                 });
-
             }
             PathVerb::Close => {
                 is_closed = true;

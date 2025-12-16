@@ -241,6 +241,90 @@ pub fn draw_clips(
 
             let painter = ui_content.painter_at(content_rect_for_clip_area);
             painter.rect_filled(drawing_clip_rect, 4.0, transparent_color);
+
+            // Draw Audio Waveform
+            if (clip.kind == TrackClipKind::Audio || clip.kind == TrackClipKind::Video)
+                && safe_width > 10.0
+            {
+                if let Some(asset_id) = clip.reference_id {
+                    let cache = project_service.get_cache_manager();
+                    if let Some(audio_data) = cache.get_audio(asset_id) {
+                        let sample_rate = project_service.audio_engine.get_sample_rate() as f64;
+                        let channels = project_service.audio_engine.get_channels() as usize; // Stereo is standard
+
+                        // Waveform drawing
+                        // We need to map pixel X to sample index
+                        let pixel_step = 1.0; // Draw every pixel? Or skipping?
+
+                        // Clip Time Range
+                        // Display X corresponds to timeline time:
+                        // t_start = gc.in_frame / fps
+
+                        let rect_w = drawing_clip_rect.width();
+                        let rect_h = drawing_clip_rect.height();
+                        let center_y = drawing_clip_rect.center().y;
+                        let max_amp_height = rect_h * 0.4; // 80% height
+
+                        // Optimization: if zoom is very low (many samples per pixel), use Peak Cache?
+                        // For now: Brute force peak finding for modest zoom levels.
+
+                        // Map pixel x [0..w] -> time offset from clip start
+                        // time_offset = x / pixels_per_unit
+                        // source_time = (source_begin_frame / fps) + time_offset
+                        // sample_idx = source_time * sample_rate * channels
+
+                        let samples_per_pixel =
+                            (sample_rate / pixels_per_unit as f64) * channels as f64;
+
+                        // Performance guard: simple stepping
+                        let step_width = if samples_per_pixel > 1000.0 { 2.0 } else { 1.0 };
+                        let mut x = 0.0;
+                        while x < rect_w {
+                            let time_offset = x as f32 / pixels_per_unit;
+                            let source_time = (gc.source_begin_frame as f64 / composition_fps)
+                                + time_offset as f64;
+
+                            let start_sample_idx = (source_time * sample_rate) as usize * channels;
+                            let end_sample_idx = start_sample_idx + samples_per_pixel as usize;
+
+                            if start_sample_idx < audio_data.len() {
+                                let end = end_sample_idx.min(audio_data.len());
+
+                                // Find peak amplitude in this chunk
+                                let mut max_amp = 0.0f32;
+                                // Stride optimization for large chunks
+                                let stride = if end - start_sample_idx > 100 { 10 } else { 1 };
+
+                                for i in (start_sample_idx..end).step_by(stride) {
+                                    let abs_val = audio_data[i].abs();
+                                    if abs_val > max_amp {
+                                        max_amp = abs_val;
+                                    }
+                                }
+
+                                if max_amp > 0.0 {
+                                    let height = (max_amp * max_amp_height as f32).max(1.0); // Min 1px
+                                    let x_pos = drawing_clip_rect.min.x + x;
+
+                                    painter.line_segment(
+                                        [
+                                            egui::pos2(x_pos, center_y - height),
+                                            egui::pos2(x_pos, center_y + height),
+                                        ],
+                                        egui::Stroke::new(
+                                            1.0,
+                                            egui::Color32::from_rgba_premultiplied(0, 0, 0, 100),
+                                        ),
+                                    );
+                                }
+                            }
+
+                            x += step_width;
+                        }
+                    }
+                }
+            }
+
             if is_sel_entity {
                 painter.rect_stroke(
                     drawing_clip_rect,
@@ -250,8 +334,8 @@ pub fn draw_clips(
                 );
             }
             painter.text(
-                drawing_clip_rect.center(),
-                egui::Align2::CENTER_CENTER,
+                drawing_clip_rect.min + egui::vec2(5.0, 5.0), // Top left align
+                egui::Align2::LEFT_TOP,
                 &gc.name,
                 egui::FontId::default(),
                 egui::Color32::BLACK,

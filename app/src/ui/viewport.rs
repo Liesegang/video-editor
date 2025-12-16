@@ -219,14 +219,22 @@ impl<'a> ViewportController<'a> {
 
                     if is_ctrl && is_shift {
                         // Zoom Y
-                        let delta = if scroll_delta.y != 0.0 { scroll_delta.y } else { scroll_delta.x };
+                        let delta = if scroll_delta.y != 0.0 {
+                            scroll_delta.y
+                        } else {
+                            scroll_delta.x
+                        };
                         let zoom_factor = if delta > 0.0 { 1.1 } else { 0.9 };
                         if self.config.allow_zoom_y {
                             self.apply_zoom_at(state, local_pivot, egui::vec2(1.0, zoom_factor));
                         }
                     } else if is_ctrl {
                         // Zoom X
-                        let delta = if scroll_delta.y != 0.0 { scroll_delta.y } else { scroll_delta.x };
+                        let delta = if scroll_delta.y != 0.0 {
+                            scroll_delta.y
+                        } else {
+                            scroll_delta.x
+                        };
                         let zoom_factor = if delta > 0.0 { 1.1 } else { 0.9 };
                         if self.config.allow_zoom_x {
                             self.apply_zoom_at(state, local_pivot, egui::vec2(zoom_factor, 1.0));
