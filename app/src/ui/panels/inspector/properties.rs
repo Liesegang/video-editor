@@ -3,7 +3,9 @@ use library::model::project::property::{PropertyValue, Property, Vec2, Vec3, Vec
 use library::plugin::{PropertyDefinition, PropertyUiType};
 use ordered_float::OrderedFloat;
 use library::model::frame::color::Color;
-use library::model::frame::draw_type::{CapType, JoinType};
+use egui_phosphor::regular::DIAMOND as ICON_DIAMOND;
+use egui_phosphor::fill::DIAMOND as ICON_DIAMOND_FILLED;
+use egui_phosphor::regular::TIMER as ICON_TIMER;
 
 pub struct PropertyRenderContext<'a> {
     pub available_fonts: &'a [String],
@@ -43,10 +45,10 @@ where
                   } else { false };
                   
                   let (icon, color) = if is_keyframed {
-                      if is_on_key { ("◆", ui.visuals().widgets.active.text_color()) } 
-                      else { ("◇", ui.visuals().text_color()) }
+                      if is_on_key { (ICON_DIAMOND_FILLED, ui.visuals().widgets.active.text_color()) } 
+                      else { (ICON_DIAMOND, ui.visuals().text_color()) }
                   } else {
-                      ("⏱", ui.visuals().text_color().gamma_multiply(0.5)) 
+                      (ICON_TIMER, ui.visuals().text_color().gamma_multiply(0.5)) 
                   };
                   
                   let btn = ui.add(egui::Button::new(egui::RichText::new(icon).color(color)).frame(false));
