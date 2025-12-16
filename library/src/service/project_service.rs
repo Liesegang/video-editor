@@ -1661,4 +1661,20 @@ impl ProjectService {
 
         definitions
     }
+    pub fn has_asset_with_path(&self, path: &str) -> bool {
+        if let Ok(project) = self.project.read() {
+            // Check if any asset normalization matches the input path
+            // Normalizing both sides is safer for path comparison (though basic string equality might suffice if paths are from same source)
+            let path_norm = std::path::Path::new(path).to_string_lossy().to_string();
+
+            project.assets.iter().any(|asset| {
+                let asset_norm = std::path::Path::new(&asset.path)
+                    .to_string_lossy()
+                    .to_string();
+                asset_norm == path_norm
+            })
+        } else {
+            false
+        }
+    }
 }
