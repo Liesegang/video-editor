@@ -1,4 +1,3 @@
-use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::effect::ImageEffect;
 use crate::model::frame::transform::Transform;
@@ -18,7 +17,15 @@ pub struct ImageSurface {
     pub transform: Transform,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)] // Removed PartialEq, Eq, Hash
+use uuid::Uuid;
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct StyleConfig {
+    pub id: Uuid,
+    pub style: DrawStyle,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type")]
 pub enum FrameContent {
     Video {
@@ -34,7 +41,8 @@ pub enum FrameContent {
         text: String,
         font: String,
         size: f64,
-        color: Color,
+        #[serde(default)]
+        styles: Vec<StyleConfig>,
         #[serde(default)]
         effects: Vec<ImageEffect>,
         #[serde(flatten)]
@@ -42,7 +50,7 @@ pub enum FrameContent {
     },
     Shape {
         path: String,
-        styles: Vec<DrawStyle>,
+        styles: Vec<StyleConfig>,
         path_effects: Vec<PathEffect>,
         #[serde(default)]
         effects: Vec<ImageEffect>,
@@ -77,14 +85,14 @@ impl Hash for FrameContent {
                 text,
                 font,
                 size,
-                color,
+                styles,
                 effects,
                 transform,
             } => {
                 text.hash(state);
                 font.hash(state);
                 OrderedFloat(*size).hash(state);
-                color.hash(state);
+                styles.hash(state);
                 effects.hash(state);
                 transform.hash(state);
             }
@@ -136,7 +144,7 @@ impl PartialEq for FrameContent {
                     text: t1,
                     font: f1,
                     size: s1,
-                    color: c1,
+                    styles: st1,
                     effects: e1,
                     transform: tr1,
                 },
@@ -144,7 +152,7 @@ impl PartialEq for FrameContent {
                     text: t2,
                     font: f2,
                     size: s2,
-                    color: c2,
+                    styles: st2,
                     effects: e2,
                     transform: tr2,
                 },
@@ -152,7 +160,7 @@ impl PartialEq for FrameContent {
                 t1 == t2
                     && f1 == f2
                     && OrderedFloat(*s1) == OrderedFloat(*s2)
-                    && c1 == c2
+                    && st1 == st2
                     && e1 == e2
                     && tr1 == tr2
             }

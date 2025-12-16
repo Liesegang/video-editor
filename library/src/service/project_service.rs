@@ -12,6 +12,7 @@ use crate::plugin::PluginManager;
 use crate::audio::engine::AudioEngine;
 
 use crate::cache::CacheManager;
+use serde_json;
 
 pub struct ProjectService {
     project: Arc<RwLock<Project>>,
@@ -1070,10 +1071,28 @@ impl ProjectService {
                 }
 
                 let config = crate::model::project::EffectConfig {
+                    id: Uuid::new_v4(),
                     effect_type: effect_id.to_string(),
                     properties: props,
                 };
                 clip.effects.push(config);
+                Ok(())
+            } else {
+                Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
+            }
+        })?
+    }
+
+    pub fn update_track_clip_effects(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effects: Vec<crate::model::project::EffectConfig>,
+    ) -> Result<(), LibraryError> {
+        self.with_track_mut(composition_id, track_id, |track| {
+            if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+                clip.effects = effects;
                 Ok(())
             } else {
                 Err(LibraryError::Project(format!("Clip {} not found", clip_id)))
@@ -1515,19 +1534,113 @@ impl ProjectService {
                     category: "Text".to_string(),
                 },
                 PropertyDefinition {
-                    name: "color".to_string(),
-                    label: "Color".to_string(),
-                    ui_type: PropertyUiType::Color,
-                    default_value: PropertyValue::Color(crate::model::frame::color::Color {
-                        r: 255,
-                        g: 255,
-                        b: 255,
-                        a: 255,
-                    }),
-                    category: "Text".to_string(),
+                    name: "styles".to_string(),
+                    label: "Styles".to_string(),
+                    ui_type: PropertyUiType::Styles,
+                    default_value: {
+                        let style = crate::model::frame::draw_type::DrawStyle::Fill {
+                            color: crate::model::frame::color::Color {
+                                r: 255,
+                                g: 255,
+                                b: 255,
+                                a: 255,
+                            },
+                            expand: 0.0,
+                        };
+                        let config = crate::model::frame::entity::StyleConfig {
+                            id: Uuid::new_v4(),
+                            style,
+                        };
+                        let style_json = serde_json::to_value(config).unwrap();
+                        PropertyValue::Array(vec![PropertyValue::from(style_json)])
+                    },
+                    category: "Styles".to_string(),
                 },
             ];
             definitions.extend(text_defs);
+        }
+
+        if kind == crate::model::project::TrackClipKind::Shape {
+            let shape_defs = vec![
+                PropertyDefinition {
+                    name: "width".to_string(),
+                    label: "Width".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 10000.0,
+                        step: 1.0,
+                        suffix: "px".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(100.0)),
+                    category: "Shape".to_string(),
+                },
+                PropertyDefinition {
+                    name: "height".to_string(),
+                    label: "Height".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 10000.0,
+                        step: 1.0,
+                        suffix: "px".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(100.0)),
+                    category: "Shape".to_string(),
+                },
+                PropertyDefinition {
+                    name: "styles".to_string(),
+                    label: "Styles".to_string(),
+                    ui_type: PropertyUiType::Styles,
+                    default_value: {
+        // Styles: Fill Red (#FF0000), Stroke White (#FFFFFF, width 2.0)
+        let styles = vec![
+            crate::model::frame::draw_type::DrawStyle::Fill {
+                color: crate::model::frame::color::Color {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
+                expand: 0.0,
+            },
+            crate::model::frame::draw_type::DrawStyle::Stroke {
+                color: crate::model::frame::color::Color {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                },
+                width: 5.0,
+                cap: Default::default(),
+                join: Default::default(),
+                miter: 4.0,
+                dash_array: Vec::new(),
+                dash_offset: 0.0,
+            },
+        ];
+        let style_configs: Vec<crate::model::frame::entity::StyleConfig> = styles
+            .into_iter()
+            .map(|style| crate::model::frame::entity::StyleConfig {
+                id: Uuid::new_v4(),
+                style,
+            })
+            .collect();
+
+        let style_json_array: Vec<serde_json::Value> = style_configs
+            .into_iter()
+            .map(|config| serde_json::to_value(config).unwrap())
+            .collect();
+
+        PropertyValue::Array(
+            style_json_array
+                .into_iter()
+                .map(PropertyValue::from)
+                .collect(),
+        )
+                    },
+                    category: "Styles".to_string(),
+                },
+            ];
+            definitions.extend(shape_defs);
         }
 
         if kind == crate::model::project::TrackClipKind::SkSL {

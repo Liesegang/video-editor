@@ -185,7 +185,9 @@ impl<'a> PreviewInteractions<'a> {
                                 }
                             }
                         }
-                        interacted_with_gizmo = changed; // Consume event if we interacted
+                        if changed {
+                            interacted_with_gizmo = true;
+                        }
                     }
                 }
             }

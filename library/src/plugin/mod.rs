@@ -84,6 +84,7 @@ pub enum PropertyUiType {
         options: Vec<String>,
     },
     Font,
+    Styles,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +94,12 @@ pub struct PropertyDefinition {
     pub ui_type: PropertyUiType,
     pub default_value: PropertyValue,
     pub category: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EffectDefinition {
+    pub label: String,
+    pub properties: Vec<PropertyDefinition>,
 }
 
 pub trait InspectorPlugin: Plugin {
@@ -503,6 +510,14 @@ impl PluginManager {
             log::warn!("Effect '{}' not found", key);
             Ok(input.clone())
         }
+    }
+
+    pub fn get_effect_definition(&self, effect_id: &str) -> Option<EffectDefinition> {
+        let inner = self.inner.read().unwrap();
+        inner.effect_plugins.get(effect_id).map(|plugin| EffectDefinition {
+            label: plugin.name(),
+            properties: plugin.properties(),
+        })
     }
 
     pub fn load_resource(

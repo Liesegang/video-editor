@@ -1,5 +1,5 @@
 use crate::model::vector::{ControlPoint, PointType, VectorEditorState};
-use skia_safe::{Path, PathVerb, Point};
+use skia_safe::{PathVerb, Point};
 
 pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
     let path = match skia_safe::utils::parse_path::from_svg(path_data) {
@@ -10,10 +10,8 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
     let mut points = Vec::new();
     let mut is_closed = false;
 
-    let mut iter = path.iter();
-    let mut last_point = Point::new(0.0, 0.0);
+    let iter = path.iter();
 
-    let mut first_point_index_of_contour = 0;
 
     for rec in iter {
         let verb = rec.verb();
@@ -27,8 +25,7 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
                     handle_out: [0.0, 0.0],
                     point_type: PointType::Corner,
                 });
-                last_point = p;
-                first_point_index_of_contour = points.len() - 1;
+
             }
             PathVerb::Line => {
                 let p = pts[1];
@@ -38,7 +35,7 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
                     handle_out: [0.0, 0.0],
                     point_type: PointType::Corner,
                 });
-                last_point = p;
+
             }
             PathVerb::Quad => {
                 let p0 = pts[0];
@@ -58,7 +55,7 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
                     handle_out: [0.0, 0.0],
                     point_type: PointType::Smooth,
                 });
-                last_point = p2;
+
             }
             PathVerb::Conic => {
                 let p = pts.last().unwrap();
@@ -68,7 +65,7 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
                     handle_out: [0.0, 0.0],
                     point_type: PointType::Corner,
                 });
-                last_point = *p;
+
             }
             PathVerb::Cubic => {
                 let p0 = pts[0];
@@ -86,7 +83,7 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
                     handle_out: [0.0, 0.0],
                     point_type: PointType::Smooth,
                 });
-                last_point = p3;
+
             }
             PathVerb::Close => {
                 is_closed = true;
