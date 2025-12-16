@@ -98,7 +98,7 @@ impl ProjectService {
         }
 
         // Limit chunk size to avoid stalling the UI thread with massive mixing
-        let chunk_size = available.min(4096); // ~85ms at 48kHz
+        let chunk_size = available.min(16384); // Increased to ~340ms to prevent buffer underrun
 
         let sample_rate = self.audio_engine.get_sample_rate();
         let channels = self.audio_engine.get_channels();
