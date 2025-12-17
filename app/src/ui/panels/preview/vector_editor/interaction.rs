@@ -68,7 +68,6 @@ impl<'a> VectorEditorInteraction<'a> {
         enum InteractionEvent {
             Select(usize, HandleType),
             Move(usize, HandleType, Pos2),
-            ChangeType(usize, PointType),
         }
         let mut events = Vec::new();
 
@@ -244,11 +243,6 @@ impl<'a> VectorEditorInteraction<'a> {
                             }
                         }
                     }
-                }
-                InteractionEvent::ChangeType(idx, p_type) => {
-                    // Logic moved inside closure due to borrow checker, but good to keep event structure if needed
-                    self.state.points[idx].point_type = p_type;
-                    changed = true;
                 }
             }
         }

@@ -275,6 +275,11 @@ pub fn show_clip_area(
                             editor_context.selection.last_selected_track_id = last_track;
                         }
                     }
+                    crate::ui::selection::BoxAction::Remove(items) => {
+                        for (id, _tid) in items {
+                            editor_context.selection.selected_entities.remove(&id);
+                        }
+                    }
                 }
             }
             editor_context.interaction.timeline_selection_drag_start = None;

@@ -1,5 +1,5 @@
 use crate::model::vector::{ControlPoint, PointType, VectorEditorState};
-use skia_safe::{PathVerb, Point};
+use skia_safe::PathVerb;
 
 pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
     let path = match skia_safe::utils::parse_path::from_svg(path_data) {

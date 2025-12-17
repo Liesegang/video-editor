@@ -2,10 +2,10 @@ use egui::{Id, Ui};
 use egui_dnd::dnd;
 use std::hash::Hash;
 
+#[allow(dead_code)]
 pub struct ReorderableList<'a, T> {
     id_source: Id,
     items: &'a mut Vec<T>,
-    on_reorder: Option<Box<dyn FnMut(usize, usize) + 'a>>,
 }
 
 impl<'a, T> ReorderableList<'a, T>
@@ -16,13 +16,7 @@ where
         Self {
             id_source: id_source.into(),
             items,
-            on_reorder: None,
         }
-    }
-
-    pub fn on_reorder(mut self, callback: impl FnMut(usize, usize) + 'a) -> Self {
-        self.on_reorder = Some(Box::new(callback));
-        self
     }
 
     pub fn show<F>(self, ui: &mut Ui, mut item_ui: F)

@@ -12,8 +12,12 @@ impl Plugin for RandomPropertyPlugin {
         "random_property"
     }
 
-    fn category(&self) -> PluginCategory {
-        PluginCategory::Property
+    fn name(&self) -> String {
+        "Random Property".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Property".to_string()
     }
 
     fn version(&self) -> (u32, u32, u32) {

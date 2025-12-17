@@ -1,5 +1,5 @@
-use eframe::egui;
 use crate::config::{AppConfig, ThemeType};
+use eframe::egui;
 
 pub fn apply_theme(ctx: &egui::Context, config: &AppConfig) {
     match config.theme.theme_type {

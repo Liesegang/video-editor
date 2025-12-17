@@ -5,11 +5,11 @@ use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
 use crate::model::frame::entity::StyleConfig;
 use crate::model::frame::transform::Transform;
 use crate::rendering::renderer::{RenderOutput, Renderer, TextureInfo};
+use crate::rendering::shader_utils::{self, ShaderContext};
 use crate::rendering::skia_utils::{
     GpuContext, create_gpu_context, create_image_from_texture, create_surface, image_to_skia,
     surface_to_image,
 };
-use crate::rendering::shader_utils::{self, ShaderContext};
 use crate::util::timing::ScopedTimer;
 use log::{debug, trace};
 use skia_safe::path_effect::PathEffect as SkPathEffect;
@@ -68,10 +68,7 @@ impl SkiaRenderer {
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
         paint.set_color(skia_safe::Color::from_argb(
-            color.a,
-            color.r,
-            color.g,
-            color.b,
+            color.a, color.r, color.g, color.b,
         ));
         paint.set_style(PaintStyle::Stroke);
         paint.set_stroke_width(width);
@@ -258,7 +255,8 @@ impl SkiaRenderer {
         }
 
         // Prepare base stroke paint
-        let mut stroke_paint = Self::create_stroke_paint(color, width as f32, &cap, &join, miter as f32);
+        let mut stroke_paint =
+            Self::create_stroke_paint(color, width as f32, &cap, &join, miter as f32);
 
         // Path Effects (Dash + others)
         let mut effects_to_apply = Vec::new();
@@ -383,8 +381,6 @@ fn apply_path_effects(
     }
     Ok(())
 }
-
-
 
 impl Renderer for SkiaRenderer {
     fn draw_layer(

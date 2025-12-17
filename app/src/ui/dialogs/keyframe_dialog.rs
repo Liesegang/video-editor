@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align2, Color32, ComboBox, DragValue, TextEdit, Window};
+use eframe::egui::{self, Color32, ComboBox, DragValue, TextEdit};
 use library::animation::EasingFunction;
 use library::model::project::project::Project;
 use library::service::project_service::ProjectService;

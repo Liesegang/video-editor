@@ -15,7 +15,7 @@ pub struct PropertyRenderContext<'a> {
 
 pub enum PropertyAction {
     Update(String, PropertyValue),
-    Commit(String),
+    Commit,
     ToggleKeyframe(String, PropertyValue),
 }
 
@@ -37,10 +37,10 @@ fn handle_prop_response(
             name.to_string(),
             default_value.clone(),
         ));
-        actions.push(PropertyAction::Commit(name.to_string()));
+        actions.push(PropertyAction::Commit);
     }
     if response.drag_stopped() || response.lost_focus() {
-        actions.push(PropertyAction::Commit(name.to_string()));
+        actions.push(PropertyAction::Commit);
     }
 }
 
@@ -53,6 +53,34 @@ fn render_vector_component(
 ) -> egui::Response {
     ui.label(label);
     ui.add(egui::DragValue::new(value).speed(0.1).suffix(suffix))
+}
+
+// Helper to render a generic group of vector components
+fn render_vector_group(
+    ui: &mut Ui,
+    components: &mut [(&str, &mut f32)],
+    suffix: &str,
+) -> (bool, bool, bool) {
+    let mut changed = false;
+    let mut reset = false;
+    let mut committed = false;
+
+    ui.horizontal(|ui| {
+        for (label, value) in components {
+            let response = render_vector_component(ui, label, value, suffix);
+            if response.changed() {
+                changed = true;
+            }
+            if response.middle_clicked() {
+                reset = true;
+            }
+            if response.drag_stopped() || response.lost_focus() {
+                committed = true;
+            }
+        }
+    });
+
+    (changed, reset, committed)
 }
 
 // Helper function to render generic property rows
@@ -165,12 +193,7 @@ where
             PropertyUiType::Color => {
                 let current_val = get_value(&prop_def.name)
                     .and_then(|v| v.get_as::<Color>())
-                    .unwrap_or(
-                        prop_def
-                            .default_value
-                            .get_as::<Color>()
-                            .unwrap_or_default(),
-                    );
+                    .unwrap_or(prop_def.default_value.get_as::<Color>().unwrap_or_default());
 
                 let mut color32 = egui::Color32::from_rgba_premultiplied(
                     current_val.r,
@@ -228,34 +251,35 @@ where
                     .unwrap_or(prop_def.default_value.get_as().unwrap_or_default());
 
                 let mut selected = current_val.clone();
-                let response_inner = egui::ComboBox::from_id_salt(format!("combo_{}", prop_def.name))
-                    .selected_text(&selected)
-                    .show_ui(ui, |ui| {
-                        for opt in options {
-                            ui.selectable_value(&mut selected, opt.clone(), opt.clone());
-                        }
-                    });
+                let response_inner =
+                    egui::ComboBox::from_id_salt(format!("combo_{}", prop_def.name))
+                        .selected_text(&selected)
+                        .show_ui(ui, |ui| {
+                            for opt in options {
+                                ui.selectable_value(&mut selected, opt.clone(), opt.clone());
+                            }
+                        });
 
                 // Dropdown specific handling for standard response
-                let mut changed = selected != current_val;
-                 // Synthesize response for handle_prop_response if needed, or just call manually
-                 // ComboBox returns InnerResponse, header response is in response_inner.response
-                 
+                let changed = selected != current_val;
+                // Synthesize response for handle_prop_response if needed, or just call manually
+                // ComboBox returns InnerResponse, header response is in response_inner.response
+
                 if changed {
-                     actions.push(PropertyAction::Update(
+                    actions.push(PropertyAction::Update(
                         prop_def.name.clone(),
                         PropertyValue::String(selected),
                     ));
-                     actions.push(PropertyAction::Commit(prop_def.name.clone()));
+                    actions.push(PropertyAction::Commit);
                 }
-                
+
                 // Middle click on the collapsed combo box
                 if response_inner.response.middle_clicked() {
-                     actions.push(PropertyAction::Update(
+                    actions.push(PropertyAction::Update(
                         prop_def.name.clone(),
                         prop_def.default_value.clone(),
                     ));
-                    actions.push(PropertyAction::Commit(prop_def.name.clone()));
+                    actions.push(PropertyAction::Commit);
                 }
 
                 if context.in_grid {
@@ -282,7 +306,7 @@ where
                         prop_def.name.clone(),
                         PropertyValue::String(selected),
                     ));
-                    actions.push(PropertyAction::Commit(prop_def.name.clone()));
+                    actions.push(PropertyAction::Commit);
                 }
                 if context.in_grid {
                     ui.end_row();
@@ -305,7 +329,7 @@ where
                     None
                 };
 
-                 handle_prop_response(
+                handle_prop_response(
                     &mut actions,
                     &response,
                     &prop_def.name,
@@ -330,30 +354,17 @@ where
                 let mut x = current_val.x.into_inner() as f32;
                 let mut y = current_val.y.into_inner() as f32;
 
-                let mut changed_here = false;
-                let mut committed_here = false;
-                let mut reset_here = false;
+                let (changed, reset, committed) =
+                    render_vector_group(ui, &mut [("X", &mut x), ("Y", &mut y)], suffix);
 
-                ui.horizontal(|ui| {
-                    let rx = render_vector_component(ui, "X", &mut x, suffix);
-                    let ry = render_vector_component(ui, "Y", &mut y, suffix);
-
-                    if rx.changed() || ry.changed() { changed_here = true; }
-                    if rx.middle_clicked() || ry.middle_clicked() { reset_here = true; }
-                     // Note: original code only committed on drag_stopped or lost_focus
-                    if rx.drag_stopped() || rx.lost_focus() || ry.drag_stopped() || ry.lost_focus() {
-                        committed_here = true;
-                    }
-                });
-
-                if reset_here {
+                if reset {
                     actions.push(PropertyAction::Update(
                         prop_def.name.clone(),
                         prop_def.default_value.clone(),
                     ));
-                    actions.push(PropertyAction::Commit(prop_def.name.clone()));
+                    actions.push(PropertyAction::Commit);
                 } else {
-                    if changed_here {
+                    if changed {
                         let new_val = Vec2 {
                             x: OrderedFloat(x as f64),
                             y: OrderedFloat(y as f64),
@@ -363,8 +374,8 @@ where
                             PropertyValue::Vec2(new_val),
                         ));
                     }
-                    if committed_here {
-                        actions.push(PropertyAction::Commit(prop_def.name.clone()));
+                    if committed {
+                        actions.push(PropertyAction::Commit);
                     }
                 }
 
@@ -373,7 +384,7 @@ where
                 }
             }
             PropertyUiType::Vec3 { suffix } => {
-               let current_val = get_value(&prop_def.name)
+                let current_val = get_value(&prop_def.name)
                     .and_then(|v| v.get_as::<Vec3>())
                     .unwrap_or_else(|| {
                         prop_def.default_value.get_as::<Vec3>().unwrap_or(Vec3 {
@@ -387,42 +398,32 @@ where
                 let mut y = current_val.y.into_inner() as f32;
                 let mut z = current_val.z.into_inner() as f32;
 
-                let mut changed_here = false;
-                let mut committed_here = false;
-                let mut reset_here = false;
+                let (changed, reset, committed) = render_vector_group(
+                    ui,
+                    &mut [("X", &mut x), ("Y", &mut y), ("Z", &mut z)],
+                    suffix,
+                );
 
-                ui.horizontal(|ui| {
-                    let rx = render_vector_component(ui, "X", &mut x, suffix);
-                    let ry = render_vector_component(ui, "Y", &mut y, suffix);
-                    let rz = render_vector_component(ui, "Z", &mut z, suffix);
-
-                    if rx.changed() || ry.changed() || rz.changed() { changed_here = true; }
-                    if rx.middle_clicked() || ry.middle_clicked() || rz.middle_clicked() { reset_here = true; }
-                    if rx.drag_stopped() || rx.lost_focus() || ry.drag_stopped() || ry.lost_focus() || rz.drag_stopped() || rz.lost_focus() {
-                        committed_here = true;
-                    }
-                });
-
-                if reset_here {
-                     actions.push(PropertyAction::Update(
+                if reset {
+                    actions.push(PropertyAction::Update(
                         prop_def.name.clone(),
                         prop_def.default_value.clone(),
                     ));
-                    actions.push(PropertyAction::Commit(prop_def.name.clone()));
+                    actions.push(PropertyAction::Commit);
                 } else {
-                    if changed_here {
+                    if changed {
                         let new_val = Vec3 {
                             x: OrderedFloat(x as f64),
                             y: OrderedFloat(y as f64),
                             z: OrderedFloat(z as f64),
                         };
-                         actions.push(PropertyAction::Update(
+                        actions.push(PropertyAction::Update(
                             prop_def.name.clone(),
                             PropertyValue::Vec3(new_val),
                         ));
                     }
-                    if committed_here {
-                         actions.push(PropertyAction::Commit(prop_def.name.clone()));
+                    if committed {
+                        actions.push(PropertyAction::Commit);
                     }
                 }
 
@@ -447,34 +448,20 @@ where
                 let mut z = current_val.z.into_inner() as f32;
                 let mut w = current_val.w.into_inner() as f32;
 
-                let mut changed_here = false;
-                let mut committed_here = false;
-                let mut reset_here = false;
+                let (changed, reset, committed) = render_vector_group(
+                    ui,
+                    &mut [("X", &mut x), ("Y", &mut y), ("Z", &mut z), ("W", &mut w)],
+                    suffix,
+                );
 
-                ui.horizontal(|ui| {
-                    let rx = render_vector_component(ui, "X", &mut x, suffix);
-                    let ry = render_vector_component(ui, "Y", &mut y, suffix);
-                    let rz = render_vector_component(ui, "Z", &mut z, suffix);
-                    let rw = render_vector_component(ui, "W", &mut w, suffix);
-
-                    if rx.changed() || ry.changed() || rz.changed() || rw.changed() { changed_here = true; }
-                    if rx.middle_clicked() || ry.middle_clicked() || rz.middle_clicked() || rw.middle_clicked() { reset_here = true; }
-                    if rx.drag_stopped() || rx.lost_focus() 
-                        || ry.drag_stopped() || ry.lost_focus() 
-                        || rz.drag_stopped() || rz.lost_focus()
-                        || rw.drag_stopped() || rw.lost_focus() {
-                        committed_here = true;
-                    }
-                });
-
-                if reset_here {
-                     actions.push(PropertyAction::Update(
+                if reset {
+                    actions.push(PropertyAction::Update(
                         prop_def.name.clone(),
                         prop_def.default_value.clone(),
                     ));
-                    actions.push(PropertyAction::Commit(prop_def.name.clone()));
+                    actions.push(PropertyAction::Commit);
                 } else {
-                     if changed_here {
+                    if changed {
                         let new_val = Vec4 {
                             x: OrderedFloat(x as f64),
                             y: OrderedFloat(y as f64),
@@ -486,8 +473,8 @@ where
                             PropertyValue::Vec4(new_val),
                         ));
                     }
-                    if committed_here {
-                         actions.push(PropertyAction::Commit(prop_def.name.clone()));
+                    if committed {
+                        actions.push(PropertyAction::Commit);
                     }
                 }
 
@@ -502,14 +489,4 @@ where
         }
     }
     actions
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn handle_drag_value_property_legacy(
-    ui: &mut Ui,
-    value: &mut f32,
-    speed: f32,
-    suffix: &str,
-) -> egui::Response {
-    ui.add(egui::DragValue::new(value).speed(speed).suffix(suffix))
 }
