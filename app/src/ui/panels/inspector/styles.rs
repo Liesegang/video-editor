@@ -2,7 +2,7 @@ use super::properties::{render_property_rows, PropertyRenderContext};
 use crate::action::HistoryManager;
 use crate::ui::widgets::reorderable_list::ReorderableList;
 use egui::collapsing_header::CollapsingState;
-use egui::{Id, Ui};
+use egui::Ui;
 use library::model::frame::color::Color;
 use library::model::frame::draw_type::{CapType, DrawStyle, JoinType};
 use library::model::frame::entity::StyleConfig;
@@ -72,7 +72,7 @@ pub fn render_styles_property(
 
     let mut needs_upgrade = false;
 
-    let mut styles: Vec<StyleConfig> = if let Some(prop) = property {
+    let styles: Vec<StyleConfig> = if let Some(prop) = property {
         let val = evaluator_registry.evaluate(prop, current_time, &ctx);
         if let PropertyValue::Array(arr) = val {
             let mut extracted = Vec::new();
@@ -164,7 +164,7 @@ pub fn render_styles_property(
     let mut needs_delete = None;
     ReorderableList::new(list_id, &mut items).show(ui, |ui, index, item, handle| {
         let id = ui.make_persistent_id(format!("style_{}", item.id));
-        let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, true);
+        let state = CollapsingState::load_with_default_open(ui.ctx(), id, true);
 
         let item_read = item.clone();
         let (label, defs) = match &item.style {
@@ -441,7 +441,7 @@ pub fn render_styles_property(
                                     _ => {}
                                 },
                             },
-                            crate::ui::panels::inspector::properties::PropertyAction::Commit(_) => {
+                            crate::ui::panels::inspector::properties::PropertyAction::Commit => {
                                 committed = true;
                             }
                             _ => {}

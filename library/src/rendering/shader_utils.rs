@@ -53,11 +53,7 @@ pub struct ShaderContext {
     pub date: (f32, f32, f32, f32),
 }
 
-pub fn bind_standard_uniforms(
-    effect: &RuntimeEffect,
-    data: &mut [u8],
-    ctx: &ShaderContext,
-) {
+pub fn bind_standard_uniforms(effect: &RuntimeEffect, data: &mut [u8], ctx: &ShaderContext) {
     let mut write_f32 = |offset: usize, val: f32| {
         if offset + 4 <= data.len() {
             let bytes = val.to_le_bytes();

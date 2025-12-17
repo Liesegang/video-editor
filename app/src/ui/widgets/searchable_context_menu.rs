@@ -1,4 +1,4 @@
-use egui::{Id, Key, RichText, ScrollArea, TextEdit, Ui};
+use egui::{Key, RichText, ScrollArea, TextEdit, Ui};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Default)]
@@ -23,7 +23,7 @@ pub fn show_searchable_menu<T: Clone + 'static>(
         on_select(value);
         state.query.clear();
         state.selected_index = 0;
-        ui.close_menu();
+        ui.close();
     };
 
     // Search Input
@@ -35,7 +35,7 @@ pub fn show_searchable_menu<T: Clone + 'static>(
     // Handle Escape
     if ui.input(|i| i.key_pressed(Key::Escape)) {
         state = MenuState::default();
-        ui.close_menu();
+        ui.close();
         ui.data_mut(|d| d.insert_temp(id, state));
         return;
     }

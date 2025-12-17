@@ -231,8 +231,6 @@ fn init_glutin_headless(share_handle: Option<usize>) -> Result<GpuContext, Strin
 
     // 7. Share Lists (Context Sharing)
     if let Some(share_hglrc) = share_handle {
-        use glutin::prelude::GlConfig;
-        use glutin::prelude::GlDisplay;
         // We need the raw HGLRC of our new context.
         // Glutin's PossiblyCurrentContext doesn't easily expose raw handle in safe API.
         // But we are on Windows/WGL.

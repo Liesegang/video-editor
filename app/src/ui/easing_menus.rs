@@ -1,4 +1,4 @@
-use eframe::egui::{self, Ui, UiKind};
+use eframe::egui::Ui;
 use library::animation::EasingFunction;
 
 pub fn show_easing_menu(

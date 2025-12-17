@@ -3,9 +3,7 @@ use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use crate::ui::widgets::reorderable_list::ReorderableList;
 use egui::collapsing_header::CollapsingState;
-use egui::{Id, Ui};
-use library::model::project::property::PropertyValue;
-use library::plugin::PropertyUiType;
+use egui::Ui;
 use library::service::project_service::ProjectService;
 use uuid::Uuid;
 
@@ -65,7 +63,7 @@ pub fn render_effects_section(
             .show(ui, |ui, _visual_index, effect, handle| {
                 let effect_index = track_clip.effects.iter().position(|e| e.id == effect.id).unwrap_or(_visual_index);
                 let id = ui.make_persistent_id(format!("effect_{}", effect.id));
-                let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
+                let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
                 
                 // Render Header (with handle)
                 let mut remove_clicked = false;
@@ -110,7 +108,7 @@ pub fn render_effects_section(
                                         ).ok();
                                         *needs_refresh = true;
                                     }
-                                    crate::ui::panels::inspector::properties::PropertyAction::Commit(_) => {
+                                    crate::ui::panels::inspector::properties::PropertyAction::Commit => {
                                          let current_state = project_service.get_project().read().unwrap().clone();
                                          history_manager.push_project_state(current_state);
                                     }

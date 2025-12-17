@@ -105,7 +105,8 @@ pub fn graph_editor_panel(
             .collect();
 
         // Capture clip range for visualization
-        let (clip_start_frame, clip_end_frame, clip_fps) = (entity.in_frame, entity.out_frame, composition.fps);
+        let (clip_start_frame, clip_end_frame, clip_fps) =
+            (entity.in_frame, entity.out_frame, composition.fps);
 
         // Add Effect Properties
 
@@ -117,20 +118,27 @@ pub fn graph_editor_panel(
                     _ => false,
                 };
                 if should_plot {
-                    properties_to_plot.push((format!("effect:{}:{}", effect_idx, prop_key), prop, &effect.properties));
+                    properties_to_plot.push((
+                        format!("effect:{}:{}", effect_idx, prop_key),
+                        prop,
+                        &effect.properties,
+                    ));
                 }
             }
         }
 
         if properties_to_plot.is_empty() {
-             ui.label("No animatable properties found.");
-             return;
+            ui.label("No animatable properties found.");
+            return;
         }
 
         // Initialize visible_properties if it's empty (first load)
         if editor_context.graph_editor.visible_properties.is_empty() {
             for (name, _, _) in &properties_to_plot {
-                editor_context.graph_editor.visible_properties.insert(name.clone());
+                editor_context
+                    .graph_editor
+                    .visible_properties
+                    .insert(name.clone());
             }
         }
 
@@ -144,15 +152,15 @@ pub fn graph_editor_panel(
                 .resizable(true)
                 .default_width(sidebar_width)
                 .show_inside(ui, |ui| {
-                   ui.heading("Properties");
-                   ui.separator();
-                   egui::ScrollArea::vertical().show(ui, |ui| {
-                       // We need a stable iterator for colors to match the graph ones
-                       // The existing logic used a cycle iterator *during* the loop.
-                       // We should probably generate colors deterministically or consistent with the loop order.
-                       // Since properties_to_plot is filtered deterministically, index-based coloring is fine.
-                       
-                       let mut color_cycle = [
+                    ui.heading("Properties");
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        // We need a stable iterator for colors to match the graph ones
+                        // The existing logic used a cycle iterator *during* the loop.
+                        // We should probably generate colors deterministically or consistent with the loop order.
+                        // Since properties_to_plot is filtered deterministically, index-based coloring is fine.
+
+                        let mut color_cycle = [
                             Color32::RED,
                             Color32::GREEN,
                             Color32::BLUE,
@@ -164,33 +172,40 @@ pub fn graph_editor_panel(
                         .iter()
                         .cycle();
 
-                       for (name, _, _) in &properties_to_plot {
-                           let color = *color_cycle.next().unwrap();
-                           let mut is_visible = editor_context.graph_editor.visible_properties.contains(name);
-                           
-                           ui.horizontal(|ui| {
-                               // Color indicator
-                               let (rect, _response) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
-                               ui.painter().circle_filled(rect.center(), 5.0, color);
-                               
-                               if ui.checkbox(&mut is_visible, name).changed() {
-                                   if is_visible {
-                                       editor_context.graph_editor.visible_properties.insert(name.clone());
-                                   } else {
-                                       editor_context.graph_editor.visible_properties.remove(name);
-                                   }
-                               }
-                           });
-                       }
-                   });
+                        for (name, _, _) in &properties_to_plot {
+                            let color = *color_cycle.next().unwrap();
+                            let mut is_visible = editor_context
+                                .graph_editor
+                                .visible_properties
+                                .contains(name);
+
+                            ui.horizontal(|ui| {
+                                // Color indicator
+                                let (rect, _response) =
+                                    ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
+                                ui.painter().circle_filled(rect.center(), 5.0, color);
+
+                                if ui.checkbox(&mut is_visible, name).changed() {
+                                    if is_visible {
+                                        editor_context
+                                            .graph_editor
+                                            .visible_properties
+                                            .insert(name.clone());
+                                    } else {
+                                        editor_context.graph_editor.visible_properties.remove(name);
+                                    }
+                                }
+                            });
+                        }
+                    });
                 });
 
             // --- Main Graph Area ---
             egui::CentralPanel::default().show_inside(ui, |ui| {
-                 // Existing Graph Logic... (wrapped)
-                 
-                 // Note: We need to filter properties_to_plot for the graph loop based on visibility.
-                 // But the rest of the logic (time cursor, zoom, etc.) remains.
+                // Existing Graph Logic... (wrapped)
+
+                // Note: We need to filter properties_to_plot for the graph loop based on visibility.
+                // But the rest of the logic (time cursor, zoom, etc.) remains.
                 let pixels_per_second = editor_context.graph_editor.zoom_x;
                 let pixels_per_unit = editor_context.graph_editor.zoom_y;
 
@@ -208,7 +223,8 @@ pub fn graph_editor_panel(
 
                 // Allocate Graph Area (Covers everything including ruler)
                 // We use Sense::hover() here so the painter allocation doesn't steal inputs from manual interact calls below.
-                let (_base_response, painter) = ui.allocate_painter(available_rect.size(), Sense::hover());
+                let (_base_response, painter) =
+                    ui.allocate_painter(available_rect.size(), Sense::hover());
 
                 // Explicitly handle interactions for disjoint areas
                 let ruler_response =
@@ -228,13 +244,15 @@ pub fn graph_editor_panel(
                     .and_then(|c| c.shortcut)
                     .map(|(_, k)| k);
 
-                let mut controller = ViewportController::new(ui, ui.id().with("graph"), hand_tool_key)
-                    .with_config(ViewportConfig {
-                        zoom_uniform: false,
-                        allow_zoom_x: true,
-                        allow_zoom_y: true,
-                        ..Default::default()
-                    });
+                let mut controller =
+                    ViewportController::new(ui, ui.id().with("graph"), hand_tool_key).with_config(
+                        ViewportConfig {
+                            zoom_uniform: false,
+                            allow_zoom_x: true,
+                            allow_zoom_y: true,
+                            ..Default::default()
+                        },
+                    );
 
                 let (_changed, graph_response) = controller.interact_with_rect(
                     graph_rect,
@@ -248,8 +266,8 @@ pub fn graph_editor_panel(
                 if ruler_response.dragged() || ruler_response.clicked() {
                     if let Some(pos) = ruler_response.interact_pointer_pos() {
                         let x = pos.x;
-                        let time =
-                            (x - graph_rect.min.x - editor_context.graph_editor.pan.x) / pixels_per_second;
+                        let time = (x - graph_rect.min.x - editor_context.graph_editor.pan.x)
+                            / pixels_per_second;
                         editor_context.timeline.current_time = time.max(0.0) as f32;
                     }
                 }
@@ -285,21 +303,25 @@ pub fn graph_editor_panel(
                 if clip_fps > 0.0 {
                     let start_t = clip_start_frame as f64 / clip_fps;
                     let end_t = clip_end_frame as f64 / clip_fps;
-                    
-                    let start_x = graph_rect.min.x + editor_context.graph_editor.pan.x + (start_t as f32 * pixels_per_second);
-                    let end_x = graph_rect.min.x + editor_context.graph_editor.pan.x + (end_t as f32 * pixels_per_second);
-                    
-                    // Clamp to graph area to avoid drawing over ruler if logic was different, 
+
+                    let start_x = graph_rect.min.x
+                        + editor_context.graph_editor.pan.x
+                        + (start_t as f32 * pixels_per_second);
+                    let end_x = graph_rect.min.x
+                        + editor_context.graph_editor.pan.x
+                        + (end_t as f32 * pixels_per_second);
+
+                    // Clamp to graph area to avoid drawing over ruler if logic was different,
                     // but pure x coordinates are fine with clip_rect.
                     // We want to highlight the *valid* area.
-                    
+
                     let highlight_rect = Rect::from_min_max(
                         Pos2::new(start_x.max(graph_rect.min.x), graph_rect.min.y),
                         Pos2::new(end_x.min(graph_rect.max.x), graph_rect.max.y),
                     );
-                    
+
                     if highlight_rect.is_positive() {
-                         painter.rect_filled(highlight_rect, 0.0, Color32::from_gray(25)); 
+                        painter.rect_filled(highlight_rect, 0.0, Color32::from_gray(25));
                     }
                 }
 
@@ -320,8 +342,8 @@ pub fn graph_editor_panel(
 
                 let from_screen_pos = |pos: Pos2| -> (f64, f64) {
                     let x = pos.x;
-                    let time =
-                        (x - graph_rect.min.x - editor_context.graph_editor.pan.x) / pixels_per_second;
+                    let time = (x - graph_rect.min.x - editor_context.graph_editor.pan.x)
+                        / pixels_per_second;
 
                     let zero_y = graph_rect.center().y + editor_context.graph_editor.pan.y;
                     let y = pos.y;
@@ -333,8 +355,8 @@ pub fn graph_editor_panel(
 
                 // Time Grid & Ruler
                 let start_time = (-editor_context.graph_editor.pan.x / pixels_per_second) as f64;
-                let end_time =
-                    ((graph_rect.width() - editor_context.graph_editor.pan.x) / pixels_per_second) as f64;
+                let end_time = ((graph_rect.width() - editor_context.graph_editor.pan.x)
+                    / pixels_per_second) as f64;
 
                 // Adaptive step size
                 let min_step_px = 50.0;
@@ -437,251 +459,287 @@ pub fn graph_editor_panel(
                         );
                     }
                 }
-        let mut color_cycle = [
-            Color32::RED,
-            Color32::GREEN,
-            Color32::BLUE,
-            Color32::YELLOW,
-            Color32::CYAN,
-            Color32::MAGENTA,
-            Color32::ORANGE,
-        ]
-        .iter()
-        .cycle();
+                let mut color_cycle = [
+                    Color32::RED,
+                    Color32::GREEN,
+                    Color32::BLUE,
+                    Color32::YELLOW,
+                    Color32::CYAN,
+                    Color32::MAGENTA,
+                    Color32::ORANGE,
+                ]
+                .iter()
+                .cycle();
 
-        for (name, property, map) in properties_to_plot {
-            let color = *color_cycle.next().unwrap();
-            
-            if !editor_context.graph_editor.visible_properties.contains(&name) {
-                continue;
-            }
+                for (name, property, map) in properties_to_plot {
+                    let color = *color_cycle.next().unwrap();
 
-            match property.evaluator.as_str() {
-                "constant" => {
-                    if let Some(val) = property.value().and_then(|v| v.get_as::<f64>()) {
-                         let y = to_screen_pos(0.0, val).y;
-                         if y >= graph_rect.min.y && y <= graph_rect.max.y {
-                             painter.line_segment(
-                                 [Pos2::new(graph_rect.min.x, y), Pos2::new(graph_rect.max.x, y)],
-                                 Stroke::new(2.0, color),
-                             );
-                             painter.text(
-                                 Pos2::new(graph_rect.min.x + 40.0, y - 5.0),
-                                 egui::Align2::LEFT_BOTTOM,
-                                 format!("{}: {:.2}", name, val),
-                                 egui::FontId::default(),
-                                 color,
-                             );
-                             
-                             // Double Click to add keyframe logic
-                             if response.double_clicked() {
-                                 if let Some(pointer_pos) = response.interact_pointer_pos() {
-                                     if (pointer_pos.y - y).abs() < 5.0 && graph_rect.contains(pointer_pos) {
-                                         let (t, _) = from_screen_pos(pointer_pos);
-                                         if let Action::None = action {
-                                             action = Action::Add(name.clone(), t.max(0.0), val);
-                                         }
-                                     }
-                                 }
-                             }
-                        }
-                    }
-                }
-                "keyframe" | "expression" => {
-                    // Use sampling based rendering for consistent visualization (Keyframes, Expressions, etc.)
-                   
-                    // 1. Draw Curve via Sampling
-                    let mut path_points = Vec::new();
-                    let step_px = 2.0f32; // Sample every 2 pixels
-                    
-                    let start_x = graph_rect.min.x;
-                    let end_x = graph_rect.max.x;
-                    let steps = ((end_x - start_x) / step_px).ceil() as usize;
-
-                    for s in 0..=steps {
-                        let x = start_x + s as f32 * step_px;
-                        // Convert screen x to time
-                        // x = min.x + pan.x + (time * pps)
-                        // time = (x - min.x - pan.x) / pps
-                         let time = (x - graph_rect.min.x - editor_context.graph_editor.pan.x) / pixels_per_second;
-                         
-                         // Evaluate
-                         let value_pv = project_service.evaluate_property_value(property, map, time as f64);
-                         
-                         if let Some(val) = value_pv.get_as::<f64>() {
-                             let pos = to_screen_pos(time as f64, val);
-                             // Clamp Y to reasonable bounds to avoid drawing issues far off screen? 
-                             // Painter usually handles it, but let's be safe if needed. 
-                             // Actually egui painter clips to clip_rect, so it's fine.
-                             path_points.push(pos);
-                         }
+                    if !editor_context
+                        .graph_editor
+                        .visible_properties
+                        .contains(&name)
+                    {
+                        continue;
                     }
 
-                    if path_points.len() > 1 {
-                        painter.add(egui::Shape::line(path_points, Stroke::new(2.0, color)));
-                    }
+                    match property.evaluator.as_str() {
+                        "constant" => {
+                            if let Some(val) = property.value().and_then(|v| v.get_as::<f64>()) {
+                                let y = to_screen_pos(0.0, val).y;
+                                if y >= graph_rect.min.y && y <= graph_rect.max.y {
+                                    painter.line_segment(
+                                        [
+                                            Pos2::new(graph_rect.min.x, y),
+                                            Pos2::new(graph_rect.max.x, y),
+                                        ],
+                                        Stroke::new(2.0, color),
+                                    );
+                                    painter.text(
+                                        Pos2::new(graph_rect.min.x + 40.0, y - 5.0),
+                                        egui::Align2::LEFT_BOTTOM,
+                                        format!("{}: {:.2}", name, val),
+                                        egui::FontId::default(),
+                                        color,
+                                    );
 
-                    // 2. Draw Keyframe Dots (Overlay) if it is a keyframe property
-                    if property.evaluator == "keyframe" {
-                        let keyframes = property.keyframes();
-                        let mut sorted_kf = keyframes.clone();
-                         sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-
-                        for (i, kf) in sorted_kf.iter().enumerate() {
-                            let t = kf.time.into_inner();
-                            let val = kf.value.get_as::<f64>().unwrap_or(0.0);
-                            let kf_pos = to_screen_pos(t, val);
-
-                            // Skip if out of view (optimization)
-                            if !graph_rect.expand(10.0).contains(kf_pos) {
-                                continue;
-                            }
-
-                            // Interaction area
-                            let point_rect = Rect::from_center_size(kf_pos, Vec2::splat(12.0));
-                            let point_id = response.id.with(&name).with(i);
-                            let point_response =
-                                ui.interact(point_rect, point_id, Sense::click_and_drag());
-
-                            let is_selected = editor_context
-                                .interaction
-                                .selected_keyframe
-                                .as_ref()
-                                .map_or(false, |(s_name, s_idx)| s_name == &name && *s_idx == i);
-
-                            // Draw Dot
-                            let dot_color = if is_selected { Color32::WHITE } else { color };
-                            let radius = if is_selected { 6.0 } else { 4.0 };
-                            painter.circle_filled(kf_pos, radius, dot_color);
-
-                            // Selection
-                            if point_response.clicked() {
-                                action = Action::Select(name.clone(), i);
-                            }
-
-                            // History: drag stopped
-                            if point_response.drag_stopped() {
-                                should_push_history = true;
-                            }
-
-                            // Context Menu
-                            let name_for_menu = name.clone();
-                            point_response.context_menu(|ui| {
-                                ui.label(format!("Keyframe {} - {}", i, name_for_menu));
-                                ui.separator();
-                                let mut chosen_easing = None;
-                                crate::ui::easing_menus::show_easing_menu(ui, None, |easing| {
-                                    chosen_easing = Some(easing);
-                                });
-
-                                if let Some(easing) = chosen_easing {
-                                    action = Action::SetEasing(name_for_menu.clone(), i, easing);
-                                    should_push_history = true;
-                                    ui.close_kind(UiKind::Menu);
-                                }
-
-                                ui.separator();
-                                if ui.button("Edit Keyframe...").clicked() {
-                                    action = Action::EditKeyframe(name_for_menu.clone(), i);
-                                    ui.close_kind(UiKind::Menu);
-                                }
-
-                                ui.separator();
-                                if ui
-                                    .button(egui::RichText::new("Delete Keyframe").color(Color32::RED))
-                                    .clicked()
-                                {
-                                    action = Action::Remove(name_for_menu.clone(), i);
-                                    should_push_history = true;
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                            });
-
-                            // Dragging
-                            if is_selected && point_response.dragged() {
-                                let (new_t, new_val) =
-                                    from_screen_pos(kf_pos + point_response.drag_delta());
-                                action = Action::Move(name.clone(), i, new_t.max(0.0), new_val);
-                            }
-                        }
-                    
-                    // Add Keyframe (Double Click) logic constraint
-                    // Re-use logic but adapted? 
-                    // The previous logic used 'closest point on curve segment'.
-                    // Now we effectively have the curve implicitly. 
-                    // We can check distance to sampled points?
-                    // Or keep the old logic just for hit testing? 
-                    // Actually, for adding keyframes, checking strictly against the curve is nice. 
-                    // But 'evaluate_property_value(t)' effectively gives us the Y for any T.
-                    // So we can check if click_y is close to eval(click_t).
-                    
-                        if response.double_clicked() {
-                             if let Some(pointer_pos) = response.interact_pointer_pos() {
-                                if graph_rect.contains(pointer_pos) {
-                                    let (t, _) = from_screen_pos(pointer_pos);
-                                    
-                                    // Evaluate at pointer time
-                                    let val_at_t = project_service.evaluate_property_value(property, map, t).get_as::<f64>().unwrap_or(0.0);
-                                    let curve_pos = to_screen_pos(t, val_at_t);
-                                    
-                                    // Distance check
-                                    if (pointer_pos.y - curve_pos.y).abs() < 10.0 {
-                                         if let Action::None = action {
-                                            action = Action::Add(name.clone(), t.max(0.0), val_at_t);
-                                            should_push_history = true;
+                                    // Double Click to add keyframe logic
+                                    if response.double_clicked() {
+                                        if let Some(pointer_pos) = response.interact_pointer_pos() {
+                                            if (pointer_pos.y - y).abs() < 5.0
+                                                && graph_rect.contains(pointer_pos)
+                                            {
+                                                let (t, _) = from_screen_pos(pointer_pos);
+                                                if let Action::None = action {
+                                                    action =
+                                                        Action::Add(name.clone(), t.max(0.0), val);
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                             }
+                            }
                         }
+                        "keyframe" | "expression" => {
+                            // Use sampling based rendering for consistent visualization (Keyframes, Expressions, etc.)
+
+                            // 1. Draw Curve via Sampling
+                            let mut path_points = Vec::new();
+                            let step_px = 2.0f32; // Sample every 2 pixels
+
+                            let start_x = graph_rect.min.x;
+                            let end_x = graph_rect.max.x;
+                            let steps = ((end_x - start_x) / step_px).ceil() as usize;
+
+                            for s in 0..=steps {
+                                let x = start_x + s as f32 * step_px;
+                                // Convert screen x to time
+                                // x = min.x + pan.x + (time * pps)
+                                // time = (x - min.x - pan.x) / pps
+                                let time =
+                                    (x - graph_rect.min.x - editor_context.graph_editor.pan.x)
+                                        / pixels_per_second;
+
+                                // Evaluate
+                                let value_pv = project_service.evaluate_property_value(
+                                    property,
+                                    map,
+                                    time as f64,
+                                );
+
+                                if let Some(val) = value_pv.get_as::<f64>() {
+                                    let pos = to_screen_pos(time as f64, val);
+                                    // Clamp Y to reasonable bounds to avoid drawing issues far off screen?
+                                    // Painter usually handles it, but let's be safe if needed.
+                                    // Actually egui painter clips to clip_rect, so it's fine.
+                                    path_points.push(pos);
+                                }
+                            }
+
+                            if path_points.len() > 1 {
+                                painter
+                                    .add(egui::Shape::line(path_points, Stroke::new(2.0, color)));
+                            }
+
+                            // 2. Draw Keyframe Dots (Overlay) if it is a keyframe property
+                            if property.evaluator == "keyframe" {
+                                let keyframes = property.keyframes();
+                                let mut sorted_kf = keyframes.clone();
+                                sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+
+                                for (i, kf) in sorted_kf.iter().enumerate() {
+                                    let t = kf.time.into_inner();
+                                    let val = kf.value.get_as::<f64>().unwrap_or(0.0);
+                                    let kf_pos = to_screen_pos(t, val);
+
+                                    // Skip if out of view (optimization)
+                                    if !graph_rect.expand(10.0).contains(kf_pos) {
+                                        continue;
+                                    }
+
+                                    // Interaction area
+                                    let point_rect =
+                                        Rect::from_center_size(kf_pos, Vec2::splat(12.0));
+                                    let point_id = response.id.with(&name).with(i);
+                                    let point_response =
+                                        ui.interact(point_rect, point_id, Sense::click_and_drag());
+
+                                    let is_selected = editor_context
+                                        .interaction
+                                        .selected_keyframe
+                                        .as_ref()
+                                        .map_or(false, |(s_name, s_idx)| {
+                                            s_name == &name && *s_idx == i
+                                        });
+
+                                    // Draw Dot
+                                    let dot_color =
+                                        if is_selected { Color32::WHITE } else { color };
+                                    let radius = if is_selected { 6.0 } else { 4.0 };
+                                    painter.circle_filled(kf_pos, radius, dot_color);
+
+                                    // Selection
+                                    if point_response.clicked() {
+                                        action = Action::Select(name.clone(), i);
+                                    }
+
+                                    // History: drag stopped
+                                    if point_response.drag_stopped() {
+                                        should_push_history = true;
+                                    }
+
+                                    // Context Menu
+                                    let name_for_menu = name.clone();
+                                    point_response.context_menu(|ui| {
+                                        ui.label(format!("Keyframe {} - {}", i, name_for_menu));
+                                        ui.separator();
+                                        let mut chosen_easing = None;
+                                        crate::ui::easing_menus::show_easing_menu(
+                                            ui,
+                                            None,
+                                            |easing| {
+                                                chosen_easing = Some(easing);
+                                            },
+                                        );
+
+                                        if let Some(easing) = chosen_easing {
+                                            action =
+                                                Action::SetEasing(name_for_menu.clone(), i, easing);
+                                            should_push_history = true;
+                                            ui.close_kind(UiKind::Menu);
+                                        }
+
+                                        ui.separator();
+                                        if ui.button("Edit Keyframe...").clicked() {
+                                            action = Action::EditKeyframe(name_for_menu.clone(), i);
+                                            ui.close_kind(UiKind::Menu);
+                                        }
+
+                                        ui.separator();
+                                        if ui
+                                            .button(
+                                                egui::RichText::new("Delete Keyframe")
+                                                    .color(Color32::RED),
+                                            )
+                                            .clicked()
+                                        {
+                                            action = Action::Remove(name_for_menu.clone(), i);
+                                            should_push_history = true;
+                                            ui.close_kind(UiKind::Menu);
+                                        }
+                                    });
+
+                                    // Dragging
+                                    if is_selected && point_response.dragged() {
+                                        let (new_t, new_val) =
+                                            from_screen_pos(kf_pos + point_response.drag_delta());
+                                        action =
+                                            Action::Move(name.clone(), i, new_t.max(0.0), new_val);
+                                    }
+                                }
+
+                                // Add Keyframe (Double Click) logic constraint
+                                // Re-use logic but adapted?
+                                // The previous logic used 'closest point on curve segment'.
+                                // Now we effectively have the curve implicitly.
+                                // We can check distance to sampled points?
+                                // Or keep the old logic just for hit testing?
+                                // Actually, for adding keyframes, checking strictly against the curve is nice.
+                                // But 'evaluate_property_value(t)' effectively gives us the Y for any T.
+                                // So we can check if click_y is close to eval(click_t).
+
+                                if response.double_clicked() {
+                                    if let Some(pointer_pos) = response.interact_pointer_pos() {
+                                        if graph_rect.contains(pointer_pos) {
+                                            let (t, _) = from_screen_pos(pointer_pos);
+
+                                            // Evaluate at pointer time
+                                            let val_at_t = project_service
+                                                .evaluate_property_value(property, map, t)
+                                                .get_as::<f64>()
+                                                .unwrap_or(0.0);
+                                            let curve_pos = to_screen_pos(t, val_at_t);
+
+                                            // Distance check
+                                            if (pointer_pos.y - curve_pos.y).abs() < 10.0 {
+                                                if let Action::None = action {
+                                                    action = Action::Add(
+                                                        name.clone(),
+                                                        t.max(0.0),
+                                                        val_at_t,
+                                                    );
+                                                    should_push_history = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
+
+                        _ => {}
                     }
+                }
 
-                _ => {}
-            }
-        }
+                // Draw Playhead in Graph
+                let t_cursor = editor_context.timeline.current_time as f64;
+                let x_cursor = graph_rect.min.x
+                    + editor_context.graph_editor.pan.x
+                    + (t_cursor as f32 * pixels_per_second);
+                if x_cursor >= graph_rect.min.x && x_cursor <= graph_rect.max.x {
+                    painter.line_segment(
+                        [
+                            Pos2::new(x_cursor, graph_rect.min.y),
+                            Pos2::new(x_cursor, graph_rect.max.y),
+                        ],
+                        Stroke::new(2.0, Color32::RED),
+                    );
+                }
+                // Draw Playhead in Ruler
+                let t_cursor = editor_context.timeline.current_time as f64;
+                let x_cursor = ruler_rect.min.x
+                    + editor_context.graph_editor.pan.x
+                    + (t_cursor as f32 * pixels_per_second);
 
-        // Draw Playhead in Graph
-        let t_cursor = editor_context.timeline.current_time as f64;
-        let x_cursor = graph_rect.min.x
-            + editor_context.graph_editor.pan.x
-            + (t_cursor as f32 * pixels_per_second);
-        if x_cursor >= graph_rect.min.x && x_cursor <= graph_rect.max.x {
-            painter.line_segment(
-                [
-                    Pos2::new(x_cursor, graph_rect.min.y),
-                    Pos2::new(x_cursor, graph_rect.max.y),
-                ],
-                Stroke::new(2.0, Color32::RED),
-            );
-        }
-        // Draw Playhead in Ruler
-        let t_cursor = editor_context.timeline.current_time as f64;
-        let x_cursor = ruler_rect.min.x
-            + editor_context.graph_editor.pan.x
-            + (t_cursor as f32 * pixels_per_second);
+                if x_cursor >= ruler_rect.min.x && x_cursor <= ruler_rect.max.x {
+                    // ... existing drawing for ruler playhead or use shared cursor logic ..
+                    // Actually lines 604-611 seem to draw the triangle in ruler.
+                    // I'll leave it as is, just closing the CentralPanel and Horizontal block.
+                }
 
-        if x_cursor >= ruler_rect.min.x && x_cursor <= ruler_rect.max.x {
-             // ... existing drawing for ruler playhead or use shared cursor logic ..
-             // Actually lines 604-611 seem to draw the triangle in ruler.
-             // I'll leave it as is, just closing the CentralPanel and Horizontal block.
-        }
-
-        if x_cursor >= ruler_rect.min.x && x_cursor <= ruler_rect.max.x {
-            // Triangle head
-            let head_size = 6.0;
-            painter.add(egui::Shape::convex_polygon(
-                vec![
-                    Pos2::new(x_cursor, ruler_rect.max.y),
-                    Pos2::new(x_cursor - head_size, ruler_rect.max.y - head_size),
-                    Pos2::new(x_cursor + head_size, ruler_rect.max.y - head_size),
-                ],
-                Color32::RED,
-                Stroke::NONE,
-            ));
-        }
-
-             }); // End CentralPanel (Graph)
+                if x_cursor >= ruler_rect.min.x && x_cursor <= ruler_rect.max.x {
+                    // Triangle head
+                    let head_size = 6.0;
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            Pos2::new(x_cursor, ruler_rect.max.y),
+                            Pos2::new(x_cursor - head_size, ruler_rect.max.y - head_size),
+                            Pos2::new(x_cursor + head_size, ruler_rect.max.y - head_size),
+                        ],
+                        Color32::RED,
+                        Stroke::NONE,
+                    ));
+                }
+            }); // End CentralPanel (Graph)
         } // End Scope
     } // End Read Lock Scope
 

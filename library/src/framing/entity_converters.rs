@@ -5,7 +5,6 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::model::frame::{
-    color::Color,
     draw_type::{DrawStyle, PathEffect},
     effect::ImageEffect,
     entity::{FrameContent, FrameObject, ImageSurface, StyleConfig},

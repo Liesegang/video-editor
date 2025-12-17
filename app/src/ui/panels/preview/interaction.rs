@@ -219,24 +219,35 @@ impl<'a> PreviewInteractions<'a> {
                     // If Shift/Ctrl is held, we might be adding it to selection?
                     // Usually dragging implies selection.
                     // If not selected, select it.
-                    if !self.editor_context.is_selected(hovered) {
-                        // Modifiers?
-                        let modifiers = self.ui.input(|i| i.modifiers);
-                        if modifiers.shift || modifiers.ctrl {
-                            self.editor_context.add_selection(
-                                hovered,
-                                self.get_track_id(hovered).unwrap_or_default(),
-                            );
-                        } else {
-                            self.editor_context.select_clip(
-                                hovered,
-                                self.get_track_id(hovered).unwrap_or_default(),
-                            );
+                    let modifiers = self.ui.input(|i| i.modifiers);
+                    let action = crate::ui::selection::SelectionAction::from_modifiers(&modifiers);
+                    let track_id = self.get_track_id(hovered).unwrap_or_default();
+                    let mut should_drag = true;
+
+                    match action {
+                        crate::ui::selection::SelectionAction::Remove => {
+                            if self.editor_context.is_selected(hovered) {
+                                self.editor_context.toggle_selection(hovered, track_id);
+                            }
+                            should_drag = false;
+                        }
+                        crate::ui::selection::SelectionAction::Add
+                        | crate::ui::selection::SelectionAction::Toggle => {
+                            if !self.editor_context.is_selected(hovered) {
+                                self.editor_context.toggle_selection(hovered, track_id);
+                            }
+                        }
+                        crate::ui::selection::SelectionAction::Replace => {
+                            if !self.editor_context.is_selected(hovered) {
+                                self.editor_context.select_clip(hovered, track_id);
+                            }
                         }
                     }
 
-                    self.editor_context.interaction.is_moving_selected_entity = true;
-                    self.init_drag_state(pointer_pos);
+                    if should_drag && self.editor_context.is_selected(hovered) {
+                        self.editor_context.interaction.is_moving_selected_entity = true;
+                        self.init_drag_state(pointer_pos);
+                    }
                 } else {
                     // Started drag on background -> Box Selection
                     self.editor_context.interaction.is_moving_selected_entity = false;
@@ -453,6 +464,18 @@ impl<'a> PreviewInteractions<'a> {
                 let track_id = self.get_track_id(id).unwrap_or_default();
                 self.editor_context.select_clip(id, track_id);
             }
+            crate::ui::selection::ClickAction::Add(id) => {
+                let track_id = self.get_track_id(id).unwrap_or_default();
+                if !self.editor_context.is_selected(id) {
+                    self.editor_context.toggle_selection(id, track_id);
+                }
+            }
+            crate::ui::selection::ClickAction::Remove(id) => {
+                let track_id = self.get_track_id(id).unwrap_or_default();
+                if self.editor_context.is_selected(id) {
+                    self.editor_context.toggle_selection(id, track_id);
+                }
+            }
             crate::ui::selection::ClickAction::Toggle(id) => {
                 let track_id = self.get_track_id(id).unwrap_or_default();
                 self.editor_context.toggle_selection(id, track_id);
@@ -566,6 +589,11 @@ impl<'a> PreviewInteractions<'a> {
                             if let Some(lid) = last_id {
                                 self.editor_context.selection.last_selected_entity_id = Some(lid);
                                 self.editor_context.selection.last_selected_track_id = last_track;
+                            }
+                        }
+                        crate::ui::selection::BoxAction::Remove(ids) => {
+                            for id in ids {
+                                self.editor_context.selection.selected_entities.remove(&id);
                             }
                         }
                     }

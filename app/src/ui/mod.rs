@@ -5,6 +5,6 @@ pub mod menu;
 pub mod panels;
 pub mod selection;
 pub mod tab_viewer;
+pub mod theme;
 pub mod viewport;
 pub mod widgets;
-pub mod theme;

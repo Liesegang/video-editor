@@ -1,13 +1,11 @@
-use egui::{Id, Ui};
+use egui::Ui;
 
 use library::model::project::project::Project;
-use library::model::project::property::PropertyValue;
 
 use library::service::project_service::ProjectService;
 use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
-use uuid::Uuid;
 
 use library::plugin::PropertyUiType;
 
@@ -123,7 +121,7 @@ pub fn inspector_panel(
                 ui.add_space(5.0);
                 ui.heading(&category);
 
-                if let Some(mut defs) = grouped.remove(&category) {
+                if let Some(defs) = grouped.remove(&category) {
                     struct Chunk {
                         is_grid: bool,
                         defs: Vec<library::plugin::PropertyDefinition>,
@@ -183,7 +181,7 @@ pub fn inspector_panel(
                                                 ).ok();
                                                 needs_refresh = true;
                                             }
-                                            crate::ui::panels::inspector::properties::PropertyAction::Commit(_) => {
+                                            crate::ui::panels::inspector::properties::PropertyAction::Commit => {
                                                 let current_state = project_service.get_project().read().unwrap().clone();
                                                 history_manager.push_project_state(current_state);
                                             }
@@ -260,7 +258,7 @@ pub fn inspector_panel(
                                                     ).ok();
                                                     needs_refresh = true;
                                                 }
-                                                crate::ui::panels::inspector::properties::PropertyAction::Commit(_) => {
+                                                crate::ui::panels::inspector::properties::PropertyAction::Commit => {
                                                     let current_state = project_service.get_project().read().unwrap().clone();
                                                     history_manager.push_project_state(current_state);
                                                 }

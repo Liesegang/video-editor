@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align2, Color32, Context, Id, InnerResponse, LayerId, Order, Rect, Vec2};
+use eframe::egui::{self, Align2, Color32, Context, Id, InnerResponse, Order, Vec2};
 
 pub struct Modal<'a> {
     title: String,
@@ -11,6 +11,7 @@ pub struct Modal<'a> {
     anchor: Option<(Align2, Vec2)>,
 }
 
+#[allow(dead_code)]
 impl<'a> Modal<'a> {
     pub fn new(title: impl Into<String>) -> Self {
         let title = title.into();
@@ -28,11 +29,6 @@ impl<'a> Modal<'a> {
 
     // ... (builders same)
 
-    pub fn with_id(mut self, id: impl std::hash::Hash) -> Self {
-        self.id = Id::new(id);
-        self
-    }
-
     pub fn open(mut self, open: &'a mut bool) -> Self {
         self.open = Some(open);
         self
@@ -48,17 +44,12 @@ impl<'a> Modal<'a> {
         self
     }
 
-    pub fn movable(mut self, movable: bool) -> Self {
-        self.movable = movable;
-        self
-    }
-
     pub fn fixed_size(mut self, size: impl Into<Vec2>) -> Self {
         self.fixed_size = Some(size.into());
         self
     }
 
-    pub fn default_width(mut self, _width: f32) -> Self {
+    pub fn default_width(self, _width: f32) -> Self {
         self
     }
 
@@ -70,13 +61,9 @@ impl<'a> Modal<'a> {
         self
     }
 
-    pub fn anchor(mut self, align: Align2, offset: impl Into<Vec2>) -> Self {
-        self.anchor = Some((align, offset.into()));
-        self
-    }
-
+    #[allow(deprecated)]
     pub fn show<R>(
-        mut self,
+        self,
         ctx: &Context,
         add_contents: impl FnOnce(&mut egui::Ui) -> R,
     ) -> Option<InnerResponse<Option<R>>> {
@@ -94,15 +81,12 @@ impl<'a> Modal<'a> {
         egui::Area::new(self.id.with("backdrop"))
             .interactable(true)
             .fixed_pos(egui::pos2(0.0, 0.0))
-            .order(Order::Middle) 
+            .order(Order::Middle)
             .show(ctx, |ui| {
-                let screen_rect = ctx.screen_rect();
+                let screen_rect = ctx.input(|i| i.screen_rect());
                 ui.allocate_rect(screen_rect, egui::Sense::click());
-                ui.painter().rect_filled(
-                    screen_rect,
-                    0.0,
-                    Color32::from_black_alpha(100),
-                );
+                ui.painter()
+                    .rect_filled(screen_rect, 0.0, Color32::from_black_alpha(100));
             });
 
         // 2. Draw Window on top
@@ -125,7 +109,7 @@ impl<'a> Modal<'a> {
         if let Some((align, offset)) = self.anchor {
             window = window.anchor(align, offset);
         } else {
-            window = window.default_pos(ctx.screen_rect().center());
+            window = window.default_pos(ctx.input(|i| i.screen_rect()).center());
         }
 
         window.show(ctx, add_contents)
