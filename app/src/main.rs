@@ -8,7 +8,7 @@ mod model;
 mod shortcut;
 mod state;
 mod ui;
-mod utils;
+pub mod utils;
 
 fn main() -> eframe::Result<()> {
     // Initialize the logger

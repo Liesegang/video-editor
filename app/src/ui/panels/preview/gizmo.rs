@@ -214,60 +214,50 @@ pub fn handle_gizmo_interaction(
                     // Apply Updates
                     let current_time = editor_context.timeline.current_time as f64;
 
-                    let _ = project_service.update_property_or_keyframe(
+                    crate::utils::property::update_number_property(
+                        project_service,
                         comp_id,
                         track_id,
                         selected_id,
                         "scale_x",
                         current_time,
-                        library::model::project::property::PropertyValue::Number(OrderedFloat(
-                            new_scale_x as f64,
-                        )),
-                        None,
+                        new_scale_x as f64,
                     );
-                    let _ = project_service.update_property_or_keyframe(
+                    crate::utils::property::update_number_property(
+                        project_service,
                         comp_id,
                         track_id,
                         selected_id,
                         "scale_y",
                         current_time,
-                        library::model::project::property::PropertyValue::Number(OrderedFloat(
-                            new_scale_y as f64,
-                        )),
-                        None,
+                        new_scale_y as f64,
                     );
-                    let _ = project_service.update_property_or_keyframe(
+                    crate::utils::property::update_number_property(
+                        project_service,
                         comp_id,
                         track_id,
                         selected_id,
                         "position_x",
                         current_time,
-                        library::model::project::property::PropertyValue::Number(OrderedFloat(
-                            new_pos_x as f64,
-                        )),
-                        None,
+                        new_pos_x as f64,
                     );
-                    let _ = project_service.update_property_or_keyframe(
+                    crate::utils::property::update_number_property(
+                        project_service,
                         comp_id,
                         track_id,
                         selected_id,
                         "position_y",
                         current_time,
-                        library::model::project::property::PropertyValue::Number(OrderedFloat(
-                            new_pos_y as f64,
-                        )),
-                        None,
+                        new_pos_y as f64,
                     );
-                    let _ = project_service.update_property_or_keyframe(
+                    crate::utils::property::update_number_property(
+                        project_service,
                         comp_id,
                         track_id,
                         selected_id,
                         "rotation",
                         current_time,
-                        library::model::project::property::PropertyValue::Number(OrderedFloat(
-                            new_rotation as f64,
-                        )),
-                        None,
+                        new_rotation as f64,
                     );
                 }
             }

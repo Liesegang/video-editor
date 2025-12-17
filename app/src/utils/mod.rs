@@ -1,3 +1,4 @@
+pub mod property;
 use egui::Context;
 use log::warn;
 use std::fs;
