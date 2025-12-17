@@ -171,16 +171,14 @@ impl<'a> PreviewInteractions<'a> {
                                 {
                                     let current_time =
                                         self.editor_context.timeline.current_time as f64;
-                                    let _ = self.project_service.update_property_or_keyframe(
+                                    crate::utils::property::update_string_property(
+                                        self.project_service,
                                         comp_id,
                                         gc.track_id,
                                         *id,
                                         "path",
                                         current_time,
-                                        library::model::project::property::PropertyValue::String(
-                                            new_path,
-                                        ),
-                                        None,
+                                        new_path,
                                     );
                                 }
                             }
@@ -504,27 +502,23 @@ impl<'a> PreviewInteractions<'a> {
                         let new_y = orig_pos[1] as f64 + world_delta.y as f64;
 
                         if let Some(tid) = self.get_track_id(*entity_id) {
-                            let _ = self.project_service.update_property_or_keyframe(
+                            crate::utils::property::update_number_property(
+                                self.project_service,
                                 comp_id,
                                 tid,
                                 *entity_id,
                                 "position_x",
                                 current_time,
-                                library::model::project::property::PropertyValue::Number(
-                                    ordered_float::OrderedFloat(new_x),
-                                ),
-                                None,
+                                new_x,
                             );
-                            let _ = self.project_service.update_property_or_keyframe(
+                            crate::utils::property::update_number_property(
+                                self.project_service,
                                 comp_id,
                                 tid,
                                 *entity_id,
                                 "position_y",
                                 current_time,
-                                library::model::project::property::PropertyValue::Number(
-                                    ordered_float::OrderedFloat(new_y),
-                                ),
-                                None,
+                                new_y,
                             );
                         }
                     }
@@ -718,14 +712,14 @@ impl<'a> PreviewInteractions<'a> {
                     self.editor_context.interaction.text_edit_buffer = text.clone();
 
                     if let Some(comp_id) = self.editor_context.selection.composition_id {
-                        let _ = self.project_service.update_property_or_keyframe(
+                        crate::utils::property::update_string_property(
+                            self.project_service,
                             comp_id,
                             gc.track_id,
                             id,
                             "text",
                             self.editor_context.timeline.current_time as f64,
-                            library::model::project::property::PropertyValue::String(text),
-                            None,
+                            text,
                         );
                     }
                 }
