@@ -10,7 +10,9 @@ use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 
 mod background;
 mod clips;
-mod interactions;
+pub mod context_menu;
+pub mod drag_and_drop;
+pub mod interactions;
 
 struct TimelineViewportState<'a> {
     scroll_offset: &'a mut egui::Vec2,

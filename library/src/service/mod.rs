@@ -1,4 +1,5 @@
 pub mod export_service;
+pub mod handlers;
 pub mod project_model;
 pub mod project_service;
 pub mod render_service; // Added
