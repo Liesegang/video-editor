@@ -19,9 +19,8 @@ pub fn show_keyframe_dialog(
     let mut should_update = false;
     let mut should_push_history = false;
 
-    Window::new("Edit Keyframe")
+    crate::ui::widgets::modal::Modal::new("Edit Keyframe")
         .open(&mut open)
-        .anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .collapsible(false)
         .resizable(true)
         .show(ctx, |ui| {
@@ -67,6 +66,7 @@ pub fn show_keyframe_dialog(
                     ui.label("Easing:");
                     let current_variant_name = match state.easing {
                         EasingFunction::Linear => "Linear",
+                        EasingFunction::Constant => "Constant",
                         EasingFunction::Expression { .. } => "Expression",
                         // Sine
                         EasingFunction::EaseInSine => "Ease In Sine",
@@ -115,218 +115,16 @@ pub fn show_keyframe_dialog(
                     ComboBox::from_id_salt("easing_selector")
                         .selected_text(current_variant_name)
                         .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::Linear,
-                                    "Linear",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            ui.separator();
-                            ui.label("Sine");
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseInSine,
-                                    "Ease In Sine",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseOutSine,
-                                    "Ease Out Sine",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseInOutSine,
-                                    "Ease In Out Sine",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            ui.separator();
-                            ui.label("Quad");
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseInQuad,
-                                    "Ease In Quad",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseOutQuad,
-                                    "Ease Out Quad",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseInOutQuad,
-                                    "Ease In Out Quad",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            ui.separator();
-                            ui.label("Back");
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseInBack { c1: 1.70158 },
-                                    "Ease In Back",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseOutBack { c1: 1.70158 },
-                                    "Ease Out Back",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseInOutBack { c1: 1.70158 },
-                                    "Ease In Out Back",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            ui.separator();
-                            ui.label("Elastic");
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseInElastic { period: 3.0 },
-                                    "Ease In Elastic",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseOutElastic { period: 3.0 },
-                                    "Ease Out Elastic",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseInOutElastic { period: 4.5 },
-                                    "Ease In Out Elastic",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            ui.separator();
-                            ui.label("Bounce");
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseInBounce {
-                                        n1: 7.5625,
-                                        d1: 2.75,
-                                    },
-                                    "Ease In Bounce",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseOutBounce {
-                                        n1: 7.5625,
-                                        d1: 2.75,
-                                    },
-                                    "Ease Out Bounce",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            if ui
-                                .selectable_value(
-                                    &mut state.easing,
-                                    EasingFunction::EaseInOutBounce {
-                                        n1: 7.5625,
-                                        d1: 2.75,
-                                    },
-                                    "Ease In Out Bounce",
-                                )
-                                .clicked()
-                            {
-                                should_update = true;
-                                should_push_history = true;
-                            }
-                            ui.separator();
-                            if ui
-                                .selectable_label(
-                                    matches!(state.easing, EasingFunction::Expression { .. }),
-                                    "Expression",
-                                )
-                                .clicked()
-                            {
-                                // Preserve text if already expression, otherwise default
-                                if !matches!(state.easing, EasingFunction::Expression { .. }) {
-                                    state.easing = EasingFunction::Expression {
-                                        text: "t".to_string(),
-                                    };
+                            let current_easing = state.easing.clone();
+                            crate::ui::easing_menus::show_easing_menu(
+                                ui,
+                                Some(&current_easing),
+                                |easing| {
+                                    state.easing = easing;
                                     should_update = true;
                                     should_push_history = true;
-                                }
-                            }
+                                },
+                            );
                         });
                     ui.end_row();
                 });

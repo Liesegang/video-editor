@@ -1,7 +1,7 @@
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2};
 use library::animation::EasingFunction;
 use library::model::project::project::Project;
-use library::model::project::property::{Property, PropertyValue};
+use library::model::project::property::{Property, PropertyMap, PropertyValue};
 use library::service::project_service::ProjectService;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
@@ -93,7 +93,7 @@ pub fn graph_editor_panel(
             return;
         };
 
-        let mut properties_to_plot: Vec<(String, &Property)> = entity
+        let mut properties_to_plot: Vec<(String, &Property, &PropertyMap)> = entity
             .properties
             .iter()
             .filter(|(_, p)| match p.evaluator.as_str() {
@@ -101,8 +101,11 @@ pub fn graph_editor_panel(
                 "constant" => matches!(p.value(), Some(PropertyValue::Number(_))),
                 _ => false,
             })
-            .map(|(k, p)| (k.clone(), p))
+            .map(|(k, p)| (k.clone(), p, &entity.properties))
             .collect();
+
+        // Capture clip range for visualization
+        let (clip_start_frame, clip_end_frame, clip_fps) = (entity.in_frame, entity.out_frame, composition.fps);
 
         // Add Effect Properties
 
@@ -114,249 +117,326 @@ pub fn graph_editor_panel(
                     _ => false,
                 };
                 if should_plot {
-                    properties_to_plot.push((format!("effect:{}:{}", effect_idx, prop_key), prop));
+                    properties_to_plot.push((format!("effect:{}:{}", effect_idx, prop_key), prop, &effect.properties));
                 }
             }
         }
 
         if properties_to_plot.is_empty() {
-            // We still want to show empty graph? no, return?
-            // User might want to drag drop properties?
-            // For now return.
-            ui.label("No animatable properties found.");
-            return;
+             ui.label("No animatable properties found.");
+             return;
         }
 
-        let pixels_per_second = editor_context.graph_editor.zoom_x;
-        let pixels_per_unit = editor_context.graph_editor.zoom_y;
-
-        // Layout: Top Ruler + Main Graph
-        let ruler_height = 24.0;
-        let available_rect = ui.available_rect_before_wrap();
-
-        // Ruler Rect
-        let mut ruler_rect = available_rect;
-        ruler_rect.max.y = ruler_rect.min.y + ruler_height;
-
-        // Graph Rect
-        let mut graph_rect = available_rect;
-        graph_rect.min.y += ruler_height;
-
-        // Allocate Graph Area (Covers everything including ruler)
-        // We use Sense::hover() here so the painter allocation doesn't steal inputs from manual interact calls below.
-        let (_base_response, painter) = ui.allocate_painter(available_rect.size(), Sense::hover());
-
-        // Explicitly handle interactions for disjoint areas
-        let ruler_response =
-            ui.interact(ruler_rect, ui.id().with("ruler"), Sense::click_and_drag());
-
-        // Viewport Controller Logic
-        let mut state = GraphViewportState {
-            pan: &mut editor_context.graph_editor.pan,
-            zoom_x: &mut editor_context.graph_editor.zoom_x,
-            zoom_y: &mut editor_context.graph_editor.zoom_y,
-        };
-
-        let hand_tool_key = registry
-            .commands
-            .iter()
-            .find(|c| c.id == CommandId::HandTool)
-            .and_then(|c| c.shortcut)
-            .map(|(_, k)| k);
-
-        let mut controller = ViewportController::new(ui, ui.id().with("graph"), hand_tool_key)
-            .with_config(ViewportConfig {
-                zoom_uniform: false,
-                allow_zoom_x: true,
-                allow_zoom_y: true,
-                ..Default::default()
-            });
-
-        let (_changed, graph_response) = controller.interact_with_rect(
-            graph_rect,
-            &mut state,
-            &mut editor_context.interaction.handled_hand_tool_drag,
-        );
-
-        // Interaction Handling
-
-        // Ruler Interaction (Seek)
-        if ruler_response.dragged() || ruler_response.clicked() {
-            if let Some(pos) = ruler_response.interact_pointer_pos() {
-                let x = pos.x;
-                let time =
-                    (x - graph_rect.min.x - editor_context.graph_editor.pan.x) / pixels_per_second;
-                editor_context.timeline.current_time = time.max(0.0) as f32;
+        // Initialize visible_properties if it's empty (first load)
+        if editor_context.graph_editor.visible_properties.is_empty() {
+            for (name, _, _) in &properties_to_plot {
+                editor_context.graph_editor.visible_properties.insert(name.clone());
             }
         }
 
-        // Graph Interaction (Pan)
+        // Layout: Sidebar (List) + Graph
+        // Layout: Sidebar (List) + Graph
+        // ui.horizontal removed to fix height issue
+        {
+            // --- Sidebar: Property List ---
+            let sidebar_width = 200.0;
+            egui::SidePanel::left("graph_sidebar")
+                .resizable(true)
+                .default_width(sidebar_width)
+                .show_inside(ui, |ui| {
+                   ui.heading("Properties");
+                   ui.separator();
+                   egui::ScrollArea::vertical().show(ui, |ui| {
+                       // We need a stable iterator for colors to match the graph ones
+                       // The existing logic used a cycle iterator *during* the loop.
+                       // We should probably generate colors deterministically or consistent with the loop order.
+                       // Since properties_to_plot is filtered deterministically, index-based coloring is fine.
+                       
+                       let mut color_cycle = [
+                            Color32::RED,
+                            Color32::GREEN,
+                            Color32::BLUE,
+                            Color32::YELLOW,
+                            Color32::CYAN,
+                            Color32::MAGENTA,
+                            Color32::ORANGE,
+                        ]
+                        .iter()
+                        .cycle();
 
-        // We use graph_response for Keyframe/Curve interactions in the loop as well?
-        // The keyframe loop uses `ui.interact(point_rect, ...)` which is fine (on top).
-        // But "Double Click to Add" needs to check graph_response.
+                       for (name, _, _) in &properties_to_plot {
+                           let color = *color_cycle.next().unwrap();
+                           let mut is_visible = editor_context.graph_editor.visible_properties.contains(name);
+                           
+                           ui.horizontal(|ui| {
+                               // Color indicator
+                               let (rect, _response) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
+                               ui.painter().circle_filled(rect.center(), 5.0, color);
+                               
+                               if ui.checkbox(&mut is_visible, name).changed() {
+                                   if is_visible {
+                                       editor_context.graph_editor.visible_properties.insert(name.clone());
+                                   } else {
+                                       editor_context.graph_editor.visible_properties.remove(name);
+                                   }
+                               }
+                           });
+                       }
+                   });
+                });
 
-        // Note: We need to update checks later in the file that used `response`.
-        // I will use `graph_response` for those generic graph interactions.
-        let response = graph_response.clone(); // Alias for compatibility with existing code lower down?
-                                               // Actually, I should update the usages below.
-                                               // But to minimize diff, let's see.
-                                               // Usages below:
-                                               // point_response context menu: independent.
-                                               // response.double_clicked(): used for adding keyframe.
-                                               // response.id.with(...): used for IDs.
+            // --- Main Graph Area ---
+            egui::CentralPanel::default().show_inside(ui, |ui| {
+                 // Existing Graph Logic... (wrapped)
+                 
+                 // Note: We need to filter properties_to_plot for the graph loop based on visibility.
+                 // But the rest of the logic (time cursor, zoom, etc.) remains.
+                let pixels_per_second = editor_context.graph_editor.zoom_x;
+                let pixels_per_unit = editor_context.graph_editor.zoom_y;
 
-        // So aliasing `response` to `graph_response` (or `base_response`?)
-        // `base_response` covers all, but `graph_response` is where we want "add keyframe" to happen (not on ruler).
-        // So `let response = graph_response;` seems appropriate.
+                // Layout: Top Ruler + Main Graph
+                let ruler_height = 24.0;
+                let available_rect = ui.available_rect_before_wrap();
 
-        let _response = graph_response; // Shadowing the tuple variable if I extracted it? No, `response` from allocate_painter.
-                                        // Wait, allocate_painter returned `response`. I named it `base_response`.
-                                        // So I can just define `let response = graph_response;` here.
+                // Ruler Rect
+                let mut ruler_rect = available_rect;
+                ruler_rect.max.y = ruler_rect.min.y + ruler_height;
 
-        // Paint Background
-        painter.rect_filled(graph_rect, 0.0, Color32::from_gray(30));
-        painter.rect_filled(ruler_rect, 0.0, Color32::from_gray(40));
-        painter.line_segment(
-            [ruler_rect.left_bottom(), ruler_rect.right_bottom()],
-            Stroke::new(1.0, Color32::BLACK),
-        );
+                // Graph Rect
+                let mut graph_rect = available_rect;
+                graph_rect.min.y += ruler_height;
 
-        let to_screen_pos = |time: f64, value: f64| -> Pos2 {
-            let x = graph_rect.min.x
-                + editor_context.graph_editor.pan.x
-                + (time as f32 * pixels_per_second);
-            let zero_y = graph_rect.center().y + editor_context.graph_editor.pan.y;
-            let y = zero_y - (value as f32 * pixels_per_unit);
-            Pos2::new(x, y)
-        };
+                // Allocate Graph Area (Covers everything including ruler)
+                // We use Sense::hover() here so the painter allocation doesn't steal inputs from manual interact calls below.
+                let (_base_response, painter) = ui.allocate_painter(available_rect.size(), Sense::hover());
 
-        let from_screen_pos = |pos: Pos2| -> (f64, f64) {
-            let x = pos.x;
-            let time =
-                (x - graph_rect.min.x - editor_context.graph_editor.pan.x) / pixels_per_second;
+                // Explicitly handle interactions for disjoint areas
+                let ruler_response =
+                    ui.interact(ruler_rect, ui.id().with("ruler"), Sense::click_and_drag());
 
-            let zero_y = graph_rect.center().y + editor_context.graph_editor.pan.y;
-            let y = pos.y;
-            let value = (zero_y - y) / pixels_per_unit;
-            (time as f64, value as f64)
-        };
-
-        // --- Draw Rulers and Grids ---
-
-        // Time Grid & Ruler
-        let start_time = (-editor_context.graph_editor.pan.x / pixels_per_second) as f64;
-        let end_time =
-            ((graph_rect.width() - editor_context.graph_editor.pan.x) / pixels_per_second) as f64;
-
-        // Adaptive step size
-        let min_step_px = 50.0;
-        let step_time = (min_step_px / pixels_per_second).max(0.01);
-        // Snap to nice numbers (1, 0.5, 0.1 etc)
-        let step_power = step_time.log10().floor();
-        let step_base = 10.0f32.powf(step_power);
-        let step_time = if step_time / step_base < 2.0 {
-            step_base
-        } else if step_time / step_base < 5.0 {
-            step_base * 2.0
-        } else {
-            step_base * 5.0
-        };
-
-        let start_step = (start_time / step_time as f64).floor() as i64;
-        let end_step = (end_time / step_time as f64).ceil() as i64;
-
-        for i in start_step..=end_step {
-            let t = i as f64 * step_time as f64;
-            let x = graph_rect.min.x
-                + editor_context.graph_editor.pan.x
-                + (t as f32 * pixels_per_second);
-
-            if x >= graph_rect.min.x && x <= graph_rect.max.x {
-                // Main Vertical Line
-                painter.line_segment(
-                    [
-                        Pos2::new(x, graph_rect.min.y),
-                        Pos2::new(x, graph_rect.max.y),
-                    ],
-                    Stroke::new(1.0, Color32::from_gray(40)),
-                );
-
-                // Ruler Tick & Label
-                painter.line_segment(
-                    [
-                        Pos2::new(x, ruler_rect.max.y),
-                        Pos2::new(x, ruler_rect.max.y - 10.0),
-                    ],
-                    Stroke::new(1.0, Color32::GRAY),
-                );
-                painter.text(
-                    Pos2::new(x + 2.0, ruler_rect.min.y + 2.0),
-                    egui::Align2::LEFT_TOP,
-                    format!("{:.2}", t),
-                    egui::FontId::proportional(10.0),
-                    Color32::GRAY,
-                );
-            }
-        }
-
-        // Value Grid & Left Axis
-        // Calculate visible value range
-        // zero_y = center + pan.y
-        // y = zero_y - val * zoom
-        // val = (zero_y - y) / zoom
-        let zero_y = graph_rect.center().y + editor_context.graph_editor.pan.y;
-        let min_val = (zero_y - graph_rect.max.y) / pixels_per_unit;
-        let max_val = (zero_y - graph_rect.min.y) / pixels_per_unit;
-
-        let v_step_val = (30.0 / pixels_per_unit).max(0.01); // 30px min spacing
-        let v_step_power = v_step_val.log10().floor();
-        let v_step_base = 10.0f32.powf(v_step_power);
-        let v_step_val = if v_step_val / v_step_base < 2.0 {
-            v_step_base
-        } else if v_step_val / v_step_base < 5.0 {
-            v_step_base * 2.0
-        } else {
-            v_step_base * 5.0
-        };
-
-        let start_v = (min_val / v_step_val).floor() as i64;
-        let end_v = (max_val / v_step_val).ceil() as i64;
-
-        for i in start_v..=end_v {
-            let val = i as f32 * v_step_val;
-            let y = zero_y - (val * pixels_per_unit);
-
-            if y >= graph_rect.min.y && y <= graph_rect.max.y {
-                // Horizontal Line
-                let color = if i == 0 {
-                    Color32::from_gray(80)
-                } else {
-                    Color32::from_gray(40)
+                // Viewport Controller Logic
+                let mut state = GraphViewportState {
+                    pan: &mut editor_context.graph_editor.pan,
+                    zoom_x: &mut editor_context.graph_editor.zoom_x,
+                    zoom_y: &mut editor_context.graph_editor.zoom_y,
                 };
+
+                let hand_tool_key = registry
+                    .commands
+                    .iter()
+                    .find(|c| c.id == CommandId::HandTool)
+                    .and_then(|c| c.shortcut)
+                    .map(|(_, k)| k);
+
+                let mut controller = ViewportController::new(ui, ui.id().with("graph"), hand_tool_key)
+                    .with_config(ViewportConfig {
+                        zoom_uniform: false,
+                        allow_zoom_x: true,
+                        allow_zoom_y: true,
+                        ..Default::default()
+                    });
+
+                let (_changed, graph_response) = controller.interact_with_rect(
+                    graph_rect,
+                    &mut state,
+                    &mut editor_context.interaction.handled_hand_tool_drag,
+                );
+
+                // Interaction Handling
+
+                // Ruler Interaction (Seek)
+                if ruler_response.dragged() || ruler_response.clicked() {
+                    if let Some(pos) = ruler_response.interact_pointer_pos() {
+                        let x = pos.x;
+                        let time =
+                            (x - graph_rect.min.x - editor_context.graph_editor.pan.x) / pixels_per_second;
+                        editor_context.timeline.current_time = time.max(0.0) as f32;
+                    }
+                }
+
+                // Graph Interaction (Pan)
+
+                // We use graph_response for Keyframe/Curve interactions in the loop as well?
+                // The keyframe loop uses `ui.interact(point_rect, ...)` which is fine (on top).
+                // But "Double Click to Add" needs to check graph_response.
+
+                // Note: We need to update checks later in the file that used `response`.
+                // I will use `graph_response` for those generic graph interactions.
+                let response = graph_response.clone(); // Alias for compatibility with existing code lower down?
+                                                       // Actually, I should update the usages below.
+                                                       // But to minimize diff, let's see.
+                                                       // Usages below:
+                                                       // point_response context menu: independent.
+                                                       // response.double_clicked(): used for adding keyframe.
+                                                       // response.id.with(...): used for IDs.
+
+                // So aliasing `response` to `graph_response` (or `base_response`?)
+                // `base_response` covers all, but `graph_response` is where we want "add keyframe" to happen (not on ruler).
+                // So `let response = graph_response;` seems appropriate.
+
+                let _response = graph_response; // Shadowing the tuple variable if I extracted it? No, `response` from allocate_painter.
+                                                // Wait, allocate_painter returned `response`. I named it `base_response`.
+                                                // So I can just define `let response = graph_response;` here.
+
+                // Paint Background (Invalid Area - Lighter)
+                painter.rect_filled(graph_rect, 0.0, Color32::from_gray(45));
+
+                // Highlight Clip Valid Range (Valid Area - Darker)
+                if clip_fps > 0.0 {
+                    let start_t = clip_start_frame as f64 / clip_fps;
+                    let end_t = clip_end_frame as f64 / clip_fps;
+                    
+                    let start_x = graph_rect.min.x + editor_context.graph_editor.pan.x + (start_t as f32 * pixels_per_second);
+                    let end_x = graph_rect.min.x + editor_context.graph_editor.pan.x + (end_t as f32 * pixels_per_second);
+                    
+                    // Clamp to graph area to avoid drawing over ruler if logic was different, 
+                    // but pure x coordinates are fine with clip_rect.
+                    // We want to highlight the *valid* area.
+                    
+                    let highlight_rect = Rect::from_min_max(
+                        Pos2::new(start_x.max(graph_rect.min.x), graph_rect.min.y),
+                        Pos2::new(end_x.min(graph_rect.max.x), graph_rect.max.y),
+                    );
+                    
+                    if highlight_rect.is_positive() {
+                         painter.rect_filled(highlight_rect, 0.0, Color32::from_gray(25)); 
+                    }
+                }
+
+                painter.rect_filled(ruler_rect, 0.0, Color32::from_gray(40));
                 painter.line_segment(
-                    [
-                        Pos2::new(graph_rect.min.x, y),
-                        Pos2::new(graph_rect.max.x, y),
-                    ],
-                    Stroke::new(1.0, color),
+                    [ruler_rect.left_bottom(), ruler_rect.right_bottom()],
+                    Stroke::new(1.0, Color32::BLACK),
                 );
 
-                // Label (Left side)
-                painter.text(
-                    Pos2::new(graph_rect.min.x + 2.0, y - 2.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    format!("{:.2}", val),
-                    egui::FontId::proportional(10.0),
-                    Color32::from_gray(150),
-                );
-            }
-        }
+                let to_screen_pos = |time: f64, value: f64| -> Pos2 {
+                    let x = graph_rect.min.x
+                        + editor_context.graph_editor.pan.x
+                        + (time as f32 * pixels_per_second);
+                    let zero_y = graph_rect.center().y + editor_context.graph_editor.pan.y;
+                    let y = zero_y - (value as f32 * pixels_per_unit);
+                    Pos2::new(x, y)
+                };
 
-        // Clip painter for graph content
-        let painter = painter.with_clip_rect(graph_rect);
+                let from_screen_pos = |pos: Pos2| -> (f64, f64) {
+                    let x = pos.x;
+                    let time =
+                        (x - graph_rect.min.x - editor_context.graph_editor.pan.x) / pixels_per_second;
 
-        // Draw Properties
+                    let zero_y = graph_rect.center().y + editor_context.graph_editor.pan.y;
+                    let y = pos.y;
+                    let value = (zero_y - y) / pixels_per_unit;
+                    (time as f64, value as f64)
+                };
+
+                // --- Draw Rulers and Grids ---
+
+                // Time Grid & Ruler
+                let start_time = (-editor_context.graph_editor.pan.x / pixels_per_second) as f64;
+                let end_time =
+                    ((graph_rect.width() - editor_context.graph_editor.pan.x) / pixels_per_second) as f64;
+
+                // Adaptive step size
+                let min_step_px = 50.0;
+                let step_time = (min_step_px / pixels_per_second).max(0.01);
+                // Snap to nice numbers (1, 0.5, 0.1 etc)
+                let step_power = step_time.log10().floor();
+                let step_base = 10.0f32.powf(step_power);
+                let step_time = if step_time / step_base < 2.0 {
+                    step_base
+                } else if step_time / step_base < 5.0 {
+                    step_base * 2.0
+                } else {
+                    step_base * 5.0
+                };
+
+                let start_step = (start_time / step_time as f64).floor() as i64;
+                let end_step = (end_time / step_time as f64).ceil() as i64;
+
+                for i in start_step..=end_step {
+                    let t = i as f64 * step_time as f64;
+                    let x = graph_rect.min.x
+                        + editor_context.graph_editor.pan.x
+                        + (t as f32 * pixels_per_second);
+
+                    if x >= graph_rect.min.x && x <= graph_rect.max.x {
+                        // Main Vertical Line
+                        painter.line_segment(
+                            [
+                                Pos2::new(x, graph_rect.min.y),
+                                Pos2::new(x, graph_rect.max.y),
+                            ],
+                            Stroke::new(1.0, Color32::from_gray(40)),
+                        );
+
+                        // Ruler Tick & Label
+                        painter.line_segment(
+                            [
+                                Pos2::new(x, ruler_rect.max.y),
+                                Pos2::new(x, ruler_rect.max.y - 10.0),
+                            ],
+                            Stroke::new(1.0, Color32::GRAY),
+                        );
+                        painter.text(
+                            Pos2::new(x + 2.0, ruler_rect.min.y + 2.0),
+                            egui::Align2::LEFT_TOP,
+                            format!("{:.2}", t),
+                            egui::FontId::proportional(10.0),
+                            Color32::GRAY,
+                        );
+                    }
+                }
+
+                // Value Grid & Left Axis
+                // Calculate visible value range
+                // zero_y = center + pan.y
+                // y = zero_y - val * zoom
+                // val = (zero_y - y) / zoom
+                let zero_y = graph_rect.center().y + editor_context.graph_editor.pan.y;
+                let min_val = (zero_y - graph_rect.max.y) / pixels_per_unit;
+                let max_val = (zero_y - graph_rect.min.y) / pixels_per_unit;
+
+                let v_step_val = (30.0 / pixels_per_unit).max(0.01); // 30px min spacing
+                let v_step_power = v_step_val.log10().floor();
+                let v_step_base = 10.0f32.powf(v_step_power);
+                let v_step_val = if v_step_val / v_step_base < 2.0 {
+                    v_step_base
+                } else if v_step_val / v_step_base < 5.0 {
+                    v_step_base * 2.0
+                } else {
+                    v_step_base * 5.0
+                };
+
+                let start_v = (min_val / v_step_val).floor() as i64;
+                let end_v = (max_val / v_step_val).ceil() as i64;
+
+                for i in start_v..=end_v {
+                    let val = i as f32 * v_step_val;
+                    let y = zero_y - (val * pixels_per_unit);
+
+                    if y >= graph_rect.min.y && y <= graph_rect.max.y {
+                        // Horizontal Line
+                        let color = if i == 0 {
+                            Color32::from_gray(80)
+                        } else {
+                            Color32::from_gray(40)
+                        };
+                        painter.line_segment(
+                            [
+                                Pos2::new(graph_rect.min.x, y),
+                                Pos2::new(graph_rect.max.x, y),
+                            ],
+                            Stroke::new(1.0, color),
+                        );
+                        painter.text(
+                            Pos2::new(graph_rect.min.x + 2.0, y - 2.0),
+                            egui::Align2::LEFT_BOTTOM,
+                            format!("{:.2}", val),
+                            egui::FontId::proportional(10.0),
+                            Color32::from_gray(150),
+                        );
+                    }
+                }
         let mut color_cycle = [
             Color32::RED,
             Color32::GREEN,
@@ -364,499 +444,199 @@ pub fn graph_editor_panel(
             Color32::YELLOW,
             Color32::CYAN,
             Color32::MAGENTA,
+            Color32::ORANGE,
         ]
         .iter()
         .cycle();
 
-        for (name, property) in properties_to_plot {
+        for (name, property, map) in properties_to_plot {
             let color = *color_cycle.next().unwrap();
+            
+            if !editor_context.graph_editor.visible_properties.contains(&name) {
+                continue;
+            }
 
             match property.evaluator.as_str() {
                 "constant" => {
                     if let Some(val) = property.value().and_then(|v| v.get_as::<f64>()) {
-                        let y = to_screen_pos(0.0, val).y;
-                        painter.line_segment(
-                            [
-                                Pos2::new(graph_rect.min.x, y),
-                                Pos2::new(graph_rect.max.x, y),
-                            ],
-                            Stroke::new(2.0, color),
-                        );
-                        painter.text(
-                            Pos2::new(graph_rect.min.x + 40.0, y - 5.0),
-                            egui::Align2::LEFT_BOTTOM,
-                            format!("{}: {:.2}", name, val),
-                            egui::FontId::default(),
-                            color,
-                        );
-
-                        // Double Click to add keyframe (Constant -> Keyframe)
-                        if response.double_clicked() {
-                            if let Some(pointer_pos) = response.interact_pointer_pos() {
-                                if (pointer_pos.y - y).abs() < 5.0
-                                    && graph_rect.contains(pointer_pos)
-                                {
-                                    let (t, _) = from_screen_pos(pointer_pos);
-                                    if let Action::None = action {
-                                        action = Action::Add(name.clone(), t.max(0.0), val);
-                                    }
-                                }
-                            }
+                         let y = to_screen_pos(0.0, val).y;
+                         if y >= graph_rect.min.y && y <= graph_rect.max.y {
+                             painter.line_segment(
+                                 [Pos2::new(graph_rect.min.x, y), Pos2::new(graph_rect.max.x, y)],
+                                 Stroke::new(2.0, color),
+                             );
+                             painter.text(
+                                 Pos2::new(graph_rect.min.x + 40.0, y - 5.0),
+                                 egui::Align2::LEFT_BOTTOM,
+                                 format!("{}: {:.2}", name, val),
+                                 egui::FontId::default(),
+                                 color,
+                             );
+                             
+                             // Double Click to add keyframe logic
+                             if response.double_clicked() {
+                                 if let Some(pointer_pos) = response.interact_pointer_pos() {
+                                     if (pointer_pos.y - y).abs() < 5.0 && graph_rect.contains(pointer_pos) {
+                                         let (t, _) = from_screen_pos(pointer_pos);
+                                         if let Action::None = action {
+                                             action = Action::Add(name.clone(), t.max(0.0), val);
+                                         }
+                                     }
+                                 }
+                             }
                         }
                     }
                 }
-                "keyframe" => {
-                    let keyframes = property.keyframes();
-                    if keyframes.is_empty() {
-                        continue;
-                    }
-
-                    let mut sorted_kf = keyframes.clone();
-                    sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-
+                "keyframe" | "expression" => {
+                    // Use sampling based rendering for consistent visualization (Keyframes, Expressions, etc.)
+                   
+                    // 1. Draw Curve via Sampling
                     let mut path_points = Vec::new();
+                    let step_px = 2.0f32; // Sample every 2 pixels
+                    
+                    let start_x = graph_rect.min.x;
+                    let end_x = graph_rect.max.x;
+                    let steps = ((end_x - start_x) / step_px).ceil() as usize;
 
-                    // Draw Curve
-                    for i in 0..sorted_kf.len().saturating_sub(1) {
-                        let k1 = &sorted_kf[i];
-                        let k2 = &sorted_kf[i + 1];
-
-                        let t1 = k1.time.into_inner();
-                        let t2 = k2.time.into_inner();
-                        let v1 = k1.value.get_as::<f64>().unwrap_or(0.0);
-                        let v2 = k2.value.get_as::<f64>().unwrap_or(0.0);
-
-                        let p1 = to_screen_pos(t1, v1);
-                        let p2 = to_screen_pos(t2, v2);
-
-                        // Adaptive sampling based on screen distance
-                        let dist = (p2.x - p1.x).abs().max(1.0);
-                        let steps = (dist / 2.0).ceil() as usize; // Sample every 2 pixels roughly
-                        let steps = steps.clamp(1, 1000); // Sanity limits
-
-                        for s in 0..=steps {
-                            let progress = s as f64 / steps as f64;
-                            let eased_progress = k1.easing.apply(progress);
-
-                            let current_time = t1 + (t2 - t1) * progress;
-                            let current_value = v1 + (v2 - v1) * eased_progress;
-
-                            path_points.push(to_screen_pos(current_time, current_value));
-                        }
+                    for s in 0..=steps {
+                        let x = start_x + s as f32 * step_px;
+                        // Convert screen x to time
+                        // x = min.x + pan.x + (time * pps)
+                        // time = (x - min.x - pan.x) / pps
+                         let time = (x - graph_rect.min.x - editor_context.graph_editor.pan.x) / pixels_per_second;
+                         
+                         // Evaluate
+                         let value_pv = project_service.evaluate_property_value(property, map, time as f64);
+                         
+                         if let Some(val) = value_pv.get_as::<f64>() {
+                             let pos = to_screen_pos(time as f64, val);
+                             // Clamp Y to reasonable bounds to avoid drawing issues far off screen? 
+                             // Painter usually handles it, but let's be safe if needed. 
+                             // Actually egui painter clips to clip_rect, so it's fine.
+                             path_points.push(pos);
+                         }
                     }
 
                     if path_points.len() > 1 {
                         painter.add(egui::Shape::line(path_points, Stroke::new(2.0, color)));
                     }
 
-                    // Draw Keyframe Points & Handle Interaction
-                    for (i, kf) in sorted_kf.iter().enumerate() {
-                        let t = kf.time.into_inner();
-                        let val = kf.value.get_as::<f64>().unwrap_or(0.0);
-                        let kf_pos = to_screen_pos(t, val);
+                    // 2. Draw Keyframe Dots (Overlay) if it is a keyframe property
+                    if property.evaluator == "keyframe" {
+                        let keyframes = property.keyframes();
+                        let mut sorted_kf = keyframes.clone();
+                         sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
 
-                        // Skip if out of view (optimization)
-                        if !graph_rect.expand(10.0).contains(kf_pos) {
-                            continue;
-                        }
+                        for (i, kf) in sorted_kf.iter().enumerate() {
+                            let t = kf.time.into_inner();
+                            let val = kf.value.get_as::<f64>().unwrap_or(0.0);
+                            let kf_pos = to_screen_pos(t, val);
 
-                        // Interaction area
-                        let point_rect = Rect::from_center_size(kf_pos, Vec2::splat(12.0));
-                        let point_id = response.id.with(&name).with(i);
-                        let point_response =
-                            ui.interact(point_rect, point_id, Sense::click_and_drag());
+                            // Skip if out of view (optimization)
+                            if !graph_rect.expand(10.0).contains(kf_pos) {
+                                continue;
+                            }
 
-                        let is_selected = editor_context
-                            .interaction
-                            .selected_keyframe
-                            .as_ref()
-                            .map_or(false, |(s_name, s_idx)| s_name == &name && *s_idx == i);
+                            // Interaction area
+                            let point_rect = Rect::from_center_size(kf_pos, Vec2::splat(12.0));
+                            let point_id = response.id.with(&name).with(i);
+                            let point_response =
+                                ui.interact(point_rect, point_id, Sense::click_and_drag());
 
-                        // Draw Dot
-                        let dot_color = if is_selected { Color32::WHITE } else { color };
-                        let radius = if is_selected { 6.0 } else { 4.0 };
-                        painter.circle_filled(kf_pos, radius, dot_color);
+                            let is_selected = editor_context
+                                .interaction
+                                .selected_keyframe
+                                .as_ref()
+                                .map_or(false, |(s_name, s_idx)| s_name == &name && *s_idx == i);
 
-                        // Selection
-                        if point_response.clicked() {
-                            action = Action::Select(name.clone(), i);
-                        }
+                            // Draw Dot
+                            let dot_color = if is_selected { Color32::WHITE } else { color };
+                            let radius = if is_selected { 6.0 } else { 4.0 };
+                            painter.circle_filled(kf_pos, radius, dot_color);
 
-                        // History: drag stopped
-                        if point_response.drag_stopped() {
-                            should_push_history = true;
-                        }
+                            // Selection
+                            if point_response.clicked() {
+                                action = Action::Select(name.clone(), i);
+                            }
 
-                        // Context Menu
-                        let name_for_menu = name.clone();
-                        point_response.context_menu(|ui| {
-                            ui.label(format!("Keyframe {} - {}", i, name_for_menu));
-                            ui.separator();
-                            ui.label("Easing:");
-
-                            if ui.button("Linear").clicked() {
-                                action = Action::SetEasing(
-                                    name_for_menu.clone(),
-                                    i,
-                                    EasingFunction::Linear,
-                                );
+                            // History: drag stopped
+                            if point_response.drag_stopped() {
                                 should_push_history = true;
-                                ui.close_kind(UiKind::Menu);
                             }
 
-                            ui.menu_button("Sine", |ui| {
-                                if ui.button("Ease In").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInSine,
-                                    );
+                            // Context Menu
+                            let name_for_menu = name.clone();
+                            point_response.context_menu(|ui| {
+                                ui.label(format!("Keyframe {} - {}", i, name_for_menu));
+                                ui.separator();
+                                let mut chosen_easing = None;
+                                crate::ui::easing_menus::show_easing_menu(ui, None, |easing| {
+                                    chosen_easing = Some(easing);
+                                });
+
+                                if let Some(easing) = chosen_easing {
+                                    action = Action::SetEasing(name_for_menu.clone(), i, easing);
                                     should_push_history = true;
                                     ui.close_kind(UiKind::Menu);
                                 }
-                                if ui.button("Ease Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseOutSine,
-                                    );
+
+                                ui.separator();
+                                if ui.button("Edit Keyframe...").clicked() {
+                                    action = Action::EditKeyframe(name_for_menu.clone(), i);
+                                    ui.close_kind(UiKind::Menu);
+                                }
+
+                                ui.separator();
+                                if ui
+                                    .button(egui::RichText::new("Delete Keyframe").color(Color32::RED))
+                                    .clicked()
+                                {
+                                    action = Action::Remove(name_for_menu.clone(), i);
                                     should_push_history = true;
                                     ui.close_kind(UiKind::Menu);
                                 }
-                                if ui.button("Ease In Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInOutSine,
-                                    );
-                                    should_push_history = true;
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                            });
-                            ui.menu_button("Quad", |ui| {
-                                if ui.button("Ease In").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInQuad,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseOutQuad,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease In Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInOutQuad,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                            });
-                            ui.menu_button("Cubic", |ui| {
-                                if ui.button("Ease In").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInCubic,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseOutCubic,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease In Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInOutCubic,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                            });
-                            ui.menu_button("Quart", |ui| {
-                                if ui.button("Ease In").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInQuart,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseOutQuart,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease In Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInOutQuart,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                            });
-                            ui.menu_button("Quint", |ui| {
-                                if ui.button("Ease In").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInQuint,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseOutQuint,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease In Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInOutQuint,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                            });
-                            ui.menu_button("Expo", |ui| {
-                                if ui.button("Ease In").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInExpo,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseOutExpo,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease In Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInOutExpo,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                            });
-                            ui.menu_button("Circ", |ui| {
-                                if ui.button("Ease In").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInCirc,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseOutCirc,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease In Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInOutCirc,
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                            });
-                            ui.menu_button("Back", |ui| {
-                                if ui.button("Ease In").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInBack { c1: 1.70158 },
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseOutBack { c1: 1.70158 },
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease In Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInOutBack { c1: 1.70158 },
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                            });
-                            ui.menu_button("Elastic", |ui| {
-                                if ui.button("Ease In").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInElastic { period: 3.0 },
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseOutElastic { period: 3.0 },
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease In Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInOutElastic { period: 4.5 },
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                            });
-                            ui.menu_button("Bounce", |ui| {
-                                if ui.button("Ease In").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInBounce {
-                                            n1: 7.5625,
-                                            d1: 2.75,
-                                        },
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseOutBounce {
-                                            n1: 7.5625,
-                                            d1: 2.75,
-                                        },
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                                if ui.button("Ease In Out").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::EaseInOutBounce {
-                                            n1: 7.5625,
-                                            d1: 2.75,
-                                        },
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
-                            });
-                            ui.menu_button("Custom", |ui| {
-                                if ui.button("Expression").clicked() {
-                                    action = Action::SetEasing(
-                                        name_for_menu.clone(),
-                                        i,
-                                        EasingFunction::Expression {
-                                            text: "t".to_string(),
-                                        },
-                                    );
-                                    ui.close_kind(UiKind::Menu);
-                                }
                             });
 
-                            ui.separator();
-                            if ui.button("Edit Keyframe...").clicked() {
-                                action = Action::EditKeyframe(name_for_menu.clone(), i);
-                                ui.close_kind(UiKind::Menu);
+                            // Dragging
+                            if is_selected && point_response.dragged() {
+                                let (new_t, new_val) =
+                                    from_screen_pos(kf_pos + point_response.drag_delta());
+                                action = Action::Move(name.clone(), i, new_t.max(0.0), new_val);
                             }
-
-                            ui.separator();
-                            if ui
-                                .button(egui::RichText::new("Delete Keyframe").color(Color32::RED))
-                                .clicked()
-                            {
-                                action = Action::Remove(name_for_menu.clone(), i);
-                                should_push_history = true;
-                                ui.close_kind(UiKind::Menu);
-                            }
-                        });
-
-                        // Dragging
-                        if is_selected && point_response.dragged() {
-                            let (new_t, new_val) =
-                                from_screen_pos(kf_pos + point_response.drag_delta());
-                            action = Action::Move(name.clone(), i, new_t.max(0.0), new_val);
+                        }
+                    
+                    // Add Keyframe (Double Click) logic constraint
+                    // Re-use logic but adapted? 
+                    // The previous logic used 'closest point on curve segment'.
+                    // Now we effectively have the curve implicitly. 
+                    // We can check distance to sampled points?
+                    // Or keep the old logic just for hit testing? 
+                    // Actually, for adding keyframes, checking strictly against the curve is nice. 
+                    // But 'evaluate_property_value(t)' effectively gives us the Y for any T.
+                    // So we can check if click_y is close to eval(click_t).
+                    
+                        if response.double_clicked() {
+                             if let Some(pointer_pos) = response.interact_pointer_pos() {
+                                if graph_rect.contains(pointer_pos) {
+                                    let (t, _) = from_screen_pos(pointer_pos);
+                                    
+                                    // Evaluate at pointer time
+                                    let val_at_t = project_service.evaluate_property_value(property, map, t).get_as::<f64>().unwrap_or(0.0);
+                                    let curve_pos = to_screen_pos(t, val_at_t);
+                                    
+                                    // Distance check
+                                    if (pointer_pos.y - curve_pos.y).abs() < 10.0 {
+                                         if let Action::None = action {
+                                            action = Action::Add(name.clone(), t.max(0.0), val_at_t);
+                                            should_push_history = true;
+                                        }
+                                    }
+                                }
+                             }
+                        }
                         }
                     }
 
-                    // Add Keyframe (Double Click on Curve/Background?)
-                    if response.double_clicked() {
-                        if let Some(pointer_pos) = response.interact_pointer_pos() {
-                            // Only if inside graph rect
-                            if graph_rect.contains(pointer_pos) {
-                                let (t, v) = from_screen_pos(pointer_pos);
-                                // ... (Keep existing best_dist logic but constrained to graph_rect)
-                                let mut best_dist = f32::MAX;
-
-                                for w in 0..sorted_kf.len().saturating_sub(1) {
-                                    let p1 = to_screen_pos(
-                                        sorted_kf[w].time.into_inner(),
-                                        sorted_kf[w].value.get_as::<f64>().unwrap_or(0.0),
-                                    );
-                                    let p2 = to_screen_pos(
-                                        sorted_kf[w + 1].time.into_inner(),
-                                        sorted_kf[w + 1].value.get_as::<f64>().unwrap_or(0.0),
-                                    );
-                                    // ...
-                                    let l2 = p1.distance_sq(p2);
-                                    let dist = if l2 == 0.0 {
-                                        p1.distance(pointer_pos)
-                                    } else {
-                                        let t_proj =
-                                            ((pointer_pos - p1).dot(p2 - p1) / l2).clamp(0.0, 1.0);
-                                        let proj = p1 + (p2 - p1) * t_proj;
-                                        pointer_pos.distance(proj)
-                                    };
-                                    if dist < best_dist {
-                                        best_dist = dist;
-                                    }
-                                }
-
-                                if best_dist < 10.0 {
-                                    if let Action::None = action {
-                                        action = Action::Add(name.clone(), t.max(0.0), v);
-                                        should_push_history = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
                 _ => {}
             }
         }
@@ -876,6 +656,17 @@ pub fn graph_editor_panel(
             );
         }
         // Draw Playhead in Ruler
+        let t_cursor = editor_context.timeline.current_time as f64;
+        let x_cursor = ruler_rect.min.x
+            + editor_context.graph_editor.pan.x
+            + (t_cursor as f32 * pixels_per_second);
+
+        if x_cursor >= ruler_rect.min.x && x_cursor <= ruler_rect.max.x {
+             // ... existing drawing for ruler playhead or use shared cursor logic ..
+             // Actually lines 604-611 seem to draw the triangle in ruler.
+             // I'll leave it as is, just closing the CentralPanel and Horizontal block.
+        }
+
         if x_cursor >= ruler_rect.min.x && x_cursor <= ruler_rect.max.x {
             // Triangle head
             let head_size = 6.0;
@@ -889,6 +680,9 @@ pub fn graph_editor_panel(
                 Stroke::NONE,
             ));
         }
+
+             }); // End CentralPanel (Graph)
+        } // End Scope
     } // End Read Lock Scope
 
     // Process Actions

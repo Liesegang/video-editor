@@ -472,6 +472,21 @@ pub fn preview_panel(
                         }
                     }
 
+                    let get_val = |key: &str, default: f32| {
+                        entity
+                            .properties
+                            .get(key)
+                            .map(|p| {
+                                project_service.evaluate_property_value(
+                                    p,
+                                    &entity.properties,
+                                    editor_context.timeline.current_time as f64,
+                                )
+                            })
+                            .and_then(|pv| pv.get_as::<f32>())
+                            .unwrap_or(default)
+                    };
+
                     let gc = crate::model::ui_types::TimelineClip {
                         id: entity.id,
                         name: entity.kind.to_string(), // entity_type -> kind
@@ -482,16 +497,13 @@ pub fn preview_panel(
                         source_begin_frame: entity.source_begin_frame, // u64
                         duration_frame: entity.duration_frame,         // Option<u64>
                         color: asset_color,
-                        position: [
-                            entity.properties.get_f32("position_x").unwrap_or(960.0),
-                            entity.properties.get_f32("position_y").unwrap_or(540.0),
-                        ],
-                        scale_x: entity.properties.get_f32("scale_x").unwrap_or(100.0),
-                        scale_y: entity.properties.get_f32("scale_y").unwrap_or(100.0),
-                        anchor_x: entity.properties.get_f32("anchor_x").unwrap_or(0.0),
-                        anchor_y: entity.properties.get_f32("anchor_y").unwrap_or(0.0),
-                        opacity: entity.properties.get_f32("opacity").unwrap_or(100.0),
-                        rotation: entity.properties.get_f32("rotation").unwrap_or(0.0),
+                        position: [get_val("position_x", 960.0), get_val("position_y", 540.0)],
+                        scale_x: get_val("scale_x", 100.0),
+                        scale_y: get_val("scale_y", 100.0),
+                        anchor_x: get_val("anchor_x", 0.0),
+                        anchor_y: get_val("anchor_y", 0.0),
+                        opacity: get_val("opacity", 100.0),
+                        rotation: get_val("rotation", 0.0),
                         asset_id: asset_id,
                         width: width,
                         height: height,

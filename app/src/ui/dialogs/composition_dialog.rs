@@ -561,7 +561,7 @@ impl CompositionDialog {
             "New Composition Properties"
         };
 
-        if let Some(inner) = egui::Window::new(window_title)
+        if let Some(inner) = crate::ui::widgets::modal::Modal::new(window_title)
             .open(&mut is_open_local)
             .collapsible(false)
             .resizable(false)

@@ -1677,4 +1677,15 @@ impl ProjectService {
             false
         }
     }
+
+    pub fn evaluate_property_value(
+        &self,
+        property: &Property,
+        property_map: &crate::model::project::property::PropertyMap,
+        time: f64,
+    ) -> PropertyValue {
+        let registry = self.plugin_manager.get_property_evaluators();
+        let ctx = crate::plugin::EvaluationContext { property_map };
+        registry.evaluate(property, time, &ctx)
+    }
 }
