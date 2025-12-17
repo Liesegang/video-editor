@@ -9,6 +9,7 @@ use crate::rendering::skia_utils::{
     GpuContext, create_gpu_context, create_image_from_texture, create_surface, image_to_skia,
     surface_to_image,
 };
+use crate::rendering::shader_utils::{self, ShaderContext};
 use crate::util::timing::ScopedTimer;
 use log::{debug, trace};
 use skia_safe::path_effect::PathEffect as SkPathEffect;
@@ -342,48 +343,7 @@ fn apply_path_effects(
     Ok(())
 }
 
-fn preprocess_shader(code: &str) -> String {
-    let standard_uniforms = r#"
-uniform float3 iResolution;
-uniform float iTime;
-uniform float iTimeDelta;
-uniform float iFrame;
-uniform float4 iMouse;
-uniform float4 iDate;
-"#;
-    let compiler = shaderc::Compiler::new().unwrap();
-    let options = shaderc::CompileOptions::new().unwrap();
 
-    let version_directive = "#version 310 es\n";
-    let full_source = if code.trim().starts_with("#version") {
-        format!("{}\n{}", standard_uniforms, code)
-    } else {
-        format!("{}{}\n{}", version_directive, standard_uniforms, code)
-    };
-
-    match compiler.preprocess(&full_source, "shader.glsl", "main", Some(&options)) {
-        Ok(artifact) => {
-            let output = artifact.as_text();
-            output
-                .lines()
-                .filter(|l| {
-                    let t = l.trim();
-                    !t.starts_with("#version")
-                        && !t.starts_with("#extension")
-                        && !t.starts_with("#line")
-                        && !t.starts_with("#pragma")
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-        Err(e) => {
-            format!(
-                "// Preprocessing failed: {}\n{}\n{}",
-                e, standard_uniforms, code
-            )
-        }
-    }
-}
 
 impl Renderer for SkiaRenderer {
     fn draw_layer(
@@ -442,7 +402,7 @@ impl Renderer for SkiaRenderer {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::TRANSPARENT);
 
-            let preprocessed_code = preprocess_shader(shader_code);
+            let preprocessed_code = shader_utils::preprocess_shader(shader_code);
             let result = skia_safe::RuntimeEffect::make_for_shader(&preprocessed_code, None);
 
             if let Err(error) = result {
@@ -456,53 +416,16 @@ impl Renderer for SkiaRenderer {
                 let uniform_size = effect.uniform_size();
                 let mut data: Vec<u8> = vec![0; uniform_size];
 
-                for uniform in effect.uniforms() {
-                    let offset = uniform.offset();
-                    let name = uniform.name();
+                let shader_context = ShaderContext {
+                    resolution,
+                    time,
+                    time_delta: 1.0 / 60.0,
+                    frame: (time * 60.0).floor(),
+                    mouse: (0.0, 0.0, 0.0, 0.0),
+                    date: (2024.0, 1.0, 1.0, 0.0),
+                };
 
-                    let mut write_f32 = |offset: usize, val: f32| {
-                        if offset + 4 <= data.len() {
-                            let bytes = val.to_le_bytes();
-                            data[offset..offset + 4].copy_from_slice(&bytes);
-                        }
-                    };
-
-                    match name {
-                        "iResolution" => {
-                            write_f32(offset, resolution.0);
-                            write_f32(offset + 4, resolution.1);
-                            write_f32(offset + 8, 1.0);
-                        }
-                        "iTime" => {
-                            write_f32(offset, time);
-                        }
-                        "iTimeDelta" => {
-                            write_f32(offset, 1.0 / 60.0);
-                        }
-                        "iFrame" => {
-                            write_f32(offset, (time * 60.0).floor());
-                        }
-                        "iMouse" => {
-                            write_f32(offset, 0.0);
-                            write_f32(offset + 4, 0.0);
-                            write_f32(offset + 8, 0.0);
-                            write_f32(offset + 12, 0.0);
-                        }
-                        "iDate" => {
-                            write_f32(offset, 2024.0);
-                            write_f32(offset + 4, 1.0);
-                            write_f32(offset + 8, 1.0);
-                            write_f32(offset + 12, 0.0);
-                        }
-                        "iChannelTime" => {
-                            write_f32(offset, time);
-                            write_f32(offset + 4, time);
-                            write_f32(offset + 8, time);
-                            write_f32(offset + 12, time);
-                        }
-                        _ => {}
-                    }
-                }
+                shader_utils::bind_standard_uniforms(&effect, &mut data, &shader_context);
 
                 let uniforms = skia_safe::Data::new_copy(&data);
 
