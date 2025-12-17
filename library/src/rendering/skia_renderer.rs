@@ -57,6 +57,63 @@ impl SkiaRenderer {
             ))
         }
     }
+
+    fn create_stroke_paint(
+        color: &Color,
+        width: f32,
+        cap: &CapType,
+        join: &JoinType,
+        miter: f32,
+    ) -> Paint {
+        let mut paint = Paint::default();
+        paint.set_anti_alias(true);
+        paint.set_color(skia_safe::Color::from_argb(
+            color.a,
+            color.r,
+            color.g,
+            color.b,
+        ));
+        paint.set_style(PaintStyle::Stroke);
+        paint.set_stroke_width(width);
+        paint.set_stroke_cap(match cap {
+            CapType::Round => skia_safe::paint::Cap::Round,
+            CapType::Square => skia_safe::paint::Cap::Square,
+            CapType::Butt => skia_safe::paint::Cap::Butt,
+        });
+        paint.set_stroke_join(match join {
+            JoinType::Round => skia_safe::paint::Join::Round,
+            JoinType::Bevel => skia_safe::paint::Join::Bevel,
+            JoinType::Miter => skia_safe::paint::Join::Miter,
+        });
+        paint.set_stroke_miter(miter);
+        paint
+    }
+
+    fn snapshot_surface(
+        surface: &mut Surface,
+        gpu_context: &mut Option<GpuContext>,
+        width: u32,
+        height: u32,
+    ) -> Result<RenderOutput, LibraryError> {
+        if let Some(ctx) = gpu_context.as_mut() {
+            ctx.direct_context.flush_and_submit();
+            if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
+                surface,
+                skia_safe::surface::BackendHandleAccess::FlushRead,
+            ) {
+                if let Some(gl_info) = texture.gl_texture_info() {
+                    return Ok(RenderOutput::Texture(TextureInfo {
+                        texture_id: gl_info.id,
+                        width,
+                        height,
+                    }));
+                }
+            }
+        }
+
+        let image = surface_to_image(surface, width, height)?;
+        Ok(RenderOutput::Image(image))
+    }
 }
 
 impl SkiaRenderer {
@@ -201,23 +258,7 @@ impl SkiaRenderer {
         }
 
         // Prepare base stroke paint
-        let mut stroke_paint = Paint::default();
-        stroke_paint.set_anti_alias(true);
-        stroke_paint.set_color(skia_safe::Color::from_argb(
-            color.a, color.r, color.g, color.b,
-        ));
-
-        stroke_paint.set_stroke_cap(match cap {
-            CapType::Round => skia_safe::paint::Cap::Round,
-            CapType::Square => skia_safe::paint::Cap::Square,
-            CapType::Butt => skia_safe::paint::Cap::Butt,
-        });
-        stroke_paint.set_stroke_join(match join {
-            JoinType::Round => skia_safe::paint::Join::Round,
-            JoinType::Bevel => skia_safe::paint::Join::Bevel,
-            JoinType::Miter => skia_safe::paint::Join::Miter,
-        });
-        stroke_paint.set_stroke_miter(miter as f32);
+        let mut stroke_paint = Self::create_stroke_paint(color, width as f32, &cap, &join, miter as f32);
 
         // Path Effects (Dash + others)
         let mut effects_to_apply = Vec::new();
@@ -449,24 +490,7 @@ impl Renderer for SkiaRenderer {
             }
         }
 
-        if let Some(ctx) = self.gpu_context.as_mut() {
-            ctx.direct_context.flush_and_submit();
-            if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
-                &mut layer,
-                skia_safe::surface::BackendHandleAccess::FlushRead,
-            ) {
-                if let Some(gl_info) = texture.gl_texture_info() {
-                    return Ok(RenderOutput::Texture(TextureInfo {
-                        texture_id: gl_info.id,
-                        width: self.width,
-                        height: self.height,
-                    }));
-                }
-            }
-        }
-
-        let image = surface_to_image(&mut layer, self.width, self.height)?;
-        Ok(RenderOutput::Image(image))
+        Self::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
     }
 
     fn rasterize_text_layer(
@@ -527,26 +551,14 @@ impl Renderer for SkiaRenderer {
                         dash_array,
                         dash_offset,
                     } => {
-                        let mut paint = Paint::default();
-                        paint.set_color(skia_safe::Color::from_argb(
-                            color.a, color.r, color.g, color.b,
-                        ));
-                        paint.set_style(PaintStyle::Stroke);
-
                         let effective_width = (width + offset * 2.0).max(0.0);
-                        paint.set_stroke_width(effective_width as f32);
-
-                        paint.set_stroke_cap(match cap {
-                            CapType::Round => skia_safe::paint::Cap::Round,
-                            CapType::Square => skia_safe::paint::Cap::Square,
-                            CapType::Butt => skia_safe::paint::Cap::Butt,
-                        });
-                        paint.set_stroke_join(match join {
-                            JoinType::Round => skia_safe::paint::Join::Round,
-                            JoinType::Bevel => skia_safe::paint::Join::Bevel,
-                            JoinType::Miter => skia_safe::paint::Join::Miter,
-                        });
-                        paint.set_stroke_miter(*miter as f32);
+                        let mut paint = Self::create_stroke_paint(
+                            color,
+                            effective_width as f32,
+                            cap,
+                            join,
+                            *miter as f32,
+                        );
 
                         if !dash_array.is_empty() {
                             let intervals: Vec<f32> =
@@ -558,7 +570,6 @@ impl Renderer for SkiaRenderer {
                             }
                         }
 
-                        paint.set_anti_alias(true);
                         text_style.set_foreground_paint(&paint);
                     }
                 }
@@ -580,24 +591,7 @@ impl Renderer for SkiaRenderer {
 
             canvas.restore();
         }
-        if let Some(ctx) = self.gpu_context.as_mut() {
-            ctx.direct_context.flush_and_submit();
-            if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
-                &mut layer,
-                skia_safe::surface::BackendHandleAccess::FlushRead,
-            ) {
-                if let Some(gl_info) = texture.gl_texture_info() {
-                    return Ok(RenderOutput::Texture(TextureInfo {
-                        texture_id: gl_info.id,
-                        width: self.width,
-                        height: self.height,
-                    }));
-                }
-            }
-        }
-
-        let image = surface_to_image(&mut layer, self.width, self.height)?;
-        Ok(RenderOutput::Image(image))
+        Self::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
     }
 
     fn rasterize_shape_layer(
@@ -656,8 +650,7 @@ impl Renderer for SkiaRenderer {
             }
             canvas.restore();
         }
-        let image = surface_to_image(&mut layer, self.width, self.height)?;
-        Ok(RenderOutput::Image(image))
+        Self::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
     }
 
     fn read_surface(&mut self, output: &RenderOutput) -> Result<Image, LibraryError> {
