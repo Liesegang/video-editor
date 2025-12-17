@@ -7,3 +7,4 @@ pub mod selection;
 pub mod tab_viewer;
 pub mod viewport;
 pub mod widgets;
+pub mod theme;
