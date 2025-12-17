@@ -508,10 +508,9 @@ pub fn assets_panel(
 
     // Confirmation Modal for Composition Deletion
     if let Some(comp_id) = editor_context.interaction.comp_delete_candidate {
-        egui::Window::new("⚠ Confirm Composition Deletion")
+        crate::ui::widgets::modal::Modal::new("⚠ Confirm Composition Deletion")
             .collapsible(false)
             .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ui.ctx(), |ui| {
                 ui.label("This composition is used inside another timeline.");
                 ui.label("Deleting it will remove all associated clips.");
@@ -552,10 +551,9 @@ pub fn assets_panel(
 
     // Confirmation Modal for Asset Deletion
     if let Some(asset_id) = editor_context.interaction.asset_delete_candidate {
-        egui::Window::new("⚠ Confirm Deletion")
+        crate::ui::widgets::modal::Modal::new("⚠ Confirm Deletion")
             .collapsible(false)
             .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ui.ctx(), |ui| {
                 ui.label("This asset is used in the timeline.");
                 ui.label("Deleting it will remove all associated clips.");
@@ -591,11 +589,10 @@ pub fn assets_panel(
         let mut open = true;
         let mut should_close = false;
 
-        egui::Window::new("Import Result")
+        crate::ui::widgets::modal::Modal::new("Import Result")
             .collapsible(false)
             .resizable(true)
             .open(&mut open)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ui.ctx(), |ui| {
                 ui.label(format!(
                     "Successfully imported {} assets.",

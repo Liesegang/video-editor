@@ -170,7 +170,7 @@ pub fn inspector_panel(
                                     let actions = render_property_rows(
                                         ui,
                                         &chunk.defs,
-                                        |name| properties.get_constant_value(name).cloned(),
+                                        |name| properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &properties, current_time))),
                                         |name| properties.get(name).cloned(),
                                         &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true, current_time }
                                     );
@@ -188,9 +188,24 @@ pub fn inspector_panel(
                                                 history_manager.push_project_state(current_state);
                                             }
                                             crate::ui::panels::inspector::properties::PropertyAction::ToggleKeyframe(name, val) => {
-                                                project_service.add_keyframe(
-                                                    comp_id, track_id, selected_entity_id, &name, current_time, val, None
-                                                ).ok();
+                                                let mut keyframe_index_to_remove = None;
+                                                if let Some(prop) = properties.get(&name) {
+                                                    if prop.evaluator == "keyframe" {
+                                                        if let Some(idx) = prop.keyframes().iter().position(|k| (k.time.into_inner() - current_time).abs() < 0.001) {
+                                                            keyframe_index_to_remove = Some(idx);
+                                                        }
+                                                    }
+                                                }
+
+                                                if let Some(index) = keyframe_index_to_remove {
+                                                    project_service.remove_keyframe(
+                                                        comp_id, track_id, selected_entity_id, &name, index
+                                                    ).ok();
+                                                } else {
+                                                    project_service.add_keyframe(
+                                                        comp_id, track_id, selected_entity_id, &name, current_time, val, None
+                                                    ).ok();
+                                                }
                                                 needs_refresh = true;
                                             }
                                         }
@@ -221,7 +236,15 @@ pub fn inspector_panel(
                                         let actions = render_property_rows(
                                             ui,
                                             std::slice::from_ref(def),
-                                            |name| properties.get_constant_value(name).cloned(),
+                                            |name| {
+                                                properties.get(name).and_then(|p| {
+                                                    Some(project_service.evaluate_property_value(
+                                                        p,
+                                                        &properties,
+                                                        current_time,
+                                                    ))
+                                                })
+                                            },
                                             |name| properties.get(name).cloned(),
                                             &PropertyRenderContext {
                                                 available_fonts: &editor_context.available_fonts,
@@ -242,9 +265,24 @@ pub fn inspector_panel(
                                                     history_manager.push_project_state(current_state);
                                                 }
                                                 crate::ui::panels::inspector::properties::PropertyAction::ToggleKeyframe(name, val) => {
-                                                    project_service.add_keyframe(
-                                                        comp_id, track_id, selected_entity_id, &name, current_time, val, None
-                                                    ).ok();
+                                                    let mut keyframe_index_to_remove = None;
+                                                    if let Some(prop) = properties.get(&name) {
+                                                        if prop.evaluator == "keyframe" {
+                                                            if let Some(idx) = prop.keyframes().iter().position(|k| (k.time.into_inner() - current_time).abs() < 0.001) {
+                                                                keyframe_index_to_remove = Some(idx);
+                                                            }
+                                                        }
+                                                    }
+
+                                                    if let Some(index) = keyframe_index_to_remove {
+                                                        project_service.remove_keyframe(
+                                                            comp_id, track_id, selected_entity_id, &name, index
+                                                        ).ok();
+                                                    } else {
+                                                        project_service.add_keyframe(
+                                                            comp_id, track_id, selected_entity_id, &name, current_time, val, None
+                                                        ).ok();
+                                                    }
                                                     needs_refresh = true;
                                                 }
                                             }

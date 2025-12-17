@@ -1,5 +1,6 @@
 pub mod command_palette;
 pub mod dialogs;
+pub mod easing_menus;
 pub mod menu;
 pub mod panels;
 pub mod selection;

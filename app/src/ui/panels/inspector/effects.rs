@@ -97,7 +97,7 @@ pub fn render_effects_section(
                             let actions = render_property_rows(
                                 ui,
                                 &defs,
-                                |name| effect.properties.get_constant_value(name).cloned(),
+                                |name| effect.properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &effect.properties, current_time))),
                                 |name| effect.properties.get(name).cloned(),
                                 &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true, current_time }
                             );
@@ -115,9 +115,24 @@ pub fn render_effects_section(
                                          history_manager.push_project_state(current_state);
                                     }
                                     crate::ui::panels::inspector::properties::PropertyAction::ToggleKeyframe(name, val) => {
-                                         project_service.add_effect_keyframe(
-                                             comp_id, track_id, selected_entity_id, effect_index, &name, current_time, val, None
-                                         ).ok();
+                                         let mut keyframe_index_to_remove = None;
+                                         if let Some(prop) = effect.properties.get(&name) {
+                                             if prop.evaluator == "keyframe" {
+                                                 if let Some(idx) = prop.keyframes().iter().position(|k| (k.time.into_inner() - current_time).abs() < 0.001) {
+                                                     keyframe_index_to_remove = Some(idx);
+                                                 }
+                                             }
+                                         }
+
+                                         if let Some(index) = keyframe_index_to_remove {
+                                              project_service.remove_effect_keyframe_by_index(
+                                                  comp_id, track_id, selected_entity_id, effect_index, &name, index
+                                              ).ok();
+                                         } else {
+                                              project_service.add_effect_keyframe(
+                                                  comp_id, track_id, selected_entity_id, effect_index, &name, current_time, val, None
+                                              ).ok();
+                                         }
                                          *needs_refresh = true;
                                     }
                                 }

@@ -522,10 +522,11 @@ impl PropertyMap {
     }
 
     pub fn get_constant_value(&self, key: &str) -> Option<&PropertyValue> {
+        // Legacy support? Or specific usage?
         self.get(key)
             .and_then(|property| match property.evaluator.as_str() {
                 "constant" => property.value(),
-                _ => None,
+                _ => None, // Returns None if keyframed, preventing editing base value?
             })
     }
 

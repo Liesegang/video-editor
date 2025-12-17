@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 pub enum EasingFunction {
     #[default]
     Linear,
+    Constant,
     // Sine
     EaseInSine,
     EaseOutSine,
@@ -88,6 +89,7 @@ impl EasingFunction {
     pub fn apply(&self, t: f64) -> f64 {
         match self {
             EasingFunction::Linear => t,
+            EasingFunction::Constant => 0.0,
             EasingFunction::EaseInSine => 1.0 - (t * std::f64::consts::PI / 2.0).cos(),
             EasingFunction::EaseOutSine => (t * std::f64::consts::PI / 2.0).sin(),
             EasingFunction::EaseInOutSine => -(std::f64::consts::PI * t).cos() / 2.0 + 0.5,
@@ -386,6 +388,7 @@ impl PartialEq for EasingFunction {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (EasingFunction::Linear, EasingFunction::Linear) => true,
+            (EasingFunction::Constant, EasingFunction::Constant) => true,
             (EasingFunction::EaseInSine, EasingFunction::EaseInSine) => true,
             (EasingFunction::EaseOutSine, EasingFunction::EaseOutSine) => true,
             (EasingFunction::EaseInOutSine, EasingFunction::EaseInOutSine) => true,

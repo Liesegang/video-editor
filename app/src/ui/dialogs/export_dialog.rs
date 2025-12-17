@@ -110,7 +110,7 @@ impl ExportDialog {
             }
         }
 
-        egui::Window::new("Export")
+        crate::ui::widgets::modal::Modal::new("Export")
             .open(&mut is_open)
             .collapsible(false)
             .resizable(true)

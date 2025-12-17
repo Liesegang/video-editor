@@ -110,6 +110,8 @@ pub struct GraphEditorState {
     pub pan: egui::Vec2, // Pan offset
     pub zoom_x: f32, // Pixels per second
     pub zoom_y: f32, // Pixels per unit value
+    #[serde(default)]
+    pub visible_properties: HashSet<String>,
 }
 
 impl Default for GraphEditorState {
@@ -118,6 +120,7 @@ impl Default for GraphEditorState {
             pan: egui::Vec2::ZERO,
             zoom_x: 100.0, // Default 100 pixels per second
             zoom_y: 1.0,   // Default 1 pixel per unit
+            visible_properties: HashSet::new(),
         }
     }
 }

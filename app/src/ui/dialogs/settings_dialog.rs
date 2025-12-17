@@ -84,7 +84,7 @@ impl SettingsDialog {
             let mut still_open = true;
             let mut close_confirmed = false;
 
-            egui::Window::new("Settings")
+            crate::ui::widgets::modal::Modal::new("Settings")
                 .open(&mut still_open)
                 .min_width(600.0)
                 .min_height(400.0)

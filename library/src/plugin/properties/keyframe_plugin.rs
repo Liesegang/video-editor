@@ -1,7 +1,7 @@
 use super::super::{Plugin, PropertyPlugin};
 use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
-use crate::model::project::property::{Property, PropertyValue, Vec2, Vec3};
+use crate::model::project::property::{Property, PropertyValue, Vec2, Vec3, Vec4};
 use crate::plugin::{EvaluationContext, PropertyEvaluator};
 use log::debug;
 use ordered_float::OrderedFloat;
@@ -76,6 +76,7 @@ fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
     );
     interpolated
 }
+
 fn interpolate_property_values(
     start: &PropertyValue,
     end: &PropertyValue,
@@ -110,6 +111,25 @@ fn interpolate_property_values(
             x: OrderedFloat(sx.0 + (ex.0 - sx.0) * t),
             y: OrderedFloat(sy.0 + (ey.0 - sy.0) * t),
             z: OrderedFloat(sz.0 + (ez.0 - sz.0) * t),
+        }),
+        (
+            PropertyValue::Vec4(Vec4 {
+                x: sx,
+                y: sy,
+                z: sz,
+                w: sw,
+            }),
+            PropertyValue::Vec4(Vec4 {
+                x: ex,
+                y: ey,
+                z: ez,
+                w: ew,
+            }),
+        ) => PropertyValue::Vec4(Vec4 {
+            x: OrderedFloat(sx.0 + (ex.0 - sx.0) * t),
+            y: OrderedFloat(sy.0 + (ey.0 - sy.0) * t),
+            z: OrderedFloat(sz.0 + (ez.0 - sz.0) * t),
+            w: OrderedFloat(sw.0 + (ew.0 - sw.0) * t),
         }),
         (
             PropertyValue::Color(Color {
