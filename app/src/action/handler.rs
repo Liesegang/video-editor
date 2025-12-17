@@ -27,12 +27,43 @@ pub fn handle_command(
     trigger_settings: &mut bool,
 ) {
     match action {
+        // File / Project Operations
+        CommandId::NewProject
+        | CommandId::LoadProject
+        | CommandId::Save
+        | CommandId::SaveAs
+        | CommandId::Export => {
+            handle_file_command(ctx, action, context);
+        }
+
+        // Edit Operations
+        CommandId::Undo | CommandId::Redo | CommandId::Delete => {
+            handle_edit_command(action, context);
+        }
+
+        // View / UI Operations
+        CommandId::ResetLayout
+        | CommandId::TogglePlayback
+        | CommandId::TogglePanel(_)
+        | CommandId::HandTool => {
+            handle_view_command(action, context);
+        }
+
+        // Global / Misc Operations
         CommandId::Settings => {
             *trigger_settings = true;
         }
-        CommandId::Export | CommandId::ShowCommandPalette => {
+        CommandId::ShowCommandPalette => {
             // Handled in MyApp::update explicitly to open dialog
         }
+        CommandId::Quit => {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+}
+
+fn handle_file_command(_ctx: &egui::Context, action: CommandId, context: ActionContext) {
+    match action {
         CommandId::NewProject => {
             // Logic to request new project - strictly speaking, this modifies MyApp state heavily.
             // For now, let's keep it simple or bubble up specific requests?
@@ -57,18 +88,6 @@ pub fn handle_command(
             context.editor_context.selection.selected_entities.clear();
             context.editor_context.timeline.current_time = 0.0;
 
-            // history_manager reset?
-            // We can't replace the history_manager instance itself easily if it's borrowed.
-            // We can clear it.
-            // context.history_manager.clear(); // Need to implement clear() or similar
-            // For now, let's assume we can just push the new state and maybe we live with the old history being accessible?
-            // Actually MyApp::new_project creates a NEW HistoryManager.
-            // If we can't do that here, we might need to expose clear method on HistoryManager.
-            // Let's implement reset() on HistoryManager later?
-            // Or just manually clear stacks.
-            // For this refactor, maybe we delegate "NewProject" back to the caller (MyApp) via return value?
-            // But let's try to do as much as possible here.
-
             context.history_manager.clear();
             if let Ok(proj_read) = context.project_service.get_project().read() {
                 context
@@ -86,8 +105,6 @@ pub fn handle_command(
                         if let Err(e) = context.project_service.load_project(&s) {
                             error!("Failed to load project: {}", e);
                         } else {
-                            // Reset history
-                            // context.history_manager.reset(); // TODO
                             if let Ok(proj_read) = context.project_service.get_project().read() {
                                 context
                                     .history_manager
@@ -122,9 +139,15 @@ pub fn handle_command(
                 }
             }
         }
-        CommandId::Quit => {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        CommandId::Export => {
+            // Handled elsewhere or placeholder
         }
+        _ => {}
+    }
+}
+
+fn handle_edit_command(action: CommandId, context: ActionContext) {
+    match action {
         CommandId::Undo => {
             if let Some(prev_state) = context.history_manager.undo() {
                 context.project_service.set_project(prev_state);
@@ -157,7 +180,6 @@ pub fn handle_command(
                                 .selected_entities
                                 .remove(&entity_id);
                             context.editor_context.selection.last_selected_entity_id = None;
-                            // context.editor_context.selection.last_selected_track_id = None; // Keep track selected?
                             let current_state = context
                                 .project_service
                                 .get_project()
@@ -170,12 +192,14 @@ pub fn handle_command(
                 }
             }
         }
+        _ => {}
+    }
+}
+
+fn handle_view_command(action: CommandId, context: ActionContext) {
+    match action {
         CommandId::ResetLayout => {
             *context.dock_state = crate::ui::tab_viewer::create_initial_dock_state();
-        }
-        CommandId::HandTool => {
-            // HandTool is an interaction state command, handled by ViewportController.
-            // No direct action needed here.
         }
         CommandId::TogglePlayback => {
             let is_playing = !context.editor_context.timeline.is_playing;
@@ -205,5 +229,9 @@ pub fn handle_command(
                 context.dock_state.push_to_focused_leaf(tab);
             }
         }
+        CommandId::HandTool => {
+            // Handled by ViewportController logic elsewhere usually
+        }
+        _ => {}
     }
 }
