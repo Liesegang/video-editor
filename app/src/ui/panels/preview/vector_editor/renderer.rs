@@ -31,16 +31,16 @@ impl<'a> VectorEditorRenderer<'a> {
             to_screen(Pos2::new(wx, wy))
         };
 
-        if self.state.points.len() > 1 {
-            for i in 0..self.state.points.len() {
-                let current = &self.state.points[i];
-                let next_idx = (i + 1) % self.state.points.len();
+        if self.state.path.points.len() > 1 {
+            for i in 0..self.state.path.points.len() {
+                let current = &self.state.path.points[i];
+                let next_idx = (i + 1) % self.state.path.points.len();
 
-                if !self.state.is_closed && i == self.state.points.len() - 1 {
+                if !self.state.path.is_closed && i == self.state.path.points.len() - 1 {
                     break;
                 }
 
-                let next = &self.state.points[next_idx];
+                let next = &self.state.path.points[next_idx];
 
                 let p0 = local_to_screen(current.position[0], current.position[1]);
                 let p3 = local_to_screen(next.position[0], next.position[1]);
@@ -64,7 +64,7 @@ impl<'a> VectorEditorRenderer<'a> {
             }
         }
 
-        for (i, pt) in self.state.points.iter().enumerate() {
+        for (i, pt) in self.state.path.points.iter().enumerate() {
             let center_screen = local_to_screen(pt.position[0], pt.position[1]);
             let is_selected = self.state.selected_point_indices.contains(&i);
 
