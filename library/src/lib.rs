@@ -13,18 +13,18 @@ pub mod util;
 
 pub use error::LibraryError;
 
-pub use crate::loader::image::Image;
-pub use crate::plugin::ExportSettings; // Added
+pub use crate::io::image::Image;
+pub use crate::extensions::traits::ExportSettings; // Added
 // Re-export the services and models that the app will need.
 pub use application::editor_service::EditorService;
 pub use rendering::render_server::{RenderResult, RenderServer};
 pub use rendering::skia_renderer::SkiaRenderer;
 pub use service::{ExportService, ProjectModel, RenderService};
 
-// use crate::plugin::load_plugins; // Removed
-// use crate::rendering::effects::EffectRegistry; // Removed
-use crate::framing::entity_converters::BuiltinEntityConverterPlugin;
-use crate::plugin::PluginManager;
+// use crate::extensions::traits::load_plugins; // Removed
+// use crate::graphics::effects::EffectRegistry; // Removed
+use crate::timeline::converter::BuiltinEntityConverterPlugin;
+use crate::extensions::manager::PluginManager;
 use log::info;
 use std::fs;
 use std::io::Write;
@@ -34,30 +34,30 @@ use std::sync::Arc; // Added
 // Function to create and initialize the PluginManager with built-in plugins
 pub fn create_plugin_manager() -> Arc<PluginManager> {
     let manager = Arc::new(PluginManager::new());
-    manager.register_effect(Arc::new(crate::plugin::effects::BlurEffectPlugin::new()));
-    manager.register_effect(Arc::new(crate::plugin::effects::PixelSorterPlugin::new()));
-    manager.register_effect(Arc::new(crate::plugin::effects::DilateEffectPlugin::new()));
-    manager.register_effect(Arc::new(crate::plugin::effects::ErodeEffectPlugin::new()));
+    manager.register_effect(Arc::new(crate::compositing::effects::BlurEffectPlugin::new()));
+    manager.register_effect(Arc::new(crate::compositing::effects::PixelSorterPlugin::new()));
+    manager.register_effect(Arc::new(crate::compositing::effects::DilateEffectPlugin::new()));
+    manager.register_effect(Arc::new(crate::compositing::effects::ErodeEffectPlugin::new()));
     manager.register_effect(Arc::new(
-        crate::plugin::effects::DropShadowEffectPlugin::new(),
+        crate::compositing::effects::DropShadowEffectPlugin::new(),
     ));
     manager.register_effect(Arc::new(
-        crate::plugin::effects::MagnifierEffectPlugin::new(),
+        crate::compositing::effects::MagnifierEffectPlugin::new(),
     ));
-    manager.register_effect(Arc::new(crate::plugin::effects::TileEffectPlugin::new()));
+    manager.register_effect(Arc::new(crate::compositing::effects::TileEffectPlugin::new()));
 
-    manager.register_load_plugin(Arc::new(crate::plugin::loaders::NativeImageLoader::new()));
-    manager.register_load_plugin(Arc::new(crate::plugin::loaders::FfmpegVideoLoader::new()));
-    manager.register_export_plugin(Arc::new(crate::plugin::exporters::PngExportPlugin::new()));
-    manager.register_export_plugin(Arc::new(crate::plugin::exporters::FfmpegExportPlugin::new()));
+    manager.register_load_plugin(Arc::new(crate::io::codecs::NativeImageLoader::new()));
+    manager.register_load_plugin(Arc::new(crate::io::codecs::FfmpegVideoLoader::new()));
+    manager.register_export_plugin(Arc::new(crate::io::exporters::PngExportPlugin::new()));
+    manager.register_export_plugin(Arc::new(crate::io::exporters::FfmpegExportPlugin::new()));
     manager.register_property_plugin(Arc::new(
-        crate::plugin::properties::ConstantPropertyPlugin::new(),
+        crate::extensions::properties::ConstantPropertyPlugin::new(),
     ));
     manager.register_property_plugin(Arc::new(
-        crate::plugin::properties::KeyframePropertyPlugin::new(),
+        crate::extensions::properties::KeyframePropertyPlugin::new(),
     ));
     manager.register_property_plugin(Arc::new(
-        crate::plugin::properties::ExpressionPropertyPlugin::new(),
+        crate::extensions::properties::ExpressionPropertyPlugin::new(),
     ));
     manager.register_entity_converter_plugin(Arc::new(BuiltinEntityConverterPlugin::new())); // Added
     manager
@@ -144,7 +144,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
     let mut audio_temp_path: Option<String> = None;
     if matches!(
         export_settings.export_format(),
-        crate::plugin::ExportFormat::Video
+        crate::extensions::traits::ExportFormat::Video
     ) {
         let fps = composition.fps;
         let start_time = final_frame_range.start as f64 / fps;
@@ -157,7 +157,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         let start_sample = (start_time * sample_rate as f64).round() as u64;
         let frames = (duration * sample_rate as f64).round() as usize;
 
-        let audio_data = crate::audio::mixer::mix_samples(
+        let audio_data = crate::compositing::audio::mixer::mix_samples(
             &project_model.project().assets,
             project_model.composition(),
             &cache_manager,

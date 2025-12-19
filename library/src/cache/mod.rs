@@ -1,4 +1,4 @@
-use crate::loader::image::Image;
+use crate::io::image::Image;
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
