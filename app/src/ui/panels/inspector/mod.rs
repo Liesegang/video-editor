@@ -98,6 +98,11 @@ pub fn inspector_panel(
 
             // --- Dynamic Properties ---
             let definitions = project_service.get_property_definitions(comp_id, track_id, selected_entity_id);
+            let fps = project_service
+                .get_composition(comp_id)
+                .map(|c| c.fps)
+                .unwrap_or(60.0);
+
             // Group by category
             let mut grouped: std::collections::HashMap<
                 String,
@@ -170,7 +175,7 @@ pub fn inspector_panel(
                                     let actions = render_property_rows(
                                         ui,
                                         &chunk.defs,
-                                        |name| properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &properties, current_time))),
+                                        |name| properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &properties, current_time, fps))),
                                         |name| properties.get(name).cloned(),
                                         &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true, current_time }
                                     );
@@ -254,6 +259,7 @@ pub fn inspector_panel(
                                                 p,
                                                 &properties,
                                                 current_time,
+                                                fps,
                                             ))
                                         })
                                     },
@@ -344,6 +350,7 @@ pub fn inspector_panel(
                 track_id,
                 selected_entity_id,
                 current_time,
+                fps,
                 &styles,
                 &mut needs_refresh,
             );
@@ -358,6 +365,7 @@ pub fn inspector_panel(
                 track_id,
                 selected_entity_id,
                 current_time,
+                fps,
                 &mut needs_refresh,
             );
 

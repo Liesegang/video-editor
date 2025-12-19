@@ -471,9 +471,11 @@ impl ProjectManager {
         property: &crate::model::project::property::Property,
         context: &crate::model::project::property::PropertyMap,
         time: f64,
+        fps: f64,
     ) -> PropertyValue {
         let eval_ctx = crate::plugin::EvaluationContext {
             property_map: context,
+            fps,
         };
         self.plugin_manager
             .get_property_evaluators()

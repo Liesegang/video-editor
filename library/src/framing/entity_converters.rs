@@ -65,6 +65,7 @@ impl<'a> FrameEvaluationContext<'a> {
         for (key, property) in config.properties.iter() {
             let ctx = EvaluationContext {
                 property_map: &config.properties,
+                fps: self.composition.fps,
             };
             let value = self.property_evaluators.evaluate(property, time, &ctx);
             evaluated.insert(key.clone(), value);
@@ -147,6 +148,7 @@ impl<'a> FrameEvaluationContext<'a> {
         let property = properties.get(key)?;
         let ctx = EvaluationContext {
             property_map: properties,
+            fps: self.composition.fps,
         };
         let evaluated_value = self.property_evaluators.evaluate(property, time, &ctx);
         // debug!("Evaluated property '{}' at time {} to {:?}", key, time, evaluated_value);
