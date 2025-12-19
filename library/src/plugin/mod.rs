@@ -1102,4 +1102,5 @@ pub trait PropertyEvaluator: Send + Sync {
 
 pub struct EvaluationContext<'a> {
     pub property_map: &'a PropertyMap,
+    pub fps: f64,
 }

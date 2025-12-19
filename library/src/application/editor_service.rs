@@ -292,9 +292,10 @@ impl EditorService {
         property: &crate::model::project::property::Property,
         context: &crate::model::project::property::PropertyMap,
         time: f64,
+        fps: f64,
     ) -> PropertyValue {
         self.project_manager
-            .evaluate_property_value(property, context, time)
+            .evaluate_property_value(property, context, time, fps)
     }
 
     pub fn add_keyframe(
