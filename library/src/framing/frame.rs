@@ -143,7 +143,10 @@ mod tests {
     use std::sync::Arc; // Added
 
     fn make_vec2(x: f64, y: f64) -> PropertyValue {
-        PropertyValue::Vec2(Vec2 { x: ordered_float::OrderedFloat(x), y: ordered_float::OrderedFloat(y) })
+        PropertyValue::Vec2(Vec2 {
+            x: ordered_float::OrderedFloat(x),
+            y: ordered_float::OrderedFloat(y),
+        })
     }
 
     fn constant(value: PropertyValue) -> Property {

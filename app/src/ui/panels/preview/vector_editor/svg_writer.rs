@@ -1,24 +1,24 @@
 use crate::model::vector::VectorEditorState;
 
 pub fn to_svg_path(state: &VectorEditorState) -> String {
-    if state.points.is_empty() {
+    if state.path.points.is_empty() {
         return String::new();
     }
 
     let mut path = String::new();
 
-    let first = &state.points[0];
+    let first = &state.path.points[0];
     path.push_str(&format!("M {},{} ", first.position[0], first.position[1]));
 
-    for i in 0..state.points.len() {
-        let current = &state.points[i];
-        let next_idx = (i + 1) % state.points.len();
+    for i in 0..state.path.points.len() {
+        let current = &state.path.points[i];
+        let next_idx = (i + 1) % state.path.points.len();
 
-        if !state.is_closed && i == state.points.len() - 1 {
+        if !state.path.is_closed && i == state.path.points.len() - 1 {
             break;
         }
 
-        let next = &state.points[next_idx];
+        let next = &state.path.points[next_idx];
 
         if is_zero(current.handle_out) && is_zero(next.handle_in) {
             path.push_str(&format!("L {},{} ", next.position[0], next.position[1]));
@@ -36,7 +36,7 @@ pub fn to_svg_path(state: &VectorEditorState) -> String {
         }
     }
 
-    if state.is_closed {
+    if state.path.is_closed {
         path.push_str("Z");
     }
 

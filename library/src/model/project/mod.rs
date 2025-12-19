@@ -2,6 +2,7 @@ pub mod asset;
 pub mod project;
 pub mod property;
 pub mod style;
+pub mod clip_helpers; // Added
 
 use crate::model::project::property::{PropertyMap, Vec2};
 use crate::model::project::style::StyleInstance;
