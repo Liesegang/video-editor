@@ -17,6 +17,7 @@ pub enum PropertyAction {
     Update(String, PropertyValue),
     Commit,
     ToggleKeyframe(String, PropertyValue),
+    SetAttribute(String, String, PropertyValue), // name, attr_key, attr_val
 }
 
 // Helper function to handle common property events
@@ -201,26 +202,52 @@ where
                     current_val.b,
                     current_val.a,
                 );
-                let response = ui.color_edit_button_srgba(&mut color32);
+                
+                ui.horizontal(|ui| {
+                    let response = ui.color_edit_button_srgba(&mut color32);
+    
+                    let new_color = if response.changed() {
+                        Some(PropertyValue::Color(Color {
+                            r: color32.r(),
+                            g: color32.g(),
+                            b: color32.b(),
+                            a: color32.a(),
+                        }))
+                    } else {
+                        None
+                    };
+    
+                    handle_prop_response(
+                        &mut actions,
+                        &response,
+                        &prop_def.name,
+                        new_color,
+                        &prop_def.default_value,
+                    );
 
-                let new_color = if response.changed() {
-                    Some(PropertyValue::Color(Color {
-                        r: color32.r(),
-                        g: color32.g(),
-                        b: color32.b(),
-                        a: color32.a(),
-                    }))
-                } else {
-                    None
-                };
-
-                handle_prop_response(
-                    &mut actions,
-                    &response,
-                    &prop_def.name,
-                    new_color,
-                    &prop_def.default_value,
-                );
+                    // Interpolation Mode UI
+                    let prop_meta = get_property(&prop_def.name);
+                    if let Some(prop) = prop_meta {
+                        if prop.evaluator == "keyframe" {
+                            let current_mode = prop.properties.get("interpolation")
+                                .and_then(|v| v.get_as::<String>())
+                                .unwrap_or_else(|| "linear".to_string());
+                            
+                            let mut mode = current_mode.clone();
+                            egui::ComboBox::from_id_salt(format!("interp_{}", prop_def.name))
+                                .selected_text(if mode == "hsv" { "HSV" } else { "RGB" })
+                                .width(60.0)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut mode, "linear".to_string(), "RGB");
+                                    ui.selectable_value(&mut mode, "hsv".to_string(), "HSV");
+                                });
+                            
+                            if mode != current_mode {
+                                actions.push(PropertyAction::SetAttribute(prop_def.name.clone(), "interpolation".to_string(), PropertyValue::String(mode)));
+                            }
+                        }
+                    }
+                });
 
                 if context.in_grid {
                     ui.end_row();

@@ -343,32 +343,7 @@ impl EditorService {
 
     // Aliases & Sequences
 
-    pub fn update_effect_property_or_keyframe(
-        &self,
-        composition_id: Uuid,
-        track_id: Uuid,
-        clip_id: Uuid,
-        effect_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        // This logic mirrors update_property_or_keyframe but for effects
-        // If "constant", update value. If "keyframe", add/update keyframe.
-        // Effectively `add_effect_keyframe` usually handles both (promoting/adding)?
-        // Let's delegate to `add_effect_keyframe` as I implemented promotion logic there.
-        self.add_effect_keyframe(
-            composition_id,
-            track_id,
-            clip_id,
-            effect_index,
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
+
 
     pub fn update_clip_time(
         &self,
@@ -596,24 +571,30 @@ impl EditorService {
         )
     }
 
-    pub fn remove_style_keyframe(
+    pub fn update_effect_property_or_keyframe(
         &self,
         composition_id: Uuid,
         track_id: Uuid,
         clip_id: Uuid,
-        style_index: usize,
+        effect_index: usize,
         property_key: &str,
-        keyframe_index: usize,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        self.project_manager.remove_style_keyframe(
+        self.project_manager.update_effect_property_or_keyframe(
             composition_id,
             track_id,
             clip_id,
-            style_index,
+            effect_index,
             property_key,
-            keyframe_index,
+            time,
+            value,
+            easing,
         )
     }
+
+
 
     pub fn update_style_keyframe_by_index(
         &self,
@@ -637,6 +618,69 @@ impl EditorService {
             new_time,
             new_value,
             new_easing,
+        )
+    }
+
+    pub fn update_style_property_or_keyframe(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        style_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        self.project_manager.update_style_property_or_keyframe(
+            composition_id,
+            track_id,
+            clip_id,
+            style_index,
+            property_key,
+            time,
+            value,
+            easing,
+        )
+    }
+
+    pub fn remove_style_keyframe(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        style_index: usize,
+        property_key: &str,
+        keyframe_index: usize,
+    ) -> Result<(), LibraryError> {
+        self.project_manager.remove_style_keyframe(
+            composition_id,
+            track_id,
+            clip_id,
+            style_index,
+            property_key,
+            keyframe_index,
+        )
+    }
+
+    pub fn set_style_property_attribute(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        style_index: usize,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        self.project_manager.set_style_property_attribute(
+            composition_id,
+            track_id,
+            clip_id,
+            style_index,
+            property_key,
+            attribute_key,
+            attribute_value,
         )
     }
 }

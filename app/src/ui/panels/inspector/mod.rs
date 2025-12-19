@@ -234,6 +234,10 @@ pub fn inspector_panel(
                                                 }
                                                 needs_refresh = true;
                                             }
+                                            crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, _key, _val) => {
+                                                 // TODO: Implement set_clip_property_attribute
+                                                 println!("SetAttribute for prop {} not implemented", name);
+                                            }
                                         }
                                     }
                                 });
@@ -318,6 +322,9 @@ pub fn inspector_panel(
                                                     }
                                                 }
                                                 needs_refresh = true;
+                                        }
+                                        crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, _key, _val) => {
+                                             println!("SetAttribute for prop {} not implemented", name);
                                         }
                                     }
                                 }
