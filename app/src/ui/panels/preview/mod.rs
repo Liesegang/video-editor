@@ -482,6 +482,7 @@ pub fn preview_panel(
                                     p,
                                     &entity.properties,
                                     editor_context.timeline.current_time as f64,
+                                    comp.fps,
                                 )
                             })
                             .and_then(|pv| pv.get_as::<f32>())
@@ -495,6 +496,7 @@ pub fn preview_panel(
                                     p,
                                     &entity.properties,
                                     editor_context.timeline.current_time as f64,
+                                    comp.fps,
                                 );
                                 val.get_as::<Vec2>()
                                    .map(|v| [v.x.into_inner() as f32, v.y.into_inner() as f32])
