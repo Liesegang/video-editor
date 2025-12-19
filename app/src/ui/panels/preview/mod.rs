@@ -3,13 +3,14 @@ use egui_phosphor::regular as icons;
 use std::sync::{Arc, RwLock};
 
 use library::model::project::project::Project;
-use library::service::project_service::ProjectService;
+use library::EditorService;
 use library::RenderServer;
 
 use crate::command::{CommandId, CommandRegistry};
 use crate::state::context_types::PreviewTool;
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 use crate::{action::HistoryManager, state::context::EditorContext};
+use library::model::project::property::Vec2;
 
 mod gizmo;
 mod grid;
@@ -46,7 +47,7 @@ pub fn preview_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     history_manager: &mut HistoryManager,
-    project_service: &ProjectService,
+    project_service: &mut EditorService,
     project: &Arc<RwLock<Project>>,
     render_server: &Arc<RenderServer>,
     registry: &CommandRegistry,
@@ -487,6 +488,21 @@ pub fn preview_panel(
                             .unwrap_or(default)
                     };
 
+                    let get_vec2 = |key: &str, default: [f32; 2]| {
+                        entity.properties.get(key)
+                            .map(|p| {
+                                let val = project_service.evaluate_property_value(
+                                    p,
+                                    &entity.properties,
+                                    editor_context.timeline.current_time as f64,
+                                );
+                                val.get_as::<Vec2>()
+                                   .map(|v| [v.x.into_inner() as f32, v.y.into_inner() as f32])
+                                   .unwrap_or(default)
+                            })
+                            .unwrap_or(default)
+                    };
+
                     let gc = crate::model::ui_types::TimelineClip {
                         id: entity.id,
                         name: entity.kind.to_string(), // entity_type -> kind
@@ -497,11 +513,9 @@ pub fn preview_panel(
                         source_begin_frame: entity.source_begin_frame, // u64
                         duration_frame: entity.duration_frame,         // Option<u64>
                         color: asset_color,
-                        position: [get_val("position_x", 960.0), get_val("position_y", 540.0)],
-                        scale_x: get_val("scale_x", 100.0),
-                        scale_y: get_val("scale_y", 100.0),
-                        anchor_x: get_val("anchor_x", 0.0),
-                        anchor_y: get_val("anchor_y", 0.0),
+                        position: get_vec2("position", [960.0, 540.0]),
+                        scale: get_vec2("scale", [100.0, 100.0]),
+                        anchor: get_vec2("anchor", [0.0, 0.0]),
                         opacity: get_val("opacity", 100.0),
                         rotation: get_val("rotation", 0.0),
                         asset_id: asset_id,
@@ -545,13 +559,13 @@ pub fn preview_panel(
                             y: gc.position[1] as f64,
                         },
                         scale: library::model::frame::transform::Scale {
-                            x: gc.scale_x as f64,
-                            y: gc.scale_y as f64,
+                            x: gc.scale[0] as f64,
+                            y: gc.scale[1] as f64,
                         },
                         rotation: gc.rotation as f64,
                         anchor: library::model::frame::transform::Position {
-                            x: gc.anchor_x as f64,
-                            y: gc.anchor_y as f64,
+                            x: gc.anchor[0] as f64,
+                            y: gc.anchor[1] as f64,
                         },
                         opacity: gc.opacity as f64,
                     };

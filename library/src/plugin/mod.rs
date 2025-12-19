@@ -163,6 +163,15 @@ pub enum LoadResponse {
 
 use crate::model::project::asset::AssetKind; // Added import
 
+#[derive(Debug, Clone)]
+pub struct AssetMetadata {
+    pub kind: AssetKind,
+    pub duration: Option<f64>,
+    pub fps: Option<f64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
 pub trait LoadPlugin: Plugin {
     fn supports(&self, request: &LoadRequest) -> bool;
     fn load(
@@ -170,6 +179,14 @@ pub trait LoadPlugin: Plugin {
         request: &LoadRequest,
         cache: &CacheManager,
     ) -> Result<LoadResponse, LibraryError>;
+
+    fn get_metadata(&self, _path: &str) -> Option<AssetMetadata> {
+        // Default implementation tries individual methods (backward compatibility logic if needed,
+        // but for efficiency plugins should override this).
+        // For now, simpler to leave default as None or implement naive fallback.
+        // Let's rely on implementation to do it right.
+        None
+    }
 
     fn get_asset_kind(&self, _path: &str) -> Option<AssetKind> {
         None
@@ -523,6 +540,25 @@ impl PluginManager {
             })
     }
 
+    pub fn get_default_effect_config(
+        &self,
+        effect_id: &str,
+    ) -> Option<crate::model::project::EffectConfig> {
+        let def = self.get_effect_definition(effect_id)?;
+        let mut props = crate::model::project::property::PropertyMap::new();
+        for p in def.properties {
+            props.set(
+                p.name,
+                crate::model::project::property::Property::constant(p.default_value),
+            );
+        }
+        Some(crate::model::project::EffectConfig {
+            id: uuid::Uuid::new_v4(),
+            effect_type: effect_id.to_string(),
+            properties: props,
+        })
+    }
+
     pub fn load_resource(
         &self,
         request: &LoadRequest,
@@ -538,6 +574,16 @@ impl PluginManager {
             "No load plugin registered for request {:?}",
             request
         )))
+    }
+
+    pub fn get_metadata(&self, path: &str) -> Option<AssetMetadata> {
+        let inner = self.inner.read().unwrap();
+        for plugin in inner.load_plugins.plugins.values() {
+            if let Some(metadata) = plugin.get_metadata(path) {
+                return Some(metadata);
+            }
+        }
+        None
     }
 
     pub fn probe_asset_kind(&self, path: &str) -> AssetKind {

@@ -190,28 +190,28 @@ fn settings_panel(
                         if ui.selectable_label(matches!(state.active_tab, SettingsTab::Shortcuts), "Shortcuts").clicked() {
                             state.active_tab = SettingsTab::Shortcuts;
                         }
-                        
+
                         let is_plugin_tab = matches!(state.active_tab, SettingsTab::PluginPaths | SettingsTab::PluginList(_, _));
-                        
+
                         egui::collapsing_header::CollapsingHeader::new("Plugins")
                             .default_open(is_plugin_tab)
                             .show(ui, |ui| {
                                 if ui.selectable_label(matches!(state.active_tab, SettingsTab::PluginPaths), "Paths").clicked() {
                                     state.active_tab = SettingsTab::PluginPaths;
                                 }
-                                
+
                                 use library::plugin::PluginCategory;
-                                
+
                                 // Loaders
                                 if ui.selectable_label(matches!(state.active_tab, SettingsTab::PluginList(PluginCategory::Load, _)), "Loaders").clicked() {
                                     state.active_tab = SettingsTab::PluginList(PluginCategory::Load, None);
                                 }
-                                
+
                                 // Exporters
                                 if ui.selectable_label(matches!(state.active_tab, SettingsTab::PluginList(PluginCategory::Export, _)), "Exporters").clicked() {
                                     state.active_tab = SettingsTab::PluginList(PluginCategory::Export, None);
                                 }
-                                
+
                                 // Effects
                                 let is_effect_tab = matches!(state.active_tab, SettingsTab::PluginList(PluginCategory::Effect, _));
                                 egui::collapsing_header::CollapsingHeader::new("Effects")
@@ -244,7 +244,7 @@ fn settings_panel(
             // --- Content Area ---
             strip.cell(|ui| {
                 ui.add_space(8.0); // Top padding
-                
+
                 // Vertical strip for Content vs Footer
                 StripBuilder::new(ui)
                     .size(Size::remainder()) // Main tab content

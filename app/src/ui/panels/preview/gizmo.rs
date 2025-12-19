@@ -2,7 +2,8 @@ use crate::model::ui_types::{GizmoHandle, TimelineClip};
 use crate::state::context::EditorContext;
 use egui::{CursorIcon, Pos2, Rect, Sense, Ui, Vec2};
 use library::model::project::project::Project;
-use library::service::project_service::ProjectService;
+use library::model::project::property::{PropertyValue, Vec2 as PropVec2};
+use library::EditorService as ProjectService;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 
@@ -214,41 +215,29 @@ pub fn handle_gizmo_interaction(
                     // Apply Updates
                     let current_time = editor_context.timeline.current_time as f64;
 
-                    crate::utils::property::update_number_property(
+                    crate::utils::property::update_property(
                         project_service,
                         comp_id,
                         track_id,
                         selected_id,
-                        "scale_x",
+                        "scale",
                         current_time,
-                        new_scale_x as f64,
+                        PropertyValue::Vec2(PropVec2 {
+                            x: OrderedFloat(new_scale_x as f64),
+                            y: OrderedFloat(new_scale_y as f64),
+                        }),
                     );
-                    crate::utils::property::update_number_property(
+                    crate::utils::property::update_property(
                         project_service,
                         comp_id,
                         track_id,
                         selected_id,
-                        "scale_y",
+                        "position",
                         current_time,
-                        new_scale_y as f64,
-                    );
-                    crate::utils::property::update_number_property(
-                        project_service,
-                        comp_id,
-                        track_id,
-                        selected_id,
-                        "position_x",
-                        current_time,
-                        new_pos_x as f64,
-                    );
-                    crate::utils::property::update_number_property(
-                        project_service,
-                        comp_id,
-                        track_id,
-                        selected_id,
-                        "position_y",
-                        current_time,
-                        new_pos_y as f64,
+                        PropertyValue::Vec2(PropVec2 {
+                            x: OrderedFloat(new_pos_x as f64),
+                            y: OrderedFloat(new_pos_y as f64),
+                        }),
                     );
                     crate::utils::property::update_number_property(
                         project_service,
@@ -354,11 +343,11 @@ pub fn draw_gizmo(
                             start_mouse_pos: response.hover_pos().unwrap_or(pos),
                             active_handle: handle,
                             original_position: gc.position,
-                            original_scale_x: gc.scale_x,
-                            original_scale_y: gc.scale_y,
+                            original_scale_x: gc.scale[0],
+                            original_scale_y: gc.scale[1],
                             original_rotation: gc.rotation,
-                            original_anchor_x: gc.anchor_x,
-                            original_anchor_y: gc.anchor_y,
+                            original_anchor_x: gc.anchor[0],
+                            original_anchor_y: gc.anchor[1],
                             original_width: base_w,
                             original_height: base_h,
                         });
@@ -377,8 +366,8 @@ fn draw_clip_box(
 ) -> ([Pos2; 4], Pos2, f32, Pos2) {
     let base_w = gc.width.unwrap_or(1920.0);
     let base_h = gc.height.unwrap_or(1080.0);
-    let sx = gc.scale_x / 100.0;
-    let sy = gc.scale_y / 100.0;
+    let sx = gc.scale[0] / 100.0;
+    let sy = gc.scale[1] / 100.0;
 
     let center = egui::pos2(gc.position[0], gc.position[1]);
     let angle_rad = gc.rotation.to_radians();
@@ -386,8 +375,8 @@ fn draw_clip_box(
     let sin = angle_rad.sin();
 
     let transform_point = |local_x: f32, local_y: f32| -> egui::Pos2 {
-        let ox = local_x - gc.anchor_x;
-        let oy = local_y - gc.anchor_y;
+        let ox = local_x - gc.anchor[0];
+        let oy = local_y - gc.anchor[1];
         let sx_ox = ox * sx;
         let sy_oy = oy * sy;
         let rx = sx_ox * cos - sy_oy * sin;

@@ -5,7 +5,7 @@ pub mod track_list;
 
 use egui::Ui;
 use library::model::project::project::Project;
-use library::service::project_service::ProjectService;
+use library::EditorService;
 use std::sync::{Arc, RwLock};
 
 use crate::command::CommandRegistry;
@@ -21,7 +21,7 @@ pub fn timeline_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     history_manager: &mut HistoryManager,
-    project_service: &mut ProjectService,
+    project_service: &mut EditorService,
     project: &Arc<RwLock<Project>>,
     registry: &CommandRegistry,
 ) {

@@ -6,6 +6,36 @@ use uuid::Uuid;
 pub struct CompositionHandler;
 
 impl CompositionHandler {
+    pub fn update_composition(
+        project: &Arc<RwLock<Project>>,
+        id: Uuid,
+        name: &str,
+        width: u32,
+        height: u32,
+        fps: f64,
+        duration: f64,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let comp =
+            proj.compositions
+                .iter_mut()
+                .find(|c| c.id == id)
+                .ok_or(LibraryError::Project(format!(
+                    "Composition not found: {}",
+                    id
+                )))?;
+
+        comp.name = name.to_string();
+        comp.width = width as u64;
+        comp.height = height as u64;
+        comp.fps = fps;
+        comp.duration = duration;
+
+        Ok(())
+    }
+
     pub fn add_composition(
         project: &Arc<RwLock<Project>>,
         name: &str,
@@ -21,6 +51,16 @@ impl CompositionHandler {
         let id = composition.id;
         proj.add_composition(composition);
         Ok(id)
+    }
+
+    pub fn remove_composition(
+        project: &Arc<RwLock<Project>>,
+        id: Uuid,
+    ) -> Result<Option<Composition>, LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        Ok(proj.remove_composition(id))
     }
 
     pub fn get_composition(

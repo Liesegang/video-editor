@@ -1,7 +1,7 @@
 use egui::Ui;
 use library::model::project::project::Project;
 use library::model::project::TrackClip;
-use library::service::project_service::ProjectService;
+use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
@@ -34,6 +34,17 @@ pub fn handle_context_menu(
             (editor_context.timeline.current_time * composition_fps as f32).round() as u64;
         let mut drop_track_index_opt = None;
 
+        let mut comp_width = 1920;
+        let mut comp_height = 1080;
+        if let Some(comp_id) = editor_context.selection.composition_id {
+             if let Ok(proj_read) = project.read() {
+                if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
+                    comp_width = comp.width;
+                    comp_height = comp.height;
+                }
+             }
+        }
+
         // Try to recover clicked position
         if let Some(pos) = editor_context.interaction.context_menu_open_pos {
             // Re-calculate frame and track from pos
@@ -54,7 +65,7 @@ pub fn handle_context_menu(
             let drop_out_frame = drop_in_frame + duration_frames;
 
             let text_clip =
-                TrackClip::create_text("this is sample text", drop_in_frame, drop_out_frame);
+                TrackClip::create_text("this is sample text", drop_in_frame, drop_out_frame, comp_width as u32, comp_height as u32);
 
             add_clip_to_best_track(
                 project,
@@ -74,7 +85,7 @@ pub fn handle_context_menu(
             let duration_frames = (duration_sec * composition_fps).round() as u64;
             let drop_out_frame = drop_in_frame + duration_frames;
 
-            let shape_clip = TrackClip::create_shape(drop_in_frame, drop_out_frame);
+            let shape_clip = TrackClip::create_shape(drop_in_frame, drop_out_frame, comp_width as u32, comp_height as u32);
 
             add_clip_to_best_track(
                 project,
@@ -94,7 +105,7 @@ pub fn handle_context_menu(
             let duration_frames = (duration_sec * composition_fps).round() as u64;
             let drop_out_frame = drop_in_frame + duration_frames;
 
-            let sksl_clip = TrackClip::create_sksl(drop_in_frame, drop_out_frame);
+            let sksl_clip = TrackClip::create_sksl(drop_in_frame, drop_out_frame, comp_width as u32, comp_height as u32);
 
             add_clip_to_best_track(
                 project,

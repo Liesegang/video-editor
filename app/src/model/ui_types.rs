@@ -15,10 +15,8 @@ pub struct TimelineClip {
     pub duration_frame: Option<u64>,
     pub color: egui::Color32, // Changed from Color32 to egui::Color32 to match original context
     pub position: [f32; 2],
-    pub scale_x: f32,
-    pub scale_y: f32,
-    pub anchor_x: f32,
-    pub anchor_y: f32,
+    pub scale: [f32; 2],
+    pub anchor: [f32; 2],
     pub opacity: f32,
     pub rotation: f32,
     pub asset_id: Option<Uuid>, // Changed from asset_index to asset_id

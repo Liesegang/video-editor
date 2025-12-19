@@ -4,7 +4,7 @@ use library::model::project::project::Project;
 use library::model::project::property::PropertyValue;
 use library::model::project::TrackClip;
 use library::model::project::TrackClipKind;
-use library::service::project_service::ProjectService;
+use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -40,10 +40,14 @@ pub fn handle_drag_and_drop(
                 if let Some(comp_id) = editor_context.selection.composition_id {
                     // Find the track to drop onto
                     let mut current_tracks_for_drop = Vec::new();
+                    let mut comp_width = 1920;
+                    let mut comp_height = 1080;
                     if let Ok(proj_read) = project.read() {
                         if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id)
                         {
                             current_tracks_for_drop = comp.tracks.clone();
+                            comp_width = comp.width;
+                            comp_height = comp.height;
                         }
                     }
 
@@ -74,12 +78,13 @@ pub fn handle_drag_and_drop(
                                                     drop_in_frame, // source_begin_frame = drop_in_frame
                                                     duration_frames, // Use asset duration
                                                     asset.fps.unwrap_or(30.0), // Use asset fps or default
+                                                    comp_width as u32,
+                                                    comp_height as u32,
                                                 );
                                                 if let (Some(w), Some(h)) =
                                                     (asset.width, asset.height)
                                                 {
-                                                    video_clip.properties.set("anchor_x".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(w as f64 / 2.0))));
-                                                    video_clip.properties.set("anchor_y".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(h as f64 / 2.0))));
+                                                    video_clip.properties.set("anchor".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Vec2(library::model::project::property::Vec2 { x: ordered_float::OrderedFloat(w as f64 / 2.0), y: ordered_float::OrderedFloat(h as f64 / 2.0) })));
                                                 }
                                                 Some(video_clip)
                                             }
@@ -89,13 +94,14 @@ pub fn handle_drag_and_drop(
                                                     &asset.path,
                                                     drop_in_frame,
                                                     drop_out,
+                                                    comp_width as u32,
+                                                    comp_height as u32,
                                                 );
                                                 image_clip.source_begin_frame = 0; // Images are static, so 0 is fine, or arguably doesn't matter. But let's keep 0 as explicit.
                                                 if let (Some(w), Some(h)) =
                                                     (asset.width, asset.height)
                                                 {
-                                                    image_clip.properties.set("anchor_x".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(w as f64 / 2.0))));
-                                                    image_clip.properties.set("anchor_y".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Number(ordered_float::OrderedFloat(h as f64 / 2.0))));
+                                                    image_clip.properties.set("anchor".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Vec2(library::model::project::property::Vec2 { x: ordered_float::OrderedFloat(w as f64 / 2.0), y: ordered_float::OrderedFloat(h as f64 / 2.0) })));
                                                 }
                                                 Some(image_clip)
                                             }
@@ -107,7 +113,8 @@ pub fn handle_drag_and_drop(
                                                          TrackClipKind::Audio,
                                                          0, 0, 0, None, 0.0,
                                                          library::model::project::property::PropertyMap::new(),
-                                                         Vec::new()
+                                                         Vec::new(), // styles
+                                                         Vec::new()  // effects
                                                      );
                                                 audio_entity.in_frame = drop_in_frame;
                                                 audio_entity.out_frame = drop_out;
@@ -152,7 +159,8 @@ pub fn handle_drag_and_drop(
                                     None,
                                     0.0,
                                     library::model::project::property::PropertyMap::new(),
-                                    Vec::new(),
+                                    Vec::new(), // styles
+                                    Vec::new(), // effects
                                 );
                                 comp_entity.in_frame = drop_in_frame;
                                 comp_entity.out_frame = drop_out;

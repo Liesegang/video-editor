@@ -1,7 +1,7 @@
 use crate::state::context::EditorContext;
 use egui::Ui;
 use library::model::project::project::Project;
-use library::service::project_service::ProjectService;
+use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 
 mod draw;

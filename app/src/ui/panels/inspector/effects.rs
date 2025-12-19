@@ -4,7 +4,7 @@ use crate::state::context::EditorContext;
 use crate::ui::widgets::reorderable_list::ReorderableList;
 use egui::collapsing_header::CollapsingState;
 use egui::Ui;
-use library::service::project_service::ProjectService;
+use library::EditorService as ProjectService;
 use uuid::Uuid;
 
 pub fn render_effects_section(
@@ -64,7 +64,7 @@ pub fn render_effects_section(
                 let effect_index = track_clip.effects.iter().position(|e| e.id == effect.id).unwrap_or(_visual_index);
                 let id = ui.make_persistent_id(format!("effect_{}", effect.id));
                 let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
-                
+
                 // Render Header (with handle)
                 let mut remove_clicked = false;
                 let header_res = state.show_header(ui, |ui| {
@@ -78,7 +78,7 @@ pub fn render_effects_section(
                         });
                     });
                 });
-                
+
                 if remove_clicked {
                     needs_delete = Some(_visual_index);
                 }

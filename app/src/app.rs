@@ -1,7 +1,7 @@
 use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, Style};
 use library::model::project::project::{Composition, Project};
-use library::service::project_service::ProjectService;
+use library::EditorService;
 use std::sync::{Arc, RwLock};
 
 use crate::action::{
@@ -26,7 +26,7 @@ use library::RenderServer;
 pub struct MyApp {
     pub editor_context: EditorContext,
     pub dock_state: DockState<Tab>,
-    pub project_service: ProjectService,
+    pub project_service: EditorService,
     pub project: Arc<RwLock<Project>>,
     pub history_manager: HistoryManager,
     shortcut_manager: ShortcutManager,
@@ -79,7 +79,7 @@ impl MyApp {
         }
 
         let cache_manager = Arc::new(library::cache::CacheManager::new());
-        let project_service = ProjectService::new(
+        let project_service = EditorService::new(
             Arc::clone(&default_project),
             plugin_manager.clone(),
             cache_manager.clone(),
@@ -321,7 +321,7 @@ impl eframe::App for MyApp {
         if self.editor_context.timeline.is_playing {
             // Audio Master Clock Sync
             // We trust the audio engine's time as the source of truth.
-            let audio_time = self.project_service.audio_engine.get_current_time();
+            let audio_time = self.project_service.get_audio_engine().get_current_time();
 
             // Cast to f32 for UI text/logic, but careful with precision for long videos?
             // editor_context uses f32 for current_time.

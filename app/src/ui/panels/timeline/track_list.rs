@@ -2,7 +2,7 @@ use egui::Ui;
 use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use library::model::project::Track;
-use library::service::project_service::ProjectService;
+use library::EditorService as ProjectService;
 use log::error;
 use std::sync::{Arc, RwLock};
 

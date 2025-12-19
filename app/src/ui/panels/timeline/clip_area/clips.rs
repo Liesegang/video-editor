@@ -2,7 +2,7 @@ use egui::{epaint::StrokeKind, Ui};
 use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
 use library::model::project::TrackClipKind;
-use library::service::project_service::ProjectService;
+use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -136,10 +136,8 @@ pub fn draw_clips(
                     clip.properties.get_f32("position_x").unwrap_or(960.0),
                     clip.properties.get_f32("position_y").unwrap_or(540.0),
                 ],
-                scale_x: clip.properties.get_f32("scale_x").unwrap_or(100.0),
-                scale_y: clip.properties.get_f32("scale_y").unwrap_or(100.0),
-                anchor_x: clip.properties.get_f32("anchor_x").unwrap_or(0.0),
-                anchor_y: clip.properties.get_f32("anchor_y").unwrap_or(0.0),
+                scale: [0.0, 0.0], // Unused in timeline view
+                anchor: [0.0, 0.0], // Unused in timeline view
                 opacity: clip.properties.get_f32("opacity").unwrap_or(100.0),
                 rotation: clip.properties.get_f32("rotation").unwrap_or(0.0),
                 asset_id: None, // We don't have asset_id                asset_id: None,
@@ -323,8 +321,14 @@ pub fn draw_clips(
                 if let Some(asset_id) = clip.reference_id {
                     let cache = project_service.get_cache_manager();
                     if let Some(audio_data) = cache.get_audio(asset_id) {
-                        let sample_rate = project_service.audio_engine.get_sample_rate() as f64;
-                        let channels = project_service.audio_engine.get_channels() as usize; // Stereo is standard
+                        let sample_rate = project_service
+                            .get_audio_service()
+                            .get_audio_engine()
+                            .get_sample_rate() as f64;
+                        let channels = project_service
+                            .get_audio_service()
+                            .get_audio_engine()
+                            .get_channels() as usize; // Stereo is standard
                         draw_waveform(
                             &painter,
                             drawing_clip_rect,
@@ -462,7 +466,6 @@ pub fn draw_clips(
                                         tid,
                                         c.id,
                                         new_source_begin_frame,
-                                        c.duration_frame,
                                     )
                                     .ok();
                             }
@@ -513,8 +516,9 @@ pub fn draw_clips(
                         if let Err(e) = project_service.move_clip_to_track(
                             comp_id,
                             original_track_id,
-                            hovered_track_id,
                             gc.id,
+                            hovered_track_id,
+                            gc.in_frame,
                         ) {
                             log::error!("Failed to move entity to new track: {:?}", e);
                         } else {

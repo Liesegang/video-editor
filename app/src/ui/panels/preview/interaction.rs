@@ -3,7 +3,7 @@ use crate::state::context::EditorContext;
 use crate::ui::panels::preview::gizmo;
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
 use library::model::project::project::Project;
-use library::service::project_service::ProjectService;
+use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -131,13 +131,13 @@ impl<'a> PreviewInteractions<'a> {
                                 y: gc.position[1] as f64,
                             },
                             scale: library::model::frame::transform::Scale {
-                                x: gc.scale_x as f64,
-                                y: gc.scale_y as f64,
+                                x: gc.scale[0] as f64,
+                                y: gc.scale[1] as f64,
                             },
                             rotation: gc.rotation as f64,
                             anchor: library::model::frame::transform::Position {
-                                x: gc.anchor_x as f64,
-                                y: gc.anchor_y as f64,
+                                x: gc.anchor[0] as f64,
+                                y: gc.anchor[1] as f64,
                             },
                             opacity: gc.opacity as f64,
                         };
@@ -307,8 +307,8 @@ impl<'a> PreviewInteractions<'a> {
             (0.0, 0.0)
         };
 
-        let sx = gc.scale_x / 100.0;
-        let sy = gc.scale_y / 100.0;
+        let sx = gc.scale[0] / 100.0;
+        let sy = gc.scale[1] / 100.0;
         let center = egui::pos2(gc.position[0], gc.position[1]);
         let angle_rad = gc.rotation.to_radians();
         let cos = angle_rad.cos();
@@ -324,8 +324,8 @@ impl<'a> PreviewInteractions<'a> {
             // World = Pos + Rot * Scale * (Local - Anchor)
             // Here, local_x/y are inside the content rect (0..w, 0..h).
             // So:
-            let ox = lx - gc.anchor_x;
-            let oy = ly - gc.anchor_y;
+            let ox = lx - gc.anchor[0];
+            let oy = ly - gc.anchor[1];
             let sx_ox = ox * sx;
             let sy_oy = oy * sy;
             let rx = sx_ox * cos - sy_oy * sin;
@@ -502,23 +502,17 @@ impl<'a> PreviewInteractions<'a> {
                         let new_y = orig_pos[1] as f64 + world_delta.y as f64;
 
                         if let Some(tid) = self.get_track_id(*entity_id) {
-                            crate::utils::property::update_number_property(
+                            crate::utils::property::update_property(
                                 self.project_service,
                                 comp_id,
                                 tid,
                                 *entity_id,
-                                "position_x",
+                                "position",
                                 current_time,
-                                new_x,
-                            );
-                            crate::utils::property::update_number_property(
-                                self.project_service,
-                                comp_id,
-                                tid,
-                                *entity_id,
-                                "position_y",
-                                current_time,
-                                new_y,
+                                library::model::project::property::PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                    x: ordered_float::OrderedFloat(new_x),
+                                    y: ordered_float::OrderedFloat(new_y),
+                                }),
                             );
                         }
                     }
@@ -688,7 +682,7 @@ impl<'a> PreviewInteractions<'a> {
 
                 let zoom = self.editor_context.view.zoom;
                 // Assuming uniform scale or using scale_y for height
-                let scale_factor = (gc.scale_y / 100.0) * zoom;
+                let scale_factor = (gc.scale[1] / 100.0) * zoom;
                 let effective_size = font_size * scale_factor;
 
                 let mut text = self.editor_context.interaction.text_edit_buffer.clone();

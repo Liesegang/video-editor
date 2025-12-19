@@ -1,7 +1,7 @@
 use egui::Ui;
 use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
-use library::service::project_service::ProjectService;
+use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
@@ -30,11 +30,19 @@ pub fn show_timeline_controls(
             if is_playing {
                 // Sync audio engine to current timeline time before starting
                 project_service.reset_audio_pump(editor_context.timeline.current_time as f64);
-                if let Err(e) = project_service.audio_engine.play() {
+                if let Err(e) = project_service
+                    .get_audio_service()
+                    .get_audio_engine()
+                    .play()
+                {
                     log::error!("Failed to start audio playback: {}", e);
                 }
             } else {
-                if let Err(e) = project_service.audio_engine.pause() {
+                if let Err(e) = project_service
+                    .get_audio_service()
+                    .get_audio_engine()
+                    .pause()
+                {
                     log::error!("Failed to pause audio playback: {}", e);
                 }
             }

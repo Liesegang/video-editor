@@ -1,4 +1,5 @@
 pub mod animation;
+pub mod application;
 pub mod audio;
 pub mod cache;
 pub mod error;
@@ -15,6 +16,7 @@ pub use error::LibraryError;
 pub use crate::loader::image::Image;
 pub use crate::plugin::ExportSettings; // Added
 // Re-export the services and models that the app will need.
+pub use application::editor_service::EditorService;
 pub use rendering::render_server::{RenderResult, RenderServer};
 pub use rendering::skia_renderer::SkiaRenderer;
 pub use service::{ExportService, ProjectModel, RenderService};
