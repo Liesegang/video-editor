@@ -2,7 +2,7 @@ use crate::model::project::property::PropertyMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StyleInstance {
     pub id: Uuid,
     pub style_type: String, // "fill" or "stroke"
