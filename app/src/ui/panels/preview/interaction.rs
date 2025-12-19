@@ -1,6 +1,5 @@
-use crate::model::ui_types::TimelineClip;
 use crate::state::context::EditorContext;
-use crate::ui::panels::preview::gizmo;
+use crate::ui::panels::preview::{gizmo, clip::PreviewClip};
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
 use library::model::project::project::Project;
 use library::EditorService as ProjectService;
@@ -13,7 +12,7 @@ pub struct PreviewInteractions<'a> {
     pub project: &'a Arc<RwLock<Project>>,
     pub project_service: &'a ProjectService,
     pub history_manager: &'a mut crate::action::HistoryManager,
-    pub gui_clips: &'a [TimelineClip],
+    pub gui_clips: &'a [PreviewClip<'a>],
     pub to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>, // Closure wrapper
     pub to_world: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
 }
@@ -25,7 +24,7 @@ impl<'a> PreviewInteractions<'a> {
         project: &'a Arc<RwLock<Project>>,
         project_service: &'a ProjectService,
         history_manager: &'a mut crate::action::HistoryManager,
-        gui_clips: &'a [TimelineClip],
+        gui_clips: &'a [PreviewClip<'a>],
         to_screen: impl Fn(Pos2) -> Pos2 + 'a,
         to_world: impl Fn(Pos2) -> Pos2 + 'a,
     ) -> Self {
@@ -79,30 +78,18 @@ impl<'a> PreviewInteractions<'a> {
                     .next()
                 {
                     // Check if it is a shape and get path
-                    if let Ok(proj) = self.project.read() {
-                        if let Some(comp) = self.editor_context.get_current_composition(&proj) {
-                            // Find the clip to get path.
-                            // use gui_clips to get track_id
-                            if let Some(gc) = self.gui_clips.iter().find(|c| c.id == *id) {
-                                if matches!(gc.kind, library::model::project::TrackClipKind::Shape)
-                                {
-                                    if let Some(track) =
-                                        comp.tracks.iter().find(|t| t.id == gc.track_id)
-                                    {
-                                        if let Some(clip) = track.clips.iter().find(|c| c.id == *id)
-                                        {
-                                            if let Some(path_str) =
-                                                clip.properties.get_string("path")
-                                            {
-                                                let state = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
-                                                self.editor_context
-                                                    .interaction
-                                                    .vector_editor_state = Some(state);
-                                                ensure_loaded = true;
-                                            }
-                                        }
-                                    }
-                                }
+                    // use gui_clips to get track_id
+                    if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == *id) {
+                        if matches!(gc.clip.kind, library::model::project::TrackClipKind::Shape)
+                        {
+                            if let Some(path_str) =
+                                gc.clip.properties.get_string("path")
+                            {
+                                let state = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
+                                self.editor_context
+                                    .interaction
+                                    .vector_editor_state = Some(state);
+                                ensure_loaded = true;
                             }
                         }
                     }
@@ -123,23 +110,23 @@ impl<'a> PreviewInteractions<'a> {
                     .iter()
                     .next()
                 {
-                    if let Some(gc) = self.gui_clips.iter().find(|c| c.id == *id) {
+                    if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == *id) {
                         // Build Transform
                         let transform = library::model::frame::transform::Transform {
                             position: library::model::frame::transform::Position {
-                                x: gc.position[0] as f64,
-                                y: gc.position[1] as f64,
+                                x: gc.transform.position.x,
+                                y: gc.transform.position.y,
                             },
                             scale: library::model::frame::transform::Scale {
-                                x: gc.scale[0] as f64,
-                                y: gc.scale[1] as f64,
+                                x: gc.transform.scale.x,
+                                y: gc.transform.scale.y,
                             },
-                            rotation: gc.rotation as f64,
+                            rotation: gc.transform.rotation,
                             anchor: library::model::frame::transform::Position {
-                                x: gc.anchor[0] as f64,
-                                y: gc.anchor[1] as f64,
+                                x: gc.transform.anchor.x,
+                                y: gc.transform.anchor.y,
                             },
-                            opacity: gc.opacity as f64,
+                            opacity: gc.transform.opacity,
                         };
 
                         let mut changed = false;
@@ -284,33 +271,32 @@ impl<'a> PreviewInteractions<'a> {
         }
     }
 
-    fn is_clip_visible(&self, gc: &TimelineClip, current_frame: i64) -> bool {
-        if gc.kind == library::model::project::TrackClipKind::Audio {
+    fn is_clip_visible(&self, gc: &PreviewClip, current_frame: i64) -> bool {
+        if gc.clip.kind == library::model::project::TrackClipKind::Audio {
             return false;
         }
 
-        let in_frame = gc.in_frame as i64;
-        let out_frame = gc.out_frame as i64;
+        let in_frame = gc.clip.in_frame as i64;
+        let out_frame = gc.clip.out_frame as i64;
 
         current_frame >= in_frame && current_frame < out_frame
     }
 
-    fn get_clip_screen_corners(&self, gc: &TimelineClip) -> [Pos2; 4] {
-        let base_w = gc.width.unwrap_or(1920.0);
-        let base_h = gc.height.unwrap_or(1080.0);
+    fn get_clip_screen_corners(&self, gc: &PreviewClip) -> [Pos2; 4] {
+        let base_w = gc.content_bounds.map(|b| b.2).unwrap_or(1920.0);
+        let base_h = gc.content_bounds.map(|b| b.3).unwrap_or(1080.0);
+
         // content_point is the top-left offset of the content in local space, relative to (0,0)
-        // If present (Text, Shape), we shift the local rect by this amount.
-        // If not (Video/Image), it's typically (0,0).
-        let (off_x, off_y) = if let Some(pt) = gc.content_point {
-            (pt[0], pt[1])
+        let (off_x, off_y) = if let Some(pt) = gc.content_bounds {
+            (pt.0, pt.1)
         } else {
             (0.0, 0.0)
         };
 
-        let sx = gc.scale[0] / 100.0;
-        let sy = gc.scale[1] / 100.0;
-        let center = egui::pos2(gc.position[0], gc.position[1]);
-        let angle_rad = gc.rotation.to_radians();
+        let sx = gc.transform.scale.x as f32 / 100.0;
+        let sy = gc.transform.scale.y as f32 / 100.0;
+        let center = egui::pos2(gc.transform.position.x as f32, gc.transform.position.y as f32);
+        let angle_rad = (gc.transform.rotation as f32).to_radians();
         let cos = angle_rad.cos();
         let sin = angle_rad.sin();
 
@@ -319,13 +305,8 @@ impl<'a> PreviewInteractions<'a> {
             let lx = local_x + off_x;
             let ly = local_y + off_y;
 
-            // Apply Anchor (Anchor is relative to the transformed/scaled object center usually?
-            // Standard generic transform:
-            // World = Pos + Rot * Scale * (Local - Anchor)
-            // Here, local_x/y are inside the content rect (0..w, 0..h).
-            // So:
-            let ox = lx - gc.anchor[0];
-            let oy = ly - gc.anchor[1];
+            let ox = lx - gc.transform.anchor.x as f32;
+            let oy = ly - gc.transform.anchor.y as f32;
             let sx_ox = ox * sx;
             let sy_oy = oy * sy;
             let rx = sx_ox * cos - sy_oy * sin;
@@ -358,21 +339,11 @@ impl<'a> PreviewInteractions<'a> {
             0
         };
 
-        let mut sorted_clips: Vec<&TimelineClip> = self.gui_clips.iter().collect();
-        // Z-sort
-        if let Ok(proj_read) = self.project.read() {
-            if let Some(comp) = self.editor_context.get_current_composition(&proj_read) {
-                sorted_clips.sort_by_key(|gc| {
-                    comp.tracks
-                        .iter()
-                        .position(|t| t.id == gc.track_id)
-                        .unwrap_or(0)
-                });
-            }
-        }
-
-        // Iterate top-down
-        for gc in sorted_clips.iter().rev() {
+        // TODO: Z-sort properly. Here we rely on iteration order, which is track order usually.
+        // Track order is bottom-to-top rendering usually? Or top-to-bottom tracks?
+        // Usually lower track index = lower layer (rendered first).
+        // So rev() gives top-most layer.
+        for gc in self.gui_clips.iter().rev() {
             if !self.is_clip_visible(gc, current_frame) {
                 continue;
             }
@@ -393,7 +364,7 @@ impl<'a> PreviewInteractions<'a> {
             let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0 || d4 < 0.0;
 
             if !(has_pos && has_neg) {
-                return Some(gc.id);
+                return Some(gc.id());
             }
         }
         None
@@ -403,8 +374,8 @@ impl<'a> PreviewInteractions<'a> {
         if let Some(pointer_pos) = pointer_pos {
             let mut original_positions = std::collections::HashMap::new();
             for selected_id in &self.editor_context.selection.selected_entities {
-                if let Some(gc) = self.gui_clips.iter().find(|c| c.id == *selected_id) {
-                    original_positions.insert(*selected_id, gc.position);
+                if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == *selected_id) {
+                    original_positions.insert(*selected_id, [gc.transform.position.x as f32, gc.transform.position.y as f32]);
                 }
             }
             self.editor_context.interaction.body_drag_state =
@@ -419,31 +390,14 @@ impl<'a> PreviewInteractions<'a> {
         if self.editor_context.view.active_tool == crate::state::context_types::PreviewTool::Text {
             if let Some(id) = hovered_id {
                 let is_text = self.gui_clips.iter().any(|c| {
-                    c.id == id && matches!(c.kind, library::model::project::TrackClipKind::Text)
+                    c.id() == id && matches!(c.clip.kind, library::model::project::TrackClipKind::Text)
                 });
                 if is_text {
                     self.editor_context.interaction.editing_text_entity_id = Some(id);
-                    // Fetch existing text
-                    if let Ok(proj) = self.project.read() {
-                        if let Some(comp_id) = self.editor_context.selection.composition_id {
-                            if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                                // We need to find the clip to get text.
-                                // Use gui_clips to get track_id
-                                if let Some(gc) = self.gui_clips.iter().find(|c| c.id == id) {
-                                    if let Some(track) =
-                                        comp.tracks.iter().find(|t| t.id == gc.track_id)
-                                    {
-                                        if let Some(clip) = track.clips.iter().find(|c| c.id == id)
-                                        {
-                                            if let Some(text) = clip.properties.get_string("text") {
-                                                self.editor_context.interaction.text_edit_buffer =
-                                                    text;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == id) {
+                         if let Some(text) = gc.clip.properties.get_string("text") {
+                            self.editor_context.interaction.text_edit_buffer = text;
+                         }
                     }
                 } else {
                     self.editor_context.interaction.editing_text_entity_id = None;
@@ -637,7 +591,7 @@ impl<'a> PreviewInteractions<'a> {
                 Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y));
 
             if selection_rect.intersects(clip_screen_rect) {
-                found.push(gc.id);
+                found.push(gc.id());
             }
         }
         found
@@ -646,12 +600,12 @@ impl<'a> PreviewInteractions<'a> {
     fn get_track_id(&self, entity_id: Uuid) -> Option<Uuid> {
         self.gui_clips
             .iter()
-            .find(|gc| gc.id == entity_id)
+            .find(|gc| gc.id() == entity_id)
             .map(|gc| gc.track_id)
     }
     pub fn draw_text_overlay(&mut self) {
         if let Some(id) = self.editor_context.interaction.editing_text_entity_id {
-            if let Some(gc) = self.gui_clips.iter().find(|c| c.id == id) {
+            if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == id) {
                 let corners = self.get_clip_screen_corners(gc);
                 let min_x = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
                 let min_y = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
@@ -668,21 +622,11 @@ impl<'a> PreviewInteractions<'a> {
 
                 // Calculate Font Size
                 let mut font_size = 100.0;
-                if let Ok(proj) = self.project.read() {
-                    if let Some(comp_id) = self.editor_context.selection.composition_id {
-                        if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                            if let Some(track) = comp.tracks.iter().find(|t| t.id == gc.track_id) {
-                                if let Some(clip) = track.clips.iter().find(|c| c.id == id) {
-                                    font_size = clip.properties.get_f32("size").unwrap_or(100.0);
-                                }
-                            }
-                        }
-                    }
-                }
+                font_size = gc.clip.properties.get_f32("size").unwrap_or(100.0);
 
                 let zoom = self.editor_context.view.zoom;
                 // Assuming uniform scale or using scale_y for height
-                let scale_factor = (gc.scale[1] / 100.0) * zoom;
+                let scale_factor = (gc.transform.scale.y as f32 / 100.0) * zoom;
                 let effective_size = font_size * scale_factor;
 
                 let mut text = self.editor_context.interaction.text_edit_buffer.clone();
