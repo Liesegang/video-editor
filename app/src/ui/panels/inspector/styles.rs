@@ -134,8 +134,14 @@ pub fn render_styles_section(
                         for action in actions {
                             match action {
                                 crate::ui::panels::inspector::properties::PropertyAction::Update(name, val) => {
-                                     project_service.update_track_clip_style_property(
-                                        comp_id, track_id, selected_entity_id, backend_index, &name, val
+                                     project_service.update_style_property_or_keyframe(
+                                        comp_id, track_id, selected_entity_id, backend_index, &name, current_time, val, None
+                                     ).ok();
+                                     *needs_refresh = true;
+                                }
+                                crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, attr_key, attr_val) => {
+                                     project_service.set_style_property_attribute(
+                                        comp_id, track_id, selected_entity_id, backend_index, &name, &attr_key, attr_val
                                      ).ok();
                                      *needs_refresh = true;
                                 }

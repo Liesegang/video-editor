@@ -363,6 +363,30 @@ impl ProjectManager {
         )
     }
 
+    pub fn update_effect_property_or_keyframe(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effect_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::update_effect_property_or_keyframe(
+            &self.project,
+            composition_id,
+            track_id,
+            clip_id,
+            effect_index,
+            property_key,
+            time,
+            value,
+            easing,
+        )
+    }
+
     pub fn update_effect_keyframe_by_index(
         &self,
         composition_id: Uuid,
@@ -665,6 +689,52 @@ impl ProjectManager {
             time,
             value,
             easing,
+        )
+    }
+
+    pub fn update_style_property_or_keyframe(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        style_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::update_style_property_or_keyframe(
+            &self.project,
+            composition_id,
+            track_id,
+            clip_id,
+            style_index,
+            property_key,
+            time,
+            value,
+            easing,
+        )
+    }
+
+    pub fn set_style_property_attribute(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        style_index: usize,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::set_style_property_attribute(
+            &self.project,
+            composition_id,
+            track_id,
+            clip_id,
+            style_index,
+            property_key,
+            attribute_key,
+            attribute_value,
         )
     }
 

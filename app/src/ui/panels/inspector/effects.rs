@@ -133,6 +133,10 @@ pub fn render_effects_section(
                                          }
                                          *needs_refresh = true;
                                     }
+                                    crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, _key, _val) => {
+                                        // TODO: Implement set_effect_property_attribute
+                                        println!("SetAttribute for effect {} not implemented yet", name);
+                                    }
                                 }
                             }
                         });
