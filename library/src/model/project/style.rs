@@ -10,6 +10,14 @@ pub struct StyleInstance {
     pub properties: PropertyMap,
 }
 
+impl Eq for StyleInstance {}
+
+impl std::hash::Hash for StyleInstance {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
 impl StyleInstance {
     pub fn new(style_type: &str, properties: PropertyMap) -> Self {
         Self {
