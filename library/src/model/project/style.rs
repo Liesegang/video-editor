@@ -23,7 +23,6 @@ impl PartialEq for StyleInstance {
 }
 
 impl Eq for StyleInstance {}
-
 impl StyleInstance {
     pub fn new(style_type: &str, properties: PropertyMap) -> Self {
         Self {

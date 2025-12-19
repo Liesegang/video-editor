@@ -58,6 +58,7 @@ impl MyApp {
         utils::setup_fonts(&cc.egui_ctx);
 
         let app_config = config::load_config();
+        crate::ui::theme::apply_theme(&cc.egui_ctx, &app_config);
         let command_registry = CommandRegistry::new(&app_config);
 
         let default_project = Arc::new(RwLock::new(Project::new("Default Project")));
@@ -173,19 +174,12 @@ impl eframe::App for MyApp {
             self.command_registry = self.settings_dialog.command_registry.clone();
             self.app_config = self.settings_dialog.config.clone();
 
+            // Apply theme when config changes
+            crate::ui::theme::apply_theme(ctx, &self.app_config);
+
             // Apply new config
             config::save_config(&self.app_config);
         }
-
-        // Apply theme initially
-        crate::ui::theme::apply_theme(ctx, &self.app_config);
-
-        // TODO: Optimize this to not run every frame.
-        // For now, we rely on the fact that set_visuals might be cheap if unchanged?
-        // Actually set_visuals triggers repaint.
-        // We really should only do this when config changes.
-        // We update `app_config` when SettingsDialog closes with Save.
-        // So we can do it inside the Save block.
 
         if self.composition_dialog.is_open {
             self.composition_dialog.show(ctx);

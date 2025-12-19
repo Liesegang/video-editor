@@ -6,7 +6,7 @@ use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-use crate::{action::HistoryManager, model::ui_types::TimelineClip, state::context::EditorContext};
+use crate::{action::HistoryManager, state::context::EditorContext};
 
 const EDGE_DRAG_WIDTH: f32 = 5.0;
 
@@ -107,49 +107,16 @@ pub fn draw_clips(
 ) -> bool {
     let mut clicked_on_entity = false;
 
-    let _clicked_on_entity = false;
-
     // Iterate tracks directly
     for (i, track) in current_tracks.iter().enumerate() {
         for clip in &track.clips {
-            // Determine Color based on kind
-            let clip_color = match clip.kind {
-                TrackClipKind::Video => egui::Color32::from_rgb(100, 150, 255), // Blue
-                TrackClipKind::Audio => egui::Color32::from_rgb(100, 255, 150), // Green
-                TrackClipKind::Image => egui::Color32::from_rgb(255, 100, 150), // Pink
-                TrackClipKind::Composition => egui::Color32::from_rgb(255, 150, 255), // Magenta
-                TrackClipKind::Text => egui::Color32::from_rgb(255, 200, 100),  // Orange/Yellow
-                _ => egui::Color32::GRAY,
-            };
-
-            let gc = TimelineClip {
-                id: clip.id,
-                name: clip.kind.to_string(), // Use Display impl
-                track_id: track.id,
-                in_frame: clip.in_frame,   // u64
-                out_frame: clip.out_frame, // u64
-                timeline_duration_frames: clip.out_frame.saturating_sub(clip.in_frame), // u64
-                source_begin_frame: clip.source_begin_frame, // u64
-                duration_frame: clip.duration_frame, // Option<u64>
-                color: clip_color,
-                position: [
-                    clip.properties.get_f32("position_x").unwrap_or(960.0),
-                    clip.properties.get_f32("position_y").unwrap_or(540.0),
-                ],
-                scale: [0.0, 0.0], // Unused in timeline view
-                anchor: [0.0, 0.0], // Unused in timeline view
-                opacity: clip.properties.get_f32("opacity").unwrap_or(100.0),
-                rotation: clip.properties.get_f32("rotation").unwrap_or(0.0),
-                asset_id: None, // We don't have asset_id                asset_id: None,
-                width: None,
-                height: None,
-                content_point: None,
-                kind: library::model::project::TrackClipKind::Video,
-            };
+            // Determine Color based on kind using helper
+            let (r, g, b) = clip.display_color();
+            let clip_color = egui::Color32::from_rgb(r, g, b);
 
             let initial_clip_rect = calculate_clip_rect(
-                gc.in_frame,
-                gc.out_frame,
+                clip.in_frame,
+                clip.out_frame,
                 i,
                 editor_context.timeline.scroll_offset,
                 pixels_per_unit,
@@ -169,7 +136,7 @@ pub fn draw_clips(
             // Define clip_resp using the initial_clip_rect for hit detection
             let clip_resp = ui_content.interact(
                 initial_clip_rect,
-                egui::Id::new(gc.id),
+                egui::Id::new(clip.id),
                 egui::Sense::click_and_drag(),
             );
 
@@ -177,12 +144,12 @@ pub fn draw_clips(
                 if ui.button(format!("{} Remove", icons::TRASH)).clicked() {
                     if let Some(comp_id) = editor_context.selection.composition_id {
                         if let Err(e) =
-                            project_service.remove_clip_from_track(comp_id, gc.track_id, gc.id)
+                            project_service.remove_clip_from_track(comp_id, track.id, clip.id)
                         {
                             log::error!("Failed to remove entity: {:?}", e);
                         } else {
-                            editor_context.selection.selected_entities.remove(&gc.id);
-                            if editor_context.selection.last_selected_entity_id == Some(gc.id) {
+                            editor_context.selection.selected_entities.remove(&clip.id);
+                            if editor_context.selection.last_selected_entity_id == Some(clip.id) {
                                 editor_context.selection.last_selected_entity_id = None;
                                 editor_context.selection.last_selected_track_id = None;
                             }
@@ -203,7 +170,7 @@ pub fn draw_clips(
             );
             let left_edge_resp = ui_content.interact(
                 left_edge_rect,
-                egui::Id::new(gc.id).with("left_edge"),
+                egui::Id::new(clip.id).with("left_edge"),
                 egui::Sense::drag(),
             );
 
@@ -216,25 +183,25 @@ pub fn draw_clips(
             );
             let right_edge_resp = ui_content.interact(
                 right_edge_rect,
-                egui::Id::new(gc.id).with("right_edge"),
+                egui::Id::new(clip.id).with("right_edge"),
                 egui::Sense::drag(),
             );
 
             // Handle edge dragging (resize)
             if left_edge_resp.drag_started() || right_edge_resp.drag_started() {
                 editor_context.interaction.is_resizing_entity = true;
-                editor_context.select_clip(gc.id, gc.track_id);
+                editor_context.select_clip(clip.id, track.id);
             }
 
             if editor_context.interaction.is_resizing_entity
-                && editor_context.selection.last_selected_entity_id == Some(gc.id)
+                && editor_context.selection.last_selected_entity_id == Some(clip.id)
             {
-                let mut new_in_frame = gc.in_frame;
-                let mut new_out_frame = gc.out_frame;
+                let mut new_in_frame = clip.in_frame;
+                let mut new_out_frame = clip.out_frame;
 
                 // Source constraints
-                let source_max_out_frame = if let Some(duration) = gc.duration_frame {
-                    gc.source_begin_frame.saturating_add(duration)
+                let source_max_out_frame = if let Some(duration) = clip.duration_frame {
+                    clip.source_begin_frame.saturating_add(duration)
                 } else {
                     u64::MAX
                 };
@@ -252,7 +219,7 @@ pub fn draw_clips(
 
                 if left_edge_resp.dragged() {
                     new_in_frame = ((new_in_frame as i64 + dt_frames).max(0) as u64)
-                        .max(gc.source_begin_frame) // Cannot go before source begin frame
+                        .max(clip.source_begin_frame) // Cannot go before source begin frame
                         .min(new_out_frame.saturating_sub(1)); // Minimum 1 frame duration
                 } else if right_edge_resp.dragged() {
                     new_out_frame =
@@ -261,13 +228,13 @@ pub fn draw_clips(
                 }
 
                 // Update if there's an actual change
-                if new_in_frame != gc.in_frame || new_out_frame != gc.out_frame {
-                    if let (Some(comp_id), Some(track_id)) = (
+                if new_in_frame != clip.in_frame || new_out_frame != clip.out_frame {
+                    if let (Some(comp_id), Some(tid)) = (
                         editor_context.selection.composition_id,
                         editor_context.selection.last_selected_track_id,
                     ) {
                         project_service
-                            .update_clip_time(comp_id, track_id, gc.id, new_in_frame, new_out_frame)
+                            .update_clip_time(comp_id, tid, clip.id, new_in_frame, new_out_frame)
                             .ok();
                     }
                 }
@@ -284,7 +251,7 @@ pub fn draw_clips(
             let mut display_y = initial_clip_rect.min.y;
 
             // Adjust position for dragged entity preview
-            if editor_context.is_selected(gc.id) && clip_resp.dragged() {
+            if editor_context.is_selected(clip.id) && clip_resp.dragged() {
                 display_x += clip_resp.drag_delta().x;
 
                 if let Some(hovered_track_id) =
@@ -306,10 +273,9 @@ pub fn draw_clips(
             );
 
             // --- Drawing for clips (always) ---
-            let is_sel_entity = editor_context.is_selected(gc.id);
-            let color = gc.color;
+            let is_sel_entity = editor_context.is_selected(clip.id);
             let transparent_color =
-                egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 150);
+                egui::Color32::from_rgba_premultiplied(clip_color.r(), clip_color.g(), clip_color.b(), 150);
 
             let painter = ui_content.painter_at(content_rect_for_clip_area);
             painter.rect_filled(drawing_clip_rect, 4.0, transparent_color);
@@ -333,7 +299,7 @@ pub fn draw_clips(
                             &painter,
                             drawing_clip_rect,
                             &audio_data,
-                            gc.source_begin_frame,
+                            clip.source_begin_frame,
                             composition_fps,
                             pixels_per_unit,
                             sample_rate,
@@ -354,7 +320,7 @@ pub fn draw_clips(
             painter.text(
                 drawing_clip_rect.min + egui::vec2(5.0, 5.0), // Top left align
                 egui::Align2::LEFT_TOP,
-                &gc.name,
+                &clip.kind.to_string(), // Use Display impl
                 egui::FontId::default(),
                 egui::Color32::BLACK,
             );
@@ -369,24 +335,24 @@ pub fn draw_clips(
             if !editor_context.interaction.is_resizing_entity && clip_resp.clicked() {
                 let action = crate::ui::selection::get_click_action(
                     &ui_content.input(|i| i.modifiers),
-                    Some(gc.id),
+                    Some(clip.id),
                 );
                 match action {
                     crate::ui::selection::ClickAction::Select(id) => {
-                        editor_context.select_clip(id, gc.track_id);
+                        editor_context.select_clip(id, track.id);
                     }
                     crate::ui::selection::ClickAction::Add(id) => {
                         if !editor_context.is_selected(id) {
-                            editor_context.toggle_selection(id, gc.track_id);
+                            editor_context.toggle_selection(id, track.id);
                         }
                     }
                     crate::ui::selection::ClickAction::Remove(id) => {
                         if editor_context.is_selected(id) {
-                            editor_context.toggle_selection(id, gc.track_id);
+                            editor_context.toggle_selection(id, track.id);
                         }
                     }
                     crate::ui::selection::ClickAction::Toggle(id) => {
-                        editor_context.toggle_selection(id, gc.track_id);
+                        editor_context.toggle_selection(id, track.id);
                     }
                     _ => {}
                 }
@@ -394,19 +360,19 @@ pub fn draw_clips(
             }
 
             if !editor_context.interaction.is_resizing_entity && clip_resp.drag_started() {
-                if !editor_context.is_selected(gc.id) {
-                    editor_context.select_clip(gc.id, gc.track_id);
+                if !editor_context.is_selected(clip.id) {
+                    editor_context.select_clip(clip.id, track.id);
                 }
                 // Update primary selection for drag logic usually, but keep multi-selection
-                editor_context.selection.last_selected_entity_id = Some(gc.id);
-                editor_context.selection.last_selected_track_id = Some(gc.track_id);
-                editor_context.interaction.dragged_entity_original_track_id = Some(gc.track_id);
-                editor_context.interaction.dragged_entity_hovered_track_id = Some(gc.track_id);
+                editor_context.selection.last_selected_entity_id = Some(clip.id);
+                editor_context.selection.last_selected_track_id = Some(track.id);
+                editor_context.interaction.dragged_entity_original_track_id = Some(track.id);
+                editor_context.interaction.dragged_entity_hovered_track_id = Some(track.id);
                 editor_context.interaction.dragged_entity_has_moved = false;
             }
             if !editor_context.interaction.is_resizing_entity
                 && clip_resp.dragged()
-                && editor_context.is_selected(gc.id)
+                && editor_context.is_selected(clip.id)
             {
                 if clip_resp.drag_delta().length_sq() > 0.0 {
                     editor_context.interaction.dragged_entity_has_moved = true;
@@ -503,7 +469,7 @@ pub fn draw_clips(
             }
             if !editor_context.interaction.is_resizing_entity
                 && clip_resp.drag_stopped()
-                && editor_context.is_selected(gc.id)
+                && editor_context.is_selected(clip.id)
             {
                 let mut moved_track = false;
                 if let (Some(original_track_id), Some(hovered_track_id), Some(comp_id)) = (
@@ -516,9 +482,9 @@ pub fn draw_clips(
                         if let Err(e) = project_service.move_clip_to_track(
                             comp_id,
                             original_track_id,
-                            gc.id,
+                            clip.id,
                             hovered_track_id,
-                            gc.in_frame,
+                            clip.in_frame,
                         ) {
                             log::error!("Failed to move entity to new track: {:?}", e);
                         } else {
