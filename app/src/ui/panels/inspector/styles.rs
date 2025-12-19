@@ -36,8 +36,8 @@ pub fn render_styles_section(
                 PropertyMap::new(),
             );
             // Defualts
-            new_style.properties.set("color", Property::constant(PropertyValue::Color(Color { r: 255, g: 255, b: 255, a: 255 })));
-            new_style.properties.set("offset", Property::constant(PropertyValue::Number(OrderedFloat(0.0))));
+            new_style.properties.set("color".to_string(), Property::constant(PropertyValue::Color(Color { r: 255, g: 255, b: 255, a: 255 })));
+            new_style.properties.set("offset".to_string(), Property::constant(PropertyValue::Number(OrderedFloat(0.0))));
              
             let mut new_styles = styles.clone();
             new_styles.push(new_style);
@@ -51,10 +51,10 @@ pub fn render_styles_section(
                 PropertyMap::new(),
             );
             // Defaults
-            new_style.properties.set("color", Property::constant(PropertyValue::Color(Color { r: 0, g: 0, b: 0, a: 255 })));
-            new_style.properties.set("width", Property::constant(PropertyValue::Number(OrderedFloat(1.0))));
-            new_style.properties.set("offset", Property::constant(PropertyValue::Number(OrderedFloat(0.0))));
-            new_style.properties.set("miter", Property::constant(PropertyValue::Number(OrderedFloat(4.0))));
+            new_style.properties.set("color".to_string(), Property::constant(PropertyValue::Color(Color { r: 0, g: 0, b: 0, a: 255 })));
+            new_style.properties.set("width".to_string(), Property::constant(PropertyValue::Number(OrderedFloat(1.0))));
+            new_style.properties.set("offset".to_string(), Property::constant(PropertyValue::Number(OrderedFloat(0.0))));
+            new_style.properties.set("miter".to_string(), Property::constant(PropertyValue::Number(OrderedFloat(4.0))));
             
             let mut new_styles = styles.clone();
             new_styles.push(new_style);

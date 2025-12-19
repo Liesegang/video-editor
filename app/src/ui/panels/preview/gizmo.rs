@@ -1,5 +1,6 @@
-use crate::model::ui_types::{GizmoHandle, TimelineClip};
+use crate::model::ui_types::GizmoHandle;
 use crate::state::context::EditorContext;
+use crate::ui::panels::preview::clip::PreviewClip;
 use egui::{CursorIcon, Pos2, Rect, Sense, Ui, Vec2};
 use library::model::project::project::Project;
 use library::model::project::property::{PropertyValue, Vec2 as PropVec2};
@@ -258,22 +259,19 @@ pub fn handle_gizmo_interaction(
 pub fn draw_gizmo(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
-    gui_clips: &[TimelineClip],
+    gui_clips: &[PreviewClip],
     to_screen: impl Fn(Pos2) -> Pos2,
 ) {
     // Draw outlines for ALL selected entities to show multi-selection
     for selected_id in &editor_context.selection.selected_entities {
         // Skip the primary one if it will be drawn by the main gizmo logic.
-        // However, the helper we are about to make only draws the outline, not the handles.
-        // The main gizmo logic draws outline AND handles.
-        // We can just rely on the main logic to overdraw the outline for the primary item.
         let is_primary = Some(*selected_id) == editor_context.selection.last_selected_entity_id;
         if is_primary {
             continue;
         }
 
-        if let Some(gc) = gui_clips.iter().find(|gc| gc.id == *selected_id) {
-            if gc.kind == library::model::project::TrackClipKind::Audio {
+        if let Some(gc) = gui_clips.iter().find(|gc| gc.id() == *selected_id) {
+            if gc.clip.kind == library::model::project::TrackClipKind::Audio {
                 continue;
             }
 
@@ -283,8 +281,8 @@ pub fn draw_gizmo(
     }
 
     if let Some(selected_id) = editor_context.selection.last_selected_entity_id {
-        if let Some(gc) = gui_clips.iter().find(|gc| gc.id == selected_id) {
-            if gc.kind == library::model::project::TrackClipKind::Audio {
+        if let Some(gc) = gui_clips.iter().find(|gc| gc.id() == selected_id) {
+            if gc.clip.kind == library::model::project::TrackClipKind::Audio {
                 return;
             }
 
@@ -335,19 +333,19 @@ pub fn draw_gizmo(
                 }
 
                 if response.drag_started() {
-                    let base_w = gc.width.unwrap_or(1920.0);
-                    let base_h = gc.height.unwrap_or(1080.0);
+                    let base_w = gc.content_bounds.map(|b| b.2).unwrap_or(1920.0);
+                    let base_h = gc.content_bounds.map(|b| b.3).unwrap_or(1080.0);
 
                     editor_context.interaction.gizmo_state =
                         Some(crate::state::context::GizmoState {
                             start_mouse_pos: response.hover_pos().unwrap_or(pos),
                             active_handle: handle,
-                            original_position: gc.position,
-                            original_scale_x: gc.scale[0],
-                            original_scale_y: gc.scale[1],
-                            original_rotation: gc.rotation,
-                            original_anchor_x: gc.anchor[0],
-                            original_anchor_y: gc.anchor[1],
+                            original_position: [gc.transform.position.x as f32, gc.transform.position.y as f32],
+                            original_scale_x: gc.transform.scale.x as f32,
+                            original_scale_y: gc.transform.scale.y as f32,
+                            original_rotation: gc.transform.rotation as f32,
+                            original_anchor_x: gc.transform.anchor.x as f32,
+                            original_anchor_y: gc.transform.anchor.y as f32,
                             original_width: base_w,
                             original_height: base_h,
                         });
@@ -359,24 +357,24 @@ pub fn draw_gizmo(
 
 fn draw_clip_box(
     ui: &Ui,
-    gc: &TimelineClip,
+    gc: &PreviewClip,
     to_screen: impl Fn(Pos2) -> Pos2,
     color: egui::Color32,
     thickness: f32,
 ) -> ([Pos2; 4], Pos2, f32, Pos2) {
-    let base_w = gc.width.unwrap_or(1920.0);
-    let base_h = gc.height.unwrap_or(1080.0);
-    let sx = gc.scale[0] / 100.0;
-    let sy = gc.scale[1] / 100.0;
+    let base_w = gc.content_bounds.map(|b| b.2).unwrap_or(1920.0);
+    let base_h = gc.content_bounds.map(|b| b.3).unwrap_or(1080.0);
+    let sx = gc.transform.scale.x as f32 / 100.0;
+    let sy = gc.transform.scale.y as f32 / 100.0;
 
-    let center = egui::pos2(gc.position[0], gc.position[1]);
-    let angle_rad = gc.rotation.to_radians();
+    let center = egui::pos2(gc.transform.position.x as f32, gc.transform.position.y as f32);
+    let angle_rad = (gc.transform.rotation as f32).to_radians();
     let cos = angle_rad.cos();
     let sin = angle_rad.sin();
 
     let transform_point = |local_x: f32, local_y: f32| -> egui::Pos2 {
-        let ox = local_x - gc.anchor[0];
-        let oy = local_y - gc.anchor[1];
+        let ox = local_x - gc.transform.anchor.x as f32;
+        let oy = local_y - gc.transform.anchor.y as f32;
         let sx_ox = ox * sx;
         let sy_oy = oy * sy;
         let rx = sx_ox * cos - sy_oy * sin;
@@ -384,8 +382,8 @@ fn draw_clip_box(
         center + egui::vec2(rx, ry)
     };
 
-    let (off_x, off_y) = if let Some(pt) = gc.content_point {
-        (pt[0], pt[1])
+    let (off_x, off_y) = if let Some(bounds) = gc.content_bounds {
+        (bounds.0, bounds.1)
     } else {
         (0.0, 0.0)
     };
