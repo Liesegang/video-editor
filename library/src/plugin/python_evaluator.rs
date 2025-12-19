@@ -19,12 +19,10 @@ impl PythonExpressionEvaluator {
 }
 
 impl PropertyEvaluator for PythonExpressionEvaluator {
-    fn evaluate(&self, property: &Property, time: f64, _ctx: &EvaluationContext) -> PropertyValue { // Using _ctx for now
+    fn evaluate(&self, property: &Property, time: f64, ctx: &EvaluationContext) -> PropertyValue {
         Python::with_gil(|py| {
-            // Placeholder for frame and fps until EvaluationContext is properly extended
-            // TODO: Get actual frame and fps from ctx
-            let frame = time; // Example: assuming frame is same as time for now
-            let fps = 60.0; // Example: assuming 60 fps for now
+            let fps = ctx.fps;
+            let frame = time * fps;
             let expression = property.evaluator.as_str();
 
             let locals = PyDict::new(py);

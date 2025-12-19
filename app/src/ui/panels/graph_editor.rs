@@ -689,6 +689,7 @@ pub fn graph_editor_panel(
                                     property,
                                     map,
                                     time as f64,
+                                    composition.fps,
                                 );
                                 let val_f64 = match component {
                                     PropertyComponent::Scalar => value_pv.get_as::<f64>(),
@@ -853,7 +854,7 @@ pub fn graph_editor_panel(
 
                                             // Evaluate at pointer time
                                             let value_pv = project_service
-                                                .evaluate_property_value(property, map, t);
+                                                .evaluate_property_value(property, map, t, composition.fps);
                                             let val_at_t = match component {
                                                 PropertyComponent::Scalar => {
                                                     value_pv.get_as::<f64>().unwrap_or(0.0)
@@ -1142,19 +1143,19 @@ pub fn graph_editor_panel(
                                 if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                                     if let Some(effect) = entity.effects.get(eff_idx) {
                                         if let Some(prop) = effect.properties.get(&prop_key) {
-                                            current_val_at_t = Some(project_service.evaluate_property_value(prop, &effect.properties, time));
+                                            current_val_at_t = Some(project_service.evaluate_property_value(prop, &effect.properties, time, comp.fps));
                                         }
                                     }
                                 } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
                                      // Style Property
                                      if let Some(style) = entity.styles.get(style_idx) {
                                          if let Some(prop) = style.properties.get(&prop_key) {
-                                              current_val_at_t = Some(project_service.evaluate_property_value(prop, &style.properties, time));
+                                              current_val_at_t = Some(project_service.evaluate_property_value(prop, &style.properties, time, comp.fps));
                                          }
                                      }
                                 } else {
                                      if let Some(prop) = entity.properties.get(base_name) {
-                                          current_val_at_t = Some(project_service.evaluate_property_value(prop, &entity.properties, time));
+                                          current_val_at_t = Some(project_service.evaluate_property_value(prop, &entity.properties, time, comp.fps));
                                      }
                                 }
                             }

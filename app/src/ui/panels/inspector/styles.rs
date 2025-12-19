@@ -21,6 +21,7 @@ pub fn render_styles_section(
     track_id: Uuid,
     selected_entity_id: Uuid,
     current_time: f64,
+    fps: f64,
     styles: &Vec<StyleInstance>,
     needs_refresh: &mut bool,
 ) {
@@ -36,8 +37,8 @@ pub fn render_styles_section(
                 PropertyMap::new(),
             );
             // Defualts
-            new_style.properties.set("color", Property::constant(PropertyValue::Color(Color { r: 255, g: 255, b: 255, a: 255 })));
-            new_style.properties.set("offset", Property::constant(PropertyValue::Number(OrderedFloat(0.0))));
+            new_style.properties.set("color".to_string(), Property::constant(PropertyValue::Color(Color { r: 255, g: 255, b: 255, a: 255 })));
+            new_style.properties.set("offset".to_string(), Property::constant(PropertyValue::Number(OrderedFloat(0.0))));
              
             let mut new_styles = styles.clone();
             new_styles.push(new_style);
@@ -51,10 +52,10 @@ pub fn render_styles_section(
                 PropertyMap::new(),
             );
             // Defaults
-            new_style.properties.set("color", Property::constant(PropertyValue::Color(Color { r: 0, g: 0, b: 0, a: 255 })));
-            new_style.properties.set("width", Property::constant(PropertyValue::Number(OrderedFloat(1.0))));
-            new_style.properties.set("offset", Property::constant(PropertyValue::Number(OrderedFloat(0.0))));
-            new_style.properties.set("miter", Property::constant(PropertyValue::Number(OrderedFloat(4.0))));
+            new_style.properties.set("color".to_string(), Property::constant(PropertyValue::Color(Color { r: 0, g: 0, b: 0, a: 255 })));
+            new_style.properties.set("width".to_string(), Property::constant(PropertyValue::Number(OrderedFloat(1.0))));
+            new_style.properties.set("offset".to_string(), Property::constant(PropertyValue::Number(OrderedFloat(0.0))));
+            new_style.properties.set("miter".to_string(), Property::constant(PropertyValue::Number(OrderedFloat(4.0))));
             
             let mut new_styles = styles.clone();
             new_styles.push(new_style);
@@ -126,7 +127,7 @@ pub fn render_styles_section(
                         let actions = render_property_rows(
                             ui,
                             &defs,
-                            |name| style.properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &style.properties, current_time))),
+                            |name| style.properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &style.properties, current_time, fps))),
                             |name| style.properties.get(name).cloned(),
                             &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true, current_time }
                         );
