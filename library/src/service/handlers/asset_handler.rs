@@ -1,7 +1,7 @@
 use crate::error::LibraryError;
 use crate::model::project::asset::{Asset, AssetKind};
 use crate::model::project::project::Project;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 

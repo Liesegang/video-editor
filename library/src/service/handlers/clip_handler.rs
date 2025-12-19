@@ -161,30 +161,7 @@ impl ClipHandler {
             // Get or create property
             if let Some(prop) = clip.properties.get_mut(property_key) {
                 // Check logic: if currently "constant", convert to "keyframe"
-                if prop.evaluator == "constant" {
-                    // Current value becomes a keyframe at time 0
-                    let initial_val = prop
-                        .properties
-                        .get("value")
-                        .cloned()
-                        .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
-                    let kf0 = Keyframe {
-                        time: OrderedFloat(0.0),
-                        value: initial_val,
-                        easing: crate::animation::EasingFunction::Linear,
-                    };
-
-                    // New keyframe
-                    let kf_new = Keyframe {
-                        time: OrderedFloat(time),
-                        value: value.clone(),
-                        easing: easing.unwrap_or(crate::animation::EasingFunction::Linear),
-                    };
-
-                    let keyframes = vec![kf0, kf_new];
-                    // Replace property with new Keyframe property
-                    *prop = Property::keyframe(keyframes);
-                } else if prop.evaluator == "keyframe" {
+                if prop.evaluator == "keyframe" {
                     let mut current_keyframes = prop.keyframes();
 
                     // Check for collision to preserve easing
@@ -209,17 +186,8 @@ impl ClipHandler {
                     current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
 
                     *prop = Property::keyframe(current_keyframes);
-                }
-                // If constant and stays constant (not implemented here? update_property handles that? No, update_property handles simple updates)
-                // Wait, update_property_or_keyframe usually handles setting constant too if not keyframe?
-                // In ProjectService L691, if evaluator != "keyframe" (and != constant logic i.e. it falls through), it sets as constant.
-                // My extracted logic covered constant->keyframe and keyframe->keyframe.
-                // It misses the "Stay Constant" update?
-                // Ah, in ProjectService L659, it checks `if evaluator == "keyframe"`.
-                // `else` (L690): Simply overwrite or create as constant.
-                // My copied logic in `add_keyframe` missed the `else` block for simple constant update!
-                // I need to add that.
-                else {
+                } else {
+                    // Update as Constant
                     clip.properties
                         .set(property_key.to_string(), Property::constant(value));
                 }
@@ -392,5 +360,171 @@ impl ClipHandler {
             }
         }
         true
+    }
+    pub fn move_clip_to_track(
+        project: &Arc<RwLock<Project>>,
+        composition_id: Uuid,
+        source_track_id: Uuid,
+        clip_id: Uuid,
+        target_track_id: Uuid,
+        new_in_frame: u64,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
+            LibraryError::Project(format!("Composition with ID {} not found", composition_id))
+        })?;
+
+        // 1. Extract Clip
+        let source_track = composition.get_track_mut(source_track_id).ok_or_else(|| {
+            LibraryError::Project(format!("Source Track {} not found", source_track_id))
+        })?;
+
+        let index = source_track
+            .clips
+            .iter()
+            .position(|c| c.id == clip_id)
+            .ok_or_else(|| {
+                LibraryError::Project(format!("Clip {} not found in source track", clip_id))
+            })?;
+
+        let mut clip = source_track.clips.remove(index);
+
+        // adjust timing
+        let duration = clip.out_frame - clip.in_frame;
+        clip.in_frame = new_in_frame;
+        clip.out_frame = new_in_frame + duration;
+
+        // 2. Insert into Target
+        // If target same as source, we just re-insert (maybe handled better by update_clip_property if just timing, but user might draging to different track)
+        // Here we lookup target again (mutable borrow split issue if same track?)
+        // If source_track_id == target_track_id, we already have mutable ref... waiting.
+        // We cannot borrow composition mutably twice.
+        // So we must handle "same track" case OR use indices.
+        // But `composition` contains tracks.
+
+        if source_track_id == target_track_id {
+            // Already have source track (which is target)
+            // Just push back
+            source_track.clips.push(clip);
+            Ok(())
+        } else {
+            let target_track = composition.get_track_mut(target_track_id).ok_or_else(|| {
+                LibraryError::Project(format!("Target Track {} not found", target_track_id))
+            })?;
+            target_track.clips.push(clip);
+            Ok(())
+        }
+    }
+
+    pub fn add_effect(
+        project: &Arc<RwLock<Project>>,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effect: crate::model::project::EffectConfig,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
+        let comp = proj
+            .get_composition_mut(composition_id)
+            .ok_or_else(|| LibraryError::Project("Comp not found".to_string()))?;
+        let track = comp
+            .get_track_mut(track_id)
+            .ok_or_else(|| LibraryError::Project("Track not found".to_string()))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|c| c.id == clip_id)
+            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
+
+        clip.effects.push(effect);
+        Ok(())
+    }
+
+    pub fn update_effects(
+        project: &Arc<RwLock<Project>>,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effects: Vec<crate::model::project::EffectConfig>,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
+        let comp = proj
+            .get_composition_mut(composition_id)
+            .ok_or_else(|| LibraryError::Project("Comp not found".to_string()))?;
+        let track = comp
+            .get_track_mut(track_id)
+            .ok_or_else(|| LibraryError::Project("Track not found".to_string()))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|c| c.id == clip_id)
+            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
+
+        clip.effects = effects;
+        Ok(())
+    }
+
+    pub fn update_styles(
+        project: &Arc<RwLock<Project>>,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        styles: Vec<crate::model::project::style::StyleInstance>,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
+        let comp = proj
+            .get_composition_mut(composition_id)
+            .ok_or_else(|| LibraryError::Project("Comp not found".to_string()))?;
+        let track = comp
+            .get_track_mut(track_id)
+            .ok_or_else(|| LibraryError::Project("Track not found".to_string()))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|c| c.id == clip_id)
+            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
+
+        clip.styles = styles;
+        Ok(())
+    }
+
+    pub fn update_style_property(
+        project: &Arc<RwLock<Project>>,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        style_index: usize,
+        property_key: &str,
+        value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
+        let comp = proj
+            .get_composition_mut(composition_id)
+            .ok_or_else(|| LibraryError::Project("Comp not found".to_string()))?;
+        let track = comp
+            .get_track_mut(track_id)
+            .ok_or_else(|| LibraryError::Project("Track not found".to_string()))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|c| c.id == clip_id)
+            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
+
+        if let Some(style) = clip.styles.get_mut(style_index) {
+             style.properties.set(property_key.to_string(), Property::constant(value));
+             Ok(())
+        } else {
+             Err(LibraryError::Project("Style index out of range".to_string()))
+        }
     }
 }

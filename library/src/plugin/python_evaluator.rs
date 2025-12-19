@@ -38,7 +38,7 @@ impl PropertyEvaluator for PythonExpressionEvaluator {
                 .expect("Failed to get 'eval' from builtins")
                 .call1((PyString::new(py, expression).into_any(), py.None(), Some(locals)))
                 .expect("Failed to call Python eval function");
-            
+
             convert_pyobject_to_property_value(&result.extract().expect("Failed to extract Python result")).expect("Failed to convert Python object to PropertyValue")
         })
     }

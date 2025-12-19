@@ -1,7 +1,7 @@
 use super::super::{LoadPlugin, LoadRequest, LoadResponse, Plugin};
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
-use crate::loader::video::VideoReader;
+use crate::loader::video::{MediaProbe, VideoReader};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -75,6 +75,13 @@ impl LoadPlugin for FfmpegVideoLoader {
             .extension()?
             .to_str()?
             .to_lowercase();
+        
+        // Explicitly reject image extensions to let NativeImageLoader handle them
+        match ext.as_str() {
+            "png" | "jpg" | "jpeg" | "bmp" | "webp" => return None,
+            _ => {}
+        }
+
         // ffmpeg supports audio too, but here we currently assume video loader.
         // Ideally we should distinguish or support both.
         match ext.as_str() {
@@ -89,32 +96,22 @@ impl LoadPlugin for FfmpegVideoLoader {
     }
 
     fn get_duration(&self, path: &str) -> Option<f64> {
-        // We need to access the VideoReader to get duration.
-        // If it's not in the cache/map, we should temporarily open it.
-        // However, self.readers is a Mutex<HashMap<String, VideoReader>>.
-        // So we can check if it exists or create a new temporary one.
-
-        // Note: Creating a new VideoReader involves ffmpeg overhead.
-        // But get_duration is usually called once at import time.
-
         let mut readers = self.readers.lock().unwrap();
-
-        // Check if we already have a reader for this path
         if let Some(reader) = readers.get(path) {
             return reader.get_duration();
         }
 
-        // If not, try to create one
-        match VideoReader::new(path) {
-            Ok(reader) => {
-                let duration = reader.get_duration();
-                // Should we cache this reader? Maybe not if we are just probing.
-                // But for now, let's cache it as we might use it soon for thumbnails.
-                readers.insert(path.to_string(), reader);
-                duration
-            }
-            Err(_) => None,
+        if let Ok(reader) = VideoReader::new(path) {
+            let duration = reader.get_duration();
+            readers.insert(path.to_string(), reader);
+            return duration;
         }
+
+        if let Ok(probe) = MediaProbe::new(path) {
+            return probe.get_duration();
+        }
+
+        None
     }
 
     fn get_fps(&self, path: &str) -> Option<f64> {
@@ -123,14 +120,17 @@ impl LoadPlugin for FfmpegVideoLoader {
             return Some(reader.get_fps());
         }
 
-        match VideoReader::new(path) {
-            Ok(reader) => {
-                let fps = reader.get_fps();
-                readers.insert(path.to_string(), reader);
-                Some(fps)
-            }
-            Err(_) => None,
+        if let Ok(reader) = VideoReader::new(path) {
+            let fps = reader.get_fps();
+            readers.insert(path.to_string(), reader);
+            return Some(fps);
         }
+
+        if let Ok(probe) = MediaProbe::new(path) {
+            return Some(probe.get_fps());
+        }
+
+        None
     }
 
     fn get_dimensions(&self, path: &str) -> Option<(u32, u32)> {
@@ -139,13 +139,83 @@ impl LoadPlugin for FfmpegVideoLoader {
             return Some(reader.get_dimensions());
         }
 
-        match VideoReader::new(path) {
-            Ok(reader) => {
-                let dim = reader.get_dimensions();
-                readers.insert(path.to_string(), reader);
-                Some(dim)
-            }
-            Err(_) => None,
+        if let Ok(reader) = VideoReader::new(path) {
+            let dim = reader.get_dimensions();
+            readers.insert(path.to_string(), reader);
+            return Some(dim);
         }
+
+        if let Ok(probe) = MediaProbe::new(path) {
+            return Some(probe.get_dimensions());
+        }
+
+        None
+    }
+    fn get_metadata(&self, path: &str) -> Option<crate::plugin::AssetMetadata> {
+        let ext = std::path::Path::new(path)
+            .extension()?
+            .to_str()?
+            .to_lowercase();
+
+        // Explicitly reject image extensions to let NativeImageLoader handle them
+        match ext.as_str() {
+            "png" | "jpg" | "jpeg" | "bmp" | "webp" => return None,
+            _ => {}
+        }
+
+        // Check if cached
+        {
+            let readers = self.readers.lock().unwrap();
+            if let Some(reader) = readers.get(path) {
+                return Some(crate::plugin::AssetMetadata {
+                    kind: crate::model::project::asset::AssetKind::Video,
+                    duration: reader.get_duration(),
+                    fps: Some(reader.get_fps()),
+                    width: Some(reader.get_dimensions().0),
+                    height: Some(reader.get_dimensions().1),
+                });
+            }
+        }
+
+        // Try VideoReader (for caching)
+        if let Ok(reader) = VideoReader::new(path) {
+            let duration = reader.get_duration();
+            let fps = reader.get_fps();
+            let (w, h) = reader.get_dimensions();
+
+            {
+                let mut readers = self.readers.lock().unwrap();
+                readers.insert(path.to_string(), reader);
+            }
+
+            return Some(crate::plugin::AssetMetadata {
+                kind: crate::model::project::asset::AssetKind::Video,
+                duration,
+                fps: Some(fps),
+                width: Some(w),
+                height: Some(h),
+            });
+        }
+
+        // Fallback to MediaProbe (e.g. for Audio)
+        if let Ok(probe) = MediaProbe::new(path) {
+            let kind = if probe.has_video() {
+                crate::model::project::asset::AssetKind::Video
+            } else if probe.has_audio() {
+                crate::model::project::asset::AssetKind::Audio
+            } else {
+                return None;
+            };
+
+            return Some(crate::plugin::AssetMetadata {
+                kind,
+                duration: probe.get_duration(),
+                fps: Some(probe.get_fps()),
+                width: Some(probe.get_dimensions().0),
+                height: Some(probe.get_dimensions().1),
+            });
+        }
+
+        None
     }
 }

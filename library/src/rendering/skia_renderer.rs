@@ -706,7 +706,7 @@ impl Renderer for SkiaRenderer {
 
         // If sharing is enabled, attempt to return a Texture.
         if self.sharing_handle.is_some() {
-            if let Some(context) = self.gpu_context.as_mut() {
+            if let Some(_context) = self.gpu_context.as_mut() {
                 if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
                     &mut self.surface,
                     skia_safe::surface::BackendHandleAccess::FlushRead,

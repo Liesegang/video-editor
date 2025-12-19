@@ -3,7 +3,7 @@ use egui_extras::{Column, TableBuilder};
 use egui_phosphor::regular as icons;
 use library::model::project::asset::AssetKind;
 use library::model::project::project::Project;
-use library::service::project_service::ProjectService;
+use library::EditorService;
 use std::sync::{Arc, RwLock};
 
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
@@ -17,7 +17,7 @@ pub fn assets_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     history_manager: &mut HistoryManager,
-    project_service: &mut ProjectService,
+    project_service: &mut EditorService,
     project: &Arc<RwLock<Project>>,
     composition_dialog: &mut CompositionDialog,
 ) {
@@ -28,8 +28,8 @@ pub fn assets_panel(
         let new_comp_id = project_service
             .add_composition(
                 &composition_dialog.name,
-                composition_dialog.width,
-                composition_dialog.height,
+                composition_dialog.width as u32,
+                composition_dialog.height as u32,
                 composition_dialog.fps,
                 composition_dialog.duration,
             )
@@ -51,8 +51,8 @@ pub fn assets_panel(
             .update_composition(
                 composition_dialog.comp_id.unwrap(),
                 &composition_dialog.name,
-                composition_dialog.width,
-                composition_dialog.height,
+                composition_dialog.width as u32,
+                composition_dialog.height as u32,
                 composition_dialog.fps,
                 composition_dialog.duration,
             )

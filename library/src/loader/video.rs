@@ -182,3 +182,67 @@ pub fn decode_video_frame(file_path: &str, frame_number: u64) -> Result<Image, L
     let mut reader = VideoReader::new(file_path)?;
     reader.decode_frame(frame_number)
 }
+
+pub struct MediaProbe {
+    input_context: ffmpeg::format::context::Input,
+}
+
+impl MediaProbe {
+    pub fn new(file_path: &str) -> Result<Self, LibraryError> {
+        ffmpeg::init()?;
+        let input_context = ffmpeg::format::input(&file_path)?;
+        Ok(Self { input_context })
+    }
+
+    pub fn get_duration(&self) -> Option<f64> {
+        if self.input_context.duration() == ffmpeg::ffi::AV_NOPTS_VALUE {
+            None
+        } else {
+            Some(self.input_context.duration() as f64 / ffmpeg::ffi::AV_TIME_BASE as f64)
+        }
+    }
+
+    pub fn get_fps(&self) -> f64 {
+        if let Some(stream) = self
+            .input_context
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+        {
+            let avg_frame_rate = stream.avg_frame_rate();
+            if avg_frame_rate.denominator() > 0 {
+                return avg_frame_rate.numerator() as f64 / avg_frame_rate.denominator() as f64;
+            }
+        }
+        0.0
+    }
+
+    pub fn get_dimensions(&self) -> (u32, u32) {
+        if let Some(stream) = self
+            .input_context
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+        {
+            if let Ok(decoder) =
+                ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+                    .and_then(|c| c.decoder().video())
+            {
+                return (decoder.width(), decoder.height());
+            }
+        }
+        (0, 0)
+    }
+
+    pub fn has_video(&self) -> bool {
+        self.input_context
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .is_some()
+    }
+
+    pub fn has_audio(&self) -> bool {
+        self.input_context
+            .streams()
+            .best(ffmpeg::media::Type::Audio)
+            .is_some()
+    }
+}

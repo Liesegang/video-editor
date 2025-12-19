@@ -2,9 +2,16 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2};
 use library::animation::EasingFunction;
 use library::model::project::project::Project;
 use library::model::project::property::{Property, PropertyMap, PropertyValue};
-use library::service::project_service::ProjectService;
+use library::EditorService;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PropertyComponent {
+    Scalar,
+    X,
+    Y,
+}
 
 use crate::action::HistoryManager;
 use crate::command::CommandRegistry;
@@ -49,7 +56,7 @@ pub fn graph_editor_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     history_manager: &mut HistoryManager,
-    project_service: &mut ProjectService,
+    project_service: &mut EditorService,
     project: &Arc<RwLock<Project>>,
     registry: &CommandRegistry,
 ) {
@@ -93,16 +100,56 @@ pub fn graph_editor_panel(
             return;
         };
 
-        let mut properties_to_plot: Vec<(String, &Property, &PropertyMap)> = entity
-            .properties
-            .iter()
-            .filter(|(_, p)| match p.evaluator.as_str() {
-                "keyframe" => true,
-                "constant" => matches!(p.value(), Some(PropertyValue::Number(_))),
-                _ => false,
-            })
-            .map(|(k, p)| (k.clone(), p, &entity.properties))
-            .collect();
+        let mut properties_to_plot: Vec<(String, &Property, &PropertyMap, PropertyComponent)> =
+            Vec::new();
+
+        for (k, p) in entity.properties.iter() {
+            let mut include = false;
+            let mut components = Vec::new();
+
+            match p.evaluator.as_str() {
+                "keyframe" => {
+                    // Check first keyframe to determine type
+                    if let Some(first) = p.keyframes().first() {
+                        match &first.value {
+                            PropertyValue::Number(_) => {
+                                components.push(PropertyComponent::Scalar);
+                            }
+                            PropertyValue::Vec2(_) => {
+                                components.push(PropertyComponent::X);
+                                components.push(PropertyComponent::Y);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                "constant" => match p.value() {
+                    Some(PropertyValue::Number(_)) => {
+                        components.push(PropertyComponent::Scalar);
+                    }
+                    Some(PropertyValue::Vec2(_)) => {
+                        components.push(PropertyComponent::X);
+                        components.push(PropertyComponent::Y);
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+
+            for comp in components {
+                let suffix = match comp {
+                    PropertyComponent::Scalar => "",
+                    PropertyComponent::X => ".x",
+                    PropertyComponent::Y => ".y",
+                };
+                properties_to_plot.push((
+                    format!("{}{}", k, suffix),
+                    p,
+                    &entity.properties,
+                    comp,
+                ));
+            }
+        }
 
         // Capture clip range for visualization
         let (clip_start_frame, clip_end_frame, clip_fps) =
@@ -112,16 +159,95 @@ pub fn graph_editor_panel(
 
         for (effect_idx, effect) in entity.effects.iter().enumerate() {
             for (prop_key, prop) in effect.properties.iter() {
-                let should_plot = match prop.evaluator.as_str() {
-                    "keyframe" => true,
-                    "constant" => matches!(prop.value(), Some(PropertyValue::Number(_))),
-                    _ => false,
-                };
-                if should_plot {
+                let mut components = Vec::new();
+                match prop.evaluator.as_str() {
+                    "keyframe" => {
+                        if let Some(first) = prop.keyframes().first() {
+                            match &first.value {
+                                PropertyValue::Number(_) => {
+                                    components.push(PropertyComponent::Scalar);
+                                }
+                                PropertyValue::Vec2(_) => {
+                                    components.push(PropertyComponent::X);
+                                    components.push(PropertyComponent::Y);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    "constant" => match prop.value() {
+                        Some(PropertyValue::Number(_)) => {
+                            components.push(PropertyComponent::Scalar);
+                        }
+                        Some(PropertyValue::Vec2(_)) => {
+                            components.push(PropertyComponent::X);
+                            components.push(PropertyComponent::Y);
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+
+                for comp in components {
+                    let suffix = match comp {
+                        PropertyComponent::Scalar => "",
+                        PropertyComponent::X => ".x",
+                        PropertyComponent::Y => ".y",
+                    };
                     properties_to_plot.push((
-                        format!("effect:{}:{}", effect_idx, prop_key),
+                        format!("effect:{}:{}{}", effect_idx, prop_key, suffix),
                         prop,
                         &effect.properties,
+                        comp,
+                    ));
+                }
+            }
+        }
+
+        // Add Style Properties
+        for (style_idx, style) in entity.styles.iter().enumerate() {
+            for (prop_key, prop) in style.properties.iter() {
+                let mut components = Vec::new();
+                match prop.evaluator.as_str() {
+                    "keyframe" => {
+                        if let Some(first) = prop.keyframes().first() {
+                            match &first.value {
+                                PropertyValue::Number(_) => {
+                                    components.push(PropertyComponent::Scalar);
+                                }
+                                PropertyValue::Vec2(_) => {
+                                    components.push(PropertyComponent::X);
+                                    components.push(PropertyComponent::Y);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    "constant" => match prop.value() {
+                        Some(PropertyValue::Number(_)) => {
+                            components.push(PropertyComponent::Scalar);
+                        }
+                        Some(PropertyValue::Vec2(_)) => {
+                            components.push(PropertyComponent::X);
+                            components.push(PropertyComponent::Y);
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+
+                for comp in components {
+                    let suffix = match comp {
+                        PropertyComponent::Scalar => "",
+                        PropertyComponent::X => ".x",
+                        PropertyComponent::Y => ".y",
+                    };
+                    // Use a recognizable prefix, style:idx:key
+                    properties_to_plot.push((
+                        format!("style:{}:{}{}", style_idx, prop_key, suffix),
+                        prop,
+                        &style.properties,
+                        comp,
                     ));
                 }
             }
@@ -134,7 +260,7 @@ pub fn graph_editor_panel(
 
         // Initialize visible_properties if it's empty (first load)
         if editor_context.graph_editor.visible_properties.is_empty() {
-            for (name, _, _) in &properties_to_plot {
+            for (name, _, _, _) in &properties_to_plot {
                 editor_context
                     .graph_editor
                     .visible_properties
@@ -172,7 +298,7 @@ pub fn graph_editor_panel(
                         .iter()
                         .cycle();
 
-                        for (name, _, _) in &properties_to_plot {
+                        for (name, _, _, _) in &properties_to_plot {
                             let color = *color_cycle.next().unwrap();
                             let mut is_visible = editor_context
                                 .graph_editor
@@ -471,7 +597,7 @@ pub fn graph_editor_panel(
                 .iter()
                 .cycle();
 
-                for (name, property, map) in properties_to_plot {
+                for (name, property, map, component) in properties_to_plot {
                     let color = *color_cycle.next().unwrap();
 
                     if !editor_context
@@ -484,7 +610,26 @@ pub fn graph_editor_panel(
 
                     match property.evaluator.as_str() {
                         "constant" => {
-                            if let Some(val) = property.value().and_then(|v| v.get_as::<f64>()) {
+                            let maybe_val = match component {
+                                PropertyComponent::Scalar => {
+                                    property.value().and_then(|v| v.get_as::<f64>())
+                                }
+                                PropertyComponent::X => property.value().and_then(|v| {
+                                    if let PropertyValue::Vec2(vec) = v {
+                                        Some(vec.x.into_inner())
+                                    } else {
+                                        None
+                                    }
+                                }),
+                                PropertyComponent::Y => property.value().and_then(|v| {
+                                    if let PropertyValue::Vec2(vec) = v {
+                                        Some(vec.y.into_inner())
+                                    } else {
+                                        None
+                                    }
+                                }),
+                            };
+                            if let Some(val) = maybe_val {
                                 let y = to_screen_pos(0.0, val).y;
                                 if y >= graph_rect.min.y && y <= graph_rect.max.y {
                                     painter.line_segment(
@@ -545,8 +690,25 @@ pub fn graph_editor_panel(
                                     map,
                                     time as f64,
                                 );
+                                let val_f64 = match component {
+                                    PropertyComponent::Scalar => value_pv.get_as::<f64>(),
+                                    PropertyComponent::X => {
+                                        if let PropertyValue::Vec2(vec) = value_pv {
+                                            Some(vec.x.into_inner())
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                    PropertyComponent::Y => {
+                                        if let PropertyValue::Vec2(vec) = value_pv {
+                                            Some(vec.y.into_inner())
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                };
 
-                                if let Some(val) = value_pv.get_as::<f64>() {
+                                if let Some(val) = val_f64 {
                                     let pos = to_screen_pos(time as f64, val);
                                     // Clamp Y to reasonable bounds to avoid drawing issues far off screen?
                                     // Painter usually handles it, but let's be safe if needed.
@@ -568,7 +730,24 @@ pub fn graph_editor_panel(
 
                                 for (i, kf) in sorted_kf.iter().enumerate() {
                                     let t = kf.time.into_inner();
-                                    let val = kf.value.get_as::<f64>().unwrap_or(0.0);
+                                    let val_f64 = match component {
+                                        PropertyComponent::Scalar => kf.value.get_as::<f64>(),
+                                        PropertyComponent::X => {
+                                            if let PropertyValue::Vec2(vec) = &kf.value {
+                                                Some(vec.x.into_inner())
+                                            } else {
+                                                None
+                                            }
+                                        }
+                                        PropertyComponent::Y => {
+                                            if let PropertyValue::Vec2(vec) = &kf.value {
+                                                Some(vec.y.into_inner())
+                                            } else {
+                                                None
+                                            }
+                                        }
+                                    };
+                                    let val = val_f64.unwrap_or(0.0);
                                     let kf_pos = to_screen_pos(t, val);
 
                                     // Skip if out of view (optimization)
@@ -673,10 +852,27 @@ pub fn graph_editor_panel(
                                             let (t, _) = from_screen_pos(pointer_pos);
 
                                             // Evaluate at pointer time
-                                            let val_at_t = project_service
-                                                .evaluate_property_value(property, map, t)
-                                                .get_as::<f64>()
-                                                .unwrap_or(0.0);
+                                            let value_pv = project_service
+                                                .evaluate_property_value(property, map, t);
+                                            let val_at_t = match component {
+                                                PropertyComponent::Scalar => {
+                                                    value_pv.get_as::<f64>().unwrap_or(0.0)
+                                                }
+                                                PropertyComponent::X => {
+                                                    if let PropertyValue::Vec2(vec) = value_pv {
+                                                        vec.x.into_inner()
+                                                    } else {
+                                                        0.0
+                                                    }
+                                                }
+                                                PropertyComponent::Y => {
+                                                    if let PropertyValue::Vec2(vec) = value_pv {
+                                                        vec.y.into_inner()
+                                                    } else {
+                                                        0.0
+                                                    }
+                                                }
+                                            };
                                             let curve_pos = to_screen_pos(t, val_at_t);
 
                                             // Distance check
@@ -757,12 +953,70 @@ pub fn graph_editor_panel(
         None
     };
 
+    let parse_style_key = |key: &str| -> Option<(usize, String)> {
+        if key.starts_with("style:") {
+            let parts: Vec<&str> = key.splitn(3, ':').collect();
+            if parts.len() == 3 {
+                if let Ok(idx) = parts[1].parse::<usize>() {
+                    return Some((idx, parts[2].to_string()));
+                }
+            }
+        }
+        None
+    };
+
     match action {
         Action::Select(name, idx) => {
             editor_context.interaction.selected_keyframe = Some((name, idx));
         }
         Action::Move(name, idx, new_time, new_val) => {
-            if let Some((eff_idx, prop_key)) = parse_key(&name) {
+            let (base_name, suffix) = if name.ends_with(".x") {
+                (name.trim_end_matches(".x"), Some(PropertyComponent::X))
+            } else if name.ends_with(".y") {
+                (name.trim_end_matches(".y"), Some(PropertyComponent::Y))
+            } else {
+                (name.as_str(), None)
+            };
+
+            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
+                // Effect property
+                let mut current_pv = None;
+                if let Ok(proj) = project.read() {
+                    // Navigate to find keyframe
+                    if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
+                        if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
+                            if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
+                                if let Some(effect) = clip.effects.get(eff_idx) {
+                                    if let Some(prop) = effect.properties.get(&prop_key) {
+                                        let keyframes = prop.keyframes();
+                                        let mut sorted_kf = keyframes.clone();
+                                        sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+                                        if let Some(kf) = sorted_kf.get(idx) {
+                                            current_pv = Some(kf.value.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
+                    match suffix {
+                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            x: OrderedFloat(new_val),
+                            y: old_vec.y,
+                        }),
+                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            x: old_vec.x,
+                            y: OrderedFloat(new_val),
+                        }),
+                        _ => PropertyValue::Number(OrderedFloat(new_val)),
+                    }
+                } else {
+                    PropertyValue::Number(OrderedFloat(new_val))
+                };
+
                 let _ = project_service.update_effect_keyframe_by_index(
                     comp_id,
                     track_id,
@@ -771,25 +1025,160 @@ pub fn graph_editor_panel(
                     &prop_key,
                     idx,
                     Some(new_time),
-                    Some(PropertyValue::Number(OrderedFloat(new_val))),
+                    Some(new_pv),
+                    None,
+                );
+            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
+                // Style property
+                let mut current_pv = None;
+                if let Ok(proj) = project.read() {
+                    if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
+                        if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
+                            if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
+                                if let Some(style) = clip.styles.get(style_idx) {
+                                    if let Some(prop) = style.properties.get(&prop_key) {
+                                        let keyframes = prop.keyframes();
+                                        let mut sorted_kf = keyframes.clone();
+                                        sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+                                        if let Some(kf) = sorted_kf.get(idx) {
+                                            current_pv = Some(kf.value.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
+                    match suffix {
+                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            x: OrderedFloat(new_val),
+                            y: old_vec.y,
+                        }),
+                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            x: old_vec.x,
+                            y: OrderedFloat(new_val),
+                        }),
+                        _ => PropertyValue::Number(OrderedFloat(new_val)),
+                    }
+                } else {
+                    PropertyValue::Number(OrderedFloat(new_val))
+                };
+
+                let _ = project_service.update_style_keyframe_by_index(
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    style_idx,
+                    &prop_key,
+                    idx,
+                    Some(new_time),
+                    Some(new_pv),
                     None,
                 );
             } else {
+                // Clip property
+                let mut current_pv = None;
+                if let Ok(proj) = project.read() {
+                    if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
+                        if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
+                            if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
+                                if let Some(prop) = clip.properties.get(base_name) {
+                                     let keyframes = prop.keyframes();
+                                     let mut sorted_kf = keyframes.clone();
+                                     sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+                                     if let Some(kf) = sorted_kf.get(idx) {
+                                         current_pv = Some(kf.value.clone());
+                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
+                    match suffix {
+                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            x: OrderedFloat(new_val),
+                            y: old_vec.y,
+                        }),
+                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            x: old_vec.x,
+                            y: OrderedFloat(new_val),
+                        }),
+                        _ => PropertyValue::Number(OrderedFloat(new_val)),
+                    }
+                } else {
+                    PropertyValue::Number(OrderedFloat(new_val))
+                };
+
                 let _ = project_service.update_keyframe(
                     comp_id,
                     track_id,
                     entity_id,
-                    &name,
+                    base_name,
                     idx,
                     Some(new_time),
-                    Some(PropertyValue::Number(OrderedFloat(new_val))),
+                    Some(new_pv),
                     None,
                 );
             }
         }
         Action::Add(name, time, val) => {
-            if let Some((eff_idx, prop_key)) = parse_key(&name) {
-                // Use add_effect_keyframe to add keyframe and handle constant->keyframe conversion
+             let (base_name, suffix) = if name.ends_with(".x") {
+                (name.trim_end_matches(".x"), Some(PropertyComponent::X))
+            } else if name.ends_with(".y") {
+                (name.trim_end_matches(".y"), Some(PropertyComponent::Y))
+            } else {
+                (name.as_str(), None)
+            };
+
+             let mut current_val_at_t = None;
+             if let Ok(proj) = project.read() {
+                   if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
+                        if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
+                            if let Some(entity) = track.clips.iter().find(|c| c.id == entity_id) {
+                                if let Some((eff_idx, prop_key)) = parse_key(base_name) {
+                                    if let Some(effect) = entity.effects.get(eff_idx) {
+                                        if let Some(prop) = effect.properties.get(&prop_key) {
+                                            current_val_at_t = Some(project_service.evaluate_property_value(prop, &effect.properties, time));
+                                        }
+                                    }
+                                } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
+                                     // Style Property
+                                     if let Some(style) = entity.styles.get(style_idx) {
+                                         if let Some(prop) = style.properties.get(&prop_key) {
+                                              current_val_at_t = Some(project_service.evaluate_property_value(prop, &style.properties, time));
+                                         }
+                                     }
+                                } else {
+                                     if let Some(prop) = entity.properties.get(base_name) {
+                                          current_val_at_t = Some(project_service.evaluate_property_value(prop, &entity.properties, time));
+                                     }
+                                }
+                            }
+                        }
+                   }
+             }
+
+             let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_val_at_t {
+                  match suffix {
+                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            x: OrderedFloat(val),
+                            y: old_vec.y,
+                        }),
+                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            x: old_vec.x,
+                            y: OrderedFloat(val),
+                        }),
+                        _ => PropertyValue::Number(OrderedFloat(val)),
+                    }
+             } else {
+                  PropertyValue::Number(OrderedFloat(val))
+             };
+
+            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                 let _ = project_service.add_effect_keyframe(
                     comp_id,
                     track_id,
@@ -797,18 +1186,29 @@ pub fn graph_editor_panel(
                     eff_idx,
                     &prop_key,
                     time,
-                    PropertyValue::Number(OrderedFloat(val)),
-                    Some(EasingFunction::Linear),
+                    new_pv,
+                    None,
                 );
-            } else {
-                let _ = project_service.add_keyframe(
+            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
+                 let _ = project_service.add_style_keyframe(
                     comp_id,
                     track_id,
                     entity_id,
-                    &name,
+                    style_idx,
+                    &prop_key,
                     time,
-                    PropertyValue::Number(OrderedFloat(val)),
-                    Some(EasingFunction::Linear),
+                    new_pv,
+                    None,
+                );
+            } else {
+                 let _ = project_service.add_keyframe(
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    base_name,
+                    time,
+                    new_pv,
+                    None,
                 );
             }
         }
@@ -819,6 +1219,18 @@ pub fn graph_editor_panel(
                     track_id,
                     entity_id,
                     eff_idx,
+                    &prop_key,
+                    idx,
+                    None,
+                    None,
+                    Some(easing),
+                );
+            } else if let Some((style_idx, prop_key)) = parse_style_key(&name) {
+                let _ = project_service.update_style_keyframe_by_index(
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    style_idx,
                     &prop_key,
                     idx,
                     None,
@@ -843,6 +1255,10 @@ pub fn graph_editor_panel(
                 let _ = project_service.remove_effect_keyframe_by_index(
                     comp_id, track_id, entity_id, eff_idx, &prop_key, idx,
                 );
+            } else if let Some((style_idx, prop_key)) = parse_style_key(&name) {
+                let _ = project_service.remove_style_keyframe(
+                    comp_id, track_id, entity_id, style_idx, &prop_key, idx,
+                );
             } else {
                 let _ = project_service.remove_keyframe(comp_id, track_id, entity_id, &name, idx);
             }
@@ -865,13 +1281,33 @@ pub fn graph_editor_panel(
                                                 editor_context.keyframe_dialog.entity_id =
                                                     Some(entity_id);
                                                 editor_context.keyframe_dialog.property_name =
-                                                    name.clone(); // Use full key name? Dialog likely re-uses it for display?
-                                                                  // Or does dialog use it to call update?
-                                                                  // If dialog calls `update_keyframe`, it won't work for effects unless we update dialog too.
-                                                                  // Ah, Keyframe Dialog needs to know if it's an effect.
-                                                                  // Right now KeyframeDialog uses `update_keyframe`.
-                                                                  // So we might need to patch KeyframeDialog too if we want full support.
-                                                                  // But let's populate it for now.
+                                                    name.clone();
+                                                editor_context.keyframe_dialog.keyframe_index = idx;
+                                                editor_context.keyframe_dialog.time =
+                                                    kf.time.into_inner();
+                                                editor_context.keyframe_dialog.value =
+                                                    kf.value.get_as::<f64>().unwrap_or(0.0);
+                                                editor_context.keyframe_dialog.easing =
+                                                    kf.easing.clone();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Style Property
+                            else if let Some((style_idx, prop_key)) = parse_style_key(&name) {
+                                if let Some(style) = clip.styles.get(style_idx) {
+                                    if let Some(prop) = style.properties.get(&prop_key) {
+                                        if prop.evaluator == "keyframe" {
+                                            let keyframes = prop.keyframes();
+                                            if let Some(kf) = keyframes.get(idx) {
+                                                editor_context.keyframe_dialog.is_open = true;
+                                                editor_context.keyframe_dialog.track_id =
+                                                    Some(track_id);
+                                                editor_context.keyframe_dialog.entity_id =
+                                                    Some(entity_id);
+                                                editor_context.keyframe_dialog.property_name =
+                                                    name.clone();
                                                 editor_context.keyframe_dialog.keyframe_index = idx;
                                                 editor_context.keyframe_dialog.time =
                                                     kf.time.into_inner();

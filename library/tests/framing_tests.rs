@@ -29,6 +29,8 @@ fn test_video_converter_frame_calculation() {
         100, // source_begin_frame
         100, // duration_frame
         video_fps,
+        1920, // width
+        1080, // height
     );
 
     println!("Clip FPS: {}", clip.fps);

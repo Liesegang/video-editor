@@ -12,13 +12,13 @@ use crate::{
     state::context::EditorContext,
     ui::panels::{assets, inspector, preview, timeline},
 };
-use library::service::project_service::ProjectService;
+use library::EditorService;
 use library::RenderServer;
 
 pub struct AppTabViewer<'a> {
     editor_context: &'a mut EditorContext,
     history_manager: &'a mut HistoryManager,
-    project_service: &'a mut ProjectService,
+    project_service: &'a mut EditorService,
     project: &'a Arc<RwLock<Project>>,
     composition_dialog: &'a mut CompositionDialog,
     render_server: &'a Arc<RenderServer>,
@@ -29,7 +29,7 @@ impl<'a> AppTabViewer<'a> {
     pub fn new(
         editor_context: &'a mut EditorContext,
         history_manager: &'a mut HistoryManager,
-        project_service: &'a mut ProjectService,
+        project_service: &'a mut EditorService,
         project: &'a Arc<RwLock<Project>>,
         composition_dialog: &'a mut CompositionDialog,
         render_server: &'a Arc<RenderServer>,

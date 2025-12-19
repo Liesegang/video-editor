@@ -14,6 +14,7 @@ use crate::model::project::EffectConfig;
 use crate::model::project::TrackClip;
 use crate::model::project::project::Composition;
 use crate::model::project::property::{PropertyMap, PropertyValue};
+use crate::model::project::style::StyleInstance;
 use crate::plugin::Plugin;
 use crate::plugin::{EvaluationContext, PropertyEvaluatorRegistry};
 
@@ -72,6 +73,47 @@ impl<'a> FrameEvaluationContext<'a> {
             effect_type: config.effect_type.clone(),
             properties: evaluated,
         })
+    }
+
+    fn build_styles(&self, instances: &[StyleInstance], time: f64) -> Vec<StyleConfig> {
+        instances
+            .iter()
+            .filter_map(|instance| {
+                let props = &instance.properties;
+                let color_val = self.evaluate_property_value(props, "color", time);
+                let color = match color_val {
+                    Some(PropertyValue::Color(c)) => c,
+                    _ => crate::model::frame::color::Color { r: 0, g: 0, b: 0, a: 255 }, // Default Black? Or White?
+                };
+                let offset = self.evaluate_number(props, "offset", time, 0.0);
+
+                let style = match instance.style_type.as_str() {
+                    "fill" => DrawStyle::Fill { color, offset },
+                    "stroke" => {
+                        let width = self.evaluate_number(props, "width", time, 1.0);
+                        let miter = self.evaluate_number(props, "miter", time, 4.0);
+                        let dash_offset = self.evaluate_number(props, "dash_offset", time, 0.0);
+                        // TODO: Implement dash_array, cap, join evaluation if needed properties exist
+                         DrawStyle::Stroke {
+                            color,
+                            width,
+                            offset,
+                            cap: Default::default(),
+                            join: Default::default(),
+                            miter,
+                            dash_array: Vec::new(),
+                            dash_offset,
+                        }
+                    }
+                    _ => return None,
+                };
+
+                Some(StyleConfig {
+                    id: instance.id,
+                    style,
+                })
+            })
+            .collect()
     }
 
     fn build_transform(&self, props: &PropertyMap, time: f64) -> Transform {
@@ -322,10 +364,10 @@ impl EntityConverter for TextEntityConverter {
             .optional_string(props, "font_family", time)
             .unwrap_or_else(|| "Arial".to_string());
         let size = evaluator.evaluate_number(props, "size", time, 12.0);
-        let styles_value = evaluator
-            .evaluate_property_value(props, "styles", time)
-            .unwrap_or(PropertyValue::Array(vec![]));
-        let styles = evaluator.parse_draw_styles(styles_value);
+        let size = evaluator.evaluate_number(props, "size", time, 12.0);
+        
+        let styles = evaluator.build_styles(&track_clip.styles, time);
+        
         let transform = evaluator.build_transform(props, time);
         let effects = evaluator.build_image_effects(&track_clip.effects, time);
 
@@ -400,10 +442,7 @@ impl EntityConverter for ShapeEntityConverter {
         let path = evaluator.require_string(props, "path", time, "shape")?;
         let transform = evaluator.build_transform(props, time);
 
-        let styles_value = evaluator
-            .evaluate_property_value(props, "styles", time)
-            .unwrap_or(PropertyValue::Array(vec![]));
-        let styles = evaluator.parse_draw_styles(styles_value);
+        let styles = evaluator.build_styles(&track_clip.styles, time);
 
         let effects_value = evaluator
             .evaluate_property_value(props, "path_effects", time)
@@ -439,7 +478,8 @@ impl EntityConverter for ShapeEntityConverter {
             let bounds = path.compute_tight_bounds();
             Some((bounds.left, bounds.top, bounds.width(), bounds.height()))
         } else {
-            None
+            // Fallback for invalid path so Gizmo still appears
+            Some((0.0, 0.0, 100.0, 100.0))
         }
     }
 }
@@ -481,6 +521,24 @@ impl EntityConverter for SkSLEntityConverter {
             },
             properties: props.clone(),
         })
+    }
+    fn get_bounds(
+        &self,
+        evaluator: &FrameEvaluationContext,
+        track_clip: &TrackClip,
+        frame_number: u64,
+    ) -> Option<(f32, f32, f32, f32)> {
+        let props = &track_clip.properties;
+        let fps = evaluator.composition.fps;
+        let time = frame_number as f64 / fps;
+
+        // Try explicit width/height properties first, else composition size
+        let width =
+            evaluator.evaluate_number(props, "width", time, evaluator.composition.width as f64);
+        let height =
+            evaluator.evaluate_number(props, "height", time, evaluator.composition.height as f64);
+
+        Some((0.0, 0.0, width as f32, height as f32))
     }
 }
 

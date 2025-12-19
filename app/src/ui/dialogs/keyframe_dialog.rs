@@ -1,7 +1,7 @@
 use eframe::egui::{self, Color32, ComboBox, DragValue, TextEdit};
 use library::animation::EasingFunction;
 use library::model::project::project::Project;
-use library::service::project_service::ProjectService;
+use library::EditorService;
 use std::sync::{Arc, RwLock};
 
 use crate::action::HistoryManager;
@@ -11,7 +11,7 @@ pub fn show_keyframe_dialog(
     ctx: &egui::Context,
     editor_context: &mut EditorContext,
     history_manager: &mut HistoryManager,
-    project_service: &mut ProjectService,
+    project_service: &mut EditorService,
     _project: &Arc<RwLock<Project>>,
 ) {
     let mut open = editor_context.keyframe_dialog.is_open;
@@ -263,6 +263,18 @@ pub fn show_keyframe_dialog(
                         None
                     };
 
+                    let parse_style_key = |key: &str| -> Option<(usize, String)> {
+                        if key.starts_with("style:") {
+                            let parts: Vec<&str> = key.splitn(3, ':').collect();
+                            if parts.len() == 3 {
+                                if let Ok(idx) = parts[1].parse::<usize>() {
+                                    return Some((idx, parts[2].to_string()));
+                                }
+                            }
+                        }
+                        None
+                    };
+
                     let result = if let Some((eff_idx, prop_key)) = parse_key(&state.property_name)
                     {
                         project_service.update_effect_keyframe_by_index(
@@ -270,6 +282,18 @@ pub fn show_keyframe_dialog(
                             track_id,
                             entity_id,
                             eff_idx,
+                            &prop_key,
+                            state.keyframe_index,
+                            Some(new_time),
+                            Some(new_value),
+                            Some(state.easing.clone()),
+                        )
+                    } else if let Some((style_idx, prop_key)) = parse_style_key(&state.property_name) {
+                         project_service.update_style_keyframe_by_index(
+                            comp_id,
+                            track_id,
+                            entity_id,
+                            style_idx,
                             &prop_key,
                             state.keyframe_index,
                             Some(new_time),

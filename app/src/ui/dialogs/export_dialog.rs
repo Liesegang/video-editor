@@ -12,7 +12,8 @@ use library::model::project::project::Project;
 use library::model::project::property::PropertyValue;
 use library::plugin::{ExportSettings, PluginManager, PropertyUiType};
 use library::rendering::skia_renderer::SkiaRenderer;
-use library::service::{ExportService, ProjectModel, RenderService};
+use library::service::render_service::RenderService;
+use library::{EditorService, ExportService, ProjectModel, RenderServer};
 
 pub struct ExportDialog {
     pub is_open: bool,
@@ -80,7 +81,7 @@ impl ExportDialog {
         &mut self,
         ctx: &egui::Context,
         project: &Arc<RwLock<Project>>,
-        project_service: &library::service::project_service::ProjectService,
+        project_service: &EditorService,
         active_composition_id: Option<uuid::Uuid>,
     ) {
         self.active_composition_id = active_composition_id;
@@ -146,7 +147,7 @@ impl ExportDialog {
         &mut self,
         ui: &mut egui::Ui,
         project: &Arc<RwLock<Project>>,
-        project_service: &library::service::project_service::ProjectService,
+        project_service: &EditorService,
     ) {
         ui.heading("Export Settings");
 
@@ -407,7 +408,7 @@ impl ExportDialog {
     fn start_export(
         &mut self,
         project_lock: &Arc<RwLock<Project>>,
-        project_service: &library::service::project_service::ProjectService,
+        project_service: &EditorService,
     ) {
         let exporter_id = if let Some(id) = &self.selected_exporter_id {
             id.clone()
@@ -440,7 +441,7 @@ impl ExportDialog {
         let custom_end = self.custom_end_frame;
 
         // Capture Audio Engine Sample Rate
-        let engine_sample_rate = project_service.audio_engine.get_sample_rate();
+        let engine_sample_rate = project_service.get_audio_engine().get_sample_rate();
 
         // Find composition index
         let comp_index = match project_snapshot

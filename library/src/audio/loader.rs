@@ -28,20 +28,28 @@ impl AudioLoader {
         )?;
 
         let mut format = hint.format;
-        let track = format
-            .tracks()
-            .iter()
-            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-            .ok_or_else(|| anyhow::anyhow!("No supported audio track found"))?;
+        let (track_id, source_sample_rate, mut decoder) = {
+            let mut found = None;
+            for t in format.tracks() {
+                if t.codec_params.codec == CODEC_TYPE_NULL {
+                    continue;
+                }
 
-        let mut decoder = symphonia::default::get_codecs()
-            .make(&track.codec_params, &DecoderOptions::default())?;
-
-        let track_id = track.id;
-        let source_sample_rate = track
-            .codec_params
-            .sample_rate
-            .ok_or_else(|| anyhow::anyhow!("Unknown sample rate"))?;
+                match symphonia::default::get_codecs()
+                    .make(&t.codec_params, &DecoderOptions::default())
+                {
+                    Ok(d) => {
+                        found = Some((t.id, t.codec_params.sample_rate, d));
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            
+            let (id, rate_opt, decoder) = found.ok_or_else(|| anyhow::anyhow!("No supported audio track found"))?;
+            let rate = rate_opt.ok_or_else(|| anyhow::anyhow!("Unknown sample rate"))?;
+            (id, rate, decoder)
+        };
 
         // Setup Resampler if needed
         // Simpler implementation: Just collect all samples first, then resample if needed?

@@ -28,7 +28,17 @@ fn test_project_serialization_roundtrip() {
     let mut track = Track::new("Video Track");
 
     // Add Clip
-    let clip = TrackClip::create_video(Some(asset_id), "/path/to/video.mp4", 0, 100, 0, 100, 60.0);
+    let clip = TrackClip::create_video(
+        Some(asset_id),
+        "/path/to/video.mp4",
+        0,
+        100,
+        0,
+        100,
+        60.0,
+        1920,
+        1080,
+    );
     track.clips.push(clip);
     comp.add_track(track);
 

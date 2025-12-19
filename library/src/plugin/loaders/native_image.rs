@@ -68,4 +68,32 @@ impl LoadPlugin for NativeImageLoader {
     fn get_dimensions(&self, path: &str) -> Option<(u32, u32)> {
         image::image_dimensions(path).ok()
     }
+    fn get_metadata(&self, path: &str) -> Option<crate::plugin::AssetMetadata> {
+        let ext = std::path::Path::new(path)
+            .extension()?
+            .to_str()?
+            .to_lowercase();
+
+        let kind = match ext.as_str() {
+            "png" | "jpg" | "jpeg" | "bmp" | "webp" => {
+                crate::model::project::asset::AssetKind::Image
+            }
+            _ => return None,
+        };
+
+        let dim = image::image_dimensions(path).ok();
+        let (w, h) = if let Some((w, h)) = dim {
+            (Some(w), Some(h))
+        } else {
+            (None, None)
+        };
+
+        Some(crate::plugin::AssetMetadata {
+            kind,
+            duration: None,
+            fps: None,
+            width: w,
+            height: h,
+        })
+    }
 }
