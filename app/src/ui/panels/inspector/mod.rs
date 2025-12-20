@@ -449,7 +449,7 @@ pub fn inspector_panel(
                                 comp_id,
                                 track_id,
                                 selected_entity_id,
-                                current_source_begin_frame_f32 as u64,
+                                current_source_begin_frame_f32 as i64,
                             )
                             .ok();
                         needs_refresh = true;

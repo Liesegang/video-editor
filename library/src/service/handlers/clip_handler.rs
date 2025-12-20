@@ -117,7 +117,7 @@ impl ClipHandler {
                 }
                 "source_begin_frame" => {
                     if let PropertyValue::Number(n) = &value {
-                        clip.source_begin_frame = n.into_inner().round() as u64;
+                        clip.source_begin_frame = n.into_inner().round() as i64;
                     }
                 }
                 _ => {}

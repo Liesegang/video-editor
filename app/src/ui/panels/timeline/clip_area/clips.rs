@@ -43,7 +43,7 @@ fn draw_waveform(
     painter: &egui::Painter,
     clip_rect: egui::Rect,
     audio_data: &[f32],
-    source_begin_frame: u64,
+    source_begin_frame: i64, // Changed to i64
     composition_fps: f64,
     pixels_per_unit: f32,
     sample_rate: f64,
@@ -60,8 +60,13 @@ fn draw_waveform(
 
     while x < rect_w {
         let time_offset = x as f32 / pixels_per_unit;
+        let time_offset = x as f32 / pixels_per_unit;
         let source_time = (source_begin_frame as f64 / composition_fps) + time_offset as f64;
-        let start_sample_idx = (source_time * sample_rate) as usize * channels;
+        let start_sample_idx = if source_time >= 0.0 {
+            (source_time * sample_rate) as usize * channels
+        } else {
+             audio_data.len() + 1 // Invalid index
+        };
         let end_sample_idx = start_sample_idx + samples_per_pixel as usize;
 
         if start_sample_idx < audio_data.len() {
@@ -264,7 +269,21 @@ pub fn draw_clips(
 
                     // Source constraints
                     let source_max_out_frame = if let Some(duration) = clip.duration_frame {
-                        clip.source_begin_frame.saturating_add(duration)
+                         // clip.source_begin_frame is i64. duration is u64.
+                         // We want: max_out = in + (duration - source_begin).
+                         // But source_begin can be negative.
+                         // If source_begin is -100, duration 1000. available = 1100?
+                         // "Duration" usually means total length of file (0..duration).
+                         // If source_begin is -100, we play "void" for 100 frames then source 0.
+                         // So effective end of source is at source_time = duration.
+                         // Timeline end = In + (duration - source_begin).
+                         // Careful with signs.
+                         let source_end_offset = duration as i64 - clip.source_begin_frame;
+                         if source_end_offset > 0 {
+                             clip.in_frame.saturating_add(source_end_offset as u64)
+                         } else {
+                             clip.in_frame // Should not happen if duration > source_begin
+                         }
                     } else {
                         u64::MAX
                     };
@@ -282,7 +301,7 @@ pub fn draw_clips(
 
                     if left.dragged() {
                         new_in_frame = ((new_in_frame as i64 + dt_frames).max(0) as u64)
-                            .max(clip.source_begin_frame) // Cannot go before source begin frame
+                            // .max(clip.source_begin_frame) // Constraint removed for negative source start
                             .min(new_out_frame.saturating_sub(1)); // Minimum 1 frame duration
                     } else if right.dragged() {
                         new_out_frame =
@@ -530,6 +549,8 @@ pub fn draw_clips(
                                     )
                                     .ok();
 
+                                // Removed update_clip_source_frames to ensure keyframes (and content) follow the clip (Relative Keyframing).
+                                /*
                                 let new_source_begin_frame =
                                     (c.source_begin_frame as i64 + dt_frames).max(0) as u64;
                                 project_service
@@ -540,6 +561,7 @@ pub fn draw_clips(
                                         new_source_begin_frame,
                                     )
                                     .ok();
+                                */
                             }
                         }
                     }
