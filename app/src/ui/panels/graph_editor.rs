@@ -142,12 +142,7 @@ pub fn graph_editor_panel(
                     PropertyComponent::X => ".x",
                     PropertyComponent::Y => ".y",
                 };
-                properties_to_plot.push((
-                    format!("{}{}", k, suffix),
-                    p,
-                    &entity.properties,
-                    comp,
-                ));
+                properties_to_plot.push((format!("{}{}", k, suffix), p, &entity.properties, comp));
             }
         }
 
@@ -853,8 +848,12 @@ pub fn graph_editor_panel(
                                             let (t, _) = from_screen_pos(pointer_pos);
 
                                             // Evaluate at pointer time
-                                            let value_pv = project_service
-                                                .evaluate_property_value(property, map, t, composition.fps);
+                                            let value_pv = project_service.evaluate_property_value(
+                                                property,
+                                                map,
+                                                t,
+                                                composition.fps,
+                                            );
                                             let val_at_t = match component {
                                                 PropertyComponent::Scalar => {
                                                     value_pv.get_as::<f64>().unwrap_or(0.0)
@@ -1004,14 +1003,18 @@ pub fn graph_editor_panel(
 
                 let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                     match suffix {
-                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                            x: OrderedFloat(new_val),
-                            y: old_vec.y,
-                        }),
-                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                            x: old_vec.x,
-                            y: OrderedFloat(new_val),
-                        }),
+                        Some(PropertyComponent::X) => {
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: OrderedFloat(new_val),
+                                y: old_vec.y,
+                            })
+                        }
+                        Some(PropertyComponent::Y) => {
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: old_vec.x,
+                                y: OrderedFloat(new_val),
+                            })
+                        }
                         _ => PropertyValue::Number(OrderedFloat(new_val)),
                     }
                 } else {
@@ -1053,14 +1056,18 @@ pub fn graph_editor_panel(
 
                 let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                     match suffix {
-                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                            x: OrderedFloat(new_val),
-                            y: old_vec.y,
-                        }),
-                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                            x: old_vec.x,
-                            y: OrderedFloat(new_val),
-                        }),
+                        Some(PropertyComponent::X) => {
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: OrderedFloat(new_val),
+                                y: old_vec.y,
+                            })
+                        }
+                        Some(PropertyComponent::Y) => {
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: old_vec.x,
+                                y: OrderedFloat(new_val),
+                            })
+                        }
                         _ => PropertyValue::Number(OrderedFloat(new_val)),
                     }
                 } else {
@@ -1086,12 +1093,12 @@ pub fn graph_editor_panel(
                         if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
                             if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
                                 if let Some(prop) = clip.properties.get(base_name) {
-                                     let keyframes = prop.keyframes();
-                                     let mut sorted_kf = keyframes.clone();
-                                     sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-                                     if let Some(kf) = sorted_kf.get(idx) {
-                                         current_pv = Some(kf.value.clone());
-                                     }
+                                    let keyframes = prop.keyframes();
+                                    let mut sorted_kf = keyframes.clone();
+                                    sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+                                    if let Some(kf) = sorted_kf.get(idx) {
+                                        current_pv = Some(kf.value.clone());
+                                    }
                                 }
                             }
                         }
@@ -1100,14 +1107,18 @@ pub fn graph_editor_panel(
 
                 let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                     match suffix {
-                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                            x: OrderedFloat(new_val),
-                            y: old_vec.y,
-                        }),
-                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                            x: old_vec.x,
-                            y: OrderedFloat(new_val),
-                        }),
+                        Some(PropertyComponent::X) => {
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: OrderedFloat(new_val),
+                                y: old_vec.y,
+                            })
+                        }
+                        Some(PropertyComponent::Y) => {
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: old_vec.x,
+                                y: OrderedFloat(new_val),
+                            })
+                        }
                         _ => PropertyValue::Number(OrderedFloat(new_val)),
                     }
                 } else {
@@ -1127,7 +1138,7 @@ pub fn graph_editor_panel(
             }
         }
         Action::Add(name, time, val) => {
-             let (base_name, suffix) = if name.ends_with(".x") {
+            let (base_name, suffix) = if name.ends_with(".x") {
                 (name.trim_end_matches(".x"), Some(PropertyComponent::X))
             } else if name.ends_with(".y") {
                 (name.trim_end_matches(".y"), Some(PropertyComponent::Y))
@@ -1135,82 +1146,83 @@ pub fn graph_editor_panel(
                 (name.as_str(), None)
             };
 
-             let mut current_val_at_t = None;
-             if let Ok(proj) = project.read() {
-                   if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                        if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                            if let Some(entity) = track.clips.iter().find(|c| c.id == entity_id) {
-                                if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                                    if let Some(effect) = entity.effects.get(eff_idx) {
-                                        if let Some(prop) = effect.properties.get(&prop_key) {
-                                            current_val_at_t = Some(project_service.evaluate_property_value(prop, &effect.properties, time, comp.fps));
-                                        }
+            let mut current_val_at_t = None;
+            if let Ok(proj) = project.read() {
+                if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
+                    if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
+                        if let Some(entity) = track.clips.iter().find(|c| c.id == entity_id) {
+                            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
+                                if let Some(effect) = entity.effects.get(eff_idx) {
+                                    if let Some(prop) = effect.properties.get(&prop_key) {
+                                        current_val_at_t =
+                                            Some(project_service.evaluate_property_value(
+                                                prop,
+                                                &effect.properties,
+                                                time,
+                                                comp.fps,
+                                            ));
                                     }
-                                } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                                     // Style Property
-                                     if let Some(style) = entity.styles.get(style_idx) {
-                                         if let Some(prop) = style.properties.get(&prop_key) {
-                                              current_val_at_t = Some(project_service.evaluate_property_value(prop, &style.properties, time, comp.fps));
-                                         }
-                                     }
-                                } else {
-                                     if let Some(prop) = entity.properties.get(base_name) {
-                                          current_val_at_t = Some(project_service.evaluate_property_value(prop, &entity.properties, time, comp.fps));
-                                     }
+                                }
+                            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
+                                // Style Property
+                                if let Some(style) = entity.styles.get(style_idx) {
+                                    if let Some(prop) = style.properties.get(&prop_key) {
+                                        current_val_at_t =
+                                            Some(project_service.evaluate_property_value(
+                                                prop,
+                                                &style.properties,
+                                                time,
+                                                comp.fps,
+                                            ));
+                                    }
+                                }
+                            } else {
+                                if let Some(prop) = entity.properties.get(base_name) {
+                                    current_val_at_t =
+                                        Some(project_service.evaluate_property_value(
+                                            prop,
+                                            &entity.properties,
+                                            time,
+                                            comp.fps,
+                                        ));
                                 }
                             }
                         }
-                   }
-             }
+                    }
+                }
+            }
 
-             let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_val_at_t {
-                  match suffix {
-                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+            let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_val_at_t {
+                match suffix {
+                    Some(PropertyComponent::X) => {
+                        PropertyValue::Vec2(library::model::project::property::Vec2 {
                             x: OrderedFloat(val),
                             y: old_vec.y,
-                        }),
-                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                        })
+                    }
+                    Some(PropertyComponent::Y) => {
+                        PropertyValue::Vec2(library::model::project::property::Vec2 {
                             x: old_vec.x,
                             y: OrderedFloat(val),
-                        }),
-                        _ => PropertyValue::Number(OrderedFloat(val)),
+                        })
                     }
-             } else {
-                  PropertyValue::Number(OrderedFloat(val))
-             };
+                    _ => PropertyValue::Number(OrderedFloat(val)),
+                }
+            } else {
+                PropertyValue::Number(OrderedFloat(val))
+            };
 
             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                 let _ = project_service.add_effect_keyframe(
-                    comp_id,
-                    track_id,
-                    entity_id,
-                    eff_idx,
-                    &prop_key,
-                    time,
-                    new_pv,
-                    None,
+                    comp_id, track_id, entity_id, eff_idx, &prop_key, time, new_pv, None,
                 );
             } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                 let _ = project_service.add_style_keyframe(
-                    comp_id,
-                    track_id,
-                    entity_id,
-                    style_idx,
-                    &prop_key,
-                    time,
-                    new_pv,
-                    None,
+                let _ = project_service.add_style_keyframe(
+                    comp_id, track_id, entity_id, style_idx, &prop_key, time, new_pv, None,
                 );
             } else {
-                 let _ = project_service.add_keyframe(
-                    comp_id,
-                    track_id,
-                    entity_id,
-                    base_name,
-                    time,
-                    new_pv,
-                    None,
-                );
+                let _ = project_service
+                    .add_keyframe(comp_id, track_id, entity_id, base_name, time, new_pv, None);
             }
         }
         Action::SetEasing(name, idx, easing) => {
@@ -1257,9 +1269,8 @@ pub fn graph_editor_panel(
                     comp_id, track_id, entity_id, eff_idx, &prop_key, idx,
                 );
             } else if let Some((style_idx, prop_key)) = parse_style_key(&name) {
-                let _ = project_service.remove_style_keyframe(
-                    comp_id, track_id, entity_id, style_idx, &prop_key, idx,
-                );
+                let _ = project_service
+                    .remove_style_keyframe(comp_id, track_id, entity_id, style_idx, &prop_key, idx);
             } else {
                 let _ = project_service.remove_keyframe(comp_id, track_id, entity_id, &name, idx);
             }

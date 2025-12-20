@@ -723,7 +723,7 @@ impl KeyframeHandler {
                     kf.easing = e;
                 }
             } else {
-                 return Err(LibraryError::Project(format!(
+                return Err(LibraryError::Project(format!(
                     "Keyframe index {} out of bounds",
                     keyframe_index
                 )));
@@ -738,4 +738,3 @@ impl KeyframeHandler {
         Ok(())
     }
 }
-

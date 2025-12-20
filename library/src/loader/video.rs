@@ -1,5 +1,6 @@
 use crate::error::LibraryError;
 use crate::loader::image::Image;
+use crate::service::color_space_manager::{ColorSpaceManager, OcioProcessor};
 use ffmpeg_next as ffmpeg;
 
 pub struct VideoReader {
@@ -8,6 +9,8 @@ pub struct VideoReader {
     decoder: ffmpeg::decoder::Video,
     next_frame_number: Option<u64>,
     fps: f64,
+    ocio_processor: Option<OcioProcessor>,
+    current_color_space: Option<(String, String)>,
 }
 
 impl VideoReader {
@@ -44,6 +47,8 @@ impl VideoReader {
             decoder,
             next_frame_number: None,
             fps,
+            ocio_processor: None,
+            current_color_space: None,
         })
     }
 
@@ -62,6 +67,16 @@ impl VideoReader {
 
     pub fn get_dimensions(&self) -> (u32, u32) {
         (self.decoder.width(), self.decoder.height())
+    }
+
+    pub fn set_color_space(&mut self, src: &str, dst: &str) {
+        if let Some((current_src, current_dst)) = &self.current_color_space {
+            if current_src == src && current_dst == dst {
+                return;
+            }
+        }
+        self.ocio_processor = ColorSpaceManager::create_processor(src, dst);
+        self.current_color_space = Some((src.to_string(), dst.to_string()));
     }
 
     pub fn decode_frame(&mut self, frame_number: u64) -> Result<Image, LibraryError> {
@@ -167,6 +182,11 @@ impl VideoReader {
             let start = y * stride;
             let end = start + row_bytes;
             data.extend_from_slice(&plane[start..end]);
+        }
+
+        // Apply OCIO transform if processor is set
+        if let Some(processor) = &self.ocio_processor {
+            data = processor.apply_rgba(&data);
         }
 
         Ok(Image {

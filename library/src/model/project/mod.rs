@@ -1,8 +1,8 @@
 pub mod asset;
+pub mod clip_helpers;
 pub mod project;
 pub mod property;
-pub mod style;
-pub mod clip_helpers; // Added
+pub mod style; // Added
 
 use crate::model::project::property::{PropertyMap, Vec2};
 use crate::model::project::style::StyleInstance;
@@ -135,9 +135,15 @@ impl TrackClip {
     }
 
     // Ported helper constructors from Entity
-    pub fn default_property_definitions(&self, canvas_width: u64, canvas_height: u64, clip_width: u64, clip_height: u64) -> Vec<crate::plugin::PropertyDefinition> {
-        use crate::plugin::{PropertyDefinition, PropertyUiType};
+    pub fn default_property_definitions(
+        &self,
+        canvas_width: u64,
+        canvas_height: u64,
+        clip_width: u64,
+        clip_height: u64,
+    ) -> Vec<crate::plugin::PropertyDefinition> {
         use crate::model::project::property::PropertyValue;
+        use crate::plugin::{PropertyDefinition, PropertyUiType};
         use ordered_float::OrderedFloat;
 
         let mut definitions = Vec::new();
@@ -434,8 +440,8 @@ impl TrackClip {
     }
 
     pub fn create_text(
-        text: &str, 
-        in_frame: u64, 
+        text: &str,
+        in_frame: u64,
         out_frame: u64,
         canvas_width: u32,
         canvas_height: u32,
@@ -466,12 +472,25 @@ impl TrackClip {
         let mut styles = Vec::new();
         // Default Fill
         let mut fill_props = PropertyMap::new();
-        fill_props.set("color".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Color(crate::model::frame::color::Color { r: 255, g: 255, b: 255, a: 255 })
-        ));
-         fill_props.set("offset".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))
-        ));
+        fill_props.set(
+            "color".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Color(
+                    crate::model::frame::color::Color {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                        a: 255,
+                    },
+                ),
+            ),
+        );
+        fill_props.set(
+            "offset".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
 
         styles.push(StyleInstance::new("fill", fill_props));
 
@@ -555,7 +574,7 @@ impl TrackClip {
     }
 
     pub fn create_shape(
-        in_frame: u64, 
+        in_frame: u64,
         out_frame: u64,
         canvas_width: u32,
         canvas_height: u32,
@@ -574,28 +593,57 @@ impl TrackClip {
 
         // Default Styles
         let mut styles = Vec::new();
-        
+
         // Fill Red
         let mut fill_props = PropertyMap::new();
-        fill_props.set("color".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Color(crate::model::frame::color::Color { r: 255, g: 0, b: 0, a: 255 })
-        ));
-        fill_props.set("offset".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))
-        ));
+        fill_props.set(
+            "color".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Color(
+                    crate::model::frame::color::Color {
+                        r: 255,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    },
+                ),
+            ),
+        );
+        fill_props.set(
+            "offset".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
         styles.push(StyleInstance::new("fill", fill_props));
 
         // Stroke White
         let mut stroke_props = PropertyMap::new();
-        stroke_props.set("color".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Color(crate::model::frame::color::Color { r: 255, g: 255, b: 255, a: 255 })
-        ));
-        stroke_props.set("width".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Number(OrderedFloat(5.0))
-        ));
-         stroke_props.set("offset".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))
-        ));
+        stroke_props.set(
+            "color".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Color(
+                    crate::model::frame::color::Color {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                        a: 255,
+                    },
+                ),
+            ),
+        );
+        stroke_props.set(
+            "width".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(5.0)),
+            ),
+        );
+        stroke_props.set(
+            "offset".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
         styles.push(StyleInstance::new("stroke", stroke_props));
 
         props.set(
@@ -668,7 +716,7 @@ impl TrackClip {
     }
 
     pub fn create_sksl(
-        in_frame: u64, 
+        in_frame: u64,
         out_frame: u64,
         canvas_width: u32,
         canvas_height: u32,

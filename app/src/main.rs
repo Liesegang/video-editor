@@ -17,8 +17,11 @@ fn main() -> eframe::Result<()> {
     // Set Python Environment Variables for PyO3
     // This is a temporary fix for local development to ensure the embedded Python finds its standard library.
     std::env::set_var("PYTHONHOME", r"C:\Users\y-yam\miniconda3");
-    std::env::set_var("PYTHONPATH", r"C:\Users\y-yam\miniconda3\Lib;C:\Users\y-yam\miniconda3\DLLs");
-    
+    std::env::set_var(
+        "PYTHONPATH",
+        r"C:\Users\y-yam\miniconda3\Lib;C:\Users\y-yam\miniconda3\DLLs",
+    );
+
     eframe::run_native(
         "Video Editor with Canvas",
         eframe::NativeOptions {

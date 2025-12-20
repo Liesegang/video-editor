@@ -1,0 +1,1099 @@
+Expression:
+  category: Scripting
+  type: python
+  description: Execute custom Python scripts
+  inputs:
+    - name: code
+      type: String
+      multiline: true
+    - name: inputs
+      type: List<Any>
+  outputs:
+    - name: result
+      type: Any
+
+# --- Data Types ---
+Scalar:
+  category: Data
+  description: Single numeric value
+  outputs:
+    - name: value
+      type: Scalar
+Vector:
+  category: Data
+  description: Generic Vector
+  outputs:
+    - name: value
+      type: Vector
+Blank:
+  category: Data
+  description: Empty generic data/image
+  outputs:
+    - name: value
+      type: Any
+Vector2:
+  category: Data
+  description: 2D Vector
+  outputs:
+    - name: value
+      type: Vector2
+Vector3:
+  category: Data
+  description: 3D Vector
+  outputs:
+    - name: value
+      type: Vector3
+Color:
+  category: Data
+  description: RGBA Color
+  outputs:
+    - name: value
+      type: Color
+String:
+  category: Data
+  description: Text string
+  outputs:
+    - name: value
+      type: String
+Image:
+  category: Data
+  description: Generic Image buffer
+  outputs:
+    - name: value
+      type: Image
+Video:
+  category: Data
+  description: Video resource
+  inputs:
+    - name: path
+      type: String
+  outputs:
+    - name: output
+      type: Video
+RGB Image:
+  category: Data
+  description: Image in RGB color space
+  outputs:
+     - name: output
+       type: RGB Image
+YUV Image:
+  category: Data
+  description: Image in YUV color space
+  outputs:
+     - name: output
+       type: YUV Image
+Gradient:
+  category: Data
+  description: Color gradient (Color Ramp)
+  outputs:
+     - name: output
+       type: Gradient
+Curve:
+  category: Data
+  description: 1D Value Curve (Profile/Timeline)
+  outputs:
+     - name: output
+       type: Curve
+Asset:
+  category: Data
+  inputs:
+    - name: asset_id
+      type: String
+  outputs:
+    - name: output
+      type: Any
+
+# --- Text ---
+Text:
+  category: Text
+  inputs:
+    - name: string
+      type: String
+    - name: font
+      type: Font
+    - name: size
+      type: Scalar
+    - name: italic
+      type: Boolean
+    - name: bold
+      type: Scalar
+    - name: split_mode
+      type: Enum
+      options: [None, Line, Character, Stroke]
+    - name: sort_order
+      type: Enum
+      options: [Natural, Random, Reverse, TopLeft, BottomLeft, TopRight, BottomRight, WritingOrder]
+  outputs:
+    - name: path
+      type: Path
+    - name: line_index
+      type: List<Integer>
+    - name: char_index
+      type: List<Integer>
+    - name: stroke_index
+      type: List<Integer>
+Join Strings:
+  category: Text
+  inputs:
+    - name: strings
+      type: List<String>
+    - name: separator
+      type: String
+  outputs:
+    - name: result
+      type: String
+Replace String:
+  category: Text
+  inputs:
+    - name: source
+      type: String
+    - name: from
+      type: String
+    - name: to
+      type: String
+  outputs:
+    - name: result
+      type: String
+
+# --- Math ---
+Add:
+  parent: Math
+  category: Math
+  inputs:
+    - name: a
+      type: Scalar/Vector
+    - name: b
+      type: Scalar/Vector
+  outputs:
+    - name: result
+      type: Scalar/Vector
+Subtract:
+  parent: Math
+  category: Math
+  inputs:
+    - name: a
+      type: Scalar/Vector
+    - name: b
+      type: Scalar/Vector
+  outputs:
+    - name: result
+      type: Scalar/Vector
+Multiply:
+  parent: Math
+  category: Math
+  inputs:
+    - name: a
+      type: Scalar/Vector
+    - name: b
+      type: Scalar/Vector
+  outputs:
+    - name: result
+      type: Scalar/Vector
+Divide:
+  parent: Math
+  category: Math
+  inputs:
+    - name: a
+      type: Scalar/Vector
+    - name: b
+      type: Scalar/Vector
+  outputs:
+    - name: result
+      type: Scalar/Vector
+Power:
+  parent: Math
+  category: Math
+  inputs:
+    - name: base
+      type: Scalar/Vector
+    - name: exponent
+      type: Scalar/Vector
+  outputs:
+    - name: result
+      type: Scalar/Vector
+Clamp:
+  category: Math
+  inputs:
+    - name: value
+      type: Scalar/Vector
+    - name: min
+      type: Scalar/Vector
+    - name: max
+      type: Scalar/Vector
+  outputs:
+    - name: result
+      type: Scalar/Vector
+Remap:
+  category: Math
+  description: Remap value from input range to output range
+  inputs:
+    - name: value
+      type: Scalar/Vector
+    - name: in_min
+      type: Scalar/Vector
+    - name: in_max
+      type: Scalar/Vector
+    - name: out_min
+      type: Scalar/Vector
+    - name: out_max
+      type: Scalar/Vector
+  outputs:
+    - name: result
+      type: Scalar/Vector
+
+# --- Vector Math ---
+Dot Product:
+  parent: Vector Math
+  category: Math
+  inputs:
+    - name: a
+      type: Vector
+    - name: b
+      type: Vector
+  outputs:
+    - name: result
+      type: Scalar
+Cross Product:
+  parent: Vector Math
+  category: Math
+  inputs:
+    - name: a
+      type: Vector
+    - name: b
+      type: Vector
+  outputs:
+    - name: result
+      type: Vector
+Normalize:
+  parent: Vector Math
+  category: Math
+  inputs:
+    - name: vector
+      type: Vector
+  outputs:
+    - name: result
+      type: Vector
+
+# --- Logic ---
+Switch:
+  category: Logic
+  inputs:
+    - name: condition
+      type: Boolean
+    - name: true_val
+      type: Any
+    - name: false_val
+      type: Any
+  outputs:
+    - name: output
+      type: Any
+Make List:
+  category: Logic
+  description: Create a list from inputs
+  inputs:
+    - name: item
+      type: Any
+      allow_multiple: true
+  outputs:
+    - name: list
+      type: List<Any>
+Get List Item:
+  category: Logic
+  inputs:
+    - name: list
+      type: List<Any>
+    - name: index
+      type: Integer
+  outputs:
+    - name: item
+      type: Any
+List Length:
+  category: Logic
+  inputs:
+    - name: list
+      type: List<Any>
+  outputs:
+    - name: length
+      type: Integer
+
+# --- Compositing ---
+Transform:
+  category: Compositing
+  inputs:
+    - name: image
+      type: Image
+    - name: position
+      type: Vector2
+    - name: rotation
+      type: Scalar
+    - name: scale
+      type: Vector2
+    - name: anchor
+      type: Vector2
+  outputs:
+    - name: image
+      type: Image
+Composite:
+  category: Compositing
+  description: Blend N images with individual blend modes
+  inputs:
+    - name: layers
+      type: List<Image>
+    - name: blend_modes
+      type: List<BlendMode>
+  outputs:
+    - name: image
+      type: Image
+Normal Blend:
+  parent: Blend
+  category: Compositing
+  inputs:
+    - name: foreground
+      type: Image
+    - name: background
+      type: Image
+    - name: opacity
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+Multiply Blend:
+  parent: Blend
+  category: Compositing
+  inputs:
+    - name: foreground
+      type: Image
+    - name: background
+      type: Image
+    - name: opacity
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+Screen Blend:
+  parent: Blend
+  category: Compositing
+  inputs:
+    - name: foreground
+      type: Image
+    - name: background
+      type: Image
+    - name: opacity
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+Overlay Blend:
+  parent: Blend
+  category: Compositing
+  inputs:
+    - name: foreground
+      type: Image
+    - name: background
+      type: Image
+    - name: opacity
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+Mask:
+  category: Compositing
+  inputs:
+    - name: source
+      type: Image
+    - name: mask
+      type: Image
+    - name: mode
+      type: Enum
+      options: [Alpha, Luma, Red, Green, Blue]
+  outputs:
+    - name: image
+      type: Image
+
+# --- Color ---
+Color Correction:
+  category: Color
+  description: Lift, Gamma, Gain 3-way color correction
+  inputs:
+    - name: image
+      type: Image
+    - name: lift
+      type: Color
+    - name: gamma
+      type: Color
+    - name: gain
+      type: Color
+    - name: offset
+      type: Color
+  outputs:
+    - name: image
+      type: Image
+Brightness Contrast:
+  category: Color
+  inputs:
+    - name: image
+      type: Image
+    - name: brightness
+      type: Scalar
+    - name: contrast
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+Hue Saturation:
+  category: Color
+  inputs:
+    - name: image
+      type: Image
+    - name: hue
+      type: Scalar
+    - name: saturation
+      type: Scalar
+    - name: lightness
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+Levels:
+  category: Color
+  inputs:
+    - name: image
+      type: Image
+    - name: black_in
+      type: Scalar
+    - name: white_in
+      type: Scalar
+    - name: gamma
+      type: Scalar
+    - name: black_out
+      type: Scalar
+    - name: white_out
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+Invert:
+  category: Color
+  inputs:
+    - name: image
+      type: Image
+  outputs:
+    - name: image
+      type: Image
+Hue Shift:
+  category: Color
+  inputs:
+    - name: image
+      type: Image
+    - name: shift_degrees
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+Color Map:
+  category: Color
+  description: Map luminance to a color gradient
+  inputs:
+    - name: image
+      type: Image
+    - name: gradient
+      type: Gradient
+    - name: gradient_map
+      type: Image
+  outputs:
+    - name: image
+      type: Image
+
+# --- Generators ---
+Solid Color:
+  category: Generators
+  inputs:
+    - name: color
+      type: Color
+  outputs:
+    - name: image
+      type: Image
+Linear Gradient:
+  parent: Gradient
+  category: Generators
+  inputs:
+    - name: start_point
+      type: Vector2
+    - name: end_point
+      type: Vector2
+    - name: gradient
+      type: Gradient
+  outputs:
+    - name: image
+      type: Image
+Radial Gradient:
+  parent: Gradient
+  category: Generators
+  inputs:
+    - name: center
+      type: Vector2
+    - name: radius
+      type: Scalar
+    - name: gradient
+      type: Gradient
+  outputs:
+    - name: image
+      type: Image
+Construct Gradient:
+  category: Generators
+  description: Create a gradient from color stops
+  inputs:
+    - name: colors
+      type: List<Color>
+    - name: positions
+      type: List<Scalar>
+  outputs:
+    - name: gradient
+      type: Gradient
+Sample Gradient:
+  category: Generators
+  inputs:
+    - name: gradient
+      type: Gradient
+    - name: time
+      type: Scalar
+  outputs:
+    - name: color
+      type: Color
+Evaluate Curve:
+  category: Generators
+  inputs:
+    - name: curve
+      type: Curve
+    - name: time
+      type: Scalar
+  outputs:
+    - name: value
+      type: Scalar
+Noise:
+  category: Generators
+  inputs:
+    - name: scale
+      type: Scalar
+    - name: seed
+      type: Integer
+    - name: evolution
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+
+# --- Filters ---
+Blur:
+  category: Filters
+  description: Gaussian blur
+  inputs:
+    - name: image
+      type: Image
+    - name: radius_x
+      type: Scalar
+    - name: radius_y
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+Glow:
+  category: Filters
+  inputs:
+    - name: image
+      type: Image
+    - name: threshold
+      type: Scalar
+    - name: radius
+      type: Scalar
+    - name: intensity
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+Drop Shadow:
+  category: Filters
+  inputs:
+    - name: image
+      type: Image
+    - name: color
+      type: Color
+    - name: distance
+      type: Scalar
+    - name: angle
+      type: Scalar
+    - name: softness
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+
+# --- Distortion ---
+Displacement Map:
+  category: Distortion
+  inputs:
+    - name: image
+      type: Image
+    - name: map
+      type: Image
+    - name: scale_x
+      type: Scalar
+    - name: scale_y
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+
+# --- Path Operations ---
+Offset Path:
+  category: Path
+  inputs:
+    - name: path
+      type: Path
+    - name: offset
+      type: Scalar
+  outputs:
+    - name: path
+      type: Path
+Fill Path:
+  category: Path
+  inputs:
+    - name: path
+      type: Path
+    - name: color
+      type: Color
+  outputs:
+    - name: image
+      type: Image
+Stroke Path:
+  category: Path
+  inputs:
+    - name: path
+      type: Path
+    - name: color
+      type: Color
+    - name: width
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+Union Path:
+  category: Path
+  inputs:
+    - name: paths
+      type: List<Path>
+  outputs:
+    - name: path
+      type: Path
+Trim Path:
+  category: Path
+  inputs:
+    - name: path
+      type: Path
+    - name: start
+      type: Scalar
+    - name: end
+      type: Scalar
+  outputs:
+    - name: path
+      type: Path
+Corner Path:
+  category: Path
+  inputs:
+    - name: path
+      type: Path
+    - name: radius
+      type: Scalar
+  outputs:
+    - name: path
+      type: Path
+Discrete Path:
+  category: Path
+  description: Jitter the path (DiscretePathEffect)
+  inputs:
+    - name: path
+      type: Path
+    - name: segment_length
+      type: Scalar
+    - name: deviation
+      type: Scalar
+  outputs:
+    - name: path
+      type: Path
+Simplify Path:
+  category: Path
+  description: Reduce points in path
+  inputs:
+    - name: path
+      type: Path
+    - name: tolerance
+      type: Scalar
+  outputs:
+    - name: path
+      type: Path
+
+# --- Time ---
+Time Shift:
+  category: Time
+  inputs:
+    - name: image
+      type: Image
+    - name: time_offset
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+
+# --- Advanced Image Effects ---
+Channel Split:
+  category: Image
+  inputs:
+    - name: image
+      type: Image
+  outputs:
+    - name: r
+      type: Image
+    - name: g
+      type: Image
+    - name: b
+      type: Image
+    - name: a
+      type: Image
+Channel Combine:
+  category: Image
+  inputs:
+    - name: r
+      type: Image
+    - name: g
+      type: Image
+    - name: b
+      type: Image
+    - name: a
+      type: Image
+  outputs:
+    - name: image
+      type: Image
+RGB to YUV:
+  category: Image
+  inputs:
+    - name: rgb_image
+      type: RGB Image
+  outputs:
+    - name: yuv_image
+      type: YUV Image
+YUV to RGB:
+  category: Image
+  inputs:
+    - name: yuv_image
+      type: YUV Image
+  outputs:
+    - name: rgb_image
+      type: RGB Image
+
+# --- Particles ---
+Particle Emitter:
+  category: Particles
+  description: Base emitter context (GPU Compute)
+  inputs:
+    - name: capacity
+      type: Integer
+      description: Max particle count (Buffer Size)
+    - name: simulation_space
+      type: Enum
+      options: [Local, World]
+    - name: rate
+      type: Scalar
+    - name: lifetime
+      type: Scalar
+    - name: loop
+      type: Boolean
+    - name: duration
+      type: Scalar
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Spawn Burst:
+  category: Particles
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: count
+      type: Integer
+    - name: time
+      type: Scalar
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Shape Location:
+  category: Particles
+  description: Initialize particle positions on a shape
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: shape
+      type: Enum
+      options: [Sphere, Box, Cone, Torus]
+    - name: radius
+      type: Scalar
+    - name: size
+      type: Vector3
+    - name: surface_only
+      type: Boolean
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Initialize Particle:
+  category: Particles
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: velocity_min
+      type: Vector3
+    - name: velocity_max
+      type: Vector3
+    - name: color_min
+      type: Color
+    - name: color_max
+      type: Color
+    - name: size_min
+      type: Scalar
+    - name: size_max
+      type: Scalar
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Set Attribute:
+  category: Particles
+  description: Set custom particle attribute (GPU Buffer Write)
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: attribute_name
+      type: String
+    - name: value
+      type: Any
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Gravity Force:
+  category: Particles
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: force
+      type: Vector3
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Drag Force:
+  category: Particles
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: coefficient
+      type: Scalar
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Point Force:
+  category: Particles
+  description: Attract or repel particles
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: target
+      type: Vector3
+    - name: strength
+      type: Scalar
+    - name: radius
+      type: Scalar
+    - name: falloff
+      type: Scalar
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Vortex Force:
+  category: Particles
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: axis
+      type: Vector3
+    - name: strength
+      type: Scalar
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Vector Field Force:
+  category: Particles
+  description: 3D Vector Field interaction (GPU Texture 3D)
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: vector_field
+      type: Asset
+    - name: intensity
+      type: Scalar
+    - name: tiling
+      type: Vector3
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Turbulence:
+  category: Particles
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: frequency
+      type: Scalar
+    - name: strength
+      type: Scalar
+    - name: octave
+      type: Integer
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Color Over Life:
+  category: Particles
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: gradient
+      type: Gradient
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Size Over Life:
+  category: Particles
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: curve
+      type: Curve
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Collision Plane:
+  category: Particles
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: plane_point
+      type: Vector3
+    - name: plane_normal
+      type: Vector3
+    - name: bounce
+      type: Scalar
+    - name: friction
+      type: Scalar
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Collision Depth:
+  category: Particles
+  description: Screen-space depth collision (GPU)
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: depth_buffer
+      type: Image
+    - name: thickness
+      type: Scalar
+  outputs:
+    - name: particles
+      type: ParticleSystem
+Sprite Renderer:
+  category: Particles
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: texture
+      type: Image
+    - name: color
+      type: Color
+    - name: blend_mode
+      type: Enum
+      options: [Alpha, Additive, Multiply]
+    - name: alignment
+      type: Enum
+      options: [View, Velocity, World]
+  outputs:
+    - name: image
+      type: Image
+Mesh Renderer:
+  category: Particles
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: mesh
+      type: Asset
+    - name: material
+      type: Material
+  outputs:
+    - name: image
+      type: Image
+Ribbon Renderer:
+  category: Particles
+  description: Connect particles with a trail
+  inputs:
+    - name: particles
+      type: ParticleSystem
+    - name: texture
+      type: Image
+    - name: width
+      type: Scalar
+    - name: max_trail_length
+      type: Scalar
+  outputs:
+    - name: image
+      type: Image
+
+# --- 3D ---
+Camera 3D:
+  category: 3D
+  inputs:
+    - name: position
+      type: Vector3
+    - name: target
+      type: Vector3
+    - name: up
+      type: Vector3
+    - name: fov
+      type: Scalar
+  outputs:
+    - name: camera
+      type: Camera3D
+Transform 3D:
+  category: 3D
+  inputs:
+    - name: object
+      type: Object3D
+    - name: translation
+      type: Vector3
+    - name: rotation
+      type: Vector3
+    - name: scale
+      type: Vector3
+  outputs:
+    - name: object
+      type: Object3D
+Mesh Instance:
+  category: 3D
+  inputs:
+    - name: mesh_asset
+      type: Asset
+    - name: material
+      type: Material
+  outputs:
+    - name: object
+      type: Object3D
+Render 3D:
+  category: 3D
+  inputs:
+    - name: scene
+      type: List<Object3D>
+    - name: camera
+      type: Camera3D
+  outputs:
+    - name: image
+      type: Image

@@ -83,15 +83,10 @@ impl<'a> PreviewInteractions<'a> {
                     // Check if it is a shape and get path
                     // use gui_clips to get track_id
                     if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == *id) {
-                        if matches!(gc.clip.kind, library::model::project::TrackClipKind::Shape)
-                        {
-                            if let Some(path_str) =
-                                gc.clip.properties.get_string("path")
-                            {
+                        if matches!(gc.clip.kind, library::model::project::TrackClipKind::Shape) {
+                            if let Some(path_str) = gc.clip.properties.get_string("path") {
                                 let state = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
-                                self.editor_context
-                                    .interaction
-                                    .vector_editor_state = Some(state);
+                                self.editor_context.interaction.vector_editor_state = Some(state);
                                 ensure_loaded = true;
                             }
                         }
@@ -156,7 +151,7 @@ impl<'a> PreviewInteractions<'a> {
                             {
                                 let new_path = crate::ui::panels::preview::vector_editor::svg_writer::to_svg_path(state);
 
-                                    // Update property
+                                // Update property
                                 if let Some(comp_id) = self.editor_context.selection.composition_id
                                 {
                                     let current_time =
@@ -297,7 +292,10 @@ impl<'a> PreviewInteractions<'a> {
 
         let sx = gc.transform.scale.x as f32 / 100.0;
         let sy = gc.transform.scale.y as f32 / 100.0;
-        let center = egui::pos2(gc.transform.position.x as f32, gc.transform.position.y as f32);
+        let center = egui::pos2(
+            gc.transform.position.x as f32,
+            gc.transform.position.y as f32,
+        );
         let angle_rad = (gc.transform.rotation as f32).to_radians();
         let cos = angle_rad.cos();
         let sin = angle_rad.sin();
@@ -377,7 +375,13 @@ impl<'a> PreviewInteractions<'a> {
             let mut original_positions = std::collections::HashMap::new();
             for selected_id in &self.editor_context.selection.selected_entities {
                 if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == *selected_id) {
-                    original_positions.insert(*selected_id, [gc.transform.position.x as f32, gc.transform.position.y as f32]);
+                    original_positions.insert(
+                        *selected_id,
+                        [
+                            gc.transform.position.x as f32,
+                            gc.transform.position.y as f32,
+                        ],
+                    );
                 }
             }
             self.editor_context.interaction.body_drag_state =
@@ -392,14 +396,15 @@ impl<'a> PreviewInteractions<'a> {
         if self.editor_context.view.active_tool == crate::state::context_types::PreviewTool::Text {
             if let Some(id) = hovered_id {
                 let is_text = self.gui_clips.iter().any(|c| {
-                    c.id() == id && matches!(c.clip.kind, library::model::project::TrackClipKind::Text)
+                    c.id() == id
+                        && matches!(c.clip.kind, library::model::project::TrackClipKind::Text)
                 });
                 if is_text {
                     self.editor_context.interaction.editing_text_entity_id = Some(id);
                     if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == id) {
-                         if let Some(text) = gc.clip.properties.get_string("text") {
+                        if let Some(text) = gc.clip.properties.get_string("text") {
                             self.editor_context.interaction.text_edit_buffer = text;
-                         }
+                        }
                     }
                 } else {
                     self.editor_context.interaction.editing_text_entity_id = None;
@@ -468,10 +473,12 @@ impl<'a> PreviewInteractions<'a> {
                                 entity_id: *entity_id,
                                 prop_name: "position".to_string(),
                                 time: current_time,
-                                value: PropertyValue::Vec2(library::model::project::property::Vec2 {
-                                    x: ordered_float::OrderedFloat(new_x),
-                                    y: ordered_float::OrderedFloat(new_y),
-                                }),
+                                value: PropertyValue::Vec2(
+                                    library::model::project::property::Vec2 {
+                                        x: ordered_float::OrderedFloat(new_x),
+                                        y: ordered_float::OrderedFloat(new_y),
+                                    },
+                                ),
                             });
                         }
                     }

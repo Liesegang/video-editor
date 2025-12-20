@@ -14,6 +14,7 @@ serde_json = "1.0"
 ffmpeg-next = "8.0.0"
 image = "0.25.9"
 skia-safe = { version = "0.91.0", features = ["gpu", "gl", "textlayout"] }
+
 log = "0.4.26"
 env_logger = "0.11.8"
 lru = "0.16.2"
@@ -36,9 +37,10 @@ rayon = "1.9.0"
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 bincode = "2.0.1"
 #opencv = "0.94.2"
-pyo3 = { version = "0.27.2", features = ["auto-initialize"] }
+
 shaderc = "0.10.1"
 toml = "0.9.8"
+pyo3 = { version = "0.27.2", features = ["auto-initialize"] }
 cpal = "0.15"
 symphonia = { version = "0.5", features = ["all"] }
 rubato = "0.16.1"

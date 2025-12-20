@@ -1,7 +1,7 @@
 use crate::model::vector::VectorEditorState;
-use library::model::vector::{PointType, HandleType};
 use egui::{Pos2, Response, Ui};
 use library::model::frame::transform::Transform;
+use library::model::vector::{HandleType, PointType};
 
 pub struct VectorEditorInteraction<'a> {
     pub state: &'a mut VectorEditorState,

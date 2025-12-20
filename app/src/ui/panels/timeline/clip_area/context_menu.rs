@@ -37,12 +37,12 @@ pub fn handle_context_menu(
         let mut comp_width = 1920;
         let mut comp_height = 1080;
         if let Some(comp_id) = editor_context.selection.composition_id {
-             if let Ok(proj_read) = project.read() {
+            if let Ok(proj_read) = project.read() {
                 if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
                     comp_width = comp.width;
                     comp_height = comp.height;
                 }
-             }
+            }
         }
 
         // Try to recover clicked position
@@ -64,8 +64,13 @@ pub fn handle_context_menu(
             let duration_frames = (duration_sec * composition_fps).round() as u64;
             let drop_out_frame = drop_in_frame + duration_frames;
 
-            let text_clip =
-                TrackClip::create_text("this is sample text", drop_in_frame, drop_out_frame, comp_width as u32, comp_height as u32);
+            let text_clip = TrackClip::create_text(
+                "this is sample text",
+                drop_in_frame,
+                drop_out_frame,
+                comp_width as u32,
+                comp_height as u32,
+            );
 
             add_clip_to_best_track(
                 project,
@@ -85,7 +90,12 @@ pub fn handle_context_menu(
             let duration_frames = (duration_sec * composition_fps).round() as u64;
             let drop_out_frame = drop_in_frame + duration_frames;
 
-            let shape_clip = TrackClip::create_shape(drop_in_frame, drop_out_frame, comp_width as u32, comp_height as u32);
+            let shape_clip = TrackClip::create_shape(
+                drop_in_frame,
+                drop_out_frame,
+                comp_width as u32,
+                comp_height as u32,
+            );
 
             add_clip_to_best_track(
                 project,
@@ -105,7 +115,12 @@ pub fn handle_context_menu(
             let duration_frames = (duration_sec * composition_fps).round() as u64;
             let drop_out_frame = drop_in_frame + duration_frames;
 
-            let sksl_clip = TrackClip::create_sksl(drop_in_frame, drop_out_frame, comp_width as u32, comp_height as u32);
+            let sksl_clip = TrackClip::create_sksl(
+                drop_in_frame,
+                drop_out_frame,
+                comp_width as u32,
+                comp_height as u32,
+            );
 
             add_clip_to_best_track(
                 project,

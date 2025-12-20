@@ -521,10 +521,14 @@ impl ClipHandler {
             .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
 
         if let Some(style) = clip.styles.get_mut(style_index) {
-             style.properties.set(property_key.to_string(), Property::constant(value));
-             Ok(())
+            style
+                .properties
+                .set(property_key.to_string(), Property::constant(value));
+            Ok(())
         } else {
-             Err(LibraryError::Project("Style index out of range".to_string()))
+            Err(LibraryError::Project(
+                "Style index out of range".to_string(),
+            ))
         }
     }
     pub fn update_effect_property_or_keyframe(
@@ -555,7 +559,7 @@ impl ClipHandler {
             if let Some(effect) = clip.effects.get_mut(effect_index) {
                 if let Some(prop) = effect.properties.get_mut(property_key) {
                     if prop.evaluator == "keyframe" {
-                         let mut current_keyframes = prop.keyframes();
+                        let mut current_keyframes = prop.keyframes();
                         let mut preserved_easing = crate::animation::EasingFunction::Linear;
                         if let Some(idx) = current_keyframes
                             .iter()
@@ -574,8 +578,8 @@ impl ClipHandler {
                         });
 
                         current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
-                        
-                         // Preserve existing attributes (like interpolation)
+
+                        // Preserve existing attributes (like interpolation)
                         let existing_props = prop.properties.clone();
                         let mut new_prop = Property::keyframe(current_keyframes);
                         for (k, v) in existing_props {
@@ -586,14 +590,20 @@ impl ClipHandler {
                         *prop = new_prop;
                     } else {
                         // Update as Constant
-                        effect.properties.set(property_key.to_string(), Property::constant(value));
+                        effect
+                            .properties
+                            .set(property_key.to_string(), Property::constant(value));
                     }
                 } else {
-                     effect.properties.set(property_key.to_string(), Property::constant(value));
+                    effect
+                        .properties
+                        .set(property_key.to_string(), Property::constant(value));
                 }
                 Ok(())
             } else {
-                 Err(LibraryError::Project("Effect index out of range".to_string()))
+                Err(LibraryError::Project(
+                    "Effect index out of range".to_string(),
+                ))
             }
         } else {
             Err(LibraryError::Project(format!(
@@ -630,7 +640,7 @@ impl ClipHandler {
             if let Some(style) = clip.styles.get_mut(style_index) {
                 if let Some(prop) = style.properties.get_mut(property_key) {
                     if prop.evaluator == "keyframe" {
-                         let mut current_keyframes = prop.keyframes();
+                        let mut current_keyframes = prop.keyframes();
                         let mut preserved_easing = crate::animation::EasingFunction::Linear;
                         if let Some(idx) = current_keyframes
                             .iter()
@@ -649,7 +659,7 @@ impl ClipHandler {
                         });
 
                         current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
-                        
+
                         // Preserve existing attributes (like interpolation)
                         let existing_props = prop.properties.clone();
                         let mut new_prop = Property::keyframe(current_keyframes);
@@ -661,14 +671,20 @@ impl ClipHandler {
                         *prop = new_prop;
                     } else {
                         // Update as Constant
-                        style.properties.set(property_key.to_string(), Property::constant(value));
+                        style
+                            .properties
+                            .set(property_key.to_string(), Property::constant(value));
                     }
                 } else {
-                     style.properties.set(property_key.to_string(), Property::constant(value));
+                    style
+                        .properties
+                        .set(property_key.to_string(), Property::constant(value));
                 }
                 Ok(())
             } else {
-                 Err(LibraryError::Project("Style index out of range".to_string()))
+                Err(LibraryError::Project(
+                    "Style index out of range".to_string(),
+                ))
             }
         } else {
             Err(LibraryError::Project(format!(
@@ -704,13 +720,19 @@ impl ClipHandler {
         if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
             if let Some(style) = clip.styles.get_mut(style_index) {
                 if let Some(prop) = style.properties.get_mut(property_key) {
-                    prop.properties.insert(attribute_key.to_string(), attribute_value);
+                    prop.properties
+                        .insert(attribute_key.to_string(), attribute_value);
                     Ok(())
                 } else {
-                     Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                    Err(LibraryError::Project(format!(
+                        "Property {} not found",
+                        property_key
+                    )))
                 }
             } else {
-                 Err(LibraryError::Project("Style index out of range".to_string()))
+                Err(LibraryError::Project(
+                    "Style index out of range".to_string(),
+                ))
             }
         } else {
             Err(LibraryError::Project(format!(
