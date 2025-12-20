@@ -61,16 +61,25 @@ impl<T: Renderer> RenderService<T> {
                 properties: _properties,
             } = frame_object;
 
-            // helper to scale transform
-            let apply_scale = |t: &Transform, s: f64| -> Transform {
+            let scale = frame_info.render_scale.into_inner();
+
+            // helper to scale transform and apply ROI offset
+            let apply_view_transform = |t: &Transform, s: f64| -> Transform {
                 let mut new_t = t.clone();
-                new_t.position.x *= s;
-                new_t.position.y *= s;
+                let mut pos_x = t.position.x;
+                let mut pos_y = t.position.y;
+
+                if let Some(region) = &frame_info.region {
+                    pos_x -= region.x;
+                    pos_y -= region.y;
+                }
+
+                new_t.position.x = pos_x * s;
+                new_t.position.y = pos_y * s;
                 new_t.scale.x *= s;
                 new_t.scale.y *= s;
                 new_t
             };
-            let scale = frame_info.render_scale.into_inner();
 
             match content {
                 FrameContent::Video {
@@ -99,7 +108,7 @@ impl<T: Renderer> RenderService<T> {
                     )?;
                     measure_debug(format!("Draw video {}", surface.file_path), || {
                         self.renderer
-                            .draw_layer(&final_image, &apply_scale(&surface.transform, scale))
+                            .draw_layer(&final_image, &apply_view_transform(&surface.transform, scale))
                     })?;
                 }
                 FrameContent::Image { surface } => {
@@ -124,7 +133,7 @@ impl<T: Renderer> RenderService<T> {
                     )?;
                     measure_debug(format!("Draw image {}", surface.file_path), || {
                         self.renderer
-                            .draw_layer(&final_image, &apply_scale(&surface.transform, scale))
+                            .draw_layer(&final_image, &apply_view_transform(&surface.transform, scale))
                     })?;
                 }
                 FrameContent::Text {
@@ -135,7 +144,7 @@ impl<T: Renderer> RenderService<T> {
                     effects,
                     transform,
                 } => {
-                    let scaled_transform = apply_scale(transform, scale);
+                    let scaled_transform = apply_view_transform(transform, scale);
                     let text_layer =
                         measure_debug(format!("Rasterize text layer '{}'", text), || {
                             self.renderer.rasterize_text_layer(
@@ -160,7 +169,7 @@ impl<T: Renderer> RenderService<T> {
                     effects,
                     transform,
                 } => {
-                    let scaled_transform = apply_scale(transform, scale);
+                    let scaled_transform = apply_view_transform(transform, scale);
                     let shape_layer =
                         measure_debug(format!("Rasterize shape layer {}", path), || {
                             self.renderer.rasterize_shape_layer(
@@ -183,7 +192,7 @@ impl<T: Renderer> RenderService<T> {
                     effects,
                     transform,
                 } => {
-                    let scaled_transform = apply_scale(transform, scale);
+                    let scaled_transform = apply_view_transform(transform, scale);
                     let sksl_layer = measure_debug(format!("Rasterize SkSL"), || {
                         self.renderer.rasterize_sksl_layer(
                             &shader,
@@ -224,6 +233,7 @@ impl<T: Renderer> RenderService<T> {
             composition_index,
             frame_number, // Pass frame_number (u64)
             1.0,          // Default render_scale to 1.0 for self-managed renders (e.g. export)
+            None,
             &property_evaluators,
             &self.entity_converter_registry,
         )

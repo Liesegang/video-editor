@@ -15,8 +15,11 @@ use library::model::project::property::Vec2;
 mod gizmo;
 mod grid;
 mod interaction;
+mod action;
 pub mod vector_editor;
 pub mod clip;
+
+use action::PreviewAction;
 
 struct PreviewViewportState<'a> {
     pan: &'a mut egui::Vec2,
@@ -193,6 +196,7 @@ pub fn preview_panel(
     );
 
     // Lock project once for reading state
+    let mut pending_actions = Vec::new();
     if let Ok(proj_read) = project.read() {
         let (comp_width, comp_height) =
             if let Some(comp) = editor_context.get_current_composition(&proj_read) {
@@ -225,16 +229,43 @@ pub fn preview_panel(
                     .max(0.01)
                     .min(1.0);
 
-                let frame_info = library::framing::get_frame_from_project(
-                    &proj_read,
-                    comp_idx,
-                    current_frame,
-                    render_scale,
-                    &property_evaluators,
-                    &entity_converter_registry,
-                );
+                // ROI Calculation
+                let visible_min_world = to_world(rect.min);
+                let visible_max_world = to_world(rect.max);
 
-                render_server.send_request(frame_info);
+                // Intersection with composition bounds
+                let comp_width = comp.width as f32;
+                let comp_height = comp.height as f32;
+
+                let region_x = visible_min_world.x.max(0.0).min(comp_width);
+                let region_y = visible_min_world.y.max(0.0).min(comp_height);
+                let region_right = visible_max_world.x.max(0.0).min(comp_width);
+                let region_bottom = visible_max_world.y.max(0.0).min(comp_height);
+
+                let region = if region_right > region_x && region_bottom > region_y {
+                     Some(library::model::frame::frame::Region {
+                         x: region_x as f64,
+                         y: region_y as f64,
+                         width: (region_right - region_x) as f64,
+                         height: (region_bottom - region_y) as f64,
+                     })
+                } else {
+                     // Nothing visible
+                     None
+                };
+
+                if let Some(valid_region) = region {
+                    let frame_info = library::framing::get_frame_from_project(
+                        &proj_read,
+                        comp_idx,
+                        current_frame,
+                        render_scale,
+                        Some(valid_region),
+                        &property_evaluators,
+                        &entity_converter_registry,
+                    );
+                    render_server.send_request(frame_info);
+                }
             }
         }
 
@@ -245,6 +276,7 @@ pub fn preview_panel(
         }
 
         if let Some(result) = latest_result {
+            editor_context.preview_region = result.frame_info.region;
             match result.output {
                 library::rendering::renderer::RenderOutput::Image(image) => {
                     let size = [image.width as usize, image.height as usize];
@@ -260,28 +292,50 @@ pub fn preview_panel(
                         ));
                     }
                     editor_context.preview_texture_id = None;
+                    editor_context.preview_texture_width = image.width;
+                    editor_context.preview_texture_height = image.height;
                 }
                 library::rendering::renderer::RenderOutput::Texture(info) => {
                     editor_context.preview_texture_id = Some(info.texture_id);
                     editor_context.preview_texture = None; // Invalidate CPU texture
+                    editor_context.preview_texture_width = info.width;
+                    editor_context.preview_texture_height = info.height;
                 }
             }
         }
 
         // 3. Draw Texture
         if let Some(texture) = &editor_context.preview_texture {
+            // Draw CPU Texture
+            let mut draw_rect = egui::Rect::from_min_max(screen_frame_min, screen_frame_max);
+
+            if let Some(region) = &editor_context.preview_region {
+                let p_min = to_screen(egui::pos2(region.x as f32, region.y as f32));
+                let p_max = to_screen(egui::pos2((region.x + region.width) as f32, (region.y + region.height) as f32));
+                draw_rect = egui::Rect::from_min_max(p_min, p_max);
+            }
+
             painter.image(
                 texture.id(),
-                egui::Rect::from_min_max(screen_frame_min, screen_frame_max),
+                draw_rect,
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 egui::Color32::WHITE,
             );
         } else if let Some(texture_id) = editor_context.preview_texture_id {
-            // Zero-copy path
-            let rect = egui::Rect::from_min_max(screen_frame_min, screen_frame_max);
+            // Zero-copy path (GPU)
+            let mut draw_rect = egui::Rect::from_min_max(screen_frame_min, screen_frame_max);
+
+            if let Some(region) = &editor_context.preview_region {
+                let p_min = to_screen(egui::pos2(region.x as f32, region.y as f32));
+                let p_max = to_screen(egui::pos2((region.x + region.width) as f32, (region.y + region.height) as f32));
+                draw_rect = egui::Rect::from_min_max(p_min, p_max);
+            }
+
+            let width = editor_context.preview_texture_width;
+            let height = editor_context.preview_texture_height;
 
             let callback = egui::PaintCallback {
-                rect,
+                rect: draw_rect,
                 callback: std::sync::Arc::new(eframe::egui_glow::CallbackFn::new(
                     move |_info, painter| {
                         use eframe::glow::HasContext;
@@ -293,7 +347,7 @@ pub fn preview_panel(
                             {
                                 let backend_texture = unsafe {
                                     skia_safe::gpu::backend_textures::make_gl(
-                                        (comp_width as i32, comp_height as i32),
+                                        (width as i32, height as i32),
                                         skia_safe::gpu::Mipmapped::No,
                                         skia_safe::gpu::gl::TextureInfo {
                                             target: eframe::glow::TEXTURE_2D,
@@ -311,7 +365,7 @@ pub fn preview_panel(
 
                                 let backend_render_target =
                                     skia_safe::gpu::backend_render_targets::make_gl(
-                                        (comp_width as i32, comp_height as i32),
+                                        (width as i32, height as i32),
                                         0, // sample count
                                         0, // stencil bits
                                         skia_safe::gpu::gl::FramebufferInfo {
@@ -521,14 +575,13 @@ pub fn preview_panel(
                 ui,
                 editor_context,
                 &project,
-                project_service,
                 history_manager,
                 &gui_clips,
                 to_screen,
                 to_world,
             );
-            interactions.handle(&response, rect);
-            interactions.draw_text_overlay();
+            interactions.handle(&response, rect, &mut pending_actions);
+            interactions.draw_text_overlay(&mut pending_actions);
         }
 
         // Draw Gizmo
@@ -549,6 +602,30 @@ pub fn preview_panel(
             }
         }
     } // End of project.read() scope
+
+    // Execute pending actions
+    for action in pending_actions {
+        match action {
+            PreviewAction::UpdateProperty {
+                comp_id,
+                track_id,
+                entity_id,
+                prop_name,
+                time,
+                value,
+            } => {
+                crate::utils::property::update_property(
+                    project_service,
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    &prop_name,
+                    time,
+                    value,
+                );
+            }
+        }
+    }
 
     // Info text
     let info_text = format!(

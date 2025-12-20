@@ -1,8 +1,9 @@
+use crate::model::ui_types::GizmoHandle;
 use crate::state::context::EditorContext;
-use crate::ui::panels::preview::{gizmo, clip::PreviewClip};
+use crate::ui::panels::preview::{action::PreviewAction, clip::PreviewClip, gizmo};
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
 use library::model::project::project::Project;
-use library::EditorService as ProjectService;
+use library::model::project::property::PropertyValue;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -10,7 +11,6 @@ pub struct PreviewInteractions<'a> {
     pub ui: &'a mut Ui,
     pub editor_context: &'a mut EditorContext,
     pub project: &'a Arc<RwLock<Project>>,
-    pub project_service: &'a ProjectService,
     pub history_manager: &'a mut crate::action::HistoryManager,
     pub gui_clips: &'a [PreviewClip<'a>],
     pub to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>, // Closure wrapper
@@ -22,7 +22,6 @@ impl<'a> PreviewInteractions<'a> {
         ui: &'a mut Ui,
         editor_context: &'a mut EditorContext,
         project: &'a Arc<RwLock<Project>>,
-        project_service: &'a ProjectService,
         history_manager: &'a mut crate::action::HistoryManager,
         gui_clips: &'a [PreviewClip<'a>],
         to_screen: impl Fn(Pos2) -> Pos2 + 'a,
@@ -32,7 +31,6 @@ impl<'a> PreviewInteractions<'a> {
             ui,
             editor_context,
             project,
-            project_service,
             history_manager,
             gui_clips,
             to_screen: Box::new(to_screen),
@@ -40,7 +38,12 @@ impl<'a> PreviewInteractions<'a> {
         }
     }
 
-    pub fn handle(&mut self, response: &Response, content_rect: Rect) {
+    pub fn handle(
+        &mut self,
+        response: &Response,
+        content_rect: Rect,
+        pending_actions: &mut Vec<PreviewAction>,
+    ) {
         let pointer_pos = self.ui.input(|i| i.pointer.hover_pos());
         let active_tool = self.editor_context.view.active_tool.clone();
 
@@ -56,10 +59,10 @@ impl<'a> PreviewInteractions<'a> {
                 self.ui,
                 self.editor_context,
                 self.project,
-                self.project_service,
                 self.history_manager,
                 pointer_pos,
                 &*self.to_world,
+                pending_actions,
             );
         } else if active_tool == crate::state::context_types::PreviewTool::Shape {
             // 1. Ensure State is Loaded
@@ -153,20 +156,19 @@ impl<'a> PreviewInteractions<'a> {
                             {
                                 let new_path = crate::ui::panels::preview::vector_editor::svg_writer::to_svg_path(state);
 
-                                // Update property
+                                    // Update property
                                 if let Some(comp_id) = self.editor_context.selection.composition_id
                                 {
                                     let current_time =
                                         self.editor_context.timeline.current_time as f64;
-                                    crate::utils::property::update_string_property(
-                                        self.project_service,
+                                    pending_actions.push(PreviewAction::UpdateProperty {
                                         comp_id,
-                                        gc.track_id,
-                                        *id,
-                                        "path",
-                                        current_time,
-                                        new_path,
-                                    );
+                                        track_id: gc.track_id,
+                                        entity_id: *id,
+                                        prop_name: "path".to_string(),
+                                        time: current_time,
+                                        value: PropertyValue::String(new_path),
+                                    });
                                 }
                             }
                         }
@@ -247,7 +249,7 @@ impl<'a> PreviewInteractions<'a> {
             if response.dragged_by(PointerButton::Primary)
                 && self.editor_context.interaction.is_moving_selected_entity
             {
-                self.handle_drag_move(pointer_pos);
+                self.handle_drag_move(pointer_pos, pending_actions);
             }
 
             // Click Selection (Mouse Released without Drag)
@@ -441,7 +443,11 @@ impl<'a> PreviewInteractions<'a> {
         }
     }
 
-    fn handle_drag_move(&self, pointer_pos: Option<Pos2>) {
+    fn handle_drag_move(
+        &self,
+        pointer_pos: Option<Pos2>,
+        pending_actions: &mut Vec<PreviewAction>,
+    ) {
         let current_zoom = self.editor_context.view.zoom;
         if let Some(comp_id) = self.editor_context.selection.composition_id {
             if let Some(drag_state) = &self.editor_context.interaction.body_drag_state {
@@ -456,18 +462,17 @@ impl<'a> PreviewInteractions<'a> {
                         let new_y = orig_pos[1] as f64 + world_delta.y as f64;
 
                         if let Some(tid) = self.get_track_id(*entity_id) {
-                            crate::utils::property::update_property(
-                                self.project_service,
+                            pending_actions.push(PreviewAction::UpdateProperty {
                                 comp_id,
-                                tid,
-                                *entity_id,
-                                "position",
-                                current_time,
-                                library::model::project::property::PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                track_id: tid,
+                                entity_id: *entity_id,
+                                prop_name: "position".to_string(),
+                                time: current_time,
+                                value: PropertyValue::Vec2(library::model::project::property::Vec2 {
                                     x: ordered_float::OrderedFloat(new_x),
                                     y: ordered_float::OrderedFloat(new_y),
                                 }),
-                            );
+                            });
                         }
                     }
                 }
@@ -603,7 +608,7 @@ impl<'a> PreviewInteractions<'a> {
             .find(|gc| gc.id() == entity_id)
             .map(|gc| gc.track_id)
     }
-    pub fn draw_text_overlay(&mut self) {
+    pub fn draw_text_overlay(&mut self, pending_actions: &mut Vec<PreviewAction>) {
         if let Some(id) = self.editor_context.interaction.editing_text_entity_id {
             if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == id) {
                 let corners = self.get_clip_screen_corners(gc);
@@ -650,15 +655,14 @@ impl<'a> PreviewInteractions<'a> {
                     self.editor_context.interaction.text_edit_buffer = text.clone();
 
                     if let Some(comp_id) = self.editor_context.selection.composition_id {
-                        crate::utils::property::update_string_property(
-                            self.project_service,
+                        pending_actions.push(PreviewAction::UpdateProperty {
                             comp_id,
-                            gc.track_id,
-                            id,
-                            "text",
-                            self.editor_context.timeline.current_time as f64,
-                            text,
-                        );
+                            track_id: gc.track_id,
+                            entity_id: id,
+                            prop_name: "text".to_string(),
+                            time: self.editor_context.timeline.current_time as f64,
+                            value: PropertyValue::String(text),
+                        });
                     }
                 }
             }
