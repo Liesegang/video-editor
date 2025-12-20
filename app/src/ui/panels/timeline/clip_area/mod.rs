@@ -14,6 +14,8 @@ pub mod context_menu;
 pub mod drag_and_drop;
 pub mod interactions;
 
+use super::utils::flatten::flatten_tracks;
+
 struct TimelineViewportState<'a> {
     scroll_offset: &'a mut egui::Vec2,
     h_zoom: &'a mut f32,
@@ -52,7 +54,8 @@ pub fn show_clip_area(
     project_service: &mut ProjectService,
     project: &Arc<RwLock<Project>>,
     pixels_per_unit: f32,
-    num_tracks: usize,
+    // num_tracks removed, calculated locally
+    _num_tracks_ignored: usize,
     row_height: f32,
     track_spacing: f32,
     composition_fps: f64,
@@ -74,6 +77,11 @@ pub fn show_clip_area(
             }
         }
     }
+
+    // Flatten tracks to get correct visible count
+    let display_tracks = flatten_tracks(&current_tracks, &editor_context.timeline.expanded_tracks);
+    let num_visible_tracks = display_tracks.len();
+
     // --- End Data collection for entities ---
 
     // --- Drawing of track backgrounds ---
@@ -92,7 +100,7 @@ pub fn show_clip_area(
     background::draw_track_backgrounds(
         &painter,
         content_rect_for_clip_area,
-        num_tracks,
+        num_visible_tracks,
         row_height,
         track_spacing,
         editor_context.timeline.scroll_offset.y,
@@ -127,7 +135,7 @@ pub fn show_clip_area(
         max_h_zoom,
         min_v_zoom: 0.1,
         max_v_zoom: 10.0,
-        max_scroll_y: (num_tracks as f32 * (row_height + track_spacing)
+        max_scroll_y: (num_visible_tracks as f32 * (row_height + track_spacing)
             - content_rect_for_clip_area.height())
         .max(0.0),
     };
@@ -185,7 +193,7 @@ pub fn show_clip_area(
         history_manager,
         pixels_per_unit,
         composition_fps,
-        num_tracks,
+        num_visible_tracks,
         row_height,
         track_spacing,
     );
