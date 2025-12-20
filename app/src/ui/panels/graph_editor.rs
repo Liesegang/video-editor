@@ -149,6 +149,21 @@ pub fn graph_editor_panel(
         // Capture clip range for visualization
         let (clip_start_frame, clip_end_frame, clip_fps) =
             (entity.in_frame, entity.out_frame, composition.fps);
+        let clip_source_begin_frame = entity.source_begin_frame;
+        let clip_inherent_fps = entity.fps;
+
+        // Helpers for time conversion
+        let to_source_time = |global_time: f64| -> f64 {
+            let in_time = clip_start_frame as f64 / clip_fps;
+            let source_start_time = clip_source_begin_frame as f64 / clip_inherent_fps;
+            source_start_time + (global_time - in_time)
+        };
+
+        let to_global_time = |source_time: f64| -> f64 {
+            let in_time = clip_start_frame as f64 / clip_fps;
+            let source_start_time = clip_source_begin_frame as f64 / clip_inherent_fps;
+            in_time + (source_time - source_start_time)
+        };
 
         // Add Effect Properties
 
@@ -675,15 +690,17 @@ pub fn graph_editor_panel(
                                 // Convert screen x to time
                                 // x = min.x + pan.x + (time * pps)
                                 // time = (x - min.x - pan.x) / pps
-                                let time =
+                                let global_time =
                                     (x - graph_rect.min.x - editor_context.graph_editor.pan.x)
                                         / pixels_per_second;
+
+                                let eval_time = to_source_time(global_time as f64);
 
                                 // Evaluate
                                 let value_pv = project_service.evaluate_property_value(
                                     property,
                                     map,
-                                    time as f64,
+                                    eval_time,
                                     composition.fps,
                                 );
                                 let val_f64 = match component {
@@ -705,7 +722,7 @@ pub fn graph_editor_panel(
                                 };
 
                                 if let Some(val) = val_f64 {
-                                    let pos = to_screen_pos(time as f64, val);
+                                    let pos = to_screen_pos(global_time as f64, val);
                                     // Clamp Y to reasonable bounds to avoid drawing issues far off screen?
                                     // Painter usually handles it, but let's be safe if needed.
                                     // Actually egui painter clips to clip_rect, so it's fine.
@@ -744,7 +761,8 @@ pub fn graph_editor_panel(
                                         }
                                     };
                                     let val = val_f64.unwrap_or(0.0);
-                                    let kf_pos = to_screen_pos(t, val);
+                                    let global_t = to_global_time(t);
+                                    let kf_pos = to_screen_pos(global_t, val);
 
                                     // Skip if out of view (optimization)
                                     if !graph_rect.expand(10.0).contains(kf_pos) {
@@ -1028,7 +1046,29 @@ pub fn graph_editor_panel(
                     eff_idx,
                     &prop_key,
                     idx,
-                    Some(new_time),
+                    Some(
+                        // Convert new_time (Global) to Source Time
+                        if let Ok(p) = project.read() {
+                            if let Some(c) = p.compositions.iter().find(|c| c.id == comp_id) {
+                                if let Some(t) = c.tracks.iter().find(|t| t.id == track_id) {
+                                    if let Some(e) = t.clips.iter().find(|c| c.id == entity_id) {
+                                        let in_time = e.in_frame as f64 / c.fps;
+                                        let source_start = e.source_begin_frame as f64 / e.fps;
+                                        Some(source_start + (new_time - in_time))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            Some(new_time)
+                        }
+                        .unwrap_or(new_time),
+                    ),
                     Some(new_pv),
                     None,
                 );
@@ -1081,7 +1121,29 @@ pub fn graph_editor_panel(
                     style_idx,
                     &prop_key,
                     idx,
-                    Some(new_time),
+                    Some(
+                        // Convert new_time (Global) to Source Time
+                        if let Ok(p) = project.read() {
+                            if let Some(c) = p.compositions.iter().find(|c| c.id == comp_id) {
+                                if let Some(t) = c.tracks.iter().find(|t| t.id == track_id) {
+                                    if let Some(e) = t.clips.iter().find(|c| c.id == entity_id) {
+                                        let in_time = e.in_frame as f64 / c.fps;
+                                        let source_start = e.source_begin_frame as f64 / e.fps;
+                                        Some(source_start + (new_time - in_time))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            Some(new_time)
+                        }
+                        .unwrap_or(new_time),
+                    ),
                     Some(new_pv),
                     None,
                 );
@@ -1131,7 +1193,29 @@ pub fn graph_editor_panel(
                     entity_id,
                     base_name,
                     idx,
-                    Some(new_time),
+                    Some(
+                        // Convert new_time (Global) to Source Time
+                        if let Ok(p) = project.read() {
+                            if let Some(c) = p.compositions.iter().find(|c| c.id == comp_id) {
+                                if let Some(t) = c.tracks.iter().find(|t| t.id == track_id) {
+                                    if let Some(e) = t.clips.iter().find(|c| c.id == entity_id) {
+                                        let in_time = e.in_frame as f64 / c.fps;
+                                        let source_start = e.source_begin_frame as f64 / e.fps;
+                                        Some(source_start + (new_time - in_time))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            Some(new_time)
+                        }
+                        .unwrap_or(new_time),
+                    ),
                     Some(new_pv),
                     None,
                 );
@@ -1147,10 +1231,17 @@ pub fn graph_editor_panel(
             };
 
             let mut current_val_at_t = None;
+            let mut eval_time = time; // Will become source_time
+
             if let Ok(proj) = project.read() {
                 if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
                     if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
                         if let Some(entity) = track.clips.iter().find(|c| c.id == entity_id) {
+                            // Calculate Source Time from Global Time 'time'
+                            let in_time = entity.in_frame as f64 / comp.fps;
+                            let source_start = entity.source_begin_frame as f64 / entity.fps;
+                            eval_time = source_start + (time - in_time);
+
                             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                                 if let Some(effect) = entity.effects.get(eff_idx) {
                                     if let Some(prop) = effect.properties.get(&prop_key) {
@@ -1158,7 +1249,7 @@ pub fn graph_editor_panel(
                                             Some(project_service.evaluate_property_value(
                                                 prop,
                                                 &effect.properties,
-                                                time,
+                                                eval_time,
                                                 comp.fps,
                                             ));
                                     }
@@ -1171,7 +1262,7 @@ pub fn graph_editor_panel(
                                             Some(project_service.evaluate_property_value(
                                                 prop,
                                                 &style.properties,
-                                                time,
+                                                eval_time,
                                                 comp.fps,
                                             ));
                                     }
@@ -1182,7 +1273,7 @@ pub fn graph_editor_panel(
                                         Some(project_service.evaluate_property_value(
                                             prop,
                                             &entity.properties,
-                                            time,
+                                            eval_time,
                                             comp.fps,
                                         ));
                                 }
@@ -1214,15 +1305,16 @@ pub fn graph_editor_panel(
 
             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                 let _ = project_service.add_effect_keyframe(
-                    comp_id, track_id, entity_id, eff_idx, &prop_key, time, new_pv, None,
+                    comp_id, track_id, entity_id, eff_idx, &prop_key, eval_time, new_pv, None,
                 );
             } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
                 let _ = project_service.add_style_keyframe(
-                    comp_id, track_id, entity_id, style_idx, &prop_key, time, new_pv, None,
+                    comp_id, track_id, entity_id, style_idx, &prop_key, eval_time, new_pv, None,
                 );
             } else {
-                let _ = project_service
-                    .add_keyframe(comp_id, track_id, entity_id, base_name, time, new_pv, None);
+                let _ = project_service.add_keyframe(
+                    comp_id, track_id, entity_id, base_name, eval_time, new_pv, None,
+                );
             }
         }
         Action::SetEasing(name, idx, easing) => {

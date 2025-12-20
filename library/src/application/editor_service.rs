@@ -136,11 +136,6 @@ impl EditorService {
                 }
             }
         }
-        // Note: AudioService::trigger_audio_loading is async/background usually or safe to call?
-        // Checking existing code: it was calling it inside the read lock in previous version?
-        // Previous version:
-        // if let Ok(project) = self.project_manager.get_project().read() { ... drop(project); self.audio_service... }
-        // It dropped the lock before calling audio service. I should do the same.
 
         Ok(asset_ids)
     }
@@ -383,7 +378,7 @@ impl EditorService {
         comp_id: Uuid,
         track_id: Uuid,
         clip_id: Uuid,
-        frame: u64,
+        frame: i64,
     ) -> Result<(), LibraryError> {
         self.update_clip_property(
             comp_id,

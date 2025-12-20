@@ -47,13 +47,33 @@ pub fn mix_samples(
 
                             let source_start_time =
                                 (overlap_start - clip_in_time) + clip_source_offset;
+
+                            // Handle negative source start (Silence before media start)
+                            let mut skip_samples = 0;
+                            let fixed_source_start_time = if source_start_time < 0.0 {
+                                let skip_seconds = -source_start_time;
+                                skip_samples = (skip_seconds * sample_rate as f64).round() as usize;
+                                0.0 // Effective start is 0.0 (Media Start)
+                            } else {
+                                source_start_time
+                            };
+
+                            // Check if we skipped the entire duration
+                            if skip_samples >= render_len_samples {
+                                continue;
+                            }
+
                             let source_start_sample =
-                                (source_start_time * sample_rate as f64).round() as usize;
+                                (fixed_source_start_time * sample_rate as f64).round() as usize;
 
                             // Optimized mixing loop using iterators/slices
                             let channels_usize = channels as usize;
-                            let dest_start = render_offset_samples * channels_usize;
-                            let len = render_len_samples * channels_usize;
+
+                            // Adjust dest_start by render_offset + skipped silence
+                            let dest_start =
+                                (render_offset_samples + skip_samples) * channels_usize;
+
+                            let len = (render_len_samples - skip_samples) * channels_usize;
                             let src_start = source_start_sample * channels_usize;
 
                             // Bounds check once

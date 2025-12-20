@@ -55,7 +55,10 @@ pub fn handle_drag_and_drop(
                     }
 
                     // Flatten to find corresponding track
-                    let display_tracks = flatten_tracks(&current_tracks_for_drop, &editor_context.timeline.expanded_tracks);
+                    let display_tracks = flatten_tracks(
+                        &current_tracks_for_drop,
+                        &editor_context.timeline.expanded_tracks,
+                    );
 
                     // We need to determine if we are dropping onto an existing track or "creating a new line"
                     // The original request says "drag and drop should add a new line".
@@ -110,14 +113,13 @@ pub fn handle_drag_and_drop(
                                                 &asset.path,
                                                 drop_in_frame,
                                                 drop_out,
-                                                drop_in_frame, // source_begin_frame = drop_in_frame
-                                                duration_frames, // Use asset duration
+                                                drop_in_frame as i64, // source_begin_frame = drop_in_frame
+                                                duration_frames,      // Use asset duration
                                                 asset.fps.unwrap_or(30.0), // Use asset fps or default
                                                 comp_width as u32,
                                                 comp_height as u32,
                                             );
-                                            if let (Some(w), Some(h)) =
-                                                (asset.width, asset.height)
+                                            if let (Some(w), Some(h)) = (asset.width, asset.height)
                                             {
                                                 video_clip.properties.set("anchor".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Vec2(library::model::project::property::Vec2 { x: ordered_float::OrderedFloat(w as f64 / 2.0), y: ordered_float::OrderedFloat(h as f64 / 2.0) })));
                                             }
@@ -133,8 +135,7 @@ pub fn handle_drag_and_drop(
                                                 comp_height as u32,
                                             );
                                             image_clip.source_begin_frame = 0; // Images are static, so 0 is fine, or arguably doesn't matter. But let's keep 0 as explicit.
-                                            if let (Some(w), Some(h)) =
-                                                (asset.width, asset.height)
+                                            if let (Some(w), Some(h)) = (asset.width, asset.height)
                                             {
                                                 image_clip.properties.set("anchor".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Vec2(library::model::project::property::Vec2 { x: ordered_float::OrderedFloat(w as f64 / 2.0), y: ordered_float::OrderedFloat(h as f64 / 2.0) })));
                                             }
@@ -143,14 +144,19 @@ pub fn handle_drag_and_drop(
 
                                         AssetKind::Audio => {
                                             let mut audio_entity = TrackClip::new(
-                                                     Uuid::new_v4(),
-                                                     Some(asset.id),
-                                                     TrackClipKind::Audio,
-                                                     0, 0, 0, None, 0.0,
-                                                     library::model::project::property::PropertyMap::new(),
-                                                     Vec::new(), // styles
-                                                     Vec::new()  // effects
-                                                 );
+                                                Uuid::new_v4(),
+                                                Some(asset.id),
+                                                TrackClipKind::Audio,
+                                                0,
+                                                0,
+                                                0,
+                                                None,
+                                                0.0,
+                                                library::model::project::property::PropertyMap::new(
+                                                ),
+                                                Vec::new(), // styles
+                                                Vec::new(), // effects
+                                            );
                                             audio_entity.in_frame = drop_in_frame;
                                             audio_entity.out_frame = drop_out;
                                             audio_entity.duration_frame = Some(duration_frames);
@@ -179,8 +185,7 @@ pub fn handle_drag_and_drop(
                                 }
                             }
 
-                            let duration_frames =
-                                (duration_sec * composition_fps).round() as u64;
+                            let duration_frames = (duration_sec * composition_fps).round() as u64;
                             let drop_out = drop_in_frame + duration_frames;
                             drop_out_frame_opt = Some(drop_out);
 
@@ -208,8 +213,7 @@ pub fn handle_drag_and_drop(
                         }
                     }
 
-                    if let (Some(new_clip), Some(_drop_out)) = (new_clip_opt, drop_out_frame_opt)
-                    {
+                    if let (Some(new_clip), Some(_drop_out)) = (new_clip_opt, drop_out_frame_opt) {
                         // Strategy:
                         // 1. If target_track_id exists, try to add there.
                         // 2. If it fails (overlap or other error) OR target_track_id is None, create NEW track.
@@ -217,7 +221,7 @@ pub fn handle_drag_and_drop(
 
                         let mut success = false;
                         if let Some(track_id) = target_track_id_opt {
-                             if let Ok(_) = project_service.add_clip_to_track(
+                            if let Ok(_) = project_service.add_clip_to_track(
                                 comp_id,
                                 track_id,
                                 new_clip.clone(),
@@ -229,25 +233,26 @@ pub fn handle_drag_and_drop(
                         }
 
                         if !success {
-                             // Create new track
-                             // Where to insert?
-                             // If target_track_id was some, maybe insert *after* it?
-                             // Currently `add_track` appends to root.
-                             // Implementing insertion at index or as child requires more service methods.
-                             // For now, let's append to root.
-                             // Wait, if I drop on a folder, maybe I want to add *into* the folder?
-                             // Current API: add_track(comp_id, name).
+                            // Create new track
+                            // Where to insert?
+                            // If target_track_id was some, maybe insert *after* it?
+                            // Currently `add_track` appends to root.
+                            // Implementing insertion at index or as child requires more service methods.
+                            // For now, let's append to root.
+                            // Wait, if I drop on a folder, maybe I want to add *into* the folder?
+                            // Current API: add_track(comp_id, name).
 
-                             let new_track_id = match project_service.add_track(comp_id, "New Layer") {
-                                 Ok(id) => Some(id),
-                                 Err(e) => {
-                                     log::error!("Failed to create new track: {:?}", e);
-                                     None
-                                 }
-                             };
+                            let new_track_id = match project_service.add_track(comp_id, "New Layer")
+                            {
+                                Ok(id) => Some(id),
+                                Err(e) => {
+                                    log::error!("Failed to create new track: {:?}", e);
+                                    None
+                                }
+                            };
 
-                             if let Some(ntid) = new_track_id {
-                                 if let Err(e) = project_service.add_clip_to_track(
+                            if let Some(ntid) = new_track_id {
+                                if let Err(e) = project_service.add_clip_to_track(
                                     comp_id,
                                     ntid,
                                     new_clip.clone(),
@@ -257,11 +262,12 @@ pub fn handle_drag_and_drop(
                                     log::error!("Failed to add entity to NEW track: {:?}", e);
                                     // Cleanup empty track?
                                     project_service.remove_track(comp_id, ntid).ok();
-                                    editor_context.interaction.active_modal_error = Some(e.to_string());
+                                    editor_context.interaction.active_modal_error =
+                                        Some(e.to_string());
                                 } else {
                                     success = true;
                                 }
-                             }
+                            }
                         }
 
                         if success {
