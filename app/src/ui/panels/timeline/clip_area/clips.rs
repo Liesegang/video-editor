@@ -43,7 +43,7 @@ fn draw_waveform(
     painter: &egui::Painter,
     clip_rect: egui::Rect,
     audio_data: &[f32],
-    source_begin_frame: u64,
+    source_begin_frame: i64, // Changed to i64
     composition_fps: f64,
     pixels_per_unit: f32,
     sample_rate: f64,
@@ -60,8 +60,13 @@ fn draw_waveform(
 
     while x < rect_w {
         let time_offset = x as f32 / pixels_per_unit;
+        let time_offset = x as f32 / pixels_per_unit;
         let source_time = (source_begin_frame as f64 / composition_fps) + time_offset as f64;
-        let start_sample_idx = (source_time * sample_rate) as usize * channels;
+        let start_sample_idx = if source_time >= 0.0 {
+            (source_time * sample_rate) as usize * channels
+        } else {
+            audio_data.len() + 1 // Invalid index
+        };
         let end_sample_idx = start_sample_idx + samples_per_pixel as usize;
 
         if start_sample_idx < audio_data.len() {
@@ -180,14 +185,10 @@ pub fn draw_clips(
             let interaction_id = if is_summary_clip {
                 egui::Id::new(clip.id).with("summary").with(i)
             } else {
-                 egui::Id::new(clip.id)
+                egui::Id::new(clip.id)
             };
 
-            let clip_resp = ui_content.interact(
-                initial_clip_rect,
-                interaction_id,
-                sense,
-            );
+            let clip_resp = ui_content.interact(initial_clip_rect, interaction_id, sense);
 
             if !is_summary_clip {
                 clip_resp.context_menu(|ui| {
@@ -199,7 +200,8 @@ pub fn draw_clips(
                                 log::error!("Failed to remove entity: {:?}", e);
                             } else {
                                 editor_context.selection.selected_entities.remove(&clip.id);
-                                if editor_context.selection.last_selected_entity_id == Some(clip.id) {
+                                if editor_context.selection.last_selected_entity_id == Some(clip.id)
+                                {
                                     editor_context.selection.last_selected_entity_id = None;
                                     editor_context.selection.last_selected_track_id = None;
                                 }
@@ -247,7 +249,7 @@ pub fn draw_clips(
             // Handle edge dragging (resize)
             let mut is_resizing = false;
             if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
-                 if left.drag_started() || right.drag_started() {
+                if left.drag_started() || right.drag_started() {
                     editor_context.interaction.is_resizing_entity = true;
                     editor_context.select_clip(clip.id, track.id);
                     is_resizing = true;
@@ -264,7 +266,21 @@ pub fn draw_clips(
 
                     // Source constraints
                     let source_max_out_frame = if let Some(duration) = clip.duration_frame {
-                        clip.source_begin_frame.saturating_add(duration)
+                        // clip.source_begin_frame is i64. duration is u64.
+                        // We want: max_out = in + (duration - source_begin).
+                        // But source_begin can be negative.
+                        // If source_begin is -100, duration 1000. available = 1100?
+                        // "Duration" usually means total length of file (0..duration).
+                        // If source_begin is -100, we play "void" for 100 frames then source 0.
+                        // So effective end of source is at source_time = duration.
+                        // Timeline end = In + (duration - source_begin).
+                        // Careful with signs.
+                        let source_end_offset = duration as i64 - clip.source_begin_frame;
+                        if source_end_offset > 0 {
+                            clip.in_frame.saturating_add(source_end_offset as u64)
+                        } else {
+                            clip.in_frame // Should not happen if duration > source_begin
+                        }
                     } else {
                         u64::MAX
                     };
@@ -282,12 +298,13 @@ pub fn draw_clips(
 
                     if left.dragged() {
                         new_in_frame = ((new_in_frame as i64 + dt_frames).max(0) as u64)
-                            .max(clip.source_begin_frame) // Cannot go before source begin frame
+                            // .max(clip.source_begin_frame) // Constraint removed for negative source start
                             .min(new_out_frame.saturating_sub(1)); // Minimum 1 frame duration
                     } else if right.dragged() {
-                        new_out_frame =
-                            ((new_out_frame as i64 + dt_frames).max(new_in_frame as i64 + 1) as u64) // Minimum 1 frame duration
-                                .min(source_max_out_frame); // Cannot go beyond source duration
+                        new_out_frame = ((new_out_frame as i64 + dt_frames)
+                            .max(new_in_frame as i64 + 1)
+                            as u64) // Minimum 1 frame duration
+                            .min(source_max_out_frame); // Cannot go beyond source duration
                     }
 
                     // Update if there's an actual change
@@ -297,7 +314,13 @@ pub fn draw_clips(
                             editor_context.selection.last_selected_track_id,
                         ) {
                             project_service
-                                .update_clip_time(comp_id, tid, clip.id, new_in_frame, new_out_frame)
+                                .update_clip_time(
+                                    comp_id,
+                                    tid,
+                                    clip.id,
+                                    new_in_frame,
+                                    new_out_frame,
+                                )
                                 .ok();
                         }
                     }
@@ -324,12 +347,14 @@ pub fn draw_clips(
                     editor_context.interaction.dragged_entity_hovered_track_id
                 {
                     // Find visible index of hovered track in flattened list
-                    if let Some(hovered_display_track) =
-                        display_tracks.iter().find(|t| t.track.id == hovered_track_id)
+                    if let Some(hovered_display_track) = display_tracks
+                        .iter()
+                        .find(|t| t.track.id == hovered_track_id)
                     {
                         display_y = content_rect_for_clip_area.min.y
                             + editor_context.timeline.scroll_offset.y
-                            + hovered_display_track.visible_row_index as f32 * (row_height + track_spacing);
+                            + hovered_display_track.visible_row_index as f32
+                                * (row_height + track_spacing);
                     }
                 }
             }
@@ -350,7 +375,12 @@ pub fn draw_clips(
 
             if is_summary_clip {
                 // Dim summary clips and maybe make them more transparent
-                transparent_color = egui::Color32::from_rgba_premultiplied(clip_color.r(), clip_color.g(), clip_color.b(), 100);
+                transparent_color = egui::Color32::from_rgba_premultiplied(
+                    clip_color.r(),
+                    clip_color.g(),
+                    clip_color.b(),
+                    100,
+                );
             }
 
             let painter = ui_content.painter_at(content_rect_for_clip_area);
@@ -411,13 +441,13 @@ pub fn draw_clips(
 
             // Cursor feedback
             if !is_summary_clip {
-                 if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
+                if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
                     if left.hovered() || right.hovered() {
                         ui_content
                             .ctx()
                             .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                     }
-                 }
+                }
             }
 
             if !editor_context.interaction.is_resizing_entity && clip_resp.clicked() {
@@ -497,7 +527,10 @@ pub fn draw_clips(
                             // Map lookup would be faster but requires building map every frame?
                             // REFACTOR: Use flatten traversal or recursive search to find clip owner
 
-                            fn find_clip_recursive(tracks: &[Track], clip_id: Uuid) -> Option<(TrackClip, Uuid)> {
+                            fn find_clip_recursive(
+                                tracks: &[Track],
+                                clip_id: Uuid,
+                            ) -> Option<(TrackClip, Uuid)> {
                                 for t in tracks {
                                     if let Some(c) = t.clips.iter().find(|c| c.id == clip_id) {
                                         return Some((c.clone(), t.id));
@@ -530,6 +563,8 @@ pub fn draw_clips(
                                     )
                                     .ok();
 
+                                // Removed update_clip_source_frames to ensure keyframes (and content) follow the clip (Relative Keyframing).
+                                /*
                                 let new_source_begin_frame =
                                     (c.source_begin_frame as i64 + dt_frames).max(0) as u64;
                                 project_service
@@ -540,6 +575,7 @@ pub fn draw_clips(
                                         new_source_begin_frame,
                                     )
                                     .ok();
+                                */
                             }
                         }
                     }
@@ -554,12 +590,10 @@ pub fn draw_clips(
                         (current_y_in_clip_area / (row_height + track_spacing)).floor() as usize;
 
                     if let Some(hovered_display_track) = display_tracks.get(hovered_track_index) {
-                         if editor_context.interaction.dragged_entity_hovered_track_id
-                                        != Some(hovered_display_track.track.id)
+                        if editor_context.interaction.dragged_entity_hovered_track_id
+                            != Some(hovered_display_track.track.id)
                         {
-                            editor_context
-                                .interaction
-                                .dragged_entity_hovered_track_id =
+                            editor_context.interaction.dragged_entity_hovered_track_id =
                                 Some(hovered_display_track.track.id);
                         }
                     }
@@ -638,7 +672,7 @@ pub fn get_clips_in_box(
         // Actually, if track is collapsed, we probably don't want to select its children via box select on the folder line.
 
         if !display_track.is_folder || display_track.is_expanded {
-             for clip in &track.clips {
+            for clip in &track.clips {
                 clips_to_check.push(clip);
             }
         }

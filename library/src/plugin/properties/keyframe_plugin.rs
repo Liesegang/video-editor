@@ -54,20 +54,63 @@ fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
     //     property, time
     // );
 
-    if keyframes.is_empty() {
+    if time.is_nan() || keyframes.is_empty() {
         return PropertyValue::Number(OrderedFloat(0.0));
     }
 
-    if time <= *keyframes[0].time {
-        return keyframes[0].value.clone();
+    // Keyframes might not be strictly sorted if modified recently?
+    // Usually they should be, but let's be safe or just reference them.
+    // For performance, we assume property.keyframes() returns a reference to a Vec.
+    // If we can't assume sort, we must sort indices.
+    // But evaluating every frame with a sort is slow.
+    // Let's assume they are sorted for now, but handle the find safely.
+    // Actually, `GraphEditor` sorts them manually before use. `TrackClip` doesn't enforce sort on add?
+    // ProjectService::add_keyframe pushes and doesn't sort?
+    // Let's check ProjectService. If it doesn't sort, we are in trouble.
+    // But for now, let's just make this function safe.
+
+    // We'll collect and sort references to be robust against unsorted input.
+    // Note: This allocation is per-evaluation per-property. Ideally data is kept sorted.
+    let mut sorted_refs: Vec<_> = keyframes.iter().collect();
+    sorted_refs.sort_by(|a, b| a.time.cmp(&b.time));
+
+    let first = sorted_refs[0];
+    let last = sorted_refs[sorted_refs.len() - 1];
+
+    if time <= *first.time {
+        return first.value.clone();
     }
-    if time >= *keyframes.last().unwrap().time {
-        return keyframes.last().unwrap().value.clone();
+    if time >= *last.time {
+        return last.value.clone();
     }
 
     // Find the keyframe before and after the current time
-    let current = keyframes.iter().rev().find(|k| *k.time <= time).unwrap();
-    let next = keyframes.iter().find(|k| *k.time > time).unwrap();
+    // Now we are sure they exist because time is strictly between first and last.
+    // We want the *last* keyframe <= time as 'current'.
+    let current_idx = sorted_refs.iter().rposition(|k| *k.time <= time);
+
+    let current = if let Some(idx) = current_idx {
+        sorted_refs[idx]
+    } else {
+        // Should be impossible given checks above, but safe fallback
+        first
+    };
+
+    // 'next' is the one immediately after
+    let next = if let Some(idx) = current_idx {
+        if idx + 1 < sorted_refs.len() {
+            sorted_refs[idx + 1]
+        } else {
+            last
+        }
+    } else {
+        // Fallback
+        if sorted_refs.len() > 1 {
+            sorted_refs[1]
+        } else {
+            last
+        }
+    };
 
     // Safety check for zero duration
     let duration = *next.time - *current.time;
