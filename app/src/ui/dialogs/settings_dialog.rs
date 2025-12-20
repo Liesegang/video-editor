@@ -84,24 +84,63 @@ impl SettingsDialog {
             let mut still_open = true;
             let mut close_confirmed = false;
 
-            crate::ui::widgets::modal::Modal::new("Settings")
+            let inner_response = crate::ui::widgets::modal::Modal::new("Settings")
                 .open(&mut still_open)
                 .min_width(600.0)
                 .min_height(400.0)
                 .resizable(true)
                 .show(ctx, |ui| {
+                    let mut should_close = false;
+                    let mut local_result: Option<SettingsResult> = None;
+
+                    if ui.input(|i| i.key_pressed(Key::Escape)) {
+                        local_result = Some(SettingsResult::Cancel);
+                        should_close = true;
+                    }
+
                     let output = settings_panel(
                         ui,
                         &mut self.editing_registry,
                         &mut self.editing_config,
                         &self.plugin_manager,
                     );
-                    is_listening_for_shortcut = output.is_listening;
+
+                    let listening = output.is_listening;
 
                     if let Some(result) = output.result {
-                        returned_result = Some(result);
+                        local_result = Some(result);
                         match result {
                             SettingsResult::Save => {
+                                should_close = true;
+                            }
+                            SettingsResult::Cancel => {
+                                should_close = true;
+                            }
+                            SettingsResult::RestoreDefaults => {
+                                // Handled outside or we need to mutate self.
+                                // Mutating self in closure is hard if self is borrowed.
+                                // We are passing &mut self.editing_config to settings_panel.
+                                // settings_panel updates it?
+                                // Wait, settings_panel handles "Restore Defaults" by returning result.
+                                // We handle the logic outside.
+                            }
+                        }
+                    }
+                    (should_close, local_result, listening)
+                });
+
+            if let Some(inner) = inner_response {
+                if let Some((should_close, local_result, listening)) = inner.inner {
+                    is_listening_for_shortcut = listening;
+                    returned_result = local_result;
+
+                    if should_close {
+                        close_confirmed = true;
+                    }
+
+                    if let Some(result) = local_result {
+                        match result {
+                                SettingsResult::Save => {
                                 // 1. Update config shortcuts from editing registry
                                 // We only save shortcuts that differ from the defaults.
                                 // This allows us to persist "Unbound" (None) if the default was "Bound" (Some),
@@ -130,20 +169,17 @@ impl SettingsDialog {
                                 // 3. Commit
                                 self.command_registry = self.editing_registry.clone();
                                 self.config = self.editing_config.clone();
-
-                                close_confirmed = true;
-                            }
-                            SettingsResult::Cancel => {
-                                close_confirmed = true;
                             }
                             SettingsResult::RestoreDefaults => {
                                 let default_config = AppConfig::new();
                                 self.editing_config = default_config.clone();
                                 self.editing_registry = CommandRegistry::new(&default_config);
                             }
+                            _ => {}
                         }
                     }
-                });
+                }
+            }
 
             if !still_open {
                 close_confirmed = true;
@@ -268,19 +304,21 @@ fn settings_panel(
                         });
 
                         strip.cell(|ui| {
-                            ui.separator();
-                            ui.horizontal(|ui| {
-                                if ui.button("Restore Defaults").clicked() {
-                                    result = Some(SettingsResult::RestoreDefaults);
+                            super::dialog_footer(ui, |ui| {
+                                if ui.button("Save").clicked() {
+                                    result = Some(SettingsResult::Save);
                                 }
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                     if ui.button("Save").clicked() {
-                                        result = Some(SettingsResult::Save);
-                                    }
-                                    if ui.button("Cancel").clicked() {
-                                        result = Some(SettingsResult::Cancel);
-                                    }
-                                });
+                                if ui.button("Cancel").clicked() {
+                                    result = Some(SettingsResult::Cancel);
+                                }
+                                ui.with_layout(
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        if ui.button("Restore Defaults").clicked() {
+                                            result = Some(SettingsResult::RestoreDefaults);
+                                        }
+                                    },
+                                );
                             });
                         });
                     });

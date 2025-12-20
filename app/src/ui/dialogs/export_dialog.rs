@@ -111,18 +111,41 @@ impl ExportDialog {
             }
         }
 
-        crate::ui::widgets::modal::Modal::new("Export")
+        let result = crate::ui::widgets::modal::Modal::new("Export")
             .open(&mut is_open)
             .collapsible(false)
             .resizable(true)
             .default_width(400.0)
             .show(ctx, |ui| {
+                let mut should_close = false;
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    if self.is_exporting {
+                         if let Some(token) = &self.cancellation_token {
+                            token.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        self.is_exporting = false;
+                        self.status_message = "Cancelled.".to_string();
+                        self.progress_rx = None;
+                    } else {
+                        should_close = true;
+                    }
+                }
+
                 if self.is_exporting {
                     self.show_export_progress(ui);
                 } else {
-                    self.show_configuration(ui, project, project_service);
+                    if self.show_configuration(ui, project, project_service) {
+                        should_close = true;
+                    }
                 }
+                should_close
             });
+
+        if let Some(inner) = result {
+             if inner.inner.unwrap_or(false) {
+                 is_open = false;
+             }
+        }
 
         self.is_open = is_open;
     }
@@ -148,7 +171,8 @@ impl ExportDialog {
         ui: &mut egui::Ui,
         project: &Arc<RwLock<Project>>,
         project_service: &EditorService,
-    ) {
+    ) -> bool {
+        let mut close_dialog = false;
         ui.heading("Export Settings");
 
         // 1. Composition Selection
@@ -377,20 +401,22 @@ impl ExportDialog {
             }
         }
 
-        ui.separator();
-
-        ui.horizontal(|ui| {
+        super::dialog_footer(ui, |ui| {
             let enabled = self.selected_exporter_id.is_some() && !self.output_path.is_empty();
+
             if ui
                 .add_enabled(enabled, egui::Button::new("Export"))
                 .clicked()
             {
                 self.start_export(project, project_service);
             }
+
             if ui.button("Close").clicked() {
-                self.is_open = false;
+                close_dialog = true;
             }
         });
+
+        close_dialog
     }
 
     fn load_defaults(&mut self, exporter_id: &str) -> Result<(), ()> {
