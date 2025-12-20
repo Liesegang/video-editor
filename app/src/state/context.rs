@@ -1,3 +1,4 @@
+use library::model::frame::frame::Region;
 use library::model::project::project::{Composition, Project};
 
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,12 @@ pub struct EditorContext {
     pub preview_texture: Option<egui::TextureHandle>,
     #[serde(skip)]
     pub preview_texture_id: Option<u32>, // Raw GL texture ID
+    #[serde(skip)]
+    pub preview_texture_width: u32,
+    #[serde(skip)]
+    pub preview_texture_height: u32,
+    #[serde(skip)]
+    pub preview_region: Option<Region>,
 
     #[serde(skip)]
     pub available_fonts: Vec<String>,
@@ -47,6 +54,9 @@ impl EditorContext {
             interaction: InteractionState::default(),
             preview_texture: None,
             preview_texture_id: None,
+            preview_texture_width: 0,
+            preview_texture_height: 0,
+            preview_region: None,
             available_fonts: Vec::new(),
         }
     }
