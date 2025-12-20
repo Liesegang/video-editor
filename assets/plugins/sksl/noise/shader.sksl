@@ -1,0 +1,24 @@
+uniform shader content;
+uniform float seed;
+uniform float amount;
+
+// Simple hash function
+float rand(float2 co) {
+    return fract(sin(dot(co, float2(12.9898, 78.233))) * 43758.5453);
+}
+
+half4 main(float2 p) {
+    half4 color = content.eval(p);
+
+    // Generate noise
+    float noise = rand(p + seed);
+
+    // Apply noise
+    // Additive or overlay?
+    // "amount" usually controls intensity.
+
+    // Additive centered at 0
+    color.rgb += (noise - 0.5) * amount;
+
+    return color;
+}

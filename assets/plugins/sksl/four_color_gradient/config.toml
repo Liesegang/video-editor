@@ -1,0 +1,33 @@
+id = "four_color_gradient"
+name = "4-Color Gradient"
+category = "Generator"
+
+[[properties]]
+name = "colTL"
+label = "Top Left"
+type = "Color"
+default = [1.0, 0.0, 0.0, 1.0]
+
+[[properties]]
+name = "colTR"
+label = "Top Right"
+type = "Color"
+default = [0.0, 1.0, 0.0, 1.0]
+
+[[properties]]
+name = "colBL"
+label = "Bottom Left"
+type = "Color"
+default = [0.0, 0.0, 1.0, 1.0]
+
+[[properties]]
+name = "colBR"
+label = "Bottom Right"
+type = "Color"
+default = [1.0, 1.0, 0.0, 1.0]
+
+[[properties]]
+name = "resolution"
+label = "Resolution"
+type = "Vec2"
+default = [1920.0, 1080.0]

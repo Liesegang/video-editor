@@ -1,89 +1,15 @@
 id = "chromatic_aberration"
 name = "Chromatic Aberration"
 category = "Distortion"
-version = [0, 1, 0]
 
-# --- Red Channel ---
 [[properties]]
-name = "offset_r"
+name = "redOffset"
 label = "Red Offset"
 type = "Vec2"
-min = -200.0
-max = 200.0
-step = 1.0
-suffix = "px"
-default = [0.0, 0.0]
+default = [5.0, 0.0]
 
 [[properties]]
-name = "zoom_r"
-label = "Red Zoom"
-type = "Vec2"
-default = [1.0, 1.0]
-
-[[properties]]
-name = "dist_r"
-label = "Red Distortion"
-type = "Float"
-min = -1.0
-max = 1.0
-step = 0.01
-default = 0.0
-
-# --- Green Channel ---
-[[properties]]
-name = "offset_g"
-label = "Green Offset"
-type = "Vec2"
-min = -200.0
-max = 200.0
-step = 1.0
-suffix = "px"
-default = [0.0, 0.0]
-
-[[properties]]
-name = "zoom_g"
-label = "Green Zoom"
-type = "Vec2"
-default = [1.0, 1.0]
-
-[[properties]]
-name = "dist_g"
-label = "Green Distortion"
-type = "Float"
-min = -1.0
-max = 1.0
-step = 0.01
-default = 0.0
-
-# --- Blue Channel ---
-[[properties]]
-name = "offset_b"
+name = "blueOffset"
 label = "Blue Offset"
 type = "Vec2"
-min = -200.0
-max = 200.0
-step = 1.0
-suffix = "px"
-default = [0.0, 0.0]
-
-[[properties]]
-name = "zoom_b"
-label = "Blue Zoom"
-type = "Vec2"
-default = [1.0, 1.0]
-
-[[properties]]
-name = "dist_b"
-label = "Blue Distortion"
-type = "Float"
-min = -1.0
-max = 1.0
-step = 0.01
-default = 0.0
-
-# --- Resolution (Auto-Injected) ---
-[[properties]]
-name = "u_resolution"
-label = "Resolution"
-type = "Vec2"
-default = [1920.0, 1080.0]
+default = [-5.0, 0.0]

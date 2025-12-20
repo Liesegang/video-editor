@@ -1,0 +1,23 @@
+id = "polar_coordinates"
+name = "Polar Coordinates"
+category = "Distortion"
+
+[[properties]]
+name = "center"
+label = "Center"
+type = "Vec2"
+default = [960.0, 540.0]
+
+[[properties]]
+name = "type"
+label = "Type"
+type = "Int"
+min = 0
+max = 1
+default = 0
+
+[[properties]]
+name = "resolution"
+label = "Resolution"
+type = "Vec2"
+default = [1920.0, 1080.0]

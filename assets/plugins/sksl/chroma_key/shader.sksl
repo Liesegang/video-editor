@@ -1,0 +1,16 @@
+uniform shader content;
+uniform half3 keyColor;
+uniform float similarity;
+uniform float smoothness;
+
+half4 main(float2 p) {
+    half4 color = content.eval(p);
+
+    // Distance in RGB
+    float dist = distance(color.rgb, keyColor);
+
+    // Alpha calculation
+    float alpha = smoothstep(similarity, similarity + smoothness, dist);
+
+    return color * alpha;
+}

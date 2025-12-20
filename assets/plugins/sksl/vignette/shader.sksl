@@ -1,0 +1,30 @@
+uniform shader content;
+uniform float radius;
+uniform float softness;
+uniform float opacity;
+uniform float2 resolution;
+
+half4 main(float2 p) {
+    half4 color = content.eval(p);
+
+    // Normalized UV
+    float2 uv = p / resolution;
+
+    // Distance from center (0.5, 0.5)
+    float d = distance(uv, float2(0.5));
+
+    // Vignette mask
+    // radius is where full black starts? or where fading starts?
+    // "Darken corners based on distance from center."
+
+    // smoothstep(edge0, edge1, x): 0 if x < edge0, 1 if x > edge1.
+    // We want 1 at center, 0 at corners.
+    // d is 0 at center, approx 0.7 at corners.
+
+    float vignette = smoothstep(radius, radius - softness, d);
+
+    // Apply opacity
+    color.rgb = mix(color.rgb, color.rgb * vignette, opacity);
+
+    return color;
+}
