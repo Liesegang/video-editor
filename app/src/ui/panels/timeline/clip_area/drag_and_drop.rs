@@ -110,7 +110,7 @@ pub fn handle_drag_and_drop(
                                                 &asset.path,
                                                 drop_in_frame,
                                                 drop_out,
-                                                drop_in_frame, // source_begin_frame = drop_in_frame
+                                                drop_in_frame as i64, // source_begin_frame = drop_in_frame
                                                 duration_frames, // Use asset duration
                                                 asset.fps.unwrap_or(30.0), // Use asset fps or default
                                                 comp_width as u32,

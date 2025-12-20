@@ -62,21 +62,21 @@ impl std::fmt::Display for TrackClipKind {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct TrackClip {
-    pub id: Uuid,                   // Added UUID field
-    pub reference_id: Option<Uuid>, // ID of the referenced Asset or Composition
+    pub id: Uuid,
+    pub reference_id: Option<Uuid>,
     #[serde(rename = "type")]
     pub kind: TrackClipKind,
     #[serde(default)]
-    pub in_frame: u64, // Renamed from start_time (timeline start in frames)
+    pub in_frame: u64,
     #[serde(default)]
-    pub out_frame: u64, // Renamed from end_time (timeline end in frames)
+    pub out_frame: u64,
     #[serde(default)]
-    pub source_begin_frame: u64, // Frame where source content begins
+    pub source_begin_frame: i64, // Changed from u64 to i64
     #[serde(default)]
-    pub duration_frame: Option<u64>, // Duration of source content in frames, None for static/infinite
+    pub duration_frame: Option<u64>,
 
     #[serde(default = "default_fps")]
-    pub fps: f64, // This fps likely refers to the source content fps
+    pub fps: f64,
 
     #[serde(default)]
     pub properties: PropertyMap,
@@ -114,10 +114,10 @@ impl TrackClip {
         id: Uuid,
         reference_id: Option<Uuid>,
         kind: TrackClipKind,
-        in_frame: u64,               // Renamed parameter
-        out_frame: u64,              // Renamed parameter
-        source_begin_frame: u64,     // New parameter
-        duration_frame: Option<u64>, // New parameter
+        in_frame: u64,
+        out_frame: u64,
+        source_begin_frame: i64, // Changed from u64 to i64
+        duration_frame: Option<u64>,
         fps: f64,
         properties: PropertyMap,
         styles: Vec<StyleInstance>,
@@ -129,7 +129,7 @@ impl TrackClip {
             kind,
             in_frame,
             out_frame,
-            source_begin_frame,
+            source_begin_frame, // Changed to i64
             duration_frame,
             fps,
             properties,
@@ -314,7 +314,7 @@ impl TrackClip {
         file_path: &str,
         in_frame: u64,
         out_frame: u64,
-        source_begin_frame: u64,
+        source_begin_frame: i64,
         duration_frame: u64,
         fps: f64,
         canvas_width: u32,
