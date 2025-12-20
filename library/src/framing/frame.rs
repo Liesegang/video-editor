@@ -3,7 +3,7 @@ use std::sync::Arc;
 use log::debug;
 
 use crate::model::frame::entity::FrameObject;
-use crate::model::frame::frame::FrameInfo;
+use crate::model::frame::frame::{FrameInfo, Region};
 use crate::model::project::project::{Composition, Project};
 use crate::model::project::{Track, TrackClip, TrackClipKind}; // Add explicit import
 use crate::util::timing::ScopedTimer;
@@ -30,8 +30,13 @@ impl<'a> FrameEvaluator<'a> {
         }
     }
 
-    pub fn evaluate(&self, frame_number: u64, render_scale: f64) -> FrameInfo {
-        let mut frame = self.initialize_frame(frame_number, render_scale);
+    pub fn evaluate(
+        &self,
+        frame_number: u64,
+        render_scale: f64,
+        region: Option<Region>,
+    ) -> FrameInfo {
+        let mut frame = self.initialize_frame(frame_number, render_scale, region);
 
         // Flatten tracks recursively
         let all_clips = self.collect_active_clips(frame_number);
@@ -44,7 +49,12 @@ impl<'a> FrameEvaluator<'a> {
         frame
     }
 
-    fn initialize_frame(&self, frame_number: u64, render_scale: f64) -> FrameInfo {
+    fn initialize_frame(
+        &self,
+        frame_number: u64,
+        render_scale: f64,
+        region: Option<Region>,
+    ) -> FrameInfo {
         let time = frame_number as f64 / self.composition.fps;
         FrameInfo {
             width: self.composition.width,
@@ -53,6 +63,7 @@ impl<'a> FrameEvaluator<'a> {
             color_profile: self.composition.color_profile.clone(),
             render_scale: ordered_float::OrderedFloat(render_scale),
             now_time: ordered_float::OrderedFloat(time),
+            region,
             objects: Vec::new(),
         }
     }
@@ -69,7 +80,7 @@ impl<'a> FrameEvaluator<'a> {
         &self,
         track: &'b Track,
         frame_number: u64,
-        out_clips: &mut Vec<&'b TrackClip>
+        out_clips: &mut Vec<&'b TrackClip>,
     ) {
         // Collect from current track
         for clip in &track.clips {
@@ -103,6 +114,7 @@ pub fn evaluate_composition_frame(
     composition: &Composition,
     frame_number: u64,
     render_scale: f64,
+    region: Option<Region>,
     property_evaluators: &Arc<PropertyEvaluatorRegistry>,
     entity_converter_registry: &Arc<EntityConverterRegistry>,
 ) -> FrameInfo {
@@ -111,7 +123,7 @@ pub fn evaluate_composition_frame(
         Arc::clone(property_evaluators),
         Arc::clone(entity_converter_registry),
     )
-    .evaluate(frame_number, render_scale)
+    .evaluate(frame_number, render_scale, region)
 }
 
 pub fn get_frame_from_project(
@@ -119,6 +131,7 @@ pub fn get_frame_from_project(
     composition_index: usize,
     frame_number: u64,
     render_scale: f64,
+    region: Option<Region>,
     property_evaluators: &Arc<PropertyEvaluatorRegistry>,
     entity_converter_registry: &Arc<EntityConverterRegistry>,
 ) -> FrameInfo {
@@ -132,6 +145,7 @@ pub fn get_frame_from_project(
         composition,
         frame_number,
         render_scale,
+        region,
         property_evaluators,
         entity_converter_registry,
     );
@@ -184,14 +198,20 @@ mod tests {
     fn create_dummy_clip() -> TrackClip {
         let mut props = PropertyMap::new();
         props.set(
-             "file_path".into(),
-             constant(PropertyValue::String("dummy".into())),
+            "file_path".into(),
+            constant(PropertyValue::String("dummy".into())),
         );
-         // Add required props for ImageEntityConverter to not fail
+        // Add required props for ImageEntityConverter to not fail
         props.set("position".into(), constant(make_vec2(0.0, 0.0)));
         props.set("scale".into(), constant(make_vec2(100.0, 100.0))); // Image converter looks for "scale"
-        props.set("scale_x".into(), constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))));
-        props.set("scale_y".into(), constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))));
+        props.set(
+            "scale_x".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))),
+        );
+        props.set(
+            "scale_y".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))),
+        );
 
         TrackClip {
             id: uuid::Uuid::new_v4(),
@@ -289,7 +309,7 @@ mod tests {
             Arc::clone(&registry),
             Arc::clone(&entity_converter_registry),
         );
-        let frame = evaluator.evaluate(1, 1.0);
+        let frame = evaluator.evaluate(1, 1.0, None);
 
         assert_eq!(frame.objects.len(), 1);
         match &frame.objects[0].content {
@@ -384,10 +404,10 @@ mod tests {
             Arc::clone(&entity_converter_registry),
         );
 
-        let frame = evaluator.evaluate(15, 1.0); // 0.5s * 30fps = 15 frames
+        let frame = evaluator.evaluate(15, 1.0, None); // 0.5s * 30fps = 15 frames
         assert_eq!(frame.objects.len(), 1, "Only early entity should render");
 
-        let frame_late = evaluator.evaluate(165, 1.0); // 5.5s * 30fps = 165 frames
+        let frame_late = evaluator.evaluate(165, 1.0, None); // 5.5s * 30fps = 165 frames
         assert_eq!(
             frame_late.objects.len(),
             1,
@@ -420,7 +440,11 @@ mod tests {
             Arc::clone(&entity_converter_registry),
         );
 
-        let frame = evaluator.evaluate(10, 1.0);
-        assert_eq!(frame.objects.len(), 2, "Should find clips from both parent and child tracks");
+        let frame = evaluator.evaluate(10, 1.0, None);
+        assert_eq!(
+            frame.objects.len(),
+            2,
+            "Should find clips from both parent and child tracks"
+        );
     }
 }
