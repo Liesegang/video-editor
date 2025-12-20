@@ -118,9 +118,12 @@ impl<'a> FrameEvaluationContext<'a> {
     }
 
     fn build_transform(&self, props: &PropertyMap, time: f64) -> Transform {
-        let (pos_x, pos_y) = self.evaluate_vec2(props, "position", time, 0.0, 0.0);
-        let (scale_x, scale_y) = self.evaluate_vec2(props, "scale", time, 100.0, 100.0);
-        let (anchor_x, anchor_y) = self.evaluate_vec2(props, "anchor", time, 0.0, 0.0);
+        let (pos_x, pos_y) =
+            self.evaluate_vec2(props, "position", "position_x", "position_y", time, 0.0, 0.0);
+        let (scale_x, scale_y) =
+            self.evaluate_vec2(props, "scale", "scale_x", "scale_y", time, 100.0, 100.0);
+        let (anchor_x, anchor_y) =
+            self.evaluate_vec2(props, "anchor", "anchor_x", "anchor_y", time, 0.0, 0.0);
         let rotation = self.evaluate_number(props, "rotation", time, 0.0);
         let opacity = self.evaluate_number(props, "opacity", time, 100.0);
 
@@ -200,6 +203,8 @@ impl<'a> FrameEvaluationContext<'a> {
         &self,
         properties: &PropertyMap,
         key: &str,
+        key_x: &str,
+        key_y: &str,
         time: f64,
         default_x: f64,
         default_y: f64,
@@ -212,8 +217,7 @@ impl<'a> FrameEvaluationContext<'a> {
             (default_x, default_y)
         };
 
-        let key_x = format!("{}_x", key);
-        if let Some(val) = self.evaluate_property_value(properties, &key_x, time) {
+        if let Some(val) = self.evaluate_property_value(properties, key_x, time) {
             match val {
                 PropertyValue::Number(n) => vx = n.0,
                 PropertyValue::Integer(i) => vx = i as f64,
@@ -221,8 +225,7 @@ impl<'a> FrameEvaluationContext<'a> {
             }
         }
 
-        let key_y = format!("{}_y", key);
-        if let Some(val) = self.evaluate_property_value(properties, &key_y, time) {
+        if let Some(val) = self.evaluate_property_value(properties, key_y, time) {
             match val {
                 PropertyValue::Number(n) => vy = n.0,
                 PropertyValue::Integer(i) => vy = i as f64,
