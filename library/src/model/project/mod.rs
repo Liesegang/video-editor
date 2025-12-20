@@ -15,7 +15,10 @@ use uuid::Uuid;
 pub struct Track {
     pub id: Uuid, // Added UUID field
     pub name: String,
+    #[serde(default)]
     pub clips: Vec<TrackClip>,
+    #[serde(default)]
+    pub children: Vec<Track>, // Sub-folders
 }
 
 impl Track {
@@ -24,6 +27,7 @@ impl Track {
             id: Uuid::new_v4(), // Initialize with a new UUID
             name: name.to_string(),
             clips: Vec::new(),
+            children: Vec::new(),
         }
     }
 }
