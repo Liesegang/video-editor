@@ -15,15 +15,35 @@ pub struct VideoReader {
 
 impl VideoReader {
     pub fn new(file_path: &str) -> Result<Self, LibraryError> {
+        Self::new_with_stream(file_path, None)
+    }
+
+    pub fn new_with_stream(
+        file_path: &str,
+        stream_index: Option<usize>,
+    ) -> Result<Self, LibraryError> {
         ffmpeg::init()?;
 
         let input_context = ffmpeg::format::input(&file_path)?;
-        let input = input_context
-            .streams()
-            .best(ffmpeg::media::Type::Video)
-            .ok_or(LibraryError::FfmpegOther(
-                "動画ストリームが見つかりません".to_string(),
-            ))?;
+        let input = if let Some(idx) = stream_index {
+            input_context.stream(idx).ok_or(LibraryError::FfmpegOther(
+                "指定されたストリームが見つかりません".to_string(),
+            ))?
+        } else {
+            input_context
+                .streams()
+                .best(ffmpeg::media::Type::Video)
+                .ok_or(LibraryError::FfmpegOther(
+                    "動画ストリームが見つかりません".to_string(),
+                ))?
+        };
+
+        if input.parameters().medium() != ffmpeg::media::Type::Video {
+            return Err(LibraryError::FfmpegOther(
+                "指定されたストリームは動画ではありません".to_string(),
+            ));
+        }
+
         let video_stream_index = input.index();
 
         let context_decoder = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
@@ -264,5 +284,53 @@ impl MediaProbe {
             .streams()
             .best(ffmpeg::media::Type::Audio)
             .is_some()
+    }
+
+    pub fn get_available_streams(&self) -> Vec<crate::plugin::AssetMetadata> {
+        let mut streams = Vec::new();
+        let duration = self.get_duration(); // Global duration
+
+        for stream in self.input_context.streams() {
+            let params = stream.parameters();
+            let medium = params.medium();
+
+            let kind = match medium {
+                ffmpeg::media::Type::Video => crate::model::project::asset::AssetKind::Video,
+                ffmpeg::media::Type::Audio => crate::model::project::asset::AssetKind::Audio,
+                _ => continue,
+            };
+
+            let mut fps = None;
+            let mut width = None;
+            let mut height = None;
+
+            if kind == crate::model::project::asset::AssetKind::Video {
+                let avg_frame_rate = stream.avg_frame_rate();
+                if avg_frame_rate.denominator() > 0 {
+                    fps = Some(
+                        avg_frame_rate.numerator() as f64 / avg_frame_rate.denominator() as f64,
+                    );
+                }
+
+                if let Ok(ctx) = ffmpeg::codec::context::Context::from_parameters(params.clone()) {
+                    if let Ok(decoder) = ctx.decoder().video() {
+                        width = Some(decoder.width());
+                        height = Some(decoder.height());
+                    }
+                }
+            }
+
+            streams.push(crate::plugin::AssetMetadata {
+                kind,
+                duration, // Use container duration? Or stream duration?
+                // stream.duration() is in time_base units.
+                // Generally container duration is safer.
+                fps,
+                width,
+                height,
+                stream_index: Some(stream.index()),
+            });
+        }
+        streams
     }
 }

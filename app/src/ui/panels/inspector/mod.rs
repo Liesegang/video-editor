@@ -237,9 +237,13 @@ pub fn inspector_panel(
                                                 }
                                                 needs_refresh = true;
                                             }
-                                            crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, _key, _val) => {
-                                                 // TODO: Implement set_clip_property_attribute
-                                                 println!("SetAttribute for prop {} not implemented", name);
+                                            crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, key, val) => {
+                                                 match project_service.set_clip_property_attribute(
+                                                     comp_id, track_id, selected_entity_id, &name, &key, val
+                                                 ) {
+                                                      Ok(_) => { needs_refresh = true; },
+                                                      Err(e) => eprintln!("Failed to set attribute {} for property {}: {:?}", key, name, e),
+                                                 }
                                             }
                                         }
                                     }
@@ -327,8 +331,13 @@ pub fn inspector_panel(
                                                 }
                                                 needs_refresh = true;
                                         }
-                                        crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, _key, _val) => {
-                                             println!("SetAttribute for prop {} not implemented", name);
+                                        crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, key, val) => {
+                                             match project_service.set_clip_property_attribute(
+                                                 comp_id, track_id, selected_entity_id, &name, &key, val
+                                             ) {
+                                                  Ok(_) => { needs_refresh = true; },
+                                                  Err(e) => eprintln!("Failed to set attribute {} for property {}: {:?}", key, name, e),
+                                             }
                                         }
                                     }
                                 }

@@ -741,4 +741,93 @@ impl ClipHandler {
             )))
         }
     }
+
+    pub fn set_clip_property_attribute(
+        project: &Arc<RwLock<Project>>,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
+            LibraryError::Project(format!("Composition with ID {} not found", composition_id))
+        })?;
+        let track = composition.get_track_mut(track_id).ok_or_else(|| {
+            LibraryError::Project(format!(
+                "Track with ID {} not found in Composition {}",
+                track_id, composition_id
+            ))
+        })?;
+
+        if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+            if let Some(prop) = clip.properties.get_mut(property_key) {
+                prop.properties
+                    .insert(attribute_key.to_string(), attribute_value);
+                Ok(())
+            } else {
+                Err(LibraryError::Project(format!(
+                    "Property {} not found",
+                    property_key
+                )))
+            }
+        } else {
+            Err(LibraryError::Project(format!(
+                "Clip with ID {} not found",
+                clip_id
+            )))
+        }
+    }
+
+    pub fn set_effect_property_attribute(
+        project: &Arc<RwLock<Project>>,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effect_index: usize,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
+            LibraryError::Project(format!("Composition with ID {} not found", composition_id))
+        })?;
+        let track = composition.get_track_mut(track_id).ok_or_else(|| {
+            LibraryError::Project(format!(
+                "Track with ID {} not found in Composition {}",
+                track_id, composition_id
+            ))
+        })?;
+
+        if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+            if let Some(effect) = clip.effects.get_mut(effect_index) {
+                if let Some(prop) = effect.properties.get_mut(property_key) {
+                    prop.properties
+                        .insert(attribute_key.to_string(), attribute_value);
+                    Ok(())
+                } else {
+                    Err(LibraryError::Project(format!(
+                        "Property {} not found",
+                        property_key
+                    )))
+                }
+            } else {
+                Err(LibraryError::Project(
+                    "Effect index out of range".to_string(),
+                ))
+            }
+        } else {
+            Err(LibraryError::Project(format!(
+                "Clip with ID {} not found",
+                clip_id
+            )))
+        }
+    }
 }

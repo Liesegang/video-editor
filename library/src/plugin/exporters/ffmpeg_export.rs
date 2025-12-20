@@ -176,6 +176,17 @@ impl ExportPlugin for FfmpegExportPlugin {
                 default_value: PropertyValue::String("medium".to_string()),
                 category: "Quality".to_string(),
             },
+            PropertyDefinition {
+                name: "audio_bitrate".to_string(),
+                label: "Audio Bitrate (kbps)".to_string(),
+                ui_type: PropertyUiType::Integer {
+                    min: 64,
+                    max: 320,
+                    suffix: " kbps".to_string(),
+                },
+                default_value: PropertyValue::Number(super::super::OrderedFloat(192.0)),
+                category: "Audio".to_string(),
+            },
         ]
     }
 }
@@ -243,10 +254,11 @@ impl FfmpegSession {
         }
 
         if has_audio {
+            let audio_bitrate = settings.parameter_u64("audio_bitrate").unwrap_or(192);
             cmd.arg("-c:a")
                 .arg("aac")
                 .arg("-b:a")
-                .arg("192k")
+                .arg(format!("{}k", audio_bitrate))
                 .arg("-map")
                 .arg("0:v")
                 .arg("-map")

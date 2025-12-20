@@ -239,7 +239,10 @@ fn init_glutin_headless(
         .ok_or("No matching GL config found")?;
 
     if let Some(target) = target_pf_index {
-        debug!("Target pixel format index was {}, but manual filtering is disabled due to API limitations.", target);
+        debug!(
+            "Target pixel format index was {}, but manual filtering is disabled due to API limitations.",
+            target
+        );
     }
 
     debug!(

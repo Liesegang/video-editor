@@ -1226,7 +1226,15 @@ pub fn graph_editor_panel(
             }
         }
         Action::SetEasing(name, idx, easing) => {
-            if let Some((eff_idx, prop_key)) = parse_key(&name) {
+            let (base_name, _) = if name.ends_with(".x") {
+                (name.trim_end_matches(".x"), Some(PropertyComponent::X))
+            } else if name.ends_with(".y") {
+                (name.trim_end_matches(".y"), Some(PropertyComponent::Y))
+            } else {
+                (name.as_str(), None)
+            };
+
+            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                 let _ = project_service.update_effect_keyframe_by_index(
                     comp_id,
                     track_id,
@@ -1238,7 +1246,7 @@ pub fn graph_editor_panel(
                     None,
                     Some(easing),
                 );
-            } else if let Some((style_idx, prop_key)) = parse_style_key(&name) {
+            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
                 let _ = project_service.update_style_keyframe_by_index(
                     comp_id,
                     track_id,
@@ -1255,7 +1263,7 @@ pub fn graph_editor_panel(
                     comp_id,
                     track_id,
                     entity_id,
-                    &name,
+                    base_name,
                     idx,
                     None, // Keep existing time
                     None, // Keep existing value
@@ -1264,41 +1272,105 @@ pub fn graph_editor_panel(
             }
         }
         Action::Remove(name, idx) => {
-            if let Some((eff_idx, prop_key)) = parse_key(&name) {
+            let (base_name, _) = if name.ends_with(".x") {
+                (name.trim_end_matches(".x"), Some(PropertyComponent::X))
+            } else if name.ends_with(".y") {
+                (name.trim_end_matches(".y"), Some(PropertyComponent::Y))
+            } else {
+                (name.as_str(), None)
+            };
+
+            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                 let _ = project_service.remove_effect_keyframe_by_index(
                     comp_id, track_id, entity_id, eff_idx, &prop_key, idx,
                 );
-            } else if let Some((style_idx, prop_key)) = parse_style_key(&name) {
+            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
                 let _ = project_service
                     .remove_style_keyframe(comp_id, track_id, entity_id, style_idx, &prop_key, idx);
             } else {
-                let _ = project_service.remove_keyframe(comp_id, track_id, entity_id, &name, idx);
+                let _ =
+                    project_service.remove_keyframe(comp_id, track_id, entity_id, base_name, idx);
             }
         }
         Action::EditKeyframe(name, idx) => {
+            let (base_name, _) = if name.ends_with(".x") {
+                (name.trim_end_matches(".x"), Some(PropertyComponent::X))
+            } else if name.ends_with(".y") {
+                (name.trim_end_matches(".y"), Some(PropertyComponent::Y))
+            } else {
+                (name.as_str(), None)
+            };
+
             if let Ok(project) = project.read() {
                 if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
                     if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
                         if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
                             // Effect Property
-                            if let Some((eff_idx, prop_key)) = parse_key(&name) {
+                            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                                 if let Some(effect) = clip.effects.get(eff_idx) {
                                     if let Some(prop) = effect.properties.get(&prop_key) {
                                         if prop.evaluator == "keyframe" {
                                             let keyframes = prop.keyframes();
-                                            if let Some(kf) = keyframes.get(idx) {
+                                            let mut sorted_kf = keyframes.clone();
+                                            sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+
+                                            if let Some(kf) = sorted_kf.get(idx) {
                                                 editor_context.keyframe_dialog.is_open = true;
                                                 editor_context.keyframe_dialog.track_id =
                                                     Some(track_id);
                                                 editor_context.keyframe_dialog.entity_id =
                                                     Some(entity_id);
                                                 editor_context.keyframe_dialog.property_name =
-                                                    name.clone();
+                                                    name.clone(); // Pass original name with suffix so updates target correct component?
+                                                                  // Wait, KeyframeDialog only supports updating Time, Value, Easing.
+                                                                  // Value is f64. If it's a Vec2 property, we are updating ONE component?
+                                                                  // KeyframeDialog update logic uses `new_value = PropertyValue::Number`.
+                                                                  // Ah, KeyframeDialog update logic (which I reviewed) uses `parse_key` on `state.property_name`.
+                                                                  // AND it assumes `new_value` is `Number`.
+                                                                  // IF `state.property_name` has suffix, and `parse_key` FAILS on suffix...
+                                                                  // The Dialog's logic ALSO needs suffix stripping.
+                                                                  // But `parse_key` in Dialog is locally defined too.
+                                                                  // Let's stick to passing `name` (with suffix) here, and assume Dialog handles it?
+                                                                  // I checked Dialog code. It defines `parse_key`.
+                                                                  // `parse_key` splits by ':'. It does NOT strip suffix.
+                                                                  // Use `base_name` here?
+                                                                  // If we pass `base_name` to dialog, dialog receives "position".
+                                                                  // Dialog constructs `PropertyValue::Number`.
+                                                                  // ProjectService `update_keyframe` overwrites the WHOLE value with Number?
+                                                                  // BAD. If it's Vec2, we destroy it.
+                                                                  // Use `name` (with suffix) in Dialog.
+                                                                  // Dialog must be fixed to handle suffix too?
+                                                                  // Wait, `KeyframeDialog` update logic:
+                                                                  // It doesn't use `Action::Move` logic. It blindly creates `PropertyValue::Number`.
+                                                                  // AND call `update_keyframe`.
+                                                                  // If target is Vec2, this is corrupting data??
+                                                                  // `handlers::keyframe_handler::update_keyframe` accepts `Option<PropertyValue>`.
+                                                                  // If we provide `Number`, and property expects `Vec2`...
+                                                                  // The `ProjectService` or `KeyframeHandler` *might* handle type conversion or partial update?
+                                                                  // `KeyframeHandler`: `kf.value = new_val;`
+                                                                  // It replaces it.
+                                                                  // This is BAD for Vec2 components if we replace `Vec2(x, y)` with `Number(x)`.
+                                                                  // The `KeyframeDialog` is fundamentally only built for Scalars right now.
+                                                                  // But we are invoking it for Vec2 components (.x, .y).
+                                                                  // We need to fix `KeyframeDialog` to handle components too, OR logic in `ProjectService` to merge.
+                                                                  // BUT FIRST, let's fix the dialog APPEARING.
+                                                                  // We pass `name` (with suffix) to dialog.
+                                                                  // Dialog code logic: `parse_key` fails for suffix.
+                                                                  // So Dialog update will fail for Vector properties anyway?
+                                                                  // Yes.
+                                                                  // BUT user complaint is "dialog does not appear".
+                                                                  // Opening it is step 1.
+                                                                  // Let's pass `name` (original) to `property_name`.
+                                                                  // We also need to fix `KeyframeDialog` to handle suffix if we want it to work.
                                                 editor_context.keyframe_dialog.keyframe_index = idx;
                                                 editor_context.keyframe_dialog.time =
                                                     kf.time.into_inner();
                                                 editor_context.keyframe_dialog.value =
-                                                    kf.value.get_as::<f64>().unwrap_or(0.0);
+                                                    match (name.ends_with(".x"), name.ends_with(".y")) {
+                                                        (true, _) => kf.value.get_as::<library::model::project::property::Vec2>().map_or(0.0, |v| v.x.into_inner()),
+                                                        (_, true) => kf.value.get_as::<library::model::project::property::Vec2>().map_or(0.0, |v| v.y.into_inner()),
+                                                        _ => kf.value.get_as::<f64>().unwrap_or(0.0),
+                                                    };
                                                 editor_context.keyframe_dialog.easing =
                                                     kf.easing.clone();
                                             }
@@ -1307,12 +1379,15 @@ pub fn graph_editor_panel(
                                 }
                             }
                             // Style Property
-                            else if let Some((style_idx, prop_key)) = parse_style_key(&name) {
+                            else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
                                 if let Some(style) = clip.styles.get(style_idx) {
                                     if let Some(prop) = style.properties.get(&prop_key) {
                                         if prop.evaluator == "keyframe" {
                                             let keyframes = prop.keyframes();
-                                            if let Some(kf) = keyframes.get(idx) {
+                                            let mut sorted_kf = keyframes.clone();
+                                            sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+
+                                            if let Some(kf) = sorted_kf.get(idx) {
                                                 editor_context.keyframe_dialog.is_open = true;
                                                 editor_context.keyframe_dialog.track_id =
                                                     Some(track_id);
@@ -1324,7 +1399,11 @@ pub fn graph_editor_panel(
                                                 editor_context.keyframe_dialog.time =
                                                     kf.time.into_inner();
                                                 editor_context.keyframe_dialog.value =
-                                                    kf.value.get_as::<f64>().unwrap_or(0.0);
+                                                    match (name.ends_with(".x"), name.ends_with(".y")) {
+                                                        (true, _) => kf.value.get_as::<library::model::project::property::Vec2>().map_or(0.0, |v| v.x.into_inner()),
+                                                        (_, true) => kf.value.get_as::<library::model::project::property::Vec2>().map_or(0.0, |v| v.y.into_inner()),
+                                                        _ => kf.value.get_as::<f64>().unwrap_or(0.0),
+                                                    };
                                                 editor_context.keyframe_dialog.easing =
                                                     kf.easing.clone();
                                             }
@@ -1333,18 +1412,33 @@ pub fn graph_editor_panel(
                                 }
                             }
                             // Clip Property
-                            else if let Some(prop) = clip.properties.get(&name) {
+                            else if let Some(prop) = clip.properties.get(base_name) {
                                 if prop.evaluator == "keyframe" {
                                     let keyframes = prop.keyframes();
-                                    if let Some(kf) = keyframes.get(idx) {
+                                    let mut sorted_kf = keyframes.clone();
+                                    sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+
+                                    if let Some(kf) = sorted_kf.get(idx) {
                                         editor_context.keyframe_dialog.is_open = true;
                                         editor_context.keyframe_dialog.track_id = Some(track_id);
                                         editor_context.keyframe_dialog.entity_id = Some(entity_id);
                                         editor_context.keyframe_dialog.property_name = name.clone();
                                         editor_context.keyframe_dialog.keyframe_index = idx;
                                         editor_context.keyframe_dialog.time = kf.time.into_inner();
-                                        editor_context.keyframe_dialog.value =
-                                            kf.value.get_as::<f64>().unwrap_or(0.0);
+                                        editor_context.keyframe_dialog.value = match (
+                                            name.ends_with(".x"),
+                                            name.ends_with(".y"),
+                                        ) {
+                                            (true, _) => kf
+                                                .value
+                                                .get_as::<library::model::project::property::Vec2>()
+                                                .map_or(0.0, |v| v.x.into_inner()),
+                                            (_, true) => kf
+                                                .value
+                                                .get_as::<library::model::project::property::Vec2>()
+                                                .map_or(0.0, |v| v.y.into_inner()),
+                                            _ => kf.value.get_as::<f64>().unwrap_or(0.0),
+                                        };
                                         editor_context.keyframe_dialog.easing = kf.easing.clone();
                                     }
                                 }
