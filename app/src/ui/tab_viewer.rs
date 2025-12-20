@@ -10,7 +10,7 @@ use crate::{
     action::HistoryManager,
     model::ui_types::Tab,
     state::context::EditorContext,
-    ui::panels::{assets, inspector, preview, timeline},
+    ui::panels::{assets, inspector, node_editor, preview, timeline},
 };
 use library::EditorService;
 use library::RenderServer;
@@ -94,6 +94,9 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                     self.command_registry,
                 );
             }
+            Tab::NodeGraph => {
+                node_editor::node_editor_panel(ui, &mut self.editor_context.node_graph_state);
+            }
         }
     }
 
@@ -104,6 +107,7 @@ impl<'a> TabViewer for AppTabViewer<'a> {
             Tab::Inspector => format!("{} {}", icons::WRENCH, "Inspector").into(),
             Tab::Assets => format!("{} {}", icons::FOLDER, "Assets").into(),
             Tab::GraphEditor => format!("{} {}", icons::CHART_LINE, "Graph Editor").into(),
+            Tab::NodeGraph => format!("{} {}", icons::SHARE_NETWORK, "Node Graph").into(),
         }
     }
 }
@@ -116,7 +120,7 @@ pub fn create_initial_dock_state() -> DockState<Tab> {
     let [main_area, _] = surface.split_below(
         egui_dock::NodeIndex::root(),
         0.7,
-        vec![Tab::Timeline, Tab::GraphEditor],
+        vec![Tab::Timeline, Tab::GraphEditor, Tab::NodeGraph],
     );
 
     // 2. Split off the inspector on the right (20% of width)

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+egui-snarl = "0.9.0"
 eframe = { version = "0.33.3", features = ["serde"] }
 egui = "0.33.3"
 egui_extras = { version = "0.33.3", features = ["all_loaders"] }
