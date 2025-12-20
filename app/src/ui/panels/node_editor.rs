@@ -3,6 +3,7 @@ use egui_snarl::{
     InPin, OutPin, Snarl,
 };
 use eframe::egui::{self, Color32};
+use log;
 use crate::model::node_graph::{MyNodeTemplate, MyValueType};
 
 // ========= 2. Define the Viewer =========
@@ -110,6 +111,15 @@ impl SnarlViewer<MyNodeTemplate> for MySnarlViewer {
 
 // ========= 3. The Panel Logic =========
 
+// Add at the top with other imports if not present, or check usages.
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, serde::Deserialize, serde::Serialize)]
+struct ContextMenuData {
+    x: f32,
+    y: f32,
+}
+
 pub fn node_editor_panel(
     ui: &mut egui::Ui,
     snarl: &mut Snarl<MyNodeTemplate>,
@@ -121,52 +131,88 @@ pub fn node_editor_panel(
     snarl.show(&mut viewer, &style, id, ui);
 
     let popup_id = ui.make_persistent_id("node_graph_context_menu");
-    if ui.input(|i| i.pointer.secondary_clicked()) && !ui.memory(|m| m.is_popup_open(popup_id)) {
-        ui.memory_mut(|m| m.toggle_popup(popup_id));
+    
+    // 1. Open Logic
+    if ui.input(|i| i.pointer.secondary_clicked()) {
+        if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+             log::info!("Opening context menu at {:?}", pos);
+             let data = ContextMenuData { x: pos.x, y: pos.y };
+             ui.memory_mut(|m| m.data.insert_persisted(popup_id, data));
+        }
     }
 
-    if ui.memory(|m| m.is_popup_open(popup_id)) {
-        let pos = ui.input(|i| i.pointer.hover_pos()).unwrap_or_default();
-        egui::Area::new(popup_id)
+    // 2. Render Logic
+    let menu_data: Option<ContextMenuData> = ui.memory_mut(|m| m.data.get_persisted(popup_id));
+
+    if let Some(data) = menu_data {
+        let pos = egui::Pos2::new(data.x, data.y);
+        let mut close_menu = false;
+
+        let response = egui::Area::new(popup_id)
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
+            .constrain(true) // Keep on screen
             .show(ui.ctx(), |ui| {
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
-                    add_node_menu(ui, snarl, pos);
+                    if add_node_menu(ui, snarl) {
+                        close_menu = true;
+                    }
+                    ui.separator();
+                    // Optional: remove dedicated close button if click-outside works, 
+                    // but keeping it doesn't hurt.
+                    if ui.button("Close Menu").clicked() {
+                        close_menu = true;
+                    }
                 });
             });
+        
+        // 3. Close Logic: Click outside
+        if ui.input(|i| i.pointer.any_pressed()) {
+            if !response.response.hovered() {
+                 close_menu = true;
+            }
+        }
+
+        if close_menu {
+            ui.memory_mut(|m| m.data.remove::<ContextMenuData>(popup_id));
+        }
     }
 }
 
-fn add_node_menu(ui: &mut egui::Ui, snarl: &mut Snarl<MyNodeTemplate>, pos: egui::Pos2) {
+// Returns true if an action was taken (should close menu)
+fn add_node_menu(ui: &mut egui::Ui, snarl: &mut Snarl<MyNodeTemplate>) -> bool {
      ui.label("Add Node");
      ui.separator();
+     let mut action_taken = false;
+     let graph_pos = egui::Pos2::ZERO; // Default to origin until we can access pan/scale
+
      if ui.button("Scalar").clicked() {
-         snarl.insert_node(pos, MyNodeTemplate::MakeScalar);
-         ui.close();
+         snarl.insert_node(graph_pos, MyNodeTemplate::MakeScalar);
+         action_taken = true;
      }
      if ui.button("Add Scalar").clicked() {
-         snarl.insert_node(pos, MyNodeTemplate::AddScalar);
-         ui.close();
+         snarl.insert_node(graph_pos, MyNodeTemplate::AddScalar);
+         action_taken = true;
      }
      if ui.button("Subtract Scalar").clicked() {
-         snarl.insert_node(pos, MyNodeTemplate::SubtractScalar);
-         ui.close();
+         snarl.insert_node(graph_pos, MyNodeTemplate::SubtractScalar);
+         action_taken = true;
      }
      if ui.button("Multiply Scalar").clicked() {
-         snarl.insert_node(pos, MyNodeTemplate::MultiplyScalar);
-         ui.close();
+         snarl.insert_node(graph_pos, MyNodeTemplate::MultiplyScalar);
+         action_taken = true;
      }
      if ui.button("Make Vector").clicked() {
-         snarl.insert_node(pos, MyNodeTemplate::MakeVector);
-         ui.close();
+         snarl.insert_node(graph_pos, MyNodeTemplate::MakeVector);
+         action_taken = true;
      }
      if ui.button("Add Vector").clicked() {
-         snarl.insert_node(pos, MyNodeTemplate::AddVector);
-         ui.close();
+         snarl.insert_node(graph_pos, MyNodeTemplate::AddVector);
+         action_taken = true;
      }
      if ui.button("Print").clicked() {
-         snarl.insert_node(pos, MyNodeTemplate::Print);
-         ui.close();
+         snarl.insert_node(graph_pos, MyNodeTemplate::Print);
+         action_taken = true;
      }
+     action_taken
 }
