@@ -1,10 +1,9 @@
 use crate::model::ui_types::GizmoHandle;
 use crate::state::context::EditorContext;
-use crate::ui::panels::preview::clip::PreviewClip;
+use crate::ui::panels::preview::{action::PreviewAction, clip::PreviewClip};
 use egui::{CursorIcon, Pos2, Rect, Sense, Ui, Vec2};
 use library::model::project::project::Project;
 use library::model::project::property::{PropertyValue, Vec2 as PropVec2};
-use library::EditorService as ProjectService;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 
@@ -12,10 +11,10 @@ pub fn handle_gizmo_interaction(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     project: &Arc<RwLock<Project>>,
-    project_service: &ProjectService,
     history_manager: &mut crate::action::HistoryManager,
     pointer_pos: Option<Pos2>,
     to_world: impl Fn(Pos2) -> Pos2,
+    pending_actions: &mut Vec<PreviewAction>,
 ) -> bool {
     let mut interacted_with_gizmo = false;
 
@@ -213,42 +212,38 @@ pub fn handle_gizmo_interaction(
                     }
 
                     // Apply Updates
-                    // Apply Updates
                     let current_time = editor_context.timeline.current_time as f64;
 
-                    crate::utils::property::update_property(
-                        project_service,
+                    pending_actions.push(PreviewAction::UpdateProperty {
                         comp_id,
                         track_id,
-                        selected_id,
-                        "scale",
-                        current_time,
-                        PropertyValue::Vec2(PropVec2 {
+                        entity_id: selected_id,
+                        prop_name: "scale".to_string(),
+                        time: current_time,
+                        value: PropertyValue::Vec2(PropVec2 {
                             x: OrderedFloat(new_scale_x as f64),
                             y: OrderedFloat(new_scale_y as f64),
                         }),
-                    );
-                    crate::utils::property::update_property(
-                        project_service,
+                    });
+                    pending_actions.push(PreviewAction::UpdateProperty {
                         comp_id,
                         track_id,
-                        selected_id,
-                        "position",
-                        current_time,
-                        PropertyValue::Vec2(PropVec2 {
+                        entity_id: selected_id,
+                        prop_name: "position".to_string(),
+                        time: current_time,
+                        value: PropertyValue::Vec2(PropVec2 {
                             x: OrderedFloat(new_pos_x as f64),
                             y: OrderedFloat(new_pos_y as f64),
                         }),
-                    );
-                    crate::utils::property::update_number_property(
-                        project_service,
+                    });
+                    pending_actions.push(PreviewAction::UpdateProperty {
                         comp_id,
                         track_id,
-                        selected_id,
-                        "rotation",
-                        current_time,
-                        new_rotation as f64,
-                    );
+                        entity_id: selected_id,
+                        prop_name: "rotation".to_string(),
+                        time: current_time,
+                        value: PropertyValue::Number(OrderedFloat(new_rotation as f64)),
+                    });
                 }
             }
         }
