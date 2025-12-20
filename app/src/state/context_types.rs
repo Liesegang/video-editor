@@ -45,6 +45,8 @@ pub struct TimelineState {
     pub playback_accumulator: f32,
     #[serde(skip)]
     pub scroll_offset: egui::Vec2,
+    #[serde(default)]
+    pub expanded_tracks: HashSet<Uuid>,
 }
 
 impl Default for TimelineState {
@@ -58,6 +60,7 @@ impl Default for TimelineState {
             h_zoom: 1.0,
             playback_accumulator: 0.0,
             scroll_offset: egui::Vec2::ZERO,
+            expanded_tracks: HashSet::new(),
         }
     }
 }

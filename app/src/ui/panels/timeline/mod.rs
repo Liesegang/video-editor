@@ -2,6 +2,7 @@ pub mod clip_area;
 pub mod controls;
 pub mod ruler;
 pub mod track_list;
+pub mod utils;
 
 use egui::Ui;
 use library::model::project::project::Project;
