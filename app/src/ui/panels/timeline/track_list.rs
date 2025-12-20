@@ -8,6 +8,8 @@ use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 
+use super::utils::flatten::flatten_tracks;
+
 pub fn show_track_list(
     ui_content: &mut Ui,
     editor_context: &mut EditorContext,
@@ -43,9 +45,15 @@ pub fn show_track_list(
             }
         } // `proj_read` lock is dropped here
     }
-    let num_tracks = current_tracks.len();
 
-    for (i, track) in current_tracks.iter().enumerate() {
+    // Flatten tracks based on expanded state
+    let display_tracks = flatten_tracks(&current_tracks, &editor_context.timeline.expanded_tracks);
+    let num_tracks = display_tracks.len();
+
+    for display_track in &display_tracks {
+        let track = display_track.track;
+        let i = display_track.visible_row_index;
+
         let y = track_list_rect.min.y + (i as f32 * (row_height + track_spacing))
             - editor_context.timeline.scroll_offset.y;
         let track_label_rect = egui::Rect::from_min_size(
@@ -99,8 +107,46 @@ pub fn show_track_list(
                     egui::Color32::from_gray(60)
                 },
             );
+
+            // Indentation
+            let indent = display_track.depth as f32 * 10.0;
+            let mut text_offset_x = 5.0 + indent;
+
+            // Expand/Collapse Icon
+            if display_track.is_folder {
+                let icon_rect = egui::Rect::from_min_size(
+                    egui::pos2(track_label_rect.min.x + indent, track_label_rect.min.y),
+                    egui::vec2(16.0, row_height),
+                );
+
+                // Interact specifically with the icon area for expansion
+                let icon_response = ui_content.interact(
+                    icon_rect,
+                    egui::Id::new(track.id).with("expand_icon"),
+                    egui::Sense::click()
+                );
+
+                if icon_response.clicked() {
+                    if display_track.is_expanded {
+                        editor_context.timeline.expanded_tracks.remove(&track.id);
+                    } else {
+                        editor_context.timeline.expanded_tracks.insert(track.id);
+                    }
+                }
+
+                let icon = if display_track.is_expanded { icons::CARET_DOWN } else { icons::CARET_RIGHT };
+                track_list_painter.text(
+                    icon_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    icon,
+                    egui::FontId::monospace(12.0),
+                    egui::Color32::WHITE,
+                );
+                text_offset_x += 16.0;
+            }
+
             track_list_painter.text(
-                track_label_rect.left_center() + egui::vec2(5.0, 0.0),
+                track_label_rect.left_center() + egui::vec2(text_offset_x, 0.0),
                 egui::Align2::LEFT_CENTER,
                 format!("Track {}", track.name),
                 egui::FontId::monospace(10.0),
