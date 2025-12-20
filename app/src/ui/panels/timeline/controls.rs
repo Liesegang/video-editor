@@ -1,6 +1,6 @@
 use egui::Ui;
 use egui_phosphor::regular as icons;
-use library::model::project::project::Project;
+use library::core::model::project::Project;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 

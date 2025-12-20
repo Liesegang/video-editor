@@ -4,7 +4,7 @@ pub mod ruler;
 pub mod track_list;
 
 use egui::Ui;
-use library::model::project::project::Project;
+use library::core::model::project::Project;
 use library::EditorService;
 use std::sync::{Arc, RwLock};
 

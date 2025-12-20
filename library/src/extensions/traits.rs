@@ -105,6 +105,7 @@ pub trait PropertyEvaluator: Send + Sync {
 
 pub struct EvaluationContext<'a> {
     pub property_map: &'a crate::core::model::property::PropertyMap,
+    pub fps: f64,
 }
 
 pub trait PropertyPlugin: Plugin {

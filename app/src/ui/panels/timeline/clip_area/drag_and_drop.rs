@@ -1,9 +1,9 @@
 use egui::Ui;
-use library::model::project::asset::AssetKind;
-use library::model::project::project::Project;
-use library::model::project::property::PropertyValue;
-use library::model::project::TrackClip;
-use library::model::project::TrackClipKind;
+use library::core::model::asset::AssetKind;
+use library::core::model::project::Project;
+use library::core::model::property::PropertyValue;
+use library::core::model::TrackClip;
+use library::core::model::TrackClipKind;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -70,39 +70,36 @@ pub fn handle_drag_and_drop(
 
                                         new_clip_opt = match asset.kind {
                                             AssetKind::Video => {
+                                                let clip_w = asset.width.unwrap_or(comp_width as u32);
+                                                let clip_h = asset.height.unwrap_or(comp_height as u32);
                                                 let mut video_clip = TrackClip::create_video(
-                                                    Some(asset.id),
                                                     &asset.path,
                                                     drop_in_frame,
-                                                    drop_out,
-                                                    drop_in_frame, // source_begin_frame = drop_in_frame
-                                                    duration_frames, // Use asset duration
-                                                    asset.fps.unwrap_or(30.0), // Use asset fps or default
+                                                    duration_frames,
+                                                    asset.fps.unwrap_or(30.0),
                                                     comp_width as u32,
                                                     comp_height as u32,
+                                                    clip_w,
+                                                    clip_h,
                                                 );
-                                                if let (Some(w), Some(h)) =
-                                                    (asset.width, asset.height)
-                                                {
-                                                    video_clip.properties.set("anchor".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Vec2(library::model::project::property::Vec2 { x: ordered_float::OrderedFloat(w as f64 / 2.0), y: ordered_float::OrderedFloat(h as f64 / 2.0) })));
-                                                }
+                                                video_clip.reference_id = Some(asset.id);
+                                                video_clip.source_begin_frame = 0;
                                                 Some(video_clip)
                                             }
                                             AssetKind::Image => {
+                                                let clip_w = asset.width.unwrap_or(comp_width as u32);
+                                                let clip_h = asset.height.unwrap_or(comp_height as u32);
                                                 let mut image_clip = TrackClip::create_image(
-                                                    Some(asset.id),
                                                     &asset.path,
                                                     drop_in_frame,
                                                     drop_out,
                                                     comp_width as u32,
                                                     comp_height as u32,
+                                                    clip_w,
+                                                    clip_h,
                                                 );
-                                                image_clip.source_begin_frame = 0; // Images are static, so 0 is fine, or arguably doesn't matter. But let's keep 0 as explicit.
-                                                if let (Some(w), Some(h)) =
-                                                    (asset.width, asset.height)
-                                                {
-                                                    image_clip.properties.set("anchor".to_string(), library::model::project::property::Property::constant(library::model::project::property::PropertyValue::Vec2(library::model::project::property::Vec2 { x: ordered_float::OrderedFloat(w as f64 / 2.0), y: ordered_float::OrderedFloat(h as f64 / 2.0) })));
-                                                }
+                                                image_clip.reference_id = Some(asset.id);
+                                                image_clip.source_begin_frame = 0;
                                                 Some(image_clip)
                                             }
 
@@ -112,7 +109,7 @@ pub fn handle_drag_and_drop(
                                                          Some(asset.id),
                                                          TrackClipKind::Audio,
                                                          0, 0, 0, None, 0.0,
-                                                         library::model::project::property::PropertyMap::new(),
+                                                         library::core::model::property::PropertyMap::new(),
                                                          Vec::new(), // styles
                                                          Vec::new()  // effects
                                                      );
@@ -158,7 +155,7 @@ pub fn handle_drag_and_drop(
                                     0,
                                     None,
                                     0.0,
-                                    library::model::project::property::PropertyMap::new(),
+                                    library::core::model::property::PropertyMap::new(),
                                     Vec::new(), // styles
                                     Vec::new(), // effects
                                 );

@@ -1,8 +1,8 @@
 use egui::Ui;
 use egui_extras::{Column, TableBuilder};
 use egui_phosphor::regular as icons;
-use library::model::project::asset::AssetKind;
-use library::model::project::project::Project;
+use library::core::model::asset::AssetKind;
+use library::core::model::project::Project;
 use library::EditorService;
 use std::sync::{Arc, RwLock};
 

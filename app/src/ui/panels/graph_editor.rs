@@ -1,7 +1,7 @@
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2};
 use library::animation::EasingFunction;
-use library::model::project::project::Project;
-use library::model::project::property::{Property, PropertyMap, PropertyValue};
+use library::core::model::project::Project;
+use library::core::model::property::{Property, PropertyMap, PropertyValue};
 use library::EditorService;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
@@ -689,6 +689,7 @@ pub fn graph_editor_panel(
                                     property,
                                     map,
                                     time as f64,
+                                    composition.fps,
                                 );
                                 let val_f64 = match component {
                                     PropertyComponent::Scalar => value_pv.get_as::<f64>(),
@@ -853,7 +854,7 @@ pub fn graph_editor_panel(
 
                                             // Evaluate at pointer time
                                             let value_pv = project_service
-                                                .evaluate_property_value(property, map, t);
+                                                .evaluate_property_value(property, map, t, composition.fps);
                                             let val_at_t = match component {
                                                 PropertyComponent::Scalar => {
                                                     value_pv.get_as::<f64>().unwrap_or(0.0)
@@ -1003,11 +1004,11 @@ pub fn graph_editor_panel(
 
                 let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                     match suffix {
-                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::core::model::property::Vec2 {
                             x: OrderedFloat(new_val),
                             y: old_vec.y,
                         }),
-                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::core::model::property::Vec2 {
                             x: old_vec.x,
                             y: OrderedFloat(new_val),
                         }),
@@ -1052,11 +1053,11 @@ pub fn graph_editor_panel(
 
                 let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                     match suffix {
-                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::core::model::property::Vec2 {
                             x: OrderedFloat(new_val),
                             y: old_vec.y,
                         }),
-                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::core::model::property::Vec2 {
                             x: old_vec.x,
                             y: OrderedFloat(new_val),
                         }),
@@ -1099,11 +1100,11 @@ pub fn graph_editor_panel(
 
                 let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                     match suffix {
-                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::core::model::property::Vec2 {
                             x: OrderedFloat(new_val),
                             y: old_vec.y,
                         }),
-                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::core::model::property::Vec2 {
                             x: old_vec.x,
                             y: OrderedFloat(new_val),
                         }),
@@ -1142,19 +1143,19 @@ pub fn graph_editor_panel(
                                 if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                                     if let Some(effect) = entity.effects.get(eff_idx) {
                                         if let Some(prop) = effect.properties.get(&prop_key) {
-                                            current_val_at_t = Some(project_service.evaluate_property_value(prop, &effect.properties, time));
+                                            current_val_at_t = Some(project_service.evaluate_property_value(prop, &effect.properties, time, comp.fps));
                                         }
                                     }
                                 } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
                                      // Style Property
                                      if let Some(style) = entity.styles.get(style_idx) {
                                          if let Some(prop) = style.properties.get(&prop_key) {
-                                              current_val_at_t = Some(project_service.evaluate_property_value(prop, &style.properties, time));
+                                              current_val_at_t = Some(project_service.evaluate_property_value(prop, &style.properties, time, comp.fps));
                                          }
                                      }
                                 } else {
                                      if let Some(prop) = entity.properties.get(base_name) {
-                                          current_val_at_t = Some(project_service.evaluate_property_value(prop, &entity.properties, time));
+                                          current_val_at_t = Some(project_service.evaluate_property_value(prop, &entity.properties, time, comp.fps));
                                      }
                                 }
                             }
@@ -1164,11 +1165,11 @@ pub fn graph_editor_panel(
 
              let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_val_at_t {
                   match suffix {
-                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::core::model::property::Vec2 {
                             x: OrderedFloat(val),
                             y: old_vec.y,
                         }),
-                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
+                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::core::model::property::Vec2 {
                             x: old_vec.x,
                             y: OrderedFloat(val),
                         }),

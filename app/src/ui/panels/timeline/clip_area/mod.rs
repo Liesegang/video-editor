@@ -1,5 +1,5 @@
 use egui::Ui;
-use library::model::project::project::Project;
+use library::core::model::project::Project;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 
@@ -65,7 +65,7 @@ pub fn show_clip_area(
     let is_dragging_item = editor_context.interaction.dragged_item.is_some();
 
     // --- Data collection for entities ---
-    let mut current_tracks: Vec<library::model::project::Track> = Vec::new();
+    let mut current_tracks: Vec<library::core::model::Track> = Vec::new();
     let selected_composition_id = editor_context.selection.composition_id;
     if let Some(comp_id) = selected_composition_id {
         if let Ok(proj_read) = project.read() {

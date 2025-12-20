@@ -1,31 +1,6 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-// GUI-specific Clip representation (derived from TrackEntity for display)
-// This struct holds display-only properties, actual data resides in Project
-#[derive(Debug, Clone, PartialEq)]
-pub struct TimelineClip {
-    pub id: Uuid,
-    pub name: String,
-    pub track_id: Uuid,
-    pub in_frame: u64,
-    pub out_frame: u64,
-    pub timeline_duration_frames: u64,
-    pub source_begin_frame: u64,
-    pub duration_frame: Option<u64>,
-    pub color: egui::Color32, // Changed from Color32 to egui::Color32 to match original context
-    pub position: [f32; 2],
-    pub scale: [f32; 2],
-    pub anchor: [f32; 2],
-    pub opacity: f32,
-    pub rotation: f32,
-    pub asset_id: Option<Uuid>, // Changed from asset_index to asset_id
-    pub width: Option<f32>,
-    pub height: Option<f32>,
-    pub content_point: Option<[f32; 2]>,
-    pub kind: library::model::project::TrackClipKind,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GizmoHandle {
     TopLeft,
@@ -119,7 +94,7 @@ pub enum TimelineDisplayMode {
     SecondsAndFrames,
 }
 
-use library::plugin::PluginCategory;
+use library::extensions::traits::PluginCategory;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsTab {

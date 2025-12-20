@@ -1,5 +1,5 @@
 use egui::TextEdit;
-use library::model::project::project::Composition;
+use library::core::model::project::Composition;
 use once_cell::sync::Lazy;
 use uuid::Uuid;
 

@@ -2,7 +2,7 @@ use egui::Ui;
 use egui_phosphor::regular as icons;
 use std::sync::{Arc, RwLock};
 
-use library::model::project::project::Project;
+use library::core::model::project::Project;
 use library::EditorService;
 use library::RenderServer;
 
@@ -10,12 +10,16 @@ use crate::command::{CommandId, CommandRegistry};
 use crate::state::context_types::PreviewTool;
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 use crate::{action::HistoryManager, state::context::EditorContext};
-use library::model::project::property::Vec2;
+use library::core::model::property::Vec2;
 
 mod gizmo;
 mod grid;
 mod interaction;
+mod action;
 pub mod vector_editor;
+pub mod clip;
+
+use action::PreviewAction;
 
 struct PreviewViewportState<'a> {
     pan: &'a mut egui::Vec2,
@@ -184,7 +188,6 @@ pub fn preview_panel(
     painter.rect_filled(rect, 0.0, egui::Color32::from_gray(30));
 
     // Grid
-    // Grid
     grid::draw_grid(
         &painter,
         rect,
@@ -192,26 +195,24 @@ pub fn preview_panel(
         editor_context.view.zoom,
     );
 
-    // Video frame outline and Preview Image
-    let (comp_width, comp_height) = if let Ok(proj_read) = project.read() {
-        if let Some(comp) = editor_context.get_current_composition(&proj_read) {
-            (comp.width, comp.height)
-        } else {
-            (1920, 1080)
-        }
-    } else {
-        (1920, 1080)
-    };
-
-    let frame_rect = egui::Rect::from_min_size(
-        egui::Pos2::ZERO,
-        egui::vec2(comp_width as f32, comp_height as f32),
-    );
-    let screen_frame_min = to_screen(frame_rect.min);
-    let screen_frame_max = to_screen(frame_rect.max);
-
-    // Calculate current frame and Request Render
+    // Lock project once for reading state
+    let mut pending_actions = Vec::new();
     if let Ok(proj_read) = project.read() {
+        let (comp_width, comp_height) =
+            if let Some(comp) = editor_context.get_current_composition(&proj_read) {
+                (comp.width, comp.height)
+            } else {
+                (1920, 1080)
+            };
+
+        let frame_rect = egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(comp_width as f32, comp_height as f32),
+        );
+        let screen_frame_min = to_screen(frame_rect.min);
+        let screen_frame_max = to_screen(frame_rect.max);
+
+        // Calculate current frame and Request Render
         if let Some(comp) = editor_context.get_current_composition(&proj_read) {
             let current_frame =
                 (editor_context.timeline.current_time as f64 * comp.fps).round() as u64;
@@ -221,12 +222,6 @@ pub fn preview_panel(
                 let property_evaluators = plugin_manager.get_property_evaluators();
                 let entity_converter_registry = plugin_manager.get_entity_converter_registry();
 
-                let _image_rect = if let Some(t) = &editor_context.preview_texture {
-                    egui::vec2(t.size()[0] as f32, t.size()[1] as f32)
-                } else {
-                    egui::vec2(comp_width as f32, comp_height as f32)
-                };
-
                 let render_scale = ((editor_context.view.zoom
                     * ui.ctx().pixels_per_point()
                     * editor_context.view.preview_resolution)
@@ -234,7 +229,7 @@ pub fn preview_panel(
                     .max(0.01)
                     .min(1.0);
 
-                let frame_info = library::framing::get_frame_from_project(
+                let frame_info = library::timeline::evaluator::get_frame_from_project(
                     &proj_read,
                     comp_idx,
                     current_frame,
@@ -246,153 +241,133 @@ pub fn preview_panel(
                 render_server.send_request(frame_info);
             }
         }
-    }
 
-    // 2. Poll for results and update texture
-    // Optimization: Drain queue and only process the LAST result to avoid backlog freeze/lag
-    let mut latest_result = None;
-    while let Ok(result) = render_server.poll_result() {
-        latest_result = Some(result);
-    }
+        // 2. Poll for results and update texture
+        let mut latest_result = None;
+        while let Ok(result) = render_server.poll_result() {
+            latest_result = Some(result);
+        }
 
-    if let Some(result) = latest_result {
-        match result.output {
-            library::rendering::renderer::RenderOutput::Image(image) => {
-                let size = [image.width as usize, image.height as usize];
-                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &image.data);
+        if let Some(result) = latest_result {
+            match result.output {
+                library::graphics::renderer::RenderOutput::Image(image) => {
+                    let size = [image.width as usize, image.height as usize];
+                    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &image.data);
 
-                if let Some(texture) = &mut editor_context.preview_texture {
-                    texture.set(color_image, Default::default());
-                } else {
-                    editor_context.preview_texture = Some(ui.ctx().load_texture(
-                        "preview_texture",
-                        color_image,
-                        Default::default(),
-                    ));
+                    if let Some(texture) = &mut editor_context.preview_texture {
+                        texture.set(color_image, Default::default());
+                    } else {
+                        editor_context.preview_texture = Some(ui.ctx().load_texture(
+                            "preview_texture",
+                            color_image,
+                            Default::default(),
+                        ));
+                    }
+                    editor_context.preview_texture_id = None;
                 }
-                editor_context.preview_texture_id = None;
-            }
-            library::rendering::renderer::RenderOutput::Texture(info) => {
-                editor_context.preview_texture_id = Some(info.texture_id);
-                editor_context.preview_texture = None; // Invalidate CPU texture
+                library::graphics::renderer::RenderOutput::Texture(info) => {
+                    editor_context.preview_texture_id = Some(info.texture_id);
+                    editor_context.preview_texture = None; // Invalidate CPU texture
+                }
             }
         }
-    }
 
-    // 3. Draw Texture
-    if let Some(texture) = &editor_context.preview_texture {
-        painter.image(
-            texture.id(),
-            egui::Rect::from_min_max(screen_frame_min, screen_frame_max),
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
-    } else if let Some(texture_id) = editor_context.preview_texture_id {
-        // Zero-copy path: Draw using PaintCallback and skia (or raw GL)
-        let rect = egui::Rect::from_min_max(screen_frame_min, screen_frame_max);
+        // 3. Draw Texture
+        if let Some(texture) = &editor_context.preview_texture {
+            painter.image(
+                texture.id(),
+                egui::Rect::from_min_max(screen_frame_min, screen_frame_max),
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        } else if let Some(texture_id) = editor_context.preview_texture_id {
+            // Zero-copy path
+            let rect = egui::Rect::from_min_max(screen_frame_min, screen_frame_max);
 
-        let callback = egui::PaintCallback {
-            rect,
-            callback: std::sync::Arc::new(eframe::egui_glow::CallbackFn::new(
-                move |_info, painter| {
-                    use eframe::glow::HasContext;
-                    let gl = painter.gl();
+            let callback = egui::PaintCallback {
+                rect,
+                callback: std::sync::Arc::new(eframe::egui_glow::CallbackFn::new(
+                    move |_info, painter| {
+                        use eframe::glow::HasContext;
+                        let gl = painter.gl();
 
-                    // Simple texture draw using raw GL to avoid heavy Skia context creation
-                    // We assume immediate mode or cached shaders would be better, but for now simple draw.
-                    // Actually, Skia is easier to write than raw GL shaders here.
+                        if let Some(interface) = skia_safe::gpu::gl::Interface::new_native() {
+                            if let Some(mut context) =
+                                skia_safe::gpu::direct_contexts::make_gl(interface, None)
+                            {
+                                let backend_texture = unsafe {
+                                    skia_safe::gpu::backend_textures::make_gl(
+                                        (comp_width as i32, comp_height as i32),
+                                        skia_safe::gpu::Mipmapped::No,
+                                        skia_safe::gpu::gl::TextureInfo {
+                                            target: eframe::glow::TEXTURE_2D,
+                                            id: texture_id,
+                                            format: 0x8058, // GL_RGBA8
+                                            protected: skia_safe::gpu::Protected::No,
+                                        },
+                                        "Texture",
+                                    )
+                                };
 
-                    // Note: Heavy context creation every frame. Optimization: Persistence.
-                    if let Some(interface) = skia_safe::gpu::gl::Interface::new_native() {
-                        if let Some(mut context) =
-                            skia_safe::gpu::direct_contexts::make_gl(interface, None)
-                        {
-                            // Wrap the texture
-                            let backend_texture = unsafe {
-                                skia_safe::gpu::backend_textures::make_gl(
-                                    (comp_width as i32, comp_height as i32),
-                                    skia_safe::gpu::Mipmapped::No,
-                                    skia_safe::gpu::gl::TextureInfo {
-                                        target: eframe::glow::TEXTURE_2D,
-                                        id: texture_id,
-                                        format: 0x8058, // GL_RGBA8
-                                        protected: skia_safe::gpu::Protected::No,
-                                    },
-                                    "Texture",
-                                )
-                            };
+                                let fbo_id = unsafe {
+                                    gl.get_parameter_i32(eframe::glow::DRAW_FRAMEBUFFER_BINDING)
+                                } as u32;
 
-                            // We need to draw *to* the current framebuffer (screen).
-                            // Get current FBO from GL
-                            let fbo_id = unsafe {
-                                gl.get_parameter_i32(eframe::glow::DRAW_FRAMEBUFFER_BINDING)
-                            } as u32;
-                            // Get viewport
-                            // _info.viewport_in_pixels();
+                                let backend_render_target =
+                                    skia_safe::gpu::backend_render_targets::make_gl(
+                                        (comp_width as i32, comp_height as i32),
+                                        0, // sample count
+                                        0, // stencil bits
+                                        skia_safe::gpu::gl::FramebufferInfo {
+                                            fboid: fbo_id,
+                                            format: 0x8058, // GL_RGBA8
+                                            protected: skia_safe::gpu::Protected::No,
+                                        },
+                                    );
 
-                            // Create surface for FBO
-                            // use skia_safe::gpu::backend_render_targets::make_gl for 0.82+
-                            let backend_render_target =
-                                skia_safe::gpu::backend_render_targets::make_gl(
-                                    (comp_width as i32, comp_height as i32),
-                                    0, // sample count
-                                    0, // stencil bits
-                                    skia_safe::gpu::gl::FramebufferInfo {
-                                        fboid: fbo_id,
-                                        format: 0x8058, // GL_RGBA8
-                                        protected: skia_safe::gpu::Protected::No,
-                                    },
-                                );
-
-                            let frame_surface =
-                                skia_safe::gpu::surfaces::wrap_backend_render_target(
-                                    &mut context,
-                                    &backend_render_target,
-                                    skia_safe::gpu::SurfaceOrigin::BottomLeft,
-                                    skia_safe::ColorType::RGBA8888,
-                                    None,
-                                    None,
-                                );
-
-                            if let Some(mut surface) = frame_surface {
-                                let canvas = surface.canvas();
-                                // Draw the texture image
-                                // borrow_texture_from_context missing in 0.82?
-                                // Workaround: Wrap backend texture as surface and snapshot (if possible)
-                                if let Some(mut texture_surface) =
-                                    skia_safe::gpu::surfaces::wrap_backend_texture(
+                                let frame_surface =
+                                    skia_safe::gpu::surfaces::wrap_backend_render_target(
                                         &mut context,
-                                        &backend_texture,
-                                        skia_safe::gpu::SurfaceOrigin::TopLeft,
-                                        1,
+                                        &backend_render_target,
+                                        skia_safe::gpu::SurfaceOrigin::BottomLeft,
                                         skia_safe::ColorType::RGBA8888,
                                         None,
                                         None,
-                                    )
-                                {
-                                    let img = texture_surface.image_snapshot();
-                                    // Draw image to fill surface
-                                    canvas.draw_image(
-                                        &img,
-                                        (0, 0),
-                                        Some(&skia_safe::Paint::default()),
                                     );
+
+                                if let Some(mut surface) = frame_surface {
+                                    let canvas = surface.canvas();
+                                    if let Some(mut texture_surface) =
+                                        skia_safe::gpu::surfaces::wrap_backend_texture(
+                                            &mut context,
+                                            &backend_texture,
+                                            skia_safe::gpu::SurfaceOrigin::TopLeft,
+                                            1,
+                                            skia_safe::ColorType::RGBA8888,
+                                            None,
+                                            None,
+                                        )
+                                    {
+                                        let img = texture_surface.image_snapshot();
+                                        canvas.draw_image(
+                                            &img,
+                                            (0, 0),
+                                            Some(&skia_safe::Paint::default()),
+                                        );
+                                    }
+                                    context.flush_and_submit();
                                 }
-                                // Flush
-                                context.flush_and_submit();
                             }
                         }
-                    }
-                },
-            )),
-        };
+                    },
+                )),
+            };
 
-        ui.painter().add(callback);
-    }
+            ui.painter().add(callback);
+        }
 
-    let mut gui_clips: Vec<crate::model::ui_types::TimelineClip> = Vec::new();
+        let mut gui_clips: Vec<clip::PreviewClip> = Vec::new();
 
-    if let Ok(proj_read) = project.read() {
         if let Some(comp) = editor_context.get_current_composition(&proj_read) {
             // Collect GuiClips from current composition's tracks
             for track in &comp.tracks {
@@ -403,14 +378,6 @@ pub fn preview_panel(
                     } else {
                         None
                     };
-
-                    let asset_id = asset_opt.map(|a| a.id);
-                    let asset_color = asset_opt
-                        .map(|a| {
-                            let c = a.color.clone();
-                            egui::Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
-                        })
-                        .unwrap_or(egui::Color32::GRAY);
 
                     let mut width = asset_opt.and_then(|a| a.width.map(|w| w as f32));
                     let mut height = asset_opt.and_then(|a| a.height.map(|h| h as f32));
@@ -452,7 +419,7 @@ pub fn preview_panel(
                                 * comp.fps)
                                 .round() as u64;
 
-                            let ctx = library::framing::entity_converters::FrameEvaluationContext {
+                            let ctx = library::timeline::converter::FrameEvaluationContext {
                                 composition: comp,
                                 property_evaluators: &property_evaluators,
                             };
@@ -482,6 +449,7 @@ pub fn preview_panel(
                                     p,
                                     &entity.properties,
                                     editor_context.timeline.current_time as f64,
+                                    comp.fps,
                                 )
                             })
                             .and_then(|pv| pv.get_as::<f32>())
@@ -489,95 +457,122 @@ pub fn preview_panel(
                     };
 
                     let get_vec2 = |key: &str, default: [f32; 2]| {
-                        entity.properties.get(key)
+                        entity
+                            .properties
+                            .get(key)
                             .map(|p| {
                                 let val = project_service.evaluate_property_value(
                                     p,
                                     &entity.properties,
                                     editor_context.timeline.current_time as f64,
+                                    comp.fps,
                                 );
                                 val.get_as::<Vec2>()
-                                   .map(|v| [v.x.into_inner() as f32, v.y.into_inner() as f32])
-                                   .unwrap_or(default)
+                                    .map(|v| [v.x.into_inner() as f32, v.y.into_inner() as f32])
+                                    .unwrap_or(default)
                             })
                             .unwrap_or(default)
                     };
 
-                    let gc = crate::model::ui_types::TimelineClip {
-                        id: entity.id,
-                        name: entity.kind.to_string(), // entity_type -> kind
+                    let position = get_vec2("position", [960.0, 540.0]);
+                    let scale = get_vec2("scale", [100.0, 100.0]);
+                    let anchor = get_vec2("anchor", [0.0, 0.0]);
+                    let rotation = get_val("rotation", 0.0);
+                    let opacity = get_val("opacity", 100.0);
+
+                    let transform = library::core::frame::transform::Transform {
+                        position: library::core::frame::transform::Position {
+                            x: position[0] as f64,
+                            y: position[1] as f64,
+                        },
+                        scale: library::core::frame::transform::Scale {
+                            x: scale[0] as f64,
+                            y: scale[1] as f64,
+                        },
+                        rotation: rotation as f64,
+                        anchor: library::core::frame::transform::Position {
+                            x: anchor[0] as f64,
+                            y: anchor[1] as f64,
+                        },
+                        opacity: opacity as f64,
+                    };
+
+                    let content_bounds = if let (Some(w), Some(h)) = (width, height) {
+                        let (cx, cy) = if let Some(pt) = content_point {
+                            (pt[0], pt[1])
+                        } else {
+                            (0.0, 0.0)
+                        };
+                        Some((cx, cy, w, h))
+                    } else {
+                        None
+                    };
+
+                    let gc = clip::PreviewClip {
+                        clip: entity,
                         track_id: track.id,
-                        in_frame: entity.in_frame,   // u64
-                        out_frame: entity.out_frame, // u64
-                        timeline_duration_frames: entity.out_frame.saturating_sub(entity.in_frame), // u64
-                        source_begin_frame: entity.source_begin_frame, // u64
-                        duration_frame: entity.duration_frame,         // Option<u64>
-                        color: asset_color,
-                        position: get_vec2("position", [960.0, 540.0]),
-                        scale: get_vec2("scale", [100.0, 100.0]),
-                        anchor: get_vec2("anchor", [0.0, 0.0]),
-                        opacity: get_val("opacity", 100.0),
-                        rotation: get_val("rotation", 0.0),
-                        asset_id: asset_id,
-                        width: width,
-                        height: height,
-                        content_point: content_point,
-                        kind: entity.kind.clone(),
+                        transform,
+                        content_bounds,
                     };
                     gui_clips.push(gc);
                 }
             }
         }
-    }
 
-    // Interactions
-    {
-        let mut interactions = interaction::PreviewInteractions::new(
-            ui,
-            editor_context,
-            &project,
-            project_service,
-            history_manager,
-            &gui_clips,
-            to_screen,
-            to_world,
-        );
-        interactions.handle(&response, rect);
-        interactions.draw_text_overlay();
-    }
+        // Interactions
+        {
+            let mut interactions = interaction::PreviewInteractions::new(
+                ui,
+                editor_context,
+                &project,
+                history_manager,
+                &gui_clips,
+                to_screen,
+                to_world,
+            );
+            interactions.handle(&response, rect, &mut pending_actions);
+            interactions.draw_text_overlay(&mut pending_actions);
+        }
 
-    // Draw Gizmo
-    if editor_context.view.active_tool == PreviewTool::Select {
-        gizmo::draw_gizmo(ui, editor_context, &gui_clips, to_screen);
-    } else if editor_context.view.active_tool == PreviewTool::Shape {
-        if let Some(state) = &editor_context.interaction.vector_editor_state {
-            if let Some(id) = editor_context.selection.selected_entities.iter().next() {
-                if let Some(gc) = gui_clips.iter().find(|c| c.id == *id) {
-                    let transform = library::model::frame::transform::Transform {
-                        position: library::model::frame::transform::Position {
-                            x: gc.position[0] as f64,
-                            y: gc.position[1] as f64,
-                        },
-                        scale: library::model::frame::transform::Scale {
-                            x: gc.scale[0] as f64,
-                            y: gc.scale[1] as f64,
-                        },
-                        rotation: gc.rotation as f64,
-                        anchor: library::model::frame::transform::Position {
-                            x: gc.anchor[0] as f64,
-                            y: gc.anchor[1] as f64,
-                        },
-                        opacity: gc.opacity as f64,
-                    };
-
-                    let renderer =
-                        crate::ui::panels::preview::vector_editor::renderer::VectorEditorRenderer {
+        // Draw Gizmo
+        if editor_context.view.active_tool == PreviewTool::Select {
+            gizmo::draw_gizmo(ui, editor_context, &gui_clips, to_screen);
+        } else if editor_context.view.active_tool == PreviewTool::Shape {
+            if let Some(state) = &editor_context.interaction.vector_editor_state {
+                if let Some(id) = editor_context.selection.selected_entities.iter().next() {
+                    if let Some(gc) = gui_clips.iter().find(|c| c.id() == *id) {
+                        let renderer = crate::ui::panels::preview::vector_editor::renderer::VectorEditorRenderer {
                             state,
-                            transform,
+                            transform: gc.transform.clone(),
                             to_screen: Box::new(|p| to_screen(p)),
                         };
-                    renderer.draw(ui.painter());
+                        renderer.draw(ui.painter());
+                    }
                 }
+            }
+        }
+    } // End of project.read() scope
+
+    // Execute pending actions
+    for action in pending_actions {
+        match action {
+            PreviewAction::UpdateProperty {
+                comp_id,
+                track_id,
+                entity_id,
+                prop_name,
+                time,
+                value,
+            } => {
+                crate::utils::property::update_property(
+                    project_service,
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    &prop_name,
+                    time,
+                    value,
+                );
             }
         }
     }

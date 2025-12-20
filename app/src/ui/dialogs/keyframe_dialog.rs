@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32, ComboBox, DragValue, TextEdit};
 use library::animation::EasingFunction;
-use library::model::project::project::Project;
+use library::core::model::project::Project;
 use library::EditorService;
 use std::sync::{Arc, RwLock};
 
@@ -245,7 +245,7 @@ pub fn show_keyframe_dialog(
 
                 if let (Some(track_id), Some(entity_id)) = (state.track_id, state.entity_id) {
                     let new_time = state.time;
-                    use library::model::project::property::PropertyValue;
+                    use library::core::model::property::PropertyValue;
                     use ordered_float::OrderedFloat;
 
                     let new_value = PropertyValue::Number(OrderedFloat(state.value));

@@ -16,6 +16,7 @@ pub fn render_effects_section(
     track_id: Uuid,
     selected_entity_id: Uuid,
     current_time: f64,
+    fps: f64,
     needs_refresh: &mut bool,
 ) {
     ui.add_space(10.0);
@@ -95,7 +96,7 @@ pub fn render_effects_section(
                             let actions = render_property_rows(
                                 ui,
                                 &defs,
-                                |name| effect.properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &effect.properties, current_time))),
+                                |name| effect.properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &effect.properties, current_time, fps))),
                                 |name| effect.properties.get(name).cloned(),
                                 &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true, current_time }
                             );
@@ -132,6 +133,10 @@ pub fn render_effects_section(
                                               ).ok();
                                          }
                                          *needs_refresh = true;
+                                    }
+                                    crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, _key, _val) => {
+                                        // TODO: Implement set_effect_property_attribute
+                                        println!("SetAttribute for effect {} not implemented yet", name);
                                     }
                                 }
                             }

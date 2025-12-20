@@ -1,4 +1,5 @@
-use crate::model::vector::{ControlPoint, PointType, VectorEditorState};
+use crate::model::vector::VectorEditorState;
+use library::core::model::vector::{ControlPoint, PointType, VectorPath};
 use skia_safe::PathVerb;
 
 pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
@@ -100,8 +101,7 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
     }
 
     VectorEditorState {
-        points,
-        is_closed,
+        path: VectorPath { points, is_closed },
         ..Default::default()
     }
 }
@@ -150,8 +150,8 @@ mod tests {
         // Close -> is_closed
 
         let state = parse_svg_path(original_path);
-        assert_eq!(state.points.len(), 4);
-        assert!(state.is_closed);
+        assert_eq!(state.path.points.len(), 4);
+        assert!(state.path.is_closed);
 
         let generated = to_svg_path(&state);
         // Expect: M 10,10 L 90,10 L 90,90 L 10,90 Z

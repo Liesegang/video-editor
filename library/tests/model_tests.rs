@@ -1,7 +1,7 @@
-use library::model::project::asset::{Asset, AssetKind};
-use library::model::project::project::{Composition, ExportConfig, Project};
-use library::model::project::property::PropertyMap;
-use library::model::project::{EffectConfig, Track, TrackClip, TrackClipKind};
+use library::core::model::asset::{Asset, AssetKind};
+use library::core::model::project::{Composition, ExportConfig, Project};
+use library::core::model::property::PropertyMap;
+use library::core::model::{EffectConfig, Track, TrackClip, TrackClipKind};
 
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
@@ -29,15 +29,14 @@ fn test_project_serialization_roundtrip() {
 
     // Add Clip
     let clip = TrackClip::create_video(
-        Some(asset_id),
         "/path/to/video.mp4",
-        0,
-        100,
         0,
         100,
         60.0,
         1920,
         1080,
+        1920,
+        1080
     );
     track.clips.push(clip);
     comp.add_track(track);
@@ -67,8 +66,8 @@ fn test_property_serialization() {
     let mut props = PropertyMap::new();
     props.set(
         "opacity".to_string(),
-        library::model::project::property::Property::constant(
-            library::model::project::property::PropertyValue::Number(OrderedFloat(0.5)),
+        library::core::model::property::Property::constant(
+            library::core::model::property::PropertyValue::Number(OrderedFloat(0.5)),
         ),
     );
 
@@ -84,7 +83,7 @@ fn test_property_serialization() {
     // We can't easily assert_eq check PropertyMap directly unless we can access inner map or check specific keys
     // Let's check keys
     let val = loaded_props.get("opacity").expect("Missing opacity");
-    if let library::model::project::property::PropertyValue::Number(n) = val.value().unwrap() {
+    if let library::core::model::property::PropertyValue::Number(n) = val.value().unwrap() {
         assert_eq!(*n, OrderedFloat(0.5));
     } else {
         panic!("Wrong value type");

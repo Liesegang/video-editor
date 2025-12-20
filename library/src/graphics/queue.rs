@@ -1,6 +1,6 @@
 use crate::Image;
 use crate::core::model::project::{Composition, Project};
-use crate::extensions::traits::{ExportFormat, ExportSettings, PluginManager};
+use crate::extensions::traits::{ExportFormat, ExportSettings}; use crate::extensions::manager::PluginManager;
 use crate::app::project_model::ProjectModel; use crate::compositing::render_service::RenderService;
 // use crate::graphics::effects::EffectRegistry; // Removed
 use crate::error::LibraryError;

@@ -471,6 +471,14 @@ impl Property {
         self.properties.get("value")
     }
 
+    pub fn get_static_value(&self) -> Option<&PropertyValue> {
+        if self.evaluator == "constant" {
+            self.value()
+        } else {
+            None
+        }
+    }
+
     pub fn expression_text(&self) -> Option<&str> {
         self.properties
             .get("expression")

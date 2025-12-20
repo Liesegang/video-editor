@@ -1,4 +1,4 @@
-use library::model::project::project::{Composition, Project};
+use library::core::model::project::{Composition, Project};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

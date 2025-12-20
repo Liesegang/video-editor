@@ -143,7 +143,10 @@ mod tests {
     use std::sync::Arc; // Added
 
     fn make_vec2(x: f64, y: f64) -> PropertyValue {
-        PropertyValue::Vec2(Vec2 { x, y })
+        PropertyValue::Vec2(Vec2 {
+            x: ordered_float::OrderedFloat(x),
+            y: ordered_float::OrderedFloat(y),
+        })
     }
 
     fn constant(value: PropertyValue) -> Property {
@@ -172,10 +175,13 @@ mod tests {
             constant(PropertyValue::String("Hello".into())),
         );
         text_props.set(
-            "font".into(),
+            "font_family".into(),
             constant(PropertyValue::String("Roboto".into())),
         );
-        text_props.set("size".into(), constant(PropertyValue::Number(48.0)));
+        text_props.set(
+            "size".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(48.0))),
+        );
         text_props.set(
             "color".into(),
             constant(PropertyValue::Color(Color {
@@ -186,12 +192,30 @@ mod tests {
             })),
         );
         text_props.set("position".into(), constant(make_vec2(10.0, 20.0)));
-        text_props.set("scale_x".into(), constant(PropertyValue::Number(100.0)));
-        text_props.set("scale_y".into(), constant(PropertyValue::Number(100.0)));
-        text_props.set("anchor_x".into(), constant(PropertyValue::Number(0.0)));
-        text_props.set("anchor_y".into(), constant(PropertyValue::Number(0.0)));
-        text_props.set("rotation".into(), constant(PropertyValue::Number(0.0)));
-        text_props.set("opacity".into(), constant(PropertyValue::Number(100.0)));
+        text_props.set(
+            "scale_x".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))),
+        );
+        text_props.set(
+            "scale_y".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))),
+        );
+        text_props.set(
+            "anchor_x".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(0.0))),
+        );
+        text_props.set(
+            "anchor_y".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(0.0))),
+        );
+        text_props.set(
+            "rotation".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(0.0))),
+        );
+        text_props.set(
+            "opacity".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))),
+        );
 
         let track_clip = TrackClip {
             id: uuid::Uuid::new_v4(), // Added ID
@@ -204,6 +228,7 @@ mod tests {
             fps: 30.0,
             properties: text_props,
             effects: Vec::new(),
+            styles: Vec::new(),
         };
         let track = Track {
             id: uuid::Uuid::new_v4(), // Added ID
@@ -245,12 +270,30 @@ mod tests {
             constant(PropertyValue::String("foo.png".into())),
         );
         props.set("position".into(), constant(make_vec2(0.0, 0.0)));
-        props.set("scale_x".into(), constant(PropertyValue::Number(100.0)));
-        props.set("scale_y".into(), constant(PropertyValue::Number(100.0)));
-        props.set("anchor_x".into(), constant(PropertyValue::Number(0.0)));
-        props.set("anchor_y".into(), constant(PropertyValue::Number(0.0)));
-        props.set("rotation".into(), constant(PropertyValue::Number(0.0)));
-        props.set("opacity".into(), constant(PropertyValue::Number(100.0)));
+        props.set(
+            "scale_x".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))),
+        );
+        props.set(
+            "scale_y".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))),
+        );
+        props.set(
+            "anchor_x".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(0.0))),
+        );
+        props.set(
+            "anchor_y".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(0.0))),
+        );
+        props.set(
+            "rotation".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(0.0))),
+        );
+        props.set(
+            "opacity".into(),
+            constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))),
+        );
 
         let early = TrackClip {
             id: uuid::Uuid::new_v4(), // Added ID
@@ -263,6 +306,7 @@ mod tests {
             fps: 30.0,
             properties: props.clone(),
             effects: Vec::new(),
+            styles: Vec::new(),
         };
 
         let late = TrackClip {
@@ -276,6 +320,7 @@ mod tests {
             fps: 30.0,
             properties: props,
             effects: Vec::new(),
+            styles: Vec::new(),
         };
 
         let track = Track {

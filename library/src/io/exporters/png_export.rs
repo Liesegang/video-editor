@@ -52,7 +52,7 @@ impl ExportPlugin for PngExportPlugin {
         Ok(())
     }
 
-    fn properties(&self) -> Vec<super::super::PropertyDefinition> {
+    fn properties(&self) -> Vec<crate::extensions::traits::PropertyDefinition> {
         use crate::extensions::traits::{PropertyDefinition, PropertyUiType};
         use crate::core::model::property::PropertyValue;
         vec![PropertyDefinition {

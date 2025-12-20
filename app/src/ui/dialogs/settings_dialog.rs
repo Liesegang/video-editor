@@ -3,7 +3,7 @@ use crate::config::AppConfig;
 use crate::{config, model::ui_types::SettingsTab};
 use eframe::egui::{Key, ScrollArea, TextEdit, Ui};
 use egui_extras::{Column, TableBuilder};
-use library::plugin::PluginManager;
+use library::extensions::manager::PluginManager;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -200,7 +200,7 @@ fn settings_panel(
                                     state.active_tab = SettingsTab::PluginPaths;
                                 }
 
-                                use library::plugin::PluginCategory;
+                                use library::extensions::traits::PluginCategory;
 
                                 // Loaders
                                 if ui.selectable_label(matches!(state.active_tab, SettingsTab::PluginList(PluginCategory::Load, _)), "Loaders").clicked() {
@@ -338,7 +338,7 @@ fn plugins_paths_tab(ui: &mut Ui, config: &mut AppConfig) {
 fn plugins_list_tab(
     ui: &mut Ui,
     plugin_manager: &PluginManager,
-    category: library::plugin::PluginCategory,
+    category: library::extensions::traits::PluginCategory,
     filter: Option<String>,
 ) {
     ui.heading(format!("Loaded Plugins: {:?}", category));

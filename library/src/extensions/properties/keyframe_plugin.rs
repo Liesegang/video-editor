@@ -49,10 +49,10 @@ impl PropertyEvaluator for KeyframeEvaluator {
 
 fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
     let keyframes = property.keyframes();
-    debug!(
-        "evaluate_keyframes for property {:?} at time {}",
-        property, time
-    );
+    // debug!(
+    //     "evaluate_keyframes for property {:?} at time {}",
+    //     property, time
+    // );
 
     if keyframes.is_empty() {
         return PropertyValue::Number(OrderedFloat(0.0));
@@ -68,12 +68,25 @@ fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
     // Find the keyframe before and after the current time
     let current = keyframes.iter().rev().find(|k| *k.time <= time).unwrap();
     let next = keyframes.iter().find(|k| *k.time > time).unwrap();
-    let t = (time - *current.time) / (*next.time - *current.time);
-    let interpolated = interpolate_property_values(&current.value, &next.value, t, &current.easing);
-    debug!(
-        "evaluate_keyframes: interpolated value {:?} for time {}",
-        interpolated, time
-    );
+
+    // Safety check for zero duration
+    let duration = *next.time - *current.time;
+    let t = if duration <= 1e-6 {
+        0.0
+    } else {
+        (time - *current.time) / duration
+    };
+
+    // Get Interpolation Mode
+    let mode = property.properties.get("interpolation")
+        .and_then(|v| v.get_as::<String>())
+        .unwrap_or_else(|| "linear".to_string());
+
+    let interpolated = interpolate_property_values(&current.value, &next.value, t, &current.easing, &mode);
+    // debug!(
+    //     "evaluate_keyframes: interpolated value {:?} for time {}",
+    //     interpolated, time
+    // );
     interpolated
 }
 
@@ -82,6 +95,7 @@ fn interpolate_property_values(
     end: &PropertyValue,
     t: f64,
     easing: &EasingFunction,
+    mode: &str,
 ) -> PropertyValue {
     let t = easing.apply(t);
 
@@ -132,38 +146,125 @@ fn interpolate_property_values(
             w: OrderedFloat(sw.0 + (ew.0 - sw.0) * t),
         }),
         (
-            PropertyValue::Color(Color {
-                r: sr,
-                g: sg,
-                b: sb,
-                a: sa,
-            }),
-            PropertyValue::Color(Color {
-                r: er,
-                g: eg,
-                b: eb,
-                a: ea,
-            }),
-        ) => PropertyValue::Color(Color {
-            r: ((*sr as f64) + (*er as f64 - *sr as f64) * t).round() as u8,
-            g: ((*sg as f64) + (*eg as f64 - *sg as f64) * t).round() as u8,
-            b: ((*sb as f64) + (*eb as f64 - *sb as f64) * t).round() as u8,
-            a: ((*sa as f64) + (*ea as f64 - *sa as f64) * t).round() as u8,
-        }),
+            PropertyValue::Color(start_color),
+            PropertyValue::Color(end_color),
+        ) => {
+            if mode == "hsv" {
+                interpolate_color_hsv(start_color, end_color, t)
+            } else {
+                interpolate_color_rgb(start_color, end_color, t)
+            }
+        },
         (PropertyValue::Array(s), PropertyValue::Array(e)) => PropertyValue::Array(
             s.iter()
                 .zip(e.iter())
-                .map(|(start, end)| interpolate_property_values(start, end, t, easing))
+                .map(|(start, end)| interpolate_property_values(start, end, t, easing, mode))
                 .collect(),
         ),
         (PropertyValue::Map(s), PropertyValue::Map(e)) => PropertyValue::Map(
             s.iter()
                 .zip(e.iter())
                 .map(|((k, sv), (_, ev))| {
-                    (k.clone(), interpolate_property_values(sv, ev, t, easing))
+                    (k.clone(), interpolate_property_values(sv, ev, t, easing, mode))
                 })
                 .collect(),
         ),
         _ => start.clone(),
     }
+}
+
+fn interpolate_color_rgb(start: &Color, end: &Color, t: f64) -> PropertyValue {
+     PropertyValue::Color(Color {
+        r: ((start.r as f64) + (end.r as f64 - start.r as f64) * t).round() as u8,
+        g: ((start.g as f64) + (end.g as f64 - start.g as f64) * t).round() as u8,
+        b: ((start.b as f64) + (end.b as f64 - start.b as f64) * t).round() as u8,
+        a: ((start.a as f64) + (end.a as f64 - start.a as f64) * t).round() as u8,
+    })
+}
+
+fn interpolate_color_hsv(start: &Color, end: &Color, t: f64) -> PropertyValue {
+    let (h1, s1, v1) = rgb_to_hsv(start.r, start.g, start.b);
+    let (h2, s2, v2) = rgb_to_hsv(end.r, end.g, end.b);
+
+    // Interpolate H (shortest path)
+    let mut diff = h2 - h1;
+    if diff > 180.0 {
+        diff -= 360.0;
+    } else if diff < -180.0 {
+        diff += 360.0;
+    }
+    let h = (h1 + diff * t).rem_euclid(360.0);
+
+    let s = s1 + (s2 - s1) * t;
+    let v = v1 + (v2 - v1) * t;
+
+    // Interpolate Alpha usually linear
+    let a = (start.a as f64) + (end.a as f64 - start.a as f64) * t;
+
+    let (r, g, b) = hsv_to_rgb(h, s, v);
+
+    PropertyValue::Color(Color {
+        r: r as u8,
+        g: g as u8,
+        b: b as u8,
+        a: a.round() as u8,
+    })
+}
+
+fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f64, f64, f64) {
+    let r = r as f64 / 255.0;
+    let g = g as f64 / 255.0;
+    let b = b as f64 / 255.0;
+
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+
+    let h = if delta == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * (((g - b) / delta) % 6.0)
+    } else if max == g {
+        60.0 * (((b - r) / delta) + 2.0)
+    } else {
+        60.0 * (((r - g) / delta) + 4.0)
+    };
+
+    let s = if max == 0.0 { 0.0 } else { delta / max };
+    let v = max;
+
+    // h in [0, 360] (can be negative before rem_euclid but here usually result of % 6.0 logic)
+    // Actually the % 6.0 logic can yield negative?
+    // ((g - b) / delta) if b > g is negative.
+    // % 6.0 keeps sign.
+    // So h can be negative.
+    let h = (h + 360.0) % 360.0;
+
+    (h, s, v)
+}
+
+fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (u8, u8, u8) {
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+
+    let (r_prime, g_prime, b_prime) = if h < 60.0 {
+        (c, x, 0.0)
+    } else if h < 120.0 {
+        (x, c, 0.0)
+    } else if h < 180.0 {
+        (0.0, c, x)
+    } else if h < 240.0 {
+        (0.0, x, c)
+    } else if h < 300.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+
+    (
+        ((r_prime + m) * 255.0).round() as u8,
+        ((g_prime + m) * 255.0).round() as u8,
+        ((b_prime + m) * 255.0).round() as u8,
+    )
 }

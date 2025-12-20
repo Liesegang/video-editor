@@ -1,6 +1,6 @@
 use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, Style};
-use library::model::project::project::{Composition, Project};
+use library::core::model::project::{Composition, Project};
 use library::EditorService;
 use std::sync::{Arc, RwLock};
 
@@ -20,7 +20,7 @@ use crate::ui::dialogs::settings_dialog::SettingsDialog;
 use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
 use crate::utils;
 use library::cache::SharedCacheManager;
-use library::plugin::PluginManager;
+use library::extensions::manager::PluginManager;
 use library::RenderServer;
 
 pub struct MyApp {
@@ -58,6 +58,7 @@ impl MyApp {
         utils::setup_fonts(&cc.egui_ctx);
 
         let app_config = config::load_config();
+        crate::ui::theme::apply_theme(&cc.egui_ctx, &app_config);
         let command_registry = CommandRegistry::new(&app_config);
 
         let default_project = Arc::new(RwLock::new(Project::new("Default Project")));
@@ -87,7 +88,7 @@ impl MyApp {
 
         let mut editor_context = EditorContext::new(default_comp_id); // Pass default_comp_id
         editor_context.selection.composition_id = Some(default_comp_id); // Select the default composition
-        editor_context.available_fonts = library::rendering::skia_utils::get_available_fonts();
+        editor_context.available_fonts = library::graphics::skia_utils::get_available_fonts();
 
         let entity_converter_registry = plugin_manager.get_entity_converter_registry();
         let render_server = Arc::new(RenderServer::new(
@@ -128,7 +129,7 @@ impl MyApp {
 
         // Zero-Copy GPU Sharing: Capture the main thread's OpenGL context handle
         // and pass it to the background render server. This enables sharing of textures.
-        if let Some(handle) = library::rendering::skia_utils::get_current_context_handle() {
+        if let Some(handle) = library::graphics::skia_utils::get_current_context_handle() {
             log::info!("MyApp: Capturing main GL context handle: {}", handle);
             app.render_server.set_sharing_context(handle);
         } else {
@@ -173,19 +174,12 @@ impl eframe::App for MyApp {
             self.command_registry = self.settings_dialog.command_registry.clone();
             self.app_config = self.settings_dialog.config.clone();
 
+            // Apply theme when config changes
+            crate::ui::theme::apply_theme(ctx, &self.app_config);
+
             // Apply new config
             config::save_config(&self.app_config);
         }
-
-        // Apply theme initially
-        crate::ui::theme::apply_theme(ctx, &self.app_config);
-
-        // TODO: Optimize this to not run every frame.
-        // For now, we rely on the fact that set_visuals might be cheap if unchanged?
-        // Actually set_visuals triggers repaint.
-        // We really should only do this when config changes.
-        // We update `app_config` when SettingsDialog closes with Save.
-        // So we can do it inside the Save block.
 
         if self.composition_dialog.is_open {
             self.composition_dialog.show(ctx);

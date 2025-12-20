@@ -1,13 +1,13 @@
 use egui::Ui;
 
-use library::model::project::project::Project;
+use library::core::model::project::Project;
 
 use library::EditorService;
 use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 
-use library::plugin::PropertyUiType;
+use library::extensions::traits::PropertyUiType;
 
 pub mod effects;
 pub mod properties;
@@ -98,10 +98,15 @@ pub fn inspector_panel(
 
             // --- Dynamic Properties ---
             let definitions = project_service.get_property_definitions(comp_id, track_id, selected_entity_id);
+            let fps = project_service
+                .get_composition(comp_id)
+                .map(|c| c.fps)
+                .unwrap_or(60.0);
+
             // Group by category
             let mut grouped: std::collections::HashMap<
                 String,
-                Vec<library::plugin::PropertyDefinition>,
+                Vec<library::extensions::traits::PropertyDefinition>,
             > = std::collections::HashMap::new();
             for def in definitions {
                 grouped.entry(def.category.clone()).or_default().push(def);
@@ -126,7 +131,7 @@ pub fn inspector_panel(
                 if let Some(defs) = grouped.remove(&category) {
                     struct Chunk {
                         is_grid: bool,
-                        defs: Vec<library::plugin::PropertyDefinition>,
+                        defs: Vec<library::extensions::traits::PropertyDefinition>,
                     }
 
                     let mut chunks: Vec<Chunk> = Vec::new();
@@ -170,7 +175,7 @@ pub fn inspector_panel(
                                     let actions = render_property_rows(
                                         ui,
                                         &chunk.defs,
-                                        |name| properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &properties, current_time))),
+                                        |name| properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &properties, current_time, fps))),
                                         |name| properties.get(name).cloned(),
                                         &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true, current_time }
                                     );
@@ -234,6 +239,10 @@ pub fn inspector_panel(
                                                 }
                                                 needs_refresh = true;
                                             }
+                                            crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, _key, _val) => {
+                                                 // TODO: Implement set_clip_property_attribute
+                                                 println!("SetAttribute for prop {} not implemented", name);
+                                            }
                                         }
                                     }
                                 });
@@ -250,6 +259,7 @@ pub fn inspector_panel(
                                                 p,
                                                 &properties,
                                                 current_time,
+                                                fps,
                                             ))
                                         })
                                     },
@@ -319,6 +329,9 @@ pub fn inspector_panel(
                                                 }
                                                 needs_refresh = true;
                                         }
+                                        crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, _key, _val) => {
+                                             println!("SetAttribute for prop {} not implemented", name);
+                                        }
                                     }
                                 }
                             }
@@ -337,6 +350,7 @@ pub fn inspector_panel(
                 track_id,
                 selected_entity_id,
                 current_time,
+                fps,
                 &styles,
                 &mut needs_refresh,
             );
@@ -351,6 +365,7 @@ pub fn inspector_panel(
                 track_id,
                 selected_entity_id,
                 current_time,
+                fps,
                 &mut needs_refresh,
             );
 

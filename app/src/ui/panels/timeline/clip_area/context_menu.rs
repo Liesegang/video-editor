@@ -1,6 +1,6 @@
 use egui::Ui;
-use library::model::project::project::Project;
-use library::model::project::TrackClip;
+use library::core::model::project::Project;
+use library::core::model::TrackClip;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 

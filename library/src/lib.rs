@@ -1,35 +1,35 @@
 pub mod animation;
-pub mod application;
-pub mod audio;
+pub mod app;
 pub mod cache;
+pub mod compositing;
+pub mod core;
 pub mod error;
-pub mod framing;
-pub mod loader;
-pub mod model;
-pub mod plugin;
-pub mod rendering;
-pub mod service;
+pub mod extensions;
+pub mod graphics;
+pub mod io;
+pub mod timeline;
 pub mod util;
 
 pub use error::LibraryError;
 
 pub use crate::io::image::Image;
-pub use crate::extensions::traits::ExportSettings; // Added
-// Re-export the services and models that the app will need.
-pub use application::editor_service::EditorService;
-pub use rendering::render_server::{RenderResult, RenderServer};
-pub use rendering::skia_renderer::SkiaRenderer;
-pub use service::{ExportService, ProjectModel, RenderService};
+pub use crate::extensions::traits::ExportSettings;
 
-// use crate::extensions::traits::load_plugins; // Removed
-// use crate::graphics::effects::EffectRegistry; // Removed
+// Re-export the services and models that the app will need.
+pub use app::editor::EditorService;
+pub use graphics::render_server::{RenderResult, RenderServer};
+pub use graphics::skia_renderer::SkiaRenderer;
+pub use app::export_service::ExportService;
+pub use app::project_model::ProjectModel;
+pub use compositing::render_service::RenderService;
+
 use crate::timeline::converter::BuiltinEntityConverterPlugin;
 use crate::extensions::manager::PluginManager;
 use log::info;
 use std::fs;
 use std::io::Write;
 use std::ops::Range;
-use std::sync::Arc; // Added
+use std::sync::Arc;
 
 // Function to create and initialize the PluginManager with built-in plugins
 pub fn create_plugin_manager() -> Arc<PluginManager> {
@@ -59,7 +59,7 @@ pub fn create_plugin_manager() -> Arc<PluginManager> {
     manager.register_property_plugin(Arc::new(
         crate::extensions::properties::ExpressionPropertyPlugin::new(),
     ));
-    manager.register_entity_converter_plugin(Arc::new(BuiltinEntityConverterPlugin::new())); // Added
+    manager.register_entity_converter_plugin(Arc::new(BuiltinEntityConverterPlugin::new()));
     manager
 }
 
@@ -87,7 +87,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         .skip(2)
         .filter(|s| !s.starts_with("--"))
         .collect();
-    let plugin_manager = create_plugin_manager(); // Changed
+    let plugin_manager = create_plugin_manager();
     for plugin_path in plugin_paths {
         info!("Loading property plugin {}", plugin_path);
         plugin_manager.load_property_plugin_from_file(plugin_path)?;
@@ -108,7 +108,6 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         }
     }
 
-    // Removed effect_registry instantiation
     let composition = project_model.composition();
     let renderer = SkiaRenderer::new(
         composition.width as u32,
@@ -151,7 +150,6 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         let duration_frames = (final_frame_range.end - final_frame_range.start).max(1);
         let duration = duration_frames as f64 / fps;
 
-        // CLI currently defaults to 48000 as ProjectService is not initialized here
         let sample_rate = 48000;
 
         let start_sample = (start_time * sample_rate as f64).round() as u64;

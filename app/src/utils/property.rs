@@ -1,4 +1,4 @@
-use library::model::project::property::PropertyValue;
+use library::core::model::property::PropertyValue;
 use library::EditorService as ProjectService;
 use ordered_float::OrderedFloat;
 use uuid::Uuid;

@@ -19,12 +19,10 @@ impl PythonExpressionEvaluator {
 }
 
 impl PropertyEvaluator for PythonExpressionEvaluator {
-    fn evaluate(&self, property: &Property, time: f64, _ctx: &EvaluationContext) -> PropertyValue { // Using _ctx for now
+    fn evaluate(&self, property: &Property, time: f64, ctx: &EvaluationContext) -> PropertyValue {
         Python::with_gil(|py| {
-            // Placeholder for frame and fps until EvaluationContext is properly extended
-            // TODO: Get actual frame and fps from ctx
-            let frame = time; // Example: assuming frame is same as time for now
-            let fps = 60.0; // Example: assuming 60 fps for now
+            let fps = ctx.fps;
+            let frame = time * fps;
             let expression = property.evaluator.as_str();
 
             let locals = PyDict::new(py);
@@ -68,7 +66,7 @@ fn convert_property_value_to_pyobject(py: Python, value: &PropertyValue) -> PyRe
         PropertyValue::Number(n) => Ok(n.into_inner().into_pyobject(py)?.into()),
         PropertyValue::Integer(i) => Ok(i.into_pyobject(py)?.into()),
         PropertyValue::String(s) => Ok(s.into_pyobject(py)?.into()),
-        PropertyValue::Boolean(b) => Ok(b.into_pyobject(py)?),
+        PropertyValue::Boolean(b) => Ok(pyo3::types::PyBool::new(py, *b).as_any().clone().unbind()),
         PropertyValue::Vec2(v) => { let elements: Vec<pyo3::Py<pyo3::PyAny>> = vec![v.x.into_inner().into_pyobject(py)?.into(), v.y.into_inner().into_pyobject(py)?.into()]; Ok(PyTuple::new(py, elements)?.into()) },
         PropertyValue::Color(c) => { let elements: Vec<pyo3::Py<pyo3::PyAny>> = vec![c.r.into_pyobject(py)?.into(), c.g.into_pyobject(py)?.into(), c.b.into_pyobject(py)?.into(), c.a.into_pyobject(py)?.into()]; Ok(PyTuple::new(py, elements)?.into()) },
         PropertyValue::Array(arr) => {

@@ -527,4 +527,196 @@ impl ClipHandler {
              Err(LibraryError::Project("Style index out of range".to_string()))
         }
     }
+    pub fn update_effect_property_or_keyframe(
+        project: &Arc<RwLock<Project>>,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effect_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
+            LibraryError::Project(format!("Composition with ID {} not found", composition_id))
+        })?;
+        let track = composition.get_track_mut(track_id).ok_or_else(|| {
+            LibraryError::Project(format!(
+                "Track with ID {} not found in Composition {}",
+                track_id, composition_id
+            ))
+        })?;
+
+        if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+            if let Some(effect) = clip.effects.get_mut(effect_index) {
+                if let Some(prop) = effect.properties.get_mut(property_key) {
+                    if prop.evaluator == "keyframe" {
+                         let mut current_keyframes = prop.keyframes();
+                        let mut preserved_easing = crate::animation::EasingFunction::Linear;
+                        if let Some(idx) = current_keyframes
+                            .iter()
+                            .position(|k| (k.time.into_inner() - time).abs() < 0.001)
+                        {
+                            preserved_easing = current_keyframes[idx].easing.clone();
+                            current_keyframes.remove(idx);
+                        }
+
+                        let final_easing = easing.unwrap_or(preserved_easing);
+
+                        current_keyframes.push(Keyframe {
+                            time: OrderedFloat(time),
+                            value: value.clone(),
+                            easing: final_easing,
+                        });
+
+                        current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
+
+                         // Preserve existing attributes (like interpolation)
+                        let existing_props = prop.properties.clone();
+                        let mut new_prop = Property::keyframe(current_keyframes);
+                        for (k, v) in existing_props {
+                            if k != "keyframes" && k != "value" && k != "expression" {
+                                new_prop.properties.insert(k, v);
+                            }
+                        }
+                        *prop = new_prop;
+                    } else {
+                        // Update as Constant
+                        effect.properties.set(property_key.to_string(), Property::constant(value));
+                    }
+                } else {
+                     effect.properties.set(property_key.to_string(), Property::constant(value));
+                }
+                Ok(())
+            } else {
+                 Err(LibraryError::Project("Effect index out of range".to_string()))
+            }
+        } else {
+            Err(LibraryError::Project(format!(
+                "Clip with ID {} not found",
+                clip_id
+            )))
+        }
+    }
+    pub fn update_style_property_or_keyframe(
+        project: &Arc<RwLock<Project>>,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        style_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
+            LibraryError::Project(format!("Composition with ID {} not found", composition_id))
+        })?;
+        let track = composition.get_track_mut(track_id).ok_or_else(|| {
+            LibraryError::Project(format!(
+                "Track with ID {} not found in Composition {}",
+                track_id, composition_id
+            ))
+        })?;
+
+        if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+            if let Some(style) = clip.styles.get_mut(style_index) {
+                if let Some(prop) = style.properties.get_mut(property_key) {
+                    if prop.evaluator == "keyframe" {
+                         let mut current_keyframes = prop.keyframes();
+                        let mut preserved_easing = crate::animation::EasingFunction::Linear;
+                        if let Some(idx) = current_keyframes
+                            .iter()
+                            .position(|k| (k.time.into_inner() - time).abs() < 0.001)
+                        {
+                            preserved_easing = current_keyframes[idx].easing.clone();
+                            current_keyframes.remove(idx);
+                        }
+
+                        let final_easing = easing.unwrap_or(preserved_easing);
+
+                        current_keyframes.push(Keyframe {
+                            time: OrderedFloat(time),
+                            value: value.clone(),
+                            easing: final_easing,
+                        });
+
+                        current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
+
+                        // Preserve existing attributes (like interpolation)
+                        let existing_props = prop.properties.clone();
+                        let mut new_prop = Property::keyframe(current_keyframes);
+                        for (k, v) in existing_props {
+                            if k != "keyframes" && k != "value" && k != "expression" {
+                                new_prop.properties.insert(k, v);
+                            }
+                        }
+                        *prop = new_prop;
+                    } else {
+                        // Update as Constant
+                        style.properties.set(property_key.to_string(), Property::constant(value));
+                    }
+                } else {
+                     style.properties.set(property_key.to_string(), Property::constant(value));
+                }
+                Ok(())
+            } else {
+                 Err(LibraryError::Project("Style index out of range".to_string()))
+            }
+        } else {
+            Err(LibraryError::Project(format!(
+                "Clip with ID {} not found",
+                clip_id
+            )))
+        }
+    }
+
+    pub fn set_style_property_attribute(
+        project: &Arc<RwLock<Project>>,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        style_index: usize,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
+            LibraryError::Project(format!("Composition with ID {} not found", composition_id))
+        })?;
+        let track = composition.get_track_mut(track_id).ok_or_else(|| {
+            LibraryError::Project(format!(
+                "Track with ID {} not found in Composition {}",
+                track_id, composition_id
+            ))
+        })?;
+
+        if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+            if let Some(style) = clip.styles.get_mut(style_index) {
+                if let Some(prop) = style.properties.get_mut(property_key) {
+                    prop.properties.insert(attribute_key.to_string(), attribute_value);
+                    Ok(())
+                } else {
+                     Err(LibraryError::Project(format!("Property {} not found", property_key)))
+                }
+            } else {
+                 Err(LibraryError::Project("Style index out of range".to_string()))
+            }
+        } else {
+            Err(LibraryError::Project(format!(
+                "Clip with ID {} not found",
+                clip_id
+            )))
+        }
+    }
 }

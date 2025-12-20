@@ -1,6 +1,7 @@
-use crate::model::vector::{HandleType, PointType, VectorEditorState};
+use crate::model::vector::VectorEditorState;
+use library::core::model::vector::{PointType, HandleType};
 use egui::{Pos2, Response, Ui};
-use library::model::frame::transform::Transform;
+use library::core::frame::transform::Transform;
 
 pub struct VectorEditorInteraction<'a> {
     pub state: &'a mut VectorEditorState,
@@ -71,10 +72,10 @@ impl<'a> VectorEditorInteraction<'a> {
         }
         let mut events = Vec::new();
 
-        for i in 0..self.state.points.len() {
+        for i in 0..self.state.path.points.len() {
             // Extract position to avoid holding borrow
             let (px, py) = {
-                let pt = &self.state.points[i];
+                let pt = &self.state.path.points[i];
                 (pt.position[0], pt.position[1])
             };
 
@@ -106,7 +107,7 @@ impl<'a> VectorEditorInteraction<'a> {
                 ui.label("Point Type");
                 if ui
                     .radio_value(
-                        &mut self.state.points[i].point_type,
+                        &mut self.state.path.points[i].point_type,
                         PointType::Corner,
                         "Corner",
                     )
@@ -116,7 +117,7 @@ impl<'a> VectorEditorInteraction<'a> {
                 }
                 if ui
                     .radio_value(
-                        &mut self.state.points[i].point_type,
+                        &mut self.state.path.points[i].point_type,
                         PointType::Smooth,
                         "Smooth",
                     )
@@ -128,7 +129,7 @@ impl<'a> VectorEditorInteraction<'a> {
                 }
                 if ui
                     .radio_value(
-                        &mut self.state.points[i].point_type,
+                        &mut self.state.path.points[i].point_type,
                         PointType::Symmetric,
                         "Symmetric",
                     )
@@ -142,7 +143,7 @@ impl<'a> VectorEditorInteraction<'a> {
             if self.state.selected_point_indices.contains(&i) {
                 // Re-borrow point for handles
                 let (h_in, h_out) = {
-                    let pt = &self.state.points[i];
+                    let pt = &self.state.path.points[i];
                     (pt.handle_in, pt.handle_out)
                 };
 
@@ -195,10 +196,10 @@ impl<'a> VectorEditorInteraction<'a> {
                     changed = true;
                     match h_type {
                         HandleType::Vertex => {
-                            self.state.points[idx].position = [local_pos.x, local_pos.y];
+                            self.state.path.points[idx].position = [local_pos.x, local_pos.y];
                         }
                         HandleType::In => {
-                            let pt = &mut self.state.points[idx];
+                            let pt = &mut self.state.path.points[idx];
                             pt.handle_in =
                                 [local_pos.x - pt.position[0], local_pos.y - pt.position[1]];
 
@@ -220,7 +221,7 @@ impl<'a> VectorEditorInteraction<'a> {
                             }
                         }
                         HandleType::Out => {
-                            let pt = &mut self.state.points[idx];
+                            let pt = &mut self.state.path.points[idx];
                             pt.handle_out =
                                 [local_pos.x - pt.position[0], local_pos.y - pt.position[1]];
 

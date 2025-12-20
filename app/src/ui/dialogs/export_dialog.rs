@@ -7,13 +7,13 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 
 use library::cache::SharedCacheManager;
-use library::framing::entity_converters::EntityConverterRegistry;
-use library::model::project::project::Project;
-use library::model::project::property::PropertyValue;
-use library::plugin::{ExportSettings, PluginManager, PropertyUiType};
-use library::rendering::skia_renderer::SkiaRenderer;
-use library::service::render_service::RenderService;
-use library::{EditorService, ExportService, ProjectModel, RenderServer};
+use library::timeline::converter::EntityConverterRegistry;
+use library::core::model::project::Project;
+use library::core::model::property::PropertyValue;
+use library::extensions::traits::{ExportSettings, PropertyUiType}; use library::extensions::manager::PluginManager;
+use library::graphics::skia_renderer::SkiaRenderer;
+use library::compositing::render_service::RenderService;
+use library::{EditorService, ExportService, ProjectModel};
 
 pub struct ExportDialog {
     pub is_open: bool,
@@ -514,7 +514,7 @@ impl ExportDialog {
             }
             settings.parameters = json_params;
             settings.container = match property_values_owned.get("container") {
-                Some(library::model::project::property::PropertyValue::String(s)) => s.clone(),
+                Some(library::core::model::property::PropertyValue::String(s)) => s.clone(),
                 _ => {
                     if exporter_id_owned == "png_export" {
                         "png".to_string()
@@ -525,7 +525,7 @@ impl ExportDialog {
             };
 
             settings.codec = match property_values_owned.get("codec") {
-                Some(library::model::project::property::PropertyValue::String(s)) => s.clone(),
+                Some(library::core::model::property::PropertyValue::String(s)) => s.clone(),
                 _ => {
                     if exporter_id_owned == "png_export" {
                         "png".to_string()
@@ -536,7 +536,7 @@ impl ExportDialog {
             };
 
             settings.pixel_format = match property_values_owned.get("pixel_format") {
-                Some(library::model::project::property::PropertyValue::String(s)) => s.clone(),
+                Some(library::core::model::property::PropertyValue::String(s)) => s.clone(),
                 _ => "rgba".to_string(),
             };
 
@@ -554,7 +554,7 @@ impl ExportDialog {
             let mut audio_temp_path: Option<String> = None;
             if matches!(
                 settings.export_format(),
-                library::plugin::ExportFormat::Video
+                library::extensions::traits::ExportFormat::Video
             ) {
                 let fps = composition.fps;
                 let start_time = start_frame as f64 / fps;
@@ -563,7 +563,7 @@ impl ExportDialog {
                 let start_sample = (start_time * sample_rate as f64).round() as u64;
                 let frames = (duration * sample_rate as f64).round() as usize;
 
-                let audio_data = library::audio::mixer::mix_samples(
+                let audio_data = library::compositing::audio::mixer::mix_samples(
                     &project_model.project().assets,
                     project_model.composition(),
                     &cache_manager,
