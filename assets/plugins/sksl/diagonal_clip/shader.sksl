@@ -1,0 +1,36 @@
+uniform shader content;
+uniform float angle;
+uniform float position;
+uniform float softness;
+uniform float invert; // bool-ish
+uniform float2 resolution;
+
+half4 main(float2 p) {
+    // Normalize p to -1..1 relative to center
+    float2 uv = (p / resolution) * 2.0 - 1.0;
+
+    // Convert angle to radians
+    float rad = radians(angle);
+    float2 n = float2(cos(rad), sin(rad));
+
+    // Distance from line
+    // Plane eq: dot(uv, n) - d = 0
+    // position is offset.
+    float dist = dot(uv, n) - position;
+
+    // Invert logic
+    if (invert > 0.5) {
+        dist = -dist;
+    }
+
+    // Smoothstep for softness
+    // We want 1 if dist > 0 (visible), 0 if dist < 0 (clipped)
+    // Softness in UV space? Softness is in px.
+    // Convert softness to UV space approx.
+    float soft_uv = softness / min(resolution.x, resolution.y) * 2.0;
+
+    float alpha = smoothstep(-soft_uv, 0.0, dist);
+
+    half4 color = content.eval(p);
+    return color * alpha;
+}

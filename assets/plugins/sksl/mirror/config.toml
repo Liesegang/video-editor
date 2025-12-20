@@ -1,0 +1,26 @@
+id = "mirror"
+name = "Mirror"
+category = "Geometry"
+
+[[properties]]
+name = "axis"
+label = "Axis"
+type = "Int"
+min = 0
+max = 1
+default = 0
+
+[[properties]]
+name = "center"
+label = "Center"
+type = "Float"
+min = 0.0
+max = 1.0
+default = 0.5
+step = 0.01
+
+[[properties]]
+name = "resolution"
+label = "Resolution"
+type = "Vec2"
+default = [1920.0, 1080.0]
