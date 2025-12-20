@@ -38,6 +38,11 @@ pub struct ExportDialog {
     pub export_range: ExportRange,
     pub custom_start_frame: u64,
     pub custom_end_frame: u64,
+
+    // Overrides
+    pub override_width: Option<u32>,
+    pub override_height: Option<u32>,
+    pub override_fps: Option<f64>,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -70,6 +75,9 @@ impl ExportDialog {
             export_range: ExportRange::EntireComposition,
             custom_start_frame: 0,
             custom_end_frame: 0,
+            override_width: None,
+            override_height: None,
+            override_fps: None,
         }
     }
 
@@ -262,6 +270,70 @@ impl ExportDialog {
         }
 
         ui.separator();
+        ui.heading("Video Settings");
+        ui.horizontal(|ui| {
+            let mut override_res = self.override_width.is_some() || self.override_height.is_some();
+            if ui
+                .checkbox(&mut override_res, "Override Resolution")
+                .changed()
+            {
+                if override_res {
+                    // Initialize with current composition limits if available, or valid defaults
+                    if let Some(comp_id) = self.active_composition_id {
+                        let project_read = project.read().unwrap();
+                        if let Some(comp) =
+                            project_read.compositions.iter().find(|c| c.id == comp_id)
+                        {
+                            self.override_width = Some(comp.width as u32);
+                            self.override_height = Some(comp.height as u32);
+                        } else {
+                            self.override_width = Some(1920);
+                            self.override_height = Some(1080);
+                        }
+                    } else {
+                        self.override_width = Some(1920);
+                        self.override_height = Some(1080);
+                    }
+                } else {
+                    self.override_width = None;
+                    self.override_height = None;
+                }
+            }
+            if override_res {
+                if let Some(w) = &mut self.override_width {
+                    ui.add(egui::DragValue::new(w).prefix("W: "));
+                }
+                if let Some(h) = &mut self.override_height {
+                    ui.add(egui::DragValue::new(h).prefix("H: "));
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            let mut override_fps = self.override_fps.is_some();
+            if ui.checkbox(&mut override_fps, "Override FPS").changed() {
+                if override_fps {
+                    if let Some(comp_id) = self.active_composition_id {
+                        let project_read = project.read().unwrap();
+                        if let Some(comp) =
+                            project_read.compositions.iter().find(|c| c.id == comp_id)
+                        {
+                            self.override_fps = Some(comp.fps);
+                        } else {
+                            self.override_fps = Some(30.0);
+                        }
+                    } else {
+                        self.override_fps = Some(30.0);
+                    }
+                } else {
+                    self.override_fps = None;
+                }
+            }
+            if let Some(fps) = &mut self.override_fps {
+                ui.add(egui::DragValue::new(fps).speed(0.1));
+            }
+        });
+
+        ui.separator();
 
         // 4. Output Path
         ui.horizontal(|ui| {
@@ -379,16 +451,16 @@ impl ExportDialog {
 
         ui.separator();
 
-        ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Close").clicked() {
+                self.is_open = false;
+            }
             let enabled = self.selected_exporter_id.is_some() && !self.output_path.is_empty();
             if ui
                 .add_enabled(enabled, egui::Button::new("Export"))
                 .clicked()
             {
                 self.start_export(project, project_service);
-            }
-            if ui.button("Close").clicked() {
-                self.is_open = false;
             }
         });
     }
@@ -439,6 +511,10 @@ impl ExportDialog {
         let export_range = self.export_range;
         let custom_start = self.custom_start_frame;
         let custom_end = self.custom_end_frame;
+
+        let override_width = self.override_width;
+        let override_height = self.override_height;
+        let override_fps = self.override_fps;
 
         // Capture Audio Engine Sample Rate
         let engine_sample_rate = project_service.get_audio_engine().get_sample_rate();
@@ -494,9 +570,9 @@ impl ExportDialog {
 
             // Build ExportSettings
             let mut settings = ExportSettings::for_dimensions(
-                composition.width as u32,
-                composition.height as u32,
-                composition.fps,
+                override_width.unwrap_or(composition.width as u32),
+                override_height.unwrap_or(composition.height as u32),
+                override_fps.unwrap_or(composition.fps),
             );
 
             // Map properties

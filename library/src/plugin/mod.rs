@@ -159,6 +159,7 @@ pub enum LoadRequest {
     VideoFrame {
         path: String,
         frame_number: u64,
+        stream_index: Option<usize>,
         input_color_space: Option<String>,
         output_color_space: Option<String>,
     },
@@ -177,6 +178,7 @@ pub struct AssetMetadata {
     pub fps: Option<f64>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub stream_index: Option<usize>,
 }
 
 pub trait LoadPlugin: Plugin {
@@ -192,6 +194,10 @@ pub trait LoadPlugin: Plugin {
         // but for efficiency plugins should override this).
         // For now, simpler to leave default as None or implement naive fallback.
         // Let's rely on implementation to do it right.
+        None
+    }
+
+    fn get_available_streams(&self, _path: &str) -> Option<Vec<AssetMetadata>> {
         None
     }
 
@@ -588,6 +594,16 @@ impl PluginManager {
         for plugin in inner.load_plugins.plugins.values() {
             if let Some(metadata) = plugin.get_metadata(path) {
                 return Some(metadata);
+            }
+        }
+        None
+    }
+
+    pub fn get_available_streams(&self, path: &str) -> Option<Vec<AssetMetadata>> {
+        let inner = self.inner.read().unwrap();
+        for plugin in inner.load_plugins.plugins.values() {
+            if let Some(streams) = plugin.get_available_streams(path) {
+                return Some(streams);
             }
         }
         None

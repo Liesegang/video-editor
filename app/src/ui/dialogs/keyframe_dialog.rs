@@ -12,7 +12,7 @@ pub fn show_keyframe_dialog(
     editor_context: &mut EditorContext,
     history_manager: &mut HistoryManager,
     project_service: &mut EditorService,
-    _project: &Arc<RwLock<Project>>,
+    project: &Arc<RwLock<Project>>,
 ) {
     let mut open = editor_context.keyframe_dialog.is_open;
     let mut should_close = false;
@@ -248,7 +248,20 @@ pub fn show_keyframe_dialog(
                     use library::model::project::property::PropertyValue;
                     use ordered_float::OrderedFloat;
 
-                    let new_value = PropertyValue::Number(OrderedFloat(state.value));
+                    // Handle suffix logic
+                    let (base_name, component_suffix) = if state.property_name.ends_with(".x") {
+                        (
+                            state.property_name.trim_end_matches(".x"),
+                            Some(crate::ui::panels::graph_editor::PropertyComponent::X),
+                        )
+                    } else if state.property_name.ends_with(".y") {
+                        (
+                            state.property_name.trim_end_matches(".y"),
+                            Some(crate::ui::panels::graph_editor::PropertyComponent::Y),
+                        )
+                    } else {
+                        (state.property_name.as_str(), None)
+                    };
 
                     // Helper to parse key
                     let parse_key = |key: &str| -> Option<(usize, String)> {
@@ -275,8 +288,71 @@ pub fn show_keyframe_dialog(
                         None
                     };
 
-                    let result = if let Some((eff_idx, prop_key)) = parse_key(&state.property_name)
-                    {
+                    // Fetch current value to merge components if needed
+                    let mut current_pv = None;
+                    if let Ok(proj) = project.read() {
+                        if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
+                            if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
+                                if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
+                                    if let Some((eff_idx, prop_key)) = parse_key(base_name) {
+                                        if let Some(effect) = clip.effects.get(eff_idx) {
+                                            if let Some(prop) = effect.properties.get(&prop_key) {
+                                                if let Some(kf) =
+                                                    prop.keyframes().get(state.keyframe_index)
+                                                {
+                                                    // Use index directly, assuming sorted
+                                                    current_pv = Some(kf.value.clone());
+                                                }
+                                            }
+                                        }
+                                    } else if let Some((style_idx, prop_key)) =
+                                        parse_style_key(base_name)
+                                    {
+                                        if let Some(style) = clip.styles.get(style_idx) {
+                                            if let Some(prop) = style.properties.get(&prop_key) {
+                                                if let Some(kf) =
+                                                    prop.keyframes().get(state.keyframe_index)
+                                                {
+                                                    current_pv = Some(kf.value.clone());
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        if let Some(prop) = clip.properties.get(base_name) {
+                                            if let Some(kf) =
+                                                prop.keyframes().get(state.keyframe_index)
+                                            {
+                                                current_pv = Some(kf.value.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Construct new PropertyValue
+                    let new_value = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
+                        match component_suffix {
+                            Some(crate::ui::panels::graph_editor::PropertyComponent::X) => {
+                                PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                    x: OrderedFloat(state.value),
+                                    y: old_vec.y,
+                                })
+                            }
+                            Some(crate::ui::panels::graph_editor::PropertyComponent::Y) => {
+                                PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                    x: old_vec.x,
+                                    y: OrderedFloat(state.value),
+                                })
+                            }
+                            _ => PropertyValue::Number(OrderedFloat(state.value)),
+                        }
+                    } else {
+                        PropertyValue::Number(OrderedFloat(state.value))
+                    };
+
+                    let result = if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                         project_service.update_effect_keyframe_by_index(
                             comp_id,
                             track_id,
@@ -288,9 +364,7 @@ pub fn show_keyframe_dialog(
                             Some(new_value),
                             Some(state.easing.clone()),
                         )
-                    } else if let Some((style_idx, prop_key)) =
-                        parse_style_key(&state.property_name)
-                    {
+                    } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
                         project_service.update_style_keyframe_by_index(
                             comp_id,
                             track_id,
@@ -307,7 +381,7 @@ pub fn show_keyframe_dialog(
                             comp_id,
                             track_id,
                             entity_id,
-                            &state.property_name,
+                            base_name,
                             state.keyframe_index,
                             Some(new_time),
                             Some(new_value),

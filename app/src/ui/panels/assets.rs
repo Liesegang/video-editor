@@ -107,9 +107,9 @@ pub fn assets_panel(
 
                         // 2. Try Import
                         match project_service.import_file(&path_str) {
-                            Ok(_) => {
+                            Ok(asset_ids) => {
                                 imported_any = true;
-                                report.successful_count += 1;
+                                report.successful_count += asset_ids.len();
                             }
                             Err(e) => {
                                 report.errors.push((
@@ -183,9 +183,9 @@ pub fn assets_panel(
 
                         // 2. Try Import
                         match project_service.import_file(&path_str) {
-                            Ok(_) => {
+                            Ok(asset_ids) => {
                                 imported_any = true;
-                                report.successful_count += 1;
+                                report.successful_count += asset_ids.len();
                             }
                             Err(e) => {
                                 // Only log errors for supported file types to avoid spamming "unknown format" for random files

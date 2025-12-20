@@ -94,6 +94,7 @@ impl LoadPlugin for NativeImageLoader {
             fps: None,
             width: w,
             height: h,
+            stream_index: None,
         })
     }
 }

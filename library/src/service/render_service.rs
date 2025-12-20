@@ -87,6 +87,7 @@ impl<T: Renderer> RenderService<T> {
                     frame_number,
                 } => {
                     let request = LoadRequest::VideoFrame {
+                        stream_index: None,
                         path: surface.file_path.clone(),
                         frame_number: *frame_number,
                         input_color_space: surface.input_color_space.clone(),
