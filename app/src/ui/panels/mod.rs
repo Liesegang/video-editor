@@ -4,3 +4,4 @@ pub mod preview;
 
 pub mod graph_editor;
 pub mod timeline;
+pub mod node_editor;
