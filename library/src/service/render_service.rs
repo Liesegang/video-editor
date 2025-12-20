@@ -89,6 +89,8 @@ impl<T: Renderer> RenderService<T> {
                     let request = LoadRequest::VideoFrame {
                         path: surface.file_path.clone(),
                         frame_number: *frame_number,
+                        input_color_space: surface.input_color_space.clone(),
+                        output_color_space: surface.output_color_space.clone(),
                     };
                     let video_frame = measure_debug(
                         format!("Decode video {} frame {}", surface.file_path, frame_number),
@@ -107,8 +109,10 @@ impl<T: Renderer> RenderService<T> {
                         0.0,
                     )?;
                     measure_debug(format!("Draw video {}", surface.file_path), || {
-                        self.renderer
-                            .draw_layer(&final_image, &apply_view_transform(&surface.transform, scale))
+                        self.renderer.draw_layer(
+                            &final_image,
+                            &apply_view_transform(&surface.transform, scale),
+                        )
                     })?;
                 }
                 FrameContent::Image { surface } => {
@@ -132,8 +136,10 @@ impl<T: Renderer> RenderService<T> {
                         0.0,
                     )?;
                     measure_debug(format!("Draw image {}", surface.file_path), || {
-                        self.renderer
-                            .draw_layer(&final_image, &apply_view_transform(&surface.transform, scale))
+                        self.renderer.draw_layer(
+                            &final_image,
+                            &apply_view_transform(&surface.transform, scale),
+                        )
                     })?;
                 }
                 FrameContent::Text {

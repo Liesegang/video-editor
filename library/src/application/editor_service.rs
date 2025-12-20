@@ -344,8 +344,6 @@ impl EditorService {
 
     // Aliases & Sequences
 
-
-
     pub fn update_clip_time(
         &self,
         comp_id: Uuid,
@@ -393,7 +391,8 @@ impl EditorService {
         track_id: Uuid,
         clip_id: Uuid,
     ) -> Vec<crate::plugin::PropertyDefinition> {
-        self.project_manager.get_inspector_definitions(comp_id, track_id, clip_id)
+        self.project_manager
+            .get_inspector_definitions(comp_id, track_id, clip_id)
     }
 
     pub fn get_property_definitions(
@@ -595,8 +594,6 @@ impl EditorService {
         )
     }
 
-
-
     pub fn update_style_keyframe_by_index(
         &self,
         composition_id: Uuid,
@@ -685,4 +682,3 @@ impl EditorService {
         )
     }
 }
-

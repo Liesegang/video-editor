@@ -22,7 +22,7 @@ pub struct RenderServer {
 
 enum RenderRequest {
     Render(FrameInfo),
-    SetSharingContext(usize),
+    SetSharingContext(usize, Option<isize>),
     #[allow(dead_code)]
     Shutdown,
 }
@@ -83,8 +83,8 @@ impl RenderServer {
                             req = RenderRequest::Shutdown;
                             break;
                         }
-                        RenderRequest::SetSharingContext(handle) => {
-                            render_service.renderer.set_sharing_context(handle);
+                        RenderRequest::SetSharingContext(handle, hwnd) => {
+                            render_service.renderer.set_sharing_context(handle, hwnd);
                             // We handled it immediately.
                             // We do NOT update `req` because `req` might be a pending Render request we still want to process.
                             // If `req` was also SetSharing, it's fine, we processed it (or will process it if we don't handle `req` variants differently).
@@ -93,7 +93,7 @@ impl RenderServer {
                             // NOTE: If `req` was SetSharingContext(old_handle), and we just set(new_handle), then `req` is outdated.
                             // But executing `req` (SetSharing) again with old handle is bad.
                             // So if `req` is SetSharing, we shound discard/update it?
-                            if let RenderRequest::SetSharingContext(_) = req {
+                            if let RenderRequest::SetSharingContext(_, _) = req {
                                 // req is an old sharing request, superseded or just done.
                                 // Since we processed next_req (new handle), we should drop old req?
                                 // But what if `req` was Render? We keep it.
@@ -103,12 +103,12 @@ impl RenderServer {
                                 // So we MUST NOT let `req` run if it is an old SetSharing.
                                 // We can update `req` to `SetSharingContext(handle)` (the new one)?
                                 // Then main loop runs it again? That's wasteful but safe-ish (idempotent check inside).
-                                req = RenderRequest::SetSharingContext(handle);
+                                req = RenderRequest::SetSharingContext(handle, hwnd);
                             }
                         }
                         RenderRequest::Render(_) => {
                             // New render request.
-                            if let RenderRequest::SetSharingContext(h) = req {
+                            if let RenderRequest::SetSharingContext(h, w) = req {
                                 // Previous `req` was sharing. We MUST execute it before switching to new Render.
                                 // But we can't execute it here easily without potentially executing it TWICE if `SetSharingContext` case above also ran?
                                 // Wait, `SetSharingContext` case only runs if `next_req` is SetSharing.
@@ -116,7 +116,7 @@ impl RenderServer {
                                 // `req` is SetSharing.
                                 // So `SetSharing` is pending.
                                 // We should apply it now?
-                                render_service.renderer.set_sharing_context(h);
+                                render_service.renderer.set_sharing_context(h, w);
                                 req = next_req; // Now we can switch to new Render.
                             } else {
                                 // req was Render or Shutdown.
@@ -128,29 +128,10 @@ impl RenderServer {
 
                 match req {
                     RenderRequest::Render(frame_info) => {
-                        // Check cache
-                        if let Some(cached_image_data) = cache.get(&frame_info) {
-                            let _ = tx_result.send(RenderResult {
-                                frame_hash: 0, // Hash is no longer used/needed for identification in the same way, or we can compute a cheap hash if needed for Result
-                                output: RenderOutput::Image(Image::new(
-                                    (frame_info.width as f64 * frame_info.render_scale.into_inner())
-                                        .round() as u32,
-                                    (frame_info.height as f64
-                                        * frame_info.render_scale.into_inner())
-                                    .round() as u32,
-                                    cached_image_data.clone(),
-                                )),
-                                frame_info,
-                            });
-                            continue;
-                        }
-
-                        // Render
-                        // Check if renderer size or background color matches
-                        // Check if renderer size or background color matches
                         let render_scale = frame_info.render_scale.into_inner();
 
-                        let (target_width, target_height) = if let Some(region) = &frame_info.region {
+                        let (target_width, target_height) = if let Some(region) = &frame_info.region
+                        {
                             (
                                 (region.width * render_scale).round() as u32,
                                 (region.height * render_scale).round() as u32,
@@ -161,6 +142,23 @@ impl RenderServer {
                                 (frame_info.height as f64 * render_scale).round() as u32,
                             )
                         };
+
+                        // Check cache
+                        if let Some(cached_image_data) = cache.get(&frame_info) {
+                            let _ = tx_result.send(RenderResult {
+                                frame_hash: 0, // Hash is no longer used/needed for identification in the same way, or we can compute a cheap hash if needed for Result
+                                output: RenderOutput::Image(Image::new(
+                                    target_width,
+                                    target_height,
+                                    cached_image_data.clone(),
+                                )),
+                                frame_info,
+                            });
+                            continue;
+                        }
+
+                        // Render
+                        // Check if renderer size or background color matches
 
                         if current_width != target_width
                             || current_height != target_height
@@ -200,13 +198,13 @@ impl RenderServer {
                             }
                         }
                     }
-                    RenderRequest::SetSharingContext(handle) => {
+                    RenderRequest::SetSharingContext(handle, hwnd) => {
                         // Need to update renderer's sharing context
                         // But RenderService holds the renderer.
                         // Does RenderService expose mut access to renderer?
                         // Assuming yes, or we need to add a method to RenderService.
                         // Actually RenderService struct definition usually has `pub renderer: R`.
-                        render_service.renderer.set_sharing_context(handle);
+                        render_service.renderer.set_sharing_context(handle, hwnd);
                     }
                     RenderRequest::Shutdown => break,
                 }
@@ -228,7 +226,7 @@ impl RenderServer {
         self.rx_result.try_recv()
     }
 
-    pub fn set_sharing_context(&self, handle: usize) {
-        let _ = self.tx.send(RenderRequest::SetSharingContext(handle));
+    pub fn set_sharing_context(&self, handle: usize, hwnd: Option<isize>) {
+        let _ = self.tx.send(RenderRequest::SetSharingContext(handle, hwnd));
     }
 }

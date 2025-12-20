@@ -45,7 +45,13 @@ impl LoadPlugin for FfmpegVideoLoader {
         request: &LoadRequest,
         cache: &CacheManager,
     ) -> Result<LoadResponse, LibraryError> {
-        if let LoadRequest::VideoFrame { path, frame_number } = request {
+        if let LoadRequest::VideoFrame {
+            path,
+            frame_number,
+            input_color_space,
+            output_color_space,
+        } = request
+        {
             if let Some(image) = cache.get_video_frame(path, *frame_number) {
                 return Ok(LoadResponse::Image(image));
             }
@@ -58,6 +64,12 @@ impl LoadPlugin for FfmpegVideoLoader {
                     Entry::Occupied(entry) => entry.into_mut(),
                     Entry::Vacant(entry) => entry.insert(VideoReader::new(path)?),
                 };
+
+                // Configure Color Space if provided
+                if let (Some(src), Some(dst)) = (input_color_space, output_color_space) {
+                    reader.set_color_space(src, dst);
+                }
+
                 reader.decode_frame(*frame_number)?
             };
 
@@ -75,7 +87,7 @@ impl LoadPlugin for FfmpegVideoLoader {
             .extension()?
             .to_str()?
             .to_lowercase();
-        
+
         // Explicitly reject image extensions to let NativeImageLoader handle them
         match ext.as_str() {
             "png" | "jpg" | "jpeg" | "bmp" | "webp" => return None,

@@ -13,6 +13,7 @@ use skia_safe::{AlphaType, ColorType, Data, ISize, Image as SkImage, ImageInfo, 
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use glutin::config::ConfigSurfaceTypes;
+use glutin::config::GlConfig;
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use glutin::context::ContextAttributesBuilder;
 #[cfg(feature = "gl")]
@@ -25,8 +26,7 @@ use raw_window_handle::{
 };
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
-#[cfg(feature = "gl")]
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM};
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(all(feature = "gl", target_os = "windows"))]
@@ -35,6 +35,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 
+#[cfg(all(feature = "gl", target_os = "windows"))]
+use windows_sys::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
+
+#[cfg(all(feature = "gl", target_os = "windows"))]
+#[link(name = "gdi32")]
+unsafe extern "system" {
+    fn GetPixelFormat(hdc: windows_sys::Win32::Graphics::Gdi::HDC) -> i32;
+}
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use windows_sys::Win32::Graphics::OpenGL::{HGLRC, wglShareLists};
 
@@ -56,10 +64,13 @@ impl GpuContext {
     }
 }
 
-pub fn create_gpu_context(share_handle: Option<usize>) -> Option<GpuContext> {
+pub fn create_gpu_context(
+    share_handle: Option<usize>,
+    share_hwnd: Option<isize>,
+) -> Option<GpuContext> {
     #[cfg(all(feature = "gl", target_os = "windows"))]
     {
-        match init_glutin_headless(share_handle) {
+        match init_glutin_headless(share_handle, share_hwnd) {
             Ok(ctx) => Some(ctx),
             Err(err) => {
                 warn!(
@@ -157,7 +168,10 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
 }
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
-fn init_glutin_headless(share_handle: Option<usize>) -> Result<GpuContext, String> {
+fn init_glutin_headless(
+    share_handle: Option<usize>,
+    share_hwnd: Option<isize>,
+) -> Result<GpuContext, String> {
     // 1. Create Dummy Window
     let raw_window_handle = create_dummy_window()?;
     let hwnd = match raw_window_handle {
@@ -165,9 +179,31 @@ fn init_glutin_headless(share_handle: Option<usize>) -> Result<GpuContext, Strin
         _ => return Err("Invalid window handle type".to_string()),
     };
 
+    // Identify target pixel format if sharing
+    let target_pf_index = if let Some(hwnd_ptr) = share_hwnd {
+        unsafe {
+            let hwnd = hwnd_ptr as HWND;
+            let dc = GetDC(hwnd);
+            if dc.is_null() {
+                warn!("SkiaRenderer: Failed to GetDC from share_hwnd");
+                None
+            } else {
+                let pf = GetPixelFormat(dc);
+                ReleaseDC(hwnd, dc);
+                if pf == 0 {
+                    warn!("SkiaRenderer: Failed to GetPixelFormat from share_hwnd DC");
+                    None
+                } else {
+                    debug!("SkiaRenderer: Target sharing PixelFormat index: {}", pf);
+                    Some(pf)
+                }
+            }
+        }
+    } else {
+        None
+    };
+
     // 2. Create Display
-    // We can use the window handle to create display?
-    // Or just empty display handle. Glutin works with empty.
     let raw_display_handle = RawDisplayHandle::Windows(WindowsDisplayHandle::new());
     let display = unsafe {
         glutin::display::Display::new(
@@ -177,6 +213,7 @@ fn init_glutin_headless(share_handle: Option<usize>) -> Result<GpuContext, Strin
     }
     .map_err(|e| format!("Display creation failed: {}", e))?;
 
+    // 3. Find Config (WINDOW)
     // 3. Find Config (WINDOW)
     let template = glutin::config::ConfigTemplateBuilder::new()
         .with_surface_type(ConfigSurfaceTypes::WINDOW)
@@ -191,13 +228,19 @@ fn init_glutin_headless(share_handle: Option<usize>) -> Result<GpuContext, Strin
             if config.num_samples() > 0 && accum.num_samples() == 0 {
                 return accum;
             }
-            if config.alpha_size() > accum.alpha_size() {
-                config
-            } else {
-                accum
+            if config.alpha_size() == 8 && accum.alpha_size() != 8 {
+                return config;
             }
+            if accum.alpha_size() == 8 && config.alpha_size() != 8 {
+                return accum;
+            }
+            accum
         })
         .ok_or("No matching GL config found")?;
+
+    if let Some(target) = target_pf_index {
+        debug!("Target pixel format index was {}, but manual filtering is disabled due to API limitations.", target);
+    }
 
     debug!(
         "init_glutin_headless: Selected config. Alpha: {}, Samples: {}",
@@ -230,25 +273,58 @@ fn init_glutin_headless(share_handle: Option<usize>) -> Result<GpuContext, Strin
         .map_err(|e| format!("Make current failed: {}", e))?;
 
     // 7. Share Lists (Context Sharing)
-    if let Some(share_hglrc) = share_handle {
-        // We need the raw HGLRC of our new context.
-        // Glutin's PossiblyCurrentContext doesn't easily expose raw handle in safe API.
-        // But we are on Windows/WGL.
-        // We can use wglGetCurrentContext right now because we just made it current!
+    let context = if let Some(share_hglrc) = share_handle {
         unsafe {
             let my_hglrc = windows_sys::Win32::Graphics::OpenGL::wglGetCurrentContext();
             if my_hglrc.is_null() {
                 warn!("SkiaRenderer: wglGetCurrentContext returned null after make_current");
+                context
             } else {
-                let success = wglShareLists(share_hglrc as HGLRC, my_hglrc);
-                if success == 0 {
-                    warn!("SkiaRenderer: wglShareLists failed! Sharing might not work.");
-                } else {
-                    debug!("SkiaRenderer: wglShareLists success! Contexts shared.");
+                let not_current = context
+                    .make_not_current()
+                    .map_err(|e| format!("Make not current failed: {}", e))?;
+
+                windows_sys::Win32::Graphics::OpenGL::wglMakeCurrent(0 as _, std::ptr::null_mut());
+
+                let mut success = 0;
+                let mut last_err = 0;
+                for attempt in 1..=5 {
+                    success = wglShareLists(share_hglrc as HGLRC, my_hglrc);
+                    if success != 0 {
+                        debug!(
+                            "SkiaRenderer: wglShareLists success on attempt {}!",
+                            attempt
+                        );
+                        break;
+                    }
+                    last_err = GetLastError();
+                    if last_err == 170 {
+                        // ERROR_BUSY
+                        warn!(
+                            "SkiaRenderer: wglShareLists busy (attempt {}), retrying...",
+                            attempt
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    } else {
+                        break;
+                    }
                 }
+
+                if success == 0 {
+                    warn!(
+                        "SkiaRenderer: wglShareLists failed after retries! Error Code: {}. Sharing might not work.",
+                        last_err
+                    );
+                }
+
+                not_current
+                    .make_current(&surface)
+                    .map_err(|e| format!("Make current retry failed: {}", e))?
             }
         }
-    }
+    } else {
+        context
+    };
 
     let interface = Interface::new_native().ok_or("Failed to create native interface")?;
     let direct_context =
@@ -346,6 +422,7 @@ pub fn surface_to_image(
         data: buffer,
     })
 }
+
 pub fn create_image_from_texture(
     context: &mut DirectContext,
     texture_id: u32,

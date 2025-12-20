@@ -356,3 +356,9 @@ tags
 /repomix-output.xml
 
 ToDo.md
+
+# Native C++ Shim build artifacts
+*.obj
+*.exp
+*.lib
+*.def

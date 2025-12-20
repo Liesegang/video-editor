@@ -84,7 +84,12 @@ impl<'a> FrameEvaluationContext<'a> {
                 let color_val = self.evaluate_property_value(props, "color", time);
                 let color = match color_val {
                     Some(PropertyValue::Color(c)) => c,
-                    _ => crate::model::frame::color::Color { r: 0, g: 0, b: 0, a: 255 }, // Default Black? Or White?
+                    _ => crate::model::frame::color::Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    }, // Default Black? Or White?
                 };
                 let offset = self.evaluate_number(props, "offset", time, 0.0);
 
@@ -95,7 +100,7 @@ impl<'a> FrameEvaluationContext<'a> {
                         let miter = self.evaluate_number(props, "miter", time, 4.0);
                         let dash_offset = self.evaluate_number(props, "dash_offset", time, 0.0);
                         // TODO: Implement dash_array, cap, join evaluation if needed properties exist
-                         DrawStyle::Stroke {
+                        DrawStyle::Stroke {
                             color,
                             width,
                             offset,
@@ -118,8 +123,15 @@ impl<'a> FrameEvaluationContext<'a> {
     }
 
     fn build_transform(&self, props: &PropertyMap, time: f64) -> Transform {
-        let (pos_x, pos_y) =
-            self.evaluate_vec2(props, "position", "position_x", "position_y", time, 0.0, 0.0);
+        let (pos_x, pos_y) = self.evaluate_vec2(
+            props,
+            "position",
+            "position_x",
+            "position_y",
+            time,
+            0.0,
+            0.0,
+        );
         let (scale_x, scale_y) =
             self.evaluate_vec2(props, "scale", "scale_x", "scale_y", time, 100.0, 100.0);
         let (anchor_x, anchor_y) =
@@ -297,6 +309,8 @@ impl EntityConverter for VideoEntityConverter {
         let time = frame_number as f64 / fps;
 
         let file_path = evaluator.require_string(props, "file_path", time, "video")?;
+        let input_color_space = evaluator.optional_string(props, "input_color_space", time);
+        let output_color_space = evaluator.optional_string(props, "output_color_space", time);
 
         let delta_comp_frames = frame_number.saturating_sub(track_clip.in_frame);
         let delta_seconds = delta_comp_frames as f64 / fps;
@@ -310,6 +324,8 @@ impl EntityConverter for VideoEntityConverter {
             file_path,
             effects,
             transform,
+            input_color_space,
+            output_color_space,
         };
 
         Some(FrameObject {
@@ -342,6 +358,8 @@ impl EntityConverter for ImageEntityConverter {
             file_path,
             effects,
             transform,
+            input_color_space: None,
+            output_color_space: None,
         };
 
         Some(FrameObject {
@@ -370,9 +388,9 @@ impl EntityConverter for TextEntityConverter {
             .unwrap_or_else(|| "Arial".to_string());
         let size = evaluator.evaluate_number(props, "size", time, 12.0);
         let size = evaluator.evaluate_number(props, "size", time, 12.0);
-        
+
         let styles = evaluator.build_styles(&track_clip.styles, time);
-        
+
         let transform = evaluator.build_transform(props, time);
         let effects = evaluator.build_image_effects(&track_clip.effects, time);
 

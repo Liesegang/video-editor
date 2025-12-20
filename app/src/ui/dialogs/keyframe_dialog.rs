@@ -288,8 +288,10 @@ pub fn show_keyframe_dialog(
                             Some(new_value),
                             Some(state.easing.clone()),
                         )
-                    } else if let Some((style_idx, prop_key)) = parse_style_key(&state.property_name) {
-                         project_service.update_style_keyframe_by_index(
+                    } else if let Some((style_idx, prop_key)) =
+                        parse_style_key(&state.property_name)
+                    {
+                        project_service.update_style_keyframe_by_index(
                             comp_id,
                             track_id,
                             entity_id,

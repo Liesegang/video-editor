@@ -45,8 +45,9 @@ impl AudioLoader {
                     Err(_) => continue,
                 }
             }
-            
-            let (id, rate_opt, decoder) = found.ok_or_else(|| anyhow::anyhow!("No supported audio track found"))?;
+
+            let (id, rate_opt, decoder) =
+                found.ok_or_else(|| anyhow::anyhow!("No supported audio track found"))?;
             let rate = rate_opt.ok_or_else(|| anyhow::anyhow!("Unknown sample rate"))?;
             (id, rate, decoder)
         };

@@ -153,8 +153,15 @@ pub trait PropertyPlugin: Plugin {
 
 #[derive(Debug, Clone)]
 pub enum LoadRequest {
-    Image { path: String },
-    VideoFrame { path: String, frame_number: u64 },
+    Image {
+        path: String,
+    },
+    VideoFrame {
+        path: String,
+        frame_number: u64,
+        input_color_space: Option<String>,
+        output_color_space: Option<String>,
+    },
 }
 
 pub enum LoadResponse {

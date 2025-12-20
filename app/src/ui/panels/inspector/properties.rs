@@ -202,10 +202,10 @@ where
                     current_val.b,
                     current_val.a,
                 );
-                
+
                 ui.horizontal(|ui| {
                     let response = ui.color_edit_button_srgba(&mut color32);
-    
+
                     let new_color = if response.changed() {
                         Some(PropertyValue::Color(Color {
                             r: color32.r(),
@@ -216,7 +216,7 @@ where
                     } else {
                         None
                     };
-    
+
                     handle_prop_response(
                         &mut actions,
                         &response,
@@ -229,10 +229,12 @@ where
                     let prop_meta = get_property(&prop_def.name);
                     if let Some(prop) = prop_meta {
                         if prop.evaluator == "keyframe" {
-                            let current_mode = prop.properties.get("interpolation")
+                            let current_mode = prop
+                                .properties
+                                .get("interpolation")
                                 .and_then(|v| v.get_as::<String>())
                                 .unwrap_or_else(|| "linear".to_string());
-                            
+
                             let mut mode = current_mode.clone();
                             egui::ComboBox::from_id_salt(format!("interp_{}", prop_def.name))
                                 .selected_text(if mode == "hsv" { "HSV" } else { "RGB" })
@@ -241,9 +243,13 @@ where
                                     ui.selectable_value(&mut mode, "linear".to_string(), "RGB");
                                     ui.selectable_value(&mut mode, "hsv".to_string(), "HSV");
                                 });
-                            
+
                             if mode != current_mode {
-                                actions.push(PropertyAction::SetAttribute(prop_def.name.clone(), "interpolation".to_string(), PropertyValue::String(mode)));
+                                actions.push(PropertyAction::SetAttribute(
+                                    prop_def.name.clone(),
+                                    "interpolation".to_string(),
+                                    PropertyValue::String(mode),
+                                ));
                             }
                         }
                     }

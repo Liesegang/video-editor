@@ -30,7 +30,12 @@ impl<'a> FrameEvaluator<'a> {
         }
     }
 
-    pub fn evaluate(&self, frame_number: u64, render_scale: f64, region: Option<Region>) -> FrameInfo {
+    pub fn evaluate(
+        &self,
+        frame_number: u64,
+        render_scale: f64,
+        region: Option<Region>,
+    ) -> FrameInfo {
         // Changed to u64
         let mut frame = self.initialize_frame(frame_number, render_scale, region);
         for track_clip in self.active_clips(frame_number) {

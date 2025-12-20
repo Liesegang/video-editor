@@ -274,8 +274,12 @@ pub fn draw_clips(
 
             // --- Drawing for clips (always) ---
             let is_sel_entity = editor_context.is_selected(clip.id);
-            let transparent_color =
-                egui::Color32::from_rgba_premultiplied(clip_color.r(), clip_color.g(), clip_color.b(), 150);
+            let transparent_color = egui::Color32::from_rgba_premultiplied(
+                clip_color.r(),
+                clip_color.g(),
+                clip_color.b(),
+                150,
+            );
 
             let painter = ui_content.painter_at(content_rect_for_clip_area);
             painter.rect_filled(drawing_clip_rect, 4.0, transparent_color);
