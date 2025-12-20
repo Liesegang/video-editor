@@ -15,8 +15,11 @@ use library::model::project::property::Vec2;
 mod gizmo;
 mod grid;
 mod interaction;
+mod action;
 pub mod vector_editor;
 pub mod clip;
+
+use action::PreviewAction;
 
 struct PreviewViewportState<'a> {
     pan: &'a mut egui::Vec2,
@@ -193,6 +196,7 @@ pub fn preview_panel(
     );
 
     // Lock project once for reading state
+    let mut pending_actions = Vec::new();
     if let Ok(proj_read) = project.read() {
         let (comp_width, comp_height) =
             if let Some(comp) = editor_context.get_current_composition(&proj_read) {
@@ -521,14 +525,13 @@ pub fn preview_panel(
                 ui,
                 editor_context,
                 &project,
-                project_service,
                 history_manager,
                 &gui_clips,
                 to_screen,
                 to_world,
             );
-            interactions.handle(&response, rect);
-            interactions.draw_text_overlay();
+            interactions.handle(&response, rect, &mut pending_actions);
+            interactions.draw_text_overlay(&mut pending_actions);
         }
 
         // Draw Gizmo
@@ -549,6 +552,30 @@ pub fn preview_panel(
             }
         }
     } // End of project.read() scope
+
+    // Execute pending actions
+    for action in pending_actions {
+        match action {
+            PreviewAction::UpdateProperty {
+                comp_id,
+                track_id,
+                entity_id,
+                prop_name,
+                time,
+                value,
+            } => {
+                crate::utils::property::update_property(
+                    project_service,
+                    comp_id,
+                    track_id,
+                    entity_id,
+                    &prop_name,
+                    time,
+                    value,
+                );
+            }
+        }
+    }
 
     // Info text
     let info_text = format!(
