@@ -1,8 +1,11 @@
 uniform shader content;
-uniform float seed;
 uniform float amount;
+uniform float seed;
+uniform float monochrome; // bool
+uniform float animate;    // bool
+uniform float time;
+uniform float speed;
 
-// Simple hash function
 float rand(float2 co) {
     return fract(sin(dot(co, float2(12.9898, 78.233))) * 43758.5453);
 }
@@ -10,15 +13,24 @@ float rand(float2 co) {
 half4 main(float2 p) {
     half4 color = content.eval(p);
 
-    // Generate noise
-    float noise = rand(p + seed);
+    float t = seed;
+    if (animate > 0.5) {
+        t += time * speed;
+    }
 
-    // Apply noise
-    // Additive or overlay?
-    // "amount" usually controls intensity.
+    float3 n;
+    if (monochrome > 0.5) {
+        float val = rand(p + float2(t));
+        n = float3(val);
+    } else {
+        float r = rand(p + float2(t));
+        float g = rand(p + float2(t + 13.5));
+        float b = rand(p + float2(t + 27.1));
+        n = float3(r, g, b);
+    }
 
-    // Additive centered at 0
-    color.rgb += (noise - 0.5) * amount;
+    // Additive noise centered at 0
+    color.rgb += (n - 0.5) * amount;
 
     return color;
 }
