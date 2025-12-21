@@ -2,7 +2,12 @@ uniform shader content;
 uniform float radius;
 uniform float softness;
 uniform float opacity;
+uniform float dither; // Amount of dither
 uniform float2 resolution;
+
+float hash(float2 p) {
+    return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+}
 
 half4 main(float2 p) {
     half4 color = content.eval(p);
@@ -14,14 +19,18 @@ half4 main(float2 p) {
     float d = distance(uv, float2(0.5));
 
     // Vignette mask
-    // radius is where full black starts? or where fading starts?
-    // "Darken corners based on distance from center."
-
-    // smoothstep(edge0, edge1, x): 0 if x < edge0, 1 if x > edge1.
-    // We want 1 at center, 0 at corners.
-    // d is 0 at center, approx 0.7 at corners.
-
     float vignette = smoothstep(radius, radius - softness, d);
+
+    // Dithering
+    // Add noise to the vignette factor to break up banding
+    // Noise range usually -1/255 to 1/255 for 8-bit.
+    // 1/255 approx 0.004.
+    float noise = hash(p) - 0.5; // -0.5 to 0.5
+
+    // Apply dither to the vignette factor
+    vignette += noise * dither;
+
+    vignette = clamp(vignette, 0.0, 1.0);
 
     // Apply opacity
     color.rgb = mix(color.rgb, color.rgb * vignette, opacity);
