@@ -68,11 +68,9 @@ pub fn mix_samples(
 
                             // Optimized mixing loop using iterators/slices
                             let channels_usize = channels as usize;
-
                             // Adjust dest_start by render_offset + skipped silence
                             let dest_start =
                                 (render_offset_samples + skip_samples) * channels_usize;
-
                             let len = (render_len_samples - skip_samples) * channels_usize;
                             let src_start = source_start_sample * channels_usize;
 
