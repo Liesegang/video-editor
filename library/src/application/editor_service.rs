@@ -137,7 +137,6 @@ impl EditorService {
             }
         }
 
-
         Ok(asset_ids)
     }
 

@@ -7,7 +7,6 @@ pub enum PropertyComponent {
     Y,
 }
 
-
 #[derive(Clone, Copy)]
 pub struct GraphTransform {
     pub graph_rect: Rect,
