@@ -38,22 +38,12 @@ impl KeyframeHandler {
         if let Some(prop) = clip.properties.get_mut(property_key) {
             // If constant, convert to keyframe
             if prop.evaluator == "constant" {
-                let initial_val = prop
-                    .properties
-                    .get("value")
-                    .cloned()
-                    .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
-                let kf0 = Keyframe {
-                    time: OrderedFloat(0.0),
-                    value: initial_val,
-                    easing: crate::animation::EasingFunction::Linear,
-                };
                 let kf_new = Keyframe {
                     time: OrderedFloat(time),
                     value: value,
                     easing: easing.unwrap_or(crate::animation::EasingFunction::Linear),
                 };
-                *prop = Property::keyframe(vec![kf0, kf_new]);
+                *prop = Property::keyframe(vec![kf_new]);
             } else if prop.evaluator == "keyframe" {
                 // Add to list
                 // Check if keyframe exists at time?
@@ -509,22 +499,12 @@ impl KeyframeHandler {
         // But Property struct fields are public? Yes.
 
         if target_prop_val.evaluator == "constant" {
-            let initial_val = target_prop_val
-                .properties
-                .get("value")
-                .cloned()
-                .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
-            let kf0 = Keyframe {
-                time: OrderedFloat(0.0),
-                value: initial_val,
-                easing: crate::animation::EasingFunction::Linear,
-            };
             let kf_new = Keyframe {
                 time: OrderedFloat(time),
                 value: value,
                 easing: easing.unwrap_or_default(),
             };
-            *target_prop_val = Property::keyframe(vec![kf0, kf_new]);
+            *target_prop_val = Property::keyframe(vec![kf_new]);
         } else if target_prop_val.evaluator == "keyframe" {
             let mut kfs = target_prop_val.keyframes();
             if let Some(idx) = kfs
@@ -588,22 +568,12 @@ impl KeyframeHandler {
             .ok_or_else(|| LibraryError::Project("Style property not found".to_string()))?;
 
         if prop.evaluator == "constant" {
-            let initial_val = prop
-                .properties
-                .get("value")
-                .cloned()
-                .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
-            let kf0 = Keyframe {
-                time: OrderedFloat(0.0),
-                value: initial_val,
-                easing: crate::animation::EasingFunction::Linear,
-            };
             let kf_new = Keyframe {
                 time: OrderedFloat(time),
                 value: value,
                 easing: easing.unwrap_or_default(),
             };
-            *prop = Property::keyframe(vec![kf0, kf_new]);
+            *prop = Property::keyframe(vec![kf_new]);
         } else if prop.evaluator == "keyframe" {
             let mut kfs = prop.keyframes();
             if let Some(idx) = kfs
@@ -723,7 +693,7 @@ impl KeyframeHandler {
                     kf.easing = e;
                 }
             } else {
-                 return Err(LibraryError::Project(format!(
+                return Err(LibraryError::Project(format!(
                     "Keyframe index {} out of bounds",
                     keyframe_index
                 )));
@@ -738,4 +708,3 @@ impl KeyframeHandler {
         Ok(())
     }
 }
-

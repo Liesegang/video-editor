@@ -84,7 +84,43 @@ impl<'a> FrameEvaluationContext<'a> {
                 let color_val = self.evaluate_property_value(props, "color", time);
                 let color = match color_val {
                     Some(PropertyValue::Color(c)) => c,
-                    _ => crate::model::frame::color::Color { r: 0, g: 0, b: 0, a: 255 }, // Default Black? Or White?
+                    Some(PropertyValue::Map(m)) => {
+                        let r = m
+                            .get("r")
+                            .and_then(|v| {
+                                v.get_as::<i64>()
+                                    .or_else(|| v.get_as::<f64>().map(|f| f as i64))
+                            })
+                            .unwrap_or(0) as u8;
+                        let g = m
+                            .get("g")
+                            .and_then(|v| {
+                                v.get_as::<i64>()
+                                    .or_else(|| v.get_as::<f64>().map(|f| f as i64))
+                            })
+                            .unwrap_or(0) as u8;
+                        let b = m
+                            .get("b")
+                            .and_then(|v| {
+                                v.get_as::<i64>()
+                                    .or_else(|| v.get_as::<f64>().map(|f| f as i64))
+                            })
+                            .unwrap_or(0) as u8;
+                        let a = m
+                            .get("a")
+                            .and_then(|v| {
+                                v.get_as::<i64>()
+                                    .or_else(|| v.get_as::<f64>().map(|f| f as i64))
+                            })
+                            .unwrap_or(255) as u8;
+                        crate::model::frame::color::Color { r, g, b, a }
+                    }
+                    _ => crate::model::frame::color::Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    },
                 };
                 let offset = self.evaluate_number(props, "offset", time, 0.0);
 
@@ -95,7 +131,7 @@ impl<'a> FrameEvaluationContext<'a> {
                         let miter = self.evaluate_number(props, "miter", time, 4.0);
                         let dash_offset = self.evaluate_number(props, "dash_offset", time, 0.0);
                         // TODO: Implement dash_array, cap, join evaluation if needed properties exist
-                         DrawStyle::Stroke {
+                        DrawStyle::Stroke {
                             color,
                             width,
                             offset,
@@ -118,8 +154,15 @@ impl<'a> FrameEvaluationContext<'a> {
     }
 
     fn build_transform(&self, props: &PropertyMap, time: f64) -> Transform {
-        let (pos_x, pos_y) =
-            self.evaluate_vec2(props, "position", "position_x", "position_y", time, 0.0, 0.0);
+        let (pos_x, pos_y) = self.evaluate_vec2(
+            props,
+            "position",
+            "position_x",
+            "position_y",
+            time,
+            0.0,
+            0.0,
+        );
         let (scale_x, scale_y) =
             self.evaluate_vec2(props, "scale", "scale_x", "scale_y", time, 100.0, 100.0);
         let (anchor_x, anchor_y) =
@@ -209,12 +252,29 @@ impl<'a> FrameEvaluationContext<'a> {
         default_x: f64,
         default_y: f64,
     ) -> (f64, f64) {
-        let (mut vx, mut vy) = if let Some(PropertyValue::Vec2(v)) =
-            self.evaluate_property_value(properties, key, time)
-        {
-            (*v.x, *v.y)
-        } else {
-            (default_x, default_y)
+        let val = self.evaluate_property_value(properties, key, time);
+        let (mut vx, mut vy) = match val {
+            Some(PropertyValue::Vec2(v)) => (*v.x, *v.y),
+            Some(PropertyValue::Map(m)) => {
+                let x = m
+                    .get("x")
+                    .and_then(|v| match v {
+                        PropertyValue::Number(n) => Some(n.into_inner()),
+                        PropertyValue::Integer(i) => Some(*i as f64),
+                        _ => None,
+                    })
+                    .unwrap_or(default_x);
+                let y = m
+                    .get("y")
+                    .and_then(|v| match v {
+                        PropertyValue::Number(n) => Some(n.into_inner()),
+                        PropertyValue::Integer(i) => Some(*i as f64),
+                        _ => None,
+                    })
+                    .unwrap_or(default_y);
+                (x, y)
+            }
+            _ => (default_x, default_y),
         };
 
         if let Some(val) = self.evaluate_property_value(properties, key_x, time) {
@@ -293,29 +353,40 @@ impl EntityConverter for VideoEntityConverter {
         frame_number: u64,
     ) -> Option<FrameObject> {
         let props = &track_clip.properties;
-        let fps = evaluator.composition.fps;
-        let time = frame_number as f64 / fps;
+        let comp_fps = evaluator.composition.fps;
 
-        let file_path = evaluator.require_string(props, "file_path", time, "video")?;
+        // keyframes are relative to the source timing
+        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
+        let time_offset = delta_frames / comp_fps;
+        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
+        let eval_time = source_start_time + time_offset;
 
-        let delta_comp_frames = frame_number.saturating_sub(track_clip.in_frame);
-        let delta_seconds = delta_comp_frames as f64 / fps;
-        let source_delta_frames = delta_seconds * track_clip.fps;
+        let file_path = evaluator.require_string(props, "file_path", eval_time, "video")?;
+        let input_color_space = evaluator.optional_string(props, "input_color_space", eval_time);
+        let output_color_space = evaluator.optional_string(props, "output_color_space", eval_time);
+
+        let source_delta_frames = time_offset * track_clip.fps;
         let source_frame_number =
-            track_clip.source_begin_frame + source_delta_frames.round() as u64;
+            track_clip.source_begin_frame + source_delta_frames.round() as i64;
 
-        let transform = evaluator.build_transform(props, time);
-        let effects = evaluator.build_image_effects(&track_clip.effects, time);
+        if source_frame_number < 0 {
+            return None;
+        }
+
+        let transform = evaluator.build_transform(props, eval_time);
+        let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
         let surface = ImageSurface {
             file_path,
             effects,
             transform,
+            input_color_space,
+            output_color_space,
         };
 
         Some(FrameObject {
             content: FrameContent::Video {
                 surface,
-                frame_number: source_frame_number,
+                frame_number: source_frame_number as u64,
             },
             properties: props.clone(),
         })
@@ -332,16 +403,40 @@ impl EntityConverter for ImageEntityConverter {
         frame_number: u64,
     ) -> Option<FrameObject> {
         let props = &track_clip.properties;
-        let fps = evaluator.composition.fps;
-        let time = frame_number as f64 / fps;
+        let comp_fps = evaluator.composition.fps;
 
-        let file_path = evaluator.require_string(props, "file_path", time, "image")?;
-        let transform = evaluator.build_transform(props, time);
-        let effects = evaluator.build_image_effects(&track_clip.effects, time);
+        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
+        let time_offset = delta_frames / comp_fps;
+        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
+        let eval_time = source_start_time + time_offset;
+
+        if frame_number % 30 == 0 {
+            // Log every ~1 sec (at 30fps) to avoid total span
+            log::info!(
+                "[ImageRender] Frame: {} | ClipIn: {} | GlobalDelta: {:.4}s | EvalTime: {:.4}s",
+                frame_number,
+                track_clip.in_frame,
+                time_offset,
+                eval_time
+            );
+        }
+
+        let file_path = evaluator.require_string(props, "file_path", eval_time, "image")?;
+        let transform = evaluator.build_transform(props, eval_time);
+        if frame_number % 30 == 0 {
+            log::info!(
+                "[ImageRender] Resolving transform at EvalTime {:.4}: {:?}",
+                eval_time,
+                transform
+            );
+        }
+        let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
         let surface = ImageSurface {
             file_path,
             effects,
             transform,
+            input_color_space: None,
+            output_color_space: None,
         };
 
         Some(FrameObject {
@@ -361,20 +456,23 @@ impl EntityConverter for TextEntityConverter {
         frame_number: u64,
     ) -> Option<FrameObject> {
         let props = &track_clip.properties;
-        let fps = evaluator.composition.fps;
-        let time = frame_number as f64 / fps;
+        let comp_fps = evaluator.composition.fps;
 
-        let text = evaluator.require_string(props, "text", time, "text")?;
+        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
+        let time_offset = delta_frames / comp_fps;
+        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
+        let eval_time = source_start_time + time_offset;
+
+        let text = evaluator.require_string(props, "text", eval_time, "text")?;
         let font = evaluator
-            .optional_string(props, "font_family", time)
+            .optional_string(props, "font_family", eval_time)
             .unwrap_or_else(|| "Arial".to_string());
-        let size = evaluator.evaluate_number(props, "size", time, 12.0);
-        let size = evaluator.evaluate_number(props, "size", time, 12.0);
-        
-        let styles = evaluator.build_styles(&track_clip.styles, time);
-        
-        let transform = evaluator.build_transform(props, time);
-        let effects = evaluator.build_image_effects(&track_clip.effects, time);
+        let size = evaluator.evaluate_number(props, "size", eval_time, 12.0);
+
+        let styles = evaluator.build_styles(&track_clip.styles, eval_time);
+
+        let transform = evaluator.build_transform(props, eval_time);
+        let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
 
         Some(FrameObject {
             content: FrameContent::Text {
@@ -396,14 +494,18 @@ impl EntityConverter for TextEntityConverter {
         frame_number: u64,
     ) -> Option<(f32, f32, f32, f32)> {
         let props = &track_clip.properties;
-        let fps = evaluator.composition.fps;
-        let time = frame_number as f64 / fps;
+        let comp_fps = evaluator.composition.fps;
 
-        let text = evaluator.require_string(props, "text", time, "text")?;
+        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
+        let time_offset = delta_frames / comp_fps;
+        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
+        let eval_time = source_start_time + time_offset;
+
+        let text = evaluator.require_string(props, "text", eval_time, "text")?;
         let font_name = evaluator
-            .optional_string(props, "font_family", time)
+            .optional_string(props, "font_family", eval_time)
             .unwrap_or_else(|| "Arial".to_string());
-        let size = evaluator.evaluate_number(props, "size", time, 12.0);
+        let size = evaluator.evaluate_number(props, "size", eval_time, 12.0);
 
         let font_mgr = skia_safe::FontMgr::default();
         let typeface = font_mgr
@@ -441,19 +543,23 @@ impl EntityConverter for ShapeEntityConverter {
         frame_number: u64,
     ) -> Option<FrameObject> {
         let props = &track_clip.properties;
-        let fps = evaluator.composition.fps;
-        let time = frame_number as f64 / fps;
+        let comp_fps = evaluator.composition.fps;
 
-        let path = evaluator.require_string(props, "path", time, "shape")?;
-        let transform = evaluator.build_transform(props, time);
+        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
+        let time_offset = delta_frames / comp_fps;
+        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
+        let eval_time = source_start_time + time_offset;
 
-        let styles = evaluator.build_styles(&track_clip.styles, time);
+        let path = evaluator.require_string(props, "path", eval_time, "shape")?;
+        let transform = evaluator.build_transform(props, eval_time);
+
+        let styles = evaluator.build_styles(&track_clip.styles, eval_time);
 
         let effects_value = evaluator
-            .evaluate_property_value(props, "path_effects", time)
+            .evaluate_property_value(props, "path_effects", eval_time)
             .unwrap_or(PropertyValue::Array(vec![]));
         let path_effects = evaluator.parse_path_effects(effects_value);
-        let effects = evaluator.build_image_effects(&track_clip.effects, time);
+        let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
 
         Some(FrameObject {
             content: FrameContent::Shape {
@@ -474,10 +580,14 @@ impl EntityConverter for ShapeEntityConverter {
         frame_number: u64,
     ) -> Option<(f32, f32, f32, f32)> {
         let props = &track_clip.properties;
-        let fps = evaluator.composition.fps;
-        let time = frame_number as f64 / fps;
+        let comp_fps = evaluator.composition.fps;
 
-        let path_str = evaluator.require_string(props, "path", time, "shape")?;
+        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
+        let time_offset = delta_frames / comp_fps;
+        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
+        let eval_time = source_start_time + time_offset;
+
+        let path_str = evaluator.require_string(props, "path", eval_time, "shape")?;
 
         if let Some(path) = skia_safe::utils::parse_path::from_svg(&path_str) {
             let bounds = path.compute_tight_bounds();
@@ -499,10 +609,14 @@ impl EntityConverter for SkSLEntityConverter {
         frame_number: u64,
     ) -> Option<FrameObject> {
         let props = &track_clip.properties;
-        let fps = evaluator.composition.fps;
-        let time = frame_number as f64 / fps;
+        let comp_fps = evaluator.composition.fps;
 
-        let shader = evaluator.require_string(props, "shader", time, "sksl")?;
+        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
+        let time_offset = delta_frames / comp_fps;
+        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
+        let eval_time = source_start_time + time_offset;
+
+        let shader = evaluator.require_string(props, "shader", eval_time, "sksl")?;
 
         // let width = evaluator.evaluate_number(props, "width", time, 1920.0);
         // let height = evaluator.evaluate_number(props, "height", time, 1080.0);
@@ -514,8 +628,8 @@ impl EntityConverter for SkSLEntityConverter {
         let res_x = comp_width;
         let res_y = comp_height;
 
-        let transform = evaluator.build_transform(props, time);
-        let effects = evaluator.build_image_effects(&track_clip.effects, time);
+        let transform = evaluator.build_transform(props, eval_time);
+        let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
 
         Some(FrameObject {
             content: FrameContent::SkSL {
@@ -534,14 +648,26 @@ impl EntityConverter for SkSLEntityConverter {
         frame_number: u64,
     ) -> Option<(f32, f32, f32, f32)> {
         let props = &track_clip.properties;
-        let fps = evaluator.composition.fps;
-        let time = frame_number as f64 / fps;
+        let comp_fps = evaluator.composition.fps;
+
+        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
+        let time_offset = delta_frames / comp_fps;
+        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
+        let eval_time = source_start_time + time_offset;
 
         // Try explicit width/height properties first, else composition size
-        let width =
-            evaluator.evaluate_number(props, "width", time, evaluator.composition.width as f64);
-        let height =
-            evaluator.evaluate_number(props, "height", time, evaluator.composition.height as f64);
+        let width = evaluator.evaluate_number(
+            props,
+            "width",
+            eval_time,
+            evaluator.composition.width as f64,
+        );
+        let height = evaluator.evaluate_number(
+            props,
+            "height",
+            eval_time,
+            evaluator.composition.height as f64,
+        );
 
         Some((0.0, 0.0, width as f32, height as f32))
     }

@@ -1,0 +1,11 @@
+id = "silhouette"
+name = "Silhouette"
+category = "Color"
+
+[[properties]]
+name = "color"
+label = "Color"
+type = "Color"
+default = [0.0, 0.0, 0.0, 1.0]
+
+

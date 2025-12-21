@@ -34,6 +34,10 @@ impl LoadPlugin for NativeImageLoader {
         matches!(request, LoadRequest::Image { .. })
     }
 
+    fn priority(&self) -> u32 {
+        100
+    }
+
     fn load(
         &self,
         request: &LoadRequest,
@@ -60,7 +64,9 @@ impl LoadPlugin for NativeImageLoader {
             .to_str()?
             .to_lowercase();
         match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "bmp" => Some(crate::model::project::asset::AssetKind::Image),
+            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
+                Some(crate::model::project::asset::AssetKind::Image)
+            }
             _ => None,
         }
     }
@@ -75,7 +81,7 @@ impl LoadPlugin for NativeImageLoader {
             .to_lowercase();
 
         let kind = match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "bmp" | "webp" => {
+            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
                 crate::model::project::asset::AssetKind::Image
             }
             _ => return None,
@@ -94,6 +100,7 @@ impl LoadPlugin for NativeImageLoader {
             fps: None,
             width: w,
             height: h,
+            stream_index: None,
         })
     }
 }

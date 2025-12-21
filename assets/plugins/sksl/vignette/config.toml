@@ -1,0 +1,45 @@
+id = "vignette"
+name = "Vignette"
+category = "Stylize"
+
+[[properties]]
+name = "radius"
+label = "Radius"
+type = "Float"
+min = 0.0
+max = 1.0
+default = 0.5
+step = 0.01
+
+[[properties]]
+name = "softness"
+label = "Softness"
+type = "Float"
+min = 0.0
+max = 1.0
+default = 0.5
+step = 0.01
+
+[[properties]]
+name = "opacity"
+label = "Opacity"
+type = "Float"
+min = 0.0
+max = 1.0
+default = 1.0
+step = 0.01
+
+[[properties]]
+name = "dither"
+label = "Dither"
+type = "Float"
+min = 0.0
+max = 0.1
+default = 0.01
+step = 0.001
+
+[[properties]]
+name = "resolution"
+label = "Resolution"
+type = "Vec2"
+default = [1920.0, 1080.0]

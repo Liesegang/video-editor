@@ -27,6 +27,7 @@ pub struct SkiaRenderer {
     surface: Surface,
     gpu_context: Option<GpuContext>,
     sharing_handle: Option<usize>,
+    sharing_hwnd: Option<isize>,
 }
 
 impl SkiaRenderer {
@@ -130,7 +131,7 @@ impl SkiaRenderer {
                 debug!("SkiaRenderer: Reusing existing GPU context");
                 ctx.resize(width, height);
                 Some(ctx)
-            } else if let Some(mut ctx) = create_gpu_context(None) {
+            } else if let Some(mut ctx) = create_gpu_context(None, None) {
                 debug!("SkiaRenderer: Created new GPU context");
                 ctx.resize(width, height);
                 Some(ctx)
@@ -163,6 +164,7 @@ impl SkiaRenderer {
             surface,
             gpu_context,
             sharing_handle: None,
+            sharing_hwnd: None,
         };
         renderer
             .clear()
@@ -739,14 +741,19 @@ impl Renderer for SkiaRenderer {
         self.gpu_context.as_mut()
     }
 
-    fn set_sharing_context(&mut self, handle: usize) {
-        if self.sharing_handle != Some(handle) {
-            log::info!("SkiaRenderer: Setting sharing context handle: {}", handle);
+    fn set_sharing_context(&mut self, handle: usize, hwnd: Option<isize>) {
+        if self.sharing_handle != Some(handle) || self.sharing_hwnd != hwnd {
+            log::info!(
+                "SkiaRenderer: Setting sharing context handle: {}, hwnd: {:?}",
+                handle,
+                hwnd
+            );
             self.sharing_handle = Some(handle);
+            self.sharing_hwnd = hwnd;
 
             // Recreate context with sharing
             let _old_context = self.gpu_context.take(); // Drop old context
-            if let Some(mut ctx) = create_gpu_context(Some(handle)) {
+            if let Some(mut ctx) = create_gpu_context(Some(handle), hwnd) {
                 ctx.resize(self.width, self.height);
                 self.gpu_context = Some(ctx);
 
@@ -764,7 +771,8 @@ impl Renderer for SkiaRenderer {
                     "SkiaRenderer: Failed to recreate GPU context with sharing! Falling back to isolated context (CPU readback). Preview performance may be reduced."
                 );
                 self.sharing_handle = None; // Reset sharing handle so we fallback to CPU copy
-                self.gpu_context = create_gpu_context(None);
+                self.sharing_hwnd = None;
+                self.gpu_context = create_gpu_context(None, None);
                 self.surface = create_surface(
                     self.width,
                     self.height,

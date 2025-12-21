@@ -335,7 +335,10 @@ pub fn draw_gizmo(
                         Some(crate::state::context::GizmoState {
                             start_mouse_pos: response.hover_pos().unwrap_or(pos),
                             active_handle: handle,
-                            original_position: [gc.transform.position.x as f32, gc.transform.position.y as f32],
+                            original_position: [
+                                gc.transform.position.x as f32,
+                                gc.transform.position.y as f32,
+                            ],
                             original_scale_x: gc.transform.scale.x as f32,
                             original_scale_y: gc.transform.scale.y as f32,
                             original_rotation: gc.transform.rotation as f32,
@@ -362,7 +365,10 @@ fn draw_clip_box(
     let sx = gc.transform.scale.x as f32 / 100.0;
     let sy = gc.transform.scale.y as f32 / 100.0;
 
-    let center = egui::pos2(gc.transform.position.x as f32, gc.transform.position.y as f32);
+    let center = egui::pos2(
+        gc.transform.position.x as f32,
+        gc.transform.position.y as f32,
+    );
     let angle_rad = (gc.transform.rotation as f32).to_radians();
     let cos = angle_rad.cos();
     let sin = angle_rad.sin();

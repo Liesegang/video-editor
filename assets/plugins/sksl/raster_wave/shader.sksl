@@ -1,0 +1,14 @@
+uniform shader content;
+uniform float amplitude;
+uniform float frequency;
+uniform float speed;
+uniform float time;
+
+half4 main(float2 p) {
+    // Raster scroll / Wave
+    // Shift X based on Y
+
+    float shift = sin(p.y * frequency + time * speed) * amplitude;
+
+    return content.eval(float2(p.x + shift, p.y));
+}

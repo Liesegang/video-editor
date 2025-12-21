@@ -123,7 +123,7 @@ pub fn show_track_list(
                 let icon_response = ui_content.interact(
                     icon_rect,
                     egui::Id::new(track.id).with("expand_icon"),
-                    egui::Sense::click()
+                    egui::Sense::click(),
                 );
 
                 if icon_response.clicked() {
@@ -134,7 +134,11 @@ pub fn show_track_list(
                     }
                 }
 
-                let icon = if display_track.is_expanded { icons::CARET_DOWN } else { icons::CARET_RIGHT };
+                let icon = if display_track.is_expanded {
+                    icons::CARET_DOWN
+                } else {
+                    icons::CARET_RIGHT
+                };
                 track_list_painter.text(
                     icon_rect.center(),
                     egui::Align2::CENTER_CENTER,

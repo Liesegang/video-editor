@@ -1,0 +1,7 @@
+uniform shader content;
+uniform float cellSize;
+
+half4 main(float2 p) {
+    float2 coord = floor(p / cellSize) * cellSize;
+    return content.eval(coord);
+}

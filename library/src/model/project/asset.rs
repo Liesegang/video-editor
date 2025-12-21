@@ -16,6 +16,8 @@ pub struct Asset {
     // Metadata
     #[serde(default)]
     pub color: Color,
+    #[serde(default)]
+    pub stream_index: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -44,6 +46,7 @@ impl Asset {
                 b: 100,
                 a: 255,
             }, // Default gray
+            stream_index: None,
         }
     }
 }

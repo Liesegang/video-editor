@@ -1,0 +1,12 @@
+id = "edge_detection"
+name = "Edge Detection"
+category = "Stylize"
+
+[[properties]]
+name = "threshold"
+label = "Threshold"
+type = "Float"
+min = 0.0
+max = 1.0
+default = 0.1
+step = 0.01

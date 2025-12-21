@@ -107,7 +107,7 @@ impl<'a> TabViewer for AppTabViewer<'a> {
             Tab::Inspector => format!("{} {}", icons::WRENCH, "Inspector").into(),
             Tab::Assets => format!("{} {}", icons::FOLDER, "Assets").into(),
             Tab::GraphEditor => format!("{} {}", icons::CHART_LINE, "Graph Editor").into(),
-            Tab::NodeGraph => format!("{} {}", icons::SHARE_NETWORK, "Node Graph").into(),
+            Tab::NodeGraph => format!("{} {}", icons::SHARE_NETWORK, "Node Editor").into(),
         }
     }
 }

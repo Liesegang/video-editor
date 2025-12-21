@@ -134,9 +134,13 @@ pub fn render_effects_section(
                                          }
                                          *needs_refresh = true;
                                     }
-                                    crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, _key, _val) => {
-                                        // TODO: Implement set_effect_property_attribute
-                                        println!("SetAttribute for effect {} not implemented yet", name);
+                                    crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, key, val) => {
+                                        match project_service.set_effect_property_attribute(
+                                            comp_id, track_id, selected_entity_id, effect_index, &name, &key, val
+                                        ) {
+                                            Ok(_) => { *needs_refresh = true; },
+                                            Err(e) => eprintln!("Failed to set attribute {} for effect property {}: {:?}", key, name, e),
+                                        }
                                     }
                                 }
                             }

@@ -1,6 +1,6 @@
+use library::model::vector::{ControlPoint, HandleType, VectorPath};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use library::model::vector::{ControlPoint, HandleType, VectorPath};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct VectorEditorState {

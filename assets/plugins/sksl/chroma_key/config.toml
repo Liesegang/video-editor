@@ -1,0 +1,27 @@
+id = "chroma_key"
+name = "Chroma Key"
+category = "Compositing"
+
+[[properties]]
+name = "keyColor"
+label = "Key Color"
+type = "Vec3"
+default = [0.0, 1.0, 0.0]
+
+[[properties]]
+name = "similarity"
+label = "Similarity"
+type = "Float"
+min = 0.0
+max = 1.0
+default = 0.4
+step = 0.01
+
+[[properties]]
+name = "smoothness"
+label = "Smoothness"
+type = "Float"
+min = 0.0
+max = 1.0
+default = 0.1
+step = 0.01

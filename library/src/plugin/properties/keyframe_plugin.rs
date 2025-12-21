@@ -3,7 +3,6 @@ use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
 use crate::model::project::property::{Property, PropertyValue, Vec2, Vec3, Vec4};
 use crate::plugin::{EvaluationContext, PropertyEvaluator};
-use log::debug;
 use ordered_float::OrderedFloat;
 use std::sync::Arc;
 
@@ -54,21 +53,67 @@ fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
     //     property, time
     // );
 
-    if keyframes.is_empty() {
+    if time.is_nan() || keyframes.is_empty() {
+        if let Some(val) = property.value() {
+            return val.clone();
+        }
         return PropertyValue::Number(OrderedFloat(0.0));
     }
 
-    if time <= *keyframes[0].time {
-        return keyframes[0].value.clone();
+    // Keyframes might not be strictly sorted if modified recently?
+    // Usually they should be, but let's be safe or just reference them.
+    // For performance, we assume property.keyframes() returns a reference to a Vec.
+    // If we can't assume sort, we must sort indices.
+    // But evaluating every frame with a sort is slow.
+    // Let's assume they are sorted for now, but handle the find safely.
+    // Actually, `GraphEditor` sorts them manually before use. `TrackClip` doesn't enforce sort on add?
+    // ProjectService::add_keyframe pushes and doesn't sort?
+    // Let's check ProjectService. If it doesn't sort, we are in trouble.
+    // But for now, let's just make this function safe.
+
+    // We'll collect and sort references to be robust against unsorted input.
+    // Note: This allocation is per-evaluation per-property. Ideally data is kept sorted.
+    let mut sorted_refs: Vec<_> = keyframes.iter().collect();
+    sorted_refs.sort_by(|a, b| a.time.cmp(&b.time));
+
+    let first = sorted_refs[0];
+    let last = sorted_refs[sorted_refs.len() - 1];
+
+    if time <= *first.time {
+        return first.value.clone();
     }
-    if time >= *keyframes.last().unwrap().time {
-        return keyframes.last().unwrap().value.clone();
+    if time >= *last.time {
+        return last.value.clone();
     }
 
     // Find the keyframe before and after the current time
-    let current = keyframes.iter().rev().find(|k| *k.time <= time).unwrap();
-    let next = keyframes.iter().find(|k| *k.time > time).unwrap();
-    
+    // Now we are sure they exist because time is strictly between first and last.
+    // We want the *last* keyframe <= time as 'current'.
+    let current_idx = sorted_refs.iter().rposition(|k| *k.time <= time);
+
+    let current = if let Some(idx) = current_idx {
+        sorted_refs[idx]
+    } else {
+        // Should be impossible given checks above, but safe fallback
+        first
+    };
+
+    // 'next' is the one immediately after
+    let next = if let Some(idx) = current_idx {
+        if idx + 1 < sorted_refs.len() {
+            sorted_refs[idx + 1]
+        } else {
+            last
+        }
+    } else {
+        // Fallback
+        if sorted_refs.len() > 1 {
+            sorted_refs[1]
+        } else {
+            last
+        }
+    };
+
     // Safety check for zero duration
     let duration = *next.time - *current.time;
     let t = if duration <= 1e-6 {
@@ -78,11 +123,14 @@ fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
     };
 
     // Get Interpolation Mode
-    let mode = property.properties.get("interpolation")
+    let mode = property
+        .properties
+        .get("interpolation")
         .and_then(|v| v.get_as::<String>())
         .unwrap_or_else(|| "linear".to_string());
 
-    let interpolated = interpolate_property_values(&current.value, &next.value, t, &current.easing, &mode);
+    let interpolated =
+        interpolate_property_values(&current.value, &next.value, t, &current.easing, &mode);
     // debug!(
     //     "evaluate_keyframes: interpolated value {:?} for time {}",
     //     interpolated, time
@@ -145,16 +193,13 @@ fn interpolate_property_values(
             z: OrderedFloat(sz.0 + (ez.0 - sz.0) * t),
             w: OrderedFloat(sw.0 + (ew.0 - sw.0) * t),
         }),
-        (
-            PropertyValue::Color(start_color),
-            PropertyValue::Color(end_color),
-        ) => {
+        (PropertyValue::Color(start_color), PropertyValue::Color(end_color)) => {
             if mode == "hsv" {
                 interpolate_color_hsv(start_color, end_color, t)
             } else {
                 interpolate_color_rgb(start_color, end_color, t)
             }
-        },
+        }
         (PropertyValue::Array(s), PropertyValue::Array(e)) => PropertyValue::Array(
             s.iter()
                 .zip(e.iter())
@@ -165,7 +210,10 @@ fn interpolate_property_values(
             s.iter()
                 .zip(e.iter())
                 .map(|((k, sv), (_, ev))| {
-                    (k.clone(), interpolate_property_values(sv, ev, t, easing, mode))
+                    (
+                        k.clone(),
+                        interpolate_property_values(sv, ev, t, easing, mode),
+                    )
                 })
                 .collect(),
         ),
@@ -174,7 +222,7 @@ fn interpolate_property_values(
 }
 
 fn interpolate_color_rgb(start: &Color, end: &Color, t: f64) -> PropertyValue {
-     PropertyValue::Color(Color {
+    PropertyValue::Color(Color {
         r: ((start.r as f64) + (end.r as f64 - start.r as f64) * t).round() as u8,
         g: ((start.g as f64) + (end.g as f64 - start.g as f64) * t).round() as u8,
         b: ((start.b as f64) + (end.b as f64 - start.b as f64) * t).round() as u8,
@@ -194,15 +242,15 @@ fn interpolate_color_hsv(start: &Color, end: &Color, t: f64) -> PropertyValue {
         diff += 360.0;
     }
     let h = (h1 + diff * t).rem_euclid(360.0);
-    
+
     let s = s1 + (s2 - s1) * t;
     let v = v1 + (v2 - v1) * t;
-    
+
     // Interpolate Alpha usually linear
     let a = (start.a as f64) + (end.a as f64 - start.a as f64) * t;
-    
+
     let (r, g, b) = hsv_to_rgb(h, s, v);
-    
+
     PropertyValue::Color(Color {
         r: r as u8,
         g: g as u8,
@@ -232,7 +280,7 @@ fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f64, f64, f64) {
 
     let s = if max == 0.0 { 0.0 } else { delta / max };
     let v = max;
-    
+
     // h in [0, 360] (can be negative before rem_euclid but here usually result of % 6.0 logic)
     // Actually the % 6.0 logic can yield negative?
     // ((g - b) / delta) if b > g is negative.

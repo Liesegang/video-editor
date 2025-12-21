@@ -21,7 +21,8 @@ pub struct EditorContext {
     pub keyframe_dialog: KeyframeDialogState,
 
     // Node Editor State
-    #[serde(skip)] // Assuming we don't need to persist this for now or implement Serialize manually
+    #[serde(skip)]
+    // Assuming we don't need to persist this for now or implement Serialize manually
     pub node_graph_state: egui_snarl::Snarl<crate::model::node_graph::MyNodeTemplate>,
 
     #[serde(skip)]

@@ -12,12 +12,12 @@ use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 use crate::{action::HistoryManager, state::context::EditorContext};
 use library::model::project::property::Vec2;
 
+mod action;
+pub mod clip;
 mod gizmo;
 mod grid;
 mod interaction;
-mod action;
 pub mod vector_editor;
-pub mod clip;
 
 use action::PreviewAction;
 
@@ -243,15 +243,15 @@ pub fn preview_panel(
                 let region_bottom = visible_max_world.y.max(0.0).min(comp_height);
 
                 let region = if region_right > region_x && region_bottom > region_y {
-                     Some(library::model::frame::frame::Region {
-                         x: region_x as f64,
-                         y: region_y as f64,
-                         width: (region_right - region_x) as f64,
-                         height: (region_bottom - region_y) as f64,
-                     })
+                    Some(library::model::frame::frame::Region {
+                        x: region_x as f64,
+                        y: region_y as f64,
+                        width: (region_right - region_x) as f64,
+                        height: (region_bottom - region_y) as f64,
+                    })
                 } else {
-                     // Nothing visible
-                     None
+                    // Nothing visible
+                    None
                 };
 
                 if let Some(valid_region) = region {
@@ -311,7 +311,10 @@ pub fn preview_panel(
 
             if let Some(region) = &editor_context.preview_region {
                 let p_min = to_screen(egui::pos2(region.x as f32, region.y as f32));
-                let p_max = to_screen(egui::pos2((region.x + region.width) as f32, (region.y + region.height) as f32));
+                let p_max = to_screen(egui::pos2(
+                    (region.x + region.width) as f32,
+                    (region.y + region.height) as f32,
+                ));
                 draw_rect = egui::Rect::from_min_max(p_min, p_max);
             }
 
@@ -327,7 +330,10 @@ pub fn preview_panel(
 
             if let Some(region) = &editor_context.preview_region {
                 let p_min = to_screen(egui::pos2(region.x as f32, region.y as f32));
-                let p_max = to_screen(egui::pos2((region.x + region.width) as f32, (region.y + region.height) as f32));
+                let p_max = to_screen(egui::pos2(
+                    (region.x + region.width) as f32,
+                    (region.y + region.height) as f32,
+                ));
                 draw_rect = egui::Rect::from_min_max(p_min, p_max);
             }
 
@@ -490,6 +496,23 @@ pub fn preview_panel(
                         }
                     }
 
+                    let current_frame_i64 =
+                        (editor_context.timeline.current_time as f64 * comp.fps).round() as i64;
+                    let delta_frames = current_frame_i64 - entity.in_frame as i64;
+                    let time_offset = delta_frames as f64 / comp.fps;
+                    let source_start_time = entity.source_begin_frame as f64 / entity.fps;
+                    let local_time = source_start_time + time_offset;
+
+                    // Log Gizmo Time Calculation (throttle slightly if possible, or just spam per user request)
+                    if editor_context.timeline.current_time.fract() < 0.1 {
+                        log::info!(
+                            "[Gizmo] Entity: {} | CurrentFrame: {} | LocalTime: {:.4}",
+                            entity.id,
+                            current_frame_i64,
+                            local_time
+                        );
+                    }
+
                     let get_val = |key: &str, default: f32| {
                         entity
                             .properties
@@ -498,7 +521,7 @@ pub fn preview_panel(
                                 project_service.evaluate_property_value(
                                     p,
                                     &entity.properties,
-                                    editor_context.timeline.current_time as f64,
+                                    local_time,
                                     comp.fps,
                                 )
                             })
@@ -514,7 +537,7 @@ pub fn preview_panel(
                                 let val = project_service.evaluate_property_value(
                                     p,
                                     &entity.properties,
-                                    editor_context.timeline.current_time as f64,
+                                    local_time,
                                     comp.fps,
                                 );
                                 val.get_as::<Vec2>()

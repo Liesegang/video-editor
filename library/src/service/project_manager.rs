@@ -4,6 +4,8 @@ use crate::model::project::project::{Composition, Project};
 use crate::model::project::property::PropertyValue;
 use crate::model::project::{Track, TrackClip};
 use crate::plugin::PluginManager;
+use crate::plugin::{PropertyDefinition, PropertyUiType};
+use crate::service::color_space_manager::ColorSpaceManager;
 use crate::service::handlers;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -124,67 +126,94 @@ impl ProjectManager {
         Ok(())
     }
 
-    pub fn import_file(&self, path: &str) -> Result<Uuid, LibraryError> {
+    pub fn import_file(&self, path: &str) -> Result<Vec<Uuid>, LibraryError> {
         let path_obj = std::path::Path::new(path);
-        let name = path_obj
+        let base_name = path_obj
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
 
-        // 1. Get Metadata (Single call)
-        let (mut kind, duration, fps, width, height) =
-            if let Some(meta) = self.plugin_manager.get_metadata(path) {
-                (meta.kind, meta.duration, meta.fps, meta.width, meta.height)
-            } else {
-                (
-                    crate::model::project::asset::AssetKind::Other,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-            };
+        let mut assets_to_add = Vec::new();
 
-        // 2. Fallback for Kind if Unknown
-        if kind == crate::model::project::asset::AssetKind::Other {
-            // Fallback to extension if plugin didn't detect it
-            let ext = path_obj
-                .extension()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_lowercase();
-            kind = match ext.as_str() {
-                "mp4" | "mov" | "avi" | "mkv" | "webm" => {
-                    crate::model::project::asset::AssetKind::Video
-                }
-                "png" | "jpg" | "jpeg" | "bmp" | "webp" => {
-                    crate::model::project::asset::AssetKind::Image
-                }
-                "mp3" | "wav" | "ogg" | "aac" | "flac" => {
-                    crate::model::project::asset::AssetKind::Audio
-                }
-                "obj" | "gltf" | "glb" => crate::model::project::asset::AssetKind::Model3D,
-                _ => crate::model::project::asset::AssetKind::Other,
-            };
+        // 1. Try to get all streams
+        if let Some(streams) = self.plugin_manager.get_available_streams(path) {
+            for stream in streams {
+                let suffix = if let Some(idx) = stream.stream_index {
+                    format!(" [Stream {}: {:?}]", idx, stream.kind)
+                } else {
+                    "".to_string()
+                };
+                let name = format!("{}{}", base_name, suffix);
+
+                let mut asset = crate::model::project::asset::Asset::new(&name, path, stream.kind);
+                asset.duration = stream.duration;
+                asset.fps = stream.fps;
+                asset.width = stream.width;
+                asset.height = stream.height;
+                asset.stream_index = stream.stream_index;
+
+                assets_to_add.push(asset);
+            }
         }
 
-        // 3. Create Asset
-        let mut asset = crate::model::project::asset::Asset::new(&name, path, kind);
-        asset.duration = duration;
-        asset.fps = fps;
-        asset.width = match width {
-            Some(w) => Some(w),
-            None => None,
-        };
-        asset.height = match height {
-            Some(h) => Some(h),
-            None => None,
-        };
+        // 2. Fallback if no streams returned (or empty list)
+        if assets_to_add.is_empty() {
+            // 1. Get Metadata (Single call)
+            let (mut kind, duration, fps, width, height) =
+                if let Some(meta) = self.plugin_manager.get_metadata(path) {
+                    (meta.kind, meta.duration, meta.fps, meta.width, meta.height)
+                } else {
+                    (
+                        crate::model::project::asset::AssetKind::Other,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                };
 
-        // 4. Clean up path (optional, maybe check absolute vs relative)
-        // For now, keep as is.
-        self.add_asset(asset)
+            // 2. Fallback for Kind if Unknown
+            if kind == crate::model::project::asset::AssetKind::Other {
+                // Fallback to extension if plugin didn't detect it
+                let ext = path_obj
+                    .extension()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_lowercase();
+                kind = match ext.as_str() {
+                    "mp4" | "mov" | "avi" | "mkv" | "webm" => {
+                        crate::model::project::asset::AssetKind::Video
+                    }
+                    "png" | "jpg" | "jpeg" | "bmp" | "webp" => {
+                        crate::model::project::asset::AssetKind::Image
+                    }
+                    "mp3" | "wav" | "ogg" | "aac" | "flac" => {
+                        crate::model::project::asset::AssetKind::Audio
+                    }
+                    "obj" | "gltf" | "glb" => crate::model::project::asset::AssetKind::Model3D,
+                    _ => crate::model::project::asset::AssetKind::Other,
+                };
+            }
+
+            // 3. Create Asset
+            let mut asset = crate::model::project::asset::Asset::new(&base_name, path, kind);
+            asset.duration = duration;
+            asset.fps = fps;
+            asset.width = width;
+            asset.height = height;
+            // stream_index remains None
+
+            assets_to_add.push(asset);
+        }
+
+        let mut added_ids = Vec::new();
+        for asset in assets_to_add {
+            let id = self.add_asset(asset)?;
+            added_ids.push(id);
+        }
+
+        Ok(added_ids)
     }
 
     pub fn add_composition(
@@ -740,6 +769,48 @@ impl ProjectManager {
         )
     }
 
+    pub fn set_clip_property_attribute(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::set_clip_property_attribute(
+            &self.project,
+            composition_id,
+            track_id,
+            clip_id,
+            property_key,
+            attribute_key,
+            attribute_value,
+        )
+    }
+
+    pub fn set_effect_property_attribute(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effect_index: usize,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::set_effect_property_attribute(
+            &self.project,
+            composition_id,
+            track_id,
+            clip_id,
+            effect_index,
+            property_key,
+            attribute_key,
+            attribute_value,
+        )
+    }
+
     pub fn get_inspector_definitions(
         &self,
         comp_id: uuid::Uuid,
@@ -747,55 +818,95 @@ impl ProjectManager {
         clip_id: uuid::Uuid,
     ) -> Vec<crate::plugin::PropertyDefinition> {
         let project = self.project.read().unwrap();
-        
-        let (clip, canvas_width, canvas_height) = if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
-            if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                if let Some(clip) = track.clips.iter().find(|c| c.id == clip_id) {
-                     (clip.clone(), comp.width, comp.height)
+
+        let (clip, canvas_width, canvas_height) =
+            if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
+                if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
+                    if let Some(clip) = track.clips.iter().find(|c| c.id == clip_id) {
+                        (clip.clone(), comp.width, comp.height)
+                    } else {
+                        return Vec::new();
+                    }
                 } else {
                     return Vec::new();
                 }
             } else {
                 return Vec::new();
-            }
-        } else {
-            return Vec::new();
-        };
-        
+            };
+
         // Resolve clip dimensions
         let (clip_width, clip_height): (u64, u64) = match clip.kind {
-            crate::model::project::TrackClipKind::Video | crate::model::project::TrackClipKind::Image => {
+            crate::model::project::TrackClipKind::Video
+            | crate::model::project::TrackClipKind::Image => {
                 if let Some(asset_id) = clip.reference_id {
                     if let Some(asset) = project.assets.iter().find(|a| a.id == asset_id) {
-                        (asset.width.unwrap_or(100) as u64, asset.height.unwrap_or(100) as u64)
+                        (
+                            asset.width.unwrap_or(100) as u64,
+                            asset.height.unwrap_or(100) as u64,
+                        )
                     } else {
-                         (100, 100)
+                        (100, 100)
                     }
                 } else {
                     (100, 100)
                 }
-            },
+            }
             crate::model::project::TrackClipKind::Shape => {
                 // Try to get from properties, otherwise default 100
                 let w = clip.properties.get_f64("width").unwrap_or(100.0) as u64;
                 let h = clip.properties.get_f64("height").unwrap_or(100.0) as u64;
                 (w, h)
-            },
+            }
             crate::model::project::TrackClipKind::Text => {
-                 // Text size is hard to know without measuring. 
-                 // For default anchor purposes, maybe use 0 or some heuristic?
-                 // Or we could fallback to the "measured" size if we had it stored?
-                 // Current text creation sets anchor based on measurement at creation.
-                 // Let's assume 0,0 for now or maybe 100,100?
-                 // If default anchor is center, and we define center as w/2, h/2...
-                 // If we pass 0,0, anchor default is 0,0.
-                 (0, 0) 
-            },
-            _ => (100, 100)
+                // Text size is hard to know without measuring.
+                // For default anchor purposes, maybe use 0 or some heuristic?
+                // Or we could fallback to the "measured" size if we had it stored?
+                // Current text creation sets anchor based on measurement at creation.
+                // Let's assume 0,0 for now or maybe 100,100?
+                // If default anchor is center, and we define center as w/2, h/2...
+                // If we pass 0,0, anchor default is 0,0.
+                (0, 0)
+            }
+            _ => (100, 100),
         };
-        
-        let mut definitions = clip.default_property_definitions(canvas_width, canvas_height, clip_width, clip_height);
 
+        let definitions = if matches!(clip.kind, crate::model::project::TrackClipKind::Video) {
+            let mut definitions = clip.default_property_definitions(
+                canvas_width,
+                canvas_height,
+                clip_width,
+                clip_height,
+            );
+
+            let colorspaces = ColorSpaceManager::get_available_colorspaces();
+            if !colorspaces.is_empty() {
+                definitions.push(PropertyDefinition {
+                    name: "input_color_space".to_string(),
+                    label: "Input Color Space".to_string(),
+                    ui_type: PropertyUiType::Dropdown {
+                        options: colorspaces.clone(),
+                    },
+                    default_value: PropertyValue::String("".to_string()),
+                    category: "OCIO".to_string(),
+                });
+                definitions.push(PropertyDefinition {
+                    name: "output_color_space".to_string(),
+                    label: "Output Color Space".to_string(),
+                    ui_type: PropertyUiType::Dropdown {
+                        options: colorspaces,
+                    },
+                    default_value: PropertyValue::String("".to_string()),
+                    category: "OCIO".to_string(),
+                });
+            }
+            definitions
+        } else {
+            clip.default_property_definitions(canvas_width, canvas_height, clip_width, clip_height)
+        };
+
+        // let mut definitions = clip.default_property_definitions(canvas_width, canvas_height, clip_width, clip_height); // Removed original line
+
+        let mut definitions = definitions; // Make mutable
         let plugin_defs = self.plugin_manager.get_inspector_definitions(&clip.kind);
         definitions.extend(plugin_defs);
 

@@ -32,45 +32,71 @@ pub fn render_styles_section(
     // Add buttons
     ui.horizontal(|ui| {
         if ui.button("+ Fill").clicked() {
-            let mut new_style = StyleInstance::new(
-                "fill",
-                PropertyMap::new(),
-            );
+            let mut new_style = StyleInstance::new("fill", PropertyMap::new());
             // Defualts
-            new_style.properties.set("color".to_string(), Property::constant(PropertyValue::Color(Color { r: 255, g: 255, b: 255, a: 255 })));
-            new_style.properties.set("offset".to_string(), Property::constant(PropertyValue::Number(OrderedFloat(0.0))));
-             
+            new_style.properties.set(
+                "color".to_string(),
+                Property::constant(PropertyValue::Color(Color {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                })),
+            );
+            new_style.properties.set(
+                "offset".to_string(),
+                Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
+            );
+
             let mut new_styles = styles.clone();
             new_styles.push(new_style);
-            
-            project_service.update_track_clip_styles(comp_id, track_id, selected_entity_id, new_styles).ok();
+
+            project_service
+                .update_track_clip_styles(comp_id, track_id, selected_entity_id, new_styles)
+                .ok();
             *needs_refresh = true;
         }
         if ui.button("+ Stroke").clicked() {
-             let mut new_style = StyleInstance::new(
-                "stroke",
-                PropertyMap::new(),
-            );
+            let mut new_style = StyleInstance::new("stroke", PropertyMap::new());
             // Defaults
-            new_style.properties.set("color".to_string(), Property::constant(PropertyValue::Color(Color { r: 0, g: 0, b: 0, a: 255 })));
-            new_style.properties.set("width".to_string(), Property::constant(PropertyValue::Number(OrderedFloat(1.0))));
-            new_style.properties.set("offset".to_string(), Property::constant(PropertyValue::Number(OrderedFloat(0.0))));
-            new_style.properties.set("miter".to_string(), Property::constant(PropertyValue::Number(OrderedFloat(4.0))));
-            
+            new_style.properties.set(
+                "color".to_string(),
+                Property::constant(PropertyValue::Color(Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                })),
+            );
+            new_style.properties.set(
+                "width".to_string(),
+                Property::constant(PropertyValue::Number(OrderedFloat(1.0))),
+            );
+            new_style.properties.set(
+                "offset".to_string(),
+                Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
+            );
+            new_style.properties.set(
+                "miter".to_string(),
+                Property::constant(PropertyValue::Number(OrderedFloat(4.0))),
+            );
+
             let mut new_styles = styles.clone();
             new_styles.push(new_style);
-            
-            project_service.update_track_clip_styles(comp_id, track_id, selected_entity_id, new_styles).ok();
+
+            project_service
+                .update_track_clip_styles(comp_id, track_id, selected_entity_id, new_styles)
+                .ok();
             *needs_refresh = true;
         }
     });
-    
+
     let mut local_styles = styles.clone();
     let old_styles = local_styles.clone();
     let list_id = ui.make_persistent_id(format!("styles_list_{}", selected_entity_id));
     let mut needs_delete = None;
-    
-     ReorderableList::new(list_id, &mut local_styles)
+
+    ReorderableList::new(list_id, &mut local_styles)
         .show(ui, |ui, visual_index, style, handle| {
             // Because ReorderableList shuffles, we need the ACTUAL index in the original property list for updates?
             // Wait, ReorderableList operates on `local_styles`.
@@ -80,27 +106,27 @@ pub fn render_styles_section(
             // If we update property on index 0 but user dragged it to 1, confusion.
             // Ideally we reorder first if changed.
             // But ReorderableList handles drag.
-            
+
             // For updates, we use the `visual_index` assuming `local_styles` reflects current state.
             // If dragging happened, `local_styles` is already permuted.
             // But the BACKEND is not.
             // If we call `update_style_property(index)` on backend, it targets OLD index.
-            
+
             // Strategy: Sync order to backend immediately if different.
             // But ReorderableList output happens after show?
             // Actually, we should check `if local_styles != old_styles` at end of function and sync.
-            
+
             // But inside the loop, we are rendering rows.
             // If we edit a property, we want to call update on backend.
             // The `style` in closure is reference to item in `local_styles`.
             // We need to know its index in BACKEND to update it properly.
             // Or we check `styles` (original) to find matching ID.
-            
+
             let backend_index = styles.iter().position(|s| s.id == style.id).unwrap_or(visual_index);
-            
+
             let id = ui.make_persistent_id(format!("style_{}", style.id));
             let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
-            
+
             let mut remove_clicked = false;
             let header_res = state.show_header(ui, |ui| {
                  ui.horizontal(|ui| {
@@ -113,14 +139,14 @@ pub fn render_styles_section(
                     });
                 });
             });
-            
+
             if remove_clicked {
                 needs_delete = Some(visual_index);
             }
-            
+
             header_res.body(|ui| {
                  let defs = get_style_definitions(&style.style_type);
-                 
+
                  egui::Grid::new(format!("style_grid_{}", style.id))
                     .striped(true)
                     .show(ui, |ui| {
@@ -131,7 +157,7 @@ pub fn render_styles_section(
                             |name| style.properties.get(name).cloned(),
                             &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true, current_time }
                         );
-                        
+
                         for action in actions {
                             match action {
                                 crate::ui::panels::inspector::properties::PropertyAction::Update(name, val) => {
@@ -165,7 +191,7 @@ pub fn render_styles_section(
                                               }
                                          }
                                       }
-                                      
+
                                       if !remove {
                                           project_service.add_style_keyframe(
                                               comp_id, track_id, selected_entity_id, backend_index, &name, current_time, val, None
@@ -182,14 +208,16 @@ pub fn render_styles_section(
     if let Some(idx) = needs_delete {
         local_styles.remove(idx);
     }
-    
+
     // Sync ordering if changed
     // Use IDs to compare
     let ids: Vec<Uuid> = local_styles.iter().map(|s| s.id).collect();
     let old_ids: Vec<Uuid> = old_styles.iter().map(|s| s.id).collect();
-    
+
     if ids != old_ids {
-        project_service.update_track_clip_styles(comp_id, track_id, selected_entity_id, local_styles).ok();
+        project_service
+            .update_track_clip_styles(comp_id, track_id, selected_entity_id, local_styles)
+            .ok();
         *needs_refresh = true;
     }
 }
@@ -201,43 +229,73 @@ fn get_style_definitions(style_type: &str) -> Vec<PropertyDefinition> {
                 name: "color".to_string(),
                 label: "Color".to_string(),
                 ui_type: PropertyUiType::Color,
-                default_value: PropertyValue::Color(Color { r: 255, g: 255, b: 255, a: 255 }),
+                default_value: PropertyValue::Color(Color {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                }),
                 category: "Style".to_string(),
             },
             PropertyDefinition {
                 name: "offset".to_string(),
                 label: "Offset".to_string(),
-                ui_type: PropertyUiType::Float { min: -100.0, max: 100.0, step: 0.1, suffix: "px".to_string() },
+                ui_type: PropertyUiType::Float {
+                    min: -100.0,
+                    max: 100.0,
+                    step: 0.1,
+                    suffix: "px".to_string(),
+                },
                 default_value: PropertyValue::Number(OrderedFloat(0.0)),
                 category: "Style".to_string(),
             },
         ],
         "stroke" => vec![
-             PropertyDefinition {
+            PropertyDefinition {
                 name: "color".to_string(),
                 label: "Color".to_string(),
                 ui_type: PropertyUiType::Color,
-                default_value: PropertyValue::Color(Color { r: 0, g: 0, b: 0, a: 255 }),
+                default_value: PropertyValue::Color(Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }),
                 category: "Style".to_string(),
             },
-             PropertyDefinition {
+            PropertyDefinition {
                 name: "width".to_string(),
                 label: "Width".to_string(),
-                ui_type: PropertyUiType::Float { min: 0.0, max: 100.0, step: 0.1, suffix: "px".to_string() },
+                ui_type: PropertyUiType::Float {
+                    min: 0.0,
+                    max: 100.0,
+                    step: 0.1,
+                    suffix: "px".to_string(),
+                },
                 default_value: PropertyValue::Number(OrderedFloat(1.0)),
                 category: "Style".to_string(),
             },
             PropertyDefinition {
                 name: "offset".to_string(),
                 label: "Offset".to_string(),
-                ui_type: PropertyUiType::Float { min: -100.0, max: 100.0, step: 0.1, suffix: "px".to_string() },
+                ui_type: PropertyUiType::Float {
+                    min: -100.0,
+                    max: 100.0,
+                    step: 0.1,
+                    suffix: "px".to_string(),
+                },
                 default_value: PropertyValue::Number(OrderedFloat(0.0)),
                 category: "Style".to_string(),
             },
             PropertyDefinition {
                 name: "miter".to_string(),
                 label: "Miter Limit".to_string(),
-                ui_type: PropertyUiType::Float { min: 0.0, max: 100.0, step: 0.1, suffix: "".to_string() },
+                ui_type: PropertyUiType::Float {
+                    min: 0.0,
+                    max: 100.0,
+                    step: 0.1,
+                    suffix: "".to_string(),
+                },
                 default_value: PropertyValue::Number(OrderedFloat(4.0)),
                 category: "Style".to_string(),
             },

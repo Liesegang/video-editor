@@ -1,0 +1,15 @@
+uniform shader content;
+uniform float brightness;
+uniform float contrast;
+
+half4 main(float2 p) {
+    half4 color = content.eval(p);
+
+    // Contrast relative to 0.5
+    color.rgb = (color.rgb - 0.5) * contrast + 0.5;
+
+    // Add brightness
+    color.rgb += brightness;
+
+    return color;
+}
