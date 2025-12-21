@@ -1,0 +1,66 @@
+uniform shader content;
+uniform float density;
+uniform float angle;
+uniform float softness;
+uniform float2 resolution;
+
+half4 main(float2 p) {
+    // 1. Rotate coordinates
+    float rad = radians(angle);
+    float c = cos(rad);
+    float s = sin(rad);
+    float2x2 rot = float2x2(c, -s, s, c);
+
+    // Rotate relative to center?
+    float2 center = resolution / 2.0;
+    float2 centered = p - center;
+    float2 rotated = rot * centered + center;
+
+    // 2. Grid coordinates
+    // density is dot size? or dots per unit?
+    // "density (dots size)" -> if density is size of grid cell.
+
+    float2 grid_uv = rotated / density;
+    float2 cell_id = floor(grid_uv);
+    float2 cell_uv = fract(grid_uv); // 0..1 in cell
+
+    // 3. Sample source brightness at center of cell
+    // Map back to pixel space for sampling
+    float2 sample_pos = (cell_id + 0.5) * density;
+    // Inverse rotate
+    float2x2 inv_rot = float2x2(c, s, -s, c);
+    sample_pos = inv_rot * (sample_pos - center) + center;
+
+    half4 color = content.eval(sample_pos);
+    float luma = dot(color.rgb, half3(0.299, 0.587, 0.114));
+
+    // 4. Draw circle
+    // Radius depends on luma.
+    // Invert luma so dark = big dots? Or light = big dots?
+    // "Halftone" usually represents darkness with ink. So dark = big dots.
+    // on screen (additive?), usually white background, black dots.
+    // Or we use it as a mask for the color?
+    // "Draw circles based on source luminance."
+
+    float max_radius = 0.5; // Radius in cell_uv space (max 0.5)
+    float radius = (1.0 - luma) * max_radius; // Darker = larger radius
+
+    float dist = distance(cell_uv, float2(0.5));
+
+    // Smoothstep for circle edge
+    float mask = smoothstep(radius, radius - softness/density, dist);
+
+    // Output: Black dots on White?
+    // Or colored dots?
+    // "Manga style" usually B&W.
+
+    // Let's return black ink on white paper.
+    return half4(half3(1.0 - mask), 1.0); // If mask=1 (inside dot), return 0 (black).
+    // Wait, if mask=1 (inside), we want black. 1.0 - 1.0 = 0.0. Correct.
+    // If mask=0 (outside), we want white. 1.0 - 0.0 = 1.0. Correct.
+
+    // If we want transparency for overlay:
+    // return half4(0.0, 0.0, 0.0, mask);
+
+    // Let's stick to B&W opaque for now as it's "Stylize".
+}

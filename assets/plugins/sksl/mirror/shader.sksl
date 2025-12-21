@@ -1,0 +1,40 @@
+uniform shader content;
+uniform int axis; // 0=Horizontal, 1=Vertical
+uniform float center; // 0.0 to 1.0 (UV space)
+uniform float2 resolution;
+
+half4 main(float2 p) {
+    float2 uv = p / resolution;
+
+    if (axis == 0) { // Horizontal mirror (flip X)
+        // If uv.x > center, reflect back?
+        // Usually "Mirror" means reflecting one side to the other.
+        // Let's assume absolute distance from center.
+        // Or "Fold".
+        // Spec: "Reflect UV coordinates across the axis/center."
+
+        // Simple abs approach:
+        // uv.x = center - abs(uv.x - center); // This keeps left side?
+        // Or uv.x = abs(uv.x - center) + center?
+
+        // Let's implement standard "Mirror" where the image is symmetric.
+        // If center is 0.5.
+        // If we want left side mirrored to right:
+        // if x > 0.5, x = 1.0 - x.
+
+        // Generalized:
+        // if uv.x > center: uv.x = center - (uv.x - center) = 2*center - uv.x
+        // This mirrors the Left side onto the Right side (if we only look at < center).
+        // Wait, if we want to mirror, we usually sample.
+
+        // Let's try: uv.x = center + abs(uv.x - center) ? No that stretches right.
+        // uv.x = center - abs(uv.x - center); // Always samples left of center.
+
+        uv.x = center - abs(uv.x - center);
+
+    } else { // Vertical
+        uv.y = center - abs(uv.y - center);
+    }
+
+    return content.eval(uv * resolution);
+}
