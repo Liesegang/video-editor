@@ -435,13 +435,23 @@ impl Property {
 
     pub fn keyframe(keyframes: Vec<Keyframe>) -> Self {
         let list = keyframes
-            .into_iter()
+            .iter()
             .filter_map(|kf| serde_json::to_value(kf).ok())
             .map(PropertyValue::from)
             .collect();
+
+        let mut properties = HashMap::from([("keyframes".to_string(), PropertyValue::Array(list))]);
+
+        // Store the first keyframe's value as a fallback "value" property
+        // This ensures evaluators can return a value of the correct type (e.g., Vec2)
+        // even if the keyframe list is empty/invalid during evaluation.
+        if let Some(first) = keyframes.first() {
+            properties.insert("value".to_string(), first.value.clone());
+        }
+
         Self {
             evaluator: "keyframe".to_string(),
-            properties: HashMap::from([("keyframes".to_string(), PropertyValue::Array(list))]),
+            properties,
             ..Default::default()
         }
     }

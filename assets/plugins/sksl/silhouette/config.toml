@@ -8,8 +8,4 @@ label = "Color"
 type = "Color"
 default = [0.0, 0.0, 0.0, 1.0]
 
-[[properties]]
-name = "preserveAlpha"
-label = "Preserve Alpha"
-type = "Bool"
-default = true
+

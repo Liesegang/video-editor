@@ -84,12 +84,43 @@ impl<'a> FrameEvaluationContext<'a> {
                 let color_val = self.evaluate_property_value(props, "color", time);
                 let color = match color_val {
                     Some(PropertyValue::Color(c)) => c,
+                    Some(PropertyValue::Map(m)) => {
+                        let r = m
+                            .get("r")
+                            .and_then(|v| {
+                                v.get_as::<i64>()
+                                    .or_else(|| v.get_as::<f64>().map(|f| f as i64))
+                            })
+                            .unwrap_or(0) as u8;
+                        let g = m
+                            .get("g")
+                            .and_then(|v| {
+                                v.get_as::<i64>()
+                                    .or_else(|| v.get_as::<f64>().map(|f| f as i64))
+                            })
+                            .unwrap_or(0) as u8;
+                        let b = m
+                            .get("b")
+                            .and_then(|v| {
+                                v.get_as::<i64>()
+                                    .or_else(|| v.get_as::<f64>().map(|f| f as i64))
+                            })
+                            .unwrap_or(0) as u8;
+                        let a = m
+                            .get("a")
+                            .and_then(|v| {
+                                v.get_as::<i64>()
+                                    .or_else(|| v.get_as::<f64>().map(|f| f as i64))
+                            })
+                            .unwrap_or(255) as u8;
+                        crate::model::frame::color::Color { r, g, b, a }
+                    }
                     _ => crate::model::frame::color::Color {
                         r: 0,
                         g: 0,
                         b: 0,
                         a: 255,
-                    }, // Default Black? Or White?
+                    },
                 };
                 let offset = self.evaluate_number(props, "offset", time, 0.0);
 
@@ -221,12 +252,29 @@ impl<'a> FrameEvaluationContext<'a> {
         default_x: f64,
         default_y: f64,
     ) -> (f64, f64) {
-        let (mut vx, mut vy) = if let Some(PropertyValue::Vec2(v)) =
-            self.evaluate_property_value(properties, key, time)
-        {
-            (*v.x, *v.y)
-        } else {
-            (default_x, default_y)
+        let val = self.evaluate_property_value(properties, key, time);
+        let (mut vx, mut vy) = match val {
+            Some(PropertyValue::Vec2(v)) => (*v.x, *v.y),
+            Some(PropertyValue::Map(m)) => {
+                let x = m
+                    .get("x")
+                    .and_then(|v| match v {
+                        PropertyValue::Number(n) => Some(n.into_inner()),
+                        PropertyValue::Integer(i) => Some(*i as f64),
+                        _ => None,
+                    })
+                    .unwrap_or(default_x);
+                let y = m
+                    .get("y")
+                    .and_then(|v| match v {
+                        PropertyValue::Number(n) => Some(n.into_inner()),
+                        PropertyValue::Integer(i) => Some(*i as f64),
+                        _ => None,
+                    })
+                    .unwrap_or(default_y);
+                (x, y)
+            }
+            _ => (default_x, default_y),
         };
 
         if let Some(val) = self.evaluate_property_value(properties, key_x, time) {
@@ -362,8 +410,26 @@ impl EntityConverter for ImageEntityConverter {
         let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
         let eval_time = source_start_time + time_offset;
 
+        if frame_number % 30 == 0 {
+            // Log every ~1 sec (at 30fps) to avoid total span
+            log::info!(
+                "[ImageRender] Frame: {} | ClipIn: {} | GlobalDelta: {:.4}s | EvalTime: {:.4}s",
+                frame_number,
+                track_clip.in_frame,
+                time_offset,
+                eval_time
+            );
+        }
+
         let file_path = evaluator.require_string(props, "file_path", eval_time, "image")?;
         let transform = evaluator.build_transform(props, eval_time);
+        if frame_number % 30 == 0 {
+            log::info!(
+                "[ImageRender] Resolving transform at EvalTime {:.4}: {:?}",
+                eval_time,
+                transform
+            );
+        }
         let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
         let surface = ImageSurface {
             file_path,

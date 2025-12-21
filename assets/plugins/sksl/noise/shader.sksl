@@ -1,11 +1,11 @@
 uniform shader content;
 uniform float amount;
 uniform float seed;
-uniform float monochrome; // bool
-uniform float animate;    // bool
-uniform float time;
+uniform int monochrome;
+uniform int animate;
 uniform float speed;
-uniform float blend_mode; // 0=Add, 1=Overlay
+uniform int blend_mode; // 0=Add, 1=Overlay
+uniform float u_time;
 
 // Simple hash for white noise
 float hash(float2 p) {
@@ -32,12 +32,12 @@ half4 main(float2 p) {
     half4 color = content.eval(p);
 
     float t = seed;
-    if (animate > 0.5) {
-        t += time * speed;
+    if (animate != 0) {
+        t += u_time * speed;
     }
 
     float3 noise_val;
-    if (monochrome > 0.5) {
+    if (monochrome != 0) {
         float g = gaussian(p, t);
         noise_val = float3(g);
     } else {
@@ -51,7 +51,7 @@ half4 main(float2 p) {
     // Gaussian std dev is 1.0. We scale by amount.
     noise_val *= amount;
 
-    if (blend_mode < 0.5) {
+    if (blend_mode == 0) {
         // Additive (Simple)
         color.rgb += noise_val;
     } else {

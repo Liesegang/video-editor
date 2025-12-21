@@ -496,6 +496,23 @@ pub fn preview_panel(
                         }
                     }
 
+                    let current_frame_i64 =
+                        (editor_context.timeline.current_time as f64 * comp.fps).round() as i64;
+                    let delta_frames = current_frame_i64 - entity.in_frame as i64;
+                    let time_offset = delta_frames as f64 / comp.fps;
+                    let source_start_time = entity.source_begin_frame as f64 / entity.fps;
+                    let local_time = source_start_time + time_offset;
+
+                    // Log Gizmo Time Calculation (throttle slightly if possible, or just spam per user request)
+                    if editor_context.timeline.current_time.fract() < 0.1 {
+                        log::info!(
+                            "[Gizmo] Entity: {} | CurrentFrame: {} | LocalTime: {:.4}",
+                            entity.id,
+                            current_frame_i64,
+                            local_time
+                        );
+                    }
+
                     let get_val = |key: &str, default: f32| {
                         entity
                             .properties
@@ -504,7 +521,7 @@ pub fn preview_panel(
                                 project_service.evaluate_property_value(
                                     p,
                                     &entity.properties,
-                                    editor_context.timeline.current_time as f64,
+                                    local_time,
                                     comp.fps,
                                 )
                             })
@@ -520,7 +537,7 @@ pub fn preview_panel(
                                 let val = project_service.evaluate_property_value(
                                     p,
                                     &entity.properties,
-                                    editor_context.timeline.current_time as f64,
+                                    local_time,
                                     comp.fps,
                                 );
                                 val.get_as::<Vec2>()

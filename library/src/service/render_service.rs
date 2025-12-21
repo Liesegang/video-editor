@@ -107,7 +107,7 @@ impl<T: Renderer> RenderService<T> {
                     let final_image = self.apply_effects(
                         RenderOutput::Image(video_frame),
                         &surface.effects,
-                        0.0,
+                        frame_info.now_time.0,
                     )?;
                     measure_debug(format!("Draw video {}", surface.file_path), || {
                         self.renderer.draw_layer(
@@ -134,7 +134,7 @@ impl<T: Renderer> RenderService<T> {
                     let final_image = self.apply_effects(
                         RenderOutput::Image(image_frame),
                         &surface.effects,
-                        0.0,
+                        frame_info.now_time.0,
                     )?;
                     measure_debug(format!("Draw image {}", surface.file_path), || {
                         self.renderer.draw_layer(
@@ -162,7 +162,8 @@ impl<T: Renderer> RenderService<T> {
                                 &scaled_transform,
                             )
                         })?;
-                    let final_image = self.apply_effects(text_layer, &effects, 0.0)?;
+                    let final_image =
+                        self.apply_effects(text_layer, &effects, frame_info.now_time.0)?;
                     let mut composite_transform = Transform::default();
                     composite_transform.opacity = transform.opacity;
                     measure_debug(format!("Composite text '{}'", text), || {
@@ -186,7 +187,8 @@ impl<T: Renderer> RenderService<T> {
                                 &scaled_transform,
                             )
                         })?;
-                    let final_image = self.apply_effects(shape_layer, &effects, 0.0)?;
+                    let final_image =
+                        self.apply_effects(shape_layer, &effects, frame_info.now_time.0)?;
                     let mut composite_transform = Transform::default();
                     composite_transform.opacity = transform.opacity;
                     measure_debug(format!("Composite shape {}", path), || {
@@ -208,7 +210,8 @@ impl<T: Renderer> RenderService<T> {
                             &scaled_transform,
                         )
                     })?;
-                    let final_image = self.apply_effects(sksl_layer, &effects, 0.0)?;
+                    let final_image =
+                        self.apply_effects(sksl_layer, &effects, frame_info.now_time.0)?;
                     let mut composite_transform = Transform::default();
                     composite_transform.opacity = transform.opacity;
                     measure_debug(format!("Composite SkSL"), || {
@@ -250,7 +253,7 @@ impl<T: Renderer> RenderService<T> {
         &mut self,
         layer: RenderOutput,
         effects: &[crate::model::frame::effect::ImageEffect],
-        _current_time: f64,
+        current_time: f64,
     ) -> Result<RenderOutput, LibraryError> {
         if effects.is_empty() {
             Ok(layer)
@@ -259,15 +262,22 @@ impl<T: Renderer> RenderService<T> {
             // Iterate over effects
             for effect in effects {
                 let effect_type = effect.effect_type.as_str();
-                let properties = &effect.properties;
                 let gpu_context = self.renderer.get_gpu_context();
+
+                let mut params = effect.properties.clone();
+                params.insert(
+                    "u_time".to_string(),
+                    crate::model::project::property::PropertyValue::Number(
+                        ordered_float::OrderedFloat(current_time),
+                    ),
+                );
 
                 // Use the PluginManager to apply the effect
                 current_layer = measure_debug(format!("Apply effect '{}'", effect_type), || {
                     self.plugin_manager.apply_effect(
                         effect_type,
                         &current_layer,
-                        properties,
+                        &params,
                         gpu_context,
                     )
                 })?;

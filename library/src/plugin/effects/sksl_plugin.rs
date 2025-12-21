@@ -265,12 +265,25 @@ impl EffectPlugin for SkslEffectPlugin {
                 // make_shader expects &[ChildPtr]
                 let children = [ChildPtr::from(input_shader)];
 
+                let expected_uniform_size = self.runtime_effect.uniform_size();
+                if uniform_bytes.len() != expected_uniform_size {
+                    return Err(LibraryError::Render(format!(
+                        "Uniform size mismatch for effect '{}': expected {} bytes, got {} bytes",
+                        self.config.name,
+                        expected_uniform_size,
+                        uniform_bytes.len()
+                    )));
+                }
+
                 let shader = self
                     .runtime_effect
                     .make_shader(data, &children, None)
-                    .ok_or(LibraryError::Render(
-                        "Failed to create runtime shader".to_string(),
-                    ))?;
+                    .ok_or_else(|| {
+                         LibraryError::Render(format!(
+                            "Failed to create runtime shader for effect '{}'. Uniform bytes: {}, Expected: {}", 
+                            self.config.name, uniform_bytes.len(), expected_uniform_size
+                        ))
+                    })?;
 
                 // Create image filter from shader.
                 // Signature guess: shader(shader, crop_rect) (2 args)
@@ -287,7 +300,7 @@ impl EffectPlugin for SkslEffectPlugin {
         self.config
             .properties
             .iter()
-            .filter(|p| p.name != "u_resolution")
+            .filter(|p| p.name != "u_resolution" && p.name != "u_time")
             .map(|p| {
                 let ui_type = match p.r#type.as_str() {
                     "Float" => PropertyUiType::Float {
@@ -327,19 +340,37 @@ impl EffectPlugin for SkslEffectPlugin {
                         })
                     }
                     Some(ValueWrapper::Vec3(v)) => {
-                        PropertyValue::Vec3(crate::model::project::property::Vec3 {
-                            x: OrderedFloat(v[0]),
-                            y: OrderedFloat(v[1]),
-                            z: OrderedFloat(v[2]),
-                        })
+                        if matches!(ui_type, PropertyUiType::Color) {
+                            PropertyValue::Color(crate::model::frame::color::Color {
+                                r: (v[0] * 255.0) as u8,
+                                g: (v[1] * 255.0) as u8,
+                                b: (v[2] * 255.0) as u8,
+                                a: 255,
+                            })
+                        } else {
+                            PropertyValue::Vec3(crate::model::project::property::Vec3 {
+                                x: OrderedFloat(v[0]),
+                                y: OrderedFloat(v[1]),
+                                z: OrderedFloat(v[2]),
+                            })
+                        }
                     }
                     Some(ValueWrapper::Vec4(v)) => {
-                        PropertyValue::Vec4(crate::model::project::property::Vec4 {
-                            x: OrderedFloat(v[0]),
-                            y: OrderedFloat(v[1]),
-                            z: OrderedFloat(v[2]),
-                            w: OrderedFloat(v[3]),
-                        })
+                        if matches!(ui_type, PropertyUiType::Color) {
+                            PropertyValue::Color(crate::model::frame::color::Color {
+                                r: (v[0] * 255.0) as u8,
+                                g: (v[1] * 255.0) as u8,
+                                b: (v[2] * 255.0) as u8,
+                                a: (v[3] * 255.0) as u8,
+                            })
+                        } else {
+                            PropertyValue::Vec4(crate::model::project::property::Vec4 {
+                                x: OrderedFloat(v[0]),
+                                y: OrderedFloat(v[1]),
+                                z: OrderedFloat(v[2]),
+                                w: OrderedFloat(v[3]),
+                            })
+                        }
                     }
                     None => PropertyValue::Number(OrderedFloat(0.0)), // Safe default
                 };
