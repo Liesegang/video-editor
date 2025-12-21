@@ -48,3 +48,9 @@ type = "Int"
 min = 0
 max = 1
 default = 1
+
+[[properties]]
+name = "u_time"
+label = "Time"
+type = "Float"
+default = 0.0

@@ -3,7 +3,6 @@ use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
 use crate::model::project::property::{Property, PropertyValue, Vec2, Vec3, Vec4};
 use crate::plugin::{EvaluationContext, PropertyEvaluator};
-use log::debug;
 use ordered_float::OrderedFloat;
 use std::sync::Arc;
 
@@ -55,6 +54,9 @@ fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
     // );
 
     if time.is_nan() || keyframes.is_empty() {
+        if let Some(val) = property.value() {
+            return val.clone();
+        }
         return PropertyValue::Number(OrderedFloat(0.0));
     }
 

@@ -70,6 +70,7 @@ pub fn handle_context_menu(
                 drop_out_frame,
                 comp_width as u32,
                 comp_height as u32,
+                composition_fps,
             );
 
             add_clip_to_best_track(
@@ -95,6 +96,7 @@ pub fn handle_context_menu(
                 drop_out_frame,
                 comp_width as u32,
                 comp_height as u32,
+                composition_fps,
             );
 
             add_clip_to_best_track(
@@ -120,6 +122,7 @@ pub fn handle_context_menu(
                 drop_out_frame,
                 comp_width as u32,
                 comp_height as u32,
+                composition_fps,
             );
 
             add_clip_to_best_track(

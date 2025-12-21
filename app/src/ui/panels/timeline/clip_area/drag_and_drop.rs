@@ -133,6 +133,7 @@ pub fn handle_drag_and_drop(
                                                 drop_out,
                                                 comp_width as u32,
                                                 comp_height as u32,
+                                                composition_fps,
                                             );
                                             image_clip.source_begin_frame = 0; // Images are static, so 0 is fine, or arguably doesn't matter. But let's keep 0 as explicit.
                                             if let (Some(w), Some(h)) = (asset.width, asset.height)
@@ -151,7 +152,7 @@ pub fn handle_drag_and_drop(
                                                 0,
                                                 0,
                                                 None,
-                                                0.0,
+                                                composition_fps,
                                                 library::model::project::property::PropertyMap::new(
                                                 ),
                                                 Vec::new(), // styles
@@ -175,6 +176,7 @@ pub fn handle_drag_and_drop(
                             // Create Composition Clip
                             // We should check duration of that composition
                             let mut duration_sec = 10.0;
+                            let mut target_fps = 30.0;
                             if let Ok(proj_read) = project.read() {
                                 if let Some(c) = proj_read
                                     .compositions
@@ -182,6 +184,7 @@ pub fn handle_drag_and_drop(
                                     .find(|c| c.id == *target_comp_id)
                                 {
                                     duration_sec = c.duration;
+                                    target_fps = c.fps;
                                 }
                             }
 
@@ -197,7 +200,7 @@ pub fn handle_drag_and_drop(
                                 0,
                                 0,
                                 None,
-                                0.0,
+                                target_fps,
                                 library::model::project::property::PropertyMap::new(),
                                 Vec::new(), // styles
                                 Vec::new(), // effects

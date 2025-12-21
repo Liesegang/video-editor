@@ -81,6 +81,10 @@ impl Project {
         self.compositions.iter_mut().find(|c| c.id == id)
     }
 
+    pub fn get_composition(&self, id: Uuid) -> Option<&Composition> {
+        self.compositions.iter().find(|c| c.id == id)
+    }
+
     pub fn remove_composition(&mut self, id: Uuid) -> Option<Composition> {
         let index = self.compositions.iter().position(|c| c.id == id)?;
         Some(self.compositions.remove(index))
@@ -133,6 +137,10 @@ impl Composition {
 
     pub fn get_track_mut(&mut self, id: Uuid) -> Option<&mut Track> {
         self.tracks.iter_mut().find(|t| t.id == id)
+    }
+
+    pub fn get_track(&self, id: Uuid) -> Option<&Track> {
+        self.tracks.iter().find(|t| t.id == id)
     }
 
     pub fn remove_track(&mut self, id: Uuid) -> Option<Track> {

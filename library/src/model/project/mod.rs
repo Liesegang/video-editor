@@ -8,7 +8,6 @@ use crate::model::project::property::{PropertyMap, Vec2};
 use crate::model::project::style::StyleInstance;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use serde_json;
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -384,6 +383,7 @@ impl TrackClip {
         out_frame: u64,
         canvas_width: u32,
         canvas_height: u32,
+        fps: f64,
     ) -> Self {
         let mut props = PropertyMap::new();
         props.set(
@@ -436,7 +436,7 @@ impl TrackClip {
             out_frame,
             0,
             None, // Image is static
-            0.0,
+            fps,
             props,
             Vec::new(),
             Vec::new(),
@@ -449,6 +449,7 @@ impl TrackClip {
         out_frame: u64,
         canvas_width: u32,
         canvas_height: u32,
+        fps: f64,
     ) -> Self {
         let mut props = PropertyMap::new();
         // User requested default: "this is sample text", Arial, White
@@ -570,7 +571,7 @@ impl TrackClip {
             out_frame,
             0,
             None, // Text is static
-            0.0,
+            fps,
             props,
             styles,
             Vec::new(),
@@ -582,6 +583,7 @@ impl TrackClip {
         out_frame: u64,
         canvas_width: u32,
         canvas_height: u32,
+        fps: f64,
     ) -> Self {
         let mut props = PropertyMap::new();
 
@@ -712,7 +714,7 @@ impl TrackClip {
             out_frame,
             0,
             None,
-            0.0,
+            fps,
             props,
             styles,
             Vec::new(),
@@ -724,6 +726,7 @@ impl TrackClip {
         out_frame: u64,
         canvas_width: u32,
         canvas_height: u32,
+        fps: f64,
     ) -> Self {
         let mut props = PropertyMap::new();
 
@@ -795,7 +798,7 @@ half4 main(float2 fragCoord) {
             out_frame,
             0,
             None,
-            0.0,
+            fps,
             props,
             Vec::new(),
             Vec::new(),
@@ -816,5 +819,5 @@ half4 main(float2 fragCoord) {
 }
 
 const fn default_fps() -> f64 {
-    0.0
+    30.0
 }

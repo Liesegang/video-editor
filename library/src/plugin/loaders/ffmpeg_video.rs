@@ -40,6 +40,10 @@ impl LoadPlugin for FfmpegVideoLoader {
         matches!(request, LoadRequest::VideoFrame { .. })
     }
 
+    fn priority(&self) -> u32 {
+        10
+    }
+
     fn load(
         &self,
         request: &LoadRequest,
@@ -95,6 +99,19 @@ impl LoadPlugin for FfmpegVideoLoader {
     }
 
     fn get_available_streams(&self, path: &str) -> Option<Vec<crate::plugin::AssetMetadata>> {
+        let ext = std::path::Path::new(path)
+            .extension()?
+            .to_str()?
+            .to_lowercase();
+
+        // Explicitly reject image extensions to let NativeImageLoader handle them
+        match ext.as_str() {
+            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
+                return None;
+            }
+            _ => {}
+        }
+
         if let Ok(probe) = MediaProbe::new(path) {
             return Some(probe.get_available_streams());
         }
@@ -109,7 +126,9 @@ impl LoadPlugin for FfmpegVideoLoader {
 
         // Explicitly reject image extensions to let NativeImageLoader handle them
         match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "bmp" | "webp" => return None,
+            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
+                return None;
+            }
             _ => {}
         }
 
@@ -190,7 +209,9 @@ impl LoadPlugin for FfmpegVideoLoader {
 
         // Explicitly reject image extensions to let NativeImageLoader handle them
         match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "bmp" | "webp" => return None,
+            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
+                return None;
+            }
             _ => {}
         }
 

@@ -1,13 +1,10 @@
 uniform shader content;
 uniform half4 color;
-uniform float preserveAlpha; // bool
+
 
 half4 main(float2 p) {
     half4 src = content.eval(p);
-
-    if (preserveAlpha > 0.5) {
-        return half4(color.rgb * src.a, src.a); // Premultiplied
-    } else {
-        return color; // Just solid block
-    }
+    // Apply the silhouette color, but modulated by the source alpha.
+    // This ensures transparent areas remain transparent.
+    return half4(color.rgb * src.a, src.a); 
 }
