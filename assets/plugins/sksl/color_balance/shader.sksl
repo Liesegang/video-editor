@@ -1,0 +1,26 @@
+uniform shader content;
+uniform half3 shadows;
+uniform half3 midtones;
+uniform half3 highlights;
+
+half4 main(float2 p) {
+    half4 color = content.eval(p);
+
+    // Luma for weighting
+    float luma = dot(color.rgb, half3(0.2126, 0.7152, 0.0722));
+
+    // Weights
+    float shadow_k = 1.0 - smoothstep(0.0, 0.5, luma);
+    float highlight_k = smoothstep(0.5, 1.0, luma);
+    float midtone_k = 1.0 - shadow_k - highlight_k;
+
+    // Apply shifts
+    color.rgb += shadows * shadow_k;
+    color.rgb += midtones * midtone_k;
+    color.rgb += highlights * highlight_k;
+
+    // Clamp result
+    color.rgb = clamp(color.rgb, 0.0, 1.0);
+
+    return color;
+}

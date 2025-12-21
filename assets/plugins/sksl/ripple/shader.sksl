@@ -1,0 +1,20 @@
+uniform shader content;
+uniform float2 center;
+uniform float amplitude;
+uniform float frequency;
+uniform float phase;
+uniform float speed;
+uniform float time;
+
+half4 main(float2 p) {
+    float2 d_vec = p - center;
+    float dist = length(d_vec);
+
+    // Ripple displacement
+    float offset = sin(dist * frequency - phase - time * speed) * amplitude;
+
+    // Displace along the radius
+    float2 p_new = center + d_vec * (1.0 + offset / (dist + 0.001));
+
+    return content.eval(p_new);
+}

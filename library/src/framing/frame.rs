@@ -135,10 +135,14 @@ pub fn get_frame_from_project(
     property_evaluators: &Arc<PropertyEvaluatorRegistry>,
     entity_converter_registry: &Arc<EntityConverterRegistry>,
 ) -> FrameInfo {
-    let _timer = ScopedTimer::debug(format!(
-        "Frame assembly comp={} frame={}",
-        composition_index, frame_number
-    ));
+    let _timer = if log::log_enabled!(log::Level::Debug) {
+        Some(ScopedTimer::debug(format!(
+            "Frame assembly comp={} frame={}",
+            composition_index, frame_number
+        )))
+    } else {
+        None
+    };
 
     let composition = &project.compositions[composition_index];
     let frame = evaluate_composition_frame(

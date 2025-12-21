@@ -1,54 +1,44 @@
 uniform shader content;
-uniform vec2 offset_r;
-uniform vec2 zoom_r;
-uniform float dist_r;
-uniform vec2 offset_g;
-uniform vec2 zoom_g;
-uniform float dist_g;
-uniform vec2 offset_b;
-uniform vec2 zoom_b;
-uniform float dist_b;
-uniform vec2 u_resolution;
+uniform float intensity;
+uniform float2 center;
+uniform float falloff;
+uniform float2 resolution;
 
-half4 main(float2 coord) {
-    vec2 center = u_resolution / 2.0;
-    vec2 uv = coord - center;
+half4 main(float2 p) {
+    float2 uv = p / resolution;
+    float2 center_uv = center / resolution;
+    float2 dist_vec = uv - center_uv;
 
-    // --- Red ---
-    // Distortion: r' = r * (1 + k * |normalized_pos|^2)
-    // Normalize position relative to center for distortion calculation to keep k manageable
-    vec2 norm_pos_r = uv / center;
-    float r2_r = dot(norm_pos_r, norm_pos_r);
-    vec2 uv_r_dist = uv * (1.0 + dist_r * r2_r);
-    
-    // Zoom and Offset
-    // Zoom should be relative to center. 
-    // coord = (uv / zoom) + center + offset
-    vec2 coord_r = (uv_r_dist / zoom_r) + center + offset_r;
+    // Scale distance by aspect ratio to make circle circular?
+    // Usually CA is lens based, so circular.
+    // float aspect = resolution.x / resolution.y;
+    // float radius = length(dist_vec * float2(aspect, 1.0));
 
-    // --- Green ---
-    vec2 norm_pos_g = uv / center;
-    float r2_g = dot(norm_pos_g, norm_pos_g);
-    vec2 uv_g_dist = uv * (1.0 + dist_g * r2_g);
-    vec2 coord_g = (uv_g_dist / zoom_g) + center + offset_g;
+    // Simple radial distance
+    float r2 = dot(dist_vec, dist_vec);
 
-    // --- Blue ---
-    vec2 norm_pos_b = uv / center;
-    float r2_b = dot(norm_pos_b, norm_pos_b);
-    vec2 uv_b_dist = uv * (1.0 + dist_b * r2_b);
-    vec2 coord_b = (uv_b_dist / zoom_b) + center + offset_b;
+    // Falloff: power of radius
+    float f = pow(r2, falloff);
+
+    // Displacement
+    // R scales out, B scales in (or vice versa)
+    float2 offset = dist_vec * (f * intensity);
 
     // Sample
-    // Use the alpha from the original coordinate (or Green/Main channel) to avoid alpha mess?
-    // Using green (center) for alpha seems standard, or just max.
-    // Let's use Green as anchor.
+    // R: shifted out
+    // G: center
+    // B: shifted in
+
+    float2 uv_r = center_uv + dist_vec + offset;
+    float2 uv_g = center_uv + dist_vec;
+    float2 uv_b = center_uv + dist_vec - offset;
+
+    // Bounds check? Skia handles clamping usually.
+
+    half r = content.eval(uv_r * resolution).r;
+    half g = content.eval(uv_g * resolution).g;
+    half b = content.eval(uv_b * resolution).b;
+    half a = content.eval(uv_g * resolution).a;
     
-    half4 color = half4(
-        content.eval(coord_r).r,
-        content.eval(coord_g).g,
-        content.eval(coord_b).b,
-        content.eval(coord_g).a 
-    );
-    
-    return color;
+    return half4(r, g, b, a);
 }

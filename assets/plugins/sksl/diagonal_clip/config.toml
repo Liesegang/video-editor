@@ -1,0 +1,42 @@
+id = "diagonal_clip"
+name = "Diagonal Clip"
+category = "Geometry"
+
+[[properties]]
+name = "angle"
+label = "Angle"
+type = "Float"
+min = 0.0
+max = 360.0
+default = 45.0
+step = 1.0
+
+[[properties]]
+name = "position"
+label = "Position"
+type = "Float"
+min = -2.0
+max = 2.0
+default = 0.0
+step = 0.01
+
+[[properties]]
+name = "softness"
+label = "Softness"
+type = "Float"
+min = 0.0
+max = 100.0
+default = 0.0
+step = 1.0
+
+[[properties]]
+name = "invert"
+label = "Invert"
+type = "Bool"
+default = false
+
+[[properties]]
+name = "resolution"
+label = "Resolution"
+type = "Vec2"
+default = [1920.0, 1080.0]

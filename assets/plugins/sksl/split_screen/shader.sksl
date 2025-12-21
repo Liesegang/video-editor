@@ -1,0 +1,50 @@
+uniform shader content;
+uniform float2 count; // x, y divisions
+uniform float margin; // in UV space or pixels? Let's say UV 0..1
+uniform float2 resolution;
+
+half4 main(float2 p) {
+    float2 uv = p / resolution;
+
+    // Scale UV by count
+    float2 scaled_uv = uv * count;
+
+    // Cell index
+    float2 cell_idx = floor(scaled_uv);
+
+    // Local UV 0..1
+    float2 local_uv = fract(scaled_uv);
+
+    // Margin logic
+    // We want to discard pixels near the edge of the cell?
+    // Or shrink the image?
+    // Usually "Margin" in split screen puts space between screens.
+
+    // If we want space between, we mask.
+    // Center of local_uv is 0.5.
+    // If local_uv is outside (margin/2 .. 1-margin/2), discard.
+    // Normalized margin.
+
+    float2 dist_from_center = abs(local_uv - 0.5);
+    // Max allowed is 0.5 - margin/2
+
+    if (dist_from_center.x > (0.5 - margin/2.0) || dist_from_center.y > (0.5 - margin/2.0)) {
+        return half4(0); // Transparent/Black gap
+    }
+
+    // If we want to scale the image to fit the remaining space?
+    // Or just clip? "Render original image in each cell".
+    // Usually means full image 0..1 is mapped to the cell.
+    // So we just sample content.eval(local_uv * resolution) if we ignore margin scaling.
+
+    // If we want to account for margin scaling (so image isn't cut):
+    // local_uv goes from 0..1.
+    // Valid range is m/2 .. 1-m/2.
+    // We want to map m/2 -> 0 and 1-m/2 -> 1.
+
+    // float2 content_uv = (local_uv - margin/2.0) / (1.0 - margin);
+    // But let's stick to simple "render original image" + mask.
+    // If user didn't ask for scaling, just full image in cell.
+
+    return content.eval(local_uv * resolution);
+}

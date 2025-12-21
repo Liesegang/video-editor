@@ -1,0 +1,39 @@
+id = "speed_lines"
+name = "Speed Lines"
+category = "Stylize"
+
+[[properties]]
+name = "center"
+label = "Center"
+type = "Vec2"
+default = [960.0, 540.0]
+
+[[properties]]
+name = "density"
+label = "Density"
+type = "Float"
+min = 1.0
+max = 100.0
+default = 40.0
+step = 1.0
+
+[[properties]]
+name = "intensity"
+label = "Intensity"
+type = "Float"
+min = 0.0
+max = 1.0
+default = 0.5
+step = 0.01
+
+[[properties]]
+name = "seed"
+label = "Seed"
+type = "Float"
+default = 0.0
+
+[[properties]]
+name = "resolution"
+label = "Resolution"
+type = "Vec2"
+default = [1920.0, 1080.0]
