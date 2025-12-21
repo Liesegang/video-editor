@@ -24,6 +24,10 @@ pub fn show_keyframe_dialog(
         .collapsible(false)
         .resizable(true)
         .show(ctx, |ui| {
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                should_close = true;
+            }
+
             let state = &mut editor_context.keyframe_dialog;
 
             // Sanitize values to prevent panics
@@ -230,8 +234,7 @@ pub fn show_keyframe_dialog(
                 _ => {}
             }
 
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
+            super::dialog_footer(ui, |ui| {
                 if ui.button("Close").clicked() {
                     should_close = true;
                 }

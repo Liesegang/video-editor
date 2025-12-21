@@ -568,6 +568,11 @@ impl CompositionDialog {
             .fixed_size([380.0, 300.0])
             .show(ctx, |ui| {
                 let mut close_dialog = false;
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    self.confirmed = false;
+                    close_dialog = true;
+                }
+
                 // Store initial values to detect changes for "(Edited)" suffix
                 let initial_values = (self.width, self.height, self.fps);
                 let initial_active_preset = self.active_preset.clone();
@@ -724,9 +729,7 @@ impl CompositionDialog {
                             ui.end_row();
                         });
 
-                    ui.add_space(10.0);
-
-                    ui.horizontal(|ui| {
+                    super::dialog_footer(ui, |ui| {
                         if ui.button("OK").clicked() {
                             self.confirmed = true;
                             close_dialog = true;
