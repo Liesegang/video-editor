@@ -153,8 +153,16 @@ pub trait PropertyPlugin: Plugin {
 
 #[derive(Debug, Clone)]
 pub enum LoadRequest {
-    Image { path: String },
-    VideoFrame { path: String, frame_number: u64 },
+    Image {
+        path: String,
+    },
+    VideoFrame {
+        path: String,
+        frame_number: u64,
+        stream_index: Option<usize>,
+        input_color_space: Option<String>,
+        output_color_space: Option<String>,
+    },
 }
 
 pub enum LoadResponse {
@@ -170,6 +178,7 @@ pub struct AssetMetadata {
     pub fps: Option<f64>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub stream_index: Option<usize>,
 }
 
 pub trait LoadPlugin: Plugin {
@@ -185,6 +194,10 @@ pub trait LoadPlugin: Plugin {
         // but for efficiency plugins should override this).
         // For now, simpler to leave default as None or implement naive fallback.
         // Let's rely on implementation to do it right.
+        None
+    }
+
+    fn get_available_streams(&self, _path: &str) -> Option<Vec<AssetMetadata>> {
         None
     }
 
@@ -206,6 +219,10 @@ pub trait LoadPlugin: Plugin {
 
     fn get_dimensions(&self, _path: &str) -> Option<(u32, u32)> {
         None
+    }
+
+    fn priority(&self) -> u32 {
+        0
     }
 }
 
@@ -389,6 +406,12 @@ impl LoadRepository {
     pub fn get(&self, id: &str) -> Option<&Arc<dyn LoadPlugin>> {
         self.plugins.get(id)
     }
+
+    pub fn get_sorted_plugins(&self) -> Vec<Arc<dyn LoadPlugin>> {
+        let mut plugins: Vec<_> = self.plugins.values().cloned().collect();
+        plugins.sort_by(|a, b| b.priority().cmp(&a.priority()));
+        plugins
+    }
 }
 
 pub struct ExportRepository {
@@ -565,7 +588,7 @@ impl PluginManager {
         cache: &CacheManager,
     ) -> Result<LoadResponse, LibraryError> {
         let inner = self.inner.read().unwrap();
-        for plugin in inner.load_plugins.plugins.values() {
+        for plugin in inner.load_plugins.get_sorted_plugins() {
             if plugin.supports(request) {
                 return plugin.load(request, cache);
             }
@@ -578,7 +601,8 @@ impl PluginManager {
 
     pub fn get_metadata(&self, path: &str) -> Option<AssetMetadata> {
         let inner = self.inner.read().unwrap();
-        for plugin in inner.load_plugins.plugins.values() {
+
+        for plugin in inner.load_plugins.get_sorted_plugins() {
             if let Some(metadata) = plugin.get_metadata(path) {
                 return Some(metadata);
             }
@@ -586,9 +610,21 @@ impl PluginManager {
         None
     }
 
+    pub fn get_available_streams(&self, path: &str) -> Option<Vec<AssetMetadata>> {
+        let inner = self.inner.read().unwrap();
+
+        for plugin in inner.load_plugins.get_sorted_plugins() {
+            if let Some(streams) = plugin.get_available_streams(path) {
+                return Some(streams);
+            }
+        }
+        None
+    }
+
     pub fn probe_asset_kind(&self, path: &str) -> AssetKind {
         let inner = self.inner.read().unwrap();
-        for plugin in inner.load_plugins.plugins.values() {
+
+        for plugin in inner.load_plugins.get_sorted_plugins() {
             if let Some(kind) = plugin.get_asset_kind(path) {
                 return kind;
             }
@@ -598,7 +634,8 @@ impl PluginManager {
 
     pub fn get_duration(&self, path: &str) -> Option<f64> {
         let inner = self.inner.read().unwrap();
-        for plugin in inner.load_plugins.plugins.values() {
+
+        for plugin in inner.load_plugins.get_sorted_plugins() {
             if let Some(duration) = plugin.get_duration(path) {
                 return Some(duration);
             }
@@ -608,7 +645,8 @@ impl PluginManager {
 
     pub fn get_fps(&self, path: &str) -> Option<f64> {
         let inner = self.inner.read().unwrap();
-        for plugin in inner.load_plugins.plugins.values() {
+
+        for plugin in inner.load_plugins.get_sorted_plugins() {
             if let Some(fps) = plugin.get_fps(path) {
                 return Some(fps);
             }
@@ -618,7 +656,7 @@ impl PluginManager {
 
     pub fn get_dimensions(&self, path: &str) -> Option<(u32, u32)> {
         let inner = self.inner.read().unwrap();
-        for plugin in inner.load_plugins.plugins.values() {
+        for plugin in inner.load_plugins.get_sorted_plugins() {
             if let Some(dimensions) = plugin.get_dimensions(path) {
                 return Some(dimensions);
             }

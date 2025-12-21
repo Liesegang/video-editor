@@ -28,6 +28,26 @@ pub struct ExportConfig {
     #[serde(default)]
     pub pixel_format: Option<String>,
     #[serde(default)]
+    pub width: Option<u64>,
+    #[serde(default)]
+    pub height: Option<u64>,
+    #[serde(default)]
+    pub fps: Option<f64>,
+    #[serde(default)]
+    pub video_bitrate: Option<u64>,
+    #[serde(default)]
+    pub audio_codec: Option<String>,
+    #[serde(default)]
+    pub audio_bitrate: Option<u64>,
+    #[serde(default)]
+    pub audio_channels: Option<u16>,
+    #[serde(default)]
+    pub audio_sample_rate: Option<u32>,
+    #[serde(default)]
+    pub crf: Option<u8>,
+    #[serde(default)]
+    pub preset: Option<String>,
+    #[serde(default)]
     pub ffmpeg_path: Option<String>,
     #[serde(default)]
     pub parameters: HashMap<String, Value>,
@@ -59,6 +79,10 @@ impl Project {
 
     pub fn get_composition_mut(&mut self, id: Uuid) -> Option<&mut Composition> {
         self.compositions.iter_mut().find(|c| c.id == id)
+    }
+
+    pub fn get_composition(&self, id: Uuid) -> Option<&Composition> {
+        self.compositions.iter().find(|c| c.id == id)
     }
 
     pub fn remove_composition(&mut self, id: Uuid) -> Option<Composition> {
@@ -113,6 +137,10 @@ impl Composition {
 
     pub fn get_track_mut(&mut self, id: Uuid) -> Option<&mut Track> {
         self.tracks.iter_mut().find(|t| t.id == id)
+    }
+
+    pub fn get_track(&self, id: Uuid) -> Option<&Track> {
+        self.tracks.iter().find(|t| t.id == id)
     }
 
     pub fn remove_track(&mut self, id: Uuid) -> Option<Track> {

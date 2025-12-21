@@ -1,0 +1,12 @@
+id = "pixelate"
+name = "Pixelate"
+category = "Stylize"
+
+[[properties]]
+name = "cellSize"
+label = "Cell Size"
+type = "Float"
+min = 1.0
+max = 100.0
+default = 10.0
+step = 1.0

@@ -58,5 +58,5 @@ pub trait Renderer {
         None
     }
 
-    fn set_sharing_context(&mut self, _handle: usize) {}
+    fn set_sharing_context(&mut self, _handle: usize, _hwnd: Option<isize>) {}
 }

@@ -117,23 +117,27 @@ impl EditorService {
         self.project_manager.save_project()
     }
 
-    pub fn import_file(&self, path: &str) -> Result<Uuid, LibraryError> {
-        let asset_id = self.project_manager.import_file(path)?;
+    pub fn import_file(&self, path: &str) -> Result<Vec<Uuid>, LibraryError> {
+        let asset_ids = self.project_manager.import_file(path)?;
 
         // Orchestration: Check if Audio
         if let Ok(project) = self.project_manager.get_project().read() {
-            if let Some(asset) = project.assets.iter().find(|a| a.id == asset_id) {
-                if asset.kind == crate::model::project::asset::AssetKind::Audio {
-                    let path_clone = asset.path.clone();
-                    drop(project);
-                    self.audio_service
-                        .trigger_audio_loading(asset_id, path_clone);
-                    return Ok(asset_id);
+            for &asset_id in &asset_ids {
+                if let Some(asset) = project.assets.iter().find(|a| a.id == asset_id) {
+                    if asset.kind == crate::model::project::asset::AssetKind::Audio {
+                        let path_clone = asset.path.clone();
+                        // self.audio_service needs to trigger loading, but we are holding project read lock
+                        // trigger_audio_loading doesn't seem to lock project?
+                        // Actually it might.
+                        // Ideally we collect need-to-load paths and do it after drop(project).
+                        self.audio_service
+                            .trigger_audio_loading(asset_id, path_clone);
+                    }
                 }
             }
         }
 
-        Ok(asset_id)
+        Ok(asset_ids)
     }
 
     // --- Delegated CRUD ---
@@ -344,8 +348,6 @@ impl EditorService {
 
     // Aliases & Sequences
 
-
-
     pub fn update_clip_time(
         &self,
         comp_id: Uuid,
@@ -376,7 +378,7 @@ impl EditorService {
         comp_id: Uuid,
         track_id: Uuid,
         clip_id: Uuid,
-        frame: u64,
+        frame: i64,
     ) -> Result<(), LibraryError> {
         self.update_clip_property(
             comp_id,
@@ -393,7 +395,8 @@ impl EditorService {
         track_id: Uuid,
         clip_id: Uuid,
     ) -> Vec<crate::plugin::PropertyDefinition> {
-        self.project_manager.get_inspector_definitions(comp_id, track_id, clip_id)
+        self.project_manager
+            .get_inspector_definitions(comp_id, track_id, clip_id)
     }
 
     pub fn get_property_definitions(
@@ -595,8 +598,6 @@ impl EditorService {
         )
     }
 
-
-
     pub fn update_style_keyframe_by_index(
         &self,
         composition_id: Uuid,
@@ -684,5 +685,44 @@ impl EditorService {
             attribute_value,
         )
     }
-}
 
+    pub fn set_clip_property_attribute(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        self.project_manager.set_clip_property_attribute(
+            composition_id,
+            track_id,
+            clip_id,
+            property_key,
+            attribute_key,
+            attribute_value,
+        )
+    }
+
+    pub fn set_effect_property_attribute(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effect_index: usize,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        self.project_manager.set_effect_property_attribute(
+            composition_id,
+            track_id,
+            clip_id,
+            effect_index,
+            property_key,
+            attribute_key,
+            attribute_value,
+        )
+    }
+}

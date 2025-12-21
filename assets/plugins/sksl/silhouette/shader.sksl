@@ -1,0 +1,10 @@
+uniform shader content;
+uniform half4 color;
+
+
+half4 main(float2 p) {
+    half4 src = content.eval(p);
+    // Apply the silhouette color, but modulated by the source alpha.
+    // This ensures transparent areas remain transparent.
+    return half4(color.rgb * src.a, src.a); 
+}

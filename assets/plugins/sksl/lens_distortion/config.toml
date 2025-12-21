@@ -1,0 +1,24 @@
+id = "lens_distortion"
+name = "Lens Distortion"
+category = "Distortion"
+
+[[properties]]
+name = "strength"
+label = "Strength"
+type = "Float"
+min = -10.0
+max = 10.0
+default = 0.0
+step = 0.1
+
+[[properties]]
+name = "center"
+label = "Center"
+type = "Vec2"
+default = [960.0, 540.0]
+
+[[properties]]
+name = "resolution"
+label = "Resolution"
+type = "Vec2"
+default = [1920.0, 1080.0]

@@ -2,6 +2,7 @@ use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, Style};
 use library::model::project::project::{Composition, Project};
 use library::EditorService;
+use raw_window_handle::HasRawWindowHandle;
 use std::sync::{Arc, RwLock};
 
 use crate::action::{
@@ -130,8 +131,24 @@ impl MyApp {
         // Zero-Copy GPU Sharing: Capture the main thread's OpenGL context handle
         // and pass it to the background render server. This enables sharing of textures.
         if let Some(handle) = library::rendering::skia_utils::get_current_context_handle() {
-            log::info!("MyApp: Capturing main GL context handle: {}", handle);
-            app.render_server.set_sharing_context(handle);
+            let hwnd = if let Ok(raw_handle) = cc.raw_window_handle() {
+                #[cfg(target_os = "windows")]
+                match raw_handle {
+                    raw_window_handle::RawWindowHandle::Win32(h) => Some(h.hwnd.get() as isize),
+                    _ => None,
+                }
+                #[cfg(not(target_os = "windows"))]
+                None
+            } else {
+                None
+            };
+
+            log::info!(
+                "MyApp: Capturing main GL context handle: {}, HWND: {:?}",
+                handle,
+                hwnd
+            );
+            app.render_server.set_sharing_context(handle, hwnd);
         } else {
             log::warn!("MyApp: Failed to capture main GL context handle. Preview might fall back to CPU copy.");
         }

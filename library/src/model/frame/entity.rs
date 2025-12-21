@@ -13,6 +13,10 @@ pub struct ImageSurface {
     pub file_path: String,
     #[serde(default)]
     pub effects: Vec<ImageEffect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_color_space: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_color_space: Option<String>,
     #[serde(flatten)]
     pub transform: Transform,
 }

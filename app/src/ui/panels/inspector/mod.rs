@@ -97,7 +97,8 @@ pub fn inspector_panel(
             let current_time = editor_context.timeline.current_time as f64;
 
             // --- Dynamic Properties ---
-            let definitions = project_service.get_property_definitions(comp_id, track_id, selected_entity_id);
+            let definitions =
+                project_service.get_property_definitions(comp_id, track_id, selected_entity_id);
             let fps = project_service
                 .get_composition(comp_id)
                 .map(|c| c.fps)
@@ -138,10 +139,7 @@ pub fn inspector_panel(
                     let mut current_grid_defs = Vec::new();
 
                     for def in defs {
-                        let is_multiline = matches!(
-                            def.ui_type,
-                            PropertyUiType::MultilineText
-                        );
+                        let is_multiline = matches!(def.ui_type, PropertyUiType::MultilineText);
                         if is_multiline {
                             // Push existing grid chunk if any
                             if !current_grid_defs.is_empty() {
@@ -153,8 +151,8 @@ pub fn inspector_panel(
                             }
                             // Push this as full width chunk
                             chunks.push(Chunk {
-                                    is_grid: false,
-                                    defs: vec![def],
+                                is_grid: false,
+                                defs: vec![def],
                             });
                         } else {
                             current_grid_defs.push(def);
@@ -195,7 +193,7 @@ pub fn inspector_panel(
                                                         handled = true;
                                                     }
                                                 }
-                                                
+
                                                 if !handled {
                                                     match project_service.update_property_or_keyframe(
                                                         comp_id, track_id, selected_entity_id, &name, current_time, val, None
@@ -239,15 +237,19 @@ pub fn inspector_panel(
                                                 }
                                                 needs_refresh = true;
                                             }
-                                            crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, _key, _val) => {
-                                                 // TODO: Implement set_clip_property_attribute
-                                                 println!("SetAttribute for prop {} not implemented", name);
+                                            crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, key, val) => {
+                                                 match project_service.set_clip_property_attribute(
+                                                     comp_id, track_id, selected_entity_id, &name, &key, val
+                                                 ) {
+                                                      Ok(_) => { needs_refresh = true; },
+                                                      Err(e) => eprintln!("Failed to set attribute {} for property {}: {:?}", key, name, e),
+                                                 }
                                             }
                                         }
                                     }
                                 });
                         } else {
-                             // Full Width Render
+                            // Full Width Render
                             for def in &chunk.defs {
                                 ui.add_space(5.0);
                                 let actions = render_property_rows(
@@ -285,7 +287,7 @@ pub fn inspector_panel(
                                                         handled = true;
                                                     }
                                                 }
-                                                
+
                                                 if !handled {
                                                     match project_service.update_property_or_keyframe(
                                                         comp_id, track_id, selected_entity_id, &name, current_time, val, None
@@ -329,8 +331,13 @@ pub fn inspector_panel(
                                                 }
                                                 needs_refresh = true;
                                         }
-                                        crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, _key, _val) => {
-                                             println!("SetAttribute for prop {} not implemented", name);
+                                        crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, key, val) => {
+                                             match project_service.set_clip_property_attribute(
+                                                 comp_id, track_id, selected_entity_id, &name, &key, val
+                                             ) {
+                                                  Ok(_) => { needs_refresh = true; },
+                                                  Err(e) => eprintln!("Failed to set attribute {} for property {}: {:?}", key, name, e),
+                                             }
                                         }
                                     }
                                 }
@@ -376,7 +383,7 @@ pub fn inspector_panel(
             egui::Grid::new("entity_timing")
                 .striped(true)
                 .show(ui, |ui| {
-                     // In Frame
+                    // In Frame
                     ui.label("In Frame");
                     let mut current_in_frame_f32 = in_frame as f32;
                     let response = ui.add(
@@ -442,7 +449,7 @@ pub fn inspector_panel(
                                 comp_id,
                                 track_id,
                                 selected_entity_id,
-                                current_source_begin_frame_f32 as u64,
+                                current_source_begin_frame_f32 as i64,
                             )
                             .ok();
                         needs_refresh = true;

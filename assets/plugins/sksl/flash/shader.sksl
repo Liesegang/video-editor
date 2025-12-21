@@ -1,0 +1,35 @@
+uniform shader content;
+uniform float intensity;
+uniform half4 color;
+
+half4 main(float2 p) {
+    half4 src = content.eval(p);
+
+    // Additive flash
+    // src + color * intensity
+    // Ensure alpha logic?
+    // Flash usually lights up the whole screen or just the object?
+    // "Flash (点滅/閃光)" -> could be global flash.
+
+    // "Additive blend solid color based on intensity."
+
+    half4 flash_color = color * intensity;
+
+    // Add to RGB, preserve original alpha? Or add to alpha too?
+    // Usually flash makes things whiter/brighter.
+
+    return src + flash_color * src.a; // Flash only where content exists?
+    // Or global flash? "Flash" often used for impact frames (full screen white).
+    // If global: return src + flash_color;
+    // But if applied to a layer/object, it should flash the object.
+    // Let's assume object flash (safe default).
+
+    // Actually, "Additive blend solid color".
+    // Let's do:
+    // half3 out_rgb = src.rgb + color.rgb * intensity * src.a; (Pre-multiplied safe)
+    // No, if src.a is 0, we don't want flash?
+    // If it's a "Flash" filter on a clip, it flashes the clip.
+    // If it's a full screen flash, it's on a solid layer.
+
+    return src + flash_color; // Additive.
+}

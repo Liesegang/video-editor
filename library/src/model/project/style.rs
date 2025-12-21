@@ -6,7 +6,8 @@ use uuid::Uuid;
 pub struct StyleInstance {
     pub id: Uuid,
     pub style_type: String, // "fill" or "stroke"
-    #[serde(default)] // Ensure backward compatibility if deserializing from older JSON (though this is new struct)
+    #[serde(default)]
+    // Ensure backward compatibility if deserializing from older JSON (though this is new struct)
     pub properties: PropertyMap,
 }
 

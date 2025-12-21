@@ -1,0 +1,30 @@
+id = "hsv_adjust"
+name = "HSV Adjust"
+category = "Color & Tone"
+
+[[properties]]
+name = "hue"
+label = "Hue Shift"
+type = "Float"
+min = 0.0
+max = 360.0
+default = 0.0
+step = 1.0
+
+[[properties]]
+name = "saturation"
+label = "Saturation"
+type = "Float"
+min = 0.0
+max = 2.0
+default = 1.0
+step = 0.01
+
+[[properties]]
+name = "value"
+label = "Value"
+type = "Float"
+min = 0.0
+max = 2.0
+default = 1.0
+step = 0.01

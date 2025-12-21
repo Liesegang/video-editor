@@ -40,13 +40,31 @@ impl LoadPlugin for FfmpegVideoLoader {
         matches!(request, LoadRequest::VideoFrame { .. })
     }
 
+    fn priority(&self) -> u32 {
+        10
+    }
+
     fn load(
         &self,
         request: &LoadRequest,
         cache: &CacheManager,
     ) -> Result<LoadResponse, LibraryError> {
-        if let LoadRequest::VideoFrame { path, frame_number } = request {
-            if let Some(image) = cache.get_video_frame(path, *frame_number) {
+        if let LoadRequest::VideoFrame {
+            path,
+            frame_number,
+            stream_index,
+            input_color_space,
+            output_color_space,
+        } = request
+        {
+            // Cache key needs to include stream_index to differentiate streams of same file
+            let cache_key = if let Some(idx) = stream_index {
+                format!("{}?stream={}", path, idx)
+            } else {
+                path.clone()
+            };
+
+            if let Some(image) = cache.get_video_frame(&cache_key, *frame_number) {
                 return Ok(LoadResponse::Image(image));
             }
 
@@ -54,14 +72,24 @@ impl LoadPlugin for FfmpegVideoLoader {
 
             let image = {
                 let mut readers = self.readers.lock().unwrap();
-                let reader = match readers.entry(path.clone()) {
+                // We use the same cache key logic for the readers map
+                let reader = match readers.entry(cache_key.clone()) {
                     Entry::Occupied(entry) => entry.into_mut(),
-                    Entry::Vacant(entry) => entry.insert(VideoReader::new(path)?),
+                    Entry::Vacant(entry) => {
+                        // Pass stream_index to VideoReader
+                        entry.insert(VideoReader::new_with_stream(path, *stream_index)?)
+                    }
                 };
+
+                // Configure Color Space if provided
+                if let (Some(src), Some(dst)) = (input_color_space, output_color_space) {
+                    reader.set_color_space(src, dst);
+                }
+
                 reader.decode_frame(*frame_number)?
             };
 
-            cache.put_video_frame(path, *frame_number, &image);
+            cache.put_video_frame(&cache_key, *frame_number, &image);
             Ok(LoadResponse::Image(image))
         } else {
             Err(LibraryError::Plugin(
@@ -70,15 +98,37 @@ impl LoadPlugin for FfmpegVideoLoader {
         }
     }
 
+    fn get_available_streams(&self, path: &str) -> Option<Vec<crate::plugin::AssetMetadata>> {
+        let ext = std::path::Path::new(path)
+            .extension()?
+            .to_str()?
+            .to_lowercase();
+
+        // Explicitly reject image extensions to let NativeImageLoader handle them
+        match ext.as_str() {
+            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
+                return None;
+            }
+            _ => {}
+        }
+
+        if let Ok(probe) = MediaProbe::new(path) {
+            return Some(probe.get_available_streams());
+        }
+        None
+    }
+
     fn get_asset_kind(&self, path: &str) -> Option<crate::model::project::asset::AssetKind> {
         let ext = std::path::Path::new(path)
             .extension()?
             .to_str()?
             .to_lowercase();
-        
+
         // Explicitly reject image extensions to let NativeImageLoader handle them
         match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "bmp" | "webp" => return None,
+            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
+                return None;
+            }
             _ => {}
         }
 
@@ -159,7 +209,9 @@ impl LoadPlugin for FfmpegVideoLoader {
 
         // Explicitly reject image extensions to let NativeImageLoader handle them
         match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "bmp" | "webp" => return None,
+            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
+                return None;
+            }
             _ => {}
         }
 
@@ -173,6 +225,7 @@ impl LoadPlugin for FfmpegVideoLoader {
                     fps: Some(reader.get_fps()),
                     width: Some(reader.get_dimensions().0),
                     height: Some(reader.get_dimensions().1),
+                    stream_index: None, // Default stream
                 });
             }
         }
@@ -194,6 +247,7 @@ impl LoadPlugin for FfmpegVideoLoader {
                 fps: Some(fps),
                 width: Some(w),
                 height: Some(h),
+                stream_index: None, // Default stream
             });
         }
 
@@ -213,6 +267,7 @@ impl LoadPlugin for FfmpegVideoLoader {
                 fps: Some(probe.get_fps()),
                 width: Some(probe.get_dimensions().0),
                 height: Some(probe.get_dimensions().1),
+                stream_index: None, // Implicit best stream
             });
         }
 

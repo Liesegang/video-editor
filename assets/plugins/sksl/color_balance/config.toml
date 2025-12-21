@@ -1,0 +1,21 @@
+id = "color_balance"
+name = "Color Balance"
+category = "Color & Tone"
+
+[[properties]]
+name = "shadows"
+label = "Shadows"
+type = "Vec3"
+default = [0.0, 0.0, 0.0]
+
+[[properties]]
+name = "midtones"
+label = "Midtones"
+type = "Vec3"
+default = [0.0, 0.0, 0.0]
+
+[[properties]]
+name = "highlights"
+label = "Highlights"
+type = "Vec3"
+default = [0.0, 0.0, 0.0]

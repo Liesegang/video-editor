@@ -1,14 +1,13 @@
 pub mod asset;
+pub mod clip_helpers;
 pub mod project;
 pub mod property;
-pub mod style;
-pub mod clip_helpers; // Added
+pub mod style; // Added
 
 use crate::model::project::property::{PropertyMap, Vec2};
 use crate::model::project::style::StyleInstance;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use serde_json;
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -62,21 +61,21 @@ impl std::fmt::Display for TrackClipKind {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct TrackClip {
-    pub id: Uuid,                   // Added UUID field
-    pub reference_id: Option<Uuid>, // ID of the referenced Asset or Composition
+    pub id: Uuid,
+    pub reference_id: Option<Uuid>,
     #[serde(rename = "type")]
     pub kind: TrackClipKind,
     #[serde(default)]
-    pub in_frame: u64, // Renamed from start_time (timeline start in frames)
+    pub in_frame: u64,
     #[serde(default)]
-    pub out_frame: u64, // Renamed from end_time (timeline end in frames)
+    pub out_frame: u64,
     #[serde(default)]
-    pub source_begin_frame: u64, // Frame where source content begins
+    pub source_begin_frame: i64, // Changed from u64 to i64
     #[serde(default)]
-    pub duration_frame: Option<u64>, // Duration of source content in frames, None for static/infinite
+    pub duration_frame: Option<u64>,
 
     #[serde(default = "default_fps")]
-    pub fps: f64, // This fps likely refers to the source content fps
+    pub fps: f64,
 
     #[serde(default)]
     pub properties: PropertyMap,
@@ -114,10 +113,10 @@ impl TrackClip {
         id: Uuid,
         reference_id: Option<Uuid>,
         kind: TrackClipKind,
-        in_frame: u64,               // Renamed parameter
-        out_frame: u64,              // Renamed parameter
-        source_begin_frame: u64,     // New parameter
-        duration_frame: Option<u64>, // New parameter
+        in_frame: u64,
+        out_frame: u64,
+        source_begin_frame: i64, // Changed from u64 to i64
+        duration_frame: Option<u64>,
         fps: f64,
         properties: PropertyMap,
         styles: Vec<StyleInstance>,
@@ -129,7 +128,7 @@ impl TrackClip {
             kind,
             in_frame,
             out_frame,
-            source_begin_frame,
+            source_begin_frame, // Changed to i64
             duration_frame,
             fps,
             properties,
@@ -139,9 +138,15 @@ impl TrackClip {
     }
 
     // Ported helper constructors from Entity
-    pub fn default_property_definitions(&self, canvas_width: u64, canvas_height: u64, clip_width: u64, clip_height: u64) -> Vec<crate::plugin::PropertyDefinition> {
-        use crate::plugin::{PropertyDefinition, PropertyUiType};
+    pub fn default_property_definitions(
+        &self,
+        canvas_width: u64,
+        canvas_height: u64,
+        clip_width: u64,
+        clip_height: u64,
+    ) -> Vec<crate::plugin::PropertyDefinition> {
         use crate::model::project::property::PropertyValue;
+        use crate::plugin::{PropertyDefinition, PropertyUiType};
         use ordered_float::OrderedFloat;
 
         let mut definitions = Vec::new();
@@ -308,7 +313,7 @@ impl TrackClip {
         file_path: &str,
         in_frame: u64,
         out_frame: u64,
-        source_begin_frame: u64,
+        source_begin_frame: i64,
         duration_frame: u64,
         fps: f64,
         canvas_width: u32,
@@ -378,6 +383,7 @@ impl TrackClip {
         out_frame: u64,
         canvas_width: u32,
         canvas_height: u32,
+        fps: f64,
     ) -> Self {
         let mut props = PropertyMap::new();
         props.set(
@@ -430,7 +436,7 @@ impl TrackClip {
             out_frame,
             0,
             None, // Image is static
-            0.0,
+            fps,
             props,
             Vec::new(),
             Vec::new(),
@@ -438,11 +444,12 @@ impl TrackClip {
     }
 
     pub fn create_text(
-        text: &str, 
-        in_frame: u64, 
+        text: &str,
+        in_frame: u64,
         out_frame: u64,
         canvas_width: u32,
         canvas_height: u32,
+        fps: f64,
     ) -> Self {
         let mut props = PropertyMap::new();
         // User requested default: "this is sample text", Arial, White
@@ -470,12 +477,25 @@ impl TrackClip {
         let mut styles = Vec::new();
         // Default Fill
         let mut fill_props = PropertyMap::new();
-        fill_props.set("color".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Color(crate::model::frame::color::Color { r: 255, g: 255, b: 255, a: 255 })
-        ));
-         fill_props.set("offset".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))
-        ));
+        fill_props.set(
+            "color".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Color(
+                    crate::model::frame::color::Color {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                        a: 255,
+                    },
+                ),
+            ),
+        );
+        fill_props.set(
+            "offset".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
 
         styles.push(StyleInstance::new("fill", fill_props));
 
@@ -551,7 +571,7 @@ impl TrackClip {
             out_frame,
             0,
             None, // Text is static
-            0.0,
+            fps,
             props,
             styles,
             Vec::new(),
@@ -559,10 +579,11 @@ impl TrackClip {
     }
 
     pub fn create_shape(
-        in_frame: u64, 
+        in_frame: u64,
         out_frame: u64,
         canvas_width: u32,
         canvas_height: u32,
+        fps: f64,
     ) -> Self {
         let mut props = PropertyMap::new();
 
@@ -578,28 +599,57 @@ impl TrackClip {
 
         // Default Styles
         let mut styles = Vec::new();
-        
+
         // Fill Red
         let mut fill_props = PropertyMap::new();
-        fill_props.set("color".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Color(crate::model::frame::color::Color { r: 255, g: 0, b: 0, a: 255 })
-        ));
-        fill_props.set("offset".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))
-        ));
+        fill_props.set(
+            "color".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Color(
+                    crate::model::frame::color::Color {
+                        r: 255,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    },
+                ),
+            ),
+        );
+        fill_props.set(
+            "offset".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
         styles.push(StyleInstance::new("fill", fill_props));
 
         // Stroke White
         let mut stroke_props = PropertyMap::new();
-        stroke_props.set("color".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Color(crate::model::frame::color::Color { r: 255, g: 255, b: 255, a: 255 })
-        ));
-        stroke_props.set("width".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Number(OrderedFloat(5.0))
-        ));
-         stroke_props.set("offset".to_string(), crate::model::project::property::Property::constant(
-             crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0))
-        ));
+        stroke_props.set(
+            "color".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Color(
+                    crate::model::frame::color::Color {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                        a: 255,
+                    },
+                ),
+            ),
+        );
+        stroke_props.set(
+            "width".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(5.0)),
+            ),
+        );
+        stroke_props.set(
+            "offset".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+        );
         styles.push(StyleInstance::new("stroke", stroke_props));
 
         props.set(
@@ -664,7 +714,7 @@ impl TrackClip {
             out_frame,
             0,
             None,
-            0.0,
+            fps,
             props,
             styles,
             Vec::new(),
@@ -672,10 +722,11 @@ impl TrackClip {
     }
 
     pub fn create_sksl(
-        in_frame: u64, 
+        in_frame: u64,
         out_frame: u64,
         canvas_width: u32,
         canvas_height: u32,
+        fps: f64,
     ) -> Self {
         let mut props = PropertyMap::new();
 
@@ -747,7 +798,7 @@ half4 main(float2 fragCoord) {
             out_frame,
             0,
             None,
-            0.0,
+            fps,
             props,
             Vec::new(),
             Vec::new(),
@@ -768,5 +819,5 @@ half4 main(float2 fragCoord) {
 }
 
 const fn default_fps() -> f64 {
-    0.0
+    30.0
 }

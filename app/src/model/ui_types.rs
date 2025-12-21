@@ -50,7 +50,7 @@ impl Tab {
             Tab::Inspector => "Inspector",
             Tab::Assets => "Assets",
             Tab::GraphEditor => "Graph Editor",
-            Tab::NodeGraph => "Node Graph",
+            Tab::NodeGraph => "Node Editor",
         }
     }
 }

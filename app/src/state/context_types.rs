@@ -174,6 +174,7 @@ pub struct InteractionState {
 
     // Graph Editor Selection: (Property NameRef, Keyframe Index)
     pub selected_keyframe: Option<(String, usize)>,
+    pub editing_keyframe: Option<(String, usize)>,
 
     // Body Drag State for absolute delta calculation
     pub body_drag_state: Option<BodyDragState>,

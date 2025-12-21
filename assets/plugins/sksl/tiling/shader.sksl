@@ -1,0 +1,18 @@
+uniform shader content;
+uniform float scale;
+uniform float2 scroll;
+uniform float2 resolution;
+
+half4 main(float2 p) {
+    float2 uv = p / resolution;
+
+    // Tiling logic
+    // uv = fract(uv * scale + scroll)
+
+    // Adjust scale so 2.0 means 2x2.
+    // Scroll is offset 0..1
+
+    float2 tiled_uv = fract(uv * scale + scroll);
+
+    return content.eval(tiled_uv * resolution);
+}
