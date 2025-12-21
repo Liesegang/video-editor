@@ -1,0 +1,15 @@
+uniform shader content;
+uniform float strength;
+uniform float2 center;
+uniform float2 resolution;
+
+half4 main(float2 p) {
+    // Normalize coordinates relative to resolution
+    float2 norm = (p - center) / resolution;
+    float r2 = dot(norm, norm);
+
+    // Distortion
+    float2 p_new = center + (p - center) * (1.0 + strength * r2);
+
+    return content.eval(p_new);
+}

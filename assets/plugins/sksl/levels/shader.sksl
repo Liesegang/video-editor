@@ -1,0 +1,27 @@
+uniform shader content;
+uniform float inBlack;
+uniform float inWhite;
+uniform float gamma;
+uniform float outBlack;
+uniform float outWhite;
+
+half4 main(float2 p) {
+    half4 color = content.eval(p);
+
+    // Avoid division by zero
+    float iw = inWhite;
+    if (abs(iw - inBlack) < 0.001) iw = inBlack + 0.001;
+
+    // Input Mapping
+    color.rgb = max(half3(0.0), color.rgb - inBlack);
+    color.rgb = color.rgb / (iw - inBlack);
+    color.rgb = clamp(color.rgb, 0.0, 1.0);
+
+    // Gamma
+    color.rgb = pow(color.rgb, half3(1.0 / max(0.001, gamma)));
+
+    // Output Mapping
+    color.rgb = color.rgb * (outWhite - outBlack) + outBlack;
+
+    return color;
+}

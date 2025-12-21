@@ -1,0 +1,24 @@
+id = "split_screen"
+name = "Split Screen"
+category = "Geometry"
+
+[[properties]]
+name = "count"
+label = "Count"
+type = "Vec2"
+default = [2.0, 2.0]
+
+[[properties]]
+name = "margin"
+label = "Margin"
+type = "Float"
+min = 0.0
+max = 0.5
+default = 0.0
+step = 0.01
+
+[[properties]]
+name = "resolution"
+label = "Resolution"
+type = "Vec2"
+default = [1920.0, 1080.0]
