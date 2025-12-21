@@ -95,14 +95,18 @@ pub fn process_action(
 
                 let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                     match component {
-                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                            x: OrderedFloat(new_val),
-                            y: old_vec.y,
-                        }),
-                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                            x: old_vec.x,
-                            y: OrderedFloat(new_val),
-                        }),
+                        Some(PropertyComponent::X) => {
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: OrderedFloat(new_val),
+                                y: old_vec.y,
+                            })
+                        }
+                        Some(PropertyComponent::Y) => {
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: old_vec.x,
+                                y: OrderedFloat(new_val),
+                            })
+                        }
                         _ => PropertyValue::Number(OrderedFloat(new_val)),
                     }
                 } else {
@@ -166,14 +170,18 @@ pub fn process_action(
 
                 let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                     match component {
-                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                            x: OrderedFloat(new_val),
-                            y: old_vec.y,
-                        }),
-                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                            x: old_vec.x,
-                            y: OrderedFloat(new_val),
-                        }),
+                        Some(PropertyComponent::X) => {
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: OrderedFloat(new_val),
+                                y: old_vec.y,
+                            })
+                        }
+                        Some(PropertyComponent::Y) => {
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: old_vec.x,
+                                y: OrderedFloat(new_val),
+                            })
+                        }
                         _ => PropertyValue::Number(OrderedFloat(new_val)),
                     }
                 } else {
@@ -235,14 +243,18 @@ pub fn process_action(
 
                 let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                     match component {
-                        Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                            x: OrderedFloat(new_val),
-                            y: old_vec.y,
-                        }),
-                        Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                            x: old_vec.x,
-                            y: OrderedFloat(new_val),
-                        }),
+                        Some(PropertyComponent::X) => {
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: OrderedFloat(new_val),
+                                y: old_vec.y,
+                            })
+                        }
+                        Some(PropertyComponent::Y) => {
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: old_vec.x,
+                                y: OrderedFloat(new_val),
+                            })
+                        }
                         _ => PropertyValue::Number(OrderedFloat(new_val)),
                     }
                 } else {
@@ -312,34 +324,37 @@ pub fn process_action(
                             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                                 if let Some(effect) = entity.effects.get(eff_idx) {
                                     if let Some(prop) = effect.properties.get(&prop_key) {
-                                        current_val_at_t = Some(project_service.evaluate_property_value(
-                                            prop,
-                                            &effect.properties,
-                                            eval_time,
-                                            comp.fps,
-                                        ));
+                                        current_val_at_t =
+                                            Some(project_service.evaluate_property_value(
+                                                prop,
+                                                &effect.properties,
+                                                eval_time,
+                                                comp.fps,
+                                            ));
                                     }
                                 }
                             } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
                                 // Style Property
                                 if let Some(style) = entity.styles.get(style_idx) {
                                     if let Some(prop) = style.properties.get(&prop_key) {
-                                        current_val_at_t = Some(project_service.evaluate_property_value(
-                                            prop,
-                                            &style.properties,
-                                            eval_time,
-                                            comp.fps,
-                                        ));
+                                        current_val_at_t =
+                                            Some(project_service.evaluate_property_value(
+                                                prop,
+                                                &style.properties,
+                                                eval_time,
+                                                comp.fps,
+                                            ));
                                     }
                                 }
                             } else {
                                 if let Some(prop) = entity.properties.get(base_name) {
-                                    current_val_at_t = Some(project_service.evaluate_property_value(
-                                        prop,
-                                        &entity.properties,
-                                        eval_time,
-                                        comp.fps,
-                                    ));
+                                    current_val_at_t =
+                                        Some(project_service.evaluate_property_value(
+                                            prop,
+                                            &entity.properties,
+                                            eval_time,
+                                            comp.fps,
+                                        ));
                                 }
                             }
                         }
@@ -349,14 +364,18 @@ pub fn process_action(
 
             let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_val_at_t {
                 match component {
-                    Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                        x: OrderedFloat(val),
-                        y: old_vec.y,
-                    }),
-                    Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::project::property::Vec2 {
-                        x: old_vec.x,
-                        y: OrderedFloat(val),
-                    }),
+                    Some(PropertyComponent::X) => {
+                        PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            x: OrderedFloat(val),
+                            y: old_vec.y,
+                        })
+                    }
+                    Some(PropertyComponent::Y) => {
+                        PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            x: old_vec.x,
+                            y: OrderedFloat(val),
+                        })
+                    }
                     _ => PropertyValue::Number(OrderedFloat(val)),
                 }
             } else {
@@ -572,5 +591,3 @@ pub fn process_action(
         Action::None => {}
     }
 }
-
-

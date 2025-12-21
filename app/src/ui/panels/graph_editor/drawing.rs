@@ -1,7 +1,7 @@
-use library::EditorService;
 use crate::state::context::EditorContext;
 use egui::{Color32, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, UiKind, Vec2};
 use library::model::project::property::{Property, PropertyMap, PropertyValue};
+use library::EditorService;
 
 use super::actions::Action;
 use super::utils::{GraphTransform, PropertyComponent, TimeMapper};
@@ -43,8 +43,7 @@ pub fn draw_grid(painter: &Painter, transform: &GraphTransform, ruler_rect: Rect
 
     // Time Grid & Ruler
     let start_time = (-transform.pan.x / pixels_per_second) as f64;
-    let end_time =
-        ((graph_rect.width() - transform.pan.x) / pixels_per_second) as f64;
+    let end_time = ((graph_rect.width() - transform.pan.x) / pixels_per_second) as f64;
 
     // Adaptive step size
     let min_step_px = 50.0;
@@ -149,8 +148,7 @@ pub fn draw_playhead(
 ) {
     let graph_rect = transform.graph_rect;
     let t_cursor = current_time;
-    let x_cursor =
-        graph_rect.min.x + transform.pan.x + (t_cursor as f32 * transform.zoom_x);
+    let x_cursor = graph_rect.min.x + transform.pan.x + (t_cursor as f32 * transform.zoom_x);
 
     if x_cursor >= graph_rect.min.x && x_cursor <= graph_rect.max.x {
         painter.line_segment(
@@ -219,9 +217,7 @@ pub fn draw_properties(
         match property.evaluator.as_str() {
             "constant" => {
                 let maybe_val = match component {
-                    PropertyComponent::Scalar => {
-                        property.value().and_then(|v| v.get_as::<f64>())
-                    }
+                    PropertyComponent::Scalar => property.value().and_then(|v| v.get_as::<f64>()),
                     PropertyComponent::X => property.value().and_then(|v| {
                         if let PropertyValue::Vec2(vec) = v {
                             Some(vec.x.into_inner())
@@ -296,8 +292,7 @@ pub fn draw_properties(
 
                 for s in 0..=steps {
                     let x = start_x + s as f32 * step_px;
-                    let global_time =
-                        (x - graph_rect.min.x - transform.pan.x) / pixels_per_second;
+                    let global_time = (x - graph_rect.min.x - transform.pan.x) / pixels_per_second;
 
                     let eval_time = time_mapper.to_source_time(global_time as f64);
 
@@ -333,10 +328,7 @@ pub fn draw_properties(
                 }
 
                 if path_points.len() > 1 {
-                    painter.add(egui::Shape::line(
-                        path_points,
-                        Stroke::new(2.0, color),
-                    ));
+                    painter.add(egui::Shape::line(path_points, Stroke::new(2.0, color)));
                 }
 
                 // 2. Draw Keyframe Dots (Overlay) if it is a keyframe property
@@ -374,8 +366,7 @@ pub fn draw_properties(
                         }
 
                         // Interaction area
-                        let point_rect =
-                            Rect::from_center_size(kf_pos, Vec2::splat(12.0));
+                        let point_rect = Rect::from_center_size(kf_pos, Vec2::splat(12.0));
                         let point_id = response.id.with(&name).with(i);
                         let point_response =
                             ui.interact(point_rect, point_id, Sense::click_and_drag());
@@ -384,13 +375,10 @@ pub fn draw_properties(
                             .interaction
                             .selected_keyframe
                             .as_ref()
-                            .map_or(false, |(s_name, s_idx)| {
-                                s_name == name && *s_idx == i
-                            });
+                            .map_or(false, |(s_name, s_idx)| s_name == name && *s_idx == i);
 
                         // Draw Dot
-                        let dot_color =
-                            if is_selected { Color32::WHITE } else { color };
+                        let dot_color = if is_selected { Color32::WHITE } else { color };
                         let radius = if is_selected { 6.0 } else { 4.0 };
                         painter.circle_filled(kf_pos, radius, dot_color);
 
@@ -410,37 +398,25 @@ pub fn draw_properties(
                             ui.label(format!("Keyframe {} - {}", i, name_for_menu));
                             ui.separator();
                             let mut chosen_easing = None;
-                            crate::ui::easing_menus::show_easing_menu(
-                                ui,
-                                None,
-                                |easing| {
-                                    chosen_easing = Some(easing);
-                                },
-                            );
+                            crate::ui::easing_menus::show_easing_menu(ui, None, |easing| {
+                                chosen_easing = Some(easing);
+                            });
 
                             if let Some(easing) = chosen_easing {
-                                *action = Action::SetEasing(
-                                    name_for_menu.clone(),
-                                    i,
-                                    easing,
-                                );
+                                *action = Action::SetEasing(name_for_menu.clone(), i, easing);
                                 *should_push_history = true;
                                 ui.close_kind(UiKind::Menu);
                             }
 
                             ui.separator();
                             if ui.button("Edit Keyframe...").clicked() {
-                                *action =
-                                    Action::EditKeyframe(name_for_menu.clone(), i);
+                                *action = Action::EditKeyframe(name_for_menu.clone(), i);
                                 ui.close_kind(UiKind::Menu);
                             }
 
                             ui.separator();
                             if ui
-                                .button(
-                                    egui::RichText::new("Delete Keyframe")
-                                        .color(Color32::RED),
-                                )
+                                .button(egui::RichText::new("Delete Keyframe").color(Color32::RED))
                                 .clicked()
                             {
                                 *action = Action::Remove(name_for_menu.clone(), i);
@@ -451,8 +427,8 @@ pub fn draw_properties(
 
                         // Dragging
                         if is_selected && point_response.dragged() {
-                            let (new_t, new_val) = transform
-                                .from_screen(kf_pos + point_response.drag_delta());
+                            let (new_t, new_val) =
+                                transform.from_screen(kf_pos + point_response.drag_delta());
                             *action = Action::Move(
                                 name.clone(),
                                 i,
@@ -517,8 +493,6 @@ pub fn draw_properties(
                         }
                     }
                 }
-
-                
             }
             _ => {}
         }

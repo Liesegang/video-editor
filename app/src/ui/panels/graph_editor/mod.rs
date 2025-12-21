@@ -4,8 +4,8 @@ pub mod utils;
 
 use actions::*;
 use drawing::*;
-use utils::*;
 pub use utils::PropertyComponent;
+use utils::*;
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2};
 use library::animation::EasingFunction;
@@ -379,7 +379,6 @@ pub fn graph_editor_panel(
                     clip_fps,
                     clip_inherent_fps,
                 };
-
 
                 drawing::draw_properties(
                     ui,
