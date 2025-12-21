@@ -1,0 +1,40 @@
+uniform shader content;
+uniform float2 center;
+uniform float amount;
+uniform int samples;
+
+float hash(float2 p) {
+    return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+}
+
+half4 main(float2 p) {
+    half4 color = half4(0);
+    float2 ray = p - center;
+
+    // Random jitter per pixel to break stepping artifacts
+    // Offset the start of the sample loop slightly
+    float jitter = hash(p);
+
+    const int MAX_SAMPLES = 50;
+
+    int count = samples;
+    if (count > MAX_SAMPLES) count = MAX_SAMPLES;
+    if (count < 1) count = 1;
+
+    float total_weight = 0.0;
+
+    for (int i = 0; i < MAX_SAMPLES; ++i) {
+        if (i >= count) break;
+
+        // Jittered t: (i + jitter) / count
+        float t = (float(i) + jitter) / float(count);
+
+        float scale = 1.0 - amount * t;
+
+        // Weight? Uniform weight is fine for standard zoom blur.
+        color += content.eval(center + ray * scale);
+        total_weight += 1.0;
+    }
+
+    return color / total_weight;
+}

@@ -1,0 +1,38 @@
+uniform shader content;
+uniform float2 center;
+uniform int type; // 0=Rect2Polar, 1=Polar2Rect
+uniform float2 resolution;
+
+half4 main(float2 p) {
+    float2 samplePoint;
+    float PI = 3.14159265;
+
+    if (type == 0) { // Rect to Polar (Wrap)
+        // Map current pixel (in circle space) to source (in rect space)
+        float r = length(p - center);
+        float theta = atan(p.y - center.y, p.x - center.x);
+
+        // Normalize theta to 0..1 (assuming -PI..PI)
+        float u = (theta + PI) / (2.0 * PI);
+
+        // Normalize r. Max radius is min dim / 2
+        float max_r = min(resolution.x, resolution.y) / 2.0;
+        float v = r / max_r;
+
+        // Map u,v to resolution
+        samplePoint = float2(u * resolution.x, v * resolution.y);
+
+    } else { // Polar to Rect (Unwrap)
+        // Map current pixel (in rect space) to source (in circle space)
+        float u = p.x / resolution.x; // Angle 0..1
+        float v = p.y / resolution.y; // Radius 0..1
+
+        float theta = u * 2.0 * PI - PI;
+        float max_r = min(resolution.x, resolution.y) / 2.0;
+        float r = v * max_r;
+
+        samplePoint = center + float2(cos(theta), sin(theta)) * r;
+    }
+
+    return content.eval(samplePoint);
+}

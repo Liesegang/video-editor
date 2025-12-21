@@ -1,0 +1,50 @@
+id = "noise"
+name = "Film Grain"
+category = "Stylize"
+
+[[properties]]
+name = "amount"
+label = "Amount"
+type = "Float"
+min = 0.0
+max = 1.0
+default = 0.1
+step = 0.01
+
+[[properties]]
+name = "seed"
+label = "Seed"
+type = "Float"
+min = 0.0
+max = 100.0
+default = 0.0
+step = 1.0
+
+[[properties]]
+name = "monochrome"
+label = "Monochrome"
+type = "Bool"
+default = true
+
+[[properties]]
+name = "animate"
+label = "Animate"
+type = "Bool"
+default = false
+
+[[properties]]
+name = "speed"
+label = "Speed"
+type = "Float"
+min = 0.0
+max = 50.0
+default = 10.0
+step = 1.0
+
+[[properties]]
+name = "blend_mode"
+label = "Mode (0=Add, 1=Overlay)"
+type = "Int"
+min = 0
+max = 1
+default = 1
