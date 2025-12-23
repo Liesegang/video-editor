@@ -38,14 +38,11 @@ impl<'a> FrameEvaluator<'a> {
     ) -> FrameInfo {
         let mut frame = self.initialize_frame(frame_number, render_scale, region);
 
-        // Flatten tracks recursively
-        let all_clips = self.collect_active_clips(frame_number);
-
-        for track_clip in all_clips {
-            if let Some(object) = self.convert_entity(track_clip, frame_number) {
-                frame.objects.push(object);
-            }
+        // Process tracks recursively directly into frame objects
+        for track in &self.composition.tracks {
+            self.process_track(track, frame_number, &mut frame.objects);
         }
+
         frame
     }
 
@@ -68,19 +65,11 @@ impl<'a> FrameEvaluator<'a> {
         }
     }
 
-    fn collect_active_clips(&self, frame_number: u64) -> Vec<&TrackClip> {
-        let mut clips = Vec::new();
-        for track in &self.composition.tracks {
-            self.collect_clips_from_track(track, frame_number, &mut clips);
-        }
-        clips
-    }
-
-    fn collect_clips_from_track<'b>(
+    fn process_track(
         &self,
-        track: &'b Track,
+        track: &Track,
         frame_number: u64,
-        out_clips: &mut Vec<&'b TrackClip>,
+        out_objects: &mut Vec<FrameObject>,
     ) {
         // Collect from current track
         for clip in &track.clips {
@@ -88,13 +77,15 @@ impl<'a> FrameEvaluator<'a> {
                 && clip.in_frame <= frame_number
                 && clip.out_frame >= frame_number
             {
-                out_clips.push(clip);
+                if let Some(object) = self.convert_entity(clip, frame_number) {
+                    out_objects.push(object);
+                }
             }
         }
 
         // Recurse into children
         for child_track in &track.children {
-            self.collect_clips_from_track(child_track, frame_number, out_clips);
+            self.process_track(child_track, frame_number, out_objects);
         }
     }
 
