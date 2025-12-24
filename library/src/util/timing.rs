@@ -25,6 +25,17 @@ impl ScopedTimer {
     pub fn debug(label: impl Into<Cow<'static, str>>) -> Self {
         Self::with_level(label, Level::Debug)
     }
+
+    pub fn debug_lazy<F>(label_fn: F) -> Option<Self>
+    where
+        F: FnOnce() -> String,
+    {
+        if log::log_enabled!(Level::Debug) {
+            Some(Self::debug(label_fn()))
+        } else {
+            None
+        }
+    }
 }
 
 impl Drop for ScopedTimer {
@@ -54,4 +65,16 @@ where
     F: FnOnce() -> T,
 {
     measure(label, Level::Debug, f)
+}
+
+pub fn measure_debug_lazy<T, L, F>(label_fn: L, f: F) -> T
+where
+    L: FnOnce() -> String,
+    F: FnOnce() -> T,
+{
+    if log::log_enabled!(Level::Debug) {
+        measure(label_fn(), Level::Debug, f)
+    } else {
+        f()
+    }
 }
