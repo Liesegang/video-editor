@@ -1,6 +1,8 @@
 //! Shared handler for processing PropertyAction events in the inspector panel.
 //! This module reduces duplication across mod.rs, effects.rs, and styles.rs.
 
+#![allow(dead_code)]
+
 use crate::action::HistoryManager;
 use library::model::project::property::PropertyValue;
 use library::EditorService;

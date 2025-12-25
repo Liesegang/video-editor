@@ -1,4 +1,3 @@
-use crate::model::ui_types::GizmoHandle;
 use crate::state::context::EditorContext;
 use crate::ui::panels::preview::{action::PreviewAction, clip::PreviewClip, gizmo};
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
@@ -633,8 +632,7 @@ impl<'a> PreviewInteractions<'a> {
                 let rect = Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y));
 
                 // Calculate Font Size
-                let mut font_size = 100.0;
-                font_size = gc.clip.properties.get_f32("size").unwrap_or(100.0);
+                let font_size = gc.clip.properties.get_f32("size").unwrap_or(100.0);
 
                 let zoom = self.editor_context.view.zoom;
                 // Assuming uniform scale or using scale_y for height

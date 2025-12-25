@@ -3,16 +3,13 @@ pub mod drawing;
 pub mod utils;
 
 use actions::*;
-use drawing::*;
 pub use utils::PropertyComponent;
 use utils::*;
 
-use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, UiKind, Vec2};
-use library::animation::EasingFunction;
+use egui::{Color32, Sense, Ui, Vec2};
 use library::model::project::project::Project;
 use library::model::project::property::{Property, PropertyMap, PropertyValue};
 use library::EditorService;
-use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 
 use crate::action::HistoryManager;
@@ -96,7 +93,6 @@ pub fn graph_editor_panel(
             Vec::new();
 
         for (k, p) in entity.properties.iter() {
-            let mut include = false;
             let mut components = Vec::new();
 
             match p.evaluator.as_str() {

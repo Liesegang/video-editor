@@ -7,14 +7,13 @@ use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 
-use library::plugin::PropertyUiType;
+use library::model::project::property::PropertyUiType;
 
 pub mod action_handler;
 pub mod effects;
 pub mod properties;
 pub mod styles;
 
-use action_handler::{ActionContext, PropertyTarget};
 use effects::render_effects_section;
 use properties::{render_property_rows, PropertyRenderContext};
 use styles::render_styles_section;
@@ -109,7 +108,7 @@ pub fn inspector_panel(
             // Group by category
             let mut grouped: std::collections::HashMap<
                 String,
-                Vec<library::plugin::PropertyDefinition>,
+                Vec<library::model::project::property::PropertyDefinition>,
             > = std::collections::HashMap::new();
             for def in definitions {
                 grouped.entry(def.category.clone()).or_default().push(def);
@@ -134,7 +133,7 @@ pub fn inspector_panel(
                 if let Some(defs) = grouped.remove(&category) {
                     struct Chunk {
                         is_grid: bool,
-                        defs: Vec<library::plugin::PropertyDefinition>,
+                        defs: Vec<library::model::project::property::PropertyDefinition>,
                     }
 
                     let mut chunks: Vec<Chunk> = Vec::new();

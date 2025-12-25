@@ -80,6 +80,7 @@ impl EditorContext {
         self.selection.last_selected_track_id = Some(track_id);
     }
 
+    #[allow(dead_code)]
     pub fn add_selection(&mut self, entity_id: Uuid, track_id: Uuid) {
         self.selection.selected_entities.insert(entity_id);
         self.selection.last_selected_entity_id = Some(entity_id);

@@ -394,7 +394,7 @@ impl EditorService {
         comp_id: Uuid,
         track_id: Uuid,
         clip_id: Uuid,
-    ) -> Vec<crate::plugin::PropertyDefinition> {
+    ) -> Vec<crate::model::project::property::PropertyDefinition> {
         self.project_manager
             .get_inspector_definitions(comp_id, track_id, clip_id)
     }
@@ -404,7 +404,7 @@ impl EditorService {
         comp_id: Uuid,
         track_id: Uuid,
         clip_id: Uuid,
-    ) -> Vec<crate::plugin::PropertyDefinition> {
+    ) -> Vec<crate::model::project::property::PropertyDefinition> {
         self.get_inspector_definitions(comp_id, track_id, clip_id)
     }
 

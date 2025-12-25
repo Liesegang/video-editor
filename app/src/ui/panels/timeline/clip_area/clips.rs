@@ -59,9 +59,8 @@ fn draw_waveform(
     let mut x = 0.0;
 
     while x < rect_w {
-        let time_offset = x as f32 / pixels_per_unit;
-        let time_offset = x as f32 / pixels_per_unit;
-        let source_time = (source_begin_frame as f64 / composition_fps) + time_offset as f64;
+        let _time_offset = x as f32 / pixels_per_unit;
+        let source_time = (source_begin_frame as f64 / composition_fps) + _time_offset as f64;
         let start_sample_idx = if source_time >= 0.0 {
             (source_time * sample_rate) as usize * channels
         } else {
@@ -114,7 +113,7 @@ pub fn draw_clips(
     history_manager: &mut HistoryManager,
     current_tracks: &[library::model::project::Track],
 
-    project: &Arc<RwLock<Project>>,
+    _project: &Arc<RwLock<Project>>,
     pixels_per_unit: f32,
     row_height: f32,
     track_spacing: f32,
@@ -247,12 +246,12 @@ pub fn draw_clips(
             }
 
             // Handle edge dragging (resize)
-            let mut is_resizing = false;
+            let mut _is_resizing = false;
             if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
                 if left.drag_started() || right.drag_started() {
                     editor_context.interaction.is_resizing_entity = true;
                     editor_context.select_clip(clip.id, track.id);
-                    is_resizing = true;
+                    _is_resizing = true;
                 }
             }
 

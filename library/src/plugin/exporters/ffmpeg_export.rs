@@ -89,9 +89,9 @@ impl ExportPlugin for FfmpegExportPlugin {
         }
     }
 
-    fn properties(&self) -> Vec<super::super::PropertyDefinition> {
-        use super::super::{PropertyDefinition, PropertyUiType};
-        use crate::model::project::property::PropertyValue;
+    fn properties(&self) -> Vec<crate::model::project::property::PropertyDefinition> {
+        use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+        use ordered_float::OrderedFloat;
         vec![
             PropertyDefinition {
                 name: "container".to_string(),
@@ -143,7 +143,7 @@ impl ExportPlugin for FfmpegExportPlugin {
                     max: 100000,
                     suffix: " kbps".to_string(),
                 },
-                default_value: PropertyValue::Number(super::super::OrderedFloat(5000.0)),
+                default_value: PropertyValue::Number(OrderedFloat(5000.0)),
                 category: "Quality".to_string(),
             },
             PropertyDefinition {
@@ -154,7 +154,7 @@ impl ExportPlugin for FfmpegExportPlugin {
                     max: 51,
                     suffix: "".to_string(),
                 },
-                default_value: PropertyValue::Number(super::super::OrderedFloat(23.0)),
+                default_value: PropertyValue::Number(OrderedFloat(23.0)),
                 category: "Quality".to_string(),
             },
             PropertyDefinition {
@@ -184,7 +184,7 @@ impl ExportPlugin for FfmpegExportPlugin {
                     max: 320,
                     suffix: " kbps".to_string(),
                 },
-                default_value: PropertyValue::Number(super::super::OrderedFloat(192.0)),
+                default_value: PropertyValue::Number(OrderedFloat(192.0)),
                 category: "Audio".to_string(),
             },
         ]

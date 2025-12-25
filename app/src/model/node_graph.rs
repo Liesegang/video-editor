@@ -12,6 +12,7 @@ pub enum MyNodeTemplate {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(dead_code)]
 pub enum MyValueType {
     Scalar(f32),
     Vector(egui::Vec2),

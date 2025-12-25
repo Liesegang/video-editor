@@ -6,16 +6,14 @@ use std::sync::{Arc, RwLock};
 
 use crate::cache::CacheManager;
 
-use crate::loader::image::Image;
-// use crate::model::project::entity::Entity; // Removed - This line was there from previous step, but should be removed
 use crate::error::LibraryError;
+use crate::loader::image::Image;
 use crate::model::project::asset::AssetKind;
-use crate::model::project::project::{Composition, Project};
+use crate::model::project::property::PropertyDefinition;
 use libloading::{Library, Symbol};
 use log::debug;
-use serde_json::Value;
 
-use crate::framing::entity_converters::{EntityConverterPlugin, EntityConverterRegistry}; // Added this line
+use crate::framing::entity_converters::{EntityConverterPlugin, EntityConverterRegistry};
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
 
@@ -53,48 +51,6 @@ pub enum PluginCategory {
     Property,
     EntityConverter,
     Inspector,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum PropertyUiType {
-    Float {
-        min: f64,
-        max: f64,
-        step: f64,
-        suffix: String,
-    },
-    Integer {
-        min: i64,
-        max: i64,
-        suffix: String,
-    },
-    Color,
-    Text,
-    MultilineText,
-    Bool,
-    Vec2 {
-        suffix: String,
-    },
-    Vec3 {
-        suffix: String,
-    },
-    Vec4 {
-        suffix: String,
-    },
-    Dropdown {
-        options: Vec<String>,
-    },
-    Font,
-    Styles,
-}
-
-#[derive(Debug, Clone)]
-pub struct PropertyDefinition {
-    pub name: String,
-    pub label: String,
-    pub ui_type: PropertyUiType,
-    pub default_value: PropertyValue,
-    pub category: String,
 }
 
 pub use self::effects::EffectDefinition;
@@ -414,16 +370,16 @@ impl PluginManager {
         symbol: &[u8],
         register: impl FnOnce(&mut PluginRegistry, Arc<T>),
     ) -> Result<(), LibraryError> {
-        let library = Library::new(path)?;
-        let constructor: Symbol<unsafe extern "C" fn() -> *mut T> = library.get(symbol)?;
-        let raw = constructor();
+        let library = unsafe { Library::new(path)? };
+        let constructor: Symbol<unsafe extern "C" fn() -> *mut T> = unsafe { library.get(symbol)? };
+        let raw = unsafe { constructor() };
         if raw.is_null() {
             return Err(LibraryError::Plugin(format!(
                 "Plugin constructor {} returned null",
                 String::from_utf8_lossy(symbol)
             )));
         }
-        let plugin = Arc::from(Box::from_raw(raw));
+        let plugin = unsafe { Arc::from(Box::from_raw(raw)) };
 
         let mut inner = self.inner.write().unwrap();
         register(&mut *inner, plugin);
@@ -679,7 +635,6 @@ impl PluginManager {
             .collect()
     }
 }
-// ... existing imports ...
 
 #[derive(Debug, Clone)]
 pub struct PluginInfo {
@@ -691,11 +646,7 @@ pub struct PluginInfo {
     pub impl_type: String, // Was plugin_type
 }
 
-// ... existing code ...
-
 impl PluginManager {
-    // ... existing new() ...
-
     pub fn get_all_plugins(&self) -> Vec<PluginInfo> {
         let inner = self.inner.read().unwrap();
         let mut plugins = Vec::new();
@@ -760,8 +711,6 @@ impl PluginManager {
         plugins.sort_by(|a, b| a.id.cmp(&b.id));
         plugins
     }
-
-    // ... existing methods ...
 }
 
 // Trait and structs moved from framing/property.rs

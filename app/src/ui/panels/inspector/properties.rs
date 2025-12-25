@@ -4,7 +4,7 @@ use egui_phosphor::regular::DIAMOND as ICON_DIAMOND;
 use egui_phosphor::regular::TIMER as ICON_TIMER;
 use library::model::frame::color::Color;
 use library::model::project::property::{Property, PropertyValue, Vec2, Vec3, Vec4};
-use library::plugin::{PropertyDefinition, PropertyUiType};
+use library::model::project::property::{PropertyDefinition, PropertyUiType};
 use ordered_float::OrderedFloat;
 
 pub struct PropertyRenderContext<'a> {

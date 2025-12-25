@@ -2,6 +2,7 @@ use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, Style};
 use library::model::project::project::{Composition, Project};
 use library::EditorService;
+#[allow(deprecated)]
 use raw_window_handle::HasRawWindowHandle;
 use std::sync::{Arc, RwLock};
 
@@ -131,6 +132,7 @@ impl MyApp {
         // Zero-Copy GPU Sharing: Capture the main thread's OpenGL context handle
         // and pass it to the background render server. This enables sharing of textures.
         if let Some(handle) = library::rendering::skia_utils::get_current_context_handle() {
+            #[allow(deprecated)]
             let hwnd = if let Ok(raw_handle) = cc.raw_window_handle() {
                 #[cfg(target_os = "windows")]
                 match raw_handle {
