@@ -1,4 +1,4 @@
-use crate::core::media::image::Image;
+use crate::model::frame::Image;
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};

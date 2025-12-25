@@ -1,4 +1,4 @@
-use pyo3::prelude::*;
+﻿use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString, PyTuple, PyList, PyDict as PyDictType};
 use pyo3::ffi::PyThreadState; // Use PyThreadState from ffi
 use crate::model::project::property::{Property, PropertyValue, Vec2};
@@ -171,3 +171,4 @@ impl PropertyPlugin for PythonExpressionPlugin {
         Arc::new(PythonExpressionEvaluator::new())
     }
 }
+

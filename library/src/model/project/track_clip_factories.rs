@@ -2,7 +2,7 @@
 //!
 //! This file contains the `create_*` constructors for different clip types.
 
-use super::{EffectConfig, TrackClip, TrackClipKind};
+use super::{TrackClip, TrackClipKind};
 use crate::model::frame::color::Color;
 use crate::model::project::property::{Property, PropertyMap, PropertyValue, Vec2};
 use crate::model::project::style::StyleInstance;

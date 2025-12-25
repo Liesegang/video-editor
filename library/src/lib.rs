@@ -24,10 +24,9 @@ pub use model::animation;
 pub use core::audio;
 pub use core::cache;
 pub use core::framing;
-pub use core::media as loader; // Backward compat alias
 pub use core::rendering;
 
-pub use crate::core::media::image::Image;
+pub use crate::model::frame::Image;
 pub use crate::plugin::ExportSettings;
 
 // Re-export the services that the app will need

@@ -3,5 +3,4 @@
 pub mod audio;
 pub mod cache;
 pub mod framing;
-pub mod media;
 pub mod rendering;

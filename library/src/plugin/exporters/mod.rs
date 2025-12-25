@@ -4,8 +4,8 @@ pub mod png_export;
 pub use self::ffmpeg_export::FfmpegExportPlugin;
 pub use self::png_export::PngExportPlugin;
 
-use crate::core::media::image::Image;
 use crate::error::LibraryError;
+use crate::model::frame::Image;
 use crate::model::project::project::{Composition, Project};
 use crate::model::project::property::PropertyDefinition;
 use crate::plugin::{Plugin, PluginCategory};
