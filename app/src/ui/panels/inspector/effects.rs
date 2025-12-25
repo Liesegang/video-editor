@@ -1,4 +1,5 @@
-use super::properties::{render_property_rows, PropertyRenderContext};
+use super::action_handler::{ActionContext, PropertyTarget};
+use super::properties::{render_property_rows, PropertyAction, PropertyRenderContext};
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use crate::ui::widgets::reorderable_list::ReorderableList;
@@ -56,9 +57,14 @@ pub fn render_effects_section(
         let list_id = ui.make_persistent_id(format!("effects_{}", selected_entity_id));
         let mut needs_delete = None;
 
-        ReorderableList::new(list_id, &mut effects)
-            .show(ui, |ui, _visual_index, effect, handle| {
-                let effect_index = track_clip.effects.iter().position(|e| e.id == effect.id).unwrap_or(_visual_index);
+        ReorderableList::new(list_id, &mut effects).show(
+            ui,
+            |ui, _visual_index, effect, handle| {
+                let effect_index = track_clip
+                    .effects
+                    .iter()
+                    .position(|e| e.id == effect.id)
+                    .unwrap_or(_visual_index);
                 let id = ui.make_persistent_id(format!("effect_{}", effect.id));
                 let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
 
@@ -66,12 +72,14 @@ pub fn render_effects_section(
                 let mut remove_clicked = false;
                 let header_res = state.show_header(ui, |ui| {
                     ui.horizontal(|ui| {
-                        handle.ui(ui, |ui| { ui.label("::"); });
+                        handle.ui(ui, |ui| {
+                            ui.label("::");
+                        });
                         ui.label(egui::RichText::new(&effect.effect_type).strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                             if ui.button("X").clicked() {
-                                 remove_clicked = true;
-                             }
+                            if ui.button("X").clicked() {
+                                remove_clicked = true;
+                            }
                         });
                     });
                 });
@@ -86,63 +94,79 @@ pub fn render_effects_section(
                         .get_plugin_manager()
                         .get_effect_properties(&effect.effect_type);
 
+                    let mut pending_actions = Vec::new();
                     egui::Grid::new(format!("effect_grid_{}", effect.id))
                         .striped(true)
                         .show(ui, |ui| {
                             let actions = render_property_rows(
                                 ui,
                                 &defs,
-                                |name| effect.properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &effect.properties, current_time, fps))),
+                                |name| {
+                                    effect.properties.get(name).and_then(|p| {
+                                        Some(project_service.evaluate_property_value(
+                                            p,
+                                            &effect.properties,
+                                            current_time,
+                                            fps,
+                                        ))
+                                    })
+                                },
                                 |name| effect.properties.get(name).cloned(),
-                                &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true, current_time }
+                                &PropertyRenderContext {
+                                    available_fonts: &editor_context.available_fonts,
+                                    in_grid: true,
+                                    current_time,
+                                },
                             );
-
-                            for action in actions {
-                                match action {
-                                    crate::ui::panels::inspector::properties::PropertyAction::Update(name, val) => {
-                                        project_service.update_effect_property_or_keyframe(
-                                             comp_id, track_id, selected_entity_id, effect_index, &name, current_time, val, None
-                                        ).ok();
-                                        *needs_refresh = true;
-                                    }
-                                    crate::ui::panels::inspector::properties::PropertyAction::Commit => {
-                                         let current_state = project_service.get_project().read().unwrap().clone();
-                                         history_manager.push_project_state(current_state);
-                                    }
-                                    crate::ui::panels::inspector::properties::PropertyAction::ToggleKeyframe(name, val) => {
-                                         let mut keyframe_index_to_remove = None;
-                                         if let Some(prop) = effect.properties.get(&name) {
-                                             if prop.evaluator == "keyframe" {
-                                                 if let Some(idx) = prop.keyframes().iter().position(|k| (k.time.into_inner() - current_time).abs() < 0.001) {
-                                                     keyframe_index_to_remove = Some(idx);
-                                                 }
-                                             }
-                                         }
-
-                                         if let Some(index) = keyframe_index_to_remove {
-                                              project_service.remove_effect_keyframe_by_index(
-                                                  comp_id, track_id, selected_entity_id, effect_index, &name, index
-                                              ).ok();
-                                         } else {
-                                              project_service.add_effect_keyframe(
-                                                  comp_id, track_id, selected_entity_id, effect_index, &name, current_time, val, None
-                                              ).ok();
-                                         }
-                                         *needs_refresh = true;
-                                    }
-                                    crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, key, val) => {
-                                        match project_service.set_effect_property_attribute(
-                                            comp_id, track_id, selected_entity_id, effect_index, &name, &key, val
-                                        ) {
-                                            Ok(_) => { *needs_refresh = true; },
-                                            Err(e) => eprintln!("Failed to set attribute {} for effect property {}: {:?}", key, name, e),
-                                        }
-                                    }
-                                }
-                            }
+                            pending_actions = actions;
                         });
-            });
-        });
+                    // Process actions outside Grid closure
+                    let effect_props = effect.properties.clone();
+                    let mut ctx = ActionContext::new(
+                        project_service,
+                        history_manager,
+                        comp_id,
+                        track_id,
+                        selected_entity_id,
+                        current_time,
+                    );
+                    for action in pending_actions {
+                        match action {
+                            PropertyAction::Update(name, val) => {
+                                ctx.handle_update(
+                                    PropertyTarget::Effect(effect_index),
+                                    &name,
+                                    val,
+                                    |n| effect_props.get(n).cloned(),
+                                );
+                                *needs_refresh = true;
+                            }
+                            PropertyAction::Commit => {
+                                ctx.handle_commit();
+                            }
+                            PropertyAction::ToggleKeyframe(name, val) => {
+                                ctx.handle_toggle_keyframe(
+                                    PropertyTarget::Effect(effect_index),
+                                    &name,
+                                    val,
+                                    |n| effect_props.get(n).cloned(),
+                                );
+                                *needs_refresh = true;
+                            }
+                            PropertyAction::SetAttribute(name, key, val) => {
+                                ctx.handle_set_attribute(
+                                    PropertyTarget::Effect(effect_index),
+                                    &name,
+                                    &key,
+                                    val,
+                                );
+                                *needs_refresh = true;
+                            }
+                        }
+                    }
+                });
+            },
+        );
 
         if let Some(idx) = needs_delete {
             effects.remove(idx);

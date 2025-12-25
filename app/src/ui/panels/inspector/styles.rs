@@ -1,4 +1,5 @@
-use super::properties::{render_property_rows, PropertyRenderContext};
+use super::action_handler::{ActionContext, PropertyTarget};
+use super::properties::{render_property_rows, PropertyAction, PropertyRenderContext};
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use crate::ui::widgets::reorderable_list::ReorderableList;
@@ -96,114 +97,130 @@ pub fn render_styles_section(
     let list_id = ui.make_persistent_id(format!("styles_list_{}", selected_entity_id));
     let mut needs_delete = None;
 
-    ReorderableList::new(list_id, &mut local_styles)
-        .show(ui, |ui, visual_index, style, handle| {
-            // Because ReorderableList shuffles, we need the ACTUAL index in the original property list for updates?
-            // Wait, ReorderableList operates on `local_styles`.
-            // The `visual_index` matches `local_styles` index.
-            // But we need to call `update_style_property` with the index.
-            // As long as we persist the reordering to backend BEFORE or AFTER?
-            // If we update property on index 0 but user dragged it to 1, confusion.
-            // Ideally we reorder first if changed.
-            // But ReorderableList handles drag.
+    ReorderableList::new(list_id, &mut local_styles).show(ui, |ui, visual_index, style, handle| {
+        // Because ReorderableList shuffles, we need the ACTUAL index in the original property list for updates?
+        // Wait, ReorderableList operates on `local_styles`.
+        // The `visual_index` matches `local_styles` index.
+        // But we need to call `update_style_property` with the index.
+        // As long as we persist the reordering to backend BEFORE or AFTER?
+        // If we update property on index 0 but user dragged it to 1, confusion.
+        // Ideally we reorder first if changed.
+        // But ReorderableList handles drag.
 
-            // For updates, we use the `visual_index` assuming `local_styles` reflects current state.
-            // If dragging happened, `local_styles` is already permuted.
-            // But the BACKEND is not.
-            // If we call `update_style_property(index)` on backend, it targets OLD index.
+        // For updates, we use the `visual_index` assuming `local_styles` reflects current state.
+        // If dragging happened, `local_styles` is already permuted.
+        // But the BACKEND is not.
+        // If we call `update_style_property(index)` on backend, it targets OLD index.
 
-            // Strategy: Sync order to backend immediately if different.
-            // But ReorderableList output happens after show?
-            // Actually, we should check `if local_styles != old_styles` at end of function and sync.
+        // Strategy: Sync order to backend immediately if different.
+        // But ReorderableList output happens after show?
+        // Actually, we should check `if local_styles != old_styles` at end of function and sync.
 
-            // But inside the loop, we are rendering rows.
-            // If we edit a property, we want to call update on backend.
-            // The `style` in closure is reference to item in `local_styles`.
-            // We need to know its index in BACKEND to update it properly.
-            // Or we check `styles` (original) to find matching ID.
+        // But inside the loop, we are rendering rows.
+        // If we edit a property, we want to call update on backend.
+        // The `style` in closure is reference to item in `local_styles`.
+        // We need to know its index in BACKEND to update it properly.
+        // Or we check `styles` (original) to find matching ID.
 
-            let backend_index = styles.iter().position(|s| s.id == style.id).unwrap_or(visual_index);
+        let backend_index = styles
+            .iter()
+            .position(|s| s.id == style.id)
+            .unwrap_or(visual_index);
 
-            let id = ui.make_persistent_id(format!("style_{}", style.id));
-            let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
+        let id = ui.make_persistent_id(format!("style_{}", style.id));
+        let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
 
-            let mut remove_clicked = false;
-            let header_res = state.show_header(ui, |ui| {
-                 ui.horizontal(|ui| {
-                    handle.ui(ui, |ui| { ui.label("::"); });
-                    ui.label(egui::RichText::new(style.style_type.clone().to_uppercase()).strong());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                         if ui.button("X").clicked() {
-                             remove_clicked = true;
-                         }
-                    });
+        let mut remove_clicked = false;
+        let header_res = state.show_header(ui, |ui| {
+            ui.horizontal(|ui| {
+                handle.ui(ui, |ui| {
+                    ui.label("::");
+                });
+                ui.label(egui::RichText::new(style.style_type.clone().to_uppercase()).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("X").clicked() {
+                        remove_clicked = true;
+                    }
                 });
             });
-
-            if remove_clicked {
-                needs_delete = Some(visual_index);
-            }
-
-            header_res.body(|ui| {
-                 let defs = get_style_definitions(&style.style_type);
-
-                 egui::Grid::new(format!("style_grid_{}", style.id))
-                    .striped(true)
-                    .show(ui, |ui| {
-                        let actions = render_property_rows(
-                            ui,
-                            &defs,
-                            |name| style.properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &style.properties, current_time, fps))),
-                            |name| style.properties.get(name).cloned(),
-                            &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true, current_time }
-                        );
-
-                        for action in actions {
-                            match action {
-                                crate::ui::panels::inspector::properties::PropertyAction::Update(name, val) => {
-                                     project_service.update_style_property_or_keyframe(
-                                        comp_id, track_id, selected_entity_id, backend_index, &name, current_time, val, None
-                                     ).ok();
-                                     *needs_refresh = true;
-                                }
-                                crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, attr_key, attr_val) => {
-                                     project_service.set_style_property_attribute(
-                                        comp_id, track_id, selected_entity_id, backend_index, &name, &attr_key, attr_val
-                                     ).ok();
-                                     *needs_refresh = true;
-                                }
-                                crate::ui::panels::inspector::properties::PropertyAction::Commit => {
-                                      let current_state = project_service.get_project().read().unwrap().clone();
-                                      history_manager.push_project_state(current_state);
-                                }
-                                crate::ui::panels::inspector::properties::PropertyAction::ToggleKeyframe(name, val) => {
-                                     // Check if keyframe exists using backend style info logic (or redundant logic here)
-                                     // Using helper from KeyframeHandler via ProjectService
-                                     let mut remove = false;
-                                      if let Some(prop) = style.properties.get(&name) {
-                                         if prop.evaluator == "keyframe" {
-                                              if let Some(idx) = prop.keyframes().iter().position(|k| (k.time.into_inner() - current_time).abs() < 0.001) {
-                                                  // Remove keyframe
-                                                   project_service.remove_style_keyframe(
-                                                       comp_id, track_id, selected_entity_id, backend_index, &name, idx
-                                                   ).ok();
-                                                   remove = true;
-                                              }
-                                         }
-                                      }
-
-                                      if !remove {
-                                          project_service.add_style_keyframe(
-                                              comp_id, track_id, selected_entity_id, backend_index, &name, current_time, val, None
-                                          ).ok();
-                                      }
-                                      *needs_refresh = true;
-                                }
-                            }
-                        }
-                    });
-            });
         });
+
+        if remove_clicked {
+            needs_delete = Some(visual_index);
+        }
+
+        header_res.body(|ui| {
+            let defs = get_style_definitions(&style.style_type);
+
+            let mut pending_actions = Vec::new();
+            egui::Grid::new(format!("style_grid_{}", style.id))
+                .striped(true)
+                .show(ui, |ui| {
+                    let actions = render_property_rows(
+                        ui,
+                        &defs,
+                        |name| {
+                            style.properties.get(name).and_then(|p| {
+                                Some(project_service.evaluate_property_value(
+                                    p,
+                                    &style.properties,
+                                    current_time,
+                                    fps,
+                                ))
+                            })
+                        },
+                        |name| style.properties.get(name).cloned(),
+                        &PropertyRenderContext {
+                            available_fonts: &editor_context.available_fonts,
+                            in_grid: true,
+                            current_time,
+                        },
+                    );
+                    pending_actions = actions;
+                });
+            // Process actions outside Grid closure
+            let style_props = style.properties.clone();
+            let mut ctx = ActionContext::new(
+                project_service,
+                history_manager,
+                comp_id,
+                track_id,
+                selected_entity_id,
+                current_time,
+            );
+            for action in pending_actions {
+                match action {
+                    PropertyAction::Update(name, val) => {
+                        ctx.handle_update(PropertyTarget::Style(backend_index), &name, val, |n| {
+                            style_props.get(n).cloned()
+                        });
+                        *needs_refresh = true;
+                    }
+                    PropertyAction::Commit => {
+                        ctx.handle_commit();
+                    }
+                    PropertyAction::ToggleKeyframe(name, val) => {
+                        ctx.handle_toggle_keyframe(
+                            PropertyTarget::Style(backend_index),
+                            &name,
+                            val,
+                            |n| style_props.get(n).cloned(),
+                        );
+                        *needs_refresh = true;
+                    }
+                    PropertyAction::SetAttribute(name, key, val) => {
+                        ctx.handle_set_attribute(
+                            PropertyTarget::Style(backend_index),
+                            &name,
+                            &key,
+                            val,
+                        );
+                        *needs_refresh = true;
+                    }
+                }
+            }
+        });
+    });
 
     if let Some(idx) = needs_delete {
         local_styles.remove(idx);

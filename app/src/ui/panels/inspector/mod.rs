@@ -15,9 +15,40 @@ pub mod effects;
 pub mod properties;
 pub mod styles;
 
+use action_handler::{ActionContext, PropertyTarget};
 use effects::render_effects_section;
-use properties::{render_property_rows, PropertyRenderContext};
+use properties::{render_property_rows, PropertyAction, PropertyRenderContext};
 use styles::render_styles_section;
+
+/// Process PropertyAction events using ActionContext for unified handling.
+fn process_property_actions(
+    actions: Vec<PropertyAction>,
+    ctx: &mut ActionContext,
+    target: PropertyTarget,
+    properties: &library::model::project::property::PropertyMap,
+) -> bool {
+    let mut needs_refresh = false;
+    for action in actions {
+        match action {
+            PropertyAction::Update(name, val) => {
+                ctx.handle_update(target, &name, val, |n| properties.get(n).cloned());
+                needs_refresh = true;
+            }
+            PropertyAction::Commit => {
+                ctx.handle_commit();
+            }
+            PropertyAction::ToggleKeyframe(name, val) => {
+                ctx.handle_toggle_keyframe(target, &name, val, |n| properties.get(n).cloned());
+                needs_refresh = true;
+            }
+            PropertyAction::SetAttribute(name, key, val) => {
+                ctx.handle_set_attribute(target, &name, &key, val);
+                needs_refresh = true;
+            }
+        }
+    }
+    needs_refresh
+}
 
 pub fn inspector_panel(
     ui: &mut Ui,
@@ -158,87 +189,49 @@ pub fn inspector_panel(
 
                     for (chunk_idx, chunk) in chunks.iter().enumerate() {
                         if chunk.is_grid {
+                            let mut pending_actions = Vec::new();
                             egui::Grid::new(format!("cat_{}_{}", category, chunk_idx))
                                 .striped(true)
                                 .show(ui, |ui| {
                                     let actions = render_property_rows(
                                         ui,
                                         &chunk.defs,
-                                        |name| properties.get(name).and_then(|p| Some(project_service.evaluate_property_value(p, &properties, current_time, fps))),
+                                        |name| {
+                                            properties.get(name).and_then(|p| {
+                                                Some(project_service.evaluate_property_value(
+                                                    p,
+                                                    &properties,
+                                                    current_time,
+                                                    fps,
+                                                ))
+                                            })
+                                        },
                                         |name| properties.get(name).cloned(),
-                                        &PropertyRenderContext { available_fonts: &editor_context.available_fonts, in_grid: true, current_time }
+                                        &PropertyRenderContext {
+                                            available_fonts: &editor_context.available_fonts,
+                                            in_grid: true,
+                                            current_time,
+                                        },
                                     );
-
-                                    for action in actions {
-                                        match action {
-                                            crate::ui::panels::inspector::properties::PropertyAction::Update(name, val) => {
-                                                let mut handled = false;
-                                                if let Some(prop) = properties.get(&name) {
-                                                    if prop.evaluator != "keyframe" {
-                                                        match project_service.update_clip_property(
-                                                            comp_id, track_id, selected_entity_id, &name, val.clone()
-                                                        ) {
-                                                            Ok(_) => {},
-                                                            Err(e) => eprintln!("Failed to update constant property {}: {:?}", name, e),
-                                                        }
-                                                        handled = true;
-                                                    }
-                                                }
-
-                                                if !handled {
-                                                    match project_service.update_property_or_keyframe(
-                                                        comp_id, track_id, selected_entity_id, &name, current_time, val, None
-                                                    ) {
-                                                         Ok(_) => {},
-                                                         Err(e) => eprintln!("Failed to update keyframe property {}: {:?}", name, e),
-                                                    }
-                                                }
-                                                needs_refresh = true;
-                                            }
-                                            crate::ui::panels::inspector::properties::PropertyAction::Commit => {
-                                                let current_state = project_service.get_project().read().unwrap().clone();
-                                                history_manager.push_project_state(current_state);
-                                            }
-                                            crate::ui::panels::inspector::properties::PropertyAction::ToggleKeyframe(name, val) => {
-                                                let mut keyframe_index_to_remove = None;
-                                                if let Some(prop) = properties.get(&name) {
-                                                    if prop.evaluator == "keyframe" {
-                                                        if let Some(idx) = prop.keyframes().iter().position(|k| (k.time.into_inner() - current_time).abs() < 0.001) {
-                                                            keyframe_index_to_remove = Some(idx);
-                                                        }
-                                                    }
-                                                }
-
-                                                if let Some(index) = keyframe_index_to_remove {
-                                                    println!("Removing keyframe for {} at index {}", name, index);
-                                                    match project_service.remove_keyframe(
-                                                        comp_id, track_id, selected_entity_id, &name, index
-                                                    ) {
-                                                        Ok(_) => {},
-                                                        Err(e) => eprintln!("Failed to remove keyframe {}: {:?}", name, e),
-                                                    }
-                                                } else {
-                                                    println!("Adding keyframe for {} at time {} value {:?}", name, current_time, val);
-                                                    match project_service.add_keyframe(
-                                                        comp_id, track_id, selected_entity_id, &name, current_time, val, None
-                                                    ) {
-                                                        Ok(_) => {},
-                                                        Err(e) => eprintln!("Failed to add keyframe {}: {:?}", name, e),
-                                                    }
-                                                }
-                                                needs_refresh = true;
-                                            }
-                                            crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, key, val) => {
-                                                 match project_service.set_clip_property_attribute(
-                                                     comp_id, track_id, selected_entity_id, &name, &key, val
-                                                 ) {
-                                                      Ok(_) => { needs_refresh = true; },
-                                                      Err(e) => eprintln!("Failed to set attribute {} for property {}: {:?}", key, name, e),
-                                                 }
-                                            }
-                                        }
-                                    }
+                                    pending_actions = actions;
                                 });
+                            // Process actions outside the Grid closure to avoid borrow conflicts
+                            let mut ctx = ActionContext::new(
+                                project_service,
+                                history_manager,
+                                comp_id,
+                                track_id,
+                                selected_entity_id,
+                                current_time,
+                            );
+                            if process_property_actions(
+                                pending_actions,
+                                &mut ctx,
+                                PropertyTarget::Clip,
+                                &properties,
+                            ) {
+                                needs_refresh = true;
+                            }
                         } else {
                             // Full Width Render
                             for def in &chunk.defs {
@@ -263,74 +256,22 @@ pub fn inspector_panel(
                                         current_time,
                                     },
                                 );
-                                for action in actions {
-                                    match action {
-                                        crate::ui::panels::inspector::properties::PropertyAction::Update(name, val) => {
-                                             let mut handled = false;
-                                                if let Some(prop) = properties.get(&name) {
-                                                    if prop.evaluator != "keyframe" {
-                                                        match project_service.update_clip_property(
-                                                            comp_id, track_id, selected_entity_id, &name, val.clone()
-                                                        ) {
-                                                            Ok(_) => {},
-                                                            Err(e) => eprintln!("Failed to update constant property {}: {:?}", name, e),
-                                                        }
-                                                        handled = true;
-                                                    }
-                                                }
-
-                                                if !handled {
-                                                    match project_service.update_property_or_keyframe(
-                                                        comp_id, track_id, selected_entity_id, &name, current_time, val, None
-                                                    ) {
-                                                         Ok(_) => {},
-                                                         Err(e) => eprintln!("Failed to update keyframe property {}: {:?}", name, e),
-                                                    }
-                                                }
-                                                needs_refresh = true;
-                                        }
-                                        crate::ui::panels::inspector::properties::PropertyAction::Commit => {
-                                            let current_state = project_service.get_project().read().unwrap().clone();
-                                            history_manager.push_project_state(current_state);
-                                        }
-                                        crate::ui::panels::inspector::properties::PropertyAction::ToggleKeyframe(name, val) => {
-                                             let mut keyframe_index_to_remove = None;
-                                                if let Some(prop) = properties.get(&name) {
-                                                    if prop.evaluator == "keyframe" {
-                                                        if let Some(idx) = prop.keyframes().iter().position(|k| (k.time.into_inner() - current_time).abs() < 0.001) {
-                                                            keyframe_index_to_remove = Some(idx);
-                                                        }
-                                                    }
-                                                }
-
-                                                if let Some(index) = keyframe_index_to_remove {
-                                                    println!("Removing keyframe for {} at index {}", name, index);
-                                                    match project_service.remove_keyframe(
-                                                        comp_id, track_id, selected_entity_id, &name, index
-                                                    ) {
-                                                        Ok(_) => {},
-                                                        Err(e) => eprintln!("Failed to remove keyframe {}: {:?}", name, e),
-                                                    }
-                                                } else {
-                                                    println!("Adding keyframe for {} at time {} value {:?}", name, current_time, val);
-                                                    match project_service.add_keyframe(
-                                                        comp_id, track_id, selected_entity_id, &name, current_time, val, None
-                                                    ) {
-                                                        Ok(_) => {},
-                                                        Err(e) => eprintln!("Failed to add keyframe {}: {:?}", name, e),
-                                                    }
-                                                }
-                                                needs_refresh = true;
-                                        }
-                                        crate::ui::panels::inspector::properties::PropertyAction::SetAttribute(name, key, val) => {
-                                             match project_service.set_clip_property_attribute(
-                                                 comp_id, track_id, selected_entity_id, &name, &key, val
-                                             ) {
-                                                  Ok(_) => { needs_refresh = true; },
-                                                  Err(e) => eprintln!("Failed to set attribute {} for property {}: {:?}", key, name, e),
-                                             }
-                                        }
-                                    }
+                                // Process actions using unified handler
+                                let mut ctx = ActionContext::new(
+                                    project_service,
+                                    history_manager,
+                                    comp_id,
+                                    track_id,
+                                    selected_entity_id,
+                                    current_time,
+                                );
+                                if process_property_actions(
+                                    actions,
+                                    &mut ctx,
+                                    PropertyTarget::Clip,
+                                    &properties,
+                                ) {
+                                    needs_refresh = true;
                                 }
                             }
                         }
