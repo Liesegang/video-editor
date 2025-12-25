@@ -1,35 +1,51 @@
-pub mod animation;
-pub mod application;
-pub mod audio;
-pub mod cache;
-pub mod error;
-pub mod framing;
-pub mod loader;
+// Core internal modules
+pub mod core;
+
+// Editor services - public API for GUI
+pub mod editor;
+
+// Data models (shared with GUI)
 pub mod model;
+
+// Plugin system
 pub mod plugin;
-pub mod rendering;
-pub mod service;
+
+// Utilities
 pub mod util;
 
+// Error types
+pub mod error;
 pub use error::LibraryError;
 
-pub use crate::loader::image::Image;
-pub use crate::plugin::ExportSettings; // Added
-// Re-export the services and models that the app will need.
-pub use application::editor_service::EditorService;
-pub use rendering::render_server::{RenderResult, RenderServer};
-pub use rendering::skia_renderer::SkiaRenderer;
-pub use service::{ExportService, ProjectModel, RenderService};
+// Re-export animation types from model for backward compatibility
+pub use model::animation;
 
-// use crate::plugin::load_plugins; // Removed
-// use crate::rendering::effects::EffectRegistry; // Removed
-use crate::framing::entity_converters::BuiltinEntityConverterPlugin;
+// Re-exports for backward compatibility
+pub use core::audio;
+pub use core::cache;
+pub use core::framing;
+pub use core::media as loader; // Backward compat alias
+pub use core::rendering;
+
+pub use crate::core::media::image::Image;
+pub use crate::plugin::ExportSettings;
+
+// Re-export the services that the app will need
+pub use core::rendering::render_server::{RenderResult, RenderServer};
+pub use core::rendering::skia_renderer::SkiaRenderer;
+pub use editor::EditorService;
+pub use editor::ExportService;
+pub use editor::ProjectModel;
+pub use editor::ProjectService;
+pub use editor::RenderService;
+
+use crate::core::framing::entity_converters::BuiltinEntityConverterPlugin;
 use crate::plugin::PluginManager;
 use log::info;
 use std::fs;
 use std::io::Write;
 use std::ops::Range;
-use std::sync::Arc; // Added
+use std::sync::Arc;
 
 // Function to create and initialize the PluginManager with built-in plugins
 pub fn create_plugin_manager() -> Arc<PluginManager> {
@@ -59,7 +75,7 @@ pub fn create_plugin_manager() -> Arc<PluginManager> {
     manager.register_property_plugin(Arc::new(
         crate::plugin::properties::ExpressionPropertyPlugin::new(),
     ));
-    manager.register_entity_converter_plugin(Arc::new(BuiltinEntityConverterPlugin::new())); // Added
+    manager.register_entity_converter_plugin(Arc::new(BuiltinEntityConverterPlugin::new()));
     manager
 }
 
@@ -87,7 +103,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         .skip(2)
         .filter(|s| !s.starts_with("--"))
         .collect();
-    let plugin_manager = create_plugin_manager(); // Changed
+    let plugin_manager = create_plugin_manager();
     for plugin_path in plugin_paths {
         info!("Loading property plugin {}", plugin_path);
         plugin_manager.load_property_plugin_from_file(plugin_path)?;
@@ -108,7 +124,6 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         }
     }
 
-    // Removed effect_registry instantiation
     let composition = project_model.composition();
     let renderer = SkiaRenderer::new(
         composition.width as u32,
@@ -118,7 +133,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         None,
     );
 
-    let cache_manager = Arc::new(crate::cache::CacheManager::new());
+    let cache_manager = Arc::new(crate::core::cache::CacheManager::new());
 
     let _property_evaluators = plugin_manager.get_property_evaluators();
 
@@ -151,13 +166,12 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         let duration_frames = (final_frame_range.end - final_frame_range.start).max(1);
         let duration = duration_frames as f64 / fps;
 
-        // CLI currently defaults to 48000 as ProjectService is not initialized here
         let sample_rate = 48000;
 
         let start_sample = (start_time * sample_rate as f64).round() as u64;
         let frames = (duration * sample_rate as f64).round() as usize;
 
-        let audio_data = crate::audio::mixer::mix_samples(
+        let audio_data = crate::core::audio::mixer::mix_samples(
             &project_model.project().assets,
             project_model.composition(),
             &cache_manager,

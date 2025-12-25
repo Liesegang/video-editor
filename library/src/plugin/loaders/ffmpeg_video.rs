@@ -1,7 +1,7 @@
 use super::super::{LoadPlugin, LoadRequest, LoadResponse, Plugin};
 use crate::cache::CacheManager;
+use crate::core::media::video::{MediaProbe, VideoReader};
 use crate::error::LibraryError;
-use crate::loader::video::{MediaProbe, VideoReader};
 use std::collections::HashMap;
 use std::sync::Mutex;
 

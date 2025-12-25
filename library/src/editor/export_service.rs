@@ -1,9 +1,9 @@
+use crate::core::media::image::Image;
+use crate::core::rendering::renderer::Renderer;
+use crate::editor::project_model::ProjectModel;
+use crate::editor::render_service::RenderService;
 use crate::error::LibraryError;
-use crate::loader::image::Image;
 use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
-use crate::rendering::renderer::Renderer;
-use crate::service::project_model::ProjectModel;
-use crate::service::render_service::RenderService;
 use crate::util::timing::{ScopedTimer, measure_info};
 use log::{error, info};
 

@@ -1,7 +1,7 @@
 use super::super::{LoadPlugin, LoadRequest, LoadResponse, Plugin};
 use crate::cache::CacheManager;
+use crate::core::media::image::load_image;
 use crate::error::LibraryError;
-use crate::loader::image::load_image;
 
 pub struct NativeImageLoader;
 

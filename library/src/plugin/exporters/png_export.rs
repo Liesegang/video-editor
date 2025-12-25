@@ -1,6 +1,6 @@
 use super::super::{ExportPlugin, ExportSettings, Plugin};
+use crate::core::media::image::Image;
 use crate::error::LibraryError;
-use crate::loader::image::Image;
 use image::ImageEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use std::fs::File;

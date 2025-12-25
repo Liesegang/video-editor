@@ -1,15 +1,15 @@
-use crate::cache::SharedCacheManager;
+use crate::core::cache::SharedCacheManager;
+use crate::core::framing::entity_converters::EntityConverterRegistry;
+use crate::core::framing::get_frame_from_project;
+use crate::core::media::image::Image;
+use crate::core::rendering::renderer::{RenderOutput, Renderer};
+use crate::editor::project_model::ProjectModel;
 use crate::error::LibraryError;
-use crate::framing::entity_converters::EntityConverterRegistry;
-use crate::framing::get_frame_from_project;
-use crate::loader::image::Image;
-use crate::model::frame::entity::{FrameContent, FrameObject}; // FrameEntity -> FrameContent
+use crate::model::frame::entity::{FrameContent, FrameObject};
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
 use crate::plugin::{LoadRequest, LoadResponse, PluginManager};
-use crate::rendering::renderer::{RenderOutput, Renderer};
-use crate::service::project_model::ProjectModel;
-use crate::util::timing::{ScopedTimer, measure_debug}; // Added this line
+use crate::util::timing::{ScopedTimer, measure_debug};
 // Removed HashMap and EvaluationContext imports
 use std::sync::Arc;
 
