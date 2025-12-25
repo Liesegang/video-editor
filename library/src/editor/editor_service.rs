@@ -279,6 +279,25 @@ impl EditorService {
         )
     }
 
+    pub fn move_clip_to_track_at_index(
+        &self,
+        composition_id: Uuid,
+        source_track_id: Uuid,
+        clip_id: Uuid,
+        target_track_id: Uuid,
+        new_in_frame: u64,
+        target_index: Option<usize>,
+    ) -> Result<(), LibraryError> {
+        self.project_manager.move_clip_to_track_at_index(
+            composition_id,
+            source_track_id,
+            clip_id,
+            target_track_id,
+            new_in_frame,
+            target_index,
+        )
+    }
+
     pub fn add_effect_to_clip(
         &self,
         composition_id: Uuid,

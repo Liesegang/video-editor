@@ -295,8 +295,8 @@ pub fn show_keyframe_dialog(
                     let mut current_pv = None;
                     if let Ok(proj) = project.read() {
                         if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                            if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                                if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
+                            if let Some(track) = comp.get_track(track_id) {
+                                if let Some(clip) = track.clips().find(|c| c.id == entity_id) {
                                     if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                                         if let Some(effect) = clip.effects.get(eff_idx) {
                                             if let Some(prop) = effect.properties.get(&prop_key) {

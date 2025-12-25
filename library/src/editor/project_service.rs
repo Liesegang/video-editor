@@ -91,9 +91,12 @@ impl ProjectManager {
         // Remove clips referencing the asset
         for comp in &mut project_write.compositions {
             for track in &mut comp.tracks {
-                track
-                    .clips
-                    .retain(|clip| clip.reference_id != Some(asset_id));
+                track.children.retain(|item| match item {
+                    crate::model::project::TrackItem::Clip(clip) => {
+                        clip.reference_id != Some(asset_id)
+                    }
+                    _ => true, // Keep sub-tracks
+                });
             }
         }
 
@@ -115,9 +118,12 @@ impl ProjectManager {
             }
 
             for track in &mut c.tracks {
-                track
-                    .clips
-                    .retain(|clip| clip.reference_id != Some(comp_id));
+                track.children.retain(|item| match item {
+                    crate::model::project::TrackItem::Clip(clip) => {
+                        clip.reference_id != Some(comp_id)
+                    }
+                    _ => true, // Keep sub-tracks
+                });
             }
         }
 
@@ -589,6 +595,26 @@ impl ProjectManager {
         )
     }
 
+    pub fn move_clip_to_track_at_index(
+        &self,
+        composition_id: Uuid,
+        source_track_id: Uuid,
+        clip_id: Uuid,
+        target_track_id: Uuid,
+        new_in_frame: u64,
+        target_index: Option<usize>,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::move_clip_to_track_at_index(
+            &self.project,
+            composition_id,
+            source_track_id,
+            clip_id,
+            target_track_id,
+            new_in_frame,
+            target_index,
+        )
+    }
+
     pub fn add_effect_to_clip(
         &self,
         composition_id: Uuid,
@@ -835,8 +861,8 @@ impl ProjectManager {
 
         let (clip, canvas_width, canvas_height) =
             if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
-                if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                    if let Some(clip) = track.clips.iter().find(|c| c.id == clip_id) {
+                if let Some(track) = comp.get_track(track_id) {
+                    if let Some(clip) = track.clips().find(|c| c.id == clip_id) {
                         (clip.clone(), comp.width, comp.height)
                     } else {
                         return Vec::new();

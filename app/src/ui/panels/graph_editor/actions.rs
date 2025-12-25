@@ -76,8 +76,8 @@ pub fn process_action(
                 if let Ok(proj) = project.read() {
                     // Navigate to find keyframe
                     if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                        if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                            if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
+                        if let Some(track) = comp.get_track(track_id) {
+                            if let Some(clip) = track.clips().find(|c| c.id == entity_id) {
                                 if let Some(effect) = clip.effects.get(eff_idx) {
                                     if let Some(prop) = effect.properties.get(&prop_key) {
                                         let keyframes = prop.keyframes();
@@ -124,8 +124,8 @@ pub fn process_action(
                         // Convert new_time (Global) to Source Time
                         if let Ok(p) = project.read() {
                             if let Some(c) = p.compositions.iter().find(|c| c.id == comp_id) {
-                                if let Some(t) = c.tracks.iter().find(|t| t.id == track_id) {
-                                    if let Some(e) = t.clips.iter().find(|c| c.id == entity_id) {
+                                if let Some(t) = c.get_track(track_id) {
+                                    if let Some(e) = t.clips().find(|c| c.id == entity_id) {
                                         let in_time = e.in_frame as f64 / c.fps;
                                         let source_start = e.source_begin_frame as f64 / e.fps;
                                         Some(source_start + (new_time - in_time))
@@ -151,8 +151,8 @@ pub fn process_action(
                 let mut current_pv = None;
                 if let Ok(proj) = project.read() {
                     if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                        if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                            if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
+                        if let Some(track) = comp.get_track(track_id) {
+                            if let Some(clip) = track.clips().find(|c| c.id == entity_id) {
                                 if let Some(style) = clip.styles.get(style_idx) {
                                     if let Some(prop) = style.properties.get(&prop_key) {
                                         let keyframes = prop.keyframes();
@@ -199,8 +199,8 @@ pub fn process_action(
                         // Convert new_time (Global) to Source Time
                         if let Ok(p) = project.read() {
                             if let Some(c) = p.compositions.iter().find(|c| c.id == comp_id) {
-                                if let Some(t) = c.tracks.iter().find(|t| t.id == track_id) {
-                                    if let Some(e) = t.clips.iter().find(|c| c.id == entity_id) {
+                                if let Some(t) = c.get_track(track_id) {
+                                    if let Some(e) = t.clips().find(|c| c.id == entity_id) {
                                         let in_time = e.in_frame as f64 / c.fps;
                                         let source_start = e.source_begin_frame as f64 / e.fps;
                                         Some(source_start + (new_time - in_time))
@@ -226,8 +226,8 @@ pub fn process_action(
                 let mut current_pv = None;
                 if let Ok(proj) = project.read() {
                     if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                        if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                            if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
+                        if let Some(track) = comp.get_track(track_id) {
+                            if let Some(clip) = track.clips().find(|c| c.id == entity_id) {
                                 if let Some(prop) = clip.properties.get(base_name) {
                                     let keyframes = prop.keyframes();
                                     let mut sorted_kf = keyframes.clone();
@@ -271,8 +271,8 @@ pub fn process_action(
                         // Convert new_time (Global) to Source Time
                         if let Ok(p) = project.read() {
                             if let Some(c) = p.compositions.iter().find(|c| c.id == comp_id) {
-                                if let Some(t) = c.tracks.iter().find(|t| t.id == track_id) {
-                                    if let Some(e) = t.clips.iter().find(|c| c.id == entity_id) {
+                                if let Some(t) = c.get_track(track_id) {
+                                    if let Some(e) = t.clips().find(|c| c.id == entity_id) {
                                         let in_time = e.in_frame as f64 / c.fps;
                                         let source_start = e.source_begin_frame as f64 / e.fps;
                                         Some(source_start + (new_time - in_time))
@@ -314,8 +314,8 @@ pub fn process_action(
 
             if let Ok(proj) = project.read() {
                 if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                    if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                        if let Some(entity) = track.clips.iter().find(|c| c.id == entity_id) {
+                    if let Some(track) = comp.get_track(track_id) {
+                        if let Some(entity) = track.clips().find(|c| c.id == entity_id) {
                             // Calculate Source Time from Global Time 'time'
                             let in_time = entity.in_frame as f64 / comp.fps;
                             let source_start = entity.source_begin_frame as f64 / entity.fps;
@@ -483,8 +483,8 @@ pub fn process_action(
 
             if let Ok(project) = project.read() {
                 if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
-                    if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                        if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
+                    if let Some(track) = comp.get_track(track_id) {
+                        if let Some(clip) = track.clips().find(|c| c.id == entity_id) {
                             // Effect Property
                             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                                 if let Some(effect) = clip.effects.get(eff_idx) {

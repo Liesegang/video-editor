@@ -83,7 +83,7 @@ impl<'a> FrameEvaluator<'a> {
         out_clips: &mut Vec<&'b TrackClip>,
     ) {
         // Collect from current track
-        for clip in &track.clips {
+        for clip in track.clips() {
             if clip.kind != TrackClipKind::Audio
                 && clip.in_frame <= frame_number
                 && clip.out_frame >= frame_number
@@ -92,9 +92,11 @@ impl<'a> FrameEvaluator<'a> {
             }
         }
 
-        // Recurse into children
-        for child_track in &track.children {
-            self.collect_clips_from_track(child_track, frame_number, out_clips);
+        // Recurse into children (only SubTrack variants)
+        for child_item in &track.children {
+            if let crate::model::project::TrackItem::SubTrack(child_track) = child_item {
+                self.collect_clips_from_track(child_track, frame_number, out_clips);
+            }
         }
     }
 
@@ -298,10 +300,9 @@ mod tests {
             styles: Vec::new(),
         };
         let track = Track {
-            id: uuid::Uuid::new_v4(), // Added ID
+            id: uuid::Uuid::new_v4(),
             name: "track".into(),
-            clips: vec![track_clip],
-            children: Vec::new(), // Added
+            children: vec![crate::model::project::TrackItem::Clip(track_clip)],
         };
         composition.add_track(track);
 
@@ -394,8 +395,10 @@ mod tests {
         let track = Track {
             id: uuid::Uuid::new_v4(),
             name: "track".into(),
-            clips: vec![early, late],
-            children: Vec::new(), // Added
+            children: vec![
+                crate::model::project::TrackItem::Clip(early),
+                crate::model::project::TrackItem::Clip(late),
+            ],
         };
         composition.add_track(track);
 
@@ -427,11 +430,11 @@ mod tests {
         let clip2 = create_dummy_clip();
 
         let mut child_track = Track::new("Child Track");
-        child_track.clips.push(clip2);
+        child_track.add_clip(clip2);
 
         let mut parent_track = Track::new("Parent Track");
-        parent_track.clips.push(clip1);
-        parent_track.children.push(child_track);
+        parent_track.add_clip(clip1);
+        parent_track.add_sub_track(child_track);
 
         composition.add_track(parent_track);
 

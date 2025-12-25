@@ -109,11 +109,17 @@ impl TrackHandler {
         fn add_child_to_track(tracks: &mut [Track], parent_id: Uuid, child: Track) -> bool {
             for track in tracks.iter_mut() {
                 if track.id == parent_id {
-                    track.children.push(child);
+                    track.add_sub_track(child);
                     return true;
                 }
-                if add_child_to_track(&mut track.children, parent_id, child.clone()) {
-                    return true;
+                // Recurse into sub-tracks within children
+                for item in &mut track.children {
+                    if let crate::model::project::TrackItem::SubTrack(sub_track) = item {
+                        if sub_track.id == parent_id {
+                            sub_track.add_sub_track(child);
+                            return true;
+                        }
+                    }
                 }
             }
             false

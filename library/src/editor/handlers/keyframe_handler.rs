@@ -71,16 +71,12 @@ impl KeyframeHandler {
                 track_id, composition_id
             ))
         })?;
-        let clip = track
-            .clips
-            .iter_mut()
-            .find(|c| c.id == clip_id)
-            .ok_or_else(|| {
-                LibraryError::Project(format!(
-                    "Clip with ID {} not found in Track {}",
-                    clip_id, track_id
-                ))
-            })?;
+        let clip = track.clips_mut().find(|c| c.id == clip_id).ok_or_else(|| {
+            LibraryError::Project(format!(
+                "Clip with ID {} not found in Track {}",
+                clip_id, track_id
+            ))
+        })?;
 
         let property = clip.properties.get_mut(property_key).ok_or_else(|| {
             LibraryError::Project(format!(
@@ -175,16 +171,12 @@ impl KeyframeHandler {
                 track_id, composition_id
             ))
         })?;
-        let clip = track
-            .clips
-            .iter_mut()
-            .find(|c| c.id == clip_id)
-            .ok_or_else(|| {
-                LibraryError::Project(format!(
-                    "Clip with ID {} not found in Track {}",
-                    clip_id, track_id
-                ))
-            })?;
+        let clip = track.clips_mut().find(|c| c.id == clip_id).ok_or_else(|| {
+            LibraryError::Project(format!(
+                "Clip with ID {} not found in Track {}",
+                clip_id, track_id
+            ))
+        })?;
 
         // Find effect by index (in effects list property)
         // This is tricky. Effect instances are usually in "effects" property which is array of PropertyValue (Map?)
@@ -366,14 +358,11 @@ impl KeyframeHandler {
             })?;
 
         let track = comp
-            .tracks
-            .iter_mut()
-            .find(|t| t.id == track_id)
+            .get_track_mut(track_id)
             .ok_or_else(|| LibraryError::Project(format!("Track {} not found", track_id)))?;
 
         let clip = track
-            .clips
-            .iter_mut()
+            .clips_mut()
             .find(|c| c.id == clip_id)
             .ok_or_else(|| LibraryError::Project(format!("Clip {} not found", clip_id)))?;
 
@@ -503,8 +492,7 @@ impl KeyframeHandler {
             .get_track_mut(track_id)
             .ok_or_else(|| LibraryError::Project("Track not found".to_string()))?;
         let clip = track
-            .clips
-            .iter_mut()
+            .clips_mut()
             .find(|c| c.id == clip_id)
             .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
 
@@ -548,8 +536,7 @@ impl KeyframeHandler {
             .get_track_mut(track_id)
             .ok_or_else(|| LibraryError::Project("Track not found".to_string()))?;
         let clip = track
-            .clips
-            .iter_mut()
+            .clips_mut()
             .find(|c| c.id == clip_id)
             .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
 

@@ -47,7 +47,7 @@ impl ClipHandler {
         final_clip.in_frame = in_frame;
         final_clip.out_frame = out_frame;
 
-        track.clips.push(final_clip);
+        track.add_clip(final_clip);
         Ok(id)
     }
 
@@ -70,8 +70,8 @@ impl ClipHandler {
             ))
         })?;
 
-        if let Some(index) = track.clips.iter().position(|e| e.id == clip_id) {
-            track.clips.remove(index);
+        if let Some(index) = track.children.iter().position(|item| item.id() == clip_id) {
+            track.children.remove(index);
             Ok(())
         } else {
             Err(LibraryError::Project(format!(
@@ -102,7 +102,7 @@ impl ClipHandler {
                 ))
             })?;
 
-        if let Some(clip) = track.clips.iter_mut().find(|e| e.id == clip_id) {
+        if let Some(clip) = track.clips_mut().find(|e| e.id == clip_id) {
             // Sync struct fields with property updates
             match key {
                 "in_frame" => {
@@ -289,7 +289,7 @@ impl ClipHandler {
                 .find(|c| c.id == current_id)
             {
                 for track in &comp.tracks {
-                    for clip in &track.clips {
+                    for clip in track.clips() {
                         if clip.kind == TrackClipKind::Composition {
                             if let Some(ref_id) = clip.reference_id {
                                 if ref_id == parent_id {
@@ -312,6 +312,27 @@ impl ClipHandler {
         target_track_id: Uuid,
         new_in_frame: u64,
     ) -> Result<(), LibraryError> {
+        // Delegate to new method with push behavior (None index)
+        Self::move_clip_to_track_at_index(
+            project,
+            composition_id,
+            source_track_id,
+            clip_id,
+            target_track_id,
+            new_in_frame,
+            None,
+        )
+    }
+
+    pub fn move_clip_to_track_at_index(
+        project: &Arc<RwLock<Project>>,
+        composition_id: Uuid,
+        source_track_id: Uuid,
+        clip_id: Uuid,
+        target_track_id: Uuid,
+        new_in_frame: u64,
+        target_index: Option<usize>,
+    ) -> Result<(), LibraryError> {
         let mut proj = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
@@ -324,15 +345,23 @@ impl ClipHandler {
             LibraryError::Project(format!("Source Track {} not found", source_track_id))
         })?;
 
-        let index = source_track
-            .clips
+        let source_index = source_track
+            .children
             .iter()
-            .position(|c| c.id == clip_id)
+            .position(|item| item.id() == clip_id)
             .ok_or_else(|| {
                 LibraryError::Project(format!("Clip {} not found in source track", clip_id))
             })?;
 
-        let mut clip = source_track.clips.remove(index);
+        let removed_item = source_track.children.remove(source_index);
+        let mut clip = match removed_item {
+            crate::model::project::TrackItem::Clip(c) => c,
+            _ => {
+                return Err(LibraryError::Project(
+                    "Expected clip, found track".to_string(),
+                ));
+            }
+        };
 
         // adjust timing
         let duration = clip.out_frame - clip.in_frame;
@@ -340,23 +369,32 @@ impl ClipHandler {
         clip.out_frame = new_in_frame + duration;
 
         // 2. Insert into Target
-        // If target same as source, we just re-insert (maybe handled better by update_clip_property if just timing, but user might draging to different track)
-        // Here we lookup target again (mutable borrow split issue if same track?)
-        // If source_track_id == target_track_id, we already have mutable ref... waiting.
-        // We cannot borrow composition mutably twice.
-        // So we must handle "same track" case OR use indices.
-        // But `composition` contains tracks.
+        let mut final_target_index = target_index;
 
+        // Adjust index if moving within same track
         if source_track_id == target_track_id {
-            // Already have source track (which is target)
-            // Just push back
-            source_track.clips.push(clip);
+            if let Some(idx) = final_target_index {
+                if source_index < idx {
+                    final_target_index = Some(idx.saturating_sub(1));
+                }
+            }
+            // Already have valid mutable reference to source (which is target)
+            if let Some(idx) = final_target_index {
+                source_track.insert_clip(idx, clip);
+            } else {
+                source_track.add_clip(clip);
+            }
             Ok(())
         } else {
             let target_track = composition.get_track_mut(target_track_id).ok_or_else(|| {
                 LibraryError::Project(format!("Target Track {} not found", target_track_id))
             })?;
-            target_track.clips.push(clip);
+
+            if let Some(idx) = final_target_index {
+                target_track.insert_clip(idx, clip);
+            } else {
+                target_track.add_clip(clip);
+            }
             Ok(())
         }
     }

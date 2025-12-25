@@ -427,7 +427,7 @@ pub fn preview_panel(
         if let Some(comp) = editor_context.get_current_composition(&proj_read) {
             // Collect GuiClips from current composition's tracks
             for track in &comp.tracks {
-                for entity in &track.clips {
+                for entity in track.clips() {
                     // Try to resolve asset ID from file_path property or similar
                     let asset_opt = if let Some(path) = entity.properties.get_string("file_path") {
                         proj_read.assets.iter().find(|a| a.path == path)

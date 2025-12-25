@@ -13,23 +13,91 @@ use crate::model::project::style::StyleInstance;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Represents either a sub-track (folder) or a clip (layer) in the timeline
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(tag = "type")]
+pub enum TrackItem {
+    SubTrack(Track),
+    Clip(TrackClip),
+}
+
+impl TrackItem {
+    /// Get the ID of this item (track or clip)
+    pub fn id(&self) -> Uuid {
+        match self {
+            TrackItem::SubTrack(t) => t.id,
+            TrackItem::Clip(c) => c.id,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Track {
-    pub id: Uuid, // Added UUID field
+    pub id: Uuid,
     pub name: String,
+    /// Ordered list of children: either sub-tracks or clips
     #[serde(default)]
-    pub clips: Vec<TrackClip>,
-    #[serde(default)]
-    pub children: Vec<Track>, // Sub-folders
+    pub children: Vec<TrackItem>,
 }
 
 impl Track {
     pub fn new(name: &str) -> Self {
         Self {
-            id: Uuid::new_v4(), // Initialize with a new UUID
+            id: Uuid::new_v4(),
             name: name.to_string(),
-            clips: Vec::new(),
             children: Vec::new(),
+        }
+    }
+
+    /// Helper: Get all clips in this track (not recursively)
+    pub fn clips(&self) -> impl Iterator<Item = &TrackClip> {
+        self.children.iter().filter_map(|item| match item {
+            TrackItem::Clip(c) => Some(c),
+            _ => None,
+        })
+    }
+
+    /// Helper: Get all clips mutably
+    pub fn clips_mut(&mut self) -> impl Iterator<Item = &mut TrackClip> {
+        self.children.iter_mut().filter_map(|item| match item {
+            TrackItem::Clip(c) => Some(c),
+            _ => None,
+        })
+    }
+
+    /// Helper: Get all sub-tracks (not recursively)
+    pub fn sub_tracks(&self) -> impl Iterator<Item = &Track> {
+        self.children.iter().filter_map(|item| match item {
+            TrackItem::SubTrack(t) => Some(t),
+            _ => None,
+        })
+    }
+
+    /// Add a clip to this track
+    pub fn add_clip(&mut self, clip: TrackClip) {
+        self.children.push(TrackItem::Clip(clip));
+    }
+
+    /// Add a sub-track to this track
+    pub fn add_sub_track(&mut self, track: Track) {
+        self.children.push(TrackItem::SubTrack(track));
+    }
+
+    /// Insert a clip at a specific index
+    pub fn insert_clip(&mut self, index: usize, clip: TrackClip) {
+        if index <= self.children.len() {
+            self.children.insert(index, TrackItem::Clip(clip));
+        } else {
+            self.children.push(TrackItem::Clip(clip));
+        }
+    }
+
+    /// Insert a track item at a specific index
+    pub fn insert_track_item(&mut self, index: usize, item: TrackItem) {
+        if index <= self.children.len() {
+            self.children.insert(index, item);
+        } else {
+            self.children.push(item);
         }
     }
 }

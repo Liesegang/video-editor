@@ -13,7 +13,7 @@ fn get_local_time(
     if let Ok(project) = service.get_project().read() {
         if let Some(comp) = project.get_composition(comp_id) {
             if let Some(track) = comp.get_track(track_id) {
-                if let Some(clip) = track.clips.iter().find(|c| c.id == entity_id) {
+                if let Some(clip) = track.clips().find(|c| c.id == entity_id) {
                     let fps = comp.fps;
                     let current_frame = (global_time * fps).round() as i64;
                     let delta_frames = current_frame - clip.in_frame as i64;
