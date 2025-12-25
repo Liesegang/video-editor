@@ -1,12 +1,13 @@
 use crate::error::LibraryError;
-use crate::model::project::Track;
 use crate::model::project::project::Project;
+use crate::model::project::{Node, TrackData};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 pub struct TrackHandler;
 
 impl TrackHandler {
+    /// Add a new track as a child of the composition's root track
     pub fn add_track(
         project: &Arc<RwLock<Project>>,
         composition_id: Uuid,
@@ -15,120 +16,135 @@ impl TrackHandler {
         let mut proj = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+
         let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
             LibraryError::Project(format!("Composition with ID {} not found", composition_id))
         })?;
-        let track = Track::new(track_name);
-        let id = track.id;
-        composition.add_track(track);
-        Ok(id)
+
+        let root_track_id = composition.root_track_id;
+
+        // Create new track
+        let new_track = TrackData::new(track_name);
+        let new_track_id = new_track.id;
+
+        // Add to nodes registry
+        proj.add_node(Node::Track(new_track));
+
+        // Add as child of root track
+        if let Some(root_track) = proj.get_track_mut(root_track_id) {
+            root_track.add_child(new_track_id);
+        } else {
+            return Err(LibraryError::Project(format!(
+                "Root track {} not found",
+                root_track_id
+            )));
+        }
+
+        Ok(new_track_id)
     }
 
+    /// Add a track with a specific track data (for undo/redo)
     pub fn add_track_with_id(
         project: &Arc<RwLock<Project>>,
         composition_id: Uuid,
-        track: Track,
+        track: TrackData,
     ) -> Result<Uuid, LibraryError> {
         let mut proj = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+
         let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
             LibraryError::Project(format!("Composition with ID {} not found", composition_id))
         })?;
+
+        let root_track_id = composition.root_track_id;
         let track_id = track.id;
-        composition.add_track(track);
+
+        // Add to nodes registry
+        proj.add_node(Node::Track(track));
+
+        // Add as child of root track
+        if let Some(root_track) = proj.get_track_mut(root_track_id) {
+            root_track.add_child(track_id);
+        } else {
+            return Err(LibraryError::Project(format!(
+                "Root track {} not found",
+                root_track_id
+            )));
+        }
+
         Ok(track_id)
     }
 
+    /// Get a track by ID
     pub fn get_track(
         project: &Arc<RwLock<Project>>,
-        composition_id: Uuid,
+        _composition_id: Uuid,
         track_id: Uuid,
-    ) -> Result<Track, LibraryError> {
+    ) -> Result<TrackData, LibraryError> {
         let proj = project
             .read()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        let composition = proj
-            .compositions
-            .iter()
-            .find(|c| c.id == composition_id)
-            .ok_or_else(|| {
-                LibraryError::Project(format!("Composition with ID {} not found", composition_id))
-            })?;
 
-        composition
-            .tracks
-            .iter()
-            .find(|t| t.id == track_id)
+        proj.get_track(track_id)
             .cloned()
-            .ok_or_else(|| {
-                LibraryError::Project(format!(
-                    "Track with ID {} not found in Composition {}",
-                    track_id, composition_id
-                ))
-            })
+            .ok_or_else(|| LibraryError::Project(format!("Track with ID {} not found", track_id)))
     }
 
+    /// Remove a track by ID
     pub fn remove_track(
         project: &Arc<RwLock<Project>>,
-        composition_id: Uuid,
+        _composition_id: Uuid,
         track_id: Uuid,
     ) -> Result<(), LibraryError> {
         let mut proj = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
-            LibraryError::Project(format!("Composition with ID {} not found", composition_id))
-        })?;
 
-        if composition.remove_track(track_id).is_some() {
+        // Remove from parent's child_ids (need to find parent first)
+        let parent_id = proj
+            .all_tracks()
+            .find(|t| t.child_ids.contains(&track_id))
+            .map(|t| t.id);
+
+        if let Some(pid) = parent_id {
+            if let Some(parent) = proj.get_track_mut(pid) {
+                parent.remove_child(track_id);
+            }
+        }
+
+        // Remove the track node itself
+        if proj.remove_node(track_id).is_some() {
             Ok(())
         } else {
             Err(LibraryError::Project(format!(
-                "Track with ID {} not found in Composition {}",
-                track_id, composition_id
+                "Track with ID {} not found",
+                track_id
             )))
         }
     }
 
-    /// Add a sub-track (child) to an existing parent track.
+    /// Add a sub-track (child) to an existing parent track
     pub fn add_sub_track(
         project: &Arc<RwLock<Project>>,
-        composition_id: Uuid,
+        _composition_id: Uuid,
         parent_track_id: Uuid,
         track_name: &str,
     ) -> Result<Uuid, LibraryError> {
         let mut proj = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
-            LibraryError::Project(format!("Composition with ID {} not found", composition_id))
-        })?;
 
-        // Recursively find parent track and add child
-        fn add_child_to_track(tracks: &mut [Track], parent_id: Uuid, child: Track) -> bool {
-            for track in tracks.iter_mut() {
-                if track.id == parent_id {
-                    track.add_sub_track(child);
-                    return true;
-                }
-                // Recurse into sub-tracks within children
-                for item in &mut track.children {
-                    if let crate::model::project::TrackItem::SubTrack(sub_track) = item {
-                        if sub_track.id == parent_id {
-                            sub_track.add_sub_track(child);
-                            return true;
-                        }
-                    }
-                }
-            }
-            false
-        }
-
-        let new_track = Track::new(track_name);
+        // Create new track
+        let new_track = TrackData::new(track_name);
         let new_track_id = new_track.id;
 
-        if add_child_to_track(&mut composition.tracks, parent_track_id, new_track) {
+        // Add to nodes registry
+        proj.add_node(Node::Track(new_track));
+
+        // Add as child of parent track
+        if let Some(parent_track) = proj.get_track_mut(parent_track_id) {
+            parent_track.add_child(new_track_id);
             Ok(new_track_id)
         } else {
             Err(LibraryError::Project(format!(

@@ -668,6 +668,7 @@ impl ExportDialog {
 
                 let audio_data = library::audio::mixer::mix_samples(
                     &project_model.project().assets,
+                    project_model.project(),
                     project_model.composition(),
                     &cache_manager,
                     start_sample,

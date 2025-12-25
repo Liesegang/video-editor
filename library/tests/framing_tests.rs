@@ -11,7 +11,7 @@ use std::sync::Arc;
 #[test]
 fn test_video_converter_frame_calculation() {
     let comp_fps = 30.0;
-    let comp = Composition::new("Test Comp", 1920, 1080, comp_fps, 10.0);
+    let (comp, _root_track) = Composition::new("Test Comp", 1920, 1080, comp_fps, 10.0);
 
     let mut registry = PropertyEvaluatorRegistry::new();
     registry.register("constant", Arc::new(ConstantEvaluator));

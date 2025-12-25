@@ -1,4 +1,5 @@
 use crate::error::LibraryError;
+use crate::model::project::Node;
 use crate::model::project::project::{Composition, Project};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -47,9 +48,15 @@ impl CompositionHandler {
         let mut proj = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        let composition = Composition::new(name, width, height, fps, duration);
+
+        // Composition::new returns (Composition, TrackData)
+        let (composition, root_track) = Composition::new(name, width, height, fps, duration);
         let id = composition.id;
+
+        // Add root track to nodes registry
+        proj.add_node(Node::Track(root_track));
         proj.add_composition(composition);
+
         Ok(id)
     }
 
@@ -82,13 +89,10 @@ impl CompositionHandler {
 
     pub fn is_composition_used(project: &Arc<RwLock<Project>>, comp_id: Uuid) -> bool {
         if let Ok(proj) = project.read() {
-            for comp in &proj.compositions {
-                for track in &comp.tracks {
-                    for clip in track.clips() {
-                        if clip.reference_id == Some(comp_id) {
-                            return true;
-                        }
-                    }
+            // Check all clips in the nodes registry
+            for clip in proj.all_clips() {
+                if clip.reference_id == Some(comp_id) {
+                    return true;
                 }
             }
         }

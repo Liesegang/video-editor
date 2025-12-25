@@ -65,12 +65,14 @@ impl MyApp {
 
         let default_project = Arc::new(RwLock::new(Project::new("Default Project")));
         // Add a default composition when the app starts
-        let default_comp = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
+        let (default_comp, root_track) =
+            Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
         let default_comp_id = default_comp.id;
-        default_project
-            .write()
-            .unwrap()
-            .add_composition(default_comp);
+        {
+            let mut proj = default_project.write().unwrap();
+            proj.add_node(library::model::project::Node::Track(root_track));
+            proj.add_composition(default_comp);
+        }
 
         let plugin_manager = library::create_plugin_manager();
 

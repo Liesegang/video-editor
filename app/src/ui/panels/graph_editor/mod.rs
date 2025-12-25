@@ -77,13 +77,10 @@ pub fn graph_editor_panel(
             return;
         };
 
-        let track = if let Some(t) = composition.get_track(track_id) {
-            t
-        } else {
-            return;
-        };
+        let track = proj_read.get_track(track_id);
+        let _ = track; // Not needed directly anymore, using entity from project
 
-        let entity = if let Some(e) = track.clips().find(|c| c.id == entity_id) {
+        let entity = if let Some(e) = proj_read.get_clip(entity_id) {
             e
         } else {
             return;

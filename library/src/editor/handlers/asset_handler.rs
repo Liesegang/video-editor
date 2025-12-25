@@ -19,14 +19,11 @@ impl AssetHandler {
 
     pub fn is_asset_used(project: &Arc<RwLock<Project>>, asset_id: Uuid) -> bool {
         if let Ok(proj) = project.read() {
-            for comp in &proj.compositions {
-                for track in &comp.tracks {
-                    for clip in track.clips() {
-                        if let Some(ref r) = clip.reference_id {
-                            if *r == asset_id {
-                                return true;
-                            }
-                        }
+            // Check all clips in the nodes registry
+            for clip in proj.all_clips() {
+                if let Some(ref r) = clip.reference_id {
+                    if *r == asset_id {
+                        return true;
                     }
                 }
             }

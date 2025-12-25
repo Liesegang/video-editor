@@ -5,7 +5,7 @@ use crate::model::project::asset::Asset;
 use crate::model::project::project::{Composition, Project};
 use crate::model::project::property::PropertyValue;
 use crate::model::project::property::{PropertyDefinition, PropertyUiType};
-use crate::model::project::{Track, TrackClip};
+use crate::model::project::{Node, TrackClip, TrackData};
 use crate::plugin::PluginManager;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -50,8 +50,10 @@ impl ProjectManager {
 
     pub fn create_new_project(&self) -> Result<(Uuid, Project), LibraryError> {
         let mut new_project = Project::new("New Project");
-        let default_comp = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
+        let (default_comp, root_track) =
+            Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
         let new_comp_id = default_comp.id;
+        new_project.add_node(Node::Track(root_track));
         new_project.add_composition(default_comp);
 
         let mut project_write = self.project.write().map_err(|e| {
@@ -88,16 +90,22 @@ impl ProjectManager {
             LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
         })?;
 
-        // Remove clips referencing the asset
-        for comp in &mut project_write.compositions {
-            for track in &mut comp.tracks {
-                track.children.retain(|item| match item {
-                    crate::model::project::TrackItem::Clip(clip) => {
-                        clip.reference_id != Some(asset_id)
-                    }
-                    _ => true, // Keep sub-tracks
-                });
+        // Remove clips referencing the asset from nodes registry
+        let clip_ids_to_remove: Vec<Uuid> = project_write
+            .all_clips()
+            .filter(|c| c.reference_id == Some(asset_id))
+            .map(|c| c.id)
+            .collect();
+
+        for clip_id in &clip_ids_to_remove {
+            // Remove from parent track's child_ids
+            for track in project_write.all_tracks().map(|t| t.id).collect::<Vec<_>>() {
+                if let Some(t) = project_write.get_track_mut(track) {
+                    t.remove_child(*clip_id);
+                }
             }
+            // Remove from nodes
+            project_write.remove_node(*clip_id);
         }
 
         // Remove the asset itself
@@ -111,20 +119,19 @@ impl ProjectManager {
         })?;
 
         // Remove clips referencing the composition (Nested Comps)
-        for c in &mut project_write.compositions {
-            // Skip self (though we remove it later)
-            if c.id == comp_id {
-                continue;
-            }
+        let clip_ids_to_remove: Vec<Uuid> = project_write
+            .all_clips()
+            .filter(|c| c.reference_id == Some(comp_id))
+            .map(|c| c.id)
+            .collect();
 
-            for track in &mut c.tracks {
-                track.children.retain(|item| match item {
-                    crate::model::project::TrackItem::Clip(clip) => {
-                        clip.reference_id != Some(comp_id)
-                    }
-                    _ => true, // Keep sub-tracks
-                });
+        for clip_id in &clip_ids_to_remove {
+            for track in project_write.all_tracks().map(|t| t.id).collect::<Vec<_>>() {
+                if let Some(t) = project_write.get_track_mut(track) {
+                    t.remove_child(*clip_id);
+                }
             }
+            project_write.remove_node(*clip_id);
         }
 
         // Remove the composition itself
@@ -281,7 +288,7 @@ impl ProjectManager {
         track_id: Uuid,
         track_name: &str,
     ) -> Result<Uuid, LibraryError> {
-        let mut track = Track::new(track_name);
+        let mut track = TrackData::new(track_name);
         track.id = track_id;
         handlers::track_handler::TrackHandler::add_track_with_id(
             &self.project,
@@ -294,7 +301,11 @@ impl ProjectManager {
     // Actually, ProjectService had `mutate_track` etc. which are useful helpers.
     // I will include get_track and remove_track first.
 
-    pub fn get_track(&self, composition_id: Uuid, track_id: Uuid) -> Result<Track, LibraryError> {
+    pub fn get_track(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+    ) -> Result<TrackData, LibraryError> {
         handlers::track_handler::TrackHandler::get_track(&self.project, composition_id, track_id)
     }
 
@@ -854,19 +865,15 @@ impl ProjectManager {
     pub fn get_inspector_definitions(
         &self,
         comp_id: uuid::Uuid,
-        track_id: uuid::Uuid,
+        _track_id: uuid::Uuid,
         clip_id: uuid::Uuid,
     ) -> Vec<PropertyDefinition> {
         let project = self.project.read().unwrap();
 
         let (clip, canvas_width, canvas_height) =
             if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
-                if let Some(track) = comp.get_track(track_id) {
-                    if let Some(clip) = track.clips().find(|c| c.id == clip_id) {
-                        (clip.clone(), comp.width, comp.height)
-                    } else {
-                        return Vec::new();
-                    }
+                if let Some(c) = project.get_clip(clip_id) {
+                    (c.clone(), comp.width, comp.height)
                 } else {
                     return Vec::new();
                 }

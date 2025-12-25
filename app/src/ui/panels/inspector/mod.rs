@@ -34,28 +34,21 @@ pub fn inspector_panel(
         editor_context.selection.composition_id,
         editor_context.selection.last_selected_track_id,
     ) {
-        // Fetch entity data directly from project
+        // Fetch entity data directly from project using flat O(1) lookup
         let entity_data = if let Ok(proj_read) = project.read() {
-            if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-                if let Some(track) = comp.get_track(track_id) {
-                    track.clips().find(|e| e.id == selected_entity_id).map(|e| {
-                        (
-                            e.kind.clone(),
-                            e.properties.clone(),
-                            e.in_frame,
-                            e.out_frame,
-                            e.source_begin_frame,
-                            e.duration_frame,
-                            e.effects.clone(),
-                            e.styles.clone(),
-                        )
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            // Use direct project.get_clip() instead of nested traversal
+            proj_read.get_clip(selected_entity_id).map(|e| {
+                (
+                    e.kind.clone(),
+                    e.properties.clone(),
+                    e.in_frame,
+                    e.out_frame,
+                    e.source_begin_frame,
+                    e.duration_frame,
+                    e.effects.clone(),
+                    e.styles.clone(),
+                )
+            })
         } else {
             None
         };

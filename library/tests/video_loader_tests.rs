@@ -1,4 +1,4 @@
-use library::loader::video::VideoReader;
+use library::plugin::loaders::ffmpeg_video::VideoReader;
 use std::path::PathBuf;
 
 fn get_test_file_path(filename: &str) -> PathBuf {

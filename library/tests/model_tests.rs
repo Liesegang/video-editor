@@ -1,7 +1,7 @@
 use library::model::project::asset::{Asset, AssetKind};
-use library::model::project::project::{Composition, ExportConfig, Project};
+use library::model::project::project::{Composition, Project};
 use library::model::project::property::PropertyMap;
-use library::model::project::{EffectConfig, Track, TrackClip, TrackClipKind};
+use library::model::project::{Node, TrackClip, TrackData};
 
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
@@ -20,14 +20,12 @@ fn test_project_serialization_roundtrip() {
     asset.fps = Some(60.0);
     project.assets.push(asset);
 
-    // Add Composition
-    let mut comp = Composition::new("My Comp", 1920, 1080, 30.0, 10.0);
-    // Comp ID is random, let's keep it
+    // Add Composition with root track
+    let (comp, root_track) = Composition::new("My Comp", 1920, 1080, 30.0, 10.0);
+    let root_id = comp.root_track_id;
+    project.add_node(Node::Track(root_track));
 
-    // Add Track
-    let mut track = Track::new("Video Track");
-
-    // Add Clip
+    // Create a clip and add to root track
     let clip = TrackClip::create_video(
         Some(asset_id),
         "/path/to/video.mp4",
@@ -39,8 +37,9 @@ fn test_project_serialization_roundtrip() {
         1920,
         1080,
     );
-    track.clips.push(clip);
-    comp.add_track(track);
+    let clip_id = clip.id;
+    project.add_node(Node::Clip(clip));
+    project.get_track_mut(root_id).unwrap().add_child(clip_id);
 
     project.add_composition(comp);
 
@@ -59,7 +58,12 @@ fn test_project_serialization_roundtrip() {
     assert_eq!(loaded_project.assets.len(), 1);
     assert_eq!(loaded_project.assets[0].fps, Some(60.0));
     assert_eq!(loaded_project.compositions.len(), 1);
-    assert_eq!(loaded_project.compositions[0].tracks.len(), 1);
+
+    // Check nodes registry has the clip
+    assert!(
+        loaded_project.get_clip(clip_id).is_some(),
+        "Clip should be in nodes registry"
+    );
 }
 
 #[test]
@@ -76,17 +80,60 @@ fn test_property_serialization() {
     let loaded_props: PropertyMap =
         serde_json::from_str(&json).expect("Failed to deserialize props");
 
-    // Manual equality check effectively provided by PropertyMap derivation?
-    // PropertyMap might not derive PartialEq correctly if HashMap order differs,
-    // but serde_json::Value comparison handles map order?
-    // Actually PropertyMap wraps HashMap, creating identical HashMaps should be Equal.
-
-    // We can't easily assert_eq check PropertyMap directly unless we can access inner map or check specific keys
-    // Let's check keys
     let val = loaded_props.get("opacity").expect("Missing opacity");
     if let library::model::project::property::PropertyValue::Number(n) = val.value().unwrap() {
         assert_eq!(*n, OrderedFloat(0.5));
     } else {
         panic!("Wrong value type");
     }
+}
+
+#[test]
+fn test_node_based_structure() {
+    let mut project = Project::new("Node Test");
+
+    // Create composition with root track
+    let (comp, root_track) = Composition::new("Test Comp", 1920, 1080, 30.0, 10.0);
+    let root_id = comp.root_track_id;
+    project.add_node(Node::Track(root_track));
+    project.add_composition(comp);
+
+    // Add a child track
+    let child_track = TrackData::new("Child Track");
+    let child_id = child_track.id;
+    project.add_node(Node::Track(child_track));
+    project.get_track_mut(root_id).unwrap().add_child(child_id);
+
+    // Add clips to child track
+    let clip1 = TrackClip::create_image(None, "/path/to/image.png", 0, 50, 100, 100, 30.0);
+    let clip2 = TrackClip::create_image(None, "/path/to/image2.png", 51, 100, 100, 100, 30.0);
+    let clip1_id = clip1.id;
+    let clip2_id = clip2.id;
+    project.add_node(Node::Clip(clip1));
+    project.add_node(Node::Clip(clip2));
+    project.get_track_mut(child_id).unwrap().add_child(clip1_id);
+    project.get_track_mut(child_id).unwrap().add_child(clip2_id);
+
+    // Verify structure
+    assert_eq!(project.all_tracks().count(), 2, "Should have 2 tracks");
+    assert_eq!(project.all_clips().count(), 2, "Should have 2 clips");
+
+    // Verify hierarchy
+    let root_track = project.get_track(root_id).unwrap();
+    assert_eq!(root_track.child_ids.len(), 1, "Root should have 1 child");
+    assert_eq!(
+        root_track.child_ids[0], child_id,
+        "Child should be the child track"
+    );
+
+    let child_track = project.get_track(child_id).unwrap();
+    assert_eq!(
+        child_track.child_ids.len(),
+        2,
+        "Child track should have 2 children (clips)"
+    );
+
+    // Test O(1) clip lookup
+    assert!(project.get_clip(clip1_id).is_some());
+    assert!(project.get_clip(clip2_id).is_some());
 }

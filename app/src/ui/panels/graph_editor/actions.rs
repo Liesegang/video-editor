@@ -44,6 +44,23 @@ fn parse_style_key(key: &str) -> Option<(usize, String)> {
     None
 }
 
+/// Helper to calculate source-local time from global time using flat clip lookup
+fn global_to_source_time(
+    project: &Project,
+    comp_id: Uuid,
+    entity_id: Uuid,
+    global_time: f64,
+) -> f64 {
+    if let Some(comp) = project.get_composition(comp_id) {
+        if let Some(clip) = project.get_clip(entity_id) {
+            let in_time = clip.in_frame as f64 / comp.fps;
+            let source_start = clip.source_begin_frame as f64 / clip.fps;
+            return source_start + (global_time - in_time);
+        }
+    }
+    global_time
+}
+
 pub fn process_action(
     action: Action,
     comp_id: Uuid,
@@ -71,22 +88,17 @@ pub fn process_action(
             };
 
             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                // Effect property
+                // Effect property - use flat lookup
                 let mut current_pv = None;
                 if let Ok(proj) = project.read() {
-                    // Navigate to find keyframe
-                    if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                        if let Some(track) = comp.get_track(track_id) {
-                            if let Some(clip) = track.clips().find(|c| c.id == entity_id) {
-                                if let Some(effect) = clip.effects.get(eff_idx) {
-                                    if let Some(prop) = effect.properties.get(&prop_key) {
-                                        let keyframes = prop.keyframes();
-                                        let mut sorted_kf = keyframes.clone();
-                                        sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-                                        if let Some(kf) = sorted_kf.get(idx) {
-                                            current_pv = Some(kf.value.clone());
-                                        }
-                                    }
+                    if let Some(clip) = proj.get_clip(entity_id) {
+                        if let Some(effect) = clip.effects.get(eff_idx) {
+                            if let Some(prop) = effect.properties.get(&prop_key) {
+                                let keyframes = prop.keyframes();
+                                let mut sorted_kf = keyframes.clone();
+                                sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+                                if let Some(kf) = sorted_kf.get(idx) {
+                                    current_pv = Some(kf.value.clone());
                                 }
                             }
                         }
@@ -111,6 +123,13 @@ pub fn process_action(
                     }
                 } else {
                     PropertyValue::Number(OrderedFloat(new_val))
+                };
+
+                // Convert time using helper
+                let source_time = if let Ok(proj) = project.read() {
+                    global_to_source_time(&proj, comp_id, entity_id, new_time)
+                } else {
+                    new_time
                 };
 
                 let _ = project_service.update_effect_keyframe_by_index(
@@ -120,48 +139,22 @@ pub fn process_action(
                     eff_idx,
                     &prop_key,
                     idx,
-                    Some(
-                        // Convert new_time (Global) to Source Time
-                        if let Ok(p) = project.read() {
-                            if let Some(c) = p.compositions.iter().find(|c| c.id == comp_id) {
-                                if let Some(t) = c.get_track(track_id) {
-                                    if let Some(e) = t.clips().find(|c| c.id == entity_id) {
-                                        let in_time = e.in_frame as f64 / c.fps;
-                                        let source_start = e.source_begin_frame as f64 / e.fps;
-                                        Some(source_start + (new_time - in_time))
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            Some(new_time)
-                        }
-                        .unwrap_or(new_time),
-                    ),
+                    Some(source_time),
                     Some(new_pv),
                     None,
                 );
             } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                // Style property
+                // Style property - use flat lookup
                 let mut current_pv = None;
                 if let Ok(proj) = project.read() {
-                    if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                        if let Some(track) = comp.get_track(track_id) {
-                            if let Some(clip) = track.clips().find(|c| c.id == entity_id) {
-                                if let Some(style) = clip.styles.get(style_idx) {
-                                    if let Some(prop) = style.properties.get(&prop_key) {
-                                        let keyframes = prop.keyframes();
-                                        let mut sorted_kf = keyframes.clone();
-                                        sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-                                        if let Some(kf) = sorted_kf.get(idx) {
-                                            current_pv = Some(kf.value.clone());
-                                        }
-                                    }
+                    if let Some(clip) = proj.get_clip(entity_id) {
+                        if let Some(style) = clip.styles.get(style_idx) {
+                            if let Some(prop) = style.properties.get(&prop_key) {
+                                let keyframes = prop.keyframes();
+                                let mut sorted_kf = keyframes.clone();
+                                sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+                                if let Some(kf) = sorted_kf.get(idx) {
+                                    current_pv = Some(kf.value.clone());
                                 }
                             }
                         }
@@ -186,6 +179,12 @@ pub fn process_action(
                     }
                 } else {
                     PropertyValue::Number(OrderedFloat(new_val))
+                };
+
+                let source_time = if let Ok(proj) = project.read() {
+                    global_to_source_time(&proj, comp_id, entity_id, new_time)
+                } else {
+                    new_time
                 };
 
                 let _ = project_service.update_style_keyframe_by_index(
@@ -195,47 +194,21 @@ pub fn process_action(
                     style_idx,
                     &prop_key,
                     idx,
-                    Some(
-                        // Convert new_time (Global) to Source Time
-                        if let Ok(p) = project.read() {
-                            if let Some(c) = p.compositions.iter().find(|c| c.id == comp_id) {
-                                if let Some(t) = c.get_track(track_id) {
-                                    if let Some(e) = t.clips().find(|c| c.id == entity_id) {
-                                        let in_time = e.in_frame as f64 / c.fps;
-                                        let source_start = e.source_begin_frame as f64 / e.fps;
-                                        Some(source_start + (new_time - in_time))
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            Some(new_time)
-                        }
-                        .unwrap_or(new_time),
-                    ),
+                    Some(source_time),
                     Some(new_pv),
                     None,
                 );
             } else {
-                // Clip property
+                // Clip property - use flat lookup
                 let mut current_pv = None;
                 if let Ok(proj) = project.read() {
-                    if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                        if let Some(track) = comp.get_track(track_id) {
-                            if let Some(clip) = track.clips().find(|c| c.id == entity_id) {
-                                if let Some(prop) = clip.properties.get(base_name) {
-                                    let keyframes = prop.keyframes();
-                                    let mut sorted_kf = keyframes.clone();
-                                    sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-                                    if let Some(kf) = sorted_kf.get(idx) {
-                                        current_pv = Some(kf.value.clone());
-                                    }
-                                }
+                    if let Some(clip) = proj.get_clip(entity_id) {
+                        if let Some(prop) = clip.properties.get(base_name) {
+                            let keyframes = prop.keyframes();
+                            let mut sorted_kf = keyframes.clone();
+                            sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+                            if let Some(kf) = sorted_kf.get(idx) {
+                                current_pv = Some(kf.value.clone());
                             }
                         }
                     }
@@ -261,35 +234,19 @@ pub fn process_action(
                     PropertyValue::Number(OrderedFloat(new_val))
                 };
 
+                let source_time = if let Ok(proj) = project.read() {
+                    global_to_source_time(&proj, comp_id, entity_id, new_time)
+                } else {
+                    new_time
+                };
+
                 let _ = project_service.update_keyframe(
                     comp_id,
                     track_id,
                     entity_id,
                     base_name,
                     idx,
-                    Some(
-                        // Convert new_time (Global) to Source Time
-                        if let Ok(p) = project.read() {
-                            if let Some(c) = p.compositions.iter().find(|c| c.id == comp_id) {
-                                if let Some(t) = c.get_track(track_id) {
-                                    if let Some(e) = t.clips().find(|c| c.id == entity_id) {
-                                        let in_time = e.in_frame as f64 / c.fps;
-                                        let source_start = e.source_begin_frame as f64 / e.fps;
-                                        Some(source_start + (new_time - in_time))
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            Some(new_time)
-                        }
-                        .unwrap_or(new_time),
-                    ),
+                    Some(source_time),
                     Some(new_pv),
                     None,
                 );
@@ -310,52 +267,46 @@ pub fn process_action(
             };
 
             let mut current_val_at_t = None;
-            let mut eval_time = time; // Will become source_time
+            let mut eval_time = time;
 
             if let Ok(proj) = project.read() {
-                if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                    if let Some(track) = comp.get_track(track_id) {
-                        if let Some(entity) = track.clips().find(|c| c.id == entity_id) {
-                            // Calculate Source Time from Global Time 'time'
-                            let in_time = entity.in_frame as f64 / comp.fps;
-                            let source_start = entity.source_begin_frame as f64 / entity.fps;
-                            eval_time = source_start + (time - in_time);
+                if let Some(comp) = proj.get_composition(comp_id) {
+                    if let Some(entity) = proj.get_clip(entity_id) {
+                        // Calculate source time from global time
+                        eval_time = global_to_source_time(&proj, comp_id, entity_id, time);
 
-                            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                                if let Some(effect) = entity.effects.get(eff_idx) {
-                                    if let Some(prop) = effect.properties.get(&prop_key) {
-                                        current_val_at_t =
-                                            Some(project_service.evaluate_property_value(
-                                                prop,
-                                                &effect.properties,
-                                                eval_time,
-                                                comp.fps,
-                                            ));
-                                    }
-                                }
-                            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                                // Style Property
-                                if let Some(style) = entity.styles.get(style_idx) {
-                                    if let Some(prop) = style.properties.get(&prop_key) {
-                                        current_val_at_t =
-                                            Some(project_service.evaluate_property_value(
-                                                prop,
-                                                &style.properties,
-                                                eval_time,
-                                                comp.fps,
-                                            ));
-                                    }
-                                }
-                            } else {
-                                if let Some(prop) = entity.properties.get(base_name) {
+                        if let Some((eff_idx, prop_key)) = parse_key(base_name) {
+                            if let Some(effect) = entity.effects.get(eff_idx) {
+                                if let Some(prop) = effect.properties.get(&prop_key) {
                                     current_val_at_t =
                                         Some(project_service.evaluate_property_value(
                                             prop,
-                                            &entity.properties,
+                                            &effect.properties,
                                             eval_time,
                                             comp.fps,
                                         ));
                                 }
+                            }
+                        } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
+                            if let Some(style) = entity.styles.get(style_idx) {
+                                if let Some(prop) = style.properties.get(&prop_key) {
+                                    current_val_at_t =
+                                        Some(project_service.evaluate_property_value(
+                                            prop,
+                                            &style.properties,
+                                            eval_time,
+                                            comp.fps,
+                                        ));
+                                }
+                            }
+                        } else {
+                            if let Some(prop) = entity.properties.get(base_name) {
+                                current_val_at_t = Some(project_service.evaluate_property_value(
+                                    prop,
+                                    &entity.properties,
+                                    eval_time,
+                                    comp.fps,
+                                ));
                             }
                         }
                     }
@@ -439,8 +390,8 @@ pub fn process_action(
                     entity_id,
                     base_name,
                     idx,
-                    None, // Keep existing time
-                    None, // Keep existing value
+                    None,
+                    None,
                     Some(easing),
                 );
             }
@@ -481,78 +432,13 @@ pub fn process_action(
                 (name.as_str(), None)
             };
 
-            if let Ok(project) = project.read() {
-                if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
-                    if let Some(track) = comp.get_track(track_id) {
-                        if let Some(clip) = track.clips().find(|c| c.id == entity_id) {
-                            // Effect Property
-                            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                                if let Some(effect) = clip.effects.get(eff_idx) {
-                                    if let Some(prop) = effect.properties.get(&prop_key) {
-                                        if prop.evaluator == "keyframe" {
-                                            let keyframes = prop.keyframes();
-                                            let mut sorted_kf = keyframes.clone();
-                                            sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-
-                                            if let Some(kf) = sorted_kf.get(idx) {
-                                                editor_context.keyframe_dialog.is_open = true;
-                                                editor_context.keyframe_dialog.track_id =
-                                                    Some(track_id);
-                                                editor_context.keyframe_dialog.entity_id =
-                                                    Some(entity_id);
-                                                editor_context.keyframe_dialog.property_name =
-                                                    name.clone();
-                                                editor_context.keyframe_dialog.keyframe_index = idx;
-                                                editor_context.keyframe_dialog.time =
-                                                    kf.time.into_inner();
-                                                editor_context.keyframe_dialog.value =
-                                                    match (name.ends_with(".x"), name.ends_with(".y")) {
-                                                        (true, _) => kf.value.get_as::<library::model::project::property::Vec2>().map_or(0.0, |v| v.x.into_inner()),
-                                                        (_, true) => kf.value.get_as::<library::model::project::property::Vec2>().map_or(0.0, |v| v.y.into_inner()),
-                                                        _ => kf.value.get_as::<f64>().unwrap_or(0.0),
-                                                    };
-                                                editor_context.keyframe_dialog.easing =
-                                                    kf.easing.clone();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            // Style Property
-                            else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                                if let Some(style) = clip.styles.get(style_idx) {
-                                    if let Some(prop) = style.properties.get(&prop_key) {
-                                        if prop.evaluator == "keyframe" {
-                                            let keyframes = prop.keyframes();
-                                            let mut sorted_kf = keyframes.clone();
-                                            sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-
-                                            if let Some(kf) = sorted_kf.get(idx) {
-                                                editor_context.keyframe_dialog.is_open = true;
-                                                editor_context.keyframe_dialog.track_id =
-                                                    Some(track_id);
-                                                editor_context.keyframe_dialog.entity_id =
-                                                    Some(entity_id);
-                                                editor_context.keyframe_dialog.property_name =
-                                                    name.clone();
-                                                editor_context.keyframe_dialog.keyframe_index = idx;
-                                                editor_context.keyframe_dialog.time =
-                                                    kf.time.into_inner();
-                                                editor_context.keyframe_dialog.value =
-                                                    match (name.ends_with(".x"), name.ends_with(".y")) {
-                                                        (true, _) => kf.value.get_as::<library::model::project::property::Vec2>().map_or(0.0, |v| v.x.into_inner()),
-                                                        (_, true) => kf.value.get_as::<library::model::project::property::Vec2>().map_or(0.0, |v| v.y.into_inner()),
-                                                        _ => kf.value.get_as::<f64>().unwrap_or(0.0),
-                                                    };
-                                                editor_context.keyframe_dialog.easing =
-                                                    kf.easing.clone();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            // Clip Property
-                            else if let Some(prop) = clip.properties.get(base_name) {
+            if let Ok(proj) = project.read() {
+                // Use flat O(1) lookup
+                if let Some(clip) = proj.get_clip(entity_id) {
+                    // Effect Property
+                    if let Some((eff_idx, prop_key)) = parse_key(base_name) {
+                        if let Some(effect) = clip.effects.get(eff_idx) {
+                            if let Some(prop) = effect.properties.get(&prop_key) {
                                 if prop.evaluator == "keyframe" {
                                     let keyframes = prop.keyframes();
                                     let mut sorted_kf = keyframes.clone();
@@ -582,6 +468,72 @@ pub fn process_action(
                                         editor_context.keyframe_dialog.easing = kf.easing.clone();
                                     }
                                 }
+                            }
+                        }
+                    }
+                    // Style Property
+                    else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
+                        if let Some(style) = clip.styles.get(style_idx) {
+                            if let Some(prop) = style.properties.get(&prop_key) {
+                                if prop.evaluator == "keyframe" {
+                                    let keyframes = prop.keyframes();
+                                    let mut sorted_kf = keyframes.clone();
+                                    sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+
+                                    if let Some(kf) = sorted_kf.get(idx) {
+                                        editor_context.keyframe_dialog.is_open = true;
+                                        editor_context.keyframe_dialog.track_id = Some(track_id);
+                                        editor_context.keyframe_dialog.entity_id = Some(entity_id);
+                                        editor_context.keyframe_dialog.property_name = name.clone();
+                                        editor_context.keyframe_dialog.keyframe_index = idx;
+                                        editor_context.keyframe_dialog.time = kf.time.into_inner();
+                                        editor_context.keyframe_dialog.value = match (
+                                            name.ends_with(".x"),
+                                            name.ends_with(".y"),
+                                        ) {
+                                            (true, _) => kf
+                                                .value
+                                                .get_as::<library::model::project::property::Vec2>()
+                                                .map_or(0.0, |v| v.x.into_inner()),
+                                            (_, true) => kf
+                                                .value
+                                                .get_as::<library::model::project::property::Vec2>()
+                                                .map_or(0.0, |v| v.y.into_inner()),
+                                            _ => kf.value.get_as::<f64>().unwrap_or(0.0),
+                                        };
+                                        editor_context.keyframe_dialog.easing = kf.easing.clone();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Clip Property
+                    else if let Some(prop) = clip.properties.get(base_name) {
+                        if prop.evaluator == "keyframe" {
+                            let keyframes = prop.keyframes();
+                            let mut sorted_kf = keyframes.clone();
+                            sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+
+                            if let Some(kf) = sorted_kf.get(idx) {
+                                editor_context.keyframe_dialog.is_open = true;
+                                editor_context.keyframe_dialog.track_id = Some(track_id);
+                                editor_context.keyframe_dialog.entity_id = Some(entity_id);
+                                editor_context.keyframe_dialog.property_name = name.clone();
+                                editor_context.keyframe_dialog.keyframe_index = idx;
+                                editor_context.keyframe_dialog.time = kf.time.into_inner();
+                                editor_context.keyframe_dialog.value =
+                                    match (name.ends_with(".x"), name.ends_with(".y")) {
+                                        (true, _) => kf
+                                            .value
+                                            .get_as::<library::model::project::property::Vec2>()
+                                            .map_or(0.0, |v| v.x.into_inner()),
+                                        (_, true) => kf
+                                            .value
+                                            .get_as::<library::model::project::property::Vec2>()
+                                            .map_or(0.0, |v| v.y.into_inner()),
+                                        _ => kf.value.get_as::<f64>().unwrap_or(0.0),
+                                    };
+                                editor_context.keyframe_dialog.easing = kf.easing.clone();
                             }
                         }
                     }

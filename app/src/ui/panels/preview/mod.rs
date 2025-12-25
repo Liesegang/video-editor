@@ -425,170 +425,170 @@ pub fn preview_panel(
         let mut gui_clips: Vec<clip::PreviewClip> = Vec::new();
 
         if let Some(comp) = editor_context.get_current_composition(&proj_read) {
-            // Collect GuiClips from current composition's tracks
-            for track in &comp.tracks {
-                for entity in track.clips() {
-                    // Try to resolve asset ID from file_path property or similar
-                    let asset_opt = if let Some(path) = entity.properties.get_string("file_path") {
-                        proj_read.assets.iter().find(|a| a.path == path)
-                    } else {
-                        None
-                    };
+            // Use flat all_clips() iterator instead of nested track traversal
+            for entity in proj_read.all_clips() {
+                // Find the parent track for this clip
+                let track_id = proj_read.find_parent_track(entity.id).unwrap_or_default();
 
-                    let mut width = asset_opt.and_then(|a| a.width.map(|w| w as f32));
-                    let mut height = asset_opt.and_then(|a| a.height.map(|h| h as f32));
-                    let mut content_point: Option<[f32; 2]> = None;
+                // Try to resolve asset ID from file_path property or similar
+                let asset_opt = if let Some(path) = entity.properties.get_string("file_path") {
+                    proj_read.assets.iter().find(|a| a.path == path)
+                } else {
+                    None
+                };
 
-                    // If dimensions are missing (e.g. Text, Shape), calculate them
-                    if width.is_none() || height.is_none() {
-                        use std::collections::hash_map::DefaultHasher;
-                        use std::hash::{Hash, Hasher};
+                let mut width = asset_opt.and_then(|a| a.width.map(|w| w as f32));
+                let mut height = asset_opt.and_then(|a| a.height.map(|h| h as f32));
+                let mut content_point: Option<[f32; 2]> = None;
 
-                        let mut hasher = DefaultHasher::new();
-                        entity.properties.hash(&mut hasher);
-                        let hash = hasher.finish();
+                // If dimensions are missing (e.g. Text, Shape), calculate them
+                if width.is_none() || height.is_none() {
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
 
-                        // Check cache
-                        let mut cached = None;
-                        if let Some((cached_hash, bounds)) = editor_context
-                            .interaction
-                            .bounds_cache
-                            .bounds
-                            .get(&entity.id)
-                        {
-                            if *cached_hash == hash {
-                                cached = Some(*bounds);
-                            }
+                    let mut hasher = DefaultHasher::new();
+                    entity.properties.hash(&mut hasher);
+                    let hash = hasher.finish();
+
+                    // Check cache
+                    let mut cached = None;
+                    if let Some((cached_hash, bounds)) = editor_context
+                        .interaction
+                        .bounds_cache
+                        .bounds
+                        .get(&entity.id)
+                    {
+                        if *cached_hash == hash {
+                            cached = Some(*bounds);
                         }
+                    }
 
-                        if let Some((x, y, w, h)) = cached {
+                    if let Some((x, y, w, h)) = cached {
+                        width = Some(w);
+                        height = Some(h);
+                        content_point = Some([x, y]);
+                    } else {
+                        // Calculate
+                        let plugin_manager = project_service.get_plugin_manager();
+                        let converter_registry = plugin_manager.get_entity_converter_registry();
+                        let property_evaluators = plugin_manager.get_property_evaluators();
+
+                        let current_frame =
+                            (editor_context.timeline.current_time as f64 * comp.fps).round() as u64;
+
+                        let ctx = library::framing::entity_converters::FrameEvaluationContext {
+                            composition: comp,
+                            property_evaluators: &property_evaluators,
+                        };
+
+                        if let Some((x, y, w, h)) =
+                            converter_registry.get_entity_bounds(&ctx, entity, current_frame)
+                        {
                             width = Some(w);
                             height = Some(h);
                             content_point = Some([x, y]);
-                        } else {
-                            // Calculate
-                            let plugin_manager = project_service.get_plugin_manager();
-                            let converter_registry = plugin_manager.get_entity_converter_registry();
-                            let property_evaluators = plugin_manager.get_property_evaluators();
-
-                            let current_frame = (editor_context.timeline.current_time as f64
-                                * comp.fps)
-                                .round() as u64;
-
-                            let ctx = library::framing::entity_converters::FrameEvaluationContext {
-                                composition: comp,
-                                property_evaluators: &property_evaluators,
-                            };
-
-                            if let Some((x, y, w, h)) =
-                                converter_registry.get_entity_bounds(&ctx, entity, current_frame)
-                            {
-                                width = Some(w);
-                                height = Some(h);
-                                content_point = Some([x, y]);
-                                // Update Cache
-                                editor_context
-                                    .interaction
-                                    .bounds_cache
-                                    .bounds
-                                    .insert(entity.id, (hash, (x, y, w, h)));
-                            }
+                            // Update Cache
+                            editor_context
+                                .interaction
+                                .bounds_cache
+                                .bounds
+                                .insert(entity.id, (hash, (x, y, w, h)));
                         }
                     }
-
-                    let current_frame_i64 =
-                        (editor_context.timeline.current_time as f64 * comp.fps).round() as i64;
-                    let delta_frames = current_frame_i64 - entity.in_frame as i64;
-                    let time_offset = delta_frames as f64 / comp.fps;
-                    let source_start_time = entity.source_begin_frame as f64 / entity.fps;
-                    let local_time = source_start_time + time_offset;
-
-                    // Log Gizmo Time Calculation (throttle slightly if possible, or just spam per user request)
-                    if editor_context.timeline.current_time.fract() < 0.1 {
-                        log::info!(
-                            "[Gizmo] Entity: {} | CurrentFrame: {} | LocalTime: {:.4}",
-                            entity.id,
-                            current_frame_i64,
-                            local_time
-                        );
-                    }
-
-                    let get_val = |key: &str, default: f32| {
-                        entity
-                            .properties
-                            .get(key)
-                            .map(|p| {
-                                project_service.evaluate_property_value(
-                                    p,
-                                    &entity.properties,
-                                    local_time,
-                                    comp.fps,
-                                )
-                            })
-                            .and_then(|pv| pv.get_as::<f32>())
-                            .unwrap_or(default)
-                    };
-
-                    let get_vec2 = |key: &str, default: [f32; 2]| {
-                        entity
-                            .properties
-                            .get(key)
-                            .map(|p| {
-                                let val = project_service.evaluate_property_value(
-                                    p,
-                                    &entity.properties,
-                                    local_time,
-                                    comp.fps,
-                                );
-                                val.get_as::<Vec2>()
-                                    .map(|v| [v.x.into_inner() as f32, v.y.into_inner() as f32])
-                                    .unwrap_or(default)
-                            })
-                            .unwrap_or(default)
-                    };
-
-                    let position = get_vec2("position", [960.0, 540.0]);
-                    let scale = get_vec2("scale", [100.0, 100.0]);
-                    let anchor = get_vec2("anchor", [0.0, 0.0]);
-                    let rotation = get_val("rotation", 0.0);
-                    let opacity = get_val("opacity", 100.0);
-
-                    let transform = library::model::frame::transform::Transform {
-                        position: library::model::frame::transform::Position {
-                            x: position[0] as f64,
-                            y: position[1] as f64,
-                        },
-                        scale: library::model::frame::transform::Scale {
-                            x: scale[0] as f64,
-                            y: scale[1] as f64,
-                        },
-                        rotation: rotation as f64,
-                        anchor: library::model::frame::transform::Position {
-                            x: anchor[0] as f64,
-                            y: anchor[1] as f64,
-                        },
-                        opacity: opacity as f64,
-                    };
-
-                    let content_bounds = if let (Some(w), Some(h)) = (width, height) {
-                        let (cx, cy) = if let Some(pt) = content_point {
-                            (pt[0], pt[1])
-                        } else {
-                            (0.0, 0.0)
-                        };
-                        Some((cx, cy, w, h))
-                    } else {
-                        None
-                    };
-
-                    let gc = clip::PreviewClip {
-                        clip: entity,
-                        track_id: track.id,
-                        transform,
-                        content_bounds,
-                    };
-                    gui_clips.push(gc);
                 }
+
+                let current_frame_i64 =
+                    (editor_context.timeline.current_time as f64 * comp.fps).round() as i64;
+                let delta_frames = current_frame_i64 - entity.in_frame as i64;
+                let time_offset = delta_frames as f64 / comp.fps;
+                let source_start_time = entity.source_begin_frame as f64 / entity.fps;
+                let local_time = source_start_time + time_offset;
+
+                // Log Gizmo Time Calculation (throttle slightly if possible, or just spam per user request)
+                if editor_context.timeline.current_time.fract() < 0.1 {
+                    log::info!(
+                        "[Gizmo] Entity: {} | CurrentFrame: {} | LocalTime: {:.4}",
+                        entity.id,
+                        current_frame_i64,
+                        local_time
+                    );
+                }
+
+                let get_val = |key: &str, default: f32| {
+                    entity
+                        .properties
+                        .get(key)
+                        .map(|p| {
+                            project_service.evaluate_property_value(
+                                p,
+                                &entity.properties,
+                                local_time,
+                                comp.fps,
+                            )
+                        })
+                        .and_then(|pv| pv.get_as::<f32>())
+                        .unwrap_or(default)
+                };
+
+                let get_vec2 = |key: &str, default: [f32; 2]| {
+                    entity
+                        .properties
+                        .get(key)
+                        .map(|p| {
+                            let val = project_service.evaluate_property_value(
+                                p,
+                                &entity.properties,
+                                local_time,
+                                comp.fps,
+                            );
+                            val.get_as::<Vec2>()
+                                .map(|v| [v.x.into_inner() as f32, v.y.into_inner() as f32])
+                                .unwrap_or(default)
+                        })
+                        .unwrap_or(default)
+                };
+
+                let position = get_vec2("position", [960.0, 540.0]);
+                let scale = get_vec2("scale", [100.0, 100.0]);
+                let anchor = get_vec2("anchor", [0.0, 0.0]);
+                let rotation = get_val("rotation", 0.0);
+                let opacity = get_val("opacity", 100.0);
+
+                let transform = library::model::frame::transform::Transform {
+                    position: library::model::frame::transform::Position {
+                        x: position[0] as f64,
+                        y: position[1] as f64,
+                    },
+                    scale: library::model::frame::transform::Scale {
+                        x: scale[0] as f64,
+                        y: scale[1] as f64,
+                    },
+                    rotation: rotation as f64,
+                    anchor: library::model::frame::transform::Position {
+                        x: anchor[0] as f64,
+                        y: anchor[1] as f64,
+                    },
+                    opacity: opacity as f64,
+                };
+
+                let content_bounds = if let (Some(w), Some(h)) = (width, height) {
+                    let (cx, cy) = if let Some(pt) = content_point {
+                        (pt[0], pt[1])
+                    } else {
+                        (0.0, 0.0)
+                    };
+                    Some((cx, cy, w, h))
+                } else {
+                    None
+                };
+
+                let gc = clip::PreviewClip {
+                    clip: entity,
+                    track_id,
+                    transform,
+                    content_bounds,
+                };
+                gui_clips.push(gc);
             }
         }
 
