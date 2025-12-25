@@ -192,8 +192,8 @@ fn add_clip_to_best_track(
 
     if let Some(track_id) = track_id_opt {
         if let Some(comp_id) = editor_context.selection.composition_id {
-            if let Err(e) =
-                project_service.add_clip_to_track(comp_id, track_id, clip, in_frame, out_frame)
+            if let Err(e) = project_service
+                .add_clip_to_track(comp_id, track_id, clip, in_frame, out_frame, None)
             {
                 log::error!("Failed to add clip: {}", e);
             } else {

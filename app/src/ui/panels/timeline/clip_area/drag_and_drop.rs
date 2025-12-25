@@ -46,6 +46,7 @@ pub fn handle_drag_and_drop(
                     let mut target_track_id_opt: Option<Uuid> = None;
                     let mut new_clip_opt: Option<TrackClip> = None;
                     let mut drop_out_frame_opt: Option<u64> = None;
+                    let mut calculated_insert_index: Option<usize> = None;
 
                     {
                         // Scope to ensure proj_read is dropped before service calls
@@ -93,6 +94,36 @@ pub fn handle_drag_and_drop(
                                 if let Some(asset) =
                                     proj_read.assets.iter().find(|a| a.id == *asset_id)
                                 {
+                                    if visible_row_index < display_rows.len() {
+                                        let row = &display_rows[visible_row_index];
+                                        match row {
+                                            super::super::utils::flatten::DisplayRow::TrackHeader {
+                                                track,
+                                                ..
+                                            } => {
+                                                target_track_id_opt = Some(track.id);
+                                            }
+                                            super::super::utils::flatten::DisplayRow::ClipRow {
+                                                parent_track,
+                                                ..
+                                            } => {
+                                                target_track_id_opt = Some(parent_track.id);
+                                            }
+                                        }
+
+                                        // Calculate Index
+                                        if let Some(tid) = target_track_id_opt {
+                                            if let Some(header_idx) = display_rows.iter().position(|r| r.track_id() == tid && matches!(r, super::super::utils::flatten::DisplayRow::TrackHeader{..})) {
+                                                 let raw_index = visible_row_index as isize - header_idx as isize - 1;
+                                                 if let Some(track) = proj_read.get_track(tid) {
+                                                     let clip_count = track.child_ids.iter().filter(|id| matches!(proj_read.get_node(**id), Some(library::model::project::Node::Clip(_)))).count();
+                                                     let max_index = clip_count as isize;
+                                                     let inverted = max_index - raw_index;
+                                                     calculated_insert_index = Some(inverted.clamp(0, max_index) as usize);
+                                                 }
+                                            }
+                                        }
+                                    }
                                     let duration_sec = asset.duration.unwrap_or(5.0);
                                     let duration_frames =
                                         (duration_sec * composition_fps).round() as u64;
@@ -155,30 +186,15 @@ pub fn handle_drag_and_drop(
                                             }
                                             Some(image_clip)
                                         }
-                                        AssetKind::Audio => {
-                                            let mut audio_entity = TrackClip::new(
-                                                Uuid::new_v4(),
-                                                Some(asset.id),
-                                                TrackClipKind::Audio,
-                                                0,
-                                                0,
-                                                0,
-                                                None,
-                                                composition_fps,
-                                                library::model::project::property::PropertyMap::new(
-                                                ),
-                                                Vec::new(),
-                                                Vec::new(),
-                                            );
-                                            audio_entity.in_frame = drop_in_frame;
-                                            audio_entity.out_frame = drop_out;
-                                            audio_entity.duration_frame = Some(duration_frames);
-                                            audio_entity.set_constant_property(
-                                                "file_path",
-                                                PropertyValue::String(asset.path.clone()),
-                                            );
-                                            Some(audio_entity)
-                                        }
+                                        AssetKind::Audio => Some(TrackClip::create_audio(
+                                            Some(asset.id),
+                                            &asset.path,
+                                            drop_in_frame,
+                                            drop_out,
+                                            0,
+                                            duration_frames,
+                                            composition_fps,
+                                        )),
                                         _ => None,
                                     };
                                 }
@@ -222,6 +238,9 @@ pub fn handle_drag_and_drop(
                                 );
                                 new_clip_opt = Some(comp_entity);
                             }
+                            _ => {
+                                // Track dragging and other variants not yet implemented
+                            }
                         }
                     } // proj_read is now dropped
 
@@ -236,6 +255,7 @@ pub fn handle_drag_and_drop(
                                 new_clip,
                                 drop_in_frame,
                                 drop_in_frame + (drop_out_frame_opt.unwrap() - drop_in_frame),
+                                calculated_insert_index,
                             ) {
                                 log::error!("Failed to add clip: {:?}", e);
                                 editor_context.interaction.active_modal_error = Some(e.to_string());
@@ -256,6 +276,7 @@ pub fn handle_drag_and_drop(
                                     new_clip,
                                     drop_in_frame,
                                     drop_in_frame + (drop_out_frame_opt.unwrap() - drop_in_frame),
+                                    calculated_insert_index,
                                 ) {
                                     log::error!("Failed to add clip to new track: {:?}", e);
                                     project_service.remove_track(comp_id, new_track_id).ok();

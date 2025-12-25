@@ -153,4 +153,25 @@ impl TrackHandler {
             )))
         }
     }
+
+    /// Rename a track
+    pub fn rename_track(
+        project: &Arc<RwLock<Project>>,
+        track_id: Uuid,
+        new_name: &str,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+
+        if let Some(track) = proj.get_track_mut(track_id) {
+            track.name = new_name.to_string();
+            Ok(())
+        } else {
+            Err(LibraryError::Project(format!(
+                "Track with ID {} not found",
+                track_id
+            )))
+        }
+    }
 }

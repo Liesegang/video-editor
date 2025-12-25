@@ -71,12 +71,18 @@ pub fn flatten_tracks_to_rows<'a>(
         depth: usize,
         rows: &mut Vec<DisplayRow<'a>>,
         current_row_index: &mut usize,
+        hide_header: bool,
     ) {
         let Some(track) = project.get_track(track_id) else {
             return;
         };
 
-        let is_expanded = expanded_tracks.contains(&track_id);
+        // If header is hidden (root track), always treat as expanded to show children
+        let is_expanded = if hide_header {
+            true
+        } else {
+            expanded_tracks.contains(&track_id)
+        };
 
         // Count clips and sub-tracks among children
         let mut has_clips = false;
@@ -89,24 +95,27 @@ pub fn flatten_tracks_to_rows<'a>(
             }
         }
 
-        rows.push(DisplayRow::TrackHeader {
-            track,
-            depth,
-            is_expanded,
-            visible_row_index: *current_row_index,
-            has_clips,
-            has_sub_tracks,
-        });
-        *current_row_index += 1;
+        if !hide_header {
+            rows.push(DisplayRow::TrackHeader {
+                track,
+                depth,
+                is_expanded,
+                visible_row_index: *current_row_index,
+                has_clips,
+                has_sub_tracks,
+            });
+            *current_row_index += 1;
+        }
 
         if is_expanded {
-            for (child_index, child_id) in track.child_ids.iter().enumerate() {
+            // Iterate in reverse: later children render on top, so show them first
+            for (child_index, child_id) in track.child_ids.iter().enumerate().rev() {
                 match project.get_node(*child_id) {
                     Some(Node::Clip(clip)) => {
                         rows.push(DisplayRow::ClipRow {
                             clip,
                             parent_track: track,
-                            depth: depth + 1,
+                            depth: if hide_header { depth } else { depth + 1 },
                             visible_row_index: *current_row_index,
                             child_index,
                         });
@@ -117,9 +126,10 @@ pub fn flatten_tracks_to_rows<'a>(
                             project,
                             sub_track.id,
                             expanded_tracks,
-                            depth + 1,
+                            if hide_header { depth } else { depth + 1 },
                             rows,
                             current_row_index,
+                            false,
                         );
                     }
                     None => {}
@@ -128,6 +138,7 @@ pub fn flatten_tracks_to_rows<'a>(
         }
     }
 
+    // Process tracks - later tracks in the list render on top
     for track_id in root_track_ids {
         process_track(
             project,
@@ -136,6 +147,7 @@ pub fn flatten_tracks_to_rows<'a>(
             0,
             &mut rows,
             &mut current_row_index,
+            true, // Hide root track header
         );
     }
 

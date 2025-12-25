@@ -12,6 +12,36 @@ use super::super::utils::flatten::{flatten_tracks_to_rows, DisplayRow};
 
 const EDGE_DRAG_WIDTH: f32 = 5.0;
 
+/// Deferred actions collected during UI phase, executed after read lock is released
+#[derive(Debug)]
+enum DeferredClipAction {
+    /// Update clip time (resize)
+    UpdateClipTime {
+        comp_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        new_in_frame: u64,
+        new_out_frame: u64,
+    },
+    /// Move clip to track at index (reorder/move)
+    MoveClipToTrack {
+        comp_id: Uuid,
+        original_track_id: Uuid,
+        clip_id: Uuid,
+        target_track_id: Uuid,
+        in_frame: u64,
+        target_index: Option<usize>,
+    },
+    /// Remove clip from track
+    RemoveClip {
+        comp_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+    },
+    /// Push history state after changes
+    PushHistory,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn calculate_clip_rect(
     in_frame: u64,
@@ -145,8 +175,18 @@ pub fn calculate_insert_index(
                 .iter()
                 .filter(|id| matches!(project.get_node(**id), Some(Node::Clip(_))))
                 .count();
-            let max_index = clip_count;
-            let target_index = raw_target_index.clamp(0, max_index as isize) as usize;
+
+            // Invert index because display order is reversed (Top of UI = End of List)
+            // raw_target_index 0 (directly below header) should result in index = clip_count (append)
+            // raw_target_index max should result in index = 0
+            let max_index = clip_count as isize;
+
+            // Note: We subtract raw_target_index from max_index.
+            // If raw=0, result=max (Insert at End/Top).
+            // If raw=max, result=0 (Insert at Start/Bottom).
+            let inverted_target = max_index - raw_target_index;
+            let target_index = inverted_target.clamp(0, max_index) as usize;
+
             return Some((target_index, header_idx));
         }
     }
@@ -168,130 +208,259 @@ pub fn draw_clips(
     composition_fps: f64,
 ) -> bool {
     let mut clicked_on_entity = false;
+    let mut deferred_actions: Vec<DeferredClipAction> = Vec::new();
 
-    let proj_read = match project.read() {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
+    // ===== PHASE 1: Read lock scope - UI rendering and action collection =====
+    {
+        let proj_read = match project.read() {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
 
-    // Flatten tracks for display using new DisplayRow system
-    let display_rows = flatten_tracks_to_rows(
-        &proj_read,
-        root_track_ids,
-        &editor_context.timeline.expanded_tracks,
-    );
+        // Flatten tracks for display using new DisplayRow system
+        let display_rows = flatten_tracks_to_rows(
+            &proj_read,
+            root_track_ids,
+            &editor_context.timeline.expanded_tracks,
+        );
 
-    // Calculate Reorder State if dragging
-    let mut reorder_state = None;
-    if let (Some(dragged_id), Some(hovered_tid)) = (
-        editor_context.selection.last_selected_entity_id,
-        editor_context.interaction.dragged_entity_hovered_track_id,
-    ) {
-        if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
-            if let Some((target_index, header_idx)) = calculate_insert_index(
-                mouse_pos.y,
-                content_rect_for_clip_area.min.y,
-                editor_context.timeline.scroll_offset.y,
-                row_height,
-                track_spacing,
-                &display_rows,
-                &proj_read,
-                root_track_ids,
-                hovered_tid,
-            ) {
-                // Find dragged clip original info
-                let mut dragged_original_index = 0;
-                if let Some(track) = proj_read.get_track(hovered_tid) {
-                    if let Some(pos) = track.child_ids.iter().position(|id| *id == dragged_id) {
-                        dragged_original_index = pos;
+        // Calculate Reorder State if dragging
+        let mut reorder_state = None;
+        if let (Some(dragged_id), Some(hovered_tid)) = (
+            editor_context.selection.last_selected_entity_id,
+            editor_context.interaction.dragged_entity_hovered_track_id,
+        ) {
+            if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
+                if let Some((target_index, header_idx)) = calculate_insert_index(
+                    mouse_pos.y,
+                    content_rect_for_clip_area.min.y,
+                    editor_context.timeline.scroll_offset.y,
+                    row_height,
+                    track_spacing,
+                    &display_rows,
+                    &proj_read,
+                    root_track_ids,
+                    hovered_tid,
+                ) {
+                    // Find dragged clip original info
+                    let mut dragged_original_index = 0;
+                    if let Some(track) = proj_read.get_track(hovered_tid) {
+                        if let Some(pos) = track.child_ids.iter().position(|id| *id == dragged_id) {
+                            dragged_original_index = pos;
+                        }
+                        reorder_state = Some((
+                            dragged_id,
+                            hovered_tid,
+                            dragged_original_index,
+                            target_index,
+                            header_idx,
+                        ));
                     }
-                    reorder_state = Some((
-                        dragged_id,
-                        hovered_tid,
-                        dragged_original_index,
-                        target_index,
-                        header_idx,
+                }
+            }
+        }
+
+        for row in &display_rows {
+            match row {
+                DisplayRow::TrackHeader {
+                    track,
+                    visible_row_index,
+                    is_expanded,
+                    ..
+                } => {
+                    // If collapsed, draw all clips on this row
+                    if !is_expanded {
+                        let mut clips_to_draw: Vec<&TrackClip> = Vec::new();
+                        collect_descendant_clips(&proj_read, track, &mut clips_to_draw);
+
+                        // Check if clip is a direct child of this track
+                        let direct_clip_ids: std::collections::HashSet<Uuid> = track
+                            .child_ids
+                            .iter()
+                            .filter(|id| matches!(proj_read.get_node(**id), Some(Node::Clip(_))))
+                            .copied()
+                            .collect();
+
+                        for clip in clips_to_draw {
+                            let is_summary_clip = !direct_clip_ids.contains(&clip.id);
+
+                            draw_single_clip(
+                                ui_content,
+                                content_rect_for_clip_area,
+                                editor_context,
+                                &mut deferred_actions,
+                                project_service,
+                                &proj_read,
+                                root_track_ids,
+                                clip,
+                                track,
+                                *visible_row_index,
+                                pixels_per_unit,
+                                row_height,
+                                track_spacing,
+                                composition_fps,
+                                is_summary_clip,
+                                &mut clicked_on_entity,
+                                &display_rows,
+                                &reorder_state,
+                            );
+                        }
+                    }
+                }
+                DisplayRow::ClipRow {
+                    clip,
+                    parent_track,
+                    visible_row_index,
+                    ..
+                } => {
+                    // Draw single clip on its own row
+                    draw_single_clip(
+                        ui_content,
+                        content_rect_for_clip_area,
+                        editor_context,
+                        &mut deferred_actions,
+                        project_service,
+                        &proj_read,
+                        root_track_ids,
+                        clip,
+                        parent_track,
+                        *visible_row_index,
+                        pixels_per_unit,
+                        row_height,
+                        track_spacing,
+                        composition_fps,
+                        false,
+                        &mut clicked_on_entity,
+                        &display_rows,
+                        &reorder_state,
+                    );
+                }
+            }
+        }
+
+        // Draw asset drag preview indicator
+        if let Some(ref _dragged_item) = editor_context.interaction.dragged_item {
+            if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
+                if content_rect_for_clip_area.contains(mouse_pos) {
+                    // Calculate insert position
+                    let relative_y = mouse_pos.y - content_rect_for_clip_area.min.y
+                        + editor_context.timeline.scroll_offset.y;
+                    let row_with_spacing = row_height + track_spacing;
+                    let row_index = (relative_y / row_with_spacing).floor() as usize;
+
+                    // Determine if we're in the top or bottom half of a row
+                    let y_in_row = relative_y % row_with_spacing;
+                    let insert_at_top = y_in_row < row_height / 2.0;
+
+                    // Calculate the Y position for the indicator line
+                    let indicator_row = if insert_at_top {
+                        row_index
+                    } else {
+                        row_index + 1
+                    };
+                    let indicator_y = content_rect_for_clip_area.min.y
+                        + (indicator_row as f32 * row_with_spacing)
+                        - editor_context.timeline.scroll_offset.y;
+
+                    // Draw a horizontal line indicator
+                    let painter = ui_content.painter();
+                    let line_start = egui::pos2(content_rect_for_clip_area.min.x, indicator_y);
+                    let line_end = egui::pos2(content_rect_for_clip_area.max.x, indicator_y);
+                    painter.line_segment(
+                        [line_start, line_end],
+                        egui::Stroke::new(3.0, egui::Color32::from_rgb(100, 200, 255)),
+                    );
+
+                    // Draw small triangles at the edges
+                    let triangle_size = 8.0;
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(line_start.x, indicator_y - triangle_size),
+                            egui::pos2(line_start.x + triangle_size, indicator_y),
+                            egui::pos2(line_start.x, indicator_y + triangle_size),
+                        ],
+                        egui::Color32::from_rgb(100, 200, 255),
+                        egui::Stroke::NONE,
+                    ));
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(line_end.x, indicator_y - triangle_size),
+                            egui::pos2(line_end.x - triangle_size, indicator_y),
+                            egui::pos2(line_end.x, indicator_y + triangle_size),
+                        ],
+                        egui::Color32::from_rgb(100, 200, 255),
+                        egui::Stroke::NONE,
                     ));
                 }
             }
         }
-    }
+    } // proj_read dropped here
 
-    for row in &display_rows {
-        match row {
-            DisplayRow::TrackHeader {
-                track,
-                visible_row_index,
-                is_expanded,
-                ..
+    // ===== PHASE 2: Execute deferred actions (no lock held) =====
+    let mut needs_history_push = false;
+    let mut removed_clip_ids: Vec<Uuid> = Vec::new();
+    for action in deferred_actions {
+        match action {
+            DeferredClipAction::UpdateClipTime {
+                comp_id,
+                track_id,
+                clip_id,
+                new_in_frame,
+                new_out_frame,
             } => {
-                // If collapsed, draw all clips on this row
-                if !is_expanded {
-                    let mut clips_to_draw: Vec<&TrackClip> = Vec::new();
-                    collect_descendant_clips(&proj_read, track, &mut clips_to_draw);
-
-                    // Check if clip is a direct child of this track
-                    let direct_clip_ids: std::collections::HashSet<Uuid> = track
-                        .child_ids
-                        .iter()
-                        .filter(|id| matches!(proj_read.get_node(**id), Some(Node::Clip(_))))
-                        .copied()
-                        .collect();
-
-                    for clip in clips_to_draw {
-                        let is_summary_clip = !direct_clip_ids.contains(&clip.id);
-
-                        draw_single_clip(
-                            ui_content,
-                            content_rect_for_clip_area,
-                            editor_context,
-                            project_service,
-                            history_manager,
-                            &proj_read,
-                            root_track_ids,
-                            clip,
-                            track,
-                            *visible_row_index,
-                            pixels_per_unit,
-                            row_height,
-                            track_spacing,
-                            composition_fps,
-                            is_summary_clip,
-                            &mut clicked_on_entity,
-                            &display_rows,
-                            &reorder_state,
-                        );
-                    }
+                project_service
+                    .update_clip_time(comp_id, track_id, clip_id, new_in_frame, new_out_frame)
+                    .ok();
+            }
+            DeferredClipAction::MoveClipToTrack {
+                comp_id,
+                original_track_id,
+                clip_id,
+                target_track_id,
+                in_frame,
+                target_index,
+            } => {
+                if let Err(e) = project_service.move_clip_to_track_at_index(
+                    comp_id,
+                    original_track_id,
+                    clip_id,
+                    target_track_id,
+                    in_frame,
+                    target_index,
+                ) {
+                    log::error!("Failed to move entity: {:?}", e);
                 }
             }
-            DisplayRow::ClipRow {
-                clip,
-                parent_track,
-                visible_row_index,
-                ..
+            DeferredClipAction::RemoveClip {
+                comp_id,
+                track_id,
+                clip_id,
             } => {
-                // Draw single clip on its own row
-                draw_single_clip(
-                    ui_content,
-                    content_rect_for_clip_area,
-                    editor_context,
-                    project_service,
-                    history_manager,
-                    &proj_read,
-                    root_track_ids,
-                    clip,
-                    parent_track,
-                    *visible_row_index,
-                    pixels_per_unit,
-                    row_height,
-                    track_spacing,
-                    composition_fps,
-                    false,
-                    &mut clicked_on_entity,
-                    &display_rows,
-                    &reorder_state,
-                );
+                if let Err(e) = project_service.remove_clip_from_track(comp_id, track_id, clip_id) {
+                    log::error!("Failed to remove clip: {:?}", e);
+                } else {
+                    removed_clip_ids.push(clip_id);
+                    needs_history_push = true;
+                }
             }
+            DeferredClipAction::PushHistory => {
+                needs_history_push = true;
+            }
+        }
+    }
+
+    // Update selection for removed clips
+    for clip_id in &removed_clip_ids {
+        editor_context.selection.selected_entities.remove(clip_id);
+        if editor_context.selection.last_selected_entity_id == Some(*clip_id) {
+            editor_context.selection.last_selected_entity_id = None;
+            editor_context.selection.last_selected_track_id = None;
+        }
+    }
+
+    if needs_history_push {
+        if let Ok(proj) = project.read() {
+            history_manager.push_project_state(proj.clone());
         }
     }
 
@@ -303,8 +472,8 @@ fn draw_single_clip(
     ui_content: &mut Ui,
     content_rect_for_clip_area: egui::Rect,
     editor_context: &mut EditorContext,
-    project_service: &mut ProjectService,
-    history_manager: &mut HistoryManager,
+    deferred_actions: &mut Vec<DeferredClipAction>,
+    project_service: &ProjectService,
     project: &Project,
     root_track_ids: &[Uuid],
     clip: &TrackClip,
@@ -410,21 +579,13 @@ fn draw_single_clip(
         clip_resp.context_menu(|ui| {
             if ui.button(format!("{} Remove", icons::TRASH)).clicked() {
                 if let Some(comp_id) = editor_context.selection.composition_id {
-                    if let Err(e) =
-                        project_service.remove_clip_from_track(comp_id, track.id, clip.id)
-                    {
-                        log::error!("Failed to remove entity: {:?}", e);
-                    } else {
-                        editor_context.selection.selected_entities.remove(&clip.id);
-                        if editor_context.selection.last_selected_entity_id == Some(clip.id) {
-                            editor_context.selection.last_selected_entity_id = None;
-                            editor_context.selection.last_selected_track_id = None;
-                        }
-                        let current_state = project_service.get_project().read().unwrap().clone();
-                        history_manager.push_project_state(current_state);
-                        ui.ctx().request_repaint();
-                        ui.close();
-                    }
+                    deferred_actions.push(DeferredClipAction::RemoveClip {
+                        comp_id,
+                        track_id: track.id,
+                        clip_id: clip.id,
+                    });
+                    ui.ctx().request_repaint();
+                    ui.close();
                 }
             }
         });
@@ -513,9 +674,13 @@ fn draw_single_clip(
                     editor_context.selection.composition_id,
                     editor_context.selection.last_selected_track_id,
                 ) {
-                    project_service
-                        .update_clip_time(comp_id, tid, clip.id, new_in_frame, new_out_frame)
-                        .ok();
+                    deferred_actions.push(DeferredClipAction::UpdateClipTime {
+                        comp_id,
+                        track_id: tid,
+                        clip_id: clip.id,
+                        new_in_frame,
+                        new_out_frame,
+                    });
                 }
             }
         }
@@ -524,8 +689,7 @@ fn draw_single_clip(
     if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
         if left.drag_stopped() || right.drag_stopped() {
             editor_context.interaction.is_resizing_entity = false;
-            let current_state = project_service.get_project().read().unwrap().clone();
-            history_manager.push_project_state(current_state);
+            deferred_actions.push(DeferredClipAction::PushHistory);
         }
     }
 
@@ -694,9 +858,13 @@ fn draw_single_clip(
                             let new_out_frame =
                                 (c.out_frame as i64 + dt_frames).max(new_in_frame as i64) as u64;
 
-                            project_service
-                                .update_clip_time(comp_id, tid, c.id, new_in_frame, new_out_frame)
-                                .ok();
+                            deferred_actions.push(DeferredClipAction::UpdateClipTime {
+                                comp_id,
+                                track_id: tid,
+                                clip_id: c.id,
+                                new_in_frame,
+                                new_out_frame,
+                            });
                         }
                     }
                 }
@@ -774,24 +942,20 @@ fn draw_single_clip(
                 }
             }
 
-            if let Err(e) = project_service.move_clip_to_track_at_index(
+            deferred_actions.push(DeferredClipAction::MoveClipToTrack {
                 comp_id,
                 original_track_id,
-                clip.id,
-                hovered_track_id,
-                clip.in_frame,
-                target_index_opt,
-            ) {
-                log::error!("Failed to move entity: {:?}", e);
-            } else {
-                editor_context.selection.last_selected_track_id = Some(hovered_track_id);
-                moved_track = true;
-            }
+                clip_id: clip.id,
+                target_track_id: hovered_track_id,
+                in_frame: clip.in_frame,
+                target_index: target_index_opt,
+            });
+            editor_context.selection.last_selected_track_id = Some(hovered_track_id);
+            moved_track = true;
         }
 
         if moved_track || editor_context.interaction.dragged_entity_has_moved {
-            let current_state = project_service.get_project().read().unwrap().clone();
-            history_manager.push_project_state(current_state);
+            deferred_actions.push(DeferredClipAction::PushHistory);
         }
 
         editor_context.interaction.dragged_entity_original_track_id = None;

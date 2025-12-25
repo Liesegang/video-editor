@@ -195,6 +195,10 @@ pub struct InteractionState {
 
     // Import Reporting
     pub import_report: Option<ImportReport>,
+
+    // Track Rename State
+    pub renaming_track_id: Option<Uuid>,
+    pub rename_buffer: String,
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
