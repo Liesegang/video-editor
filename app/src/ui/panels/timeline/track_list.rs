@@ -56,8 +56,94 @@ pub fn show_track_list(
     let num_rows = display_rows.len();
 
     // Iterate over visible rows
+    // Calculate Reorder State for Preview
+    let mut reorder_state = None;
+    if let (Some(dragged_id), Some(hovered_tid)) = (
+        editor_context.selection.last_selected_entity_id,
+        editor_context.interaction.dragged_entity_hovered_track_id,
+    ) {
+        if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
+            // We use track_list_rect for Y reference, assuming alignment with clip area
+            if let Some((target_index, header_idx)) =
+                super::clip_area::clips::calculate_insert_index(
+                    mouse_pos.y,
+                    track_list_rect.min.y,
+                    editor_context.timeline.scroll_offset.y,
+                    row_height,
+                    track_spacing,
+                    &display_rows,
+                    &current_tracks,
+                    hovered_tid,
+                )
+            {
+                let mut dragged_original_index = 0;
+                if let Some(track) = current_tracks.iter().find(|t| t.id == hovered_tid) {
+                    if let Some(pos) = track.clips().position(|c| c.id == dragged_id) {
+                        dragged_original_index = pos;
+                    }
+                    reorder_state = Some((
+                        dragged_id,
+                        hovered_tid,
+                        dragged_original_index,
+                        target_index,
+                        header_idx,
+                    ));
+                }
+            }
+        }
+    }
+
     for row in &display_rows {
-        let visible_row_index = row.visible_row_index();
+        let mut visible_row_index = row.visible_row_index() as isize;
+
+        // Apply visual shift based on reorder state
+        if let Some((dragged_id, hovered_track_id, original_idx, target_idx, header_idx)) =
+            reorder_state
+        {
+            match row {
+                super::utils::flatten::DisplayRow::ClipRow {
+                    clip,
+                    parent_track,
+                    child_index,
+                    ..
+                } => {
+                    if clip.id == dragged_id {
+                        visible_row_index = (header_idx + 1 + target_idx) as isize;
+                    } else if parent_track.id == hovered_track_id {
+                        let idx = *child_index;
+                        // Check if same track reordering
+                        if let Some(original_track_id) =
+                            editor_context.interaction.dragged_entity_original_track_id
+                        {
+                            if original_track_id == hovered_track_id {
+                                // Same track sort
+                                let src = original_idx;
+                                let dst = target_idx;
+                                if src < dst {
+                                    // Moving down: Items between src and dst shift up
+                                    if idx > src && idx <= dst {
+                                        visible_row_index -= 1;
+                                    }
+                                } else {
+                                    // Moving up: Items between dst and src shift down
+                                    if idx < src && idx >= dst {
+                                        visible_row_index += 1;
+                                    }
+                                }
+                            } else {
+                                // Cross track insert
+                                if idx >= target_idx {
+                                    visible_row_index += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let visible_row_index = visible_row_index as usize;
 
         let y = track_list_rect.min.y + (visible_row_index as f32 * (row_height + track_spacing))
             - editor_context.timeline.scroll_offset.y;

@@ -107,7 +107,7 @@ fn collect_descendant_clips<'a>(track: &'a Track, clips: &mut Vec<&'a TrackClip>
 }
 
 #[allow(clippy::too_many_arguments)]
-fn calculate_insert_index(
+pub fn calculate_insert_index(
     mouse_y: f32,
     content_rect_min_y: f32,
     scroll_offset_y: f32,

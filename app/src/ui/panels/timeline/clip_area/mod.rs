@@ -9,7 +9,7 @@ use crate::command::{CommandId, CommandRegistry};
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 
 mod background;
-mod clips;
+pub mod clips;
 pub mod context_menu;
 pub mod drag_and_drop;
 pub mod interactions;
