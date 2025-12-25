@@ -220,7 +220,7 @@ impl VideoReader {
 
     pub fn get_available_streams(&self) -> Vec<crate::plugin::AssetMetadata> {
         let mut streams = Vec::new();
-        let duration = self.get_duration();
+        let container_duration = self.get_duration();
 
         for stream in self.input_context.streams() {
             let params = stream.parameters();
@@ -230,6 +230,26 @@ impl VideoReader {
                 ffmpeg::media::Type::Video => crate::model::project::asset::AssetKind::Video,
                 ffmpeg::media::Type::Audio => crate::model::project::asset::AssetKind::Audio,
                 _ => continue,
+            };
+
+            // Calculate stream-specific duration
+            let duration = {
+                // First try to get duration from the stream itself
+                let stream_duration = stream.duration();
+                if stream_duration != ffmpeg::ffi::AV_NOPTS_VALUE && stream_duration > 0 {
+                    let time_base = stream.time_base();
+                    if time_base.denominator() > 0 {
+                        Some(
+                            stream_duration as f64 * time_base.numerator() as f64
+                                / time_base.denominator() as f64,
+                        )
+                    } else {
+                        container_duration
+                    }
+                } else {
+                    // Fallback to container duration
+                    container_duration
+                }
             };
 
             let mut fps = None;
