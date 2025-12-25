@@ -1,8 +1,12 @@
 pub mod asset;
 pub mod clip_helpers;
+pub mod effect;
 pub mod project;
 pub mod property;
-pub mod style; // Added
+pub mod style;
+mod track_clip_factories; // Factory methods for TrackClip
+
+pub use effect::EffectConfig;
 
 use crate::model::project::property::{PropertyMap, Vec2};
 use crate::model::project::style::StyleInstance;
@@ -84,29 +88,6 @@ pub struct TrackClip {
     #[serde(default)]
     pub effects: Vec<EffectConfig>,
 }
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct EffectConfig {
-    pub id: Uuid,
-    pub effect_type: String,
-    pub properties: PropertyMap,
-}
-
-impl std::hash::Hash for EffectConfig {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-    }
-}
-
-impl PartialEq for EffectConfig {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-            && self.effect_type == other.effect_type
-            && self.properties == other.properties
-    }
-}
-
-impl Eq for EffectConfig {}
 
 impl TrackClip {
     pub fn new(
@@ -307,504 +288,6 @@ impl TrackClip {
         definitions
     }
 
-    // Ported helper constructors from Entity
-    pub fn create_video(
-        reference_id: Option<Uuid>,
-        file_path: &str,
-        in_frame: u64,
-        out_frame: u64,
-        source_begin_frame: i64,
-        duration_frame: u64,
-        fps: f64,
-        canvas_width: u32,
-        canvas_height: u32,
-    ) -> Self {
-        let mut props = PropertyMap::new();
-        props.set(
-            "file_path".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(file_path.to_string()),
-            ),
-        );
-        // Default transform: Position at canvas center
-        props.set(
-            "position".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(canvas_width as f64 / 2.0),
-                    y: OrderedFloat(canvas_height as f64 / 2.0),
-                }),
-            ),
-        );
-        props.set(
-            "scale".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(100.0),
-                    y: OrderedFloat(100.0),
-                }),
-            ),
-        );
-        props.set(
-            "rotation".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-        );
-        props.set(
-            "anchor".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(0.0),
-                    y: OrderedFloat(0.0),
-                }),
-            ),
-        );
-
-        TrackClip::new(
-            Uuid::new_v4(),
-            reference_id,
-            TrackClipKind::Video,
-            in_frame,
-            out_frame,
-            source_begin_frame,
-            Some(duration_frame),
-            fps,
-            props,
-            Vec::new(),
-            Vec::new(),
-        )
-    }
-
-    pub fn create_image(
-        reference_id: Option<Uuid>,
-        file_path: &str,
-        in_frame: u64,
-        out_frame: u64,
-        canvas_width: u32,
-        canvas_height: u32,
-        fps: f64,
-    ) -> Self {
-        let mut props = PropertyMap::new();
-        props.set(
-            "file_path".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(file_path.to_string()),
-            ),
-        );
-
-        // Default transform: Position at canvas center
-        props.set(
-            "position".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(canvas_width as f64 / 2.0),
-                    y: OrderedFloat(canvas_height as f64 / 2.0),
-                }),
-            ),
-        );
-        props.set(
-            "scale".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(100.0),
-                    y: OrderedFloat(100.0),
-                }),
-            ),
-        );
-        props.set(
-            "rotation".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-        );
-        props.set(
-            "anchor".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(0.0),
-                    y: OrderedFloat(0.0),
-                }),
-            ),
-        );
-
-        TrackClip::new(
-            Uuid::new_v4(),
-            reference_id,
-            TrackClipKind::Image,
-            in_frame,
-            out_frame,
-            0,
-            None, // Image is static
-            fps,
-            props,
-            Vec::new(),
-            Vec::new(),
-        )
-    }
-
-    pub fn create_text(
-        text: &str,
-        in_frame: u64,
-        out_frame: u64,
-        canvas_width: u32,
-        canvas_height: u32,
-        fps: f64,
-    ) -> Self {
-        let mut props = PropertyMap::new();
-        // User requested default: "this is sample text", Arial, White
-
-        let font_size = 100.0;
-
-        props.set(
-            "text".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(text.to_string()),
-            ),
-        );
-        props.set(
-            "font_family".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String("Arial".to_string()),
-            ),
-        );
-        props.set(
-            "size".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(font_size)),
-            ),
-        );
-        let mut styles = Vec::new();
-        // Default Fill
-        let mut fill_props = PropertyMap::new();
-        fill_props.set(
-            "color".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Color(
-                    crate::model::frame::color::Color {
-                        r: 255,
-                        g: 255,
-                        b: 255,
-                        a: 255,
-                    },
-                ),
-            ),
-        );
-        fill_props.set(
-            "offset".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-        );
-
-        styles.push(StyleInstance::new("fill", fill_props));
-
-        // Measure text for anchor centering
-        let font_mgr = skia_safe::FontMgr::default();
-        let typeface = font_mgr
-            .match_family_style("Arial", skia_safe::FontStyle::normal())
-            .unwrap_or_else(|| {
-                font_mgr
-                    .match_family_style("Arial", skia_safe::FontStyle::normal())
-                    .expect("Failed to load default font")
-            }); // Fallback
-
-        let mut font = skia_safe::Font::default();
-        font.set_typeface(typeface);
-        font.set_size(font_size as f32);
-
-        let width =
-            crate::rendering::text_layout::measure_text_width(text, "Arial", font_size as f32);
-        let (_, metrics) = font.metrics();
-        // Calculate height consistent with entity_converters logic
-        let height = metrics.descent - metrics.ascent;
-
-        let anchor_x = width as f64 / 2.0;
-        let anchor_y = height as f64 / 2.0;
-
-        // Default transform
-        props.set(
-            "position".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(canvas_width as f64 / 2.0),
-                    y: OrderedFloat(canvas_height as f64 / 2.0),
-                }),
-            ),
-        );
-        props.set(
-            "scale".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(100.0),
-                    y: OrderedFloat(100.0),
-                }),
-            ),
-        );
-        props.set(
-            "rotation".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-        );
-        props.set(
-            "anchor".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(anchor_x),
-                    y: OrderedFloat(anchor_y),
-                }),
-            ),
-        );
-        props.set(
-            "opacity".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
-            ),
-        );
-
-        TrackClip::new(
-            Uuid::new_v4(),
-            None,
-            TrackClipKind::Text,
-            in_frame,
-            out_frame,
-            0,
-            None, // Text is static
-            fps,
-            props,
-            styles,
-            Vec::new(),
-        )
-    }
-
-    pub fn create_shape(
-        in_frame: u64,
-        out_frame: u64,
-        canvas_width: u32,
-        canvas_height: u32,
-        fps: f64,
-    ) -> Self {
-        let mut props = PropertyMap::new();
-
-        // Default Shape Properties
-        // User requested: Heart (White Border, Red Fill)
-        let heart_path = "M 50,30 A 20,20 0,0,1 90,30 C 90,55 50,85 50,85 C 50,85 10,55 10,30 A 20,20 0,0,1 50,30 Z";
-        props.set(
-            "path".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(heart_path.to_string()),
-            ),
-        );
-
-        // Default Styles
-        let mut styles = Vec::new();
-
-        // Fill Red
-        let mut fill_props = PropertyMap::new();
-        fill_props.set(
-            "color".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Color(
-                    crate::model::frame::color::Color {
-                        r: 255,
-                        g: 0,
-                        b: 0,
-                        a: 255,
-                    },
-                ),
-            ),
-        );
-        fill_props.set(
-            "offset".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-        );
-        styles.push(StyleInstance::new("fill", fill_props));
-
-        // Stroke White
-        let mut stroke_props = PropertyMap::new();
-        stroke_props.set(
-            "color".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Color(
-                    crate::model::frame::color::Color {
-                        r: 255,
-                        g: 255,
-                        b: 255,
-                        a: 255,
-                    },
-                ),
-            ),
-        );
-        stroke_props.set(
-            "width".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(5.0)),
-            ),
-        );
-        stroke_props.set(
-            "offset".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-        );
-        styles.push(StyleInstance::new("stroke", stroke_props));
-
-        props.set(
-            "width".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
-            ),
-        );
-        props.set(
-            "height".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
-            ),
-        );
-
-        // Transform: Position at canvas center
-        props.set(
-            "position".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(canvas_width as f64 / 2.0),
-                    y: OrderedFloat(canvas_height as f64 / 2.0),
-                }),
-            ),
-        );
-        props.set(
-            "scale".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(100.0),
-                    y: OrderedFloat(100.0),
-                }),
-            ),
-        );
-        props.set(
-            "rotation".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-        );
-        props.set(
-            "anchor".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(50.0),
-                    y: OrderedFloat(50.0),
-                }),
-            ),
-        );
-        props.set(
-            "opacity".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
-            ),
-        );
-
-        TrackClip::new(
-            Uuid::new_v4(),
-            None,
-            TrackClipKind::Shape,
-            in_frame,
-            out_frame,
-            0,
-            None,
-            fps,
-            props,
-            styles,
-            Vec::new(),
-        )
-    }
-
-    pub fn create_sksl(
-        in_frame: u64,
-        out_frame: u64,
-        canvas_width: u32,
-        canvas_height: u32,
-        fps: f64,
-    ) -> Self {
-        let mut props = PropertyMap::new();
-
-        // Default ShaderToy-compatible shader
-        // Note: Uniforms (iResolution, iTime, etc.) are automatically injected by the renderer.
-        let default_shader = r#"
-half4 main(float2 fragCoord) {
-    float2 uv = fragCoord / iResolution.xy;
-    float3 col = 0.5 + 0.5*cos(iTime+uv.xyx+float3(0,2,4));
-    return half4(col,1.0);
-}
-"#;
-
-        props.set(
-            "shader".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(default_shader.to_string()),
-            ),
-        );
-
-        // Default transform
-        props.set(
-            "position".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(canvas_width as f64 / 2.0),
-                    y: OrderedFloat(canvas_height as f64 / 2.0),
-                }),
-            ),
-        );
-        props.set(
-            "scale".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(100.0),
-                    y: OrderedFloat(100.0),
-                }),
-            ),
-        );
-        props.set(
-            "rotation".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-        );
-        // For SkSL which usually fills screen, we might center anchor too (if it fills screen).
-        // Let's assume it matches canvas size for now.
-        props.set(
-            "anchor".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(canvas_width as f64 / 2.0),
-                    y: OrderedFloat(canvas_height as f64 / 2.0),
-                }),
-            ),
-        );
-        props.set(
-            "opacity".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::Number(OrderedFloat(100.0)),
-            ),
-        );
-
-        TrackClip::new(
-            Uuid::new_v4(),
-            None,
-            TrackClipKind::SkSL,
-            in_frame,
-            out_frame,
-            0,
-            None,
-            fps,
-            props,
-            Vec::new(),
-            Vec::new(),
-        )
-    }
-
     // Helper for consistency with Entity
     pub fn set_constant_property(
         &mut self,
@@ -815,6 +298,60 @@ half4 main(float2 fragCoord) {
             key.to_string(),
             crate::model::project::property::Property::constant(value),
         );
+    }
+
+    /// Update or upsert a clip property value/keyframe.
+    /// If property exists and is keyframed, upserts keyframe at time.
+    /// If property is constant or doesn't exist, sets as constant.
+    pub fn update_property_or_keyframe(
+        &mut self,
+        key: &str,
+        time: f64,
+        value: property::PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) {
+        if let Some(prop) = self.properties.get_mut(key) {
+            if prop.evaluator == "keyframe" {
+                prop.upsert_keyframe(time, value, easing);
+            } else {
+                self.properties
+                    .set(key.to_string(), property::Property::constant(value));
+            }
+        } else {
+            self.properties
+                .set(key.to_string(), property::Property::constant(value));
+        }
+    }
+
+    /// Update effect property at specified index.
+    pub fn update_effect_property(
+        &mut self,
+        effect_index: usize,
+        key: &str,
+        time: f64,
+        value: property::PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), &'static str> {
+        let effect = self
+            .effects
+            .get_mut(effect_index)
+            .ok_or("Effect not found")?;
+        effect.update_property_or_keyframe(key, time, value, easing);
+        Ok(())
+    }
+
+    /// Update style property at specified index.
+    pub fn update_style_property(
+        &mut self,
+        style_index: usize,
+        key: &str,
+        time: f64,
+        value: property::PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), &'static str> {
+        let style = self.styles.get_mut(style_index).ok_or("Style not found")?;
+        style.update_property_or_keyframe(key, time, value, easing);
+        Ok(())
     }
 }
 
