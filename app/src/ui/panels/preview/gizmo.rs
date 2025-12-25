@@ -65,16 +65,15 @@ pub fn handle_gizmo_interaction(
                 // Clone needed properties to avoid borrow issues
                 let (comp_id, track_id, current_props) = if let Ok(proj_read) = project.read() {
                     if let Some(comp) = editor_context.get_current_composition(&proj_read) {
-                        if let Some(track) = comp
-                            .tracks
-                            .iter()
-                            .find(|t| t.clips().any(|c| c.id == selected_id))
-                        {
-                            if let Some(clip) = track.clips().find(|c| c.id == selected_id) {
-                                (Some(comp.id), Some(track.id), Some(clip.properties.clone()))
-                            } else {
-                                (None, None, None)
-                            }
+                        // Use flat O(1) lookup instead of nested traversal
+                        if let Some(clip) = proj_read.get_clip(selected_id) {
+                            let parent_track_id =
+                                proj_read.find_parent_track(selected_id).unwrap_or_default();
+                            (
+                                Some(comp.id),
+                                Some(parent_track_id),
+                                Some(clip.properties.clone()),
+                            )
                         } else {
                             (None, None, None)
                         }

@@ -42,6 +42,7 @@ impl AudioService {
             if let Some(comp) = project.compositions.first() {
                 crate::core::audio::mixer::mix_samples(
                     &project.assets,
+                    &project,
                     comp,
                     &self.cache_manager,
                     sample_pos,
@@ -92,6 +93,7 @@ impl AudioService {
             if let Some(comp) = project.compositions.first() {
                 crate::core::audio::mixer::mix_samples(
                     &project.assets,
+                    &project,
                     comp,
                     &self.cache_manager,
                     start_sample,
@@ -144,6 +146,7 @@ impl AudioService {
             if let Some(comp) = project.compositions.first() {
                 crate::core::audio::mixer::mix_samples(
                     &project.assets,
+                    &project,
                     comp,
                     &self.cache_manager,
                     start_sample,

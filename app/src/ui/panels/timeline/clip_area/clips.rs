@@ -1,7 +1,7 @@
 use egui::{epaint::StrokeKind, Ui};
 use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
-use library::model::project::{Track, TrackClip, TrackClipKind, TrackItem};
+use library::model::project::{Node, TrackClip, TrackClipKind, TrackData};
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -22,7 +22,7 @@ fn calculate_clip_rect(
     row_height: f32,
     track_spacing: f32,
     composition_fps: f64,
-    base_offset: egui::Vec2, // e.g. content_rect.min or similar
+    base_offset: egui::Vec2,
 ) -> egui::Rect {
     let timeline_duration = out_frame.saturating_sub(in_frame);
     let initial_x = base_offset.x + (in_frame as f32 / composition_fps as f32) * pixels_per_unit
@@ -43,7 +43,7 @@ fn draw_waveform(
     painter: &egui::Painter,
     clip_rect: egui::Rect,
     audio_data: &[f32],
-    source_begin_frame: i64, // Changed to i64
+    source_begin_frame: i64,
     composition_fps: f64,
     pixels_per_unit: f32,
     sample_rate: f64,
@@ -64,7 +64,7 @@ fn draw_waveform(
         let start_sample_idx = if source_time >= 0.0 {
             (source_time * sample_rate) as usize * channels
         } else {
-            audio_data.len() + 1 // Invalid index
+            audio_data.len() + 1
         };
         let end_sample_idx = start_sample_idx + samples_per_pixel as usize;
 
@@ -96,12 +96,17 @@ fn draw_waveform(
     }
 }
 
-// Helper to collect all clips from a track and its descendants
-fn collect_descendant_clips<'a>(track: &'a Track, clips: &mut Vec<&'a TrackClip>) {
-    clips.extend(track.clips());
-    for child_item in &track.children {
-        if let TrackItem::SubTrack(child) = child_item {
-            collect_descendant_clips(child, clips);
+// Helper to collect all clips from a track and its descendants using Project node lookup
+fn collect_descendant_clips<'a>(
+    project: &'a Project,
+    track: &'a TrackData,
+    clips: &mut Vec<&'a TrackClip>,
+) {
+    for child_id in &track.child_ids {
+        match project.get_node(*child_id) {
+            Some(Node::Clip(clip)) => clips.push(clip),
+            Some(Node::Track(sub_track)) => collect_descendant_clips(project, sub_track, clips),
+            None => {}
         }
     }
 }
@@ -114,7 +119,8 @@ pub fn calculate_insert_index(
     row_height: f32,
     track_spacing: f32,
     display_rows: &[DisplayRow],
-    current_tracks: &[library::model::project::Track],
+    project: &Project,
+    _root_track_ids: &[Uuid],
     hovered_track_id: Uuid,
 ) -> Option<(usize, usize)> {
     // Returns (target_index, header_row_index)
@@ -129,14 +135,17 @@ pub fn calculate_insert_index(
             (current_y_in_clip_area / (row_height + track_spacing)).floor() as isize;
         let header_row_index = header_idx as isize;
 
-        // Target index relative to track (0-indexed clips)
-        // Row structure: Header (0), Clip 0 (1), Clip 1 (2)...
-        // So clip_index = row_diff - 1
         let raw_target_index = hovered_row_index - header_row_index - 1;
 
         // Clamp to valid range
-        if let Some(track) = current_tracks.iter().find(|t| t.id == hovered_track_id) {
-            let max_index = track.clips().count();
+        if let Some(track) = project.get_track(hovered_track_id) {
+            // Count clips in this track
+            let clip_count = track
+                .child_ids
+                .iter()
+                .filter(|id| matches!(project.get_node(**id), Some(Node::Clip(_))))
+                .count();
+            let max_index = clip_count;
             let target_index = raw_target_index.clamp(0, max_index as isize) as usize;
             return Some((target_index, header_idx));
         }
@@ -151,9 +160,8 @@ pub fn draw_clips(
     editor_context: &mut EditorContext,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
-    current_tracks: &[library::model::project::Track],
-
-    _project: &Arc<RwLock<Project>>,
+    project: &Arc<RwLock<Project>>,
+    root_track_ids: &[Uuid],
     pixels_per_unit: f32,
     row_height: f32,
     track_spacing: f32,
@@ -161,11 +169,19 @@ pub fn draw_clips(
 ) -> bool {
     let mut clicked_on_entity = false;
 
-    // Flatten tracks for display using new DisplayRow system - MOVED TO TOP
-    let display_rows =
-        flatten_tracks_to_rows(current_tracks, &editor_context.timeline.expanded_tracks);
+    let proj_read = match project.read() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
 
-    // Calcluate Reorder State if dragging
+    // Flatten tracks for display using new DisplayRow system
+    let display_rows = flatten_tracks_to_rows(
+        &proj_read,
+        root_track_ids,
+        &editor_context.timeline.expanded_tracks,
+    );
+
+    // Calculate Reorder State if dragging
     let mut reorder_state = None;
     if let (Some(dragged_id), Some(hovered_tid)) = (
         editor_context.selection.last_selected_entity_id,
@@ -179,13 +195,14 @@ pub fn draw_clips(
                 row_height,
                 track_spacing,
                 &display_rows,
-                current_tracks,
+                &proj_read,
+                root_track_ids,
                 hovered_tid,
             ) {
                 // Find dragged clip original info
                 let mut dragged_original_index = 0;
-                if let Some(track) = current_tracks.iter().find(|t| t.id == hovered_tid) {
-                    if let Some(pos) = track.clips().position(|c| c.id == dragged_id) {
+                if let Some(track) = proj_read.get_track(hovered_tid) {
+                    if let Some(pos) = track.child_ids.iter().position(|id| *id == dragged_id) {
                         dragged_original_index = pos;
                     }
                     reorder_state = Some((
@@ -211,10 +228,18 @@ pub fn draw_clips(
                 // If collapsed, draw all clips on this row
                 if !is_expanded {
                     let mut clips_to_draw: Vec<&TrackClip> = Vec::new();
-                    collect_descendant_clips(track, &mut clips_to_draw);
+                    collect_descendant_clips(&proj_read, track, &mut clips_to_draw);
+
+                    // Check if clip is a direct child of this track
+                    let direct_clip_ids: std::collections::HashSet<Uuid> = track
+                        .child_ids
+                        .iter()
+                        .filter(|id| matches!(proj_read.get_node(**id), Some(Node::Clip(_))))
+                        .copied()
+                        .collect();
 
                     for clip in clips_to_draw {
-                        let is_summary_clip = !track.clips().any(|c| c.id == clip.id);
+                        let is_summary_clip = !direct_clip_ids.contains(&clip.id);
 
                         draw_single_clip(
                             ui_content,
@@ -222,7 +247,8 @@ pub fn draw_clips(
                             editor_context,
                             project_service,
                             history_manager,
-                            current_tracks,
+                            &proj_read,
+                            root_track_ids,
                             clip,
                             track,
                             *visible_row_index,
@@ -251,7 +277,8 @@ pub fn draw_clips(
                     editor_context,
                     project_service,
                     history_manager,
-                    current_tracks,
+                    &proj_read,
+                    root_track_ids,
                     clip,
                     parent_track,
                     *visible_row_index,
@@ -278,9 +305,10 @@ fn draw_single_clip(
     editor_context: &mut EditorContext,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
-    current_tracks: &[Track],
+    project: &Project,
+    root_track_ids: &[Uuid],
     clip: &TrackClip,
-    track: &Track,
+    track: &TrackData,
     row_index: usize,
     pixels_per_unit: f32,
     row_height: f32,
@@ -289,7 +317,7 @@ fn draw_single_clip(
     is_summary_clip: bool,
     clicked_on_entity: &mut bool,
     display_rows: &[DisplayRow],
-    reorder_state: &Option<(Uuid, Uuid, usize, usize, usize)>, // dragged_id, track_id, orig_idx, target_idx, header_row_idx
+    reorder_state: &Option<(Uuid, Uuid, usize, usize, usize)>,
 ) {
     // Determine Color based on kind using helper
     let (r, g, b) = clip.display_color();
@@ -300,13 +328,9 @@ fn draw_single_clip(
 
     // Check if we are in a reordering state
     if let Some((dragged_id, r_track_id, src_idx, dst_idx, header_row_idx)) = reorder_state {
-        // CASE 1: This is the dragged clip (snap to target)
         if clip.id == *dragged_id {
-            // Snap to target row (works for both same track and cross-track)
             visual_row_index = header_row_idx + 1 + dst_idx;
-        }
-        // CASE 2: Other clips in the TARGET track (shift to make gap)
-        else if track.id == *r_track_id {
+        } else if track.id == *r_track_id {
             // Get original child index from DisplayRow if available
             let mut original_child_index = None;
             if let Some(DisplayRow::ClipRow { child_index, .. }) = display_rows.get(row_index) {
@@ -314,25 +338,9 @@ fn draw_single_clip(
             }
 
             if let Some(idx) = original_child_index {
-                // Shift logic
                 let mut new_child_index = idx;
                 let src = *src_idx;
                 let dst = *dst_idx;
-
-                // Only shift if we are in the same track as original?
-                // If dragging from A to B:
-                // In B (target track): src is effectively "undefined" or "infinity" (new item coming in).
-                // Actually, reorder_state.src_idx is only valid if dragged_id was originally in r_track_id.
-
-                // Checking if dragged item WAS in this track
-                // We need to know if we are doing Intra-Track (Sort) or Inter-Track (Insert).
-                // reorder_state has `dragged_original_index`. This index is strictly valid for the track where it CAME from.
-
-                // If r_track_id == dragged_entity_original_track_id: then Sort.
-                // Else: Insert.
-
-                // We can check if `current_tracks` (model) has the clip in this track to know if it's local.
-                // Optimization: Check editor_context.
 
                 let is_same_track_sort = if let Some(orig_tid) =
                     editor_context.interaction.dragged_entity_original_track_id
@@ -343,7 +351,6 @@ fn draw_single_clip(
                 };
 
                 if is_same_track_sort {
-                    // Intra-Track Sort Logic (existing logic)
                     if src < dst {
                         if idx > src && idx <= dst {
                             new_child_index = idx - 1;
@@ -354,10 +361,6 @@ fn draw_single_clip(
                         }
                     }
                 } else {
-                    // Inter-Track Insert Logic
-                    // Dragging FROM another track TO here.
-                    // Simply open a gap at dst.
-                    // Everything >= dst shifts down.
                     if idx >= dst {
                         new_child_index = idx + 1;
                     }
@@ -373,7 +376,7 @@ fn draw_single_clip(
     let initial_clip_rect = calculate_clip_rect(
         clip.in_frame,
         clip.out_frame,
-        visual_row_index, // Use the adjusted visual row index
+        visual_row_index,
         editor_context.timeline.scroll_offset,
         pixels_per_unit,
         row_height,
@@ -389,14 +392,12 @@ fn draw_single_clip(
     }
 
     // --- Interaction for clips ---
-
     let sense = if is_summary_clip {
         egui::Sense::click()
     } else {
         egui::Sense::click_and_drag()
     };
 
-    // Note: Use a combined ID for summary clips to avoid conflicts if same clip shown multiple times
     let interaction_id = if is_summary_clip {
         egui::Id::new(clip.id).with("summary").with(row_index)
     } else {
@@ -429,12 +430,11 @@ fn draw_single_clip(
         });
     }
 
-    // Edges (Resize) - Disable for summary clips for now
+    // Edges (Resize)
     let mut left_edge_resp = None;
     let mut right_edge_resp = None;
 
     if !is_summary_clip {
-        // Create edge responses
         let left_edge_rect = egui::Rect::from_min_size(
             egui::pos2(initial_clip_rect.min.x, initial_clip_rect.min.y),
             egui::vec2(EDGE_DRAG_WIDTH, initial_clip_rect.height()),
@@ -477,7 +477,6 @@ fn draw_single_clip(
             let mut new_in_frame = clip.in_frame;
             let mut new_out_frame = clip.out_frame;
 
-            // Source constraints
             let source_max_out_frame = if let Some(duration) = clip.duration_frame {
                 let source_end_offset = duration as i64 - clip.source_begin_frame;
                 if source_end_offset > 0 {
@@ -502,14 +501,13 @@ fn draw_single_clip(
 
             if left.dragged() {
                 new_in_frame = ((new_in_frame as i64 + dt_frames).max(0) as u64)
-                    .min(new_out_frame.saturating_sub(1)); // Minimum 1 frame duration
+                    .min(new_out_frame.saturating_sub(1));
             } else if right.dragged() {
                 new_out_frame = ((new_out_frame as i64 + dt_frames).max(new_in_frame as i64 + 1)
-                    as u64) // Minimum 1 frame duration
-                    .min(source_max_out_frame); // Cannot go beyond source duration
+                    as u64)
+                    .min(source_max_out_frame);
             }
 
-            // Update if there's an actual change
             if new_in_frame != clip.in_frame || new_out_frame != clip.out_frame {
                 if let (Some(comp_id), Some(tid)) = (
                     editor_context.selection.composition_id,
@@ -531,16 +529,12 @@ fn draw_single_clip(
         }
     }
 
-    // Calculate display position (potentially adjusted for drag preview)
+    // Calculate display position
     let mut display_x = initial_clip_rect.min.x;
     let display_y = initial_clip_rect.min.y;
 
-    // Adjust position for dragged entity preview
     if editor_context.is_selected(clip.id) && clip_resp.dragged() && !is_summary_clip {
         display_x += clip_resp.drag_delta().x;
-
-        // Remove legacy display_y calculation logic as it's handled by reorder_state now.
-        // We only adjust X here for time-shift visualization.
     }
 
     let drawing_clip_rect = egui::Rect::from_min_size(
@@ -548,13 +542,12 @@ fn draw_single_clip(
         egui::vec2(safe_width, row_height),
     );
 
-    // --- Drawing for clips (always) ---
+    // --- Drawing ---
     let is_sel_entity = editor_context.is_selected(clip.id);
     let mut transparent_color =
         egui::Color32::from_rgba_premultiplied(clip_color.r(), clip_color.g(), clip_color.b(), 150);
 
     if is_summary_clip {
-        // Dim summary clips and maybe make them more transparent
         transparent_color = egui::Color32::from_rgba_premultiplied(
             clip_color.r(),
             clip_color.g(),
@@ -610,13 +603,12 @@ fn draw_single_clip(
     }
 
     painter.text(
-        drawing_clip_rect.min + egui::vec2(5.0, 5.0), // Top left align
+        drawing_clip_rect.min + egui::vec2(5.0, 5.0),
         egui::Align2::LEFT_TOP,
         &clip_text,
         egui::FontId::default(),
         egui::Color32::BLACK,
     );
-    // --- End Drawing for clips ---
 
     // Cursor feedback
     if !is_summary_clip {
@@ -669,6 +661,7 @@ fn draw_single_clip(
             editor_context.interaction.dragged_entity_has_moved = false;
         }
     }
+
     if !editor_context.interaction.is_resizing_entity
         && clip_resp.dragged()
         && editor_context.is_selected(clip.id)
@@ -691,58 +684,32 @@ fn draw_single_clip(
                     .collect();
 
                 for entity_id in selected_ids {
-                    // Optimized recursive helper
-                    fn find_clip_recursive_single(
-                        track: &Track,
-                        clip_id: Uuid,
-                    ) -> Option<(TrackClip, Uuid)> {
-                        if let Some(c) = track.clips().find(|c| c.id == clip_id) {
-                            return Some((c.clone(), track.id));
-                        }
-                        for item in &track.children {
-                            if let TrackItem::SubTrack(sub) = item {
-                                if let Some(res) = find_clip_recursive_single(sub, clip_id) {
-                                    return Some(res);
-                                }
-                            }
-                        }
-                        None
-                    }
+                    // Use Project.get_clip for lookup
+                    if let Some(c) = project.get_clip(entity_id) {
+                        // Find which track contains this clip
+                        if let Some(tid) =
+                            find_track_containing_clip(project, root_track_ids, entity_id)
+                        {
+                            let new_in_frame = (c.in_frame as i64 + dt_frames).max(0) as u64;
+                            let new_out_frame =
+                                (c.out_frame as i64 + dt_frames).max(new_in_frame as i64) as u64;
 
-                    fn find_clip_recursive(
-                        tracks: &[Track],
-                        clip_id: Uuid,
-                    ) -> Option<(TrackClip, Uuid)> {
-                        for t in tracks {
-                            if let Some(res) = find_clip_recursive_single(t, clip_id) {
-                                return Some(res);
-                            }
+                            project_service
+                                .update_clip_time(comp_id, tid, c.id, new_in_frame, new_out_frame)
+                                .ok();
                         }
-                        None
-                    }
-
-                    if let Some((c, tid)) = find_clip_recursive(current_tracks, entity_id) {
-                        let new_in_frame = (c.in_frame as i64 + dt_frames).max(0) as u64;
-                        let new_out_frame =
-                            (c.out_frame as i64 + dt_frames).max(new_in_frame as i64) as u64;
-
-                        project_service
-                            .update_clip_time(comp_id, tid, c.id, new_in_frame, new_out_frame)
-                            .ok();
                     }
                 }
             }
         }
 
-        // Handle vertical movement (track change detection) with stickiness
+        // Handle vertical movement
         if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
             let mut allow_track_change = true;
 
-            // Calculate total vertical drag distance to implement stickiness
-            // We only allow changing tracks if the user implies vertical movement
             if let Some(press_origin) = ui_content.input(|i| i.pointer.press_origin()) {
                 let total_vertical_delta = (mouse_pos.y - press_origin.y).abs();
-                let threshold = (row_height + track_spacing) * 0.75; // Require significant vertical movement
+                let threshold = (row_height + track_spacing) * 0.75;
 
                 if total_vertical_delta < threshold {
                     allow_track_change = false;
@@ -765,7 +732,6 @@ fn draw_single_clip(
                     }
                 }
             } else {
-                // Stick to original track
                 if let Some(original_id) =
                     editor_context.interaction.dragged_entity_original_track_id
                 {
@@ -779,6 +745,7 @@ fn draw_single_clip(
             }
         }
     }
+
     if !editor_context.interaction.is_resizing_entity
         && clip_resp.drag_stopped()
         && editor_context.is_selected(clip.id)
@@ -790,8 +757,6 @@ fn draw_single_clip(
             editor_context.interaction.dragged_entity_hovered_track_id,
             editor_context.selection.composition_id,
         ) {
-            // Allow moving within same track (Reordering)
-            // Calculate target index
             let mut target_index_opt = None;
             if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
                 if let Some((target_index, _)) = calculate_insert_index(
@@ -801,14 +766,14 @@ fn draw_single_clip(
                     row_height,
                     track_spacing,
                     display_rows,
-                    current_tracks,
+                    project,
+                    root_track_ids,
                     hovered_track_id,
                 ) {
                     target_index_opt = Some(target_index);
                 }
             }
 
-            // Move entity
             if let Err(e) = project_service.move_clip_to_track_at_index(
                 comp_id,
                 original_track_id,
@@ -834,25 +799,57 @@ fn draw_single_clip(
     }
 }
 
+// Helper to find which track contains a clip
+fn find_track_containing_clip(
+    project: &Project,
+    root_track_ids: &[Uuid],
+    clip_id: Uuid,
+) -> Option<Uuid> {
+    fn search_track(project: &Project, track_id: Uuid, clip_id: Uuid) -> Option<Uuid> {
+        if let Some(track) = project.get_track(track_id) {
+            for child_id in &track.child_ids {
+                if *child_id == clip_id {
+                    return Some(track_id);
+                }
+                if let Some(Node::Track(_)) = project.get_node(*child_id) {
+                    if let Some(found) = search_track(project, *child_id, clip_id) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    for root_id in root_track_ids {
+        if let Some(found) = search_track(project, *root_id, clip_id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn get_clips_in_box(
     rect: egui::Rect,
-    editor_context: &EditorContext, // Access scroll_offset
-    current_tracks: &[library::model::project::Track],
+    editor_context: &EditorContext,
+    project: &Project,
+    root_track_ids: &[Uuid],
     pixels_per_unit: f32,
     row_height: f32,
     track_spacing: f32,
     composition_fps: f64,
     rect_offset: egui::Vec2,
 ) -> Vec<(Uuid, Uuid)> {
-    // Returns (EntityId, TrackId)
     let mut found_clips = Vec::new();
-    let display_rows =
-        flatten_tracks_to_rows(current_tracks, &editor_context.timeline.expanded_tracks);
+    let display_rows = flatten_tracks_to_rows(
+        project,
+        root_track_ids,
+        &editor_context.timeline.expanded_tracks,
+    );
 
     for row in display_rows {
-        // Collect clips to check based on row type
-        let mut clips_to_check: Vec<(&TrackClip, &Track, usize)> = Vec::new(); // clip, track, visible_row_index
+        let mut clips_to_check: Vec<(&TrackClip, &TrackData, usize)> = Vec::new();
 
         match row {
             DisplayRow::TrackHeader {
@@ -861,10 +858,9 @@ pub fn get_clips_in_box(
                 is_expanded,
                 ..
             } => {
-                // If collapsed, check clips on this row
                 if !is_expanded {
                     let mut clips = Vec::new();
-                    collect_descendant_clips(track, &mut clips);
+                    collect_descendant_clips(project, track, &mut clips);
                     for clip in clips {
                         clips_to_check.push((clip, track, visible_row_index));
                     }

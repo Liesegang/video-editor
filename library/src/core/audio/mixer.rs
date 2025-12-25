@@ -1,21 +1,27 @@
 use crate::cache::CacheManager;
 use crate::model::project::asset::Asset;
-use crate::model::project::project::Composition;
-use crate::model::project::{Track, TrackClip};
+use crate::model::project::project::{Composition, Project};
+use crate::model::project::{Node, TrackClip};
+use uuid::Uuid;
 
-/// Recursively collect all clips from a track and its children
-fn collect_all_clips(track: &Track) -> Vec<&TrackClip> {
-    let mut clips: Vec<&TrackClip> = track.clips().collect();
-    for child_item in &track.children {
-        if let crate::model::project::TrackItem::SubTrack(child_track) = child_item {
-            clips.extend(collect_all_clips(child_track));
+/// Recursively collect all clips from the project starting at a given node
+fn collect_clips_recursive<'a>(project: &'a Project, node_id: Uuid) -> Vec<&'a TrackClip> {
+    let mut clips = Vec::new();
+    match project.get_node(node_id) {
+        Some(Node::Clip(c)) => clips.push(c),
+        Some(Node::Track(t)) => {
+            for child_id in &t.child_ids {
+                clips.extend(collect_clips_recursive(project, *child_id));
+            }
         }
+        None => {}
     }
     clips
 }
 
 pub fn mix_samples(
     assets: &[Asset],
+    project: &Project,
     composition: &Composition,
     cache_manager: &CacheManager,
     start_sample: u64,
@@ -26,12 +32,8 @@ pub fn mix_samples(
     let mut mix_buffer = vec![0.0; frames_to_mix * channels as usize];
     let fps = composition.fps;
 
-    // Collect all clips from all tracks (including nested)
-    let all_clips: Vec<&TrackClip> = composition
-        .tracks
-        .iter()
-        .flat_map(|t| collect_all_clips(t))
-        .collect();
+    // Collect all clips from the root track
+    let all_clips: Vec<&TrackClip> = collect_clips_recursive(project, composition.root_track_id);
 
     for clip in all_clips {
         if let Some(asset_id) = clip.reference_id {

@@ -172,6 +172,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
 
         let audio_data = crate::core::audio::mixer::mix_samples(
             &project_model.project().assets,
+            project_model.project().as_ref(),
             project_model.composition(),
             &cache_manager,
             start_sample,

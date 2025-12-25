@@ -1,4 +1,4 @@
-use library::service::color_space_manager::ColorSpaceManager;
+use library::editor::color_service::ColorSpaceManager;
 
 #[test]
 fn test_native_ocio_integration() {

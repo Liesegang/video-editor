@@ -1,7 +1,6 @@
 use egui::Ui;
 use egui_phosphor::regular as icons;
 use library::model::project::project::Project;
-use library::model::project::Track;
 use library::EditorService as ProjectService;
 use log::error;
 use std::sync::{Arc, RwLock};
@@ -32,27 +31,34 @@ pub fn show_track_list(
 
     use std::collections::HashMap;
 
-    let mut current_tracks: Vec<Track> = Vec::new();
+    let mut root_track_ids: Vec<uuid::Uuid> = Vec::new();
     let mut asset_names: HashMap<uuid::Uuid, String> = HashMap::new();
     let selected_composition_id = editor_context.selection.composition_id;
 
+    let proj_read = project.read().ok();
+
     if let Some(comp_id) = selected_composition_id {
-        if let Ok(proj_read) = project.read() {
-            if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-                current_tracks = comp.tracks.clone();
+        if let Some(ref proj) = proj_read {
+            if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
+                root_track_ids.push(comp.root_track_id);
             }
             // Cache asset names for quick lookup
-            for asset in &proj_read.assets {
+            for asset in &proj.assets {
                 asset_names.insert(asset.id, asset.name.clone());
             }
         }
     }
 
     // Flatten tracks based on expanded state using the new row-based flattener
-    let display_rows = super::utils::flatten::flatten_tracks_to_rows(
-        &current_tracks,
-        &editor_context.timeline.expanded_tracks,
-    );
+    let display_rows = if let Some(ref proj) = proj_read {
+        super::utils::flatten::flatten_tracks_to_rows(
+            proj,
+            &root_track_ids,
+            &editor_context.timeline.expanded_tracks,
+        )
+    } else {
+        Vec::new()
+    };
     let num_rows = display_rows.len();
 
     // Iterate over visible rows
@@ -63,31 +69,33 @@ pub fn show_track_list(
         editor_context.interaction.dragged_entity_hovered_track_id,
     ) {
         if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
-            // We use track_list_rect for Y reference, assuming alignment with clip area
-            if let Some((target_index, header_idx)) =
-                super::clip_area::clips::calculate_insert_index(
-                    mouse_pos.y,
-                    track_list_rect.min.y,
-                    editor_context.timeline.scroll_offset.y,
-                    row_height,
-                    track_spacing,
-                    &display_rows,
-                    &current_tracks,
-                    hovered_tid,
-                )
-            {
-                let mut dragged_original_index = 0;
-                if let Some(track) = current_tracks.iter().find(|t| t.id == hovered_tid) {
-                    if let Some(pos) = track.clips().position(|c| c.id == dragged_id) {
-                        dragged_original_index = pos;
-                    }
-                    reorder_state = Some((
-                        dragged_id,
+            if let Some(ref proj) = proj_read {
+                if let Some((target_index, header_idx)) =
+                    super::clip_area::clips::calculate_insert_index(
+                        mouse_pos.y,
+                        track_list_rect.min.y,
+                        editor_context.timeline.scroll_offset.y,
+                        row_height,
+                        track_spacing,
+                        &display_rows,
+                        proj,
+                        &root_track_ids,
                         hovered_tid,
-                        dragged_original_index,
-                        target_index,
-                        header_idx,
-                    ));
+                    )
+                {
+                    let mut dragged_original_index = 0;
+                    if let Some(track) = proj.get_track(hovered_tid) {
+                        if let Some(pos) = track.child_ids.iter().position(|id| *id == dragged_id) {
+                            dragged_original_index = pos;
+                        }
+                        reorder_state = Some((
+                            dragged_id,
+                            hovered_tid,
+                            dragged_original_index,
+                            target_index,
+                            header_idx,
+                        ));
+                    }
                 }
             }
         }
@@ -238,11 +246,6 @@ pub fn show_track_list(
                 // Indentation
                 let indent = *depth as f32 * 10.0;
                 let mut text_offset_x = 5.0 + indent;
-
-                // Expand/Collapse Icon (Always show if it's a track, might want to check children count?
-                // flatten.rs uses has_clips/has_sub_tracks but we can simpler just show for Tracks)
-                // Actually `flatten.rs` determines `is_folder`... here we just check if it can expand.
-                // Assuming all tracks *can* be folders effectively.
 
                 let icon_rect = egui::Rect::from_min_size(
                     egui::pos2(row_rect.min.x + indent, row_rect.min.y),

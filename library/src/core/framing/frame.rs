@@ -5,13 +5,14 @@ use log::debug;
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::frame::{FrameInfo, Region};
 use crate::model::project::project::{Composition, Project};
-use crate::model::project::{Track, TrackClip, TrackClipKind}; // Add explicit import
+use crate::model::project::{Node, TrackClip, TrackClipKind};
 use crate::util::timing::ScopedTimer;
 
 use super::entity_converters::{EntityConverterRegistry, FrameEvaluationContext};
 use crate::plugin::PropertyEvaluatorRegistry;
 
 pub struct FrameEvaluator<'a> {
+    project: &'a Project,
     composition: &'a Composition,
     property_evaluators: Arc<PropertyEvaluatorRegistry>,
     entity_converter_registry: Arc<EntityConverterRegistry>,
@@ -19,11 +20,13 @@ pub struct FrameEvaluator<'a> {
 
 impl<'a> FrameEvaluator<'a> {
     pub fn new(
+        project: &'a Project,
         composition: &'a Composition,
         property_evaluators: Arc<PropertyEvaluatorRegistry>,
         entity_converter_registry: Arc<EntityConverterRegistry>,
     ) -> Self {
         Self {
+            project,
             composition,
             property_evaluators,
             entity_converter_registry,
@@ -38,7 +41,7 @@ impl<'a> FrameEvaluator<'a> {
     ) -> FrameInfo {
         let mut frame = self.initialize_frame(frame_number, render_scale, region);
 
-        // Flatten tracks recursively
+        // Collect active clips from the node registry
         let all_clips = self.collect_active_clips(frame_number);
 
         for track_clip in all_clips {
@@ -70,33 +73,31 @@ impl<'a> FrameEvaluator<'a> {
 
     fn collect_active_clips(&self, frame_number: u64) -> Vec<&TrackClip> {
         let mut clips = Vec::new();
-        for track in &self.composition.tracks {
-            self.collect_clips_from_track(track, frame_number, &mut clips);
-        }
+        self.collect_clips_recursive(self.composition.root_track_id, frame_number, &mut clips);
         clips
     }
 
-    fn collect_clips_from_track<'b>(
-        &self,
-        track: &'b Track,
+    fn collect_clips_recursive<'b>(
+        &'b self,
+        node_id: uuid::Uuid,
         frame_number: u64,
         out_clips: &mut Vec<&'b TrackClip>,
     ) {
-        // Collect from current track
-        for clip in track.clips() {
-            if clip.kind != TrackClipKind::Audio
-                && clip.in_frame <= frame_number
-                && clip.out_frame >= frame_number
-            {
-                out_clips.push(clip);
+        match self.project.get_node(node_id) {
+            Some(Node::Clip(clip)) => {
+                if clip.kind != TrackClipKind::Audio
+                    && clip.in_frame <= frame_number
+                    && clip.out_frame >= frame_number
+                {
+                    out_clips.push(clip);
+                }
             }
-        }
-
-        // Recurse into children (only SubTrack variants)
-        for child_item in &track.children {
-            if let crate::model::project::TrackItem::SubTrack(child_track) = child_item {
-                self.collect_clips_from_track(child_track, frame_number, out_clips);
+            Some(Node::Track(track)) => {
+                for child_id in &track.child_ids {
+                    self.collect_clips_recursive(*child_id, frame_number, out_clips);
+                }
             }
+            None => {}
         }
     }
 
@@ -113,6 +114,7 @@ impl<'a> FrameEvaluator<'a> {
 }
 
 pub fn evaluate_composition_frame(
+    project: &Project,
     composition: &Composition,
     frame_number: u64,
     render_scale: f64,
@@ -121,6 +123,7 @@ pub fn evaluate_composition_frame(
     entity_converter_registry: &Arc<EntityConverterRegistry>,
 ) -> FrameInfo {
     FrameEvaluator::new(
+        project,
         composition,
         Arc::clone(property_evaluators),
         Arc::clone(entity_converter_registry),
@@ -148,6 +151,7 @@ pub fn get_frame_from_project(
 
     let composition = &project.compositions[composition_index];
     let frame = evaluate_composition_frame(
+        project,
         composition,
         frame_number,
         render_scale,
@@ -171,7 +175,7 @@ mod tests {
     use crate::model::frame::entity::FrameContent;
     use crate::model::project::project::Composition;
     use crate::model::project::property::{Property, PropertyMap, PropertyValue, Vec2};
-    use crate::model::project::{Track, TrackClip, TrackClipKind};
+    use crate::model::project::{Node, TrackClip, TrackClipKind, TrackData};
 
     use crate::plugin::PluginManager;
     use crate::plugin::properties::{
@@ -207,9 +211,8 @@ mod tests {
             "file_path".into(),
             constant(PropertyValue::String("dummy".into())),
         );
-        // Add required props for ImageEntityConverter to not fail
         props.set("position".into(), constant(make_vec2(0.0, 0.0)));
-        props.set("scale".into(), constant(make_vec2(100.0, 100.0))); // Image converter looks for "scale"
+        props.set("scale".into(), constant(make_vec2(100.0, 100.0)));
         props.set(
             "scale_x".into(),
             constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))),
@@ -234,9 +237,24 @@ mod tests {
         }
     }
 
+    fn setup_test_project() -> (Project, uuid::Uuid) {
+        let mut project = Project::new("Test");
+        let root_track = TrackData::new("Root");
+        let root_id = root_track.id;
+        project.add_node(Node::Track(root_track));
+
+        let comp = Composition::new_with_root("comp", 1920, 1080, 30.0, 10.0, root_id);
+        let comp_id = comp.id;
+        project.add_composition(comp);
+
+        (project, comp_id)
+    }
+
     #[test]
     fn frame_evaluator_builds_text_object() {
-        let mut composition = Composition::new("comp", 1920, 1080, 30.0, 10.0);
+        let (mut project, _comp_id) = setup_test_project();
+        let comp = &project.compositions[0];
+        let root_id = comp.root_track_id;
 
         let mut text_props = PropertyMap::new();
         text_props.set(
@@ -287,30 +305,30 @@ mod tests {
         );
 
         let track_clip = TrackClip {
-            id: uuid::Uuid::new_v4(), // Added ID
+            id: uuid::Uuid::new_v4(),
             reference_id: None,
             kind: TrackClipKind::Text,
-            in_frame: 0,           // Renamed
-            out_frame: 150,        // Renamed
-            source_begin_frame: 0, // Added
-            duration_frame: None,  // Added
+            in_frame: 0,
+            out_frame: 150,
+            source_begin_frame: 0,
+            duration_frame: None,
             fps: 30.0,
             properties: text_props,
             effects: Vec::new(),
             styles: Vec::new(),
         };
-        let track = Track {
-            id: uuid::Uuid::new_v4(),
-            name: "track".into(),
-            children: vec![crate::model::project::TrackItem::Clip(track_clip)],
-        };
-        composition.add_track(track);
+        let clip_id = track_clip.id;
+        project.add_node(Node::Clip(track_clip));
+        project.get_track_mut(root_id).unwrap().add_child(clip_id);
 
         let plugin_manager = create_test_plugin_manager();
         let registry = plugin_manager.get_property_evaluators();
         let entity_converter_registry = plugin_manager.get_entity_converter_registry();
+
+        let composition = &project.compositions[0];
         let evaluator = FrameEvaluator::new(
-            &composition,
+            &project,
+            composition,
             Arc::clone(&registry),
             Arc::clone(&entity_converter_registry),
         );
@@ -331,7 +349,9 @@ mod tests {
 
     #[test]
     fn frame_evaluator_filters_inactive_entities() {
-        let mut composition = Composition::new("comp", 1920, 1080, 30.0, 10.0);
+        let (mut project, _comp_id) = setup_test_project();
+        let comp = &project.compositions[0];
+        let root_id = comp.root_track_id;
 
         let mut props = PropertyMap::new();
         props.set(
@@ -365,11 +385,11 @@ mod tests {
         );
 
         let early = TrackClip {
-            id: uuid::Uuid::new_v4(), // Added ID
+            id: uuid::Uuid::new_v4(),
             reference_id: None,
             kind: TrackClipKind::Image,
-            in_frame: 0,   // Renamed
-            out_frame: 30, // Renamed (1.0 sec at 30fps)
+            in_frame: 0,
+            out_frame: 30,
             source_begin_frame: 0,
             duration_frame: None,
             fps: 30.0,
@@ -379,11 +399,11 @@ mod tests {
         };
 
         let late = TrackClip {
-            id: uuid::Uuid::new_v4(), // Added ID
+            id: uuid::Uuid::new_v4(),
             reference_id: None,
             kind: TrackClipKind::Image,
-            in_frame: 150,  // Renamed (5.0 sec at 30fps)
-            out_frame: 180, // Renamed (6.0 sec at 30fps)
+            in_frame: 150,
+            out_frame: 180,
             source_begin_frame: 0,
             duration_frame: None,
             fps: 30.0,
@@ -392,29 +412,29 @@ mod tests {
             styles: Vec::new(),
         };
 
-        let track = Track {
-            id: uuid::Uuid::new_v4(),
-            name: "track".into(),
-            children: vec![
-                crate::model::project::TrackItem::Clip(early),
-                crate::model::project::TrackItem::Clip(late),
-            ],
-        };
-        composition.add_track(track);
+        let early_id = early.id;
+        let late_id = late.id;
+        project.add_node(Node::Clip(early));
+        project.add_node(Node::Clip(late));
+        project.get_track_mut(root_id).unwrap().add_child(early_id);
+        project.get_track_mut(root_id).unwrap().add_child(late_id);
 
         let plugin_manager = create_test_plugin_manager();
         let registry = plugin_manager.get_property_evaluators();
         let entity_converter_registry = plugin_manager.get_entity_converter_registry();
+
+        let composition = &project.compositions[0];
         let evaluator = FrameEvaluator::new(
-            &composition,
+            &project,
+            composition,
             Arc::clone(&registry),
             Arc::clone(&entity_converter_registry),
         );
 
-        let frame = evaluator.evaluate(15, 1.0, None); // 0.5s * 30fps = 15 frames
+        let frame = evaluator.evaluate(15, 1.0, None);
         assert_eq!(frame.objects.len(), 1, "Only early entity should render");
 
-        let frame_late = evaluator.evaluate(165, 1.0, None); // 5.5s * 30fps = 165 frames
+        let frame_late = evaluator.evaluate(165, 1.0, None);
         assert_eq!(
             frame_late.objects.len(),
             1,
@@ -424,25 +444,43 @@ mod tests {
 
     #[test]
     fn frame_evaluator_flattens_nested_tracks() {
-        let mut composition = Composition::new("comp", 1920, 1080, 30.0, 10.0);
+        let (mut project, _comp_id) = setup_test_project();
+        let comp = &project.compositions[0];
+        let root_id = comp.root_track_id;
 
         let clip1 = create_dummy_clip();
         let clip2 = create_dummy_clip();
+        let clip1_id = clip1.id;
+        let clip2_id = clip2.id;
 
-        let mut child_track = Track::new("Child Track");
-        child_track.add_clip(clip2);
+        // Create child track
+        let child_track = TrackData::new("Child Track");
+        let child_track_id = child_track.id;
+        project.add_node(Node::Track(child_track));
 
-        let mut parent_track = Track::new("Parent Track");
-        parent_track.add_clip(clip1);
-        parent_track.add_sub_track(child_track);
+        // Add clips
+        project.add_node(Node::Clip(clip1));
+        project.add_node(Node::Clip(clip2));
 
-        composition.add_track(parent_track);
+        // Link hierarchy
+        project.get_track_mut(root_id).unwrap().add_child(clip1_id);
+        project
+            .get_track_mut(root_id)
+            .unwrap()
+            .add_child(child_track_id);
+        project
+            .get_track_mut(child_track_id)
+            .unwrap()
+            .add_child(clip2_id);
 
         let plugin_manager = create_test_plugin_manager();
         let registry = plugin_manager.get_property_evaluators();
         let entity_converter_registry = plugin_manager.get_entity_converter_registry();
+
+        let composition = &project.compositions[0];
         let evaluator = FrameEvaluator::new(
-            &composition,
+            &project,
+            composition,
             Arc::clone(&registry),
             Arc::clone(&entity_converter_registry),
         );

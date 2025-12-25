@@ -4,7 +4,7 @@ use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Track, TrackItem};
+use super::{Node, TrackClip, TrackData};
 use crate::model::frame::color::Color;
 
 use crate::model::project::asset::Asset;
@@ -17,6 +17,9 @@ pub struct Project {
     pub assets: Vec<Asset>,
     #[serde(default)]
     pub export: ExportConfig,
+    /// 統一ノードレジストリ - 全Track/Clipを格納
+    #[serde(default)]
+    pub nodes: HashMap<Uuid, Node>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)]
@@ -60,12 +63,12 @@ impl Project {
             compositions: Vec::new(),
             assets: Vec::new(),
             export: ExportConfig::default(),
+            nodes: HashMap::new(),
         }
     }
 
     pub fn load(json_str: &str) -> Result<Self, serde_json::Error> {
         let project: Project = serde_json::from_str(json_str)?;
-
         Ok(project)
     }
 
@@ -90,28 +93,115 @@ impl Project {
         Some(self.compositions.remove(index))
     }
 
-    /// Helper to get a mutable reference to a Track inside a Composition
-    pub fn get_track_mut(&mut self, composition_id: Uuid, track_id: Uuid) -> Option<&mut Track> {
-        self.get_composition_mut(composition_id)?
-            .get_track_mut(track_id)
+    // ==================== Node Registry Methods ====================
+
+    /// Add a node to the registry
+    pub fn add_node(&mut self, node: Node) {
+        self.nodes.insert(node.id(), node);
     }
 
-    /// Helper to get a mutable reference to a Clip inside a Track inside a Composition
-    pub fn get_clip_mut(
-        &mut self,
-        composition_id: Uuid,
-        track_id: Uuid,
-        clip_id: Uuid,
-    ) -> Option<&mut crate::model::project::TrackClip> {
-        self.get_track_mut(composition_id, track_id)?
-            .clips_mut()
-            .find(|c| c.id == clip_id)
+    /// Get a node by ID
+    pub fn get_node(&self, id: Uuid) -> Option<&Node> {
+        self.nodes.get(&id)
+    }
+
+    /// Get a mutable node by ID
+    pub fn get_node_mut(&mut self, id: Uuid) -> Option<&mut Node> {
+        self.nodes.get_mut(&id)
+    }
+
+    /// Remove a node from the registry
+    pub fn remove_node(&mut self, id: Uuid) -> Option<Node> {
+        self.nodes.remove(&id)
+    }
+
+    // ==================== Convenience Accessors ====================
+
+    /// Get a clip by ID (convenience method)
+    pub fn get_clip(&self, id: Uuid) -> Option<&TrackClip> {
+        match self.nodes.get(&id)? {
+            Node::Clip(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// Get a mutable clip by ID (convenience method)
+    pub fn get_clip_mut(&mut self, id: Uuid) -> Option<&mut TrackClip> {
+        match self.nodes.get_mut(&id)? {
+            Node::Clip(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// Get a track by ID (convenience method)
+    pub fn get_track(&self, id: Uuid) -> Option<&TrackData> {
+        match self.nodes.get(&id)? {
+            Node::Track(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// Get a mutable track by ID (convenience method)
+    pub fn get_track_mut(&mut self, id: Uuid) -> Option<&mut TrackData> {
+        match self.nodes.get_mut(&id)? {
+            Node::Track(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    // ==================== Traversal Helpers ====================
+
+    /// Collect all clips under a given node (recursively)
+    pub fn collect_clips(&self, node_id: Uuid) -> Vec<&TrackClip> {
+        let mut clips = Vec::new();
+        self.collect_clips_recursive(node_id, &mut clips);
+        clips
+    }
+
+    fn collect_clips_recursive<'a>(&'a self, node_id: Uuid, clips: &mut Vec<&'a TrackClip>) {
+        match self.nodes.get(&node_id) {
+            Some(Node::Clip(c)) => clips.push(c),
+            Some(Node::Track(t)) => {
+                for child_id in &t.child_ids {
+                    self.collect_clips_recursive(*child_id, clips);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Iterate over all clips in the registry
+    pub fn all_clips(&self) -> impl Iterator<Item = &TrackClip> {
+        self.nodes.values().filter_map(|node| match node {
+            Node::Clip(c) => Some(c),
+            _ => None,
+        })
+    }
+
+    /// Iterate over all tracks in the registry
+    pub fn all_tracks(&self) -> impl Iterator<Item = &TrackData> {
+        self.nodes.values().filter_map(|node| match node {
+            Node::Track(t) => Some(t),
+            _ => None,
+        })
+    }
+
+    /// Find the parent track containing a given clip ID
+    pub fn find_parent_track(&self, clip_id: Uuid) -> Option<Uuid> {
+        for (id, node) in &self.nodes {
+            if let Node::Track(track) = node {
+                if track.child_ids.contains(&clip_id) {
+                    return Some(*id);
+                }
+            }
+        }
+        None
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Composition {
-    pub id: Uuid, // Added UUID field
+    pub id: Uuid,
     pub name: String,
     pub width: u64,
     pub height: u64,
@@ -124,13 +214,16 @@ pub struct Composition {
     #[serde(default)]
     pub work_area_out: u64,
 
-    pub tracks: Vec<Track>,
+    /// 単一のルートトラックUUID
+    pub root_track_id: Uuid,
 }
 
 impl Composition {
-    pub fn new(name: &str, width: u64, height: u64, fps: f64, duration: f64) -> Self {
-        Self {
-            id: Uuid::new_v4(), // Initialize with a new UUID
+    /// Create a new composition with an auto-generated root track
+    pub fn new(name: &str, width: u64, height: u64, fps: f64, duration: f64) -> (Self, TrackData) {
+        let root_track = TrackData::new(&format!("{} - Root", name));
+        let comp = Self {
+            id: Uuid::new_v4(),
             name: name.to_string(),
             width,
             height,
@@ -145,92 +238,37 @@ impl Composition {
             color_profile: "sRGB".to_string(),
             work_area_in: 0,
             work_area_out: (duration * fps).ceil() as u64,
-            tracks: Vec::new(),
-        }
+            root_track_id: root_track.id,
+        };
+        (comp, root_track)
     }
 
-    pub fn add_track(&mut self, track: Track) {
-        self.tracks.push(track);
-    }
-
-    pub fn get_track_mut(&mut self, id: Uuid) -> Option<&mut Track> {
-        fn find_in_track(track: &mut Track, id: Uuid) -> Option<&mut Track> {
-            if track.id == id {
-                return Some(track);
-            }
-            for item in &mut track.children {
-                if let TrackItem::SubTrack(sub) = item {
-                    if let Some(found) = find_in_track(sub, id) {
-                        return Some(found);
-                    }
-                }
-            }
-            None
+    /// Create a composition with an existing root track ID
+    pub fn new_with_root(
+        name: &str,
+        width: u64,
+        height: u64,
+        fps: f64,
+        duration: f64,
+        root_track_id: Uuid,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            width,
+            height,
+            fps,
+            duration,
+            background_color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            color_profile: "sRGB".to_string(),
+            work_area_in: 0,
+            work_area_out: (duration * fps).ceil() as u64,
+            root_track_id,
         }
-
-        for track in &mut self.tracks {
-            if let Some(found) = find_in_track(track, id) {
-                return Some(found);
-            }
-        }
-        None
-    }
-
-    pub fn get_track(&self, id: Uuid) -> Option<&Track> {
-        fn find_in_track(track: &Track, id: Uuid) -> Option<&Track> {
-            if track.id == id {
-                return Some(track);
-            }
-            for item in &track.children {
-                if let TrackItem::SubTrack(sub) = item {
-                    if let Some(found) = find_in_track(sub, id) {
-                        return Some(found);
-                    }
-                }
-            }
-            None
-        }
-
-        for track in &self.tracks {
-            if let Some(found) = find_in_track(track, id) {
-                return Some(found);
-            }
-        }
-        None
-    }
-
-    pub fn remove_track(&mut self, id: Uuid) -> Option<Track> {
-        // First check top-level
-        if let Some(index) = self.tracks.iter().position(|t| t.id == id) {
-            return Some(self.tracks.remove(index));
-        }
-
-        // Recursively search in children
-        fn remove_from_track(track: &mut Track, id: Uuid) -> Option<Track> {
-            // Check if any child is the target
-            if let Some(index) = track.children.iter().position(|item| item.id() == id) {
-                if let TrackItem::SubTrack(_) = &track.children[index] {
-                    if let TrackItem::SubTrack(removed) = track.children.remove(index) {
-                        return Some(removed);
-                    }
-                }
-            }
-            // Recurse into sub-tracks
-            for item in &mut track.children {
-                if let TrackItem::SubTrack(sub) = item {
-                    if let Some(removed) = remove_from_track(sub, id) {
-                        return Some(removed);
-                    }
-                }
-            }
-            None
-        }
-
-        for track in &mut self.tracks {
-            if let Some(removed) = remove_from_track(track, id) {
-                return Some(removed);
-            }
-        }
-        None
     }
 }

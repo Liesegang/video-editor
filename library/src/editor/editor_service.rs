@@ -6,7 +6,7 @@ use crate::error::LibraryError;
 use crate::model::project::asset::Asset;
 use crate::model::project::project::{Composition, Project};
 use crate::model::project::property::PropertyValue;
-use crate::model::project::{Track, TrackClip};
+use crate::model::project::{TrackClip, TrackData};
 use crate::plugin::PluginManager;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -205,7 +205,11 @@ impl EditorService {
             .add_track_with_id(composition_id, track_id, track_name)
     }
 
-    pub fn get_track(&self, composition_id: Uuid, track_id: Uuid) -> Result<Track, LibraryError> {
+    pub fn get_track(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+    ) -> Result<TrackData, LibraryError> {
         self.project_manager.get_track(composition_id, track_id)
     }
 
