@@ -72,6 +72,26 @@ pub fn show_track_list(
 
             track_interaction_response.context_menu(|ui| {
                 if let Some(comp_id) = editor_context.selection.composition_id {
+                    // Add Sub-Track option
+                    if ui
+                        .button(format!("{} Add Sub-Track", icons::FOLDER_PLUS))
+                        .clicked()
+                    {
+                        if let Err(e) =
+                            project_service.add_sub_track(comp_id, track.id, "New Sub-Track")
+                        {
+                            error!("Failed to add sub-track: {:?}", e);
+                        } else {
+                            // Auto-expand the parent track to show the new child
+                            editor_context.timeline.expanded_tracks.insert(track.id);
+                            let current_state = project.read().unwrap().clone();
+                            history_manager.push_project_state(current_state);
+                        }
+                        ui.close();
+                    }
+
+                    ui.separator();
+
                     if ui
                         .button(format!("{} Remove Track", icons::TRASH))
                         .clicked()
@@ -87,8 +107,8 @@ pub fn show_track_list(
                             }
                             let current_state = project.read().unwrap().clone();
                             history_manager.push_project_state(current_state);
-                            ui.close();
                         }
+                        ui.close();
                     }
                 }
             });

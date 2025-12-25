@@ -296,6 +296,20 @@ impl ProjectManager {
         handlers::track_handler::TrackHandler::remove_track(&self.project, composition_id, track_id)
     }
 
+    pub fn add_sub_track(
+        &self,
+        composition_id: Uuid,
+        parent_track_id: Uuid,
+        track_name: &str,
+    ) -> Result<Uuid, LibraryError> {
+        handlers::track_handler::TrackHandler::add_sub_track(
+            &self.project,
+            composition_id,
+            parent_track_id,
+            track_name,
+        )
+    }
+
     pub fn add_clip_to_track(
         &self,
         composition_id: Uuid,
