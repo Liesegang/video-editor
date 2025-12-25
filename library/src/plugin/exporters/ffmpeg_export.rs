@@ -1,6 +1,6 @@
 use super::super::{ExportPlugin, ExportSettings, Plugin};
-use crate::core::media::image::Image;
 use crate::error::LibraryError;
+use crate::model::frame::Image;
 use log::{info, warn};
 use std::collections::HashMap;
 use std::io::Write;

@@ -1,10 +1,10 @@
 use crate::core::cache::SharedCacheManager;
 use crate::core::framing::entity_converters::EntityConverterRegistry;
 use crate::core::framing::get_frame_from_project;
-use crate::core::media::image::Image;
 use crate::core::rendering::renderer::{RenderOutput, Renderer};
 use crate::editor::project_model::ProjectModel;
 use crate::error::LibraryError;
+use crate::model::frame::Image;
 use crate::model::frame::entity::{FrameContent, FrameObject};
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;

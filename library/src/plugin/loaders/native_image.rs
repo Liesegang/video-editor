@@ -1,7 +1,19 @@
 use super::super::{LoadPlugin, LoadRequest, LoadResponse, Plugin};
 use crate::cache::CacheManager;
-use crate::core::media::image::load_image;
 use crate::error::LibraryError;
+use crate::model::frame::Image;
+use std::error::Error;
+
+/// Load an image from disk and return as RGBA.
+pub fn load_image(path: &str) -> Result<Image, Box<dyn Error>> {
+    let img = image::open(path).map_err(|e| format!("Failed to open image file: {}", e))?;
+    let rgba_image = img.to_rgba8();
+    Ok(Image {
+        width: rgba_image.width(),
+        height: rgba_image.height(),
+        data: rgba_image.into_raw(),
+    })
+}
 
 pub struct NativeImageLoader;
 

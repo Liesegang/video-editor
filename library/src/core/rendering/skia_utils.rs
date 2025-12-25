@@ -1,5 +1,5 @@
-use crate::core::media::image::Image;
 use crate::error::LibraryError;
+use crate::model::frame::Image;
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use log::{debug, warn};
 #[cfg(all(feature = "gl", target_os = "windows"))]

@@ -10,7 +10,6 @@ pub use effect::EffectConfig;
 
 use crate::model::project::property::{PropertyMap, Vec2};
 use crate::model::project::style::StyleInstance;
-use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

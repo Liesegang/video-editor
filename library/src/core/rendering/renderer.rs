@@ -1,5 +1,5 @@
-use crate::core::media::image::Image;
 use crate::error::LibraryError;
+use crate::model::frame::Image;
 
 use crate::model::frame::draw_type::PathEffect;
 use crate::model::frame::entity::StyleConfig;
