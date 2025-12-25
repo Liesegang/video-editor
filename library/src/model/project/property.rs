@@ -575,6 +575,48 @@ impl Property {
         false
     }
 
+    /// Update a keyframe at the given index.
+    /// Returns true if successful.
+    pub fn update_keyframe_at_index(
+        &mut self,
+        index: usize,
+        new_time: Option<f64>,
+        new_value: Option<PropertyValue>,
+        new_easing: Option<EasingFunction>,
+    ) -> bool {
+        if self.evaluator != "keyframe" {
+            return false;
+        }
+
+        let mut kfs = self.keyframes();
+        if index >= kfs.len() {
+            return false;
+        }
+
+        let kf = &mut kfs[index];
+        if let Some(t) = new_time {
+            kf.time = OrderedFloat(t);
+        }
+        if let Some(v) = new_value {
+            kf.value = v;
+        }
+        if let Some(e) = new_easing {
+            kf.easing = e;
+        }
+
+        kfs.sort_by_key(|k| k.time);
+
+        // Preserve existing property attributes (like interpolation mode)
+        let existing_props = self.properties.clone();
+        *self = Property::keyframe(kfs);
+        for (k, v) in existing_props {
+            if k != "keyframes" && k != "value" {
+                self.properties.insert(k, v);
+            }
+        }
+        true
+    }
+
     /// Remove a keyframe at the given index.
     /// Returns true if successful.
     pub fn remove_keyframe_at_index(&mut self, index: usize) -> bool {
@@ -588,7 +630,15 @@ impl Property {
         }
 
         kfs.remove(index);
+
+        // Preserve existing property attributes
+        let existing_props = self.properties.clone();
         *self = Property::keyframe(kfs);
+        for (k, v) in existing_props {
+            if k != "keyframes" && k != "value" {
+                self.properties.insert(k, v);
+            }
+        }
         true
     }
 }

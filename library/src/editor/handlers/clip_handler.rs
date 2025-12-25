@@ -465,55 +465,19 @@ impl ClipHandler {
             .get_clip_mut(composition_id, track_id, clip_id)
             .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
 
-        if let Some(effect) = clip.effects.get_mut(effect_index) {
-            if let Some(prop) = effect.properties.get_mut(property_key) {
-                if prop.evaluator == "keyframe" {
-                    let mut current_keyframes = prop.keyframes();
-                    let mut preserved_easing = crate::animation::EasingFunction::Linear;
-                    if let Some(idx) = current_keyframes
-                        .iter()
-                        .position(|k| (k.time.into_inner() - time).abs() < 0.001)
-                    {
-                        preserved_easing = current_keyframes[idx].easing.clone();
-                        current_keyframes.remove(idx);
-                    }
+        let effect = clip
+            .effects
+            .get_mut(effect_index)
+            .ok_or_else(|| LibraryError::Project("Effect index out of range".to_string()))?;
 
-                    let final_easing = easing.unwrap_or(preserved_easing);
-
-                    current_keyframes.push(Keyframe {
-                        time: OrderedFloat(time),
-                        value: value.clone(),
-                        easing: final_easing,
-                    });
-
-                    current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
-
-                    // Preserve existing attributes (like interpolation)
-                    let existing_props = prop.properties.clone();
-                    let mut new_prop = Property::keyframe(current_keyframes);
-                    for (k, v) in existing_props {
-                        if k != "keyframes" && k != "value" && k != "expression" {
-                            new_prop.properties.insert(k, v);
-                        }
-                    }
-                    *prop = new_prop;
-                } else {
-                    // Update as Constant
-                    effect
-                        .properties
-                        .set(property_key.to_string(), Property::constant(value));
-                }
-            } else {
-                effect
-                    .properties
-                    .set(property_key.to_string(), Property::constant(value));
-            }
-            Ok(())
-        } else {
-            Err(LibraryError::Project(
-                "Effect index out of range".to_string(),
-            ))
-        }
+        let mut container = super::property_ops::PropertyContainer::Effect(effect);
+        super::property_ops::upsert_property_or_keyframe(
+            &mut container,
+            property_key,
+            time,
+            value,
+            easing,
+        )
     }
     pub fn update_style_property_or_keyframe(
         project: &Arc<RwLock<Project>>,
@@ -534,55 +498,19 @@ impl ClipHandler {
             .get_clip_mut(composition_id, track_id, clip_id)
             .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
 
-        if let Some(style) = clip.styles.get_mut(style_index) {
-            if let Some(prop) = style.properties.get_mut(property_key) {
-                if prop.evaluator == "keyframe" {
-                    let mut current_keyframes = prop.keyframes();
-                    let mut preserved_easing = crate::animation::EasingFunction::Linear;
-                    if let Some(idx) = current_keyframes
-                        .iter()
-                        .position(|k| (k.time.into_inner() - time).abs() < 0.001)
-                    {
-                        preserved_easing = current_keyframes[idx].easing.clone();
-                        current_keyframes.remove(idx);
-                    }
+        let style = clip
+            .styles
+            .get_mut(style_index)
+            .ok_or_else(|| LibraryError::Project("Style index out of range".to_string()))?;
 
-                    let final_easing = easing.unwrap_or(preserved_easing);
-
-                    current_keyframes.push(Keyframe {
-                        time: OrderedFloat(time),
-                        value: value.clone(),
-                        easing: final_easing,
-                    });
-
-                    current_keyframes.sort_by(|a, b| a.time.cmp(&b.time));
-
-                    // Preserve existing attributes (like interpolation)
-                    let existing_props = prop.properties.clone();
-                    let mut new_prop = Property::keyframe(current_keyframes);
-                    for (k, v) in existing_props {
-                        if k != "keyframes" && k != "value" && k != "expression" {
-                            new_prop.properties.insert(k, v);
-                        }
-                    }
-                    *prop = new_prop;
-                } else {
-                    // Update as Constant
-                    style
-                        .properties
-                        .set(property_key.to_string(), Property::constant(value));
-                }
-            } else {
-                style
-                    .properties
-                    .set(property_key.to_string(), Property::constant(value));
-            }
-            Ok(())
-        } else {
-            Err(LibraryError::Project(
-                "Style index out of range".to_string(),
-            ))
-        }
+        let mut container = super::property_ops::PropertyContainer::Style(style);
+        super::property_ops::upsert_property_or_keyframe(
+            &mut container,
+            property_key,
+            time,
+            value,
+            easing,
+        )
     }
 
     pub fn set_style_property_attribute(
