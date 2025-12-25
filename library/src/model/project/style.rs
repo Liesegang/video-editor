@@ -37,4 +37,26 @@ impl StyleInstance {
             properties,
         }
     }
+
+    /// Update or upsert a style property value/keyframe.
+    pub fn update_property_or_keyframe(
+        &mut self,
+        key: &str,
+        time: f64,
+        value: crate::model::project::property::PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) {
+        use crate::model::project::property::Property;
+        if let Some(prop) = self.properties.get_mut(key) {
+            if prop.evaluator == "keyframe" {
+                prop.upsert_keyframe(time, value, easing);
+            } else {
+                self.properties
+                    .set(key.to_string(), Property::constant(value));
+            }
+        } else {
+            self.properties
+                .set(key.to_string(), Property::constant(value));
+        }
+    }
 }

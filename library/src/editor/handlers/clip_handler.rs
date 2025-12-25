@@ -465,19 +465,8 @@ impl ClipHandler {
             .get_clip_mut(composition_id, track_id, clip_id)
             .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
 
-        let effect = clip
-            .effects
-            .get_mut(effect_index)
-            .ok_or_else(|| LibraryError::Project("Effect index out of range".to_string()))?;
-
-        let mut container = super::property_ops::PropertyContainer::Effect(effect);
-        super::property_ops::upsert_property_or_keyframe(
-            &mut container,
-            property_key,
-            time,
-            value,
-            easing,
-        )
+        clip.update_effect_property(effect_index, property_key, time, value, easing)
+            .map_err(|e| LibraryError::Project(e.to_string()))
     }
     pub fn update_style_property_or_keyframe(
         project: &Arc<RwLock<Project>>,
@@ -498,19 +487,8 @@ impl ClipHandler {
             .get_clip_mut(composition_id, track_id, clip_id)
             .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
 
-        let style = clip
-            .styles
-            .get_mut(style_index)
-            .ok_or_else(|| LibraryError::Project("Style index out of range".to_string()))?;
-
-        let mut container = super::property_ops::PropertyContainer::Style(style);
-        super::property_ops::upsert_property_or_keyframe(
-            &mut container,
-            property_key,
-            time,
-            value,
-            easing,
-        )
+        clip.update_style_property(style_index, property_key, time, value, easing)
+            .map_err(|e| LibraryError::Project(e.to_string()))
     }
 
     pub fn set_style_property_attribute(
