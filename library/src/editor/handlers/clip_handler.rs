@@ -9,7 +9,7 @@ use uuid::Uuid;
 pub struct ClipHandler;
 
 impl ClipHandler {
-    /// Add a clip to a track
+    /// Add a clip to a track at a specific index (or index 0 if not specified)
     pub fn add_clip_to_track(
         project: &Arc<RwLock<Project>>,
         composition_id: Uuid,
@@ -17,6 +17,7 @@ impl ClipHandler {
         clip: TrackClip,
         in_frame: u64,
         out_frame: u64,
+        insert_index: Option<usize>,
     ) -> Result<Uuid, LibraryError> {
         // Validation: Prevent circular references if adding a composition
         if clip.kind == TrackClipKind::Composition {
@@ -49,9 +50,10 @@ impl ClipHandler {
         // Add clip to nodes registry
         proj.add_node(Node::Clip(final_clip));
 
-        // Add clip ID to track's children
+        // Add clip ID to track's children at specified index (or 0 for top of layer list)
         if let Some(track) = proj.get_track_mut(track_id) {
-            track.add_child(clip_id);
+            let idx = insert_index.unwrap_or(0);
+            track.insert_child(idx, clip_id);
         }
 
         Ok(clip_id)

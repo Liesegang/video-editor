@@ -227,6 +227,10 @@ impl EditorService {
             .add_sub_track(composition_id, parent_track_id, track_name)
     }
 
+    pub fn rename_track(&self, track_id: Uuid, new_name: &str) -> Result<(), LibraryError> {
+        self.project_manager.rename_track(track_id, new_name)
+    }
+
     pub fn add_clip_to_track(
         &self,
         composition_id: Uuid,
@@ -234,9 +238,16 @@ impl EditorService {
         clip: TrackClip,
         in_frame: u64,
         out_frame: u64,
+        insert_index: Option<usize>,
     ) -> Result<Uuid, LibraryError> {
-        self.project_manager
-            .add_clip_to_track(composition_id, track_id, clip, in_frame, out_frame)
+        self.project_manager.add_clip_to_track(
+            composition_id,
+            track_id,
+            clip,
+            in_frame,
+            out_frame,
+            insert_index,
+        )
     }
 
     pub fn remove_clip_from_track(

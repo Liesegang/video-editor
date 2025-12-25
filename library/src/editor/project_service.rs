@@ -327,6 +327,10 @@ impl ProjectManager {
         )
     }
 
+    pub fn rename_track(&self, track_id: Uuid, new_name: &str) -> Result<(), LibraryError> {
+        handlers::track_handler::TrackHandler::rename_track(&self.project, track_id, new_name)
+    }
+
     pub fn add_clip_to_track(
         &self,
         composition_id: Uuid,
@@ -334,14 +338,16 @@ impl ProjectManager {
         clip: TrackClip,
         in_frame: u64,
         out_frame: u64,
+        insert_index: Option<usize>,
     ) -> Result<Uuid, LibraryError> {
         handlers::clip_handler::ClipHandler::add_clip_to_track(
             &self.project,
             composition_id,
             track_id,
             clip,
-            in_frame,  // Pass u64
-            out_frame, // Pass u64
+            in_frame,
+            out_frame,
+            insert_index,
         )
     }
 

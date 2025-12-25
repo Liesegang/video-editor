@@ -10,6 +10,37 @@ use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 impl TrackClip {
+    /// Create an audio clip with default properties.
+    pub fn create_audio(
+        reference_id: Option<Uuid>,
+        file_path: &str,
+        in_frame: u64,
+        out_frame: u64,
+        source_begin_frame: i64,
+        duration_frame: u64,
+        fps: f64,
+    ) -> Self {
+        let mut props = PropertyMap::new();
+        props.set(
+            "file_path".to_string(),
+            Property::constant(PropertyValue::String(file_path.to_string())),
+        );
+
+        TrackClip::new(
+            Uuid::new_v4(),
+            reference_id,
+            TrackClipKind::Audio,
+            in_frame,
+            out_frame,
+            source_begin_frame,
+            Some(duration_frame),
+            fps,
+            props,
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
     /// Create a video clip with default properties.
     pub fn create_video(
         reference_id: Option<Uuid>,

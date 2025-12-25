@@ -4,8 +4,29 @@ use library::model::project::project::Project;
 use library::EditorService as ProjectService;
 use log::error;
 use std::sync::{Arc, RwLock};
+use uuid::Uuid;
 
 use crate::{action::HistoryManager, state::context::EditorContext};
+
+/// Deferred actions to execute after read lock is released
+#[derive(Debug)]
+enum DeferredTrackAction {
+    AddTrack {
+        comp_id: Uuid,
+    },
+    AddSubTrack {
+        comp_id: Uuid,
+        parent_track_id: Uuid,
+    },
+    RemoveTrack {
+        comp_id: Uuid,
+        track_id: Uuid,
+    },
+    RenameTrack {
+        track_id: Uuid,
+        new_name: String,
+    },
+}
 
 pub fn show_track_list(
     ui_content: &mut Ui,
@@ -17,6 +38,9 @@ pub fn show_track_list(
 ) -> (usize, f32, f32) {
     let row_height = 30.0;
     let track_spacing = 2.0;
+    let mut deferred_actions: Vec<DeferredTrackAction> = Vec::new();
+    let mut tracks_to_expand: Vec<Uuid> = Vec::new();
+    let mut tracks_to_deselect: Vec<Uuid> = Vec::new();
 
     let (track_list_rect, track_list_response) = ui_content.allocate_exact_size(
         egui::vec2(sidebar_width, ui_content.available_height()),
@@ -190,16 +214,23 @@ pub fn show_track_list(
                             .button(format!("{} Add Sub-Track", icons::FOLDER_PLUS))
                             .clicked()
                         {
-                            if let Err(e) =
-                                project_service.add_sub_track(comp_id, track.id, "New Sub-Track")
-                            {
-                                error!("Failed to add sub-track: {:?}", e);
-                            } else {
-                                // Auto-expand the parent track to show the new child
-                                editor_context.timeline.expanded_tracks.insert(track.id);
-                                let current_state = project.read().unwrap().clone();
-                                history_manager.push_project_state(current_state);
-                            }
+                            deferred_actions.push(DeferredTrackAction::AddSubTrack {
+                                comp_id,
+                                parent_track_id: track.id,
+                            });
+                            tracks_to_expand.push(track.id);
+                            ui.close();
+                        }
+
+                        ui.separator();
+
+                        // Rename Track option
+                        if ui
+                            .button(format!("{} Rename", icons::PENCIL_SIMPLE))
+                            .clicked()
+                        {
+                            editor_context.interaction.renaming_track_id = Some(track.id);
+                            editor_context.interaction.rename_buffer = track.name.clone();
                             ui.close();
                         }
 
@@ -209,18 +240,13 @@ pub fn show_track_list(
                             .button(format!("{} Remove Track", icons::TRASH))
                             .clicked()
                         {
-                            if let Err(e) = project_service.remove_track(comp_id, track.id) {
-                                error!("Failed to remove track: {:?}", e);
-                            } else {
-                                // If the removed track was selected, deselect it
-                                if editor_context.selection.last_selected_track_id == Some(track.id)
-                                {
-                                    editor_context.selection.last_selected_track_id = None;
-                                    editor_context.selection.last_selected_entity_id = None;
-                                    editor_context.selection.selected_entities.clear();
-                                }
-                                let current_state = project.read().unwrap().clone();
-                                history_manager.push_project_state(current_state);
+                            deferred_actions.push(DeferredTrackAction::RemoveTrack {
+                                comp_id,
+                                track_id: track.id,
+                            });
+                            // Mark for deselection if this track was selected
+                            if editor_context.selection.last_selected_track_id == Some(track.id) {
+                                tracks_to_deselect.push(track.id);
                             }
                             ui.close();
                         }
@@ -281,13 +307,57 @@ pub fn show_track_list(
                 );
                 text_offset_x += 16.0;
 
-                track_list_painter.text(
-                    row_rect.left_center() + egui::vec2(text_offset_x, 0.0),
-                    egui::Align2::LEFT_CENTER,
-                    format!("Track {}", track.name),
-                    egui::FontId::monospace(10.0),
-                    egui::Color32::GRAY,
-                );
+                // Check if this track is being renamed
+                if editor_context.interaction.renaming_track_id == Some(track.id) {
+                    // Draw inline TextEdit for renaming
+                    let text_rect = egui::Rect::from_min_size(
+                        row_rect.left_center() + egui::vec2(text_offset_x, -10.0),
+                        egui::vec2(row_rect.width() - text_offset_x - 10.0, 20.0),
+                    );
+                    let text_edit =
+                        egui::TextEdit::singleline(&mut editor_context.interaction.rename_buffer)
+                            .font(egui::FontId::monospace(10.0))
+                            .desired_width(text_rect.width());
+
+                    let response = ui_content.put(text_rect, text_edit);
+
+                    // Focus the text edit automatically
+                    if !response.has_focus()
+                        && editor_context.interaction.renaming_track_id == Some(track.id)
+                    {
+                        response.request_focus();
+                    }
+
+                    // Confirm on Enter or lose focus
+                    let committed = response.lost_focus()
+                        || (response.has_focus()
+                            && ui_content.input(|i| i.key_pressed(egui::Key::Enter)));
+
+                    if committed {
+                        // Commit the rename
+                        let new_name = editor_context.interaction.rename_buffer.clone();
+                        // Only update if name changed and is not empty
+                        if !new_name.is_empty() && new_name != track.name {
+                            deferred_actions.push(DeferredTrackAction::RenameTrack {
+                                track_id: track.id,
+                                new_name,
+                            });
+                        }
+
+                        // Clear rename state
+                        editor_context.interaction.renaming_track_id = None;
+                        editor_context.interaction.rename_buffer.clear();
+                    }
+                } else {
+                    // Normal track name display
+                    track_list_painter.text(
+                        row_rect.left_center() + egui::vec2(text_offset_x, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        format!("Track {}", track.name),
+                        egui::FontId::monospace(10.0),
+                        egui::Color32::GRAY,
+                    );
+                }
             }
             super::utils::flatten::DisplayRow::ClipRow {
                 clip,
@@ -339,17 +409,74 @@ pub fn show_track_list(
                 ))))
                 .clicked()
             {
-                project_service
-                    .add_track(comp_id, "New Track")
-                    .expect("Failed to add track");
-                let current_state = project.read().unwrap().clone();
-                history_manager.push_project_state(current_state);
+                deferred_actions.push(DeferredTrackAction::AddTrack { comp_id });
                 ui_content.close();
             }
         } else {
             ui_content.label("Select a Composition first");
         }
     });
+
+    // Drop read lock before executing deferred actions
+    drop(proj_read);
+
+    // Execute deferred actions (no read lock held)
+    let mut needs_history_push = false;
+    for action in deferred_actions {
+        match action {
+            DeferredTrackAction::AddTrack { comp_id } => {
+                if let Err(e) = project_service.add_track(comp_id, "New Track") {
+                    error!("Failed to add track: {:?}", e);
+                } else {
+                    needs_history_push = true;
+                }
+            }
+            DeferredTrackAction::AddSubTrack {
+                comp_id,
+                parent_track_id,
+            } => {
+                if let Err(e) =
+                    project_service.add_sub_track(comp_id, parent_track_id, "New Sub-Track")
+                {
+                    error!("Failed to add sub-track: {:?}", e);
+                } else {
+                    needs_history_push = true;
+                }
+            }
+            DeferredTrackAction::RemoveTrack { comp_id, track_id } => {
+                if let Err(e) = project_service.remove_track(comp_id, track_id) {
+                    error!("Failed to remove track: {:?}", e);
+                } else {
+                    needs_history_push = true;
+                }
+            }
+            DeferredTrackAction::RenameTrack { track_id, new_name } => {
+                if let Err(e) = project_service.rename_track(track_id, &new_name) {
+                    error!("Failed to rename track: {:?}", e);
+                } else {
+                    needs_history_push = true;
+                }
+            }
+        }
+    }
+
+    // Apply deferred state changes
+    for track_id in tracks_to_expand {
+        editor_context.timeline.expanded_tracks.insert(track_id);
+    }
+    for track_id in tracks_to_deselect {
+        if editor_context.selection.last_selected_track_id == Some(track_id) {
+            editor_context.selection.last_selected_track_id = None;
+            editor_context.selection.last_selected_entity_id = None;
+            editor_context.selection.selected_entities.clear();
+        }
+    }
+
+    if needs_history_push {
+        if let Ok(proj) = project.read() {
+            history_manager.push_project_state(proj.clone());
+        }
+    }
 
     (num_rows, row_height, track_spacing)
 }
