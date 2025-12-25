@@ -497,6 +497,100 @@ impl Property {
                 _ => None,
             })
     }
+
+    /// Find the index of a keyframe at the given time (within tolerance).
+    /// Returns None if no keyframe exists at that time or if this is not a keyframe property.
+    pub fn keyframe_index_at(&self, time: f64, tolerance: f64) -> Option<usize> {
+        if self.evaluator != "keyframe" {
+            return None;
+        }
+        self.keyframes()
+            .iter()
+            .position(|k| (k.time.into_inner() - time).abs() < tolerance)
+    }
+
+    /// Check if a keyframe exists at the given time.
+    pub fn has_keyframe_at(&self, time: f64, tolerance: f64) -> bool {
+        self.keyframe_index_at(time, tolerance).is_some()
+    }
+
+    /// Add or update a keyframe at the given time.
+    /// If a keyframe already exists at the time, updates its value and optionally its easing.
+    /// If easing is None, preserves the existing easing for updates; uses Linear for new keyframes.
+    /// If this is a constant property, converts it to a keyframe property.
+    /// Returns true if successful.
+    pub fn upsert_keyframe(
+        &mut self,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<EasingFunction>,
+    ) -> bool {
+        const TOLERANCE: f64 = 0.001;
+
+        if self.evaluator == "constant" {
+            // Convert to keyframe property
+            let kf = Keyframe {
+                time: OrderedFloat(time),
+                value,
+                easing: easing.unwrap_or(EasingFunction::Linear),
+            };
+            *self = Property::keyframe(vec![kf]);
+            return true;
+        }
+
+        if self.evaluator == "keyframe" {
+            let mut kfs = self.keyframes();
+
+            // Check for existing keyframe at this time
+            if let Some(idx) = kfs
+                .iter()
+                .position(|k| (k.time.into_inner() - time).abs() < TOLERANCE)
+            {
+                // Update existing keyframe, preserving easing if not specified
+                let preserved_easing = kfs[idx].easing.clone();
+                kfs[idx].value = value;
+                kfs[idx].easing = easing.unwrap_or(preserved_easing);
+            } else {
+                // Add new keyframe
+                kfs.push(Keyframe {
+                    time: OrderedFloat(time),
+                    value,
+                    easing: easing.unwrap_or(EasingFunction::Linear),
+                });
+                kfs.sort_by_key(|k| k.time);
+            }
+
+            // Preserve existing property attributes (like interpolation mode)
+            let existing_props = self.properties.clone();
+            *self = Property::keyframe(kfs);
+            for (k, v) in existing_props {
+                if k != "keyframes" && k != "value" {
+                    self.properties.insert(k, v);
+                }
+            }
+            return true;
+        }
+
+        // Other evaluator types (expression, etc.) - cannot add keyframes
+        false
+    }
+
+    /// Remove a keyframe at the given index.
+    /// Returns true if successful.
+    pub fn remove_keyframe_at_index(&mut self, index: usize) -> bool {
+        if self.evaluator != "keyframe" {
+            return false;
+        }
+
+        let mut kfs = self.keyframes();
+        if index >= kfs.len() {
+            return false;
+        }
+
+        kfs.remove(index);
+        *self = Property::keyframe(kfs);
+        true
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, PartialEq, Eq, Debug)] // Added Debug

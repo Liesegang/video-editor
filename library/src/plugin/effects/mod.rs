@@ -16,3 +16,52 @@ pub use self::magnifier::MagnifierEffectPlugin;
 pub use self::pixel_sorter::PixelSorterPlugin;
 pub use self::sksl_plugin::SkslEffectPlugin;
 pub use self::tile::TileEffectPlugin;
+
+use crate::error::LibraryError;
+use crate::model::project::property::PropertyValue;
+use crate::plugin::{Plugin, PluginCategory, PropertyDefinition};
+use crate::rendering::renderer::RenderOutput;
+use crate::rendering::skia_utils::GpuContext;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+#[derive(Debug, Clone)]
+pub struct EffectDefinition {
+    pub label: String,
+    pub properties: Vec<PropertyDefinition>,
+}
+
+pub trait EffectPlugin: Plugin {
+    fn apply(
+        &self,
+        input: &RenderOutput,
+        params: &HashMap<String, PropertyValue>,
+        gpu_context: Option<&mut GpuContext>,
+    ) -> Result<RenderOutput, LibraryError>;
+
+    fn properties(&self) -> Vec<PropertyDefinition>;
+
+    fn plugin_type(&self) -> PluginCategory {
+        PluginCategory::Effect
+    }
+}
+
+pub struct EffectRepository {
+    pub plugins: HashMap<String, Arc<dyn EffectPlugin>>,
+}
+
+impl EffectRepository {
+    pub fn new() -> Self {
+        Self {
+            plugins: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, plugin: Arc<dyn EffectPlugin>) {
+        self.plugins.insert(plugin.id().to_string(), plugin);
+    }
+
+    pub fn get(&self, id: &str) -> Option<&Arc<dyn EffectPlugin>> {
+        self.plugins.get(id)
+    }
+}

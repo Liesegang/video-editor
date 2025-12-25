@@ -9,6 +9,7 @@ use crate::cache::CacheManager;
 use crate::loader::image::Image;
 // use crate::model::project::entity::Entity; // Removed - This line was there from previous step, but should be removed
 use crate::error::LibraryError;
+use crate::model::project::asset::AssetKind;
 use crate::model::project::project::{Composition, Project};
 use libloading::{Library, Symbol};
 use log::debug;
@@ -96,11 +97,7 @@ pub struct PropertyDefinition {
     pub category: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct EffectDefinition {
-    pub label: String,
-    pub properties: Vec<PropertyDefinition>,
-}
+pub use self::effects::EffectDefinition;
 
 pub trait InspectorPlugin: Plugin {
     // We pass the "kind" of the clip (e.g. Video, Image, Effect?)
@@ -128,20 +125,7 @@ pub trait Plugin: Send + Sync {
     }
 }
 
-pub trait EffectPlugin: Plugin {
-    fn apply(
-        &self,
-        input: &RenderOutput,
-        params: &HashMap<String, PropertyValue>,
-        gpu_context: Option<&mut GpuContext>,
-    ) -> Result<RenderOutput, LibraryError>;
-
-    fn properties(&self) -> Vec<PropertyDefinition>;
-
-    fn plugin_type(&self) -> PluginCategory {
-        PluginCategory::Effect
-    }
-}
+pub use self::effects::EffectPlugin;
 
 pub trait PropertyPlugin: Plugin {
     fn get_evaluator_instance(&self) -> Arc<dyn PropertyEvaluator>;
@@ -151,262 +135,41 @@ pub trait PropertyPlugin: Plugin {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum LoadRequest {
-    Image {
-        path: String,
-    },
-    VideoFrame {
-        path: String,
-        frame_number: u64,
-        stream_index: Option<usize>,
-        input_color_space: Option<String>,
-        output_color_space: Option<String>,
-    },
+pub use self::loaders::{AssetMetadata, LoadPlugin, LoadRequest, LoadResponse};
+
+pub use self::exporters::{ExportFormat, ExportPlugin, ExportSettings};
+
+pub use self::effects::EffectRepository;
+
+pub use self::loaders::LoadRepository;
+
+pub use self::exporters::ExportRepository;
+
+pub struct PluginRepository<T: ?Sized> {
+    pub plugins: HashMap<String, Arc<T>>,
 }
 
-pub enum LoadResponse {
-    Image(Image),
-}
-
-use crate::model::project::asset::AssetKind; // Added import
-
-#[derive(Debug, Clone)]
-pub struct AssetMetadata {
-    pub kind: AssetKind,
-    pub duration: Option<f64>,
-    pub fps: Option<f64>,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub stream_index: Option<usize>,
-}
-
-pub trait LoadPlugin: Plugin {
-    fn supports(&self, request: &LoadRequest) -> bool;
-    fn load(
-        &self,
-        request: &LoadRequest,
-        cache: &CacheManager,
-    ) -> Result<LoadResponse, LibraryError>;
-
-    fn get_metadata(&self, _path: &str) -> Option<AssetMetadata> {
-        // Default implementation tries individual methods (backward compatibility logic if needed,
-        // but for efficiency plugins should override this).
-        // For now, simpler to leave default as None or implement naive fallback.
-        // Let's rely on implementation to do it right.
-        None
-    }
-
-    fn get_available_streams(&self, _path: &str) -> Option<Vec<AssetMetadata>> {
-        None
-    }
-
-    fn get_asset_kind(&self, _path: &str) -> Option<AssetKind> {
-        None
-    }
-
-    fn get_duration(&self, _path: &str) -> Option<f64> {
-        None
-    }
-
-    fn get_fps(&self, _path: &str) -> Option<f64> {
-        None
-    }
-
-    fn plugin_type(&self) -> PluginCategory {
-        PluginCategory::Load
-    }
-
-    fn get_dimensions(&self, _path: &str) -> Option<(u32, u32)> {
-        None
-    }
-
-    fn priority(&self) -> u32 {
-        0
-    }
-}
-
-pub trait ExportPlugin: Plugin {
-    fn export_image(
-        &self,
-        path: &str,
-        image: &Image,
-        settings: &ExportSettings,
-    ) -> Result<(), LibraryError>;
-
-    fn finish_export(&self, _path: &str) -> Result<(), LibraryError> {
-        Ok(())
-    }
-
-    fn properties(&self) -> Vec<PropertyDefinition> {
-        Vec::new()
-    }
-
-    fn plugin_type(&self) -> PluginCategory {
-        PluginCategory::Export
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ExportFormat {
-    Png,
-    Video,
-}
-
-#[derive(Debug, Clone)]
-pub struct ExportSettings {
-    pub container: String,
-    pub codec: String,
-    pub pixel_format: String,
-    pub ffmpeg_path: Option<String>,
-    pub width: u32,
-    pub height: u32,
-    pub fps: f64,
-    pub parameters: HashMap<String, Value>,
-}
-
-impl ExportSettings {
-    pub fn from_project(
-        project: &Project,
-        composition: &Composition,
-    ) -> Result<Self, LibraryError> {
-        let mut settings = ExportSettings::for_dimensions(
-            composition.width as u32,
-            composition.height as u32,
-            composition.fps,
-        );
-
-        let config = &project.export;
-        if config.container.is_none()
-            && config.codec.is_none()
-            && config.pixel_format.is_none()
-            && config.ffmpeg_path.is_none()
-            && config.parameters.is_empty()
-        {
-            return Ok(settings);
-        }
-
-        if let Some(value) = &config.container {
-            settings.container = value.clone();
-        }
-        if let Some(value) = &config.codec {
-            settings.codec = value.clone();
-        }
-        if let Some(value) = &config.pixel_format {
-            settings.pixel_format = value.clone();
-        }
-        if let Some(value) = &config.ffmpeg_path {
-            settings.ffmpeg_path = Some(value.clone());
-        }
-        settings.parameters = config.parameters.clone();
-
-        if matches!(settings.export_format(), ExportFormat::Video) {
-            if settings.codec == "png" {
-                settings.codec = "libx264".into();
-            }
-            if settings.pixel_format == "rgba" {
-                settings.pixel_format = "yuv420p".into();
-            }
-        }
-
-        Ok(settings)
-    }
-
-    pub fn for_dimensions(width: u32, height: u32, fps: f64) -> Self {
-        Self {
-            container: "png".into(),
-            codec: "png".into(),
-            pixel_format: "rgba".into(),
-            ffmpeg_path: None,
-            width,
-            height,
-            fps,
-            parameters: HashMap::new(),
-        }
-    }
-
-    pub fn export_format(&self) -> ExportFormat {
-        match self.container.as_str() {
-            "png" | "apng" => ExportFormat::Png,
-            _ => ExportFormat::Video,
-        }
-    }
-
-    pub fn parameter_string(&self, key: &str) -> Option<String> {
-        match self.parameters.get(key)? {
-            Value::String(value) => Some(value.clone()),
-            Value::Number(value) => Some(value.to_string()),
-            Value::Bool(value) => Some(value.to_string()),
-            _ => None,
-        }
-    }
-
-    pub fn parameter_u64(&self, key: &str) -> Option<u64> {
-        match self.parameters.get(key)? {
-            Value::Number(value) => {
-                if value.is_u64() {
-                    value.as_u64()
-                } else if value.is_i64() {
-                    value
-                        .as_i64()
-                        .and_then(|v| if v >= 0 { Some(v as u64) } else { None })
-                } else {
-                    value.as_f64().map(|v| v.max(0.0).round() as u64)
-                }
-            }
-            Value::String(value) => value.parse::<u64>().ok(),
-            _ => None,
-        }
-    }
-
-    pub fn parameter_f64(&self, key: &str) -> Option<f64> {
-        match self.parameters.get(key)? {
-            Value::Number(value) => value.as_f64(),
-            Value::String(value) => value.parse::<f64>().ok(),
-            _ => None,
-        }
-    }
-}
-
-pub struct EffectRepository {
-    plugins: HashMap<String, Arc<dyn EffectPlugin>>,
-}
-
-impl EffectRepository {
+impl<T: ?Sized + Plugin> PluginRepository<T> {
     pub fn new() -> Self {
         Self {
             plugins: HashMap::new(),
         }
     }
 
-    pub fn register(&mut self, plugin: Arc<dyn EffectPlugin>) {
+    pub fn register(&mut self, plugin: Arc<T>) {
         self.plugins.insert(plugin.id().to_string(), plugin);
     }
 
-    pub fn get(&self, id: &str) -> Option<&Arc<dyn EffectPlugin>> {
-        self.plugins.get(id)
-    }
-}
-
-pub struct LoadRepository {
-    plugins: HashMap<String, Arc<dyn LoadPlugin>>,
-}
-
-impl LoadRepository {
-    pub fn new() -> Self {
-        Self {
-            plugins: HashMap::new(),
-        }
-    }
-
-    pub fn register(&mut self, plugin: Arc<dyn LoadPlugin>) {
-        self.plugins.insert(plugin.id().to_string(), plugin);
-    }
-
-    pub fn get(&self, id: &str) -> Option<&Arc<dyn LoadPlugin>> {
+    pub fn get(&self, id: &str) -> Option<&Arc<T>> {
         self.plugins.get(id)
     }
 
+    pub fn values(&self) -> impl Iterator<Item = &Arc<T>> {
+        self.plugins.values()
+    }
+}
+
+impl PluginRepository<dyn LoadPlugin> {
     pub fn get_sorted_plugins(&self) -> Vec<Arc<dyn LoadPlugin>> {
         let mut plugins: Vec<_> = self.plugins.values().cloned().collect();
         plugins.sort_by(|a, b| b.priority().cmp(&a.priority()));
@@ -414,89 +177,31 @@ impl LoadRepository {
     }
 }
 
-pub struct ExportRepository {
-    plugins: HashMap<String, Arc<dyn ExportPlugin>>,
-}
-
-impl ExportRepository {
-    pub fn new() -> Self {
-        Self {
-            plugins: HashMap::new(),
-        }
-    }
-
-    pub fn register(&mut self, plugin: Arc<dyn ExportPlugin>) {
-        self.plugins.insert(plugin.id().to_string(), plugin);
-    }
-
-    pub fn get(&self, id: &str) -> Option<&Arc<dyn ExportPlugin>> {
-        self.plugins.get(id)
-    }
-}
-
-pub struct EntityConverterRepository {
-    plugins: HashMap<String, Arc<dyn EntityConverterPlugin>>,
-}
-
-// ... existing impl ...
-
-pub struct InspectorRepository {
-    plugins: HashMap<String, Arc<dyn InspectorPlugin>>,
-}
-
-impl InspectorRepository {
-    pub fn new() -> Self {
-        Self {
-            plugins: HashMap::new(),
-        }
-    }
-
-    pub fn register(&mut self, plugin: Arc<dyn InspectorPlugin>) {
-        self.plugins.insert(plugin.id().to_string(), plugin);
-    }
-}
-
-impl EntityConverterRepository {
-    pub fn new() -> Self {
-        Self {
-            plugins: HashMap::new(),
-        }
-    }
-
-    pub fn register(&mut self, plugin: Arc<dyn EntityConverterPlugin>) {
-        self.plugins.insert(plugin.id().to_string(), plugin);
-    }
-
-    pub fn get(&self, id: &str) -> Option<&Arc<dyn EntityConverterPlugin>> {
-        self.plugins.get(id)
-    }
-}
-
-struct PluginRepository {
-    effect_plugins: EffectRepository,
-    load_plugins: LoadRepository,
-    export_plugins: ExportRepository,
-    entity_converter_plugins: EntityConverterRepository,
-    inspector_plugins: InspectorRepository,
-    property_evaluators: PropertyEvaluatorRegistry, // Direct ownership
-    dynamic_libraries: Vec<Library>,                // Moved here
+struct PluginRegistry {
+    effect_plugins: PluginRepository<dyn EffectPlugin>,
+    load_plugins: PluginRepository<dyn LoadPlugin>,
+    export_plugins: PluginRepository<dyn ExportPlugin>,
+    entity_converter_plugins: PluginRepository<dyn EntityConverterPlugin>,
+    inspector_plugins: PluginRepository<dyn InspectorPlugin>,
+    property_evaluators: PropertyEvaluatorRegistry,
+    dynamic_libraries: Vec<Library>,
 }
 
 pub struct PluginManager {
-    inner: RwLock<PluginRepository>,
+    inner: RwLock<PluginRegistry>,
 }
 
 impl PluginManager {
     pub fn new() -> Self {
         Self {
-            inner: RwLock::new(PluginRepository {
-                effect_plugins: EffectRepository::new(),
-                load_plugins: LoadRepository::new(),
-                export_plugins: ExportRepository::new(),
-                entity_converter_plugins: EntityConverterRepository::new(),
-                inspector_plugins: InspectorRepository::new(),
+            inner: RwLock::new(PluginRegistry {
+                effect_plugins: PluginRepository::new(),
+                load_plugins: PluginRepository::new(),
+                export_plugins: PluginRepository::new(),
+                entity_converter_plugins: PluginRepository::new(),
+                inspector_plugins: PluginRepository::new(),
                 property_evaluators: PropertyEvaluatorRegistry::new(),
-                dynamic_libraries: Vec::new(), // Initialized here
+                dynamic_libraries: Vec::new(),
             }),
         }
     }
@@ -703,32 +408,46 @@ impl PluginManager {
         )))
     }
 
+    unsafe fn load_plugin_generic<T: ?Sized + 'static>(
+        &self,
+        path: &Path,
+        symbol: &[u8],
+        register: impl FnOnce(&mut PluginRegistry, Arc<T>),
+    ) -> Result<(), LibraryError> {
+        let library = Library::new(path)?;
+        let constructor: Symbol<unsafe extern "C" fn() -> *mut T> = library.get(symbol)?;
+        let raw = constructor();
+        if raw.is_null() {
+            return Err(LibraryError::Plugin(format!(
+                "Plugin constructor {} returned null",
+                String::from_utf8_lossy(symbol)
+            )));
+        }
+        let plugin = Arc::from(Box::from_raw(raw));
+
+        let mut inner = self.inner.write().unwrap();
+        register(&mut *inner, plugin);
+        inner.dynamic_libraries.push(library);
+        Ok(())
+    }
+
     pub fn load_property_plugin_from_file<P: AsRef<Path>>(
         &self,
         path: P,
     ) -> Result<(), LibraryError> {
         unsafe {
-            let library = Library::new(path.as_ref())?;
-            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn PropertyPlugin> =
-                library.get(b"create_property_plugin")?;
-            let raw = constructor();
-            if raw.is_null() {
-                return Err(LibraryError::Plugin(
-                    "create_property_plugin returned null".to_string(),
-                ));
-            }
-            let plugin_box = Box::from_raw(raw);
-            let plugin_arc: Arc<dyn PropertyPlugin> = Arc::from(plugin_box); // Convert Box to Arc
-
-            let mut inner = self.inner.write().unwrap();
-            let evaluator_id = plugin_arc.id();
-            let evaluator_instance = plugin_arc.get_evaluator_instance();
-            inner
-                .property_evaluators
-                .register(evaluator_id, evaluator_instance);
-            inner.dynamic_libraries.push(library);
+            self.load_plugin_generic::<dyn PropertyPlugin>(
+                path.as_ref(),
+                b"create_property_plugin",
+                |inner, plugin| {
+                    let evaluator_id = plugin.id();
+                    let evaluator_instance = plugin.get_evaluator_instance();
+                    inner
+                        .property_evaluators
+                        .register(evaluator_id, evaluator_instance);
+                },
+            )
         }
-        Ok(())
     }
 
     pub fn load_effect_plugin_from_file<P: AsRef<Path>>(
@@ -736,44 +455,26 @@ impl PluginManager {
         path: P,
     ) -> Result<(), LibraryError> {
         unsafe {
-            let library = Library::new(path.as_ref())?;
-            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn EffectPlugin> =
-                library.get(b"create_effect_plugin")?;
-            let raw = constructor();
-            if raw.is_null() {
-                return Err(LibraryError::Plugin(
-                    "create_effect_plugin returned null".to_string(),
-                ));
-            }
-            let plugin_box = Box::from_raw(raw);
-            let plugin_arc: Arc<dyn EffectPlugin> = Arc::from(plugin_box); // Convert Box to Arc
-
-            let mut inner = self.inner.write().unwrap();
-            inner.effect_plugins.register(plugin_arc);
-            inner.dynamic_libraries.push(library);
+            self.load_plugin_generic::<dyn EffectPlugin>(
+                path.as_ref(),
+                b"create_effect_plugin",
+                |inner, plugin| {
+                    inner.effect_plugins.register(plugin);
+                },
+            )
         }
-        Ok(())
     }
 
     pub fn load_load_plugin_from_file<P: AsRef<Path>>(&self, path: P) -> Result<(), LibraryError> {
         unsafe {
-            let library = Library::new(path.as_ref())?;
-            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn LoadPlugin> =
-                library.get(b"create_load_plugin")?;
-            let raw = constructor();
-            if raw.is_null() {
-                return Err(LibraryError::Plugin(
-                    "create_load_plugin returned null".to_string(),
-                ));
-            }
-            let plugin_box = Box::from_raw(raw);
-            let plugin_arc: Arc<dyn LoadPlugin> = Arc::from(plugin_box); // Convert Box to Arc
-
-            let mut inner = self.inner.write().unwrap();
-            inner.load_plugins.register(plugin_arc);
-            inner.dynamic_libraries.push(library);
+            self.load_plugin_generic::<dyn LoadPlugin>(
+                path.as_ref(),
+                b"create_load_plugin",
+                |inner, plugin| {
+                    inner.load_plugins.register(plugin);
+                },
+            )
         }
-        Ok(())
     }
 
     pub fn load_export_plugin_from_file<P: AsRef<Path>>(
@@ -781,23 +482,14 @@ impl PluginManager {
         path: P,
     ) -> Result<(), LibraryError> {
         unsafe {
-            let library = Library::new(path.as_ref())?;
-            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn ExportPlugin> =
-                library.get(b"create_export_plugin")?;
-            let raw = constructor();
-            if raw.is_null() {
-                return Err(LibraryError::Plugin(
-                    "create_export_plugin returned null".to_string(),
-                ));
-            }
-            let plugin_box = Box::from_raw(raw);
-            let plugin_arc: Arc<dyn ExportPlugin> = Arc::from(plugin_box); // Convert Box to Arc
-
-            let mut inner = self.inner.write().unwrap();
-            inner.export_plugins.register(plugin_arc);
-            inner.dynamic_libraries.push(library);
+            self.load_plugin_generic::<dyn ExportPlugin>(
+                path.as_ref(),
+                b"create_export_plugin",
+                |inner, plugin| {
+                    inner.export_plugins.register(plugin);
+                },
+            )
         }
-        Ok(())
     }
 
     pub fn load_entity_converter_plugin_from_file<P: AsRef<Path>>(
@@ -805,23 +497,14 @@ impl PluginManager {
         path: P,
     ) -> Result<(), LibraryError> {
         unsafe {
-            let library = Library::new(path.as_ref())?;
-            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn EntityConverterPlugin> =
-                library.get(b"create_entity_converter_plugin")?;
-            let raw = constructor();
-            if raw.is_null() {
-                return Err(LibraryError::Plugin(
-                    "create_entity_converter_plugin returned null".to_string(),
-                ));
-            }
-            let plugin_box = Box::from_raw(raw);
-            let plugin_arc: Arc<dyn EntityConverterPlugin> = Arc::from(plugin_box); // Convert Box to Arc
-
-            let mut inner = self.inner.write().unwrap();
-            inner.entity_converter_plugins.register(plugin_arc);
-            inner.dynamic_libraries.push(library);
+            self.load_plugin_generic::<dyn EntityConverterPlugin>(
+                path.as_ref(),
+                b"create_entity_converter_plugin",
+                |inner, plugin| {
+                    inner.entity_converter_plugins.register(plugin);
+                },
+            )
         }
-        Ok(())
     }
 
     pub fn load_inspector_plugin_from_file<P: AsRef<Path>>(
@@ -829,23 +512,14 @@ impl PluginManager {
         path: P,
     ) -> Result<(), LibraryError> {
         unsafe {
-            let library = Library::new(path.as_ref())?;
-            let constructor: Symbol<unsafe extern "C" fn() -> *mut dyn InspectorPlugin> =
-                library.get(b"create_inspector_plugin")?;
-            let raw = constructor();
-            if raw.is_null() {
-                return Err(LibraryError::Plugin(
-                    "create_inspector_plugin returned null".to_string(),
-                ));
-            }
-            let plugin_box = Box::from_raw(raw);
-            let plugin_arc: Arc<dyn InspectorPlugin> = Arc::from(plugin_box);
-
-            let mut inner = self.inner.write().unwrap();
-            inner.inspector_plugins.register(plugin_arc);
-            inner.dynamic_libraries.push(library);
+            self.load_plugin_generic::<dyn InspectorPlugin>(
+                path.as_ref(),
+                b"create_inspector_plugin",
+                |inner, plugin| {
+                    inner.inspector_plugins.register(plugin);
+                },
+            )
         }
-        Ok(())
     }
 
     pub fn load_plugins_from_directory<P: AsRef<Path>>(

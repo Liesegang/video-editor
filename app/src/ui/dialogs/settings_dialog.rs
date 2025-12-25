@@ -140,7 +140,7 @@ impl SettingsDialog {
 
                     if let Some(result) = local_result {
                         match result {
-                                SettingsResult::Save => {
+                            SettingsResult::Save => {
                                 // 1. Update config shortcuts from editing registry
                                 // We only save shortcuts that differ from the defaults.
                                 // This allows us to persist "Unbound" (None) if the default was "Bound" (Some),

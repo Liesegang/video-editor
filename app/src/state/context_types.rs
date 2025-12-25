@@ -141,8 +141,7 @@ pub struct SelectionState {
 #[derive(Default, Clone)]
 pub struct InteractionState {
     pub dragged_item: Option<DraggedItem>,
-    pub asset_delete_candidate: Option<Uuid>,
-    pub comp_delete_candidate: Option<Uuid>,
+    pub active_confirmation: Option<crate::ui::dialogs::confirmation::ConfirmationDialog>,
     pub active_modal_error: Option<String>,
 
     // Drag/Drop specifics
