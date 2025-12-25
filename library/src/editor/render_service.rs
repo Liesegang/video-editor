@@ -8,7 +8,7 @@ use crate::model::frame::Image;
 use crate::model::frame::entity::{FrameContent, FrameObject};
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
-use crate::plugin::{LoadRequest, LoadResponse, PluginManager};
+use crate::plugin::{LoadRequest, PluginManager};
 use crate::util::timing::{ScopedTimer, measure_debug};
 // Removed HashMap and EvaluationContext imports
 use std::sync::Arc;
@@ -86,22 +86,20 @@ impl<T: Renderer> RenderService<T> {
                     surface,
                     frame_number,
                 } => {
-                    let request = LoadRequest::VideoFrame {
-                        stream_index: None,
-                        path: surface.file_path.clone(),
-                        frame_number: *frame_number,
-                        input_color_space: surface.input_color_space.clone(),
-                        output_color_space: surface.output_color_space.clone(),
-                    };
                     let video_frame = measure_debug(
                         format!("Decode video {} frame {}", surface.file_path, frame_number),
                         || -> Result<Image, LibraryError> {
-                            match self
+                            let request = LoadRequest::VideoFrame {
+                                path: surface.file_path.clone(),
+                                frame_number: *frame_number,
+                                stream_index: None,
+                                input_color_space: surface.input_color_space.clone(),
+                                output_color_space: surface.output_color_space.clone(),
+                            };
+                            Ok(self
                                 .plugin_manager
                                 .load_resource(&request, &self.cache_manager)?
-                            {
-                                LoadResponse::Image(img) => Ok(img),
-                            }
+                                .image)
                         },
                     )?;
                     let final_image = self.apply_effects(
@@ -117,18 +115,16 @@ impl<T: Renderer> RenderService<T> {
                     })?;
                 }
                 FrameContent::Image { surface } => {
-                    let request = LoadRequest::Image {
-                        path: surface.file_path.clone(),
-                    };
                     let image_frame = measure_debug(
                         format!("Load image {}", surface.file_path),
                         || -> Result<Image, LibraryError> {
-                            match self
+                            let request = LoadRequest::Image {
+                                path: surface.file_path.clone(),
+                            };
+                            Ok(self
                                 .plugin_manager
                                 .load_resource(&request, &self.cache_manager)?
-                            {
-                                LoadResponse::Image(img) => Ok(img),
-                            }
+                                .image)
                         },
                     )?;
                     let final_image = self.apply_effects(

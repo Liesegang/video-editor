@@ -163,6 +163,10 @@ impl SettingsDialog {
                                 }
                                 self.editing_config.shortcuts = shortcuts;
 
+                                // 1b. Save current loader priority
+                                self.editing_config.plugins.loader_priority =
+                                    self.plugin_manager.get_loader_priority();
+
                                 // 2. Save
                                 config::save_config(&self.editing_config);
 
@@ -377,6 +381,14 @@ fn plugins_list_tab(
     category: library::plugin::PluginCategory,
     filter: Option<String>,
 ) {
+    use library::plugin::PluginCategory;
+
+    // Special handling for Load plugins - show priority order
+    if category == PluginCategory::Load {
+        loader_priority_tab(ui, plugin_manager);
+        return;
+    }
+
     ui.heading(format!("Loaded Plugins: {:?}", category));
     if let Some(f) = &filter {
         ui.label(format!("Filter: {}", f));
@@ -455,6 +467,82 @@ fn plugins_list_tab(
                 });
             }
         });
+}
+
+/// Special tab for loader plugins with priority ordering.
+fn loader_priority_tab(ui: &mut Ui, plugin_manager: &PluginManager) {
+    ui.heading("Loader Plugins (Priority Order)");
+    ui.add_space(5.0);
+    ui.label("Higher in the list = tried first. Drag or use arrows to reorder.");
+    ui.add_space(10.0);
+
+    // Get current priority order from a persistent state
+    let loaders = plugin_manager.get_loader_plugins();
+
+    if loaders.is_empty() {
+        ui.label("No loader plugins registered.");
+        return;
+    }
+
+    // Use egui memory to store the priority order during editing
+    let id = ui.make_persistent_id("loader_priority");
+    let mut priority_order: Vec<String> = ui.memory_mut(|m| {
+        m.data
+            .get_temp_mut_or_insert_with(id, || {
+                loaders
+                    .iter()
+                    .map(|(id, _)| id.clone())
+                    .collect::<Vec<String>>()
+            })
+            .clone()
+    });
+
+    let mut swap: Option<(usize, usize)> = None;
+
+    ScrollArea::vertical().show(ui, |ui| {
+        for (i, plugin_id) in priority_order.iter().enumerate() {
+            let name = loaders
+                .iter()
+                .find(|(id, _)| id == plugin_id)
+                .map(|(_, n)| n.as_str())
+                .unwrap_or(plugin_id);
+
+            ui.horizontal(|ui| {
+                ui.label(format!("{}.", i + 1));
+
+                // Up button
+                if ui
+                    .add_enabled(i > 0, egui::Button::new("▲"))
+                    .on_hover_text("Move up")
+                    .clicked()
+                {
+                    swap = Some((i, i - 1));
+                }
+
+                // Down button
+                if ui
+                    .add_enabled(i < priority_order.len() - 1, egui::Button::new("▼"))
+                    .on_hover_text("Move down")
+                    .clicked()
+                {
+                    swap = Some((i, i + 1));
+                }
+
+                ui.label(format!("{} ({})", name, plugin_id));
+            });
+        }
+    });
+
+    // Apply swap
+    if let Some((a, b)) = swap {
+        priority_order.swap(a, b);
+
+        // Apply to plugin manager immediately
+        plugin_manager.set_loader_priority(priority_order.clone());
+    }
+
+    // Store back to memory
+    ui.memory_mut(|m| m.data.insert_temp(id, priority_order));
 }
 
 fn shortcuts_tab(ui: &mut Ui, commands: &mut Vec<Command>, state: &mut SettingsState) {

@@ -42,12 +42,31 @@ impl Plugin for NativeImageLoader {
 }
 
 impl LoadPlugin for NativeImageLoader {
-    fn supports(&self, request: &LoadRequest) -> bool {
-        matches!(request, LoadRequest::Image { .. })
-    }
+    fn open(&self, path: &str) -> Result<Vec<crate::plugin::AssetMetadata>, LibraryError> {
+        // Check file extension
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase());
+        let is_supported = matches!(
+            ext.as_deref(),
+            Some("png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm")
+        );
+        if !is_supported {
+            return Err(LibraryError::Plugin("Unsupported file type".to_string()));
+        }
 
-    fn priority(&self) -> u32 {
-        100
+        let (w, h) = image::image_dimensions(path)
+            .map_err(|e| LibraryError::from(Box::new(e) as Box<dyn std::error::Error>))?;
+
+        Ok(vec![crate::plugin::AssetMetadata {
+            kind: crate::model::project::asset::AssetKind::Image,
+            duration: None,
+            fps: None,
+            width: Some(w),
+            height: Some(h),
+            stream_index: None,
+        }])
     }
 
     fn load(
@@ -56,63 +75,18 @@ impl LoadPlugin for NativeImageLoader {
         cache: &CacheManager,
     ) -> Result<LoadResponse, LibraryError> {
         if let LoadRequest::Image { path } = request {
-            if let Some(image) = cache.get_image(path) {
-                return Ok(LoadResponse::Image(image));
-            }
-
-            let image = load_image(path)?;
-            cache.put_image(path, &image);
-            Ok(LoadResponse::Image(image))
+            let image = if let Some(img) = cache.get_image(path) {
+                img
+            } else {
+                let img = load_image(path)?;
+                cache.put_image(path, &img);
+                img
+            };
+            Ok(LoadResponse { image })
         } else {
             Err(LibraryError::Plugin(
                 "NativeImageLoader received unsupported request".to_string(),
             ))
         }
-    }
-
-    fn get_asset_kind(&self, path: &str) -> Option<crate::model::project::asset::AssetKind> {
-        let ext = std::path::Path::new(path)
-            .extension()?
-            .to_str()?
-            .to_lowercase();
-        match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
-                Some(crate::model::project::asset::AssetKind::Image)
-            }
-            _ => None,
-        }
-    }
-
-    fn get_dimensions(&self, path: &str) -> Option<(u32, u32)> {
-        image::image_dimensions(path).ok()
-    }
-    fn get_metadata(&self, path: &str) -> Option<crate::plugin::AssetMetadata> {
-        let ext = std::path::Path::new(path)
-            .extension()?
-            .to_str()?
-            .to_lowercase();
-
-        let kind = match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
-                crate::model::project::asset::AssetKind::Image
-            }
-            _ => return None,
-        };
-
-        let dim = image::image_dimensions(path).ok();
-        let (w, h) = if let Some((w, h)) = dim {
-            (Some(w), Some(h))
-        } else {
-            (None, None)
-        };
-
-        Some(crate::plugin::AssetMetadata {
-            kind,
-            duration: None,
-            fps: None,
-            width: w,
-            height: h,
-            stream_index: None,
-        })
     }
 }

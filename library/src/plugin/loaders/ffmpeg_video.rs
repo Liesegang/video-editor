@@ -203,60 +203,6 @@ impl VideoReader {
             data,
         })
     }
-}
-
-// ============================================================================
-// MediaProbe - Probes media files for metadata
-// ============================================================================
-
-pub struct MediaProbe {
-    input_context: ffmpeg::format::context::Input,
-}
-
-impl MediaProbe {
-    pub fn new(file_path: &str) -> Result<Self, LibraryError> {
-        ffmpeg::init()?;
-        let input_context = ffmpeg::format::input(&file_path)?;
-        Ok(Self { input_context })
-    }
-
-    pub fn get_duration(&self) -> Option<f64> {
-        if self.input_context.duration() == ffmpeg::ffi::AV_NOPTS_VALUE {
-            None
-        } else {
-            Some(self.input_context.duration() as f64 / ffmpeg::ffi::AV_TIME_BASE as f64)
-        }
-    }
-
-    pub fn get_fps(&self) -> f64 {
-        if let Some(stream) = self
-            .input_context
-            .streams()
-            .best(ffmpeg::media::Type::Video)
-        {
-            let avg_frame_rate = stream.avg_frame_rate();
-            if avg_frame_rate.denominator() > 0 {
-                return avg_frame_rate.numerator() as f64 / avg_frame_rate.denominator() as f64;
-            }
-        }
-        0.0
-    }
-
-    pub fn get_dimensions(&self) -> (u32, u32) {
-        if let Some(stream) = self
-            .input_context
-            .streams()
-            .best(ffmpeg::media::Type::Video)
-        {
-            if let Ok(decoder) =
-                ffmpeg::codec::context::Context::from_parameters(stream.parameters())
-                    .and_then(|c| c.decoder().video())
-            {
-                return (decoder.width(), decoder.height());
-            }
-        }
-        (0, 0)
-    }
 
     pub fn has_video(&self) -> bool {
         self.input_context
@@ -324,13 +270,18 @@ impl MediaProbe {
 // ============================================================================
 
 pub struct FfmpegVideoLoader {
-    readers: Mutex<HashMap<String, VideoReader>>,
+    readers: Mutex<HashMap<u64, VideoReader>>,
+    /// Maps path to existing context_id to avoid re-opening the same file.
+    path_to_context: Mutex<HashMap<String, u64>>,
+    next_context_id: std::sync::atomic::AtomicU64,
 }
 
 impl FfmpegVideoLoader {
     pub fn new() -> Self {
         Self {
             readers: Mutex::new(HashMap::new()),
+            path_to_context: Mutex::new(HashMap::new()),
+            next_context_id: std::sync::atomic::AtomicU64::new(1),
         }
     }
 }
@@ -354,12 +305,38 @@ impl Plugin for FfmpegVideoLoader {
 }
 
 impl LoadPlugin for FfmpegVideoLoader {
-    fn supports(&self, request: &LoadRequest) -> bool {
-        matches!(request, LoadRequest::VideoFrame { .. })
-    }
+    fn open(&self, path: &str) -> Result<Vec<crate::plugin::AssetMetadata>, LibraryError> {
+        // Check if already opened
+        {
+            let path_map = self.path_to_context.lock().unwrap();
+            if let Some(&context_id) = path_map.get(path) {
+                let readers = self.readers.lock().unwrap();
+                if let Some(reader) = readers.get(&context_id) {
+                    return Ok(reader.get_available_streams());
+                }
+            }
+        }
 
-    fn priority(&self) -> u32 {
-        10
+        // Open new reader
+        let reader = VideoReader::new(path)?;
+        let streams = reader.get_available_streams();
+
+        if streams.is_empty() {
+            return Err(LibraryError::Plugin("No video or audio stream".to_string()));
+        }
+
+        // Generate context ID and store
+        let context_id = self
+            .next_context_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        self.path_to_context
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), context_id);
+        self.readers.lock().unwrap().insert(context_id, reader);
+
+        Ok(streams)
     }
 
     fn load(
@@ -370,225 +347,58 @@ impl LoadPlugin for FfmpegVideoLoader {
         if let LoadRequest::VideoFrame {
             path,
             frame_number,
-            stream_index,
+            stream_index: _,
             input_color_space,
             output_color_space,
         } = request
         {
-            // Cache key needs to include stream_index to differentiate streams of same file
-            let cache_key = if let Some(idx) = stream_index {
-                format!("{}?stream={}", path, idx)
-            } else {
-                path.clone()
+            // Get context_id from path, auto-open if needed
+            let context_id = {
+                let mut path_map = self.path_to_context.lock().unwrap();
+                if let Some(&id) = path_map.get(path) {
+                    id
+                } else {
+                    // Open new reader inline to avoid lock/unlock cycles
+                    let reader = VideoReader::new(path)?;
+                    let streams = reader.get_available_streams();
+                    if streams.is_empty() {
+                        return Err(LibraryError::Plugin("No video or audio stream".to_string()));
+                    }
+                    let id = self
+                        .next_context_id
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    path_map.insert(path.to_string(), id);
+                    self.readers.lock().unwrap().insert(id, reader);
+                    id
+                }
             };
 
-            if let Some(image) = cache.get_video_frame(&cache_key, *frame_number) {
-                return Ok(LoadResponse::Image(image));
-            }
-
-            use std::collections::hash_map::Entry;
+            let cache_key = path.as_str();
 
             let image = {
                 let mut readers = self.readers.lock().unwrap();
-                // We use the same cache key logic for the readers map
-                let reader = match readers.entry(cache_key.clone()) {
-                    Entry::Occupied(entry) => entry.into_mut(),
-                    Entry::Vacant(entry) => {
-                        // Pass stream_index to VideoReader
-                        entry.insert(VideoReader::new_with_stream(path, *stream_index)?)
-                    }
-                };
+                let reader = readers.get_mut(&context_id).ok_or_else(|| {
+                    LibraryError::Plugin(format!("Reader for {} not found", path))
+                })?;
 
-                // Configure Color Space if provided
                 if let (Some(src), Some(dst)) = (input_color_space, output_color_space) {
                     reader.set_color_space(src, dst);
                 }
 
-                reader.decode_frame(*frame_number)?
+                if let Some(cached) = cache.get_video_frame(cache_key, *frame_number) {
+                    cached
+                } else {
+                    let decoded = reader.decode_frame(*frame_number)?;
+                    cache.put_video_frame(cache_key, *frame_number, &decoded);
+                    decoded
+                }
             };
 
-            cache.put_video_frame(&cache_key, *frame_number, &image);
-            Ok(LoadResponse::Image(image))
+            Ok(LoadResponse { image })
         } else {
             Err(LibraryError::Plugin(
                 "FfmpegVideoLoader received unsupported request".to_string(),
             ))
         }
-    }
-
-    fn get_available_streams(&self, path: &str) -> Option<Vec<crate::plugin::AssetMetadata>> {
-        let ext = std::path::Path::new(path)
-            .extension()?
-            .to_str()?
-            .to_lowercase();
-
-        // Explicitly reject image extensions to let NativeImageLoader handle them
-        match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
-                return None;
-            }
-            _ => {}
-        }
-
-        if let Ok(probe) = MediaProbe::new(path) {
-            return Some(probe.get_available_streams());
-        }
-        None
-    }
-
-    fn get_asset_kind(&self, path: &str) -> Option<crate::model::project::asset::AssetKind> {
-        let ext = std::path::Path::new(path)
-            .extension()?
-            .to_str()?
-            .to_lowercase();
-
-        // Explicitly reject image extensions to let NativeImageLoader handle them
-        match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
-                return None;
-            }
-            _ => {}
-        }
-
-        // ffmpeg supports audio too, but here we currently assume video loader.
-        // Ideally we should distinguish or support both.
-        match ext.as_str() {
-            "mp4" | "mov" | "avi" | "mkv" | "webm" => {
-                Some(crate::model::project::asset::AssetKind::Video)
-            }
-            "mp3" | "wav" | "aac" | "flac" | "ogg" => {
-                Some(crate::model::project::asset::AssetKind::Audio)
-            }
-            _ => None,
-        }
-    }
-
-    fn get_duration(&self, path: &str) -> Option<f64> {
-        let mut readers = self.readers.lock().unwrap();
-        if let Some(reader) = readers.get(path) {
-            return reader.get_duration();
-        }
-
-        if let Ok(reader) = VideoReader::new(path) {
-            let duration = reader.get_duration();
-            readers.insert(path.to_string(), reader);
-            return duration;
-        }
-
-        if let Ok(probe) = MediaProbe::new(path) {
-            return probe.get_duration();
-        }
-
-        None
-    }
-
-    fn get_fps(&self, path: &str) -> Option<f64> {
-        let mut readers = self.readers.lock().unwrap();
-        if let Some(reader) = readers.get(path) {
-            return Some(reader.get_fps());
-        }
-
-        if let Ok(reader) = VideoReader::new(path) {
-            let fps = reader.get_fps();
-            readers.insert(path.to_string(), reader);
-            return Some(fps);
-        }
-
-        if let Ok(probe) = MediaProbe::new(path) {
-            return Some(probe.get_fps());
-        }
-
-        None
-    }
-
-    fn get_dimensions(&self, path: &str) -> Option<(u32, u32)> {
-        let mut readers = self.readers.lock().unwrap();
-        if let Some(reader) = readers.get(path) {
-            return Some(reader.get_dimensions());
-        }
-
-        if let Ok(reader) = VideoReader::new(path) {
-            let dim = reader.get_dimensions();
-            readers.insert(path.to_string(), reader);
-            return Some(dim);
-        }
-
-        if let Ok(probe) = MediaProbe::new(path) {
-            return Some(probe.get_dimensions());
-        }
-
-        None
-    }
-    fn get_metadata(&self, path: &str) -> Option<crate::plugin::AssetMetadata> {
-        let ext = std::path::Path::new(path)
-            .extension()?
-            .to_str()?
-            .to_lowercase();
-
-        // Explicitly reject image extensions to let NativeImageLoader handle them
-        match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm" => {
-                return None;
-            }
-            _ => {}
-        }
-
-        // Check if cached
-        {
-            let readers = self.readers.lock().unwrap();
-            if let Some(reader) = readers.get(path) {
-                return Some(crate::plugin::AssetMetadata {
-                    kind: crate::model::project::asset::AssetKind::Video,
-                    duration: reader.get_duration(),
-                    fps: Some(reader.get_fps()),
-                    width: Some(reader.get_dimensions().0),
-                    height: Some(reader.get_dimensions().1),
-                    stream_index: None, // Default stream
-                });
-            }
-        }
-
-        // Try VideoReader (for caching)
-        if let Ok(reader) = VideoReader::new(path) {
-            let duration = reader.get_duration();
-            let fps = reader.get_fps();
-            let (w, h) = reader.get_dimensions();
-
-            {
-                let mut readers = self.readers.lock().unwrap();
-                readers.insert(path.to_string(), reader);
-            }
-
-            return Some(crate::plugin::AssetMetadata {
-                kind: crate::model::project::asset::AssetKind::Video,
-                duration,
-                fps: Some(fps),
-                width: Some(w),
-                height: Some(h),
-                stream_index: None, // Default stream
-            });
-        }
-
-        // Fallback to MediaProbe (e.g. for Audio)
-        if let Ok(probe) = MediaProbe::new(path) {
-            let kind = if probe.has_video() {
-                crate::model::project::asset::AssetKind::Video
-            } else if probe.has_audio() {
-                crate::model::project::asset::AssetKind::Audio
-            } else {
-                return None;
-            };
-
-            return Some(crate::plugin::AssetMetadata {
-                kind,
-                duration: probe.get_duration(),
-                fps: Some(probe.get_fps()),
-                width: Some(probe.get_dimensions().0),
-                height: Some(probe.get_dimensions().1),
-                stream_index: None, // Implicit best stream
-            });
-        }
-
-        None
     }
 }

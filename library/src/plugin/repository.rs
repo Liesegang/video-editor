@@ -9,7 +9,7 @@ use crate::framing::entity_converters::EntityConverterPlugin;
 use crate::plugin::effects::EffectPlugin;
 use crate::plugin::evaluator::PropertyEvaluatorRegistry;
 use crate::plugin::exporters::ExportPlugin;
-use crate::plugin::loaders::LoadPlugin;
+use crate::plugin::loaders::LoadRepository;
 use crate::plugin::traits::{InspectorPlugin, Plugin};
 
 /// Generic container for plugins of a specific type.
@@ -37,18 +37,10 @@ impl<T: ?Sized + Plugin> PluginRepository<T> {
     }
 }
 
-impl PluginRepository<dyn LoadPlugin> {
-    pub fn get_sorted_plugins(&self) -> Vec<Arc<dyn LoadPlugin>> {
-        let mut plugins: Vec<_> = self.plugins.values().cloned().collect();
-        plugins.sort_by(|a, b| b.priority().cmp(&a.priority()));
-        plugins
-    }
-}
-
 /// Internal registry holding all plugin repositories.
 pub(crate) struct PluginRegistry {
     pub effect_plugins: PluginRepository<dyn EffectPlugin>,
-    pub load_plugins: PluginRepository<dyn LoadPlugin>,
+    pub load_plugins: LoadRepository,
     pub export_plugins: PluginRepository<dyn ExportPlugin>,
     pub entity_converter_plugins: PluginRepository<dyn EntityConverterPlugin>,
     pub inspector_plugins: PluginRepository<dyn InspectorPlugin>,

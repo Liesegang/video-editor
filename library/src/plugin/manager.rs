@@ -21,7 +21,9 @@ use crate::plugin::PluginCategory;
 use crate::plugin::effects::{EffectDefinition, EffectPlugin};
 use crate::plugin::evaluator::PropertyEvaluatorRegistry;
 use crate::plugin::exporters::{ExportPlugin, ExportSettings};
-use crate::plugin::loaders::{AssetMetadata, LoadPlugin, LoadRequest, LoadResponse};
+use crate::plugin::loaders::{
+    AssetMetadata, LoadPlugin, LoadRepository, LoadRequest, LoadResponse,
+};
 use crate::plugin::repository::{PluginRegistry, PluginRepository};
 use crate::plugin::traits::{InspectorPlugin, Plugin, PropertyPlugin};
 
@@ -35,7 +37,7 @@ impl PluginManager {
         Self {
             inner: RwLock::new(PluginRegistry {
                 effect_plugins: PluginRepository::new(),
-                load_plugins: PluginRepository::new(),
+                load_plugins: LoadRepository::new(),
                 export_plugins: PluginRepository::new(),
                 entity_converter_plugins: PluginRepository::new(),
                 inspector_plugins: PluginRepository::new(),
@@ -77,6 +79,29 @@ impl PluginManager {
     pub fn register_inspector_plugin(&self, plugin: Arc<dyn InspectorPlugin>) {
         let mut inner = self.inner.write().unwrap();
         inner.inspector_plugins.register(plugin);
+    }
+
+    /// Set the priority order for loader plugins.
+    pub fn set_loader_priority(&self, order: Vec<String>) {
+        let mut inner = self.inner.write().unwrap();
+        inner.load_plugins.set_priority_order(order);
+    }
+
+    /// Get the current loader plugin priority order.
+    pub fn get_loader_priority(&self) -> Vec<String> {
+        let inner = self.inner.read().unwrap();
+        inner.load_plugins.get_priority_order().to_vec()
+    }
+
+    /// Get list of all registered loader plugins (id, name).
+    pub fn get_loader_plugins(&self) -> Vec<(String, String)> {
+        let inner = self.inner.read().unwrap();
+        inner
+            .load_plugins
+            .get_priority_order()
+            .iter()
+            .filter_map(|id| inner.load_plugins.get(id).map(|p| (id.clone(), p.name())))
+            .collect()
     }
 
     pub fn apply_effect(
@@ -126,39 +151,40 @@ impl PluginManager {
         })
     }
 
+    /// Load a resource (image or video frame).
     pub fn load_resource(
         &self,
         request: &LoadRequest,
         cache: &CacheManager,
     ) -> Result<LoadResponse, LibraryError> {
         let inner = self.inner.read().unwrap();
-        for plugin in inner.load_plugins.get_sorted_plugins() {
-            if plugin.supports(request) {
-                return plugin.load(request, cache);
+        for plugin in inner.load_plugins.values() {
+            if let Ok(response) = plugin.load(request, cache) {
+                return Ok(response);
             }
         }
+        let path = match request {
+            LoadRequest::Image { path } => path,
+            LoadRequest::VideoFrame { path, .. } => path,
+        };
+        log::error!("Failed to load resource: {}", path);
         Err(LibraryError::Plugin(format!(
-            "No load plugin registered for request {:?}",
-            request
+            "No load plugin registered for path {:?}",
+            path
         )))
     }
 
+    /// Get metadata for the first stream (for backward compatibility).
     pub fn get_metadata(&self, path: &str) -> Option<AssetMetadata> {
-        let inner = self.inner.read().unwrap();
-
-        for plugin in inner.load_plugins.get_sorted_plugins() {
-            if let Some(metadata) = plugin.get_metadata(path) {
-                return Some(metadata);
-            }
-        }
-        None
+        self.get_available_streams(path)
+            .and_then(|streams| streams.into_iter().next())
     }
 
+    /// Get all available streams/resources from a file.
     pub fn get_available_streams(&self, path: &str) -> Option<Vec<AssetMetadata>> {
         let inner = self.inner.read().unwrap();
-
-        for plugin in inner.load_plugins.get_sorted_plugins() {
-            if let Some(streams) = plugin.get_available_streams(path) {
+        for plugin in inner.load_plugins.values() {
+            if let Ok(streams) = plugin.open(path) {
                 return Some(streams);
             }
         }
@@ -166,46 +192,25 @@ impl PluginManager {
     }
 
     pub fn probe_asset_kind(&self, path: &str) -> AssetKind {
-        let inner = self.inner.read().unwrap();
-
-        for plugin in inner.load_plugins.get_sorted_plugins() {
-            if let Some(kind) = plugin.get_asset_kind(path) {
-                return kind;
-            }
-        }
-        AssetKind::Other
+        self.get_metadata(path)
+            .map(|m| m.kind)
+            .unwrap_or(AssetKind::Other)
     }
 
     pub fn get_duration(&self, path: &str) -> Option<f64> {
-        let inner = self.inner.read().unwrap();
-
-        for plugin in inner.load_plugins.get_sorted_plugins() {
-            if let Some(duration) = plugin.get_duration(path) {
-                return Some(duration);
-            }
-        }
-        None
+        self.get_metadata(path).and_then(|m| m.duration)
     }
 
     pub fn get_fps(&self, path: &str) -> Option<f64> {
-        let inner = self.inner.read().unwrap();
-
-        for plugin in inner.load_plugins.get_sorted_plugins() {
-            if let Some(fps) = plugin.get_fps(path) {
-                return Some(fps);
-            }
-        }
-        None
+        self.get_metadata(path).and_then(|m| m.fps)
     }
 
     pub fn get_dimensions(&self, path: &str) -> Option<(u32, u32)> {
-        let inner = self.inner.read().unwrap();
-        for plugin in inner.load_plugins.get_sorted_plugins() {
-            if let Some(dimensions) = plugin.get_dimensions(path) {
-                return Some(dimensions);
-            }
-        }
-        None
+        self.get_metadata(path)
+            .and_then(|m| match (m.width, m.height) {
+                (Some(w), Some(h)) => Some((w, h)),
+                _ => None,
+            })
     }
 
     pub fn export_image(
