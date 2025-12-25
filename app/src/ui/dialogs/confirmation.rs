@@ -1,7 +1,7 @@
-use egui::Ui;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(dead_code)]
 pub enum ConfirmationAction {
     DeleteComposition(Uuid),
     DeleteAsset(Uuid),

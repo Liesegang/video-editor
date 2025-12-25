@@ -667,3 +667,49 @@ impl PropertyMap {
             .and_then(|pv| pv.get_as::<bool>())
     }
 }
+
+// === UI Property Definitions ===
+
+/// Defines how a property should be displayed and edited in the UI
+#[derive(Debug, Clone, PartialEq)]
+pub enum PropertyUiType {
+    Float {
+        min: f64,
+        max: f64,
+        step: f64,
+        suffix: String,
+    },
+    Integer {
+        min: i64,
+        max: i64,
+        suffix: String,
+    },
+    Color,
+    Text,
+    MultilineText,
+    Bool,
+    Vec2 {
+        suffix: String,
+    },
+    Vec3 {
+        suffix: String,
+    },
+    Vec4 {
+        suffix: String,
+    },
+    Dropdown {
+        options: Vec<String>,
+    },
+    Font,
+    Styles,
+}
+
+/// Defines a property with its metadata for UI rendering
+#[derive(Debug, Clone)]
+pub struct PropertyDefinition {
+    pub name: String,
+    pub label: String,
+    pub ui_type: PropertyUiType,
+    pub default_value: PropertyValue,
+    pub category: String,
+}

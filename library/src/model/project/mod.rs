@@ -144,10 +144,10 @@ impl TrackClip {
         canvas_height: u64,
         clip_width: u64,
         clip_height: u64,
-    ) -> Vec<crate::plugin::PropertyDefinition> {
+    ) -> Vec<property::PropertyDefinition> {
         use crate::model::project::property::PropertyValue;
-        use crate::plugin::{PropertyDefinition, PropertyUiType};
         use ordered_float::OrderedFloat;
+        use property::{PropertyDefinition, PropertyUiType};
 
         let mut definitions = Vec::new();
 

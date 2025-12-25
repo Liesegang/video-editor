@@ -1,4 +1,4 @@
-use library::model::vector::{ControlPoint, HandleType, VectorPath};
+use library::model::vector::{HandleType, VectorPath};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 

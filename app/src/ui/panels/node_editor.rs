@@ -1,4 +1,4 @@
-use crate::model::node_graph::{MyNodeTemplate, MyValueType};
+use crate::model::node_graph::MyNodeTemplate;
 use eframe::egui::{self, Color32};
 use egui_snarl::{
     ui::{PinInfo, SnarlStyle, SnarlViewer},
@@ -47,6 +47,7 @@ impl SnarlViewer<MyNodeTemplate> for MySnarlViewer {
         }
     }
 
+    #[allow(refining_impl_trait_reachable)]
     fn show_input(
         &mut self,
         pin: &InPin,
@@ -104,6 +105,7 @@ impl SnarlViewer<MyNodeTemplate> for MySnarlViewer {
         PinInfo::circle().with_fill(color)
     }
 
+    #[allow(refining_impl_trait_reachable)]
     fn show_output(
         &mut self,
         pin: &OutPin,
@@ -140,9 +142,6 @@ impl SnarlViewer<MyNodeTemplate> for MySnarlViewer {
 }
 
 // ========= 3. The Panel Logic =========
-
-// Add at the top with other imports if not present, or check usages.
-use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, serde::Deserialize, serde::Serialize)]
 struct ContextMenuData {

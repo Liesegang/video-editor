@@ -109,8 +109,8 @@ impl EffectPlugin for DropShadowEffectPlugin {
         })
     }
 
-    fn properties(&self) -> Vec<crate::plugin::PropertyDefinition> {
-        use crate::plugin::{PropertyDefinition, PropertyUiType};
+    fn properties(&self) -> Vec<crate::model::project::property::PropertyDefinition> {
+        use crate::model::project::property::{PropertyDefinition, PropertyUiType};
         use ordered_float::OrderedFloat;
 
         vec![

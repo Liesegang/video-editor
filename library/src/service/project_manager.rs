@@ -2,9 +2,9 @@ use crate::error::LibraryError;
 use crate::model::project::asset::Asset;
 use crate::model::project::project::{Composition, Project};
 use crate::model::project::property::PropertyValue;
+use crate::model::project::property::{PropertyDefinition, PropertyUiType};
 use crate::model::project::{Track, TrackClip};
 use crate::plugin::PluginManager;
-use crate::plugin::{PropertyDefinition, PropertyUiType};
 use crate::service::color_space_manager::ColorSpaceManager;
 use crate::service::handlers;
 use std::sync::{Arc, RwLock};
@@ -816,7 +816,7 @@ impl ProjectManager {
         comp_id: uuid::Uuid,
         track_id: uuid::Uuid,
         clip_id: uuid::Uuid,
-    ) -> Vec<crate::plugin::PropertyDefinition> {
+    ) -> Vec<PropertyDefinition> {
         let project = self.project.read().unwrap();
 
         let (clip, canvas_width, canvas_height) =

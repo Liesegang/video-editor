@@ -296,6 +296,7 @@ impl<'a> FrameEvaluationContext<'a> {
         (vx, vy)
     }
 
+    #[allow(dead_code)]
     fn parse_draw_styles(&self, value: PropertyValue) -> Vec<StyleConfig> {
         match value {
             PropertyValue::Array(arr) => arr

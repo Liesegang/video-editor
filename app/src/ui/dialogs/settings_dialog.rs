@@ -197,8 +197,6 @@ impl SettingsDialog {
 
 use egui_extras::{Size, StripBuilder};
 
-// ... (existing helper functions)
-
 fn settings_panel(
     ui: &mut Ui,
     registry: &mut CommandRegistry,

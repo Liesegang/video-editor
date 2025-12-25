@@ -18,8 +18,8 @@ pub use self::sksl_plugin::SkslEffectPlugin;
 pub use self::tile::TileEffectPlugin;
 
 use crate::error::LibraryError;
-use crate::model::project::property::PropertyValue;
-use crate::plugin::{Plugin, PluginCategory, PropertyDefinition};
+use crate::model::project::property::{PropertyDefinition, PropertyValue};
+use crate::plugin::{Plugin, PluginCategory};
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
 use std::collections::HashMap;
