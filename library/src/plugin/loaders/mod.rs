@@ -26,6 +26,15 @@ pub enum LoadRequest {
     },
 }
 
+impl LoadRequest {
+    pub fn path(&self) -> &str {
+        match self {
+            LoadRequest::Image { path } => path,
+            LoadRequest::VideoFrame { path, .. } => path,
+        }
+    }
+}
+
 pub struct LoadResponse {
     pub image: Image,
 }

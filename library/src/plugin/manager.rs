@@ -163,10 +163,7 @@ impl PluginManager {
                 return Ok(response);
             }
         }
-        let path = match request {
-            LoadRequest::Image { path } => path,
-            LoadRequest::VideoFrame { path, .. } => path,
-        };
+        let path = request.path();
         log::error!("Failed to load resource: {}", path);
         Err(LibraryError::Plugin(format!(
             "No load plugin registered for path {:?}",
