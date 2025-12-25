@@ -374,9 +374,7 @@ impl ClipHandler {
         // Adjust index if moving within same track
         if source_track_id == target_track_id {
             if let Some(idx) = final_target_index {
-                if source_index < idx {
-                    final_target_index = Some(idx.saturating_sub(1));
-                }
+                // No adjustment needed - target_index is the final index in the simplified list
             }
             // Already have valid mutable reference to source (which is target)
             if let Some(idx) = final_target_index {
