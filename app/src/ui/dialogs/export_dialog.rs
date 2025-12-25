@@ -128,7 +128,7 @@ impl ExportDialog {
                 let mut should_close = false;
                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     if self.is_exporting {
-                         if let Some(token) = &self.cancellation_token {
+                        if let Some(token) = &self.cancellation_token {
                             token.store(true, std::sync::atomic::Ordering::Relaxed);
                         }
                         self.is_exporting = false;
@@ -150,9 +150,9 @@ impl ExportDialog {
             });
 
         if let Some(inner) = result {
-             if inner.inner.unwrap_or(false) {
-                 is_open = false;
-             }
+            if inner.inner.unwrap_or(false) {
+                is_open = false;
+            }
         }
 
         self.is_open = is_open;

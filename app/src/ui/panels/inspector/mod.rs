@@ -9,10 +9,12 @@ use crate::{action::HistoryManager, state::context::EditorContext};
 
 use library::plugin::PropertyUiType;
 
+pub mod action_handler;
 pub mod effects;
 pub mod properties;
 pub mod styles;
 
+use action_handler::{ActionContext, PropertyTarget};
 use effects::render_effects_section;
 use properties::{render_property_rows, PropertyRenderContext};
 use styles::render_styles_section;

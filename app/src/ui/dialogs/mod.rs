@@ -1,4 +1,5 @@
 pub mod composition_dialog;
+pub mod confirmation;
 pub mod export_dialog;
 pub mod keyframe_dialog;
 pub mod settings_dialog;
@@ -21,5 +22,8 @@ pub fn dialog_footer(ui: &mut eframe::egui::Ui, add_contents: impl FnOnce(&mut e
     ui.add_space(10.0);
     ui.separator();
     ui.add_space(5.0);
-    ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), add_contents);
+    ui.with_layout(
+        eframe::egui::Layout::right_to_left(eframe::egui::Align::Center),
+        add_contents,
+    );
 }

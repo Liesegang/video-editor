@@ -296,11 +296,14 @@ pub fn assets_panel(
                                                     ))
                                                     .clicked()
                                                 {
-                                                    if project_service.is_composition_used(comp.id)
-                                                    {
-                                                        editor_context
-                                                            .interaction
-                                                            .comp_delete_candidate = Some(comp.id);
+                                                    if project_service.is_composition_used(comp.id) {
+                                                        let mut dialog = crate::ui::dialogs::confirmation::ConfirmationDialog::new();
+                                                        dialog.open(
+                                                            "⚠ Confirm Composition Deletion",
+                                                            "This composition is used inside another timeline.\nDeleting it will remove all associated clips.\nAre you sure?",
+                                                            crate::ui::dialogs::confirmation::ConfirmationAction::DeleteComposition(comp.id)
+                                                        );
+                                                        editor_context.interaction.active_confirmation = Some(dialog);
                                                     } else {
                                                         comp_to_remove = Some(comp.id);
                                                     }
@@ -428,10 +431,13 @@ pub fn assets_panel(
                                                     .clicked()
                                                 {
                                                     if project_service.is_asset_used(asset.id) {
-                                                        editor_context
-                                                            .interaction
-                                                            .asset_delete_candidate =
-                                                            Some(asset.id);
+                                                        let mut dialog = crate::ui::dialogs::confirmation::ConfirmationDialog::new();
+                                                        dialog.open(
+                                                            "⚠ Confirm Deletion",
+                                                            "This asset is used in the timeline.\nDeleting it will remove all associated clips.\nAre you sure?",
+                                                            crate::ui::dialogs::confirmation::ConfirmationAction::DeleteAsset(asset.id)
+                                                        );
+                                                        editor_context.interaction.active_confirmation = Some(dialog);
                                                     } else {
                                                         asset_to_remove = Some(asset.id);
                                                     }
@@ -506,83 +512,7 @@ pub fn assets_panel(
         needs_refresh = true;
     }
 
-    // Confirmation Modal for Composition Deletion
-    if let Some(comp_id) = editor_context.interaction.comp_delete_candidate {
-        crate::ui::widgets::modal::Modal::new("⚠ Confirm Composition Deletion")
-            .collapsible(false)
-            .resizable(false)
-            .show(ui.ctx(), |ui| {
-                ui.label("This composition is used inside another timeline.");
-                ui.label("Deleting it will remove all associated clips.");
-                ui.label("Are you sure?");
-
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        editor_context.interaction.comp_delete_candidate = None;
-                    }
-                    if ui
-                        .button(egui::RichText::new("Delete").color(egui::Color32::RED))
-                        .clicked()
-                    {
-                        match project_service.remove_composition_fully(comp_id) {
-                            Ok(_) => {
-                                // Clear selection if we just deleted the selected comp
-                                if editor_context.selection.composition_id == Some(comp_id) {
-                                    editor_context.selection.composition_id = None;
-                                    editor_context.selection.last_selected_track_id = None;
-                                    editor_context.selection.last_selected_entity_id = None;
-                                    editor_context.selection.selected_entities.clear();
-                                }
-
-                                let current_state =
-                                    project_service.get_project().read().unwrap().clone();
-                                history_manager.push_project_state(current_state);
-                                needs_refresh = true;
-                            }
-                            Err(e) => {
-                                log::error!("Failed to remove composition fully: {}", e);
-                            }
-                        }
-                        editor_context.interaction.comp_delete_candidate = None;
-                    }
-                });
-            });
-    }
-
-    // Confirmation Modal for Asset Deletion
-    if let Some(asset_id) = editor_context.interaction.asset_delete_candidate {
-        crate::ui::widgets::modal::Modal::new("⚠ Confirm Deletion")
-            .collapsible(false)
-            .resizable(false)
-            .show(ui.ctx(), |ui| {
-                ui.label("This asset is used in the timeline.");
-                ui.label("Deleting it will remove all associated clips.");
-                ui.label("Are you sure?");
-
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        editor_context.interaction.asset_delete_candidate = None;
-                    }
-                    if ui
-                        .button(egui::RichText::new("Delete").color(egui::Color32::RED))
-                        .clicked()
-                    {
-                        match project_service.remove_asset_fully(asset_id) {
-                            Ok(_) => {
-                                let current_state =
-                                    project_service.get_project().read().unwrap().clone();
-                                history_manager.push_project_state(current_state);
-                                needs_refresh = true;
-                            }
-                            Err(e) => {
-                                log::error!("Failed to remove asset fully: {}", e);
-                            }
-                        }
-                        editor_context.interaction.asset_delete_candidate = None;
-                    }
-                });
-            });
-    }
+    // Old modals removed.
 
     // Import Report Modal
     if let Some(report) = &editor_context.interaction.import_report {

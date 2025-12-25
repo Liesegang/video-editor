@@ -223,7 +223,43 @@ impl eframe::App for MyApp {
             self.triggered_action = Some(cmd_id);
         }
 
-        // 6. Generic Error Modal
+        // 6. Confirmation Dialog
+        if let Some(dialog) = &mut self.editor_context.interaction.active_confirmation {
+            if let Some(action) = dialog.show(ctx) {
+                match action {
+                    crate::ui::dialogs::confirmation::ConfirmationAction::DeleteAsset(id) => {
+                        if let Err(e) = self.project_service.remove_asset_fully(id) {
+                            log::error!("Failed to remove asset: {}", e);
+                        } else {
+                            // Push history
+                            let current_state =
+                                self.project_service.get_project().read().unwrap().clone();
+                            self.history_manager.push_project_state(current_state);
+                        }
+                    }
+                    crate::ui::dialogs::confirmation::ConfirmationAction::DeleteComposition(id) => {
+                        if let Err(e) = self.project_service.remove_composition_fully(id) {
+                            log::error!("Failed to remove composition: {}", e);
+                        } else {
+                            // Clear selection if needed
+                            if self.editor_context.selection.composition_id == Some(id) {
+                                self.editor_context.selection.composition_id = None;
+                                self.editor_context.selection.selected_entities.clear();
+                            }
+                            let current_state =
+                                self.project_service.get_project().read().unwrap().clone();
+                            self.history_manager.push_project_state(current_state);
+                        }
+                    }
+                    _ => {}
+                }
+                // Reset dialog logic is handled inside show() which sets is_open=false,
+                // but we can set the Option to None if we want to clean up.
+                // For now, keeping it is fine as is_open controls visibility.
+            }
+        }
+
+        // 7. Generic Error Modal
         if let Some(error_msg) = self.editor_context.interaction.active_modal_error.clone() {
             let mut open = true;
             egui::Window::new("⚠ Error")

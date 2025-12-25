@@ -89,6 +89,25 @@ impl Project {
         let index = self.compositions.iter().position(|c| c.id == id)?;
         Some(self.compositions.remove(index))
     }
+
+    /// Helper to get a mutable reference to a Track inside a Composition
+    pub fn get_track_mut(&mut self, composition_id: Uuid, track_id: Uuid) -> Option<&mut Track> {
+        self.get_composition_mut(composition_id)?
+            .get_track_mut(track_id)
+    }
+
+    /// Helper to get a mutable reference to a Clip inside a Track inside a Composition
+    pub fn get_clip_mut(
+        &mut self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+    ) -> Option<&mut crate::model::project::TrackClip> {
+        self.get_track_mut(composition_id, track_id)?
+            .clips
+            .iter_mut()
+            .find(|c| c.id == clip_id)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]

@@ -22,63 +22,21 @@ impl KeyframeHandler {
         let mut proj = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        let comp = proj
-            .get_composition_mut(composition_id)
-            .ok_or_else(|| LibraryError::Project(format!("Comp {} not found", composition_id)))?;
-        let track = comp
-            .get_track_mut(track_id)
-            .ok_or_else(|| LibraryError::Project(format!("Track {} not found", track_id)))?;
-        let clip = track
-            .clips
-            .iter_mut()
-            .find(|c| c.id == clip_id)
+
+        let clip = proj
+            .get_clip_mut(composition_id, track_id, clip_id)
             .ok_or_else(|| LibraryError::Project(format!("Clip {} not found", clip_id)))?;
 
-        // Find property or create
+        // Get or create property
         if let Some(prop) = clip.properties.get_mut(property_key) {
-            // If constant, convert to keyframe
-            if prop.evaluator == "constant" {
-                let kf_new = Keyframe {
-                    time: OrderedFloat(time),
-                    value: value,
-                    easing: easing.unwrap_or(crate::animation::EasingFunction::Linear),
-                };
-                *prop = Property::keyframe(vec![kf_new]);
-            } else if prop.evaluator == "keyframe" {
-                // Add to list
-                // Check if keyframe exists at time?
-                let mut kfs = prop.keyframes();
-                // Update existing if exists
-                if let Some(existing_idx) = kfs
-                    .iter()
-                    .position(|k| (k.time.into_inner() - time).abs() < 0.001)
-                {
-                    kfs[existing_idx].value = value;
-                    if let Some(e) = easing {
-                        kfs[existing_idx].easing = e;
-                    }
-                } else {
-                    kfs.push(Keyframe {
-                        time: OrderedFloat(time),
-                        value: value,
-                        easing: easing.unwrap_or(crate::animation::EasingFunction::Linear),
-                    });
-                    kfs.sort_by_key(|k| k.time);
-                }
-                *prop = Property::keyframe(kfs);
-            } else {
-                // Other evaluator type
+            if !prop.upsert_keyframe(time, value, easing) {
                 return Err(LibraryError::Project(format!(
                     "Property {} is type {}, cannot add keyframe",
                     property_key, prop.evaluator
                 )));
             }
         } else {
-            // Create New Keyframe Property implies base value 0? Or use this value?
-            // Usually we create constant first. But here we can create keyframe prop directly.
-            // But we might need two keyframes (one at 0, one at time)? Or just one?
-            // If just one, it's effectively constant.
-            // Let's create keyframe prop with this single keyframe.
+            // Create new keyframe property
             let kf = Keyframe {
                 time: OrderedFloat(time),
                 value,
@@ -468,63 +426,21 @@ impl KeyframeHandler {
         let mut proj = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
-        let comp = proj
-            .get_composition_mut(composition_id)
-            .ok_or_else(|| LibraryError::Project("Comp not found".to_string()))?;
-        let track = comp
-            .get_track_mut(track_id)
-            .ok_or_else(|| LibraryError::Project("Track not found".to_string()))?;
-        let clip = track
-            .clips
-            .iter_mut()
-            .find(|c| c.id == clip_id)
+
+        let clip = proj
+            .get_clip_mut(composition_id, track_id, clip_id)
             .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
 
-        let effect_map_val = clip
+        let effect = clip
             .effects
             .get_mut(effect_index)
             .ok_or_else(|| LibraryError::Project("Effect index out of bounds".to_string()))?;
-        let target_prop_val = effect_map_val
+        let prop = effect
             .properties
             .get_mut(property_key)
             .ok_or_else(|| LibraryError::Project("Effect property not found".to_string()))?;
 
-        // Logic: Promotes to keyframe if constant, or adds if keyframe.
-        // Note: previous logic accessed "value" key inside properties if generic.
-        // But `target_prop_val` IS the Property object (struct).
-        // So we can use helper logic. (Ideally extracted).
-
-        // Check evaluator.
-        // Since target_prop_val is &mut Property, we can check .evaluator
-        // But Property struct fields are public? Yes.
-
-        if target_prop_val.evaluator == "constant" {
-            let kf_new = Keyframe {
-                time: OrderedFloat(time),
-                value: value,
-                easing: easing.unwrap_or_default(),
-            };
-            *target_prop_val = Property::keyframe(vec![kf_new]);
-        } else if target_prop_val.evaluator == "keyframe" {
-            let mut kfs = target_prop_val.keyframes();
-            if let Some(idx) = kfs
-                .iter()
-                .position(|k| (k.time.into_inner() - time).abs() < 0.001)
-            {
-                kfs[idx].value = value;
-                if let Some(e) = easing {
-                    kfs[idx].easing = e;
-                }
-            } else {
-                kfs.push(Keyframe {
-                    time: OrderedFloat(time),
-                    value: value,
-                    easing: easing.unwrap_or_default(),
-                });
-                kfs.sort_by_key(|k| k.time);
-            }
-            *target_prop_val = Property::keyframe(kfs);
-        } else {
+        if !prop.upsert_keyframe(time, value, easing) {
             return Err(LibraryError::Project(
                 "Cannot keyframe this property type".to_string(),
             ));
@@ -546,16 +462,9 @@ impl KeyframeHandler {
         let mut proj = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
-        let comp = proj
-            .get_composition_mut(composition_id)
-            .ok_or_else(|| LibraryError::Project("Comp not found".to_string()))?;
-        let track = comp
-            .get_track_mut(track_id)
-            .ok_or_else(|| LibraryError::Project("Track not found".to_string()))?;
-        let clip = track
-            .clips
-            .iter_mut()
-            .find(|c| c.id == clip_id)
+
+        let clip = proj
+            .get_clip_mut(composition_id, track_id, clip_id)
             .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
 
         let style = clip
@@ -567,33 +476,7 @@ impl KeyframeHandler {
             .get_mut(property_key)
             .ok_or_else(|| LibraryError::Project("Style property not found".to_string()))?;
 
-        if prop.evaluator == "constant" {
-            let kf_new = Keyframe {
-                time: OrderedFloat(time),
-                value: value,
-                easing: easing.unwrap_or_default(),
-            };
-            *prop = Property::keyframe(vec![kf_new]);
-        } else if prop.evaluator == "keyframe" {
-            let mut kfs = prop.keyframes();
-            if let Some(idx) = kfs
-                .iter()
-                .position(|k| (k.time.into_inner() - time).abs() < 0.001)
-            {
-                kfs[idx].value = value;
-                if let Some(e) = easing {
-                    kfs[idx].easing = e;
-                }
-            } else {
-                kfs.push(Keyframe {
-                    time: OrderedFloat(time),
-                    value: value,
-                    easing: easing.unwrap_or_default(),
-                });
-                kfs.sort_by_key(|k| k.time);
-            }
-            *prop = Property::keyframe(kfs);
-        } else {
+        if !prop.upsert_keyframe(time, value, easing) {
             return Err(LibraryError::Project(
                 "Cannot keyframe this property type".to_string(),
             ));
