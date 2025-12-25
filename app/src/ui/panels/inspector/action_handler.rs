@@ -1,7 +1,7 @@
 //! Shared handler for processing PropertyAction events in the inspector panel.
 //! This module reduces duplication across mod.rs, effects.rs, and styles.rs.
 
-#![allow(dead_code)]
+// Action handler is now actively used by mod.rs, effects.rs, and styles.rs
 
 use crate::action::HistoryManager;
 use library::model::project::property::PropertyValue;
