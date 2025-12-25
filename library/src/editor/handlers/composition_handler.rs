@@ -84,7 +84,7 @@ impl CompositionHandler {
         if let Ok(proj) = project.read() {
             for comp in &proj.compositions {
                 for track in &comp.tracks {
-                    for clip in &track.clips {
+                    for clip in track.clips() {
                         if clip.reference_id == Some(comp_id) {
                             return true;
                         }

@@ -8,8 +8,6 @@ use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 
-use super::utils::flatten::flatten_tracks;
-
 pub fn show_track_list(
     ui_content: &mut Ui,
     editor_context: &mut EditorContext,
@@ -32,114 +30,139 @@ pub fn show_track_list(
         ui_content.style().visuals.window_fill(),
     );
 
+    use std::collections::HashMap;
+
     let mut current_tracks: Vec<Track> = Vec::new();
+    let mut asset_names: HashMap<uuid::Uuid, String> = HashMap::new();
     let selected_composition_id = editor_context.selection.composition_id;
-    // CRITICAL CHANGE: Acquire read lock, clone necessary data, then release the lock.
+
     if let Some(comp_id) = selected_composition_id {
-        // Scope for the read lock to ensure it's dropped before any write attempts
-        {
-            if let Ok(proj_read) = project.read() {
-                if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-                    current_tracks = comp.tracks.clone();
-                }
+        if let Ok(proj_read) = project.read() {
+            if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
+                current_tracks = comp.tracks.clone();
             }
-        } // `proj_read` lock is dropped here
+            // Cache asset names for quick lookup
+            for asset in &proj_read.assets {
+                asset_names.insert(asset.id, asset.name.clone());
+            }
+        }
     }
 
-    // Flatten tracks based on expanded state
-    let display_tracks = flatten_tracks(&current_tracks, &editor_context.timeline.expanded_tracks);
-    let num_tracks = display_tracks.len();
+    // Flatten tracks based on expanded state using the new row-based flattener
+    let display_rows = super::utils::flatten::flatten_tracks_to_rows(
+        &current_tracks,
+        &editor_context.timeline.expanded_tracks,
+    );
+    let num_rows = display_rows.len();
 
-    for display_track in &display_tracks {
-        let track = display_track.track;
-        let i = display_track.visible_row_index;
+    // Iterate over visible rows
+    for row in &display_rows {
+        let visible_row_index = row.visible_row_index();
 
-        let y = track_list_rect.min.y + (i as f32 * (row_height + track_spacing))
+        let y = track_list_rect.min.y + (visible_row_index as f32 * (row_height + track_spacing))
             - editor_context.timeline.scroll_offset.y;
-        let track_label_rect = egui::Rect::from_min_size(
+
+        let row_rect = egui::Rect::from_min_size(
             egui::pos2(track_list_rect.min.x, y),
             egui::vec2(track_list_rect.width(), row_height),
         );
 
-        if track_list_rect.intersects(track_label_rect) {
-            let track_interaction_response = ui_content
-                .interact(
-                    track_label_rect,
-                    egui::Id::new(track.id).with("track_label_interact"),
-                    egui::Sense::click(),
-                )
-                .on_hover_text(format!("Track ID: {}", track.id));
+        // Optimization: Skip rendering if out of view
+        if !track_list_rect.intersects(row_rect) {
+            continue;
+        }
 
-            track_interaction_response.context_menu(|ui| {
-                if let Some(comp_id) = editor_context.selection.composition_id {
-                    // Add Sub-Track option
-                    if ui
-                        .button(format!("{} Add Sub-Track", icons::FOLDER_PLUS))
-                        .clicked()
-                    {
-                        if let Err(e) =
-                            project_service.add_sub_track(comp_id, track.id, "New Sub-Track")
+        match row {
+            super::utils::flatten::DisplayRow::TrackHeader {
+                track,
+                depth,
+                is_expanded,
+                has_clips: _,
+                has_sub_tracks: _,
+                visible_row_index: _, // Ignored here as we use row.visible_row_index() method
+            } => {
+                let track_interaction_response = ui_content
+                    .interact(
+                        row_rect,
+                        egui::Id::new(track.id).with("track_label_interact"),
+                        egui::Sense::click(),
+                    )
+                    .on_hover_text(format!("Track ID: {}", track.id));
+
+                track_interaction_response.context_menu(|ui| {
+                    if let Some(comp_id) = editor_context.selection.composition_id {
+                        // Add Sub-Track option
+                        if ui
+                            .button(format!("{} Add Sub-Track", icons::FOLDER_PLUS))
+                            .clicked()
                         {
-                            error!("Failed to add sub-track: {:?}", e);
-                        } else {
-                            // Auto-expand the parent track to show the new child
-                            editor_context.timeline.expanded_tracks.insert(track.id);
-                            let current_state = project.read().unwrap().clone();
-                            history_manager.push_project_state(current_state);
-                        }
-                        ui.close();
-                    }
-
-                    ui.separator();
-
-                    if ui
-                        .button(format!("{} Remove Track", icons::TRASH))
-                        .clicked()
-                    {
-                        if let Err(e) = project_service.remove_track(comp_id, track.id) {
-                            error!("Failed to remove track: {:?}", e);
-                        } else {
-                            // If the removed track was selected, deselect it
-                            if editor_context.selection.last_selected_track_id == Some(track.id) {
-                                editor_context.selection.last_selected_track_id = None;
-                                editor_context.selection.last_selected_entity_id = None;
-                                editor_context.selection.selected_entities.clear();
+                            if let Err(e) =
+                                project_service.add_sub_track(comp_id, track.id, "New Sub-Track")
+                            {
+                                error!("Failed to add sub-track: {:?}", e);
+                            } else {
+                                // Auto-expand the parent track to show the new child
+                                editor_context.timeline.expanded_tracks.insert(track.id);
+                                let current_state = project.read().unwrap().clone();
+                                history_manager.push_project_state(current_state);
                             }
-                            let current_state = project.read().unwrap().clone();
-                            history_manager.push_project_state(current_state);
+                            ui.close();
                         }
-                        ui.close();
+
+                        ui.separator();
+
+                        if ui
+                            .button(format!("{} Remove Track", icons::TRASH))
+                            .clicked()
+                        {
+                            if let Err(e) = project_service.remove_track(comp_id, track.id) {
+                                error!("Failed to remove track: {:?}", e);
+                            } else {
+                                // If the removed track was selected, deselect it
+                                if editor_context.selection.last_selected_track_id == Some(track.id)
+                                {
+                                    editor_context.selection.last_selected_track_id = None;
+                                    editor_context.selection.last_selected_entity_id = None;
+                                    editor_context.selection.selected_entities.clear();
+                                }
+                                let current_state = project.read().unwrap().clone();
+                                history_manager.push_project_state(current_state);
+                            }
+                            ui.close();
+                        }
                     }
+                });
+
+                if track_interaction_response.clicked() {
+                    editor_context.selection.last_selected_track_id = Some(track.id);
                 }
-            });
-            if track_interaction_response.clicked() {
-                editor_context.selection.last_selected_track_id = Some(track.id);
-            }
 
-            track_list_painter.rect_filled(
-                track_label_rect,
-                0.0,
-                if editor_context.selection.last_selected_track_id == Some(track.id) {
-                    egui::Color32::from_rgb(50, 80, 120)
-                } else if i % 2 == 0 {
-                    egui::Color32::from_gray(50)
-                } else {
-                    egui::Color32::from_gray(60)
-                },
-            );
+                track_list_painter.rect_filled(
+                    row_rect,
+                    0.0,
+                    if editor_context.selection.last_selected_track_id == Some(track.id) {
+                        egui::Color32::from_rgb(50, 80, 120)
+                    } else if visible_row_index % 2 == 0 {
+                        egui::Color32::from_gray(50)
+                    } else {
+                        egui::Color32::from_gray(60)
+                    },
+                );
 
-            // Indentation
-            let indent = display_track.depth as f32 * 10.0;
-            let mut text_offset_x = 5.0 + indent;
+                // Indentation
+                let indent = *depth as f32 * 10.0;
+                let mut text_offset_x = 5.0 + indent;
 
-            // Expand/Collapse Icon
-            if display_track.is_folder {
+                // Expand/Collapse Icon (Always show if it's a track, might want to check children count?
+                // flatten.rs uses has_clips/has_sub_tracks but we can simpler just show for Tracks)
+                // Actually `flatten.rs` determines `is_folder`... here we just check if it can expand.
+                // Assuming all tracks *can* be folders effectively.
+
                 let icon_rect = egui::Rect::from_min_size(
-                    egui::pos2(track_label_rect.min.x + indent, track_label_rect.min.y),
+                    egui::pos2(row_rect.min.x + indent, row_rect.min.y),
                     egui::vec2(16.0, row_height),
                 );
 
-                // Interact specifically with the icon area for expansion
                 let icon_response = ui_content.interact(
                     icon_rect,
                     egui::Id::new(track.id).with("expand_icon"),
@@ -147,18 +170,19 @@ pub fn show_track_list(
                 );
 
                 if icon_response.clicked() {
-                    if display_track.is_expanded {
+                    if *is_expanded {
                         editor_context.timeline.expanded_tracks.remove(&track.id);
                     } else {
                         editor_context.timeline.expanded_tracks.insert(track.id);
                     }
                 }
 
-                let icon = if display_track.is_expanded {
+                let icon = if *is_expanded {
                     icons::CARET_DOWN
                 } else {
                     icons::CARET_RIGHT
                 };
+
                 track_list_painter.text(
                     icon_rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -167,15 +191,53 @@ pub fn show_track_list(
                     egui::Color32::WHITE,
                 );
                 text_offset_x += 16.0;
-            }
 
-            track_list_painter.text(
-                track_label_rect.left_center() + egui::vec2(text_offset_x, 0.0),
-                egui::Align2::LEFT_CENTER,
-                format!("Track {}", track.name),
-                egui::FontId::monospace(10.0),
-                egui::Color32::GRAY,
-            );
+                track_list_painter.text(
+                    row_rect.left_center() + egui::vec2(text_offset_x, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    format!("Track {}", track.name),
+                    egui::FontId::monospace(10.0),
+                    egui::Color32::GRAY,
+                );
+            }
+            super::utils::flatten::DisplayRow::ClipRow {
+                clip,
+                parent_track: _,
+                depth,
+                visible_row_index: _,
+                child_index: _,
+            } => {
+                // Render Clip Name
+                track_list_painter.rect_filled(
+                    row_rect,
+                    0.0,
+                    if visible_row_index % 2 == 0 {
+                        egui::Color32::from_gray(45)
+                    } else {
+                        egui::Color32::from_gray(55)
+                    },
+                );
+
+                let indent = *depth as f32 * 10.0;
+                let text_offset_x = 5.0 + indent + 16.0; // Extra indent for clip (no folder icon)
+
+                let clip_name = if let Some(asset_id) = clip.reference_id {
+                    asset_names
+                        .get(&asset_id)
+                        .cloned()
+                        .unwrap_or_else(|| "Unknown Asset".to_string())
+                } else {
+                    format!("{}", clip.kind)
+                };
+
+                track_list_painter.text(
+                    row_rect.left_center() + egui::vec2(text_offset_x, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    clip_name,
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+            }
         }
     }
 
@@ -200,5 +262,5 @@ pub fn show_track_list(
         }
     });
 
-    (num_tracks, row_height, track_spacing)
+    (num_rows, row_height, track_spacing)
 }

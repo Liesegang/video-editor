@@ -14,7 +14,8 @@ pub mod context_menu;
 pub mod drag_and_drop;
 pub mod interactions;
 
-use super::utils::flatten::flatten_tracks;
+pub const CLIP_CORNER_RADIUS: f32 = 4.0;
+const HEADER_HEIGHT: f32 = 24.0;
 
 struct TimelineViewportState<'a> {
     scroll_offset: &'a mut egui::Vec2,
@@ -79,8 +80,11 @@ pub fn show_clip_area(
     }
 
     // Flatten tracks to get correct visible count
-    let display_tracks = flatten_tracks(&current_tracks, &editor_context.timeline.expanded_tracks);
-    let num_visible_tracks = display_tracks.len();
+    let display_rows = super::utils::flatten::flatten_tracks_to_rows(
+        &current_tracks,
+        &editor_context.timeline.expanded_tracks,
+    );
+    let num_visible_tracks = display_rows.len();
 
     // --- End Data collection for entities ---
 

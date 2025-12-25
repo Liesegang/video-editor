@@ -21,7 +21,7 @@ impl AssetHandler {
         if let Ok(proj) = project.read() {
             for comp in &proj.compositions {
                 for track in &comp.tracks {
-                    for clip in &track.clips {
+                    for clip in track.clips() {
                         if let Some(ref r) = clip.reference_id {
                             if *r == asset_id {
                                 return true;

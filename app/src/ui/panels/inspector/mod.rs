@@ -1,6 +1,7 @@
 use egui::Ui;
 
 use library::model::project::project::Project;
+use library::model::project::TrackClipKind;
 
 use library::EditorService;
 use std::sync::{Arc, RwLock};
@@ -36,23 +37,19 @@ pub fn inspector_panel(
         // Fetch entity data directly from project
         let entity_data = if let Ok(proj_read) = project.read() {
             if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-                if let Some(track) = comp.tracks.iter().find(|t| t.id == track_id) {
-                    track
-                        .clips
-                        .iter()
-                        .find(|e| e.id == selected_entity_id)
-                        .map(|e| {
-                            (
-                                e.kind.clone(),
-                                e.properties.clone(),
-                                e.in_frame,
-                                e.out_frame,
-                                e.source_begin_frame,
-                                e.duration_frame,
-                                e.effects.clone(),
-                                e.styles.clone(),
-                            )
-                        })
+                if let Some(track) = comp.get_track(track_id) {
+                    track.clips().find(|e| e.id == selected_entity_id).map(|e| {
+                        (
+                            e.kind.clone(),
+                            e.properties.clone(),
+                            e.in_frame,
+                            e.out_frame,
+                            e.source_begin_frame,
+                            e.duration_frame,
+                            e.effects.clone(),
+                            e.styles.clone(),
+                        )
+                    })
                 } else {
                     None
                 }
@@ -348,20 +345,22 @@ pub fn inspector_panel(
                 }
             }
 
-            // --- Styles Section ---
-            render_styles_section(
-                ui,
-                project_service,
-                history_manager,
-                editor_context,
-                comp_id,
-                track_id,
-                selected_entity_id,
-                current_time,
-                fps,
-                &styles,
-                &mut needs_refresh,
-            );
+            // --- Styles Section (Text and Shape only) ---
+            if matches!(kind, TrackClipKind::Text | TrackClipKind::Shape) {
+                render_styles_section(
+                    ui,
+                    project_service,
+                    history_manager,
+                    editor_context,
+                    comp_id,
+                    track_id,
+                    selected_entity_id,
+                    current_time,
+                    fps,
+                    &styles,
+                    &mut needs_refresh,
+                );
+            }
 
             // --- Effects Section ---
             render_effects_section(

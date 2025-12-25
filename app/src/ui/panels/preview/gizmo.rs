@@ -68,9 +68,9 @@ pub fn handle_gizmo_interaction(
                         if let Some(track) = comp
                             .tracks
                             .iter()
-                            .find(|t| t.clips.iter().any(|c| c.id == selected_id))
+                            .find(|t| t.clips().any(|c| c.id == selected_id))
                         {
-                            if let Some(clip) = track.clips.iter().find(|c| c.id == selected_id) {
+                            if let Some(clip) = track.clips().find(|c| c.id == selected_id) {
                                 (Some(comp.id), Some(track.id), Some(clip.properties.clone()))
                             } else {
                                 (None, None, None)

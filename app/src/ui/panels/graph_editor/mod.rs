@@ -77,13 +77,13 @@ pub fn graph_editor_panel(
             return;
         };
 
-        let track = if let Some(t) = composition.tracks.iter().find(|t| t.id == track_id) {
+        let track = if let Some(t) = composition.get_track(track_id) {
             t
         } else {
             return;
         };
 
-        let entity = if let Some(e) = track.clips.iter().find(|c| c.id == entity_id) {
+        let entity = if let Some(e) = track.clips().find(|c| c.id == entity_id) {
             e
         } else {
             return;

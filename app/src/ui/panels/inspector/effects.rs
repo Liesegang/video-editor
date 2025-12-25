@@ -50,8 +50,8 @@ pub fn render_effects_section(
         .compositions
         .iter()
         .find(|c| c.id == comp_id)
-        .and_then(|c| c.tracks.iter().find(|t| t.id == track_id))
-        .and_then(|t| t.clips.iter().find(|c| c.id == selected_entity_id).cloned());
+        .and_then(|c| c.get_track(track_id))
+        .and_then(|t| t.clips().find(|c| c.id == selected_entity_id).cloned());
 
     if let Some(track_clip) = track_clip_ref {
         let mut effects = track_clip.effects.clone();

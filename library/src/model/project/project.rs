@@ -4,7 +4,7 @@ use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::Track;
+use super::{Track, TrackItem};
 use crate::model::frame::color::Color;
 
 use crate::model::project::asset::Asset;
@@ -104,8 +104,7 @@ impl Project {
         clip_id: Uuid,
     ) -> Option<&mut crate::model::project::TrackClip> {
         self.get_track_mut(composition_id, track_id)?
-            .clips
-            .iter_mut()
+            .clips_mut()
             .find(|c| c.id == clip_id)
     }
 }
@@ -155,16 +154,83 @@ impl Composition {
     }
 
     pub fn get_track_mut(&mut self, id: Uuid) -> Option<&mut Track> {
-        self.tracks.iter_mut().find(|t| t.id == id)
+        fn find_in_track(track: &mut Track, id: Uuid) -> Option<&mut Track> {
+            if track.id == id {
+                return Some(track);
+            }
+            for item in &mut track.children {
+                if let TrackItem::SubTrack(sub) = item {
+                    if let Some(found) = find_in_track(sub, id) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+
+        for track in &mut self.tracks {
+            if let Some(found) = find_in_track(track, id) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     pub fn get_track(&self, id: Uuid) -> Option<&Track> {
-        self.tracks.iter().find(|t| t.id == id)
+        fn find_in_track(track: &Track, id: Uuid) -> Option<&Track> {
+            if track.id == id {
+                return Some(track);
+            }
+            for item in &track.children {
+                if let TrackItem::SubTrack(sub) = item {
+                    if let Some(found) = find_in_track(sub, id) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+
+        for track in &self.tracks {
+            if let Some(found) = find_in_track(track, id) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     pub fn remove_track(&mut self, id: Uuid) -> Option<Track> {
-        let index = self.tracks.iter().position(|t| t.id == id)?;
-        let removed_track = self.tracks.remove(index);
-        Some(removed_track)
+        // First check top-level
+        if let Some(index) = self.tracks.iter().position(|t| t.id == id) {
+            return Some(self.tracks.remove(index));
+        }
+
+        // Recursively search in children
+        fn remove_from_track(track: &mut Track, id: Uuid) -> Option<Track> {
+            // Check if any child is the target
+            if let Some(index) = track.children.iter().position(|item| item.id() == id) {
+                if let TrackItem::SubTrack(_) = &track.children[index] {
+                    if let TrackItem::SubTrack(removed) = track.children.remove(index) {
+                        return Some(removed);
+                    }
+                }
+            }
+            // Recurse into sub-tracks
+            for item in &mut track.children {
+                if let TrackItem::SubTrack(sub) = item {
+                    if let Some(removed) = remove_from_track(sub, id) {
+                        return Some(removed);
+                    }
+                }
+            }
+            None
+        }
+
+        for track in &mut self.tracks {
+            if let Some(removed) = remove_from_track(track, id) {
+                return Some(removed);
+            }
+        }
+        None
     }
 }
