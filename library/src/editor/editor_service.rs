@@ -213,6 +213,16 @@ impl EditorService {
         self.project_manager.remove_track(composition_id, track_id)
     }
 
+    pub fn add_sub_track(
+        &self,
+        composition_id: Uuid,
+        parent_track_id: Uuid,
+        track_name: &str,
+    ) -> Result<Uuid, LibraryError> {
+        self.project_manager
+            .add_sub_track(composition_id, parent_track_id, track_name)
+    }
+
     pub fn add_clip_to_track(
         &self,
         composition_id: Uuid,

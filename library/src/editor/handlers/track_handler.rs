@@ -90,4 +90,45 @@ impl TrackHandler {
             )))
         }
     }
+
+    /// Add a sub-track (child) to an existing parent track.
+    pub fn add_sub_track(
+        project: &Arc<RwLock<Project>>,
+        composition_id: Uuid,
+        parent_track_id: Uuid,
+        track_name: &str,
+    ) -> Result<Uuid, LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
+            LibraryError::Project(format!("Composition with ID {} not found", composition_id))
+        })?;
+
+        // Recursively find parent track and add child
+        fn add_child_to_track(tracks: &mut [Track], parent_id: Uuid, child: Track) -> bool {
+            for track in tracks.iter_mut() {
+                if track.id == parent_id {
+                    track.children.push(child);
+                    return true;
+                }
+                if add_child_to_track(&mut track.children, parent_id, child.clone()) {
+                    return true;
+                }
+            }
+            false
+        }
+
+        let new_track = Track::new(track_name);
+        let new_track_id = new_track.id;
+
+        if add_child_to_track(&mut composition.tracks, parent_track_id, new_track) {
+            Ok(new_track_id)
+        } else {
+            Err(LibraryError::Project(format!(
+                "Parent track with ID {} not found",
+                parent_track_id
+            )))
+        }
+    }
 }
