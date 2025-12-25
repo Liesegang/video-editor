@@ -4,7 +4,6 @@ use crate::core::framing::get_frame_from_project;
 use crate::core::rendering::renderer::{RenderOutput, Renderer};
 use crate::editor::project_model::ProjectModel;
 use crate::error::LibraryError;
-use crate::model::frame::Image;
 use crate::model::frame::entity::{FrameContent, FrameObject};
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
@@ -62,82 +61,41 @@ impl<T: Renderer> RenderService<T> {
             } = frame_object;
 
             let scale = frame_info.render_scale.into_inner();
-
-            // helper to scale transform and apply ROI offset
-            let apply_view_transform = |t: &Transform, s: f64| -> Transform {
-                let mut new_t = t.clone();
-                let mut pos_x = t.position.x;
-                let mut pos_y = t.position.y;
-
-                if let Some(region) = &frame_info.region {
-                    pos_x -= region.x;
-                    pos_y -= region.y;
-                }
-
-                new_t.position.x = pos_x * s;
-                new_t.position.y = pos_y * s;
-                new_t.scale.x *= s;
-                new_t.scale.y *= s;
-                new_t
-            };
+            let region = frame_info.region.as_ref();
 
             match content {
                 FrameContent::Video {
                     surface,
                     frame_number,
                 } => {
-                    let video_frame = measure_debug(
-                        format!("Decode video {} frame {}", surface.file_path, frame_number),
-                        || -> Result<Image, LibraryError> {
-                            let request = LoadRequest::VideoFrame {
-                                path: surface.file_path.clone(),
-                                frame_number: *frame_number,
-                                stream_index: None,
-                                input_color_space: surface.input_color_space.clone(),
-                                output_color_space: surface.output_color_space.clone(),
-                            };
-                            Ok(self
-                                .plugin_manager
-                                .load_resource(&request, &self.cache_manager)?
-                                .image)
-                        },
-                    )?;
-                    let final_image = self.apply_effects(
-                        RenderOutput::Image(video_frame),
+                    let request = LoadRequest::VideoFrame {
+                        path: surface.file_path.clone(),
+                        frame_number: *frame_number,
+                        stream_index: None,
+                        input_color_space: surface.input_color_space.clone(),
+                        output_color_space: surface.output_color_space.clone(),
+                    };
+                    self.render_media_surface(
+                        &request,
+                        &surface.file_path,
+                        &surface.transform,
                         &surface.effects,
-                        frame_info.now_time.0,
+                        frame_info,
+                        scale,
                     )?;
-                    measure_debug(format!("Draw video {}", surface.file_path), || {
-                        self.renderer.draw_layer(
-                            &final_image,
-                            &apply_view_transform(&surface.transform, scale),
-                        )
-                    })?;
                 }
                 FrameContent::Image { surface } => {
-                    let image_frame = measure_debug(
-                        format!("Load image {}", surface.file_path),
-                        || -> Result<Image, LibraryError> {
-                            let request = LoadRequest::Image {
-                                path: surface.file_path.clone(),
-                            };
-                            Ok(self
-                                .plugin_manager
-                                .load_resource(&request, &self.cache_manager)?
-                                .image)
-                        },
-                    )?;
-                    let final_image = self.apply_effects(
-                        RenderOutput::Image(image_frame),
+                    let request = LoadRequest::Image {
+                        path: surface.file_path.clone(),
+                    };
+                    self.render_media_surface(
+                        &request,
+                        &surface.file_path,
+                        &surface.transform,
                         &surface.effects,
-                        frame_info.now_time.0,
+                        frame_info,
+                        scale,
                     )?;
-                    measure_debug(format!("Draw image {}", surface.file_path), || {
-                        self.renderer.draw_layer(
-                            &final_image,
-                            &apply_view_transform(&surface.transform, scale),
-                        )
-                    })?;
                 }
                 FrameContent::Text {
                     text,
@@ -147,7 +105,7 @@ impl<T: Renderer> RenderService<T> {
                     effects,
                     transform,
                 } => {
-                    let scaled_transform = apply_view_transform(transform, scale);
+                    let scaled_transform = apply_view_transform(transform, region, scale);
                     let text_layer =
                         measure_debug(format!("Rasterize text layer '{}'", text), || {
                             self.renderer.rasterize_text_layer(
@@ -173,7 +131,7 @@ impl<T: Renderer> RenderService<T> {
                     effects,
                     transform,
                 } => {
-                    let scaled_transform = apply_view_transform(transform, scale);
+                    let scaled_transform = apply_view_transform(transform, region, scale);
                     let shape_layer =
                         measure_debug(format!("Rasterize shape layer {}", path), || {
                             self.renderer.rasterize_shape_layer(
@@ -197,7 +155,7 @@ impl<T: Renderer> RenderService<T> {
                     effects,
                     transform,
                 } => {
-                    let scaled_transform = apply_view_transform(transform, scale);
+                    let scaled_transform = apply_view_transform(transform, region, scale);
                     let sksl_layer = measure_debug(format!("Rasterize SkSL"), || {
                         self.renderer.rasterize_sksl_layer(
                             &shader,
@@ -281,4 +239,54 @@ impl<T: Renderer> RenderService<T> {
             Ok(current_layer)
         }
     }
-} // Added closing brace for impl RenderService
+
+    /// Helper to load, apply effects, and draw a media surface (video or image).
+    fn render_media_surface(
+        &mut self,
+        request: &LoadRequest,
+        file_path: &str,
+        transform: &Transform,
+        effects: &[crate::model::frame::effect::ImageEffect],
+        frame_info: &FrameInfo,
+        scale: f64,
+    ) -> Result<(), LibraryError> {
+        let image = measure_debug(format!("Load {}", file_path), || {
+            self.plugin_manager
+                .load_resource(request, &self.cache_manager)
+                .map(|r| r.image)
+        })?;
+
+        let final_image =
+            self.apply_effects(RenderOutput::Image(image), effects, frame_info.now_time.0)?;
+
+        let view_transform = apply_view_transform(transform, frame_info.region.as_ref(), scale);
+
+        measure_debug(format!("Draw {}", file_path), || {
+            self.renderer.draw_layer(&final_image, &view_transform)
+        })?;
+
+        Ok(())
+    }
+}
+
+/// Apply scale and optional region offset to a transform.
+fn apply_view_transform(
+    t: &Transform,
+    region: Option<&crate::model::frame::frame::Region>,
+    scale: f64,
+) -> Transform {
+    let mut new_t = t.clone();
+    let mut pos_x = t.position.x;
+    let mut pos_y = t.position.y;
+
+    if let Some(r) = region {
+        pos_x -= r.x;
+        pos_y -= r.y;
+    }
+
+    new_t.position.x = pos_x * scale;
+    new_t.position.y = pos_y * scale;
+    new_t.scale.x *= scale;
+    new_t.scale.y *= scale;
+    new_t
+}
