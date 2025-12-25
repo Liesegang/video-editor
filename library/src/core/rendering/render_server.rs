@@ -6,12 +6,12 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::thread;
 
 use crate::cache::SharedCacheManager;
+use crate::core::media::image::Image;
+use crate::editor::RenderService;
 use crate::framing::entity_converters::EntityConverterRegistry;
-use crate::loader::image::Image;
 use crate::model::frame::frame::FrameInfo;
 use crate::plugin::PluginManager;
 use crate::rendering::skia_renderer::SkiaRenderer;
-use crate::service::RenderService;
 
 pub struct RenderServer {
     tx: Sender<RenderRequest>,

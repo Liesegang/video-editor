@@ -1,6 +1,6 @@
+use crate::core::media::image::Image;
+use crate::editor::color_service::{ColorSpaceManager, OcioProcessor};
 use crate::error::LibraryError;
-use crate::loader::image::Image;
-use crate::service::color_space_manager::{ColorSpaceManager, OcioProcessor};
 use ffmpeg_next as ffmpeg;
 
 pub struct VideoReader {
@@ -27,20 +27,20 @@ impl VideoReader {
         let input_context = ffmpeg::format::input(&file_path)?;
         let input = if let Some(idx) = stream_index {
             input_context.stream(idx).ok_or(LibraryError::FfmpegOther(
-                "指定されたストリームが見つかりません".to_string(),
+                "謖・ｮ壹＆繧後◆繧ｹ繝医Μ繝ｼ繝縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ".to_string(),
             ))?
         } else {
             input_context
                 .streams()
                 .best(ffmpeg::media::Type::Video)
                 .ok_or(LibraryError::FfmpegOther(
-                    "動画ストリームが見つかりません".to_string(),
+                    "蜍慕判繧ｹ繝医Μ繝ｼ繝縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ".to_string(),
                 ))?
         };
 
         if input.parameters().medium() != ffmpeg::media::Type::Video {
             return Err(LibraryError::FfmpegOther(
-                "指定されたストリームは動画ではありません".to_string(),
+                "謖・ｮ壹＆繧後◆繧ｹ繝医Μ繝ｼ繝縺ｯ蜍慕判縺ｧ縺ｯ縺ゅｊ縺ｾ縺帙ｓ".to_string(),
             ));
         }
 
@@ -52,7 +52,7 @@ impl VideoReader {
         let stream = input_context
             .stream(video_stream_index)
             .ok_or(LibraryError::FfmpegOther(
-                "ストリームが見つかりません".to_string(),
+                "繧ｹ繝医Μ繝ｼ繝縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ".to_string(),
             ))?;
         let avg_frame_rate = stream.avg_frame_rate();
         let fps = if avg_frame_rate.denominator() > 0 {
@@ -104,7 +104,7 @@ impl VideoReader {
             self.input_context
                 .stream(self.video_stream_index)
                 .ok_or(LibraryError::FfmpegOther(
-                    "ストリームが見つかりません".to_string(),
+                    "繧ｹ繝医Μ繝ｼ繝縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ".to_string(),
                 ))?;
         let time_base = stream.time_base();
         let fps = self.fps;
@@ -176,7 +176,7 @@ impl VideoReader {
         // original logic errored.
 
         let frame = decoded_frame.ok_or(LibraryError::FfmpegOther(
-            "指定したフレームをデコードできませんでした".to_string(),
+            "謖・ｮ壹＠縺溘ヵ繝ｬ繝ｼ繝繧偵ョ繧ｳ繝ｼ繝峨〒縺阪∪縺帙ｓ縺ｧ縺励◆".to_string(),
         ))?;
 
         // Scaler setup

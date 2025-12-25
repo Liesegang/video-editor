@@ -1,7 +1,7 @@
 use crate::Image;
+use crate::editor::{ProjectModel, RenderService};
 use crate::model::project::project::{Composition, Project};
 use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
-use crate::service::{ProjectModel, RenderService};
 // use crate::rendering::effects::EffectRegistry; // Removed
 use crate::error::LibraryError;
 use crate::framing::entity_converters::EntityConverterRegistry;

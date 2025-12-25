@@ -1,3 +1,5 @@
+use crate::editor::color_service::ColorSpaceManager;
+use crate::editor::handlers;
 use crate::error::LibraryError;
 use crate::model::project::asset::Asset;
 use crate::model::project::project::{Composition, Project};
@@ -5,8 +7,6 @@ use crate::model::project::property::PropertyValue;
 use crate::model::project::property::{PropertyDefinition, PropertyUiType};
 use crate::model::project::{Track, TrackClip};
 use crate::plugin::PluginManager;
-use crate::service::color_space_manager::ColorSpaceManager;
-use crate::service::handlers;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 

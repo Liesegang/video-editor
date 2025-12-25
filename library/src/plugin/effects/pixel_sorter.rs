@@ -1,5 +1,5 @@
+use crate::core::media::image::Image;
 use crate::error::LibraryError;
-use crate::loader::image::Image;
 use crate::model::project::property::PropertyValue;
 use crate::plugin::{EffectPlugin, Plugin};
 use image::Rgba;

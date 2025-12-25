@@ -5,8 +5,8 @@ pub use self::ffmpeg_video::FfmpegVideoLoader;
 pub use self::native_image::NativeImageLoader;
 
 use crate::cache::CacheManager;
+use crate::core::media::image::Image;
 use crate::error::LibraryError;
-use crate::loader::image::Image;
 use crate::model::project::asset::AssetKind;
 use crate::plugin::{Plugin, PluginCategory};
 use std::collections::HashMap;

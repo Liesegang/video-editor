@@ -1,5 +1,5 @@
-use crate::audio::engine::AudioEngine;
-use crate::cache::CacheManager;
+use crate::core::audio::engine::AudioEngine;
+use crate::core::cache::CacheManager;
 use crate::model::project::project::Project;
 use std::sync::{Arc, RwLock};
 
@@ -40,7 +40,7 @@ impl AudioService {
         let frames = (preview_duration * sample_rate as f64) as usize;
         let scrub_samples = if let Ok(project) = self.project.read() {
             if let Some(comp) = project.compositions.first() {
-                crate::audio::mixer::mix_samples(
+                crate::core::audio::mixer::mix_samples(
                     &project.assets,
                     comp,
                     &self.cache_manager,
@@ -90,7 +90,7 @@ impl AudioService {
         // Use shared mixing logic
         let mix_buffer = if let Ok(project) = self.project.read() {
             if let Some(comp) = project.compositions.first() {
-                crate::audio::mixer::mix_samples(
+                crate::core::audio::mixer::mix_samples(
                     &project.assets,
                     comp,
                     &self.cache_manager,
@@ -119,7 +119,7 @@ impl AudioService {
         let target_sample_rate = self.audio_engine.get_sample_rate();
 
         std::thread::spawn(move || {
-            use crate::audio::loader::AudioLoader;
+            use crate::core::audio::loader::AudioLoader;
             match AudioLoader::load_entire_file(&path, target_sample_rate) {
                 Ok(data) => {
                     cache_manager.put_audio(asset_id, data);
@@ -142,7 +142,7 @@ impl AudioService {
 
         if let Ok(project) = self.project.read() {
             if let Some(comp) = project.compositions.first() {
-                crate::audio::mixer::mix_samples(
+                crate::core::audio::mixer::mix_samples(
                     &project.assets,
                     comp,
                     &self.cache_manager,

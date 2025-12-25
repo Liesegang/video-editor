@@ -1,13 +1,13 @@
-use crate::audio::engine::AudioEngine;
-use crate::cache::CacheManager;
+use crate::core::audio::engine::AudioEngine;
+use crate::core::cache::CacheManager;
+use crate::editor::audio_service::AudioService;
+use crate::editor::project_service::ProjectManager;
 use crate::error::LibraryError;
 use crate::model::project::asset::Asset;
 use crate::model::project::project::{Composition, Project};
 use crate::model::project::property::PropertyValue;
 use crate::model::project::{Track, TrackClip};
 use crate::plugin::PluginManager;
-use crate::service::audio_service::AudioService;
-use crate::service::project_manager::ProjectManager;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 

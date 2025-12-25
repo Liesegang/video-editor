@@ -1,5 +1,5 @@
+use crate::core::media::image::Image;
 use crate::error::LibraryError;
-use crate::loader::image::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
 use crate::model::frame::entity::StyleConfig;

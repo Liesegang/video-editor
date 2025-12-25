@@ -8,9 +8,9 @@ use libloading::{Library, Symbol};
 use log::debug;
 
 use crate::cache::CacheManager;
+use crate::core::media::image::Image;
 use crate::error::LibraryError;
 use crate::framing::entity_converters::{EntityConverterPlugin, EntityConverterRegistry};
-use crate::loader::image::Image;
 use crate::model::project::asset::AssetKind;
 use crate::model::project::property::PropertyDefinition;
 use crate::model::project::property::PropertyValue;

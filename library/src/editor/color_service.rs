@@ -1,4 +1,4 @@
-use crate::service::ocio_shim::{OcioContext, OcioProcessor as ShimProcessor, OcioWrapper};
+use crate::editor::ocio_shim::{OcioContext, OcioProcessor as ShimProcessor, OcioWrapper};
 use log::{error, info, warn};
 use std::sync::{Arc, OnceLock};
 
