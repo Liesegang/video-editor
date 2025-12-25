@@ -46,11 +46,3 @@ pub enum PluginCategory {
     EntityConverter,
     Inspector,
 }
-
-// FFI function types for dynamic loading
-use crate::framing::entity_converters::EntityConverterPlugin;
-pub type PropertyPluginCreateFn = unsafe extern "C" fn() -> *mut dyn PropertyPlugin;
-pub type EffectPluginCreateFn = unsafe extern "C" fn() -> *mut dyn EffectPlugin;
-pub type LoadPluginCreateFn = unsafe extern "C" fn() -> *mut dyn LoadPlugin;
-pub type ExportPluginCreateFn = unsafe extern "C" fn() -> *mut dyn ExportPlugin;
-pub type EntityConverterPluginCreateFn = unsafe extern "C" fn() -> *mut dyn EntityConverterPlugin;

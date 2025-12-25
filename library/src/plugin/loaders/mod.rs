@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum LoadRequest {
-    Image {
-        path: String,
-    },
+    /// Load a static image.
+    Image { path: String },
+    /// Load a video frame.
     VideoFrame {
         path: String,
         frame_number: u64,
@@ -26,8 +26,8 @@ pub enum LoadRequest {
     },
 }
 
-pub enum LoadResponse {
-    Image(Image),
+pub struct LoadResponse {
+    pub image: Image,
 }
 
 #[derive(Debug, Clone)]
@@ -41,68 +41,76 @@ pub struct AssetMetadata {
 }
 
 pub trait LoadPlugin: Plugin {
-    fn supports(&self, request: &LoadRequest) -> bool;
+    /// Open a file and return metadata for all available streams.
+    /// The plugin internally caches the reader/decoder for subsequent load() calls.
+    /// Returns Err if this plugin cannot handle the file.
+    fn open(&self, path: &str) -> Result<Vec<AssetMetadata>, LibraryError>;
+
+    /// Load a frame from a file.
+    /// The plugin uses internally cached reader if available.
+    /// Returns Err if the request type is not supported.
     fn load(
         &self,
         request: &LoadRequest,
         cache: &CacheManager,
     ) -> Result<LoadResponse, LibraryError>;
 
-    fn get_metadata(&self, _path: &str) -> Option<AssetMetadata> {
-        None
-    }
-
-    fn get_available_streams(&self, _path: &str) -> Option<Vec<AssetMetadata>> {
-        None
-    }
-
-    fn get_asset_kind(&self, _path: &str) -> Option<AssetKind> {
-        None
-    }
-
-    fn get_duration(&self, _path: &str) -> Option<f64> {
-        None
-    }
-
-    fn get_fps(&self, _path: &str) -> Option<f64> {
-        None
-    }
-
     fn plugin_type(&self) -> PluginCategory {
         PluginCategory::Load
-    }
-
-    fn get_dimensions(&self, _path: &str) -> Option<(u32, u32)> {
-        None
-    }
-
-    fn priority(&self) -> u32 {
-        0
     }
 }
 
 pub struct LoadRepository {
     pub plugins: HashMap<String, Arc<dyn LoadPlugin>>,
+    /// Plugin IDs in priority order (first = highest priority).
+    priority_order: Vec<String>,
 }
 
 impl LoadRepository {
     pub fn new() -> Self {
         Self {
             plugins: HashMap::new(),
+            priority_order: Vec::new(),
         }
     }
 
     pub fn register(&mut self, plugin: Arc<dyn LoadPlugin>) {
-        self.plugins.insert(plugin.id().to_string(), plugin);
+        let id = plugin.id().to_string();
+        if !self.priority_order.contains(&id) {
+            self.priority_order.push(id.clone());
+        }
+        self.plugins.insert(id, plugin);
     }
 
     pub fn get(&self, id: &str) -> Option<&Arc<dyn LoadPlugin>> {
         self.plugins.get(id)
     }
 
-    pub fn get_sorted_plugins(&self) -> Vec<Arc<dyn LoadPlugin>> {
-        let mut plugins: Vec<_> = self.plugins.values().cloned().collect();
-        plugins.sort_by(|a, b| b.priority().cmp(&a.priority()));
-        plugins
+    /// Set plugin priority order. IDs not in the list will be appended at the end.
+    pub fn set_priority_order(&mut self, order: Vec<String>) {
+        // Start with the given order, then append any missing plugins
+        let mut new_order = order;
+        for id in &self.priority_order {
+            if !new_order.contains(id) {
+                new_order.push(id.clone());
+            }
+        }
+        self.priority_order = new_order;
+    }
+
+    /// Get priority order (for UI display).
+    pub fn get_priority_order(&self) -> &[String] {
+        &self.priority_order
+    }
+
+    /// Iterate plugins in priority order.
+    pub fn values_by_priority(&self) -> impl Iterator<Item = &Arc<dyn LoadPlugin>> {
+        self.priority_order
+            .iter()
+            .filter_map(|id| self.plugins.get(id))
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &Arc<dyn LoadPlugin>> {
+        self.values_by_priority()
     }
 }

@@ -81,6 +81,11 @@ impl MyApp {
             }
         }
 
+        // Apply saved loader priority
+        if !app_config.plugins.loader_priority.is_empty() {
+            plugin_manager.set_loader_priority(app_config.plugins.loader_priority.clone());
+        }
+
         let cache_manager = Arc::new(library::cache::CacheManager::new());
         let project_service = EditorService::new(
             Arc::clone(&default_project),

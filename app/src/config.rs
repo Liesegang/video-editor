@@ -140,6 +140,9 @@ enum KeyDef {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PluginConfig {
     pub paths: Vec<String>,
+    /// Loader plugin IDs in priority order (first = highest priority).
+    #[serde(default)]
+    pub loader_priority: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -179,6 +182,10 @@ impl AppConfig {
             shortcuts: HashMap::new(),
             plugins: PluginConfig {
                 paths: vec!["./assets/plugins/sksl".to_string()],
+                loader_priority: vec![
+                    "native_image_loader".to_string(),
+                    "ffmpeg_video_loader".to_string(),
+                ],
             },
             theme: ThemeConfig {
                 theme_type: ThemeType::Dark,
