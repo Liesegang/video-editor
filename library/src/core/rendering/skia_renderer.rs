@@ -499,11 +499,13 @@ impl Renderer for SkiaRenderer {
         styles: &[StyleConfig],
         transform: &Transform,
     ) -> Result<RenderOutput, LibraryError> {
-        let _timer = ScopedTimer::debug(format!(
-            "SkiaRenderer::rasterize_text_layer len={} size={}",
-            text.len(),
-            size
-        ));
+        let _timer = ScopedTimer::debug_lazy(|| {
+            format!(
+                "SkiaRenderer::rasterize_text_layer len={} size={}",
+                text.len(),
+                size
+            )
+        });
         let mut layer = self.create_layer_surface()?;
         {
             let canvas: &Canvas = layer.canvas();
@@ -697,10 +699,9 @@ impl Renderer for SkiaRenderer {
     }
 
     fn finalize(&mut self) -> Result<RenderOutput, LibraryError> {
-        let _timer = ScopedTimer::debug(format!(
-            "SkiaRenderer::finalize {}x{}",
-            self.width, self.height
-        ));
+        let _timer = ScopedTimer::debug_lazy(|| {
+            format!("SkiaRenderer::finalize {}x{}", self.width, self.height)
+        });
 
         if let Some(context) = self.gpu_context.as_mut() {
             context.direct_context.flush_and_submit();
