@@ -8,7 +8,7 @@ use crate::framing::entity_converters::EntityConverterRegistry;
 use crate::plugin::PropertyEvaluatorRegistry;
 use crate::rendering::renderer::Renderer;
 use crate::rendering::skia_renderer::SkiaRenderer;
-use crate::util::timing::{ScopedTimer, measure_info};
+use crate::util::timing::{ScopedTimer, measure_info_lazy};
 use log::{error, info};
 use std::cmp;
 use std::sync::{Arc, Mutex, mpsc};
@@ -168,16 +168,17 @@ impl RenderQueue {
         let (save_tx, save_rx) = mpsc::sync_channel::<SaveTask>(cmp::max(1, queue_bound));
         let saver_handle = thread::spawn(move || {
             while let Ok(task) = save_rx.recv() {
-                if let Err(err) =
-                    measure_info(format!("Frame {}: save image", task.frame_index), || {
+                if let Err(err) = measure_info_lazy(
+                    || format!("Frame {}: save image", task.frame_index),
+                    || {
                         plugin_manager.export_image(
                             "png_export", // Hardcoded exporter_id
                             &task.output_path,
                             &task.image,
                             &export_settings,
                         )
-                    })
-                {
+                    },
+                ) {
                     error!("Failed to save frame {}: {}", task.frame_index, err);
                     break;
                 }
@@ -259,16 +260,20 @@ impl RenderQueue {
                     };
 
                     info!("Worker {} rendering frame {}", worker_id, job.frame_index);
-                    let _frame_scope = ScopedTimer::info(format!(
-                        "Frame {} total (worker {})",
-                        job.frame_index, worker_id
-                    ));
-
-                    let render_result = measure_info(
+                    let _frame_scope = ScopedTimer::info_lazy(|| {
                         format!(
-                            "Frame {}: renderer pass (worker {})",
+                            "Frame {} total (worker {})",
                             job.frame_index, worker_id
-                        ),
+                        )
+                    });
+
+                    let render_result = measure_info_lazy(
+                        || {
+                            format!(
+                                "Frame {}: renderer pass (worker {})",
+                                job.frame_index, worker_id
+                            )
+                        },
                         || render_service.render_frame(&project_model, job.frame_time),
                     );
 

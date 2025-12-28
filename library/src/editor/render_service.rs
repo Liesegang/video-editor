@@ -9,7 +9,7 @@ use crate::model::frame::entity::{FrameContent, FrameObject};
 use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
 use crate::plugin::{LoadRequest, PluginManager};
-use crate::util::timing::{ScopedTimer, measure_debug};
+use crate::util::timing::{ScopedTimer, measure_debug, measure_debug_lazy};
 // Removed HashMap and EvaluationContext imports
 use std::sync::Arc;
 
@@ -50,10 +50,9 @@ impl<T: Renderer> RenderService<T> {
     ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
         self.clear()?;
         let object_count = frame_info.objects.len();
-        let _timer = ScopedTimer::debug(format!(
-            "RenderService::render_frame objects={}",
-            object_count
-        ));
+        let _timer = ScopedTimer::debug_lazy(|| {
+            format!("RenderService::render_frame objects={}", object_count)
+        });
 
         for frame_object in &frame_info.objects {
             let FrameObject {
@@ -86,8 +85,8 @@ impl<T: Renderer> RenderService<T> {
                     surface,
                     frame_number,
                 } => {
-                    let video_frame = measure_debug(
-                        format!("Decode video {} frame {}", surface.file_path, frame_number),
+                    let video_frame = measure_debug_lazy(
+                        || format!("Decode video {} frame {}", surface.file_path, frame_number),
                         || -> Result<Image, LibraryError> {
                             let request = LoadRequest::VideoFrame {
                                 path: surface.file_path.clone(),
@@ -107,16 +106,19 @@ impl<T: Renderer> RenderService<T> {
                         &surface.effects,
                         frame_info.now_time.0,
                     )?;
-                    measure_debug(format!("Draw video {}", surface.file_path), || {
-                        self.renderer.draw_layer(
-                            &final_image,
-                            &apply_view_transform(&surface.transform, scale),
-                        )
-                    })?;
+                    measure_debug_lazy(
+                        || format!("Draw video {}", surface.file_path),
+                        || {
+                            self.renderer.draw_layer(
+                                &final_image,
+                                &apply_view_transform(&surface.transform, scale),
+                            )
+                        },
+                    )?;
                 }
                 FrameContent::Image { surface } => {
-                    let image_frame = measure_debug(
-                        format!("Load image {}", surface.file_path),
+                    let image_frame = measure_debug_lazy(
+                        || format!("Load image {}", surface.file_path),
                         || -> Result<Image, LibraryError> {
                             let request = LoadRequest::Image {
                                 path: surface.file_path.clone(),
@@ -132,12 +134,15 @@ impl<T: Renderer> RenderService<T> {
                         &surface.effects,
                         frame_info.now_time.0,
                     )?;
-                    measure_debug(format!("Draw image {}", surface.file_path), || {
-                        self.renderer.draw_layer(
-                            &final_image,
-                            &apply_view_transform(&surface.transform, scale),
-                        )
-                    })?;
+                    measure_debug_lazy(
+                        || format!("Draw image {}", surface.file_path),
+                        || {
+                            self.renderer.draw_layer(
+                                &final_image,
+                                &apply_view_transform(&surface.transform, scale),
+                            )
+                        },
+                    )?;
                 }
                 FrameContent::Text {
                     text,
@@ -148,8 +153,9 @@ impl<T: Renderer> RenderService<T> {
                     transform,
                 } => {
                     let scaled_transform = apply_view_transform(transform, scale);
-                    let text_layer =
-                        measure_debug(format!("Rasterize text layer '{}'", text), || {
+                    let text_layer = measure_debug_lazy(
+                        || format!("Rasterize text layer '{}'", text),
+                        || {
                             self.renderer.rasterize_text_layer(
                                 &text,
                                 *size,
@@ -157,14 +163,16 @@ impl<T: Renderer> RenderService<T> {
                                 &styles,
                                 &scaled_transform,
                             )
-                        })?;
+                        },
+                    )?;
                     let final_image =
                         self.apply_effects(text_layer, &effects, frame_info.now_time.0)?;
                     let mut composite_transform = Transform::default();
                     composite_transform.opacity = transform.opacity;
-                    measure_debug(format!("Composite text '{}'", text), || {
-                        self.renderer.draw_layer(&final_image, &composite_transform)
-                    })?;
+                    measure_debug_lazy(
+                        || format!("Composite text '{}'", text),
+                        || self.renderer.draw_layer(&final_image, &composite_transform),
+                    )?;
                 }
                 FrameContent::Shape {
                     path,
@@ -174,22 +182,25 @@ impl<T: Renderer> RenderService<T> {
                     transform,
                 } => {
                     let scaled_transform = apply_view_transform(transform, scale);
-                    let shape_layer =
-                        measure_debug(format!("Rasterize shape layer {}", path), || {
+                    let shape_layer = measure_debug_lazy(
+                        || format!("Rasterize shape layer {}", path),
+                        || {
                             self.renderer.rasterize_shape_layer(
                                 &path,
                                 &styles,
                                 &path_effects,
                                 &scaled_transform,
                             )
-                        })?;
+                        },
+                    )?;
                     let final_image =
                         self.apply_effects(shape_layer, &effects, frame_info.now_time.0)?;
                     let mut composite_transform = Transform::default();
                     composite_transform.opacity = transform.opacity;
-                    measure_debug(format!("Composite shape {}", path), || {
-                        self.renderer.draw_layer(&final_image, &composite_transform)
-                    })?;
+                    measure_debug_lazy(
+                        || format!("Composite shape {}", path),
+                        || self.renderer.draw_layer(&final_image, &composite_transform),
+                    )?;
                 }
                 FrameContent::SkSL {
                     shader,
@@ -269,14 +280,15 @@ impl<T: Renderer> RenderService<T> {
                 );
 
                 // Use the PluginManager to apply the effect
-                current_layer = measure_debug(format!("Apply effect '{}'", effect_type), || {
-                    self.plugin_manager.apply_effect(
-                        effect_type,
-                        &current_layer,
-                        &params,
-                        gpu_context,
-                    )
-                })?;
+                current_layer =
+                    measure_debug_lazy(|| format!("Apply effect '{}'", effect_type), || {
+                        self.plugin_manager.apply_effect(
+                            effect_type,
+                            &current_layer,
+                            &params,
+                            gpu_context,
+                        )
+                    })?;
             }
             Ok(current_layer)
         }

@@ -4,7 +4,7 @@ use crate::editor::render_service::RenderService;
 use crate::error::LibraryError;
 use crate::model::frame::Image;
 use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
-use crate::util::timing::{ScopedTimer, measure_info};
+use crate::util::timing::{ScopedTimer, measure_info_lazy};
 use log::{error, info};
 
 use std::ops::Range;
@@ -113,12 +113,14 @@ impl ExportService {
             }
 
             info!("Render frame {}:", frame_index);
-            let _frame_scope = ScopedTimer::info(format!("Frame {} total", frame_index));
+            let _frame_scope = ScopedTimer::info_lazy(|| format!("Frame {} total", frame_index));
 
             let frame_time = frame_index as f64 / fps;
-            let output = measure_info(format!("Frame {}: renderer pass", frame_index), || {
-                render_service.render_frame(project_model, frame_time)
-            })?;
+            let output =
+                measure_info_lazy(
+                    || format!("Frame {}: renderer pass", frame_index),
+                    || render_service.render_frame(project_model, frame_time),
+                )?;
 
             let image = match output {
                 crate::rendering::renderer::RenderOutput::Image(img) => img,
