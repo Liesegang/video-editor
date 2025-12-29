@@ -690,6 +690,38 @@ impl ProjectManager {
         )
     }
 
+    pub fn update_track_clip_effectors(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effectors: Vec<crate::model::project::ensemble::EffectorInstance>,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::update_effectors(
+            &self.project,
+            composition_id,
+            track_id,
+            clip_id,
+            effectors,
+        )
+    }
+
+    pub fn update_track_clip_decorators(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        decorators: Vec<crate::model::project::ensemble::DecoratorInstance>,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::update_decorators(
+            &self.project,
+            composition_id,
+            track_id,
+            clip_id,
+            decorators,
+        )
+    }
+
     pub fn update_track_clip_style_property(
         &self,
         composition_id: Uuid,
@@ -820,6 +852,98 @@ impl ProjectManager {
             track_id,
             clip_id,
             style_index,
+            property_key,
+            attribute_key,
+            attribute_value,
+        )
+    }
+
+    pub fn update_effector_property_or_keyframe(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effector_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::update_effector_property_or_keyframe(
+            &self.project,
+            composition_id,
+            track_id,
+            clip_id,
+            effector_index,
+            property_key,
+            time,
+            value,
+            easing,
+        )
+    }
+
+    pub fn update_decorator_property_or_keyframe(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        decorator_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::update_decorator_property_or_keyframe(
+            &self.project,
+            composition_id,
+            track_id,
+            clip_id,
+            decorator_index,
+            property_key,
+            time,
+            value,
+            easing,
+        )
+    }
+
+    pub fn set_effector_property_attribute(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        effector_index: usize,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::set_effector_property_attribute(
+            &self.project,
+            composition_id,
+            track_id,
+            clip_id,
+            effector_index,
+            property_key,
+            attribute_key,
+            attribute_value,
+        )
+    }
+
+    pub fn set_decorator_property_attribute(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        clip_id: Uuid,
+        decorator_index: usize,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        handlers::clip_handler::ClipHandler::set_decorator_property_attribute(
+            &self.project,
+            composition_id,
+            track_id,
+            clip_id,
+            decorator_index,
             property_key,
             attribute_key,
             attribute_value,

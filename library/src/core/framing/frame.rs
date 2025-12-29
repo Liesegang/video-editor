@@ -234,6 +234,8 @@ mod tests {
             properties: props,
             effects: Vec::new(),
             styles: Vec::new(),
+            effectors: Vec::new(),
+            decorators: Vec::new(),
         }
     }
 
@@ -316,6 +318,8 @@ mod tests {
             properties: text_props,
             effects: Vec::new(),
             styles: Vec::new(),
+            effectors: Vec::new(),
+            decorators: Vec::new(),
         };
         let clip_id = track_clip.id;
         project.add_node(Node::Clip(track_clip));
@@ -396,6 +400,8 @@ mod tests {
             properties: props.clone(),
             effects: Vec::new(),
             styles: Vec::new(),
+            effectors: vec![],
+            decorators: vec![],
         };
 
         let late = TrackClip {
@@ -410,6 +416,8 @@ mod tests {
             properties: props,
             effects: Vec::new(),
             styles: Vec::new(),
+            effectors: vec![],
+            decorators: vec![],
         };
 
         let early_id = early.id;

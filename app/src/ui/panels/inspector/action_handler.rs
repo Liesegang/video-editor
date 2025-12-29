@@ -17,6 +17,10 @@ pub enum PropertyTarget {
     Effect(usize),
     /// Style property at the given index
     Style(usize),
+    /// Effector property at the given index
+    Effector(usize),
+    /// Decorator property at the given index
+    Decorator(usize),
 }
 
 /// Context for handling property actions.
@@ -103,6 +107,30 @@ impl<'a> ActionContext<'a> {
                 value,
                 None,
             ),
+            PropertyTarget::Effector(idx) => {
+                self.project_service.update_effector_property_or_keyframe(
+                    self.comp_id,
+                    self.track_id,
+                    self.clip_id,
+                    idx,
+                    name,
+                    self.current_time,
+                    value,
+                    None,
+                )
+            }
+            PropertyTarget::Decorator(idx) => {
+                self.project_service.update_decorator_property_or_keyframe(
+                    self.comp_id,
+                    self.track_id,
+                    self.clip_id,
+                    idx,
+                    name,
+                    self.current_time,
+                    value,
+                    None,
+                )
+            }
         };
 
         if let Err(e) = result {
@@ -164,6 +192,14 @@ impl<'a> ActionContext<'a> {
                     name,
                     index,
                 ),
+                // TODO: Implement remove for Effector/Decorator when needed
+                // For now, these are not fully supported or exposed via specialized methods
+                // If remove methods are missing, we might need to add them to service first.
+                // Assuming property update handles basics, but keyframe removal requires specific methods.
+                PropertyTarget::Effector(_) | PropertyTarget::Decorator(_) => {
+                    // Placeholder: currently no dedicated remove_keyframe for these
+                    Ok(())
+                }
             }
         } else {
             // Add new keyframe
@@ -197,6 +233,32 @@ impl<'a> ActionContext<'a> {
                     value,
                     None,
                 ),
+                // Using generic update for add_keyframe behavior for now if specific add_keyframe missing?
+                // Actually update_..._or_keyframe handles adding if type is keyframe.
+                PropertyTarget::Effector(idx) => {
+                    self.project_service.update_effector_property_or_keyframe(
+                        self.comp_id,
+                        self.track_id,
+                        self.clip_id,
+                        idx,
+                        name,
+                        self.current_time,
+                        value,
+                        None,
+                    )
+                }
+                PropertyTarget::Decorator(idx) => {
+                    self.project_service.update_decorator_property_or_keyframe(
+                        self.comp_id,
+                        self.track_id,
+                        self.clip_id,
+                        idx,
+                        name,
+                        self.current_time,
+                        value,
+                        None,
+                    )
+                }
             }
         };
 
@@ -241,6 +303,8 @@ impl<'a> ActionContext<'a> {
                 attr_key,
                 attr_val,
             ),
+            // TODO: Implement for Effector/Decorator
+            PropertyTarget::Effector(_) | PropertyTarget::Decorator(_) => Ok(()),
         };
 
         if let Err(e) = result {

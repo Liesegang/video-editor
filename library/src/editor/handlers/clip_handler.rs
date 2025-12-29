@@ -424,6 +424,44 @@ impl ClipHandler {
         Ok(())
     }
 
+    pub fn update_effectors(
+        project: &Arc<RwLock<Project>>,
+        _composition_id: Uuid,
+        _track_id: Uuid,
+        clip_id: Uuid,
+        effectors: Vec<crate::model::project::ensemble::EffectorInstance>,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
+
+        let clip = proj
+            .get_clip_mut(clip_id)
+            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
+
+        clip.effectors = effectors;
+        Ok(())
+    }
+
+    pub fn update_decorators(
+        project: &Arc<RwLock<Project>>,
+        _composition_id: Uuid,
+        _track_id: Uuid,
+        clip_id: Uuid,
+        decorators: Vec<crate::model::project::ensemble::DecoratorInstance>,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
+
+        let clip = proj
+            .get_clip_mut(clip_id)
+            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
+
+        clip.decorators = decorators;
+        Ok(())
+    }
+
     pub fn update_style_property(
         project: &Arc<RwLock<Project>>,
         _composition_id: Uuid,
@@ -499,6 +537,66 @@ impl ClipHandler {
             .map_err(|e| LibraryError::Project(e.to_string()))
     }
 
+    pub fn update_effector_property_or_keyframe(
+        project: &Arc<RwLock<Project>>,
+        _composition_id: Uuid,
+        _track_id: Uuid,
+        clip_id: Uuid,
+        effector_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+
+        let clip = proj
+            .get_clip_mut(clip_id)
+            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
+
+        // Manual implementation since TrackClip might not have helper yet
+        if let Some(effector) = clip.effectors.get_mut(effector_index) {
+            effector.update_property_or_keyframe(property_key, time, value, easing);
+            Ok(())
+        } else {
+            Err(LibraryError::Project(
+                "Effector index out of range".to_string(),
+            ))
+        }
+    }
+
+    pub fn update_decorator_property_or_keyframe(
+        project: &Arc<RwLock<Project>>,
+        _composition_id: Uuid,
+        _track_id: Uuid,
+        clip_id: Uuid,
+        decorator_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+
+        let clip = proj
+            .get_clip_mut(clip_id)
+            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
+
+        // Manual implementation since TrackClip might not have helper yet
+        if let Some(decorator) = clip.decorators.get_mut(decorator_index) {
+            decorator.update_property_or_keyframe(property_key, time, value, easing);
+            Ok(())
+        } else {
+            Err(LibraryError::Project(
+                "Decorator index out of range".to_string(),
+            ))
+        }
+    }
+
     pub fn set_style_property_attribute(
         project: &Arc<RwLock<Project>>,
         _composition_id: Uuid,
@@ -531,6 +629,78 @@ impl ClipHandler {
         } else {
             Err(LibraryError::Project(
                 "Style index out of range".to_string(),
+            ))
+        }
+    }
+
+    pub fn set_effector_property_attribute(
+        project: &Arc<RwLock<Project>>,
+        _composition_id: Uuid,
+        _track_id: Uuid,
+        clip_id: Uuid,
+        effector_index: usize,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+
+        let clip = proj
+            .get_clip_mut(clip_id)
+            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
+
+        if let Some(effector) = clip.effectors.get_mut(effector_index) {
+            if let Some(prop) = effector.properties.get_mut(property_key) {
+                prop.properties
+                    .insert(attribute_key.to_string(), attribute_value);
+                Ok(())
+            } else {
+                Err(LibraryError::Project(format!(
+                    "Property {} not found",
+                    property_key
+                )))
+            }
+        } else {
+            Err(LibraryError::Project(
+                "Effector index out of range".to_string(),
+            ))
+        }
+    }
+
+    pub fn set_decorator_property_attribute(
+        project: &Arc<RwLock<Project>>,
+        _composition_id: Uuid,
+        _track_id: Uuid,
+        clip_id: Uuid,
+        decorator_index: usize,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+
+        let clip = proj
+            .get_clip_mut(clip_id)
+            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
+
+        if let Some(decorator) = clip.decorators.get_mut(decorator_index) {
+            if let Some(prop) = decorator.properties.get_mut(property_key) {
+                prop.properties
+                    .insert(attribute_key.to_string(), attribute_value);
+                Ok(())
+            } else {
+                Err(LibraryError::Project(format!(
+                    "Property {} not found",
+                    property_key
+                )))
+            }
+        } else {
+            Err(LibraryError::Project(
+                "Decorator index out of range".to_string(),
             ))
         }
     }

@@ -228,6 +228,8 @@ pub fn handle_drag_and_drop(
                                     library::model::project::property::PropertyMap::new(),
                                     Vec::new(),
                                     Vec::new(),
+                                    Vec::new(),
+                                    Vec::new(),
                                 );
                                 comp_entity.in_frame = drop_in_frame;
                                 comp_entity.out_frame = drop_out;
@@ -237,9 +239,6 @@ pub fn handle_drag_and_drop(
                                     PropertyValue::String(target_comp_id.to_string()),
                                 );
                                 new_clip_opt = Some(comp_entity);
-                            }
-                            _ => {
-                                // Track dragging and other variants not yet implemented
                             }
                         }
                     } // proj_read is now dropped

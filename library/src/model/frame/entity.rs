@@ -49,6 +49,8 @@ pub enum FrameContent {
         styles: Vec<StyleConfig>,
         #[serde(default)]
         effects: Vec<ImageEffect>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ensemble: Option<crate::core::ensemble::EnsembleData>,
         #[serde(flatten)]
         transform: Transform,
     },
@@ -91,6 +93,7 @@ impl Hash for FrameContent {
                 size,
                 styles,
                 effects,
+                ensemble,
                 transform,
             } => {
                 text.hash(state);
@@ -98,6 +101,8 @@ impl Hash for FrameContent {
                 OrderedFloat(*size).hash(state);
                 styles.hash(state);
                 effects.hash(state);
+                // Skip ensemble in hash (not part of cache key)
+                ensemble.is_some().hash(state);
                 transform.hash(state);
             }
             FrameContent::Shape {
@@ -150,6 +155,7 @@ impl PartialEq for FrameContent {
                     size: s1,
                     styles: st1,
                     effects: e1,
+                    ensemble: en1,
                     transform: tr1,
                 },
                 FrameContent::Text {
@@ -158,6 +164,7 @@ impl PartialEq for FrameContent {
                     size: s2,
                     styles: st2,
                     effects: e2,
+                    ensemble: en2,
                     transform: tr2,
                 },
             ) => {
@@ -166,6 +173,7 @@ impl PartialEq for FrameContent {
                     && OrderedFloat(*s1) == OrderedFloat(*s2)
                     && st1 == st2
                     && e1 == e2
+                    && en1.is_some() == en2.is_some()
                     && tr1 == tr2
             }
             (

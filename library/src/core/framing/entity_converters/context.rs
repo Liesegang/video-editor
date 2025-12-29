@@ -56,37 +56,7 @@ impl<'a> FrameEvaluationContext<'a> {
                 let color_val = self.evaluate_property_value(props, "color", time);
                 let color = match color_val {
                     Some(PropertyValue::Color(c)) => c,
-                    Some(PropertyValue::Map(m)) => {
-                        let r = m
-                            .get("r")
-                            .and_then(|v| {
-                                v.get_as::<i64>()
-                                    .or_else(|| v.get_as::<f64>().map(|f| f as i64))
-                            })
-                            .unwrap_or(0) as u8;
-                        let g = m
-                            .get("g")
-                            .and_then(|v| {
-                                v.get_as::<i64>()
-                                    .or_else(|| v.get_as::<f64>().map(|f| f as i64))
-                            })
-                            .unwrap_or(0) as u8;
-                        let b = m
-                            .get("b")
-                            .and_then(|v| {
-                                v.get_as::<i64>()
-                                    .or_else(|| v.get_as::<f64>().map(|f| f as i64))
-                            })
-                            .unwrap_or(0) as u8;
-                        let a = m
-                            .get("a")
-                            .and_then(|v| {
-                                v.get_as::<i64>()
-                                    .or_else(|| v.get_as::<f64>().map(|f| f as i64))
-                            })
-                            .unwrap_or(255) as u8;
-                        crate::model::frame::color::Color { r, g, b, a }
-                    }
+                    Some(PropertyValue::Map(m)) => Self::map_to_color(&m, 255),
                     _ => crate::model::frame::color::Color {
                         r: 0,
                         g: 0,
@@ -169,6 +139,59 @@ impl<'a> FrameEvaluationContext<'a> {
         };
         let evaluated_value = self.property_evaluators.evaluate(property, time, &ctx);
         Some(evaluated_value)
+    }
+
+    fn map_to_color(
+        m: &HashMap<String, PropertyValue>,
+        default_alpha: u8,
+    ) -> crate::model::frame::color::Color {
+        let extract = |key: &str, default: u8| -> u8 {
+            m.get(key)
+                .and_then(|v| {
+                    v.get_as::<i64>()
+                        .or_else(|| v.get_as::<f64>().map(|f| f as i64))
+                })
+                .unwrap_or(default as i64) as u8
+        };
+
+        crate::model::frame::color::Color {
+            r: extract("r", 0),
+            g: extract("g", 0),
+            b: extract("b", 0),
+            a: extract("a", default_alpha),
+        }
+    }
+
+    pub fn evaluate_color(
+        &self,
+        properties: &PropertyMap,
+        key: &str,
+        time: f64,
+        default: crate::model::frame::color::Color,
+    ) -> (f32, f32, f32, f32) {
+        match self.evaluate_property_value(properties, key, time) {
+            Some(PropertyValue::Color(c)) => (
+                c.r as f32 / 255.0,
+                c.g as f32 / 255.0,
+                c.b as f32 / 255.0,
+                c.a as f32 / 255.0,
+            ),
+            Some(PropertyValue::Map(m)) => {
+                let c = Self::map_to_color(&m, default.a);
+                (
+                    c.r as f32 / 255.0,
+                    c.g as f32 / 255.0,
+                    c.b as f32 / 255.0,
+                    c.a as f32 / 255.0,
+                )
+            }
+            _ => (
+                default.r as f32 / 255.0,
+                default.g as f32 / 255.0,
+                default.b as f32 / 255.0,
+                default.a as f32 / 255.0,
+            ),
+        }
     }
 
     pub fn require_string(
@@ -319,6 +342,13 @@ impl<'a> FrameEvaluationContext<'a> {
                 })
                 .collect(),
             _ => Vec::new(),
+        }
+    }
+
+    pub fn optional_bool(&self, properties: &PropertyMap, key: &str, time: f64) -> Option<bool> {
+        match self.evaluate_property_value(properties, key, time) {
+            Some(PropertyValue::Boolean(value)) => Some(value),
+            _ => None,
         }
     }
 }

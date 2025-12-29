@@ -14,11 +14,10 @@ pub enum GizmoHandle {
     Rotation,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DraggedItem {
     Asset(Uuid),
     Composition(Uuid),
-    Track(Uuid),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

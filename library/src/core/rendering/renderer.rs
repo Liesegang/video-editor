@@ -31,6 +31,7 @@ pub trait Renderer {
         size: f64,
         font_name: &String,
         styles: &[StyleConfig],
+        ensemble: Option<&crate::core::ensemble::EnsembleData>,
         transform: &Transform,
     ) -> Result<RenderOutput, LibraryError>;
 
