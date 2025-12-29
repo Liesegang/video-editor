@@ -763,3 +763,15 @@ pub struct PropertyDefinition {
     pub default_value: PropertyValue,
     pub category: String,
 }
+
+impl PropertyDefinition {
+    pub fn new(name: &str, ui_type: PropertyUiType, label: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            label: label.to_string(),
+            ui_type,
+            default_value: PropertyValue::Number(OrderedFloat(0.0)), // Default, can be overridden by caller if needed
+            category: "General".to_string(),
+        }
+    }
+}

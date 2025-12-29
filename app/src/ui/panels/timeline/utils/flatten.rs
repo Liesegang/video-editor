@@ -12,8 +12,6 @@ pub enum DisplayRow<'a> {
         depth: usize,
         is_expanded: bool,
         visible_row_index: usize,
-        has_clips: bool,
-        has_sub_tracks: bool,
     },
     /// A clip row (shown when parent track is expanded)
     ClipRow {
@@ -41,13 +39,6 @@ impl<'a> DisplayRow<'a> {
         match self {
             DisplayRow::TrackHeader { track, .. } => track.id,
             DisplayRow::ClipRow { parent_track, .. } => parent_track.id,
-        }
-    }
-
-    pub fn depth(&self) -> usize {
-        match self {
-            DisplayRow::TrackHeader { depth, .. } => *depth,
-            DisplayRow::ClipRow { depth, .. } => *depth,
         }
     }
 }
@@ -84,25 +75,12 @@ pub fn flatten_tracks_to_rows<'a>(
             expanded_tracks.contains(&track_id)
         };
 
-        // Count clips and sub-tracks among children
-        let mut has_clips = false;
-        let mut has_sub_tracks = false;
-        for child_id in &track.child_ids {
-            match project.get_node(*child_id) {
-                Some(Node::Clip(_)) => has_clips = true,
-                Some(Node::Track(_)) => has_sub_tracks = true,
-                None => {}
-            }
-        }
-
         if !hide_header {
             rows.push(DisplayRow::TrackHeader {
                 track,
                 depth,
                 is_expanded,
                 visible_row_index: *current_row_index,
-                has_clips,
-                has_sub_tracks,
             });
             *current_row_index += 1;
         }
@@ -155,89 +133,3 @@ pub fn flatten_tracks_to_rows<'a>(
 }
 
 // Backward compatibility - DisplayTrack for track list panel
-pub struct DisplayTrack<'a> {
-    pub track: &'a TrackData,
-    pub depth: usize,
-    pub is_expanded: bool,
-    pub visible_row_index: usize,
-    pub is_folder: bool,
-}
-
-/// Flatten tracks for the track list panel (sidebar)
-pub fn flatten_tracks<'a>(
-    project: &'a Project,
-    root_track_ids: &[Uuid],
-    expanded_tracks: &HashSet<Uuid>,
-) -> Vec<DisplayTrack<'a>> {
-    let mut display_tracks = Vec::new();
-    let mut current_row_index = 0;
-
-    fn recurse<'a>(
-        project: &'a Project,
-        track_id: Uuid,
-        expanded_tracks: &HashSet<Uuid>,
-        depth: usize,
-        display_tracks: &mut Vec<DisplayTrack<'a>>,
-        current_row_index: &mut usize,
-    ) {
-        let Some(track) = project.get_track(track_id) else {
-            return;
-        };
-
-        let is_expanded = expanded_tracks.contains(&track_id);
-
-        // Check for children
-        let mut clip_count = 0;
-        let mut sub_track_ids = Vec::new();
-        for child_id in &track.child_ids {
-            match project.get_node(*child_id) {
-                Some(Node::Clip(_)) => clip_count += 1,
-                Some(Node::Track(_)) => sub_track_ids.push(*child_id),
-                None => {}
-            }
-        }
-
-        let is_folder = !sub_track_ids.is_empty() || clip_count > 0;
-
-        display_tracks.push(DisplayTrack {
-            track,
-            depth,
-            is_expanded,
-            visible_row_index: *current_row_index,
-            is_folder,
-        });
-        *current_row_index += 1;
-
-        // Add rows for expanded clips
-        if is_expanded && clip_count > 0 {
-            *current_row_index += clip_count;
-        }
-
-        // Recurse into sub-tracks
-        if is_expanded {
-            for sub_id in sub_track_ids {
-                recurse(
-                    project,
-                    sub_id,
-                    expanded_tracks,
-                    depth + 1,
-                    display_tracks,
-                    current_row_index,
-                );
-            }
-        }
-    }
-
-    for track_id in root_track_ids {
-        recurse(
-            project,
-            *track_id,
-            expanded_tracks,
-            0,
-            &mut display_tracks,
-            &mut current_row_index,
-        );
-    }
-
-    display_tracks
-}

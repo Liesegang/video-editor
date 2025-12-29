@@ -103,6 +103,7 @@ impl<T: Renderer> RenderService<T> {
                     size,
                     styles,
                     effects,
+                    ensemble,
                     transform,
                 } => {
                     let scaled_transform = apply_view_transform(transform, region, scale);
@@ -113,6 +114,7 @@ impl<T: Renderer> RenderService<T> {
                                 *size,
                                 &font,
                                 &styles,
+                                ensemble.as_ref(),
                                 &scaled_transform,
                             )
                         })?;

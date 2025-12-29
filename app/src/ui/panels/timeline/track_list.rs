@@ -195,9 +195,8 @@ pub fn show_track_list(
                 track,
                 depth,
                 is_expanded,
-                has_clips: _,
-                has_sub_tracks: _,
                 visible_row_index: _, // Ignored here as we use row.visible_row_index() method
+                ..
             } => {
                 let track_interaction_response = ui_content
                     .interact(

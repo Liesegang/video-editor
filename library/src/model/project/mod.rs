@@ -1,12 +1,14 @@
 pub mod asset;
 pub mod clip_helpers;
 pub mod effect;
+pub mod ensemble;
 pub mod project;
 pub mod property;
 pub mod style;
 mod track_clip_factories; // Factory methods for TrackClip
 
 pub use effect::EffectConfig;
+pub use ensemble::{DecoratorInstance, EffectorInstance};
 
 use crate::model::project::property::{PropertyMap, Vec2};
 use crate::model::project::style::StyleInstance;
@@ -127,6 +129,10 @@ pub struct TrackClip {
     pub styles: Vec<StyleInstance>,
     #[serde(default)]
     pub effects: Vec<EffectConfig>,
+    #[serde(default)]
+    pub effectors: Vec<EffectorInstance>,
+    #[serde(default)]
+    pub decorators: Vec<DecoratorInstance>,
 }
 
 impl TrackClip {
@@ -142,6 +148,8 @@ impl TrackClip {
         properties: PropertyMap,
         styles: Vec<StyleInstance>,
         effects: Vec<EffectConfig>,
+        effectors: Vec<EffectorInstance>,
+        decorators: Vec<DecoratorInstance>,
     ) -> Self {
         Self {
             id,
@@ -155,6 +163,8 @@ impl TrackClip {
             properties,
             styles,
             effects,
+            effectors,
+            decorators,
         }
     }
 
@@ -275,6 +285,312 @@ impl TrackClip {
                 },
             ];
             definitions.extend(text_defs);
+
+            // Ensemble properties
+            let ensemble_defs = vec![
+                // Core toggle
+                PropertyDefinition {
+                    name: "ensemble_enabled".to_string(),
+                    label: "Enable Ensemble".to_string(),
+                    ui_type: PropertyUiType::Bool,
+                    default_value: PropertyValue::Boolean(false),
+                    category: "Ensemble".to_string(),
+                },
+                // Transform Effector
+                PropertyDefinition {
+                    name: "ensemble_transform_enabled".to_string(),
+                    label: "Transform Enabled".to_string(),
+                    ui_type: PropertyUiType::Bool,
+                    default_value: PropertyValue::Boolean(false),
+                    category: "Ensemble: Transform".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_transform_translate".to_string(),
+                    label: "Translate".to_string(),
+                    ui_type: PropertyUiType::Vec2 {
+                        suffix: "px".to_string(),
+                    },
+                    default_value: PropertyValue::Vec2(Vec2 {
+                        x: OrderedFloat(0.0),
+                        y: OrderedFloat(0.0),
+                    }),
+                    category: "Ensemble: Transform".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_transform_rotate".to_string(),
+                    label: "Rotate".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: -360.0,
+                        max: 360.0,
+                        step: 1.0,
+                        suffix: "deg".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(0.0)),
+                    category: "Ensemble: Transform".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_transform_scale".to_string(),
+                    label: "Scale".to_string(),
+                    ui_type: PropertyUiType::Vec2 {
+                        suffix: "%".to_string(),
+                    },
+                    default_value: PropertyValue::Vec2(Vec2 {
+                        x: OrderedFloat(100.0),
+                        y: OrderedFloat(100.0),
+                    }),
+                    category: "Ensemble: Transform".to_string(),
+                },
+                // StepDelay Effector
+                PropertyDefinition {
+                    name: "ensemble_step_delay_enabled".to_string(),
+                    label: "Step Delay Enabled".to_string(),
+                    ui_type: PropertyUiType::Bool,
+                    default_value: PropertyValue::Boolean(false),
+                    category: "Ensemble: Step Delay".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_step_delay_per_element".to_string(),
+                    label: "Delay Per Element".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 2.0,
+                        step: 0.01,
+                        suffix: "s".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(0.1)),
+                    category: "Ensemble: Step Delay".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_step_delay_duration".to_string(),
+                    label: "Duration".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 5.0,
+                        step: 0.1,
+                        suffix: "s".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(1.0)),
+                    category: "Ensemble: Step Delay".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_step_delay_from_opacity".to_string(),
+                    label: "From Opacity".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "%".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(0.0)),
+                    category: "Ensemble: Step Delay".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_step_delay_to_opacity".to_string(),
+                    label: "To Opacity".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "%".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(100.0)),
+                    category: "Ensemble: Step Delay".to_string(),
+                },
+                // Opacity Effector
+                PropertyDefinition {
+                    name: "ensemble_opacity_enabled".to_string(),
+                    label: "Opacity Enabled".to_string(),
+                    ui_type: PropertyUiType::Bool,
+                    default_value: PropertyValue::Boolean(false),
+                    category: "Ensemble: Opacity".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_opacity_target".to_string(),
+                    label: "Target Opacity".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "%".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(50.0)),
+                    category: "Ensemble: Opacity".to_string(),
+                },
+                // Randomize Effector
+                PropertyDefinition {
+                    name: "ensemble_randomize_enabled".to_string(),
+                    label: "Randomize Enabled".to_string(),
+                    ui_type: PropertyUiType::Bool,
+                    default_value: PropertyValue::Boolean(false),
+                    category: "Ensemble: Randomize".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_randomize_translate_range".to_string(),
+                    label: "Translate Range".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "px".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(10.0)),
+                    category: "Ensemble: Randomize".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_randomize_rotate_range".to_string(),
+                    label: "Rotate Range".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 180.0,
+                        step: 1.0,
+                        suffix: "deg".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(15.0)),
+                    category: "Ensemble: Randomize".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_randomize_seed".to_string(),
+                    label: "Random Seed".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 10000.0,
+                        step: 1.0,
+                        suffix: "".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(0.0)),
+                    category: "Ensemble: Randomize".to_string(),
+                },
+                // Backplate Decorator
+                PropertyDefinition {
+                    name: "ensemble_backplate_enabled".to_string(),
+                    label: "Backplate Enabled".to_string(),
+                    ui_type: PropertyUiType::Bool,
+                    default_value: PropertyValue::Boolean(false),
+                    category: "Ensemble: Backplate".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_backplate_target".to_string(),
+                    label: "Target".to_string(),
+                    ui_type: PropertyUiType::Dropdown {
+                        options: vec!["Char".to_string(), "Line".to_string(), "Block".to_string()],
+                    },
+                    default_value: PropertyValue::String("Block".to_string()),
+                    category: "Ensemble: Backplate".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_backplate_shape".to_string(),
+                    label: "Shape".to_string(),
+                    ui_type: PropertyUiType::Dropdown {
+                        options: vec![
+                            "Rect".to_string(),
+                            "RoundRect".to_string(),
+                            "Circle".to_string(),
+                        ],
+                    },
+                    default_value: PropertyValue::String("Rect".to_string()),
+                    category: "Ensemble: Backplate".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_backplate_color".to_string(),
+                    label: "Backplate Color".to_string(),
+                    ui_type: PropertyUiType::Color,
+                    default_value: PropertyValue::Color(crate::model::frame::color::Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 128,
+                    }),
+                    category: "Ensemble: Backplate".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_backplate_padding".to_string(),
+                    label: "Backplate Padding".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 50.0,
+                        step: 1.0,
+                        suffix: "px".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(5.0)),
+                    category: "Ensemble: Backplate".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_backplate_corner_radius".to_string(),
+                    label: "Corner Radius".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 50.0,
+                        step: 1.0,
+                        suffix: "px".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(4.0)),
+                    category: "Ensemble: Backplate".to_string(),
+                },
+                // Patch System
+                PropertyDefinition {
+                    name: "ensemble_patch_enabled".to_string(),
+                    label: "Enable Patch".to_string(),
+                    ui_type: PropertyUiType::Bool,
+                    default_value: PropertyValue::Boolean(false),
+                    category: "Ensemble: Patch".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_patch_indices".to_string(),
+                    label: "Character Indices".to_string(),
+                    ui_type: PropertyUiType::Text,
+                    default_value: PropertyValue::String("0".to_string()),
+                    category: "Ensemble: Patch".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_patch_translate".to_string(),
+                    label: "Patch Translate".to_string(),
+                    ui_type: PropertyUiType::Vec2 {
+                        suffix: "px".to_string(),
+                    },
+                    default_value: PropertyValue::Vec2(crate::model::project::property::Vec2 {
+                        x: OrderedFloat(0.0),
+                        y: OrderedFloat(0.0),
+                    }),
+                    category: "Ensemble: Patch".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_patch_rotate".to_string(),
+                    label: "Patch Rotate".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: -360.0,
+                        max: 360.0,
+                        step: 1.0,
+                        suffix: "deg".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(0.0)),
+                    category: "Ensemble: Patch".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_patch_scale".to_string(),
+                    label: "Patch Scale".to_string(),
+                    ui_type: PropertyUiType::Vec2 {
+                        suffix: "%".to_string(),
+                    },
+                    default_value: PropertyValue::Vec2(crate::model::project::property::Vec2 {
+                        x: OrderedFloat(100.0),
+                        y: OrderedFloat(100.0),
+                    }),
+                    category: "Ensemble: Patch".to_string(),
+                },
+                PropertyDefinition {
+                    name: "ensemble_patch_opacity".to_string(),
+                    label: "Patch Opacity".to_string(),
+                    ui_type: PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "%".to_string(),
+                    },
+                    default_value: PropertyValue::Number(OrderedFloat(100.0)),
+                    category: "Ensemble: Patch".to_string(),
+                },
+            ];
+            definitions.extend(ensemble_defs);
         }
 
         if matches!(self.kind, TrackClipKind::Shape) {

@@ -23,6 +23,7 @@ pub use model::animation;
 // Re-exports for backward compatibility
 pub use core::audio;
 pub use core::cache;
+pub use core::ensemble;
 pub use core::framing;
 pub use core::rendering;
 

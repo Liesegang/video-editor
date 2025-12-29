@@ -26,19 +26,21 @@ impl TrackClip {
             Property::constant(PropertyValue::String(file_path.to_string())),
         );
 
-        TrackClip::new(
-            Uuid::new_v4(),
+        TrackClip {
+            id: Uuid::new_v4(),
             reference_id,
-            TrackClipKind::Audio,
+            kind: TrackClipKind::Audio,
             in_frame,
             out_frame,
             source_begin_frame,
-            Some(duration_frame),
+            duration_frame: Some(duration_frame),
             fps,
-            props,
-            Vec::new(),
-            Vec::new(),
-        )
+            properties: props,
+            effects: Vec::new(),
+            effectors: Vec::new(),
+            decorators: Vec::new(),
+            styles: Vec::new(),
+        }
     }
 
     /// Create a video clip with default properties.
@@ -96,6 +98,8 @@ impl TrackClip {
             props,
             Vec::new(),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
         )
     }
 
@@ -150,6 +154,8 @@ impl TrackClip {
             None,
             fps,
             props,
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         )
@@ -241,6 +247,8 @@ impl TrackClip {
             fps,
             props,
             styles,
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
         )
     }
@@ -360,6 +368,8 @@ impl TrackClip {
             props,
             styles,
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
         )
     }
 
@@ -425,6 +435,8 @@ half4 main(float2 fragCoord) {
             None,
             fps,
             props,
+            Vec::new(),
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         )

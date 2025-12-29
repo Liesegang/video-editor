@@ -12,11 +12,13 @@ use library::model::project::property::PropertyUiType;
 
 pub mod action_handler;
 pub mod effects;
+pub mod ensemble;
 pub mod properties;
 pub mod styles;
 
 use action_handler::{ActionContext, PropertyTarget};
 use effects::render_effects_section;
+use ensemble::render_ensemble_section;
 use properties::{render_property_rows, PropertyAction, PropertyRenderContext};
 use styles::render_styles_section;
 
@@ -78,6 +80,8 @@ pub fn inspector_panel(
                     e.duration_frame,
                     e.effects.clone(),
                     e.styles.clone(),
+                    e.effectors.clone(),
+                    e.decorators.clone(),
                 )
             })
         } else {
@@ -93,6 +97,8 @@ pub fn inspector_panel(
             duration_frame,
             _effects,
             styles,
+            effectors,
+            decorators,
         )) = entity_data
         {
             if editor_context.selection.selected_entities.len() > 1 {
@@ -294,6 +300,47 @@ pub fn inspector_panel(
                     &styles,
                     &mut needs_refresh,
                 );
+            }
+
+            //--- Ensemble Section (Text only) ---
+            if matches!(kind, TrackClipKind::Text) {
+                ui.add_space(5.0);
+                let ensemble_actions = render_ensemble_section(
+                    ui,
+                    project_service,    // Add project_service
+                    history_manager,    // Add history_manager
+                    editor_context,     // Add editor_context
+                    comp_id,            // Add comp_id
+                    track_id,           // Add track_id
+                    selected_entity_id, // Add selected_entity_id
+                    current_time,       // Add current_time
+                    fps,                // Add fps
+                    &effectors,         // Pass effectors
+                    &decorators,        // Pass decorators
+                    &mut needs_refresh, // Pass needs_refresh
+                    &properties,
+                    &PropertyRenderContext {
+                        available_fonts: &editor_context.available_fonts,
+                        in_grid: false,
+                        current_time,
+                    },
+                );
+                let mut ctx = ActionContext::new(
+                    project_service,
+                    history_manager,
+                    comp_id,
+                    track_id,
+                    selected_entity_id,
+                    current_time,
+                );
+                if process_property_actions(
+                    ensemble_actions,
+                    &mut ctx,
+                    PropertyTarget::Clip,
+                    &properties,
+                ) {
+                    needs_refresh = true;
+                }
             }
 
             // --- Effects Section ---
