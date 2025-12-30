@@ -372,15 +372,22 @@ impl SkiaRenderer {
             };
 
             // Text decomposition: measure each character
-            let mut char_data = Vec::new();
+            // OPTIMIZATION: Use &str slices instead of allocating Strings for each character
+            let mut char_data = Vec::with_capacity(text.len());
             let mut x_pos = 0.0f32;
 
-            for ch in text.chars() {
-                let ch_str = ch.to_string();
-                let (advance, _bounds) = font.measure_str(&ch_str, None);
+            let mut char_indices = text.char_indices().peekable();
+            while let Some((idx, _ch)) = char_indices.next() {
+                let end_idx = char_indices
+                    .peek()
+                    .map(|(next_idx, _)| *next_idx)
+                    .unwrap_or(text.len());
+                let ch_str = &text[idx..end_idx];
+
+                let (advance, _bounds) = font.measure_str(ch_str, None);
 
                 // Store char data
-                char_data.push((ch, x_pos, advance));
+                char_data.push((ch_str, x_pos, advance));
                 x_pos += advance;
             }
 
@@ -529,7 +536,7 @@ impl SkiaRenderer {
                         match target {
                             BackplateTarget::Char => {
                                 // Draw backplate for each character individually
-                                for (i, (_ch, base_x, advance)) in char_data.iter().enumerate() {
+                                for (i, (_ch_str, base_x, advance)) in char_data.iter().enumerate() {
                                     if let Some(ch_transform) = char_transforms.get(i) {
                                         canvas.save();
 
@@ -599,8 +606,12 @@ impl SkiaRenderer {
                 }
             }
 
+            // OPTIMIZATION: Create paint once and reuse it
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+
             // Render each character with its transform
-            for (i, (ch, base_x, _advance)) in char_data.iter().enumerate() {
+            for (i, (ch_str, base_x, _advance)) in char_data.iter().enumerate() {
                 let ch_transform = &char_transforms[i];
 
                 // Apply character transform
@@ -618,8 +629,7 @@ impl SkiaRenderer {
                 // Translate back
                 canvas.translate((-char_center_x, -char_center_y));
 
-                // Create paint with opacity
-                let mut paint = Paint::default();
+                // Update paint color/alpha
                 let final_alpha =
                     (base_color.a as f32 * ch_transform.opacity).clamp(0.0, 255.0) as u8;
                 paint.set_color(skia_safe::Color::from_argb(
@@ -628,12 +638,10 @@ impl SkiaRenderer {
                     base_color.g,
                     base_color.b,
                 ));
-                paint.set_anti_alias(true);
 
-                // Draw character
-                let ch_str = ch.to_string();
+                // Draw character using the slice directly, no allocation
                 // Use baseline_offset for accurate positioning to match standard text rendering
-                canvas.draw_str(&ch_str, (*base_x, baseline_offset), &font, &paint);
+                canvas.draw_str(ch_str, (*base_x, baseline_offset), &font, &paint);
 
                 canvas.restore();
             }
