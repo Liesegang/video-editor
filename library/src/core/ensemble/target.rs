@@ -1,5 +1,5 @@
 /// Effectorの適用対象スコープ
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Hash)]
 pub enum EffectorTarget {
     Block, // 全体（全文字通してインデックス計算）
     Line,  // 行ごと（行内でインデックスリセット）
@@ -13,7 +13,6 @@ impl Default for EffectorTarget {
     }
 }
 
-/// Effectorとそのターゲットスコープのペア
 pub struct EffectorEntry {
     pub effector: Box<dyn super::effectors::Effector>,
     pub target: EffectorTarget,

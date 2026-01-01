@@ -110,7 +110,7 @@ pub struct OpacityEffector {
     pub mode: OpacityMode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Hash)]
 pub enum OpacityMode {
     Set,      // 直接設定
     Multiply, // 乗算
