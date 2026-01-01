@@ -62,6 +62,7 @@ pub fn render_effects_section(
         crate::ui::widgets::collection_editor::CollectionEditor::new(
             list_id,
             &mut local_effects,
+            |e| egui::Id::new(e.id),
             |ui, visual_index, effect, handle, history_manager, project_service, needs_refresh| {
                 let effect_index = effects
                     .iter()

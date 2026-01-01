@@ -80,6 +80,7 @@ impl Eq for EffectorInstance {}
 impl std::hash::Hash for EffectorInstance {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
+        self.properties.hash(state);
     }
 }
 
@@ -138,5 +139,6 @@ impl Eq for DecoratorInstance {}
 impl std::hash::Hash for DecoratorInstance {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
+        self.properties.hash(state);
     }
 }
