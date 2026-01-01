@@ -1,5 +1,5 @@
 use super::action_handler::{ActionContext, PropertyTarget};
-use super::properties::{render_inspector_properties_grid, PropertyAction, PropertyRenderContext};
+use super::properties::{render_inspector_properties_grid, PropertyRenderContext};
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 
@@ -24,9 +24,7 @@ pub fn render_ensemble_section(
     needs_refresh: &mut bool,
     _properties: &PropertyMap,
     context: &PropertyRenderContext,
-) -> Vec<PropertyAction> {
-    let actions = vec![];
-
+) {
     ui.add_space(10.0);
     ui.heading("Ensemble");
     ui.separator();
@@ -128,39 +126,10 @@ pub fn render_ensemble_section(
                     current_time,
                 );
 
-                for action in item_actions {
-                    match action {
-                        PropertyAction::Update(key, value) => {
-                            ctx.handle_update(
-                                PropertyTarget::Effector(backend_index),
-                                &key,
-                                value,
-                                |n| effector_props.get(n).cloned(),
-                            );
-                            *needs_refresh = true;
-                        }
-                        PropertyAction::ToggleKeyframe(key, value) => {
-                            ctx.handle_toggle_keyframe(
-                                PropertyTarget::Effector(backend_index),
-                                &key,
-                                value,
-                                |n| effector_props.get(n).cloned(),
-                            );
-                            *needs_refresh = true;
-                        }
-                        PropertyAction::SetAttribute(key, attr, value) => {
-                            ctx.handle_set_attribute(
-                                PropertyTarget::Effector(backend_index),
-                                &key,
-                                &attr,
-                                value,
-                            );
-                            *needs_refresh = true;
-                        }
-                        PropertyAction::Commit => {
-                            ctx.handle_commit();
-                        }
-                    }
+                if ctx.handle_actions(item_actions, PropertyTarget::Effector(backend_index), |n| {
+                    effector_props.get(n).cloned()
+                }) {
+                    *needs_refresh = true;
                 }
             });
 
@@ -249,39 +218,12 @@ pub fn render_ensemble_section(
                     current_time,
                 );
 
-                for action in item_actions {
-                    match action {
-                        PropertyAction::Update(key, value) => {
-                            ctx.handle_update(
-                                PropertyTarget::Decorator(backend_index),
-                                &key,
-                                value,
-                                |n| decorator_props.get(n).cloned(),
-                            );
-                            *needs_refresh = true;
-                        }
-                        PropertyAction::ToggleKeyframe(key, value) => {
-                            ctx.handle_toggle_keyframe(
-                                PropertyTarget::Decorator(backend_index),
-                                &key,
-                                value,
-                                |n| decorator_props.get(n).cloned(),
-                            );
-                            *needs_refresh = true;
-                        }
-                        PropertyAction::SetAttribute(key, attr, value) => {
-                            ctx.handle_set_attribute(
-                                PropertyTarget::Decorator(backend_index),
-                                &key,
-                                &attr,
-                                value,
-                            );
-                            *needs_refresh = true;
-                        }
-                        PropertyAction::Commit => {
-                            ctx.handle_commit();
-                        }
-                    }
+                if ctx.handle_actions(
+                    item_actions,
+                    PropertyTarget::Decorator(backend_index),
+                    |n| decorator_props.get(n).cloned(),
+                ) {
+                    *needs_refresh = true;
                 }
             });
 
@@ -292,8 +234,6 @@ pub fn render_ensemble_section(
         },
     )
     .show(ui, history_manager, project_service, needs_refresh);
-
-    actions
 }
 
 fn format_type_name(s: &str) -> String {

@@ -2,7 +2,7 @@ use crate::model::project::property::PropertyMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct StyleInstance {
     pub id: Uuid,
     pub style_type: String, // "fill" or "stroke"
@@ -11,24 +11,6 @@ pub struct StyleInstance {
     pub properties: PropertyMap,
 }
 
-impl std::hash::Hash for StyleInstance {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-        self.style_type.hash(state);
-        // PropertyMap doesn't implement Hash, so we might skip it or use a workaround.
-        // For ReorderableList, we mostly care about identity (ID).
-        // If properties change, it's still the same style instance in the list logic.
-        // So hashing ID should be sufficient for list diffing.
-    }
-}
-
-impl PartialEq for StyleInstance {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Eq for StyleInstance {}
 impl StyleInstance {
     pub fn new(style_type: &str, properties: PropertyMap) -> Self {
         Self {

@@ -4,13 +4,13 @@
 // Action handler is now actively used by mod.rs, effects.rs, and styles.rs
 
 use crate::action::HistoryManager;
-use library::model::project::property::PropertyValue;
+use crate::ui::panels::inspector::properties::PropertyAction;
+use library::model::project::property::{Property, PropertyValue};
 use library::EditorService;
 use uuid::Uuid;
 
 pub use library::model::project::property::PropertyTarget;
 
-/// Context for handling property actions.
 /// Context for handling property actions.
 pub struct ActionContext<'a> {
     pub project_service: &'a mut EditorService,
@@ -246,5 +246,35 @@ impl<'a> ActionContext<'a> {
             eprintln!("Failed to set attribute {} for {}: {:?}", attr_key, name, e);
         }
         true
+    }
+
+    /// Process a list of PropertyActions, handling updates and history commits.
+    pub fn handle_actions(
+        &mut self,
+        actions: Vec<PropertyAction>,
+        target: PropertyTarget,
+        get_property: impl Fn(&str) -> Option<Property>,
+    ) -> bool {
+        let mut needs_refresh = false;
+        for action in actions {
+            match action {
+                PropertyAction::Update(name, val) => {
+                    self.handle_update(target, &name, val, &get_property);
+                    needs_refresh = true;
+                }
+                PropertyAction::Commit => {
+                    self.handle_commit();
+                }
+                PropertyAction::ToggleKeyframe(name, val) => {
+                    self.handle_toggle_keyframe(target, &name, val, &get_property);
+                    needs_refresh = true;
+                }
+                PropertyAction::SetAttribute(name, key, val) => {
+                    self.handle_set_attribute(target, &name, &key, val);
+                    needs_refresh = true;
+                }
+            }
+        }
+        needs_refresh
     }
 }

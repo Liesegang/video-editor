@@ -1,5 +1,5 @@
 use super::action_handler::{ActionContext, PropertyTarget};
-use super::properties::{render_inspector_properties_grid, PropertyAction, PropertyRenderContext};
+use super::properties::{render_inspector_properties_grid, PropertyRenderContext};
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 
@@ -161,39 +161,10 @@ pub fn render_styles_section(
                     selected_entity_id,
                     current_time,
                 );
-                for action in pending_actions {
-                    match action {
-                        PropertyAction::Update(name, val) => {
-                            ctx.handle_update(
-                                PropertyTarget::Style(backend_index),
-                                &name,
-                                val,
-                                |n| style_props.get(n).cloned(),
-                            );
-                            *needs_refresh = true;
-                        }
-                        PropertyAction::Commit => {
-                            ctx.handle_commit();
-                        }
-                        PropertyAction::ToggleKeyframe(name, val) => {
-                            ctx.handle_toggle_keyframe(
-                                PropertyTarget::Style(backend_index),
-                                &name,
-                                val,
-                                |n| style_props.get(n).cloned(),
-                            );
-                            *needs_refresh = true;
-                        }
-                        PropertyAction::SetAttribute(name, key, val) => {
-                            ctx.handle_set_attribute(
-                                PropertyTarget::Style(backend_index),
-                                &name,
-                                &key,
-                                val,
-                            );
-                            *needs_refresh = true;
-                        }
-                    }
+                if ctx.handle_actions(pending_actions, PropertyTarget::Style(backend_index), |n| {
+                    style_props.get(n).cloned()
+                }) {
+                    *needs_refresh = true;
                 }
             });
 
