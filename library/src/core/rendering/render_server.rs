@@ -7,7 +7,6 @@ use std::thread;
 
 use crate::cache::SharedCacheManager;
 use crate::editor::RenderService;
-use crate::framing::entity_converters::EntityConverterRegistry;
 use crate::model::frame::Image;
 use crate::model::frame::frame::FrameInfo;
 use crate::plugin::PluginManager;
@@ -37,11 +36,7 @@ pub struct RenderResult {
 }
 
 impl RenderServer {
-    pub fn new(
-        plugin_manager: Arc<PluginManager>,
-        cache_manager: SharedCacheManager,
-        entity_converter_registry: Arc<EntityConverterRegistry>,
-    ) -> Self {
+    pub fn new(plugin_manager: Arc<PluginManager>, cache_manager: SharedCacheManager) -> Self {
         let (tx, rx) = channel::<RenderRequest>();
         let (tx_result, rx_result) = channel::<RenderResult>();
 
@@ -61,12 +56,7 @@ impl RenderServer {
             let mut current_width = 1920;
             let mut current_height = 1080;
 
-            let mut render_service = RenderService::new(
-                renderer,
-                plugin_manager,
-                cache_manager,
-                entity_converter_registry,
-            );
+            let mut render_service = RenderService::new(renderer, plugin_manager, cache_manager);
 
             loop {
                 // Get the next request (blocking)

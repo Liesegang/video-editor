@@ -1,5 +1,4 @@
 use crate::core::cache::SharedCacheManager;
-use crate::core::framing::entity_converters::EntityConverterRegistry;
 use crate::core::framing::get_frame_from_project;
 use crate::core::rendering::renderer::{RenderOutput, Renderer};
 use crate::editor::project_model::ProjectModel;
@@ -9,14 +8,12 @@ use crate::model::frame::frame::FrameInfo;
 use crate::model::frame::transform::Transform;
 use crate::plugin::{LoadRequest, PluginManager};
 use crate::util::timing::{ScopedTimer, measure_debug};
-// Removed HashMap and EvaluationContext imports
 use std::sync::Arc;
 
 pub struct RenderService<T: Renderer> {
     pub renderer: T,
     cache_manager: SharedCacheManager,
     plugin_manager: Arc<PluginManager>,
-    entity_converter_registry: Arc<EntityConverterRegistry>,
 }
 
 impl<T: Renderer> RenderService<T> {
@@ -24,13 +21,11 @@ impl<T: Renderer> RenderService<T> {
         renderer: T,
         plugin_manager: Arc<PluginManager>,
         cache_manager: SharedCacheManager,
-        entity_converter_registry: Arc<EntityConverterRegistry>,
     ) -> Self {
         Self {
             renderer,
             plugin_manager,
             cache_manager,
-            entity_converter_registry,
         }
     }
 
@@ -201,7 +196,7 @@ impl<T: Renderer> RenderService<T> {
             1.0,          // Default render_scale to 1.0 for self-managed renders (e.g. export)
             None,
             &property_evaluators,
-            &self.entity_converter_registry,
+            &self.plugin_manager,
         )
     }
 

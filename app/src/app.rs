@@ -2,9 +2,12 @@ use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, Style};
 use library::model::project::project::{Composition, Project};
 use library::EditorService;
+use log::warn;
 #[allow(deprecated)]
 use raw_window_handle::HasRawWindowHandle;
+use std::fs;
 use std::sync::{Arc, RwLock};
+use uuid::Uuid;
 
 use crate::action::{
     handler::{handle_command, ActionContext},
@@ -20,12 +23,9 @@ use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::ui::dialogs::export_dialog::ExportDialog;
 use crate::ui::dialogs::settings_dialog::SettingsDialog;
 use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
-use crate::utils;
-use library::cache::SharedCacheManager;
-use library::plugin::PluginManager;
 use library::RenderServer;
 
-pub struct MyApp {
+pub struct RuViEApp {
     pub editor_context: EditorContext,
     pub dock_state: DockState<Tab>,
     pub project_service: EditorService,
@@ -43,50 +43,17 @@ pub struct MyApp {
 
     pub triggered_action: Option<CommandId>,
     pub render_server: Arc<RenderServer>,
-
-    // Dependencies
-    _plugin_manager: Arc<PluginManager>,
-    _cache_manager: SharedCacheManager,
 }
 
-impl MyApp {
+impl RuViEApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Customize egui
-        let mut visuals = Visuals::dark();
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(255, 120, 0);
-        cc.egui_ctx.set_visuals(visuals);
-
-        // Setup fonts
-        utils::setup_fonts(&cc.egui_ctx);
-
         let app_config = config::load_config();
-        crate::ui::theme::apply_theme(&cc.egui_ctx, &app_config);
+        setup_theme(&cc.egui_ctx, &app_config);
+        setup_fonts(&cc.egui_ctx);
+
         let command_registry = CommandRegistry::new(&app_config);
-
-        let default_project = Arc::new(RwLock::new(Project::new("Default Project")));
-        // Add a default composition when the app starts
-        let (default_comp, root_track) =
-            Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
-        let default_comp_id = default_comp.id;
-        {
-            let mut proj = default_project.write().unwrap();
-            proj.add_node(library::model::project::Node::Track(root_track));
-            proj.add_composition(default_comp);
-        }
-
-        let plugin_manager = library::create_plugin_manager();
-
-        // Load plugins from configured paths
-        for path in &app_config.plugins.paths {
-            if let Err(e) = plugin_manager.load_sksl_plugins_from_directory(path) {
-                log::error!("Failed to load SkSL plugins from {}: {}", path, e);
-            }
-        }
-
-        // Apply saved loader priority
-        if !app_config.plugins.loader_priority.is_empty() {
-            plugin_manager.set_loader_priority(app_config.plugins.loader_priority.clone());
-        }
+        let (default_project, default_comp_id) = create_default_project();
+        let plugin_manager = setup_plugin_manager(&app_config);
 
         let cache_manager = Arc::new(library::cache::CacheManager::new());
         let project_service = EditorService::new(
@@ -99,11 +66,9 @@ impl MyApp {
         editor_context.selection.composition_id = Some(default_comp_id); // Select the default composition
         editor_context.available_fonts = library::rendering::skia_utils::get_available_fonts();
 
-        let entity_converter_registry = plugin_manager.get_entity_converter_registry();
         let render_server = Arc::new(RenderServer::new(
             plugin_manager.clone(),
             cache_manager.clone(),
-            entity_converter_registry.clone(),
         ));
 
         let mut app = Self {
@@ -122,52 +87,23 @@ impl MyApp {
             ),
             triggered_action: None,
             composition_dialog: CompositionDialog::new(),
-            export_dialog: ExportDialog::new(
-                plugin_manager.clone(),
-                cache_manager.clone(),
-                entity_converter_registry,
-            ),
+            export_dialog: ExportDialog::new(plugin_manager.clone(), cache_manager.clone()),
             command_palette: CommandPalette::new(),
             render_server,
-            _plugin_manager: plugin_manager,
-            _cache_manager: cache_manager,
         };
+
         if let Ok(proj_read) = app.project_service.get_project().read() {
             app.history_manager.push_project_state(proj_read.clone());
         }
 
-        // Zero-Copy GPU Sharing: Capture the main thread's OpenGL context handle
-        // and pass it to the background render server. This enables sharing of textures.
-        if let Some(handle) = library::rendering::skia_utils::get_current_context_handle() {
-            #[allow(deprecated)]
-            let hwnd = if let Ok(raw_handle) = cc.raw_window_handle() {
-                #[cfg(target_os = "windows")]
-                match raw_handle {
-                    raw_window_handle::RawWindowHandle::Win32(h) => Some(h.hwnd.get() as isize),
-                    _ => None,
-                }
-                #[cfg(not(target_os = "windows"))]
-                None
-            } else {
-                None
-            };
+        setup_gpu_sharing(&app.render_server, cc);
 
-            log::info!(
-                "MyApp: Capturing main GL context handle: {}, HWND: {:?}",
-                handle,
-                hwnd
-            );
-            app.render_server.set_sharing_context(handle, hwnd);
-        } else {
-            log::warn!("MyApp: Failed to capture main GL context handle. Preview might fall back to CPU copy.");
-        }
-
-        cc.egui_ctx.request_repaint(); // Request repaint after initial state setup
+        cc.egui_ctx.request_repaint();
         app
     }
 }
 
-impl eframe::App for MyApp {
+impl eframe::App for RuViEApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.triggered_action = None;
         let mut is_listening_for_shortcut = false;
@@ -388,5 +324,112 @@ impl eframe::App for MyApp {
             // Reset accumulator when not playing to avoid jump on resume
             self.editor_context.timeline.playback_accumulator = 0.0;
         }
+    }
+}
+
+fn setup_theme(ctx: &egui::Context, config: &config::AppConfig) {
+    let mut visuals = Visuals::dark();
+    visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(255, 120, 0);
+    ctx.set_visuals(visuals);
+    crate::ui::theme::apply_theme(ctx, config);
+}
+
+fn setup_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+
+    // Windows specific font path for MS Gothic
+    let font_path = "C:\\Windows\\Fonts\\msgothic.ttc";
+
+    if let Ok(font_data) = fs::read(font_path) {
+        fonts.font_data.insert(
+            "my_font".to_owned(),
+            egui::FontData::from_owned(font_data)
+                .tweak(egui::FontTweak {
+                    scale: 1.2,
+                    ..Default::default()
+                })
+                .into(),
+        );
+
+        // Add my_font to the proportional and monospace families
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "my_font".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .insert(0, "my_font".to_owned());
+
+        ctx.set_fonts(fonts);
+    } else {
+        warn!("Warning: Failed to load font from {}", font_path);
+        // Fallback to default egui fonts if MS Gothic fails to load
+        ctx.set_fonts(fonts);
+    }
+}
+
+fn create_default_project() -> (Arc<RwLock<Project>>, Uuid) {
+    let default_project = Arc::new(RwLock::new(Project::new("Default Project")));
+    // Add a default composition when the app starts
+    let (default_comp, root_track) = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
+    let default_comp_id = default_comp.id;
+    {
+        let mut proj = default_project.write().unwrap();
+        proj.add_node(library::model::project::Node::Track(root_track));
+        proj.add_composition(default_comp);
+    }
+    (default_project, default_comp_id)
+}
+
+fn setup_plugin_manager(app_config: &config::AppConfig) -> Arc<library::plugin::PluginManager> {
+    let plugin_manager = library::create_plugin_manager();
+
+    // Load plugins from configured paths
+    for path in &app_config.plugins.paths {
+        if let Err(e) = plugin_manager.load_sksl_plugins_from_directory(path) {
+            log::error!("Failed to load SkSL plugins from {}: {}", path, e);
+        }
+    }
+
+    // Apply saved loader priority
+    if !app_config.plugins.loader_priority.is_empty() {
+        plugin_manager.set_loader_priority(app_config.plugins.loader_priority.clone());
+    }
+    plugin_manager
+}
+
+fn setup_gpu_sharing(render_server: &Arc<RenderServer>, cc: &eframe::CreationContext<'_>) {
+    // Zero-Copy GPU Sharing: Capture the main thread's OpenGL context handle
+    // and pass it to the background render server. This enables sharing of textures.
+    if let Some(handle) = library::rendering::skia_utils::get_current_context_handle() {
+        #[allow(deprecated)]
+        let hwnd = if let Ok(raw_handle) = cc.raw_window_handle() {
+            #[allow(unused_variables)]
+            let _ = raw_handle; // Silence usage warning on non-windows
+            #[cfg(target_os = "windows")]
+            match raw_handle {
+                raw_window_handle::RawWindowHandle::Win32(h) => Some(h.hwnd.get() as isize),
+                _ => None,
+            }
+            #[cfg(not(target_os = "windows"))]
+            None
+        } else {
+            None
+        };
+
+        log::info!(
+            "MyApp: Capturing main GL context handle: {}, HWND: {:?}",
+            handle,
+            hwnd
+        );
+        render_server.set_sharing_context(handle, hwnd);
+    } else {
+        log::warn!(
+            "MyApp: Failed to capture main GL context handle. Preview might fall back to CPU copy."
+        );
     }
 }

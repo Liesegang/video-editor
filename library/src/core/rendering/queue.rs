@@ -1,11 +1,9 @@
 use crate::Image;
 use crate::editor::{ProjectModel, RenderService};
-use crate::model::project::project::{Composition, Project};
-use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
-// use crate::rendering::effects::EffectRegistry; // Removed
 use crate::error::LibraryError;
-use crate::framing::entity_converters::EntityConverterRegistry;
+use crate::model::project::project::{Composition, Project};
 use crate::plugin::PropertyEvaluatorRegistry;
+use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
 use crate::rendering::renderer::Renderer;
 use crate::rendering::skia_renderer::SkiaRenderer;
 use crate::util::timing::{ScopedTimer, measure_info};
@@ -13,7 +11,7 @@ use log::{error, info};
 use std::cmp;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
-use tokio::task; // Corrected tokio::task import
+use tokio::task;
 
 #[derive(Debug)]
 struct SaveTask {
@@ -46,11 +44,9 @@ pub struct RenderQueueConfig {
     pub composition_index: usize,
     pub plugin_manager: Arc<PluginManager>,
     pub property_evaluators: Arc<PropertyEvaluatorRegistry>,
-    pub cache_manager: Arc<crate::cache::CacheManager>, // Added this line
-    // pub effect_registry: Arc<EffectRegistry>, // Removed
+    pub cache_manager: Arc<crate::cache::CacheManager>,
     pub export_format: ExportFormat,
     pub export_settings: Arc<ExportSettings>,
-    pub entity_converter_registry: Arc<EntityConverterRegistry>,
     pub worker_count: Option<usize>,
     pub save_queue_bound: usize,
 }
@@ -98,7 +94,6 @@ impl RenderQueue {
             config.export_format,
             Arc::clone(&config.export_settings),
             Arc::clone(&config.cache_manager),
-            Arc::clone(&config.entity_converter_registry),
             &save_tx,
         );
 
@@ -195,8 +190,7 @@ impl RenderQueue {
         background_color: crate::model::frame::color::Color,
         _export_format: ExportFormat,
         export_settings: Arc<ExportSettings>,
-        cache_manager: Arc<crate::cache::CacheManager>, // Added this line
-        _entity_converter_registry: Arc<EntityConverterRegistry>,
+        cache_manager: Arc<crate::cache::CacheManager>,
         save_tx: &mpsc::SyncSender<SaveTask>,
     ) -> (mpsc::Sender<FrameRenderJob>, Vec<JoinHandle<()>>) {
         let (render_tx, render_rx) = mpsc::channel::<FrameRenderJob>();
@@ -218,7 +212,6 @@ impl RenderQueue {
             // Moved ctx fields into individual captures
             let background_color_clone = background_color.clone();
             let export_settings_clone = Arc::clone(&export_settings);
-            let entity_converter_registry_clone = Arc::clone(&config.entity_converter_registry);
 
             let cache_manager_for_thread = Arc::clone(&cache_manager);
 
@@ -233,7 +226,6 @@ impl RenderQueue {
                     ),
                     plugin_manager,
                     cache_manager_for_thread,
-                    entity_converter_registry_clone,
                 );
 
                 let project_model = match ProjectModel::new(project, composition_index) {
@@ -322,6 +314,6 @@ impl Drop for RenderQueue {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(self.shutdown()); // Changed to use async shutdown
+            .block_on(self.shutdown());
     }
 }

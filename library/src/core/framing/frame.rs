@@ -8,14 +8,14 @@ use crate::model::project::project::{Composition, Project};
 use crate::model::project::{Node, TrackClip, TrackClipKind};
 use crate::util::timing::ScopedTimer;
 
-use super::entity_converters::{EntityConverterRegistry, FrameEvaluationContext};
-use crate::plugin::PropertyEvaluatorRegistry;
+use crate::plugin::FrameEvaluationContext;
+use crate::plugin::{PluginManager, PropertyEvaluatorRegistry};
 
 pub struct FrameEvaluator<'a> {
     project: &'a Project,
     composition: &'a Composition,
     property_evaluators: Arc<PropertyEvaluatorRegistry>,
-    entity_converter_registry: Arc<EntityConverterRegistry>,
+    plugin_manager: Arc<PluginManager>,
 }
 
 impl<'a> FrameEvaluator<'a> {
@@ -23,13 +23,13 @@ impl<'a> FrameEvaluator<'a> {
         project: &'a Project,
         composition: &'a Composition,
         property_evaluators: Arc<PropertyEvaluatorRegistry>,
-        entity_converter_registry: Arc<EntityConverterRegistry>,
+        plugin_manager: Arc<PluginManager>,
     ) -> Self {
         Self {
             project,
             composition,
             property_evaluators,
-            entity_converter_registry,
+            plugin_manager,
         }
     }
 
@@ -102,14 +102,20 @@ impl<'a> FrameEvaluator<'a> {
     }
 
     fn convert_entity(&self, track_clip: &TrackClip, frame_number: u64) -> Option<FrameObject> {
-        self.entity_converter_registry.convert_entity(
-            &FrameEvaluationContext {
-                composition: self.composition,
-                property_evaluators: &self.property_evaluators,
-            },
-            track_clip,
-            frame_number,
-        )
+        let kind_str = track_clip.kind.to_string();
+        if let Some(converter) = self.plugin_manager.get_entity_converter(&kind_str) {
+            converter.convert_entity(
+                &FrameEvaluationContext {
+                    composition: self.composition,
+                    property_evaluators: &self.property_evaluators,
+                },
+                track_clip,
+                frame_number,
+            )
+        } else {
+            log::warn!("No converter registered for entity type '{}'", kind_str);
+            None
+        }
     }
 }
 
@@ -120,13 +126,13 @@ pub fn evaluate_composition_frame(
     render_scale: f64,
     region: Option<Region>,
     property_evaluators: &Arc<PropertyEvaluatorRegistry>,
-    entity_converter_registry: &Arc<EntityConverterRegistry>,
+    plugin_manager: &Arc<PluginManager>,
 ) -> FrameInfo {
     FrameEvaluator::new(
         project,
         composition,
         Arc::clone(property_evaluators),
-        Arc::clone(entity_converter_registry),
+        Arc::clone(plugin_manager),
     )
     .evaluate(frame_number, render_scale, region)
 }
@@ -138,7 +144,7 @@ pub fn get_frame_from_project(
     render_scale: f64,
     region: Option<Region>,
     property_evaluators: &Arc<PropertyEvaluatorRegistry>,
-    entity_converter_registry: &Arc<EntityConverterRegistry>,
+    plugin_manager: &Arc<PluginManager>,
 ) -> FrameInfo {
     let _timer = if log::log_enabled!(log::Level::Debug) {
         Some(ScopedTimer::debug(format!(
@@ -157,7 +163,7 @@ pub fn get_frame_from_project(
         render_scale,
         region,
         property_evaluators,
-        entity_converter_registry,
+        plugin_manager,
     );
 
     debug!(
@@ -200,7 +206,19 @@ mod tests {
         manager.register_property_plugin(Arc::new(KeyframePropertyPlugin::new()));
         manager.register_property_plugin(Arc::new(ExpressionPropertyPlugin::new()));
         manager.register_entity_converter_plugin(Arc::new(
-            crate::framing::entity_converters::BuiltinEntityConverterPlugin::new(),
+            crate::plugin::entity_converter::VideoEntityConverterPlugin::new(),
+        ));
+        manager.register_entity_converter_plugin(Arc::new(
+            crate::plugin::entity_converter::ImageEntityConverterPlugin::new(),
+        ));
+        manager.register_entity_converter_plugin(Arc::new(
+            crate::plugin::entity_converter::TextEntityConverterPlugin::new(),
+        ));
+        manager.register_entity_converter_plugin(Arc::new(
+            crate::plugin::entity_converter::ShapeEntityConverterPlugin::new(),
+        ));
+        manager.register_entity_converter_plugin(Arc::new(
+            crate::plugin::entity_converter::SkSLEntityConverterPlugin::new(),
         ));
         manager
     }
@@ -327,14 +345,13 @@ mod tests {
 
         let plugin_manager = create_test_plugin_manager();
         let registry = plugin_manager.get_property_evaluators();
-        let entity_converter_registry = plugin_manager.get_entity_converter_registry();
 
         let composition = &project.compositions[0];
         let evaluator = FrameEvaluator::new(
             &project,
             composition,
             Arc::clone(&registry),
-            Arc::clone(&entity_converter_registry),
+            Arc::clone(&plugin_manager),
         );
         let frame = evaluator.evaluate(1, 1.0, None);
 
@@ -429,14 +446,14 @@ mod tests {
 
         let plugin_manager = create_test_plugin_manager();
         let registry = plugin_manager.get_property_evaluators();
-        let entity_converter_registry = plugin_manager.get_entity_converter_registry();
+        // let entity_converter_registry = plugin_manager.get_entity_converter_registry(); // This line is no longer needed
 
         let composition = &project.compositions[0];
         let evaluator = FrameEvaluator::new(
             &project,
             composition,
             Arc::clone(&registry),
-            Arc::clone(&entity_converter_registry),
+            Arc::clone(&plugin_manager),
         );
 
         let frame = evaluator.evaluate(15, 1.0, None);
@@ -483,14 +500,14 @@ mod tests {
 
         let plugin_manager = create_test_plugin_manager();
         let registry = plugin_manager.get_property_evaluators();
-        let entity_converter_registry = plugin_manager.get_entity_converter_registry();
+        // let entity_converter_registry = plugin_manager.get_entity_converter_registry(); // This line is no longer needed
 
         let composition = &project.compositions[0];
         let evaluator = FrameEvaluator::new(
             &project,
             composition,
             Arc::clone(&registry),
-            Arc::clone(&entity_converter_registry),
+            Arc::clone(&plugin_manager),
         );
 
         let frame = evaluator.evaluate(10, 1.0, None);

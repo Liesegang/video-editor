@@ -1,4 +1,4 @@
-use crate::model::project::property::PropertyValue; // Added Property
+use crate::model::project::property::PropertyValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -8,7 +8,7 @@ pub struct ImageEffect {
     #[serde(rename = "type")]
     pub effect_type: String,
     #[serde(default)]
-    pub properties: HashMap<String, PropertyValue>, // Changed PropertyValue to Property
+    pub properties: HashMap<String, PropertyValue>,
 }
 
 impl Hash for ImageEffect {

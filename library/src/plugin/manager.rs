@@ -9,11 +9,11 @@ use log::debug;
 
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
-use crate::framing::entity_converters::{EntityConverterPlugin, EntityConverterRegistry};
 use crate::model::frame::Image;
 use crate::model::project::asset::AssetKind;
 use crate::model::project::property::PropertyDefinition;
 use crate::model::project::property::PropertyValue;
+use crate::plugin::EntityConverterPlugin;
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
 
@@ -25,7 +25,7 @@ use crate::plugin::loaders::{
     AssetMetadata, LoadPlugin, LoadRepository, LoadRequest, LoadResponse,
 };
 use crate::plugin::repository::{PluginRegistry, PluginRepository};
-use crate::plugin::traits::{InspectorPlugin, Plugin, PropertyPlugin};
+use crate::plugin::traits::{Plugin, PropertyPlugin};
 
 /// Main plugin manager.
 pub struct PluginManager {
@@ -40,7 +40,7 @@ impl PluginManager {
                 load_plugins: LoadRepository::new(),
                 export_plugins: PluginRepository::new(),
                 entity_converter_plugins: PluginRepository::new(),
-                inspector_plugins: PluginRepository::new(),
+
                 property_evaluators: PropertyEvaluatorRegistry::new(),
                 dynamic_libraries: Vec::new(),
             }),
@@ -74,11 +74,6 @@ impl PluginManager {
         inner
             .property_evaluators
             .register(evaluator_id, evaluator_instance);
-    }
-
-    pub fn register_inspector_plugin(&self, plugin: Arc<dyn InspectorPlugin>) {
-        let mut inner = self.inner.write().unwrap();
-        inner.inspector_plugins.register(plugin);
     }
 
     /// Set the priority order for loader plugins.
@@ -348,21 +343,6 @@ impl PluginManager {
         }
     }
 
-    pub fn load_inspector_plugin_from_file<P: AsRef<Path>>(
-        &self,
-        path: P,
-    ) -> Result<(), LibraryError> {
-        unsafe {
-            self.load_plugin_generic::<dyn InspectorPlugin>(
-                path.as_ref(),
-                b"create_inspector_plugin",
-                |inner, plugin| {
-                    inner.inspector_plugins.register(plugin);
-                },
-            )
-        }
-    }
-
     pub fn load_plugins_from_directory<P: AsRef<Path>>(
         &self,
         dir_path: P,
@@ -405,11 +385,7 @@ impl PluginManager {
                     } else {
                         continue;
                     }
-                    if let Err(e) = self.load_inspector_plugin_from_file(&path) {
-                        log::debug!("Not an inspector plugin: {}", e);
-                    } else {
-                        continue;
-                    }
+
                     log::warn!("File is not a recognized plugin type: {}", path.display());
                 }
             }
@@ -469,25 +445,22 @@ impl PluginManager {
         Arc::new(inner.property_evaluators.clone())
     }
 
-    pub fn get_entity_converter_registry(&self) -> Arc<EntityConverterRegistry> {
+    pub fn get_entity_converter(&self, kind: &str) -> Option<Arc<dyn EntityConverterPlugin>> {
         let inner = self.inner.read().unwrap();
-        let mut registry = EntityConverterRegistry::new();
-        for plugin in inner.entity_converter_plugins.plugins.values() {
-            plugin.register_converters(&mut registry);
+        for plugin in inner.entity_converter_plugins.values() {
+            if plugin.supports_kind(kind) {
+                return Some(plugin.clone());
+            }
         }
-        Arc::new(registry)
+        None
     }
 
     pub fn get_inspector_definitions(
         &self,
-        kind: &crate::model::project::TrackClipKind,
+        _kind: &crate::model::project::TrackClipKind,
     ) -> Vec<PropertyDefinition> {
-        let inner = self.inner.read().unwrap();
-        let mut definitions = Vec::new();
-        for plugin in inner.inspector_plugins.plugins.values() {
-            definitions.extend(plugin.get_definitions(kind));
-        }
-        definitions
+        // Inspector plugins removed. Return empty or implement static logic if needed.
+        Vec::new()
     }
 
     pub fn get_available_effects(&self) -> Vec<(String, String, String)> {
@@ -557,17 +530,6 @@ impl PluginManager {
             });
         }
         for p in inner.entity_converter_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
-        }
-        for p in inner.inspector_plugins.plugins.values() {
             let v = p.version();
             plugins.push(PluginInfo {
                 id: p.id().to_string(),

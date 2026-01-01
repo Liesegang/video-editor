@@ -1047,14 +1047,17 @@ impl ProjectManager {
             _ => (100, 100),
         };
 
-        let definitions = if matches!(clip.kind, crate::model::project::TrackClipKind::Video) {
-            let mut definitions = clip.default_property_definitions(
-                canvas_width,
-                canvas_height,
-                clip_width,
-                clip_height,
-            );
+        let converter = self
+            .plugin_manager
+            .get_entity_converter(&clip.kind.to_string());
 
+        let mut definitions = if let Some(converter) = converter {
+            converter.get_property_definitions(canvas_width, canvas_height, clip_width, clip_height)
+        } else {
+            Vec::new()
+        };
+
+        if matches!(clip.kind, crate::model::project::TrackClipKind::Video) {
             let colorspaces = ColorSpaceManager::get_available_colorspaces();
             if !colorspaces.is_empty() {
                 definitions.push(PropertyDefinition {
@@ -1076,16 +1079,9 @@ impl ProjectManager {
                     category: "OCIO".to_string(),
                 });
             }
-            definitions
-        } else {
-            clip.default_property_definitions(canvas_width, canvas_height, clip_width, clip_height)
-        };
+        }
 
         // let mut definitions = clip.default_property_definitions(canvas_width, canvas_height, clip_width, clip_height); // Removed original line
-
-        let mut definitions = definitions; // Make mutable
-        let plugin_defs = self.plugin_manager.get_inspector_definitions(&clip.kind);
-        definitions.extend(plugin_defs);
 
         definitions
     }

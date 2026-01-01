@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use libloading::Library;
 
-use crate::framing::entity_converters::EntityConverterPlugin;
+use crate::plugin::EntityConverterPlugin;
 use crate::plugin::effects::EffectPlugin;
 use crate::plugin::evaluator::PropertyEvaluatorRegistry;
 use crate::plugin::exporters::ExportPlugin;
 use crate::plugin::loaders::LoadRepository;
-use crate::plugin::traits::{InspectorPlugin, Plugin};
+use crate::plugin::traits::Plugin;
 
 /// Generic container for plugins of a specific type.
 pub struct PluginRepository<T: ?Sized> {
@@ -43,7 +43,6 @@ pub(crate) struct PluginRegistry {
     pub load_plugins: LoadRepository,
     pub export_plugins: PluginRepository<dyn ExportPlugin>,
     pub entity_converter_plugins: PluginRepository<dyn EntityConverterPlugin>,
-    pub inspector_plugins: PluginRepository<dyn InspectorPlugin>,
     pub property_evaluators: PropertyEvaluatorRegistry,
     pub dynamic_libraries: Vec<Library>,
 }

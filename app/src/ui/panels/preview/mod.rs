@@ -220,7 +220,6 @@ pub fn preview_panel(
             if let Some(comp_idx) = proj_read.compositions.iter().position(|c| c.id == comp.id) {
                 let plugin_manager = project_service.get_plugin_manager();
                 let property_evaluators = plugin_manager.get_property_evaluators();
-                let entity_converter_registry = plugin_manager.get_entity_converter_registry();
 
                 let render_scale = ((editor_context.view.zoom
                     * ui.ctx().pixels_per_point()
@@ -262,7 +261,7 @@ pub fn preview_panel(
                         render_scale,
                         Some(valid_region),
                         &property_evaluators,
-                        &entity_converter_registry,
+                        &plugin_manager,
                     );
                     render_server.send_request(frame_info);
                 }
@@ -470,29 +469,32 @@ pub fn preview_panel(
                     } else {
                         // Calculate
                         let plugin_manager = project_service.get_plugin_manager();
-                        let converter_registry = plugin_manager.get_entity_converter_registry();
                         let property_evaluators = plugin_manager.get_property_evaluators();
 
                         let current_frame =
                             (editor_context.timeline.current_time as f64 * comp.fps).round() as u64;
 
-                        let ctx = library::framing::entity_converters::FrameEvaluationContext {
+                        let ctx = library::plugin::entity_converter::FrameEvaluationContext {
                             composition: comp,
                             property_evaluators: &property_evaluators,
                         };
 
-                        if let Some((x, y, w, h)) =
-                            converter_registry.get_entity_bounds(&ctx, entity, current_frame)
+                        if let Some(converter) =
+                            plugin_manager.get_entity_converter(&entity.kind.to_string())
                         {
-                            width = Some(w);
-                            height = Some(h);
-                            content_point = Some([x, y]);
-                            // Update Cache
-                            editor_context
-                                .interaction
-                                .bounds_cache
-                                .bounds
-                                .insert(entity.id, (hash, (x, y, w, h)));
+                            if let Some((x, y, w, h)) =
+                                converter.get_bounds(&ctx, entity, current_frame)
+                            {
+                                width = Some(w);
+                                height = Some(h);
+                                content_point = Some([x, y]);
+                                // Update Cache
+                                editor_context
+                                    .interaction
+                                    .bounds_cache
+                                    .bounds
+                                    .insert(entity.id, (hash, (x, y, w, h)));
+                            }
                         }
                     }
                 }

@@ -1,4 +1,3 @@
-// ... (keep imports)
 use crate::command::CommandId;
 use directories::ProjectDirs;
 use eframe::egui::{Key, Modifiers};
@@ -8,8 +7,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use toml;
-
-// --- Serde remote definitions for egui types ---
 
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "Modifiers")]
