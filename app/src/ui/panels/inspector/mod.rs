@@ -225,8 +225,6 @@ pub fn inspector_panel(
                             let mut ctx = ActionContext::new(
                                 project_service,
                                 history_manager,
-                                comp_id,
-                                track_id,
                                 selected_entity_id,
                                 current_time,
                             );
@@ -266,8 +264,6 @@ pub fn inspector_panel(
                                 let mut ctx = ActionContext::new(
                                     project_service,
                                     history_manager,
-                                    comp_id,
-                                    track_id,
                                     selected_entity_id,
                                     current_time,
                                 );
@@ -292,8 +288,6 @@ pub fn inspector_panel(
                     project_service,
                     history_manager,
                     editor_context,
-                    comp_id,
-                    track_id,
                     selected_entity_id,
                     current_time,
                     fps,
@@ -307,17 +301,15 @@ pub fn inspector_panel(
                 ui.add_space(5.0);
                 let ensemble_actions = render_ensemble_section(
                     ui,
-                    project_service,    // Add project_service
-                    history_manager,    // Add history_manager
-                    editor_context,     // Add editor_context
-                    comp_id,            // Add comp_id
-                    track_id,           // Add track_id
-                    selected_entity_id, // Add selected_entity_id
-                    current_time,       // Add current_time
-                    fps,                // Add fps
-                    &effectors,         // Pass effectors
-                    &decorators,        // Pass decorators
-                    &mut needs_refresh, // Pass needs_refresh
+                    project_service,
+                    history_manager,
+                    editor_context,
+                    selected_entity_id,
+                    current_time,
+                    fps,
+                    &effectors,
+                    &decorators,
+                    &mut needs_refresh,
                     &properties,
                     &PropertyRenderContext {
                         available_fonts: &editor_context.available_fonts,
@@ -328,8 +320,6 @@ pub fn inspector_panel(
                 let mut ctx = ActionContext::new(
                     project_service,
                     history_manager,
-                    comp_id,
-                    track_id,
                     selected_entity_id,
                     current_time,
                 );
@@ -349,8 +339,6 @@ pub fn inspector_panel(
                 project_service,
                 history_manager,
                 editor_context,
-                comp_id,
-                track_id,
                 selected_entity_id,
                 current_time,
                 fps,
@@ -375,8 +363,6 @@ pub fn inspector_panel(
                     if response.changed() {
                         project_service
                             .update_clip_time(
-                                comp_id,
-                                track_id,
                                 selected_entity_id,
                                 current_in_frame_f32 as u64,
                                 out_frame,
@@ -401,8 +387,6 @@ pub fn inspector_panel(
                     if response.changed() {
                         project_service
                             .update_clip_time(
-                                comp_id,
-                                track_id,
                                 selected_entity_id,
                                 in_frame,
                                 current_out_frame_f32 as u64,
@@ -427,8 +411,6 @@ pub fn inspector_panel(
                     if response.changed() {
                         project_service
                             .update_clip_source_frames(
-                                comp_id,
-                                track_id,
                                 selected_entity_id,
                                 current_source_begin_frame_f32 as i64,
                             )

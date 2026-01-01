@@ -179,29 +179,6 @@ impl TrackClip {
         );
     }
 
-    /// Update or upsert a clip property value/keyframe.
-    /// If property exists and is keyframed, upserts keyframe at time.
-    /// If property is constant or doesn't exist, sets as constant.
-    pub fn update_property_or_keyframe(
-        &mut self,
-        key: &str,
-        time: f64,
-        value: property::PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) {
-        if let Some(prop) = self.properties.get_mut(key) {
-            if prop.evaluator == "keyframe" {
-                prop.upsert_keyframe(time, value, easing);
-            } else {
-                self.properties
-                    .set(key.to_string(), property::Property::constant(value));
-            }
-        } else {
-            self.properties
-                .set(key.to_string(), property::Property::constant(value));
-        }
-    }
-
     /// Update effect property at specified index.
     pub fn update_effect_property(
         &mut self,
@@ -215,7 +192,9 @@ impl TrackClip {
             .effects
             .get_mut(effect_index)
             .ok_or("Effect not found")?;
-        effect.update_property_or_keyframe(key, time, value, easing);
+        effect
+            .properties
+            .update_property_or_keyframe(key, time, value, easing);
         Ok(())
     }
 
@@ -229,8 +208,25 @@ impl TrackClip {
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), &'static str> {
         let style = self.styles.get_mut(style_index).ok_or("Style not found")?;
-        style.update_property_or_keyframe(key, time, value, easing);
+        style
+            .properties
+            .update_property_or_keyframe(key, time, value, easing);
         Ok(())
+    }
+
+    /// Unified accessor for property maps
+    pub fn get_property_map_mut(
+        &mut self,
+        target: crate::model::project::property::PropertyTarget,
+    ) -> Option<&mut crate::model::project::property::PropertyMap> {
+        use crate::model::project::property::PropertyTarget;
+        match target {
+            PropertyTarget::Clip => Some(&mut self.properties),
+            PropertyTarget::Effect(i) => self.effects.get_mut(i).map(|e| &mut e.properties),
+            PropertyTarget::Style(i) => self.styles.get_mut(i).map(|s| &mut s.properties),
+            PropertyTarget::Effector(i) => self.effectors.get_mut(i).map(|e| &mut e.properties),
+            PropertyTarget::Decorator(i) => self.decorators.get_mut(i).map(|e| &mut e.properties),
+        }
     }
 }
 

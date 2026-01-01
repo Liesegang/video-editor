@@ -144,14 +144,14 @@ fn handle_edit_command(action: CommandId, context: ActionContext) {
             }
         }
         CommandId::Delete => {
-            if let Some(comp_id) = context.editor_context.selection.composition_id {
+            if let Some(_comp_id) = context.editor_context.selection.composition_id {
                 if let Some(track_id) = context.editor_context.selection.last_selected_track_id {
                     if let Some(entity_id) =
                         context.editor_context.selection.last_selected_entity_id
                     {
                         if let Err(e) = context
                             .project_service
-                            .remove_clip_from_track(comp_id, track_id, entity_id)
+                            .remove_clip_from_track(track_id, entity_id)
                         {
                             error!("Failed to remove entity: {:?}", e);
                         } else {

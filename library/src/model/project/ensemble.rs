@@ -68,31 +68,11 @@ impl EffectorInstance {
         }
         Self::new(type_name, props)
     }
-
-    pub fn update_property_or_keyframe(
-        &mut self,
-        key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) {
-        if let Some(prop) = self.properties.get_mut(key) {
-            if prop.evaluator == "keyframe" {
-                prop.upsert_keyframe(time, value, easing);
-            } else {
-                self.properties
-                    .set(key.to_string(), Property::constant(value));
-            }
-        } else {
-            self.properties
-                .set(key.to_string(), Property::constant(value));
-        }
-    }
 }
 
 impl PartialEq for EffectorInstance {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.id == other.id && self.properties == other.properties
     }
 }
 impl Eq for EffectorInstance {}
@@ -100,6 +80,7 @@ impl Eq for EffectorInstance {}
 impl std::hash::Hash for EffectorInstance {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
+        self.properties.hash(state);
     }
 }
 
@@ -146,31 +127,11 @@ impl DecoratorInstance {
         }
         Self::new(type_name, props)
     }
-
-    pub fn update_property_or_keyframe(
-        &mut self,
-        key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) {
-        if let Some(prop) = self.properties.get_mut(key) {
-            if prop.evaluator == "keyframe" {
-                prop.upsert_keyframe(time, value, easing);
-            } else {
-                self.properties
-                    .set(key.to_string(), Property::constant(value));
-            }
-        } else {
-            self.properties
-                .set(key.to_string(), Property::constant(value));
-        }
-    }
 }
 
 impl PartialEq for DecoratorInstance {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.id == other.id && self.properties == other.properties
     }
 }
 impl Eq for DecoratorInstance {}
@@ -178,5 +139,6 @@ impl Eq for DecoratorInstance {}
 impl std::hash::Hash for DecoratorInstance {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
+        self.properties.hash(state);
     }
 }

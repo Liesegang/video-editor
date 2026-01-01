@@ -2,38 +2,6 @@
 
 このプロジェクトは主に[MITライセンス](./LICENSE)の下で公開されていますが、以下のサードパーティコンポーネントを含んでいます。それぞれのコンポーネントは、記載されたライセンスに従います。
 
-## Qt
-
-- **ライセンス**: LGPL v3
-- **ウェブサイト**: https://www.qt.io/
-- **ライセンステキスト**: https://doc.qt.io/qt-6/lgpl.html
-
-```
-The Qt Toolkit is Copyright (C) 2023 The Qt Company Ltd. and other contributors.
-Contact: https://www.qt.io/licensing/
-
-This library is free software; you can redistribute it and/or modify it under the terms
-of the GNU Lesser General Public License as published by the Free Software Foundation;
-either version 3 of the License, or (at your option) any later version.
-
-This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
-without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-See the GNU Lesser General Public License for more details.
-```
-
-このアプリケーションはQt Open Source版を使用しており、Qtライブラリは動的リンク（共有ライブラリ）形式で使用されています。LGPL v3ライセンスに従い、ユーザーは自分でQtライブラリをビルドして置き換えることが可能です。
-
-### Qtのビルドと置き換え方法
-
-Qtライブラリを自分でビルドして置き換える場合は、以下の手順に従ってください：
-
-1. [Qt公式サイト](https://www.qt.io/download-open-source) からQt Open Source版をダウンロード
-2. ビルドツールとともにインストール
-3. 必要に応じてQtライブラリをカスタマイズ/ビルド
-4. 生成された共有ライブラリファイル（.dll/.so/.dylib）を、このアプリケーションが使用している同名ファイルと置き換え
-
-詳細は[Qt公式ドキュメント](https://doc.qt.io/qt-6/)を参照してください。
-
 ## Skia
 
 - **ライセンス**: BSD 3-Clause "New" or "Revised" License

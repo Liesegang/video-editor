@@ -40,13 +40,12 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
         clip_width: u64,
         clip_height: u64,
     ) -> Vec<crate::model::project::property::PropertyDefinition> {
-        use crate::model::frame::color::Color;
         use crate::model::project::property::{
             PropertyDefinition, PropertyUiType, PropertyValue, Vec2,
         };
         use ordered_float::OrderedFloat;
 
-        let mut definitions = vec![
+        vec![
             // Transform Properties
             PropertyDefinition {
                 name: "position".to_string(),
@@ -135,315 +134,7 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
                 default_value: PropertyValue::Number(OrderedFloat(100.0)),
                 category: "Text".to_string(),
             },
-        ];
-
-        // Ensemble properties
-        let ensemble_defs = vec![
-            // Core toggle
-            PropertyDefinition {
-                name: "ensemble_enabled".to_string(),
-                label: "Enable Ensemble".to_string(),
-                ui_type: PropertyUiType::Bool,
-                default_value: PropertyValue::Boolean(false),
-                category: "Ensemble".to_string(),
-            },
-            // Transform Effector
-            PropertyDefinition {
-                name: "ensemble_transform_enabled".to_string(),
-                label: "Transform Enabled".to_string(),
-                ui_type: PropertyUiType::Bool,
-                default_value: PropertyValue::Boolean(false),
-                category: "Ensemble: Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_transform_translate".to_string(),
-                label: "Translate".to_string(),
-                ui_type: PropertyUiType::Vec2 {
-                    suffix: "px".to_string(),
-                },
-                default_value: PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(0.0),
-                    y: OrderedFloat(0.0),
-                }),
-                category: "Ensemble: Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_transform_rotate".to_string(),
-                label: "Rotate".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: -360.0,
-                    max: 360.0,
-                    step: 1.0,
-                    suffix: "deg".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Ensemble: Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_transform_scale".to_string(),
-                label: "Scale".to_string(),
-                ui_type: PropertyUiType::Vec2 {
-                    suffix: "%".to_string(),
-                },
-                default_value: PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(100.0),
-                    y: OrderedFloat(100.0),
-                }),
-                category: "Ensemble: Transform".to_string(),
-            },
-            // StepDelay Effector
-            PropertyDefinition {
-                name: "ensemble_step_delay_enabled".to_string(),
-                label: "Step Delay Enabled".to_string(),
-                ui_type: PropertyUiType::Bool,
-                default_value: PropertyValue::Boolean(false),
-                category: "Ensemble: Step Delay".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_step_delay_per_element".to_string(),
-                label: "Delay Per Element".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 2.0,
-                    step: 0.01,
-                    suffix: "s".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(0.1)),
-                category: "Ensemble: Step Delay".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_step_delay_duration".to_string(),
-                label: "Duration".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 5.0,
-                    step: 0.1,
-                    suffix: "s".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(1.0)),
-                category: "Ensemble: Step Delay".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_step_delay_from_opacity".to_string(),
-                label: "From Opacity".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 100.0,
-                    step: 1.0,
-                    suffix: "%".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Ensemble: Step Delay".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_step_delay_to_opacity".to_string(),
-                label: "To Opacity".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 100.0,
-                    step: 1.0,
-                    suffix: "%".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Ensemble: Step Delay".to_string(),
-            },
-            // Opacity Effector
-            PropertyDefinition {
-                name: "ensemble_opacity_enabled".to_string(),
-                label: "Opacity Enabled".to_string(),
-                ui_type: PropertyUiType::Bool,
-                default_value: PropertyValue::Boolean(false),
-                category: "Ensemble: Opacity".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_opacity_target".to_string(),
-                label: "Target Opacity".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 100.0,
-                    step: 1.0,
-                    suffix: "%".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(50.0)),
-                category: "Ensemble: Opacity".to_string(),
-            },
-            // Randomize Effector
-            PropertyDefinition {
-                name: "ensemble_randomize_enabled".to_string(),
-                label: "Randomize Enabled".to_string(),
-                ui_type: PropertyUiType::Bool,
-                default_value: PropertyValue::Boolean(false),
-                category: "Ensemble: Randomize".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_randomize_translate_range".to_string(),
-                label: "Translate Range".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 100.0,
-                    step: 1.0,
-                    suffix: "px".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(10.0)),
-                category: "Ensemble: Randomize".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_randomize_rotate_range".to_string(),
-                label: "Rotate Range".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 180.0,
-                    step: 1.0,
-                    suffix: "deg".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(15.0)),
-                category: "Ensemble: Randomize".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_randomize_seed".to_string(),
-                label: "Random Seed".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 10000.0,
-                    step: 1.0,
-                    suffix: "".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Ensemble: Randomize".to_string(),
-            },
-            // Backplate Decorator
-            PropertyDefinition {
-                name: "ensemble_backplate_enabled".to_string(),
-                label: "Backplate Enabled".to_string(),
-                ui_type: PropertyUiType::Bool,
-                default_value: PropertyValue::Boolean(false),
-                category: "Ensemble: Backplate".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_backplate_target".to_string(),
-                label: "Target".to_string(),
-                ui_type: PropertyUiType::Dropdown {
-                    options: vec!["Char".to_string(), "Line".to_string(), "Block".to_string()],
-                },
-                default_value: PropertyValue::String("Block".to_string()),
-                category: "Ensemble: Backplate".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_backplate_shape".to_string(),
-                label: "Shape".to_string(),
-                ui_type: PropertyUiType::Dropdown {
-                    options: vec![
-                        "Rect".to_string(),
-                        "RoundRect".to_string(),
-                        "Circle".to_string(),
-                    ],
-                },
-                default_value: PropertyValue::String("Rect".to_string()),
-                category: "Ensemble: Backplate".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_backplate_color".to_string(),
-                label: "Backplate Color".to_string(),
-                ui_type: PropertyUiType::Color,
-                default_value: PropertyValue::Color(Color {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 128,
-                }),
-                category: "Ensemble: Backplate".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_backplate_padding".to_string(),
-                label: "Backplate Padding".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 50.0,
-                    step: 1.0,
-                    suffix: "px".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(5.0)),
-                category: "Ensemble: Backplate".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_backplate_corner_radius".to_string(),
-                label: "Corner Radius".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 50.0,
-                    step: 1.0,
-                    suffix: "px".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(4.0)),
-                category: "Ensemble: Backplate".to_string(),
-            },
-            // Patch System
-            PropertyDefinition {
-                name: "ensemble_patch_enabled".to_string(),
-                label: "Enable Patch".to_string(),
-                ui_type: PropertyUiType::Bool,
-                default_value: PropertyValue::Boolean(false),
-                category: "Ensemble: Patch".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_patch_indices".to_string(),
-                label: "Character Indices".to_string(),
-                ui_type: PropertyUiType::Text,
-                default_value: PropertyValue::String("0".to_string()),
-                category: "Ensemble: Patch".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_patch_translate".to_string(),
-                label: "Patch Translate".to_string(),
-                ui_type: PropertyUiType::Vec2 {
-                    suffix: "px".to_string(),
-                },
-                default_value: PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(0.0),
-                    y: OrderedFloat(0.0),
-                }),
-                category: "Ensemble: Patch".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_patch_rotate".to_string(),
-                label: "Patch Rotate".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: -360.0,
-                    max: 360.0,
-                    step: 1.0,
-                    suffix: "deg".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Ensemble: Patch".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_patch_scale".to_string(),
-                label: "Patch Scale".to_string(),
-                ui_type: PropertyUiType::Vec2 {
-                    suffix: "%".to_string(),
-                },
-                default_value: PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(100.0),
-                    y: OrderedFloat(100.0),
-                }),
-                category: "Ensemble: Patch".to_string(),
-            },
-            PropertyDefinition {
-                name: "ensemble_patch_opacity".to_string(),
-                label: "Patch Opacity".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 100.0,
-                    step: 1.0,
-                    suffix: "%".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Ensemble: Patch".to_string(),
-            },
-        ];
-
-        definitions.extend(ensemble_defs);
-        definitions
+        ]
     }
 
     fn convert_entity(
@@ -471,259 +162,193 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
         let transform = evaluator.build_transform(props, eval_time);
         let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
 
-        // Parse Ensemble data if enabled
-        let ensemble = if evaluator
-            .optional_bool(props, "ensemble_enabled", eval_time)
-            .unwrap_or(false)
-        {
+        // Build Ensemble data from text_clip.effectors/decorators
+        let ensemble = if !track_clip.effectors.is_empty() || !track_clip.decorators.is_empty() {
             use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
-            use crate::core::ensemble::effectors::OpacityMode;
             use crate::core::ensemble::target::EffectorTarget;
             use crate::core::ensemble::types::{DecoratorConfig, EffectorConfig};
 
             let mut effector_configs = Vec::new();
             let mut decorator_configs = Vec::new();
 
-            // Transform Effector
-            if evaluator
-                .optional_bool(props, "ensemble_transform_enabled", eval_time)
-                .unwrap_or(false)
-            {
-                let (translate_x, translate_y) = evaluator.evaluate_vec2_components(
-                    props,
-                    "ensemble_transform_translate",
-                    "ensemble_transform_translate_x",
-                    "ensemble_transform_translate_y",
-                    eval_time,
-                    0.0,
-                    0.0,
-                );
+            // Convert EffectorInstances to EffectorConfigs
+            for instance in &track_clip.effectors {
+                match instance.effector_type.as_str() {
+                    "transform" => {
+                        let tx =
+                            evaluator.evaluate_number(&instance.properties, "tx", eval_time, 0.0)
+                                as f32;
+                        let ty =
+                            evaluator.evaluate_number(&instance.properties, "ty", eval_time, 0.0)
+                                as f32;
+                        let r = evaluator.evaluate_number(
+                            &instance.properties,
+                            "rotation",
+                            eval_time,
+                            0.0,
+                        ) as f32;
+                        let sx = evaluator.evaluate_number(
+                            &instance.properties,
+                            "scale_x",
+                            eval_time,
+                            1.0,
+                        ) as f32;
+                        let sy = evaluator.evaluate_number(
+                            &instance.properties,
+                            "scale_y",
+                            eval_time,
+                            1.0,
+                        ) as f32;
 
-                let rotate =
-                    evaluator.evaluate_number(props, "ensemble_transform_rotate", eval_time, 0.0)
-                        as f32;
-
-                let (scale_x, scale_y) = evaluator.evaluate_vec2_components(
-                    props,
-                    "ensemble_transform_scale",
-                    "ensemble_transform_scale_x",
-                    "ensemble_transform_scale_y",
-                    eval_time,
-                    100.0,
-                    100.0,
-                );
-
-                effector_configs.push(EffectorConfig::Transform {
-                    translate: (translate_x as f32, translate_y as f32),
-                    rotate,
-                    scale: (scale_x as f32 / 100.0, scale_y as f32 / 100.0),
-                    target: EffectorTarget::default(),
-                });
-            }
-
-            // StepDelay Effector
-            if evaluator
-                .optional_bool(props, "ensemble_step_delay_enabled", eval_time)
-                .unwrap_or(false)
-            {
-                let delay_per_element = evaluator.evaluate_number(
-                    props,
-                    "ensemble_step_delay_per_element",
-                    eval_time,
-                    0.1,
-                ) as f32;
-                let duration = evaluator.evaluate_number(
-                    props,
-                    "ensemble_step_delay_duration",
-                    eval_time,
-                    1.0,
-                ) as f32;
-                let from_opacity = evaluator.evaluate_number(
-                    props,
-                    "ensemble_step_delay_from_opacity",
-                    eval_time,
-                    0.0,
-                ) as f32;
-                let to_opacity = evaluator.evaluate_number(
-                    props,
-                    "ensemble_step_delay_to_opacity",
-                    eval_time,
-                    100.0,
-                ) as f32;
-
-                effector_configs.push(EffectorConfig::StepDelay {
-                    delay_per_element,
-                    duration,
-                    from_opacity,
-                    to_opacity,
-                    target: EffectorTarget::default(),
-                });
-            }
-
-            // Opacity Effector
-            if evaluator
-                .optional_bool(props, "ensemble_opacity_enabled", eval_time)
-                .unwrap_or(false)
-            {
-                let target_opacity =
-                    evaluator.evaluate_number(props, "ensemble_opacity_target", eval_time, 50.0)
-                        as f32;
-
-                effector_configs.push(EffectorConfig::Opacity {
-                    target_opacity,
-                    mode: OpacityMode::Multiply,
-                    target: EffectorTarget::default(),
-                });
-            }
-
-            // Randomize Effector
-            if evaluator
-                .optional_bool(props, "ensemble_randomize_enabled", eval_time)
-                .unwrap_or(false)
-            {
-                let translate_range_val = evaluator.evaluate_number(
-                    props,
-                    "ensemble_randomize_translate_range",
-                    eval_time,
-                    10.0,
-                ) as f32;
-                let translate_range = (translate_range_val, translate_range_val);
-                let rotate_range = evaluator.evaluate_number(
-                    props,
-                    "ensemble_randomize_rotate_range",
-                    eval_time,
-                    15.0,
-                ) as f32;
-                let scale_range = (1.0, 1.0); // Not exposed in UI yet
-                let seed =
-                    evaluator.evaluate_number(props, "ensemble_randomize_seed", eval_time, 0.0)
-                        as u64;
-
-                effector_configs.push(EffectorConfig::Randomize {
-                    translate_range,
-                    rotate_range,
-                    scale_range,
-                    seed,
-                    target: EffectorTarget::default(),
-                });
-            }
-
-            // Backplate Decorator
-            if evaluator
-                .optional_bool(props, "ensemble_backplate_enabled", eval_time)
-                .unwrap_or(false)
-            {
-                // Parse target
-                let target_str = evaluator
-                    .optional_string(props, "ensemble_backplate_target", eval_time)
-                    .unwrap_or_else(|| "Block".to_string());
-                let target = match target_str.as_str() {
-                    "Char" => BackplateTarget::Char,
-                    "Line" => BackplateTarget::Line,
-                    "Block" => BackplateTarget::Block,
-                    _ => BackplateTarget::Block,
-                };
-
-                // Parse shape
-                let shape_str = evaluator
-                    .optional_string(props, "ensemble_backplate_shape", eval_time)
-                    .unwrap_or_else(|| "Rect".to_string());
-                let shape = match shape_str.as_str() {
-                    "Rect" => BackplateShape::Rect,
-                    "RoundRect" => BackplateShape::RoundedRect,
-                    "Circle" => BackplateShape::Circle,
-                    _ => BackplateShape::Rect,
-                };
-
-                /*
-                // Color evaluation was using `evaluate_color` which doesn't exist in FrameEvaluationContext in `entity_converter.rs`.
-                // I need to either implement `evaluate_color` in `entity_converter.rs` or adapt this.
-                // Assuming I should comment it out or implement it.
-                // Let's implement it in `entity_converter/mod.rs` later if needed, but for now I'll stub it.
-                // Or I can use properties directly if `evaluate_color` is internal helper.
-                // Looking at `text.rs` original, `evaluate_color` call was at line 200.
-                 */
-                let color_val = (0.0, 0.0, 0.0, 0.5); // Dummy fallback until evaluate_color is available.
-
-                let color = crate::model::frame::color::Color {
-                    r: (color_val.0 * 255.0) as u8,
-                    g: (color_val.1 * 255.0) as u8,
-                    b: (color_val.2 * 255.0) as u8,
-                    a: (color_val.3 * 255.0) as u8,
-                };
-
-                let padding_val =
-                    evaluator.evaluate_number(props, "ensemble_backplate_padding", eval_time, 5.0)
-                        as f32;
-                let padding = (padding_val, padding_val, padding_val, padding_val);
-                let corner_radius =
-                    evaluator.evaluate_number(props, "ensemble_backplate_radius", eval_time, 0.0)
-                        as f32;
-
-                let config = DecoratorConfig::Backplate {
-                    target,
-                    shape,
-                    color,
-                    padding,
-                    corner_radius,
-                };
-                decorator_configs.push(config);
-            }
-
-            // Patch System
-            let mut patches = std::collections::HashMap::new();
-            if evaluator
-                .optional_bool(props, "ensemble_patch_enabled", eval_time)
-                .unwrap_or(false)
-            {
-                let indices_str = evaluator
-                    .optional_string(props, "ensemble_patch_indices", eval_time)
-                    .unwrap_or_else(|| "0".to_string());
-                let indices: Vec<usize> = indices_str
-                    .split(',')
-                    .filter_map(|s| s.trim().parse().ok())
-                    .collect();
-
-                if !indices.is_empty() {
-                    let (translate_x, translate_y) = evaluator.evaluate_vec2_components(
-                        props,
-                        "ensemble_patch_translate",
-                        "ensemble_patch_translate_x",
-                        "ensemble_patch_translate_y",
-                        eval_time,
-                        0.0,
-                        0.0,
-                    );
-                    let rotate =
-                        evaluator.evaluate_number(props, "ensemble_patch_rotate", eval_time, 0.0)
-                            as f32;
-                    let (scale_x, scale_y) = evaluator.evaluate_vec2_components(
-                        props,
-                        "ensemble_patch_scale",
-                        "ensemble_patch_scale_x",
-                        "ensemble_patch_scale_y",
-                        eval_time,
-                        100.0,
-                        100.0,
-                    );
-                    let opacity = evaluator.evaluate_number(
-                        props,
-                        "ensemble_patch_opacity",
-                        eval_time,
-                        100.0,
-                    ) as f32;
-
-                    let patch = crate::core::ensemble::types::TransformData {
-                        translate: (translate_x as f32, translate_y as f32),
-                        rotate,
-                        scale: (scale_x as f32 / 100.0, scale_y as f32 / 100.0),
-                        opacity: opacity / 100.0,
-                        color_override: None,
-                    };
-
-                    for index in indices {
-                        patches.insert(index, patch.clone());
+                        effector_configs.push(EffectorConfig::Transform {
+                            translate: (tx, ty),
+                            rotate: r,
+                            scale: (sx, sy),
+                            target: EffectorTarget::default(),
+                        });
                     }
+                    "step_delay" => {
+                        let delay = evaluator.evaluate_number(
+                            &instance.properties,
+                            "delay",
+                            eval_time,
+                            0.1,
+                        ) as f32;
+                        let duration = evaluator.evaluate_number(
+                            &instance.properties,
+                            "duration",
+                            eval_time,
+                            1.0,
+                        ) as f32;
+                        let from_opacity = evaluator.evaluate_number(
+                            &instance.properties,
+                            "from_opacity",
+                            eval_time,
+                            0.0,
+                        ) as f32;
+                        let to_opacity = evaluator.evaluate_number(
+                            &instance.properties,
+                            "to_opacity",
+                            eval_time,
+                            100.0,
+                        ) as f32;
+
+                        effector_configs.push(EffectorConfig::StepDelay {
+                            delay_per_element: delay,
+                            duration,
+                            from_opacity,
+                            to_opacity,
+                            target: EffectorTarget::default(),
+                        });
+                    }
+                    "randomize" => {
+                        let seed =
+                            evaluator.evaluate_number(&instance.properties, "seed", eval_time, 0.0)
+                                as u64;
+                        let amount = evaluator.evaluate_number(
+                            &instance.properties,
+                            "amount",
+                            eval_time,
+                            1.0,
+                        ) as f32;
+                        // Read explicit ranges if available, otherwise fall back to amount-based defaults
+                        let tr_val = evaluator.evaluate_number(
+                            &instance.properties,
+                            "translate_range",
+                            eval_time,
+                            100.0 * amount as f64,
+                        ) as f32;
+                        let translate_range = (tr_val, tr_val);
+
+                        let rotate_range = evaluator.evaluate_number(
+                            &instance.properties,
+                            "rotate_range",
+                            eval_time,
+                            45.0 * amount as f64,
+                        ) as f32;
+
+                        // Start with default scale range (1.0, 1.0) as we don't have scale_range property yet in UI snippet?
+                        let scale_range = (1.0, 1.0);
+
+                        effector_configs.push(EffectorConfig::Randomize {
+                            translate_range,
+                            rotate_range,
+                            scale_range,
+                            seed,
+                            target: EffectorTarget::default(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+
+            // Convert DecoratorInstances to DecoratorConfigs
+            for instance in &track_clip.decorators {
+                match instance.decorator_type.as_str() {
+                    "backplate" => {
+                        // Note: Color evaluation logic in original text.rs was tricky, assuming default behavior for now if helpers missing
+                        // But we can try to evaluate color components if they exist, or use a helper if available.
+                        // FrameEvaluationContext doesn't seem to have evaluate_color exposed publicly in definitions seen so far?
+                        // Actually it might map to `evaluate_color` if implemented.
+                        // Let's assume `evaluate_color` is NOT available based on previous errors/context, and allow fallback.
+                        // Wait, `PropertyUiType::Color` stores `PropertyValue::Color`.
+                        // `evaluate_property_value` returns `PropertyValue`.
+                        // We need a way to get the Color struct.
+
+                        let color = if let Some(prop) = instance.properties.get("color") {
+                            if let Some(crate::model::project::property::PropertyValue::Color(c)) =
+                                prop.value()
+                            {
+                                c.clone()
+                            } else {
+                                crate::model::frame::color::Color::black()
+                            }
+                        } else {
+                            crate::model::frame::color::Color::black()
+                        };
+
+                        let padding_val = evaluator.evaluate_number(
+                            &instance.properties,
+                            "padding",
+                            eval_time,
+                            0.0,
+                        ) as f32;
+                        let radius = evaluator.evaluate_number(
+                            &instance.properties,
+                            "radius",
+                            eval_time,
+                            0.0,
+                        ) as f32;
+
+                        let target_str = evaluator
+                            .require_string(&instance.properties, "target", eval_time, "Block")
+                            .unwrap_or("Block".to_string());
+
+                        let target = match target_str.as_str() {
+                            "Char" => BackplateTarget::Char,
+                            "Line" => BackplateTarget::Line,
+                            _ => BackplateTarget::Block,
+                        };
+
+                        let shape_str = evaluator
+                            .require_string(&instance.properties, "shape", eval_time, "Rect")
+                            .unwrap_or("Rect".to_string());
+
+                        let shape = match shape_str.as_str() {
+                            "RoundRect" => BackplateShape::RoundedRect,
+                            "Circle" => BackplateShape::Circle,
+                            _ => BackplateShape::Rect,
+                        };
+
+                        decorator_configs.push(DecoratorConfig::Backplate {
+                            target,
+                            shape,
+                            color,
+                            padding: (padding_val, padding_val, padding_val, padding_val),
+                            corner_radius: radius,
+                        });
+                    }
+                    _ => {}
                 }
             }
 
@@ -731,7 +356,7 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
                 enabled: true,
                 effector_configs,
                 decorator_configs,
-                patches,
+                patches: std::collections::HashMap::new(), // Patches not yet in UI
             })
         } else {
             None
