@@ -1,4 +1,4 @@
-name: Build and Package Rust cx-qt App for Windows
+name: Build and Package Rust App for Windows
 
 on:
   workflow_dispatch:
@@ -15,13 +15,6 @@ jobs:
 
       - name: Setup Visual Studio
         uses: microsoft/setup-msbuild@v1.3.1
-
-      - name: Setup Qt
-        uses: jurplel/install-qt-action@c6c7281365daef91a238e1c2ddce4eaa94a2991d
-        with:
-          version: 6.8.2
-          host: windows
-          target: 'desktop'
 
       - name: Install vcpkg
         run: |
