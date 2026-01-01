@@ -91,78 +91,84 @@ impl EffectPlugin for MagnifierEffectPlugin {
         use ordered_float::OrderedFloat;
 
         vec![
-            PropertyDefinition {
-                name: "x".to_string(),
-                label: "X".to_string(),
-                ui_type: PropertyUiType::Float {
+            PropertyDefinition::new(
+                "x",
+                PropertyUiType::Float {
                     min: -10000.0,
                     max: 10000.0,
                     step: 1.0,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Magnifier".to_string(),
-            },
-            PropertyDefinition {
-                name: "y".to_string(),
-                label: "Y".to_string(),
-                ui_type: PropertyUiType::Float {
+                "X",
+                PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+            PropertyDefinition::new(
+                "y",
+                PropertyUiType::Float {
                     min: -10000.0,
                     max: 10000.0,
                     step: 1.0,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Magnifier".to_string(),
-            },
-            PropertyDefinition {
-                name: "width".to_string(),
-                label: "Width".to_string(),
-                ui_type: PropertyUiType::Float {
+                "Y",
+                PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+            PropertyDefinition::new(
+                "width",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 10000.0,
                     step: 1.0,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Magnifier".to_string(),
-            },
-            PropertyDefinition {
-                name: "height".to_string(),
-                label: "Height".to_string(),
-                ui_type: PropertyUiType::Float {
+                "Width",
+                PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+            PropertyDefinition::new(
+                "height",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 10000.0,
                     step: 1.0,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Magnifier".to_string(),
-            },
-            PropertyDefinition {
-                name: "zoom_amount".to_string(),
-                label: "Zoom Amount".to_string(),
-                ui_type: PropertyUiType::Float {
+                "Height",
+                PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+            PropertyDefinition::new(
+                "zoom_amount",
+                PropertyUiType::Float {
                     min: 1.0,
                     max: 100.0,
                     step: 0.1,
                     suffix: "x".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(2.0)),
-                category: "Magnifier".to_string(),
-            },
-            PropertyDefinition {
-                name: "inset".to_string(),
-                label: "Inset".to_string(),
-                ui_type: PropertyUiType::Float {
+                "Zoom Amount",
+                PropertyValue::Number(OrderedFloat(2.0)),
+            ),
+            PropertyDefinition::new(
+                "inset",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 100.0,
                     step: 0.1,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Magnifier".to_string(),
-            },
+                "Inset",
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
         ]
     }
 }

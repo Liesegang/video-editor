@@ -93,10 +93,9 @@ impl ExportPlugin for FfmpegExportPlugin {
         use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
         use ordered_float::OrderedFloat;
         vec![
-            PropertyDefinition {
-                name: "container".to_string(),
-                label: "Container".to_string(),
-                ui_type: PropertyUiType::Dropdown {
+            PropertyDefinition::new(
+                "container",
+                PropertyUiType::Dropdown {
                     options: vec![
                         "mp4".to_string(),
                         "mkv".to_string(),
@@ -104,13 +103,12 @@ impl ExportPlugin for FfmpegExportPlugin {
                         "mov".to_string(),
                     ],
                 },
-                default_value: PropertyValue::String("mp4".to_string()),
-                category: "Format".to_string(),
-            },
-            PropertyDefinition {
-                name: "codec".to_string(),
-                label: "Video Codec".to_string(),
-                ui_type: PropertyUiType::Dropdown {
+                "Container",
+                PropertyValue::String("mp4".to_string()),
+            ),
+            PropertyDefinition::new(
+                "codec",
+                PropertyUiType::Dropdown {
                     options: vec![
                         "libx264".to_string(),
                         "libx265".to_string(),
@@ -118,13 +116,12 @@ impl ExportPlugin for FfmpegExportPlugin {
                         "prores_ks".to_string(),
                     ],
                 },
-                default_value: PropertyValue::String("libx264".to_string()),
-                category: "Format".to_string(),
-            },
-            PropertyDefinition {
-                name: "pixel_format".to_string(),
-                label: "Pixel Format".to_string(),
-                ui_type: PropertyUiType::Dropdown {
+                "Video Codec",
+                PropertyValue::String("libx264".to_string()),
+            ),
+            PropertyDefinition::new(
+                "pixel_format",
+                PropertyUiType::Dropdown {
                     options: vec![
                         "yuv420p".to_string(),
                         "yuv444p".to_string(),
@@ -132,35 +129,36 @@ impl ExportPlugin for FfmpegExportPlugin {
                         "rgba".to_string(),
                     ],
                 },
-                default_value: PropertyValue::String("yuv420p".to_string()),
-                category: "Format".to_string(),
-            },
-            PropertyDefinition {
-                name: "bitrate".to_string(),
-                label: "Bitrate (kbps)".to_string(),
-                ui_type: PropertyUiType::Integer {
+                "Pixel Format",
+                PropertyValue::String("yuv420p".to_string()),
+            ),
+            PropertyDefinition::new(
+                "bitrate",
+                PropertyUiType::Integer {
                     min: 0,
                     max: 100000,
                     suffix: " kbps".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(5000.0)),
-                category: "Quality".to_string(),
-            },
-            PropertyDefinition {
-                name: "crf".to_string(),
-                label: "CRF (Quality, 0-51)".to_string(),
-                ui_type: PropertyUiType::Integer {
+                "Bitrate (kbps)",
+                PropertyValue::Number(OrderedFloat(5000.0)),
+            ),
+            PropertyDefinition::new(
+                "crf",
+                PropertyUiType::Integer {
                     min: 0,
                     max: 51,
                     suffix: "".to_string(),
+                    min_hard_limit: true,
+                    max_hard_limit: true,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(23.0)),
-                category: "Quality".to_string(),
-            },
-            PropertyDefinition {
-                name: "preset".to_string(),
-                label: "Preset".to_string(),
-                ui_type: PropertyUiType::Dropdown {
+                "CRF (Quality, 0-51)",
+                PropertyValue::Number(OrderedFloat(23.0)),
+            ),
+            PropertyDefinition::new(
+                "preset",
+                PropertyUiType::Dropdown {
                     options: vec![
                         "ultrafast".to_string(),
                         "superfast".to_string(),
@@ -173,20 +171,21 @@ impl ExportPlugin for FfmpegExportPlugin {
                         "veryslow".to_string(),
                     ],
                 },
-                default_value: PropertyValue::String("medium".to_string()),
-                category: "Quality".to_string(),
-            },
-            PropertyDefinition {
-                name: "audio_bitrate".to_string(),
-                label: "Audio Bitrate (kbps)".to_string(),
-                ui_type: PropertyUiType::Integer {
+                "Preset",
+                PropertyValue::String("medium".to_string()),
+            ),
+            PropertyDefinition::new(
+                "audio_bitrate",
+                PropertyUiType::Integer {
                     min: 64,
                     max: 320,
                     suffix: " kbps".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(192.0)),
-                category: "Audio".to_string(),
-            },
+                "Audio Bitrate (kbps)",
+                PropertyValue::Number(OrderedFloat(192.0)),
+            ),
         ]
     }
 }

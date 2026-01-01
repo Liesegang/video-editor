@@ -26,17 +26,22 @@ fn test_project_serialization_roundtrip() {
     project.add_node(Node::Track(root_track));
 
     // Create a clip and add to root track
-    let clip = TrackClip::create_video(
+    let mut clip = TrackClip::new(
+        Uuid::new_v4(),
         Some(asset_id),
-        "/path/to/video.mp4",
+        library::model::project::TrackClipKind::Video,
         0,
         100,
-        0,
         100,
+        Some(100),
         60.0,
-        1920,
-        1080,
+        PropertyMap::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
     );
+    clip.source_begin_frame = 0;
     let clip_id = clip.id;
     project.add_node(Node::Clip(clip));
     project.get_track_mut(root_id).unwrap().add_child(clip_id);
@@ -105,8 +110,46 @@ fn test_node_based_structure() {
     project.get_track_mut(root_id).unwrap().add_child(child_id);
 
     // Add clips to child track
-    let clip1 = TrackClip::create_image(None, "/path/to/image.png", 0, 50, 100, 100, 30.0);
-    let clip2 = TrackClip::create_image(None, "/path/to/image2.png", 51, 100, 100, 100, 30.0);
+    let mut clip1 = TrackClip::new(
+        Uuid::new_v4(),
+        None,
+        library::model::project::TrackClipKind::Image,
+        0,
+        50,
+        100,
+        Some(50),
+        30.0,
+        PropertyMap::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    clip1.set_constant_property(
+        "file_path",
+        library::model::project::property::PropertyValue::String("/path/to/image.png".to_string()),
+    );
+    clip1.source_begin_frame = 0;
+    let mut clip2 = TrackClip::new(
+        Uuid::new_v4(),
+        None,
+        library::model::project::TrackClipKind::Image,
+        51,
+        100,
+        100,
+        Some(50),
+        30.0,
+        PropertyMap::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    clip2.set_constant_property(
+        "file_path",
+        library::model::project::property::PropertyValue::String("/path/to/image2.png".to_string()),
+    );
+    clip2.source_begin_frame = 0;
     let clip1_id = clip1.id;
     let clip2_id = clip2.id;
     project.add_node(Node::Clip(clip1));

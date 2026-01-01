@@ -1,3 +1,4 @@
+use log;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
@@ -96,6 +97,29 @@ impl Hash for PropertyValue {
 impl From<f64> for PropertyValue {
     fn from(value: f64) -> Self {
         PropertyValue::Number(OrderedFloat(value))
+    }
+}
+
+impl PropertyValue {
+    pub fn is_compatible_with(&self, ui_type: &PropertyUiType) -> bool {
+        match self {
+            PropertyValue::Number(_) => matches!(ui_type, PropertyUiType::Float { .. }),
+            PropertyValue::Integer(_) => matches!(ui_type, PropertyUiType::Integer { .. }),
+            PropertyValue::String(_) => matches!(
+                ui_type,
+                PropertyUiType::Text
+                    | PropertyUiType::MultilineText
+                    | PropertyUiType::Font
+                    | PropertyUiType::Dropdown { .. }
+            ),
+            PropertyValue::Boolean(_) => matches!(ui_type, PropertyUiType::Bool),
+            PropertyValue::Color(_) => matches!(ui_type, PropertyUiType::Color),
+            PropertyValue::Vec2(_) => matches!(ui_type, PropertyUiType::Vec2 { .. }),
+            PropertyValue::Vec3(_) => matches!(ui_type, PropertyUiType::Vec3 { .. }),
+            PropertyValue::Vec4(_) => matches!(ui_type, PropertyUiType::Vec4 { .. }),
+            PropertyValue::Array(_) => false,
+            _ => false,
+        }
     }
 }
 
@@ -775,11 +799,15 @@ pub enum PropertyUiType {
         max: f64,
         step: f64,
         suffix: String,
+        min_hard_limit: bool,
+        max_hard_limit: bool,
     },
     Integer {
         min: i64,
         max: i64,
         suffix: String,
+        min_hard_limit: bool,
+        max_hard_limit: bool,
     },
     Color,
     Text,
@@ -798,32 +826,67 @@ pub enum PropertyUiType {
         options: Vec<String>,
     },
     Font,
-    Styles,
 }
 
 /// Defines a property with its metadata for UI rendering
 #[derive(Debug, Clone)]
 pub struct PropertyDefinition {
-    pub name: String,
-    pub label: String,
-    pub ui_type: PropertyUiType,
-    pub default_value: PropertyValue,
-    pub category: String,
+    name: String,
+    label: String,
+    ui_type: PropertyUiType,
+    default_value: PropertyValue,
 }
 
 impl PropertyDefinition {
-    pub fn new(name: &str, ui_type: PropertyUiType, label: &str) -> Self {
+    pub fn new(
+        name: &str,
+        ui_type: PropertyUiType,
+        label: &str,
+        default_value: PropertyValue,
+    ) -> Self {
+        // Validation
+        if !default_value.is_compatible_with(&ui_type) {
+            log::error!(
+                "Property type mismatch for '{}': ui_type={:?}, default_value={:?}",
+                name,
+                ui_type,
+                default_value
+            );
+        }
+
         Self {
             name: name.to_string(),
             label: label.to_string(),
             ui_type,
-            default_value: PropertyValue::Number(OrderedFloat(0.0)), // Default, can be overridden by caller if needed
-            category: "General".to_string(),
+            default_value,
         }
     }
 
-    pub fn with_default(mut self, value: PropertyValue) -> Self {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub fn ui_type(&self) -> &PropertyUiType {
+        &self.ui_type
+    }
+
+    pub fn default_value(&self) -> &PropertyValue {
+        &self.default_value
+    }
+
+    pub fn set_default_value(&mut self, value: PropertyValue) {
+        if !value.is_compatible_with(&self.ui_type) {
+            log::warn!(
+                "Setting incompatible default value for '{}': expected {:?}, got {:?}",
+                self.name,
+                self.ui_type,
+                value
+            );
+        }
         self.default_value = value;
-        self
     }
 }

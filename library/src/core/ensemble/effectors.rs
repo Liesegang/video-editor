@@ -114,6 +114,7 @@ pub struct OpacityEffector {
 pub enum OpacityMode {
     Set,      // 直接設定
     Multiply, // 乗算
+    Add,      // 加算
 }
 
 impl OpacityEffector {
@@ -145,6 +146,9 @@ impl Effector for OpacityEffector {
             }
             OpacityMode::Multiply => {
                 transform.opacity *= self.target_opacity;
+            }
+            OpacityMode::Add => {
+                transform.opacity += self.target_opacity;
             }
         }
     }

@@ -17,6 +17,7 @@ pub use image::ImageEntityConverterPlugin;
 pub use shape::ShapeEntityConverterPlugin;
 pub use sksl::SkSLEntityConverterPlugin;
 pub use text::TextEntityConverterPlugin;
+pub use text::measure_text_size;
 pub use video::VideoEntityConverterPlugin;
 
 pub struct FrameEvaluationContext<'a> {

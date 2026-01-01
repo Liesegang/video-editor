@@ -132,7 +132,7 @@ pub fn handle_drag_and_drop(
 
                                     new_clip_opt = match asset.kind {
                                         AssetKind::Video => {
-                                            let mut video_clip = TrackClip::create_video(
+                                            let video_clip_res = project_service.create_video_clip(
                                                 Some(asset.id),
                                                 &asset.path,
                                                 drop_in_frame,
@@ -143,24 +143,26 @@ pub fn handle_drag_and_drop(
                                                 comp_width as u32,
                                                 comp_height as u32,
                                             );
-                                            if let (Some(w), Some(h)) = (asset.width, asset.height)
-                                            {
-                                                video_clip.properties.set(
-                                                    "anchor".to_string(),
-                                                    library::model::project::property::Property::constant(
-                                                        library::model::project::property::PropertyValue::Vec2(
-                                                            library::model::project::property::Vec2 {
-                                                                x: ordered_float::OrderedFloat(w as f64 / 2.0),
-                                                                y: ordered_float::OrderedFloat(h as f64 / 2.0),
-                                                            },
+                                            video_clip_res.ok().map(|mut video_clip| {
+                                                if let (Some(w), Some(h)) = (asset.width, asset.height)
+                                                {
+                                                    video_clip.properties.set(
+                                                        "anchor".to_string(),
+                                                        library::model::project::property::Property::constant(
+                                                            library::model::project::property::PropertyValue::Vec2(
+                                                                library::model::project::property::Vec2 {
+                                                                    x: ordered_float::OrderedFloat(w as f64 / 2.0),
+                                                                    y: ordered_float::OrderedFloat(h as f64 / 2.0),
+                                                                },
+                                                            ),
                                                         ),
-                                                    ),
-                                                );
-                                            }
-                                            Some(video_clip)
+                                                    );
+                                                }
+                                                video_clip
+                                            })
                                         }
                                         AssetKind::Image => {
-                                            let mut image_clip = TrackClip::create_image(
+                                            let image_clip_res = project_service.create_image_clip(
                                                 Some(asset.id),
                                                 &asset.path,
                                                 drop_in_frame,
@@ -169,32 +171,36 @@ pub fn handle_drag_and_drop(
                                                 comp_height as u32,
                                                 composition_fps,
                                             );
-                                            image_clip.source_begin_frame = 0;
-                                            if let (Some(w), Some(h)) = (asset.width, asset.height)
-                                            {
-                                                image_clip.properties.set(
-                                                    "anchor".to_string(),
-                                                    library::model::project::property::Property::constant(
-                                                        library::model::project::property::PropertyValue::Vec2(
-                                                            library::model::project::property::Vec2 {
-                                                                x: ordered_float::OrderedFloat(w as f64 / 2.0),
-                                                                y: ordered_float::OrderedFloat(h as f64 / 2.0),
-                                                            },
+                                            image_clip_res.ok().map(|mut image_clip| {
+                                                image_clip.source_begin_frame = 0;
+                                                if let (Some(w), Some(h)) = (asset.width, asset.height)
+                                                {
+                                                    image_clip.properties.set(
+                                                        "anchor".to_string(),
+                                                        library::model::project::property::Property::constant(
+                                                            library::model::project::property::PropertyValue::Vec2(
+                                                                library::model::project::property::Vec2 {
+                                                                    x: ordered_float::OrderedFloat(w as f64 / 2.0),
+                                                                    y: ordered_float::OrderedFloat(h as f64 / 2.0),
+                                                                },
+                                                            ),
                                                         ),
-                                                    ),
-                                                );
-                                            }
-                                            Some(image_clip)
+                                                    );
+                                                }
+                                                image_clip
+                                            })
                                         }
-                                        AssetKind::Audio => Some(TrackClip::create_audio(
-                                            Some(asset.id),
-                                            &asset.path,
-                                            drop_in_frame,
-                                            drop_out,
-                                            0,
-                                            duration_frames,
-                                            composition_fps,
-                                        )),
+                                        AssetKind::Audio => {
+                                            Some(project_service.create_audio_clip(
+                                                Some(asset.id),
+                                                &asset.path,
+                                                drop_in_frame,
+                                                drop_out,
+                                                0,
+                                                duration_frames,
+                                                composition_fps,
+                                            ))
+                                        }
                                         _ => None,
                                     };
                                 }

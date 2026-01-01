@@ -85,34 +85,35 @@ impl EffectPlugin for BlurEffectPlugin {
         use ordered_float::OrderedFloat;
 
         vec![
-            PropertyDefinition {
-                name: "sigma_x".to_string(),
-                label: "Sigma X".to_string(),
-                ui_type: PropertyUiType::Float {
+            PropertyDefinition::new(
+                "sigma_x",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 100.0,
                     step: 0.1,
                     suffix: "px".to_string(),
+                    min_hard_limit: true,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Blur".to_string(),
-            },
-            PropertyDefinition {
-                name: "sigma_y".to_string(),
-                label: "Sigma Y".to_string(),
-                ui_type: PropertyUiType::Float {
+                "Sigma X",
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+            PropertyDefinition::new(
+                "sigma_y",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 100.0,
                     step: 0.1,
                     suffix: "px".to_string(),
+                    min_hard_limit: true,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Blur".to_string(),
-            },
-            PropertyDefinition {
-                name: "tile_mode".to_string(),
-                label: "Tile Mode".to_string(),
-                ui_type: PropertyUiType::Dropdown {
+                "Sigma Y",
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+            PropertyDefinition::new(
+                "tile_mode",
+                PropertyUiType::Dropdown {
                     options: vec![
                         "clamp".to_string(),
                         "repeat".to_string(),
@@ -120,9 +121,9 @@ impl EffectPlugin for BlurEffectPlugin {
                         "decal".to_string(),
                     ],
                 },
-                default_value: PropertyValue::String("clamp".to_string()),
-                category: "Blur".to_string(),
-            },
+                "Tile Mode",
+                PropertyValue::String("clamp".to_string()),
+            ),
         ]
     }
 }

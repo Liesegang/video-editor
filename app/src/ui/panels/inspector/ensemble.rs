@@ -250,19 +250,12 @@ fn add_effector(
     service: &mut ProjectService,
     history_manager: &mut HistoryManager,
     clip_id: Uuid,
-    current_list: &Vec<EffectorInstance>,
+    _current_list: &Vec<EffectorInstance>,
 ) {
-    let mut new_list = current_list.clone();
-
-    // Create new instance (properties initialized by library)
-    let defs = service
-        .get_plugin_manager()
-        .get_effector_properties(type_name);
-    let props = PropertyMap::from_definitions(&defs);
-    let instance = EffectorInstance::new(type_name, props);
-
-    new_list.push(instance);
-    service.update_track_clip_effectors(clip_id, new_list).ok();
+    if let Err(e) = service.add_effector(clip_id, type_name) {
+        log::error!("Failed to add effector: {}", e);
+        return;
+    }
 
     let current_state = service.get_project().read().unwrap().clone();
     history_manager.push_project_state(current_state);
@@ -273,19 +266,12 @@ fn add_decorator(
     service: &mut ProjectService,
     history_manager: &mut HistoryManager,
     clip_id: Uuid,
-    current_list: &Vec<DecoratorInstance>,
+    _current_list: &Vec<DecoratorInstance>,
 ) {
-    let mut new_list = current_list.clone();
-
-    // Create new instance (properties initialized by library)
-    let defs = service
-        .get_plugin_manager()
-        .get_decorator_properties(type_name);
-    let props = PropertyMap::from_definitions(&defs);
-    let instance = DecoratorInstance::new(type_name, props);
-
-    new_list.push(instance);
-    service.update_track_clip_decorators(clip_id, new_list).ok();
+    if let Err(e) = service.add_decorator(clip_id, type_name) {
+        log::error!("Failed to add decorator: {}", e);
+        return;
+    }
 
     let current_state = service.get_project().read().unwrap().clone();
     history_manager.push_project_state(current_state);

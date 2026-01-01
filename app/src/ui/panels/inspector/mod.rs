@@ -108,7 +108,7 @@ pub fn inspector_panel(
                 Vec<library::model::project::property::PropertyDefinition>,
             > = std::collections::HashMap::new();
             for def in definitions {
-                grouped.entry(def.category.clone()).or_default().push(def);
+                grouped.entry("General".to_string()).or_default().push(def);
             }
 
             // Sort categories
@@ -137,7 +137,7 @@ pub fn inspector_panel(
                     let mut current_grid_defs = Vec::new();
 
                     for def in defs {
-                        let is_multiline = matches!(def.ui_type, PropertyUiType::MultilineText);
+                        let is_multiline = matches!(def.ui_type(), PropertyUiType::MultilineText);
                         if is_multiline {
                             // Push existing grid chunk if any
                             if !current_grid_defs.is_empty() {

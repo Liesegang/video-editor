@@ -114,73 +114,75 @@ impl EffectPlugin for DropShadowEffectPlugin {
         use ordered_float::OrderedFloat;
 
         vec![
-            PropertyDefinition {
-                name: "dx".to_string(),
-                label: "Distance X".to_string(),
-                ui_type: PropertyUiType::Float {
+            PropertyDefinition::new(
+                "dx",
+                PropertyUiType::Float {
                     min: -500.0,
                     max: 500.0,
                     step: 1.0,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(5.0)),
-                category: "Drop Shadow".to_string(),
-            },
-            PropertyDefinition {
-                name: "dy".to_string(),
-                label: "Distance Y".to_string(),
-                ui_type: PropertyUiType::Float {
+                "Distance X",
+                PropertyValue::Number(OrderedFloat(5.0)),
+            ),
+            PropertyDefinition::new(
+                "dy",
+                PropertyUiType::Float {
                     min: -500.0,
                     max: 500.0,
                     step: 1.0,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(5.0)),
-                category: "Drop Shadow".to_string(),
-            },
-            PropertyDefinition {
-                name: "sigma_x".to_string(),
-                label: "Blur X".to_string(),
-                ui_type: PropertyUiType::Float {
+                "Distance Y",
+                PropertyValue::Number(OrderedFloat(5.0)),
+            ),
+            PropertyDefinition::new(
+                "sigma_x",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 100.0,
                     step: 0.1,
                     suffix: "px".to_string(),
+                    min_hard_limit: true,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(3.0)),
-                category: "Drop Shadow".to_string(),
-            },
-            PropertyDefinition {
-                name: "sigma_y".to_string(),
-                label: "Blur Y".to_string(),
-                ui_type: PropertyUiType::Float {
+                "Blur X",
+                PropertyValue::Number(OrderedFloat(3.0)),
+            ),
+            PropertyDefinition::new(
+                "sigma_y",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 100.0,
                     step: 0.1,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(3.0)),
-                category: "Drop Shadow".to_string(),
-            },
-            PropertyDefinition {
-                name: "color".to_string(),
-                label: "Color".to_string(),
-                ui_type: PropertyUiType::Color,
-                default_value: PropertyValue::Color(crate::model::frame::color::Color {
+                "Blur Y",
+                PropertyValue::Number(OrderedFloat(3.0)),
+            ),
+            PropertyDefinition::new(
+                "color",
+                PropertyUiType::Color,
+                "Color",
+                PropertyValue::Color(crate::model::frame::color::Color {
                     r: 0,
                     g: 0,
                     b: 0,
                     a: 255,
                 }),
-                category: "Drop Shadow".to_string(),
-            },
-            PropertyDefinition {
-                name: "shadow_only".to_string(),
-                label: "Shadow Only".to_string(),
-                ui_type: PropertyUiType::Bool,
-                default_value: PropertyValue::Boolean(false),
-                category: "Drop Shadow".to_string(),
-            },
+            ),
+            PropertyDefinition::new(
+                "shadow_only",
+                PropertyUiType::Bool,
+                "Shadow Only",
+                PropertyValue::Boolean(false),
+            ),
         ]
     }
 }

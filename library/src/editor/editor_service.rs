@@ -198,6 +198,123 @@ impl EditorService {
         self.project_manager.remove_asset_fully(asset_id)
     }
 
+    // --- Clip Factory Methods ---
+
+    pub fn create_audio_clip(
+        &self,
+        reference_id: Option<Uuid>,
+        file_path: &str,
+        in_frame: u64,
+        out_frame: u64,
+        source_begin_frame: i64,
+        duration_frame: u64,
+        fps: f64,
+    ) -> TrackClip {
+        self.project_manager.create_audio_clip(
+            reference_id,
+            file_path,
+            in_frame,
+            out_frame,
+            source_begin_frame,
+            duration_frame,
+            fps,
+        )
+    }
+
+    pub fn create_video_clip(
+        &self,
+        reference_id: Option<Uuid>,
+        file_path: &str,
+        in_frame: u64,
+        out_frame: u64,
+        source_begin_frame: i64,
+        duration_frame: u64,
+        fps: f64,
+        canvas_width: u32,
+        canvas_height: u32,
+    ) -> Result<TrackClip, LibraryError> {
+        self.project_manager.create_video_clip(
+            reference_id,
+            file_path,
+            in_frame,
+            out_frame,
+            source_begin_frame,
+            duration_frame,
+            fps,
+            canvas_width,
+            canvas_height,
+        )
+    }
+
+    pub fn create_image_clip(
+        &self,
+        reference_id: Option<Uuid>,
+        file_path: &str,
+        in_frame: u64,
+        out_frame: u64,
+        canvas_width: u32,
+        canvas_height: u32,
+        fps: f64,
+    ) -> Result<TrackClip, LibraryError> {
+        self.project_manager.create_image_clip(
+            reference_id,
+            file_path,
+            in_frame,
+            out_frame,
+            canvas_width,
+            canvas_height,
+            fps,
+        )
+    }
+
+    pub fn create_text_clip(
+        &self,
+        text: &str,
+        in_frame: u64,
+        out_frame: u64,
+        canvas_width: u32,
+        canvas_height: u32,
+        fps: f64,
+    ) -> Result<TrackClip, LibraryError> {
+        self.project_manager.create_text_clip(
+            text,
+            in_frame,
+            out_frame,
+            canvas_width,
+            canvas_height,
+            fps,
+        )
+    }
+
+    pub fn create_shape_clip(
+        &self,
+        in_frame: u64,
+        out_frame: u64,
+        canvas_width: u32,
+        canvas_height: u32,
+        fps: f64,
+    ) -> Result<TrackClip, LibraryError> {
+        self.project_manager.create_shape_clip(
+            in_frame,
+            out_frame,
+            canvas_width,
+            canvas_height,
+            fps,
+        )
+    }
+
+    pub fn create_sksl_clip(
+        &self,
+        in_frame: u64,
+        out_frame: u64,
+        canvas_width: u32,
+        canvas_height: u32,
+        fps: f64,
+    ) -> Result<TrackClip, LibraryError> {
+        self.project_manager
+            .create_sksl_clip(in_frame, out_frame, canvas_width, canvas_height, fps)
+    }
+
     pub fn add_composition(
         &self,
         name: &str,
@@ -865,5 +982,17 @@ impl EditorService {
             attribute_key,
             attribute_value,
         )
+    }
+
+    pub fn add_style(&self, clip_id: Uuid, style_type: &str) -> Result<(), LibraryError> {
+        self.project_manager.add_style(clip_id, style_type)
+    }
+
+    pub fn add_effector(&self, clip_id: Uuid, effector_type: &str) -> Result<(), LibraryError> {
+        self.project_manager.add_effector(clip_id, effector_type)
+    }
+
+    pub fn add_decorator(&self, clip_id: Uuid, decorator_type: &str) -> Result<(), LibraryError> {
+        self.project_manager.add_decorator(clip_id, decorator_type)
     }
 }

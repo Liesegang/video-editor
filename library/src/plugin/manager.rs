@@ -283,8 +283,8 @@ impl PluginManager {
         let mut props = crate::model::project::property::PropertyMap::new();
         for p in def.properties {
             props.set(
-                p.name,
-                crate::model::project::property::Property::constant(p.default_value),
+                p.name().to_string(),
+                crate::model::project::property::Property::constant(p.default_value().clone()),
             );
         }
         Some(crate::model::project::EffectConfig {
