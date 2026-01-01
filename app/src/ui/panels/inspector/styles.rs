@@ -5,12 +5,8 @@ use crate::state::context::EditorContext;
 
 use egui::collapsing_header::CollapsingState;
 use egui::Ui;
-use library::model::frame::color::Color;
-use library::model::project::property::{Property, PropertyMap, PropertyValue};
-use library::model::project::property::{PropertyDefinition, PropertyUiType};
 use library::model::project::style::StyleInstance;
 use library::EditorService as ProjectService;
-use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 pub fn render_styles_section(
@@ -33,73 +29,36 @@ pub fn render_styles_section(
     ui.horizontal(|ui| {
         use super::properties::render_add_button;
         render_add_button(ui, |ui| {
-            if ui.button("Fill").clicked() {
-                let mut new_style = StyleInstance::new("fill", PropertyMap::new());
-                // Defualts
-                new_style.properties.set(
-                    "color".to_string(),
-                    Property::constant(PropertyValue::Color(Color {
-                        r: 255,
-                        g: 255,
-                        b: 255,
-                        a: 255,
-                    })),
-                );
-                new_style.properties.set(
-                    "offset".to_string(),
-                    Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
-                );
+            let plugin_manager = project_service.get_plugin_manager();
+            for type_name in plugin_manager.get_available_styles() {
+                let label = plugin_manager
+                    .get_style_plugin(&type_name)
+                    .map(|p| p.name())
+                    .unwrap_or_else(|| type_name.clone());
 
-                let mut new_styles = styles.clone();
-                new_styles.push(new_style);
+                if ui.button(label).clicked() {
+                    let defs = plugin_manager.get_style_properties(&type_name);
+                    let props =
+                        library::model::project::property::PropertyMap::from_definitions(&defs);
+                    let new_style = StyleInstance::new(&type_name, props);
 
-                project_service
-                    .update_track_clip_styles(selected_entity_id, new_styles)
-                    .ok();
+                    let mut new_styles = styles.clone();
+                    new_styles.push(new_style);
 
-                let current_state = project_service.get_project().read().unwrap().clone();
-                history_manager.push_project_state(current_state);
+                    project_service
+                        .update_track_clip_styles(selected_entity_id, new_styles)
+                        .ok();
 
-                *needs_refresh = true;
-                ui.close();
-            }
-            if ui.button("Stroke").clicked() {
-                let mut new_style = StyleInstance::new("stroke", PropertyMap::new());
-                // Defaults
-                new_style.properties.set(
-                    "color".to_string(),
-                    Property::constant(PropertyValue::Color(Color {
-                        r: 0,
-                        g: 0,
-                        b: 0,
-                        a: 255,
-                    })),
-                );
-                new_style.properties.set(
-                    "width".to_string(),
-                    Property::constant(PropertyValue::Number(OrderedFloat(1.0))),
-                );
-                new_style.properties.set(
-                    "offset".to_string(),
-                    Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
-                );
-                new_style.properties.set(
-                    "miter".to_string(),
-                    Property::constant(PropertyValue::Number(OrderedFloat(4.0))),
-                );
+                    // No history push needed here? Original code did push.
+                    // Wait, original code call history_manager.push_project_state.
+                    // But I need access to history_manager. It is passed as argument.
+                    // Let's use it.
+                    let current_state = project_service.get_project().read().unwrap().clone();
+                    history_manager.push_project_state(current_state);
 
-                let mut new_styles = styles.clone();
-                new_styles.push(new_style);
-
-                project_service
-                    .update_track_clip_styles(selected_entity_id, new_styles)
-                    .ok();
-
-                let current_state = project_service.get_project().read().unwrap().clone();
-                history_manager.push_project_state(current_state);
-
-                *needs_refresh = true;
-                ui.close();
+                    *needs_refresh = true;
+                    ui.close();
+                }
             }
         });
     });
@@ -126,7 +85,16 @@ pub fn render_styles_section(
                     handle.ui(ui, |ui| {
                         ui.label("::");
                     });
-                    ui.label(egui::RichText::new(style.style_type.clone().to_uppercase()).strong());
+                    ui.label(
+                        egui::RichText::new(
+                            project_service
+                                .get_plugin_manager()
+                                .get_style_plugin(&style.style_type)
+                                .map(|p| p.name())
+                                .unwrap_or_else(|| style.style_type.clone().to_uppercase()),
+                        )
+                        .strong(),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("X").clicked() {
                             remove_clicked = true;
@@ -136,7 +104,9 @@ pub fn render_styles_section(
             });
 
             header_res.body(|ui| {
-                let defs = get_style_definitions(&style.style_type);
+                let defs = project_service
+                    .get_plugin_manager()
+                    .get_style_properties(&style.style_type);
 
                 let context = PropertyRenderContext {
                     available_fonts: &editor_context.available_fonts,
@@ -175,131 +145,4 @@ pub fn render_styles_section(
         },
     )
     .show(ui, history_manager, project_service, needs_refresh);
-}
-
-fn get_style_definitions(style_type: &str) -> Vec<PropertyDefinition> {
-    match style_type {
-        "fill" => vec![
-            PropertyDefinition {
-                name: "color".to_string(),
-                label: "Color".to_string(),
-                ui_type: PropertyUiType::Color,
-                default_value: PropertyValue::Color(Color {
-                    r: 255,
-                    g: 255,
-                    b: 255,
-                    a: 255,
-                }),
-                category: "Style".to_string(),
-            },
-            PropertyDefinition {
-                name: "offset".to_string(),
-                label: "Offset".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: -100.0,
-                    max: 100.0,
-                    step: 0.1,
-                    suffix: "px".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Style".to_string(),
-            },
-        ],
-        "stroke" => vec![
-            PropertyDefinition {
-                name: "color".to_string(),
-                label: "Color".to_string(),
-                ui_type: PropertyUiType::Color,
-                default_value: PropertyValue::Color(Color {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                }),
-                category: "Style".to_string(),
-            },
-            PropertyDefinition {
-                name: "width".to_string(),
-                label: "Width".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 100.0,
-                    step: 0.1,
-                    suffix: "px".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(1.0)),
-                category: "Style".to_string(),
-            },
-            PropertyDefinition {
-                name: "offset".to_string(),
-                label: "Offset".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: -100.0,
-                    max: 100.0,
-                    step: 0.1,
-                    suffix: "px".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Style".to_string(),
-            },
-            PropertyDefinition {
-                name: "miter".to_string(),
-                label: "Miter Limit".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 100.0,
-                    step: 0.1,
-                    suffix: "".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(4.0)),
-                category: "Style".to_string(),
-            },
-            PropertyDefinition {
-                name: "cap".to_string(),
-                label: "Line Cap".to_string(),
-                ui_type: PropertyUiType::Dropdown {
-                    options: vec![
-                        "Butt".to_string(),
-                        "Round".to_string(),
-                        "Square".to_string(),
-                    ],
-                },
-                default_value: PropertyValue::String("Butt".to_string()),
-                category: "Style".to_string(),
-            },
-            PropertyDefinition {
-                name: "join".to_string(),
-                label: "Line Join".to_string(),
-                ui_type: PropertyUiType::Dropdown {
-                    options: vec![
-                        "Miter".to_string(),
-                        "Round".to_string(),
-                        "Bevel".to_string(),
-                    ],
-                },
-                default_value: PropertyValue::String("Miter".to_string()),
-                category: "Style".to_string(),
-            },
-            PropertyDefinition {
-                name: "dash_array".to_string(),
-                label: "Dash Array".to_string(),
-                ui_type: PropertyUiType::Text,
-                default_value: PropertyValue::String("".to_string()),
-                category: "Style".to_string(),
-            },
-            PropertyDefinition {
-                name: "dash_offset".to_string(),
-                label: "Dash Offset".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: -100.0,
-                    max: 100.0,
-                    step: 1.0,
-                    suffix: "px".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Style".to_string(),
-            },
-        ],
-        _ => vec![],
-    }
 }

@@ -104,7 +104,9 @@ pub fn graph_editor_panel(
                                 components.push(PropertyComponent::X);
                                 components.push(PropertyComponent::Y);
                             }
-                            _ => {}
+                            _ => {
+                                log::trace!("GraphEditor: Skipping keyframe property {} with non-numeric type {:?}", k, first.value);
+                            }
                         }
                     }
                 }
@@ -116,7 +118,9 @@ pub fn graph_editor_panel(
                         components.push(PropertyComponent::X);
                         components.push(PropertyComponent::Y);
                     }
-                    _ => {}
+                    _ => {
+                        log::trace!("GraphEditor: Skipping constant property {} with non-numeric value {:?}", k, p.value());
+                    }
                 },
                 _ => {}
             }
@@ -151,7 +155,9 @@ pub fn graph_editor_panel(
                                     components.push(PropertyComponent::X);
                                     components.push(PropertyComponent::Y);
                                 }
-                                _ => {}
+                                _ => {
+                                    log::trace!("GraphEditor: Skipping effect property {} with non-numeric type {:?}", prop_key, first.value);
+                                }
                             }
                         }
                     }
@@ -163,7 +169,9 @@ pub fn graph_editor_panel(
                             components.push(PropertyComponent::X);
                             components.push(PropertyComponent::Y);
                         }
-                        _ => {}
+                        _ => {
+                            log::trace!("GraphEditor: Skipping effect property {} with non-numeric value {:?}", prop_key, prop.value());
+                        }
                     },
                     _ => {}
                 }
@@ -198,7 +206,9 @@ pub fn graph_editor_panel(
                                     components.push(PropertyComponent::X);
                                     components.push(PropertyComponent::Y);
                                 }
-                                _ => {}
+                                _ => {
+                                    log::trace!("GraphEditor: Skipping style property {} with non-numeric type {:?}", prop_key, first.value);
+                                }
                             }
                         }
                     }
@@ -210,7 +220,9 @@ pub fn graph_editor_panel(
                             components.push(PropertyComponent::X);
                             components.push(PropertyComponent::Y);
                         }
-                        _ => {}
+                        _ => {
+                            log::trace!("GraphEditor: Skipping style property {} with non-numeric value {:?}", prop_key, prop.value());
+                        }
                     },
                     _ => {}
                 }

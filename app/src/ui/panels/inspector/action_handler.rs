@@ -101,7 +101,7 @@ impl<'a> ActionContext<'a> {
         };
 
         if let Err(e) = result {
-            eprintln!("Failed to update property {}: {:?}", name, e);
+            log::error!("Failed to update property {}: {:?}", name, e);
         }
         true
     }
@@ -204,7 +204,7 @@ impl<'a> ActionContext<'a> {
         };
 
         if let Err(e) = result {
-            eprintln!("Failed to toggle keyframe for {}: {:?}", name, e);
+            log::error!("Failed to toggle keyframe for {}: {:?}", name, e);
         }
         true
     }
@@ -243,7 +243,7 @@ impl<'a> ActionContext<'a> {
         };
 
         if let Err(e) = result {
-            eprintln!("Failed to set attribute {} for {}: {:?}", attr_key, name, e);
+            log::error!("Failed to set attribute {} for {}: {:?}", attr_key, name, e);
         }
         true
     }

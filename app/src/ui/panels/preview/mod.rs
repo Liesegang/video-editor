@@ -477,6 +477,7 @@ pub fn preview_panel(
                         let ctx = library::plugin::entity_converter::FrameEvaluationContext {
                             composition: comp,
                             property_evaluators: &property_evaluators,
+                            plugin_manager: &plugin_manager,
                         };
 
                         if let Some(converter) =

@@ -4,8 +4,9 @@ use crate::model::project::project::Composition;
 use crate::model::project::property::{PropertyMap, PropertyValue, Vec2};
 use crate::model::project::style::StyleInstance;
 use crate::model::project::{EffectConfig, TrackClip};
-use crate::plugin::{EvaluationContext, PropertyEvaluatorRegistry};
+use crate::plugin::{EvaluationContext, PluginManager, PropertyEvaluatorRegistry};
 
+pub mod effector;
 mod image;
 mod shape;
 mod sksl;
@@ -21,6 +22,7 @@ pub use video::VideoEntityConverterPlugin;
 pub struct FrameEvaluationContext<'a> {
     pub composition: &'a Composition,
     pub property_evaluators: &'a PropertyEvaluatorRegistry,
+    pub plugin_manager: &'a PluginManager,
 }
 
 impl<'a> FrameEvaluationContext<'a> {
@@ -177,37 +179,15 @@ impl<'a> FrameEvaluationContext<'a> {
         styles: &[StyleInstance],
         time: f64,
     ) -> Vec<crate::model::frame::entity::StyleConfig> {
-        use crate::model::frame::color::Color;
-        use crate::model::frame::draw_type::DrawStyle;
-        use crate::model::frame::entity::StyleConfig;
-
         styles
             .iter()
-            .map(|s| {
-                let style = if s.style_type == "stroke" {
-                    DrawStyle::Stroke {
-                        color: self.evaluate_color(&s.properties, "color", time, Color::black()),
-                        width: self.evaluate_number(&s.properties, "width", time, 1.0),
-                        offset: 0.0,
-                        cap: self.evaluate_cap_type(&s.properties, "cap", time, Default::default()),
-                        join: self.evaluate_join_type(
-                            &s.properties,
-                            "join",
-                            time,
-                            Default::default(),
-                        ),
-                        miter: self.evaluate_number(&s.properties, "miter", time, 4.0),
-                        dash_array: self.evaluate_number_array(&s.properties, "dash_array", time),
-                        dash_offset: self.evaluate_number(&s.properties, "dash_offset", time, 0.0),
-                    }
+            .filter_map(|s| {
+                if let Some(plugin) = self.plugin_manager.get_style_plugin(&s.style_type) {
+                    plugin.convert(self, s, time)
                 } else {
-                    DrawStyle::Fill {
-                        color: self.evaluate_color(&s.properties, "color", time, Color::white()),
-                        offset: 0.0,
-                    }
-                };
-
-                StyleConfig { id: s.id, style }
+                    log::warn!("Unknown style type: {}", s.style_type);
+                    None
+                }
             })
             .collect()
     }

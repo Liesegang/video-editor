@@ -107,7 +107,7 @@ pub fn show_time_input(
                     editor_context.timeline.current_time =
                         snapped_time.clamp(0.0, max_duration as f32);
                 } else {
-                    eprintln!("Failed to parse time input: {}", input_str);
+                    log::warn!("Failed to parse time input: {}", input_str);
                     // Revert to current_time's formatted string
                     editor_context.interaction.current_time_text_input =
                         match editor_context.timeline.display_mode {

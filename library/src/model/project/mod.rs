@@ -228,6 +228,171 @@ impl TrackClip {
             PropertyTarget::Decorator(i) => self.decorators.get_mut(i).map(|e| &mut e.properties),
         }
     }
+
+    pub fn get_transform_definitions() -> Vec<crate::model::project::property::PropertyDefinition> {
+        use crate::model::project::property::{
+            PropertyDefinition, PropertyUiType, PropertyValue, Vec2,
+        };
+        use ordered_float::OrderedFloat;
+
+        vec![
+            PropertyDefinition::new(
+                "position",
+                PropertyUiType::Vec2 {
+                    suffix: "".to_string(),
+                },
+                "Position",
+            )
+            .with_default(PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(0.0),
+            })),
+            PropertyDefinition::new(
+                "scale",
+                PropertyUiType::Vec2 {
+                    suffix: "".to_string(),
+                },
+                "Scale",
+            )
+            .with_default(PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(100.0),
+                y: OrderedFloat(100.0),
+            })),
+            PropertyDefinition::new(
+                "rotation",
+                PropertyUiType::Float {
+                    min: -360.0,
+                    max: 360.0,
+                    step: 1.0,
+                    suffix: "°".into(),
+                },
+                "Rotation",
+            )
+            .with_default(PropertyValue::Number(OrderedFloat(0.0))),
+            PropertyDefinition::new(
+                "anchor",
+                PropertyUiType::Vec2 {
+                    suffix: "".to_string(),
+                },
+                "Anchor Point",
+            )
+            .with_default(PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(0.0),
+            })),
+            PropertyDefinition::new(
+                "opacity",
+                PropertyUiType::Float {
+                    min: 0.0,
+                    max: 100.0,
+                    step: 1.0,
+                    suffix: "%".into(),
+                },
+                "Opacity",
+            )
+            .with_default(PropertyValue::Number(OrderedFloat(100.0))),
+        ]
+    }
+
+    pub fn get_definitions_for_kind(
+        kind: &TrackClipKind,
+    ) -> Vec<crate::model::project::property::PropertyDefinition> {
+        use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+        use ordered_float::OrderedFloat;
+
+        let mut defs = vec![];
+
+        // Specific properties
+        match kind {
+            TrackClipKind::Audio => {
+                defs.push(PropertyDefinition::new(
+                    "file_path",
+                    PropertyUiType::Text,
+                    "File Path",
+                ));
+            }
+            TrackClipKind::Video | TrackClipKind::Image => {
+                defs.push(PropertyDefinition::new(
+                    "file_path",
+                    PropertyUiType::Text,
+                    "File Path",
+                ));
+                defs.extend(Self::get_transform_definitions());
+            }
+            TrackClipKind::Text => {
+                defs.push(PropertyDefinition::new(
+                    "text",
+                    PropertyUiType::Text,
+                    "Text",
+                ));
+                defs.push(
+                    PropertyDefinition::new("font_family", PropertyUiType::Font, "Font Family")
+                        .with_default(PropertyValue::String("Arial".to_string())),
+                );
+                defs.push(
+                    PropertyDefinition::new(
+                        "size",
+                        PropertyUiType::Float {
+                            min: 1.0,
+                            max: 500.0,
+                            step: 1.0,
+                            suffix: "px".into(),
+                        },
+                        "Size",
+                    )
+                    .with_default(PropertyValue::Number(OrderedFloat(100.0))),
+                );
+
+                defs.extend(Self::get_transform_definitions());
+            }
+            TrackClipKind::Shape => {
+                defs.push(PropertyDefinition::new(
+                    "path",
+                    PropertyUiType::Text, // Or specialized Path editor if we had one
+                    "Path Data",
+                ));
+                defs.push(
+                    PropertyDefinition::new(
+                        "width",
+                        PropertyUiType::Float {
+                            min: 0.0,
+                            max: 10000.0,
+                            step: 1.0,
+                            suffix: "px".into(),
+                        },
+                        "Width",
+                    )
+                    .with_default(PropertyValue::Number(OrderedFloat(100.0))),
+                );
+                defs.push(
+                    PropertyDefinition::new(
+                        "height",
+                        PropertyUiType::Float {
+                            min: 0.0,
+                            max: 10000.0,
+                            step: 1.0,
+                            suffix: "px".into(),
+                        },
+                        "Height",
+                    )
+                    .with_default(PropertyValue::Number(OrderedFloat(100.0))),
+                );
+
+                defs.extend(Self::get_transform_definitions());
+            }
+            TrackClipKind::SkSL => {
+                defs.push(PropertyDefinition::new(
+                    "shader",
+                    PropertyUiType::MultilineText,
+                    "Shader Code",
+                ));
+                defs.extend(Self::get_transform_definitions());
+            }
+            _ => {}
+        }
+
+        defs
+    }
 }
 
 const fn default_fps() -> f64 {

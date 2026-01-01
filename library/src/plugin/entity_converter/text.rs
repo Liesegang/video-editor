@@ -164,191 +164,40 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
 
         // Build Ensemble data from text_clip.effectors/decorators
         let ensemble = if !track_clip.effectors.is_empty() || !track_clip.decorators.is_empty() {
-            use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
-            use crate::core::ensemble::target::EffectorTarget;
-            use crate::core::ensemble::types::{DecoratorConfig, EffectorConfig};
-
             let mut effector_configs = Vec::new();
             let mut decorator_configs = Vec::new();
 
             // Convert EffectorInstances to EffectorConfigs
             for instance in &track_clip.effectors {
-                match instance.effector_type.as_str() {
-                    "transform" => {
-                        let tx =
-                            evaluator.evaluate_number(&instance.properties, "tx", eval_time, 0.0)
-                                as f32;
-                        let ty =
-                            evaluator.evaluate_number(&instance.properties, "ty", eval_time, 0.0)
-                                as f32;
-                        let r = evaluator.evaluate_number(
-                            &instance.properties,
-                            "rotation",
-                            eval_time,
-                            0.0,
-                        ) as f32;
-                        let sx = evaluator.evaluate_number(
-                            &instance.properties,
-                            "scale_x",
-                            eval_time,
-                            1.0,
-                        ) as f32;
-                        let sy = evaluator.evaluate_number(
-                            &instance.properties,
-                            "scale_y",
-                            eval_time,
-                            1.0,
-                        ) as f32;
-
-                        effector_configs.push(EffectorConfig::Transform {
-                            translate: (tx, ty),
-                            rotate: r,
-                            scale: (sx, sy),
-                            target: EffectorTarget::default(),
-                        });
+                if let Some(plugin) = evaluator
+                    .plugin_manager
+                    .get_effector_plugin(&instance.effector_type)
+                {
+                    if let Some(config) = plugin.convert(evaluator, instance, eval_time) {
+                        effector_configs.push(config);
                     }
-                    "step_delay" => {
-                        let delay = evaluator.evaluate_number(
-                            &instance.properties,
-                            "delay",
-                            eval_time,
-                            0.1,
-                        ) as f32;
-                        let duration = evaluator.evaluate_number(
-                            &instance.properties,
-                            "duration",
-                            eval_time,
-                            1.0,
-                        ) as f32;
-                        let from_opacity = evaluator.evaluate_number(
-                            &instance.properties,
-                            "from_opacity",
-                            eval_time,
-                            0.0,
-                        ) as f32;
-                        let to_opacity = evaluator.evaluate_number(
-                            &instance.properties,
-                            "to_opacity",
-                            eval_time,
-                            100.0,
-                        ) as f32;
-
-                        effector_configs.push(EffectorConfig::StepDelay {
-                            delay_per_element: delay,
-                            duration,
-                            from_opacity,
-                            to_opacity,
-                            target: EffectorTarget::default(),
-                        });
-                    }
-                    "randomize" => {
-                        let seed =
-                            evaluator.evaluate_number(&instance.properties, "seed", eval_time, 0.0)
-                                as u64;
-                        let amount = evaluator.evaluate_number(
-                            &instance.properties,
-                            "amount",
-                            eval_time,
-                            1.0,
-                        ) as f32;
-                        // Read explicit ranges if available, otherwise fall back to amount-based defaults
-                        let tr_val = evaluator.evaluate_number(
-                            &instance.properties,
-                            "translate_range",
-                            eval_time,
-                            100.0 * amount as f64,
-                        ) as f32;
-                        let translate_range = (tr_val, tr_val);
-
-                        let rotate_range = evaluator.evaluate_number(
-                            &instance.properties,
-                            "rotate_range",
-                            eval_time,
-                            45.0 * amount as f64,
-                        ) as f32;
-
-                        // Start with default scale range (1.0, 1.0) as we don't have scale_range property yet in UI snippet?
-                        let scale_range = (1.0, 1.0);
-
-                        effector_configs.push(EffectorConfig::Randomize {
-                            translate_range,
-                            rotate_range,
-                            scale_range,
-                            seed,
-                            target: EffectorTarget::default(),
-                        });
-                    }
-                    _ => {}
+                } else {
+                    log::warn!(
+                        "[WARN] entity_converter/text.rs: Unknown/Unsupported effector type: {}",
+                        instance.effector_type
+                    );
                 }
             }
 
             // Convert DecoratorInstances to DecoratorConfigs
             for instance in &track_clip.decorators {
-                match instance.decorator_type.as_str() {
-                    "backplate" => {
-                        // Note: Color evaluation logic in original text.rs was tricky, assuming default behavior for now if helpers missing
-                        // But we can try to evaluate color components if they exist, or use a helper if available.
-                        // FrameEvaluationContext doesn't seem to have evaluate_color exposed publicly in definitions seen so far?
-                        // Actually it might map to `evaluate_color` if implemented.
-                        // Let's assume `evaluate_color` is NOT available based on previous errors/context, and allow fallback.
-                        // Wait, `PropertyUiType::Color` stores `PropertyValue::Color`.
-                        // `evaluate_property_value` returns `PropertyValue`.
-                        // We need a way to get the Color struct.
-
-                        let color = if let Some(prop) = instance.properties.get("color") {
-                            if let Some(crate::model::project::property::PropertyValue::Color(c)) =
-                                prop.value()
-                            {
-                                c.clone()
-                            } else {
-                                crate::model::frame::color::Color::black()
-                            }
-                        } else {
-                            crate::model::frame::color::Color::black()
-                        };
-
-                        let padding_val = evaluator.evaluate_number(
-                            &instance.properties,
-                            "padding",
-                            eval_time,
-                            0.0,
-                        ) as f32;
-                        let radius = evaluator.evaluate_number(
-                            &instance.properties,
-                            "radius",
-                            eval_time,
-                            0.0,
-                        ) as f32;
-
-                        let target_str = evaluator
-                            .require_string(&instance.properties, "target", eval_time, "Block")
-                            .unwrap_or("Block".to_string());
-
-                        let target = match target_str.as_str() {
-                            "Char" => BackplateTarget::Char,
-                            "Line" => BackplateTarget::Line,
-                            _ => BackplateTarget::Block,
-                        };
-
-                        let shape_str = evaluator
-                            .require_string(&instance.properties, "shape", eval_time, "Rect")
-                            .unwrap_or("Rect".to_string());
-
-                        let shape = match shape_str.as_str() {
-                            "RoundRect" => BackplateShape::RoundedRect,
-                            "Circle" => BackplateShape::Circle,
-                            _ => BackplateShape::Rect,
-                        };
-
-                        decorator_configs.push(DecoratorConfig::Backplate {
-                            target,
-                            shape,
-                            color,
-                            padding: (padding_val, padding_val, padding_val, padding_val),
-                            corner_radius: radius,
-                        });
+                if let Some(plugin) = evaluator
+                    .plugin_manager
+                    .get_decorator_plugin(&instance.decorator_type)
+                {
+                    if let Some(config) = plugin.convert(evaluator, instance, eval_time) {
+                        decorator_configs.push(config);
                     }
-                    _ => {}
+                } else {
+                    log::warn!(
+                        "[WARN] entity_converter/text.rs: Unknown/Unsupported decorator type: {}",
+                        instance.decorator_type
+                    );
                 }
             }
 

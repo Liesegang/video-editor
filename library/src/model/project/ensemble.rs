@@ -1,11 +1,11 @@
-use crate::model::project::property::{Property, PropertyMap, PropertyValue};
+use crate::model::project::property::PropertyMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EffectorInstance {
     pub id: Uuid,
-    pub effector_type: String, // e.g. "step_delay", "randomize"
+    pub effector_type: String,
     #[serde(default)]
     pub properties: PropertyMap,
 }
@@ -17,56 +17,6 @@ impl EffectorInstance {
             effector_type: effector_type.to_string(),
             properties,
         }
-    }
-
-    pub fn default_of_type(type_name: &str) -> Self {
-        let mut props = PropertyMap::default();
-        match type_name {
-            "transform" => {
-                props.set(
-                    "tx".into(),
-                    Property::constant(PropertyValue::Number(ordered_float::OrderedFloat(0.0))),
-                );
-                props.set(
-                    "ty".into(),
-                    Property::constant(PropertyValue::Number(ordered_float::OrderedFloat(0.0))),
-                );
-                props.set(
-                    "scale_x".into(),
-                    Property::constant(PropertyValue::Number(ordered_float::OrderedFloat(1.0))),
-                );
-                props.set(
-                    "scale_y".into(),
-                    Property::constant(PropertyValue::Number(ordered_float::OrderedFloat(1.0))),
-                );
-                props.set(
-                    "rotation".into(),
-                    Property::constant(PropertyValue::Number(ordered_float::OrderedFloat(0.0))),
-                );
-            }
-            "step_delay" => {
-                props.set(
-                    "delay".into(),
-                    Property::constant(PropertyValue::Number(ordered_float::OrderedFloat(0.1))),
-                );
-                props.set(
-                    "duration".into(),
-                    Property::constant(PropertyValue::Number(ordered_float::OrderedFloat(1.0))),
-                );
-            }
-            "randomize" => {
-                props.set(
-                    "seed".into(),
-                    Property::constant(PropertyValue::Number(ordered_float::OrderedFloat(0.0))),
-                );
-                props.set(
-                    "amount".into(),
-                    Property::constant(PropertyValue::Number(ordered_float::OrderedFloat(1.0))),
-                );
-            }
-            _ => {}
-        }
-        Self::new(type_name, props)
     }
 }
 
@@ -99,33 +49,6 @@ impl DecoratorInstance {
             decorator_type: decorator_type.to_string(),
             properties,
         }
-    }
-
-    pub fn default_of_type(type_name: &str) -> Self {
-        let mut props = PropertyMap::default();
-        match type_name {
-            "backplate" => {
-                props.set(
-                    "color".into(),
-                    Property::constant(PropertyValue::Color(crate::model::frame::color::Color {
-                        r: 0,
-                        g: 0,
-                        b: 0,
-                        a: 128,
-                    })),
-                );
-                props.set(
-                    "padding".into(),
-                    Property::constant(PropertyValue::Number(ordered_float::OrderedFloat(10.0))),
-                );
-                props.set(
-                    "radius".into(),
-                    Property::constant(PropertyValue::Number(ordered_float::OrderedFloat(4.0))),
-                );
-            }
-            _ => {}
-        }
-        Self::new(type_name, props)
     }
 }
 

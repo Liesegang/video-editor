@@ -676,6 +676,18 @@ impl PropertyMap {
         }
     }
 
+    /// Creates a PropertyMap populated with default values from the given definitions.
+    pub fn from_definitions(defs: &[PropertyDefinition]) -> Self {
+        let mut map = Self::new();
+        for def in defs {
+            map.set(
+                def.name.clone(),
+                Property::constant(def.default_value.clone()),
+            );
+        }
+        map
+    }
+
     pub fn get(&self, key: &str) -> Option<&Property> {
         self.properties.get(key)
     }
@@ -808,5 +820,10 @@ impl PropertyDefinition {
             default_value: PropertyValue::Number(OrderedFloat(0.0)), // Default, can be overridden by caller if needed
             category: "General".to_string(),
         }
+    }
+
+    pub fn with_default(mut self, value: PropertyValue) -> Self {
+        self.default_value = value;
+        self
     }
 }

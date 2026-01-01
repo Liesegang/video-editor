@@ -8,10 +8,13 @@ mod manager;
 mod repository;
 mod traits;
 
+pub mod decorators;
+pub mod effectors;
 pub mod effects;
 pub mod exporters;
 pub mod loaders;
 pub mod properties;
+pub mod styles;
 
 // Re-export from submodules
 pub use entity_converter::{EntityConverterPlugin, FrameEvaluationContext};
@@ -21,9 +24,12 @@ pub use repository::PluginRepository;
 pub use traits::{Plugin, PropertyPlugin};
 
 // Re-export from sub-crate modules
+pub use decorators::DecoratorPlugin;
+pub use effectors::EffectorPlugin;
 pub use effects::{EffectDefinition, EffectPlugin, EffectRepository};
 pub use exporters::{ExportFormat, ExportPlugin, ExportRepository, ExportSettings};
 pub use loaders::{AssetMetadata, LoadPlugin, LoadRepository, LoadRequest, LoadResponse};
+pub use styles::StylePlugin;
 
 // Re-export plugin implementations
 pub use effects::blur::BlurEffectPlugin;
@@ -46,4 +52,7 @@ pub enum PluginCategory {
     Export,
     Property,
     EntityConverter,
+    Effector,
+    Decorator,
+    Style,
 }

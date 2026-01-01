@@ -17,9 +17,11 @@ fn test_video_converter_frame_calculation() {
     registry.register("constant", Arc::new(ConstantEvaluator));
     let registry = Arc::new(registry);
 
+    let plugin_manager = Arc::new(library::plugin::PluginManager::new());
     let context = FrameEvaluationContext {
         composition: &comp,
         property_evaluators: &registry,
+        plugin_manager: &plugin_manager,
     };
 
     let video_fps = 60.0;
