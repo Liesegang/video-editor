@@ -17,8 +17,6 @@ const EDGE_DRAG_WIDTH: f32 = 5.0;
 enum DeferredClipAction {
     /// Update clip time (resize)
     UpdateClipTime {
-        comp_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         new_in_frame: u64,
         new_out_frame: u64,
@@ -33,11 +31,7 @@ enum DeferredClipAction {
         target_index: Option<usize>,
     },
     /// Remove clip from track
-    RemoveClip {
-        comp_id: Uuid,
-        track_id: Uuid,
-        clip_id: Uuid,
-    },
+    RemoveClip { track_id: Uuid, clip_id: Uuid },
     /// Push history state after changes
     PushHistory,
 }
@@ -402,14 +396,12 @@ pub fn draw_clips(
     for action in deferred_actions {
         match action {
             DeferredClipAction::UpdateClipTime {
-                comp_id,
-                track_id,
                 clip_id,
                 new_in_frame,
                 new_out_frame,
             } => {
                 project_service
-                    .update_clip_time(comp_id, track_id, clip_id, new_in_frame, new_out_frame)
+                    .update_clip_time(clip_id, new_in_frame, new_out_frame)
                     .ok();
             }
             DeferredClipAction::MoveClipToTrack {
@@ -431,12 +423,8 @@ pub fn draw_clips(
                     log::error!("Failed to move entity: {:?}", e);
                 }
             }
-            DeferredClipAction::RemoveClip {
-                comp_id,
-                track_id,
-                clip_id,
-            } => {
-                if let Err(e) = project_service.remove_clip_from_track(comp_id, track_id, clip_id) {
+            DeferredClipAction::RemoveClip { track_id, clip_id } => {
+                if let Err(e) = project_service.remove_clip_from_track(track_id, clip_id) {
                     log::error!("Failed to remove clip: {:?}", e);
                 } else {
                     removed_clip_ids.push(clip_id);
@@ -578,9 +566,8 @@ fn draw_single_clip(
     if !is_summary_clip {
         clip_resp.context_menu(|ui| {
             if ui.button(format!("{} Remove", icons::TRASH)).clicked() {
-                if let Some(comp_id) = editor_context.selection.composition_id {
+                if let Some(_comp_id) = editor_context.selection.composition_id {
                     deferred_actions.push(DeferredClipAction::RemoveClip {
-                        comp_id,
                         track_id: track.id,
                         clip_id: clip.id,
                     });
@@ -670,13 +657,11 @@ fn draw_single_clip(
             }
 
             if new_in_frame != clip.in_frame || new_out_frame != clip.out_frame {
-                if let (Some(comp_id), Some(tid)) = (
+                if let (Some(_comp_id), Some(_tid)) = (
                     editor_context.selection.composition_id,
                     editor_context.selection.last_selected_track_id,
                 ) {
                     deferred_actions.push(DeferredClipAction::UpdateClipTime {
-                        comp_id,
-                        track_id: tid,
                         clip_id: clip.id,
                         new_in_frame,
                         new_out_frame,
@@ -839,7 +824,7 @@ fn draw_single_clip(
         let dt_frames = dt_frames_f32.round() as i64;
 
         if dt_frames != 0 {
-            if let Some(comp_id) = editor_context.selection.composition_id {
+            if let Some(_comp_id) = editor_context.selection.composition_id {
                 let selected_ids: Vec<Uuid> = editor_context
                     .selection
                     .selected_entities
@@ -851,7 +836,7 @@ fn draw_single_clip(
                     // Use Project.get_clip for lookup
                     if let Some(c) = project.get_clip(entity_id) {
                         // Find which track contains this clip
-                        if let Some(tid) =
+                        if let Some(_tid) =
                             find_track_containing_clip(project, root_track_ids, entity_id)
                         {
                             let new_in_frame = (c.in_frame as i64 + dt_frames).max(0) as u64;
@@ -859,8 +844,6 @@ fn draw_single_clip(
                                 (c.out_frame as i64 + dt_frames).max(new_in_frame as i64) as u64;
 
                             deferred_actions.push(DeferredClipAction::UpdateClipTime {
-                                comp_id,
-                                track_id: tid,
                                 clip_id: c.id,
                                 new_in_frame,
                                 new_out_frame,

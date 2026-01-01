@@ -133,8 +133,6 @@ pub fn process_action(
                 };
 
                 let _ = project_service.update_effect_keyframe_by_index(
-                    comp_id,
-                    track_id,
                     entity_id,
                     eff_idx,
                     &prop_key,
@@ -188,8 +186,6 @@ pub fn process_action(
                 };
 
                 let _ = project_service.update_style_keyframe_by_index(
-                    comp_id,
-                    track_id,
                     entity_id,
                     style_idx,
                     &prop_key,
@@ -241,8 +237,6 @@ pub fn process_action(
                 };
 
                 let _ = project_service.update_keyframe(
-                    comp_id,
-                    track_id,
                     entity_id,
                     base_name,
                     idx,
@@ -334,17 +328,13 @@ pub fn process_action(
             };
 
             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                let _ = project_service.add_effect_keyframe(
-                    comp_id, track_id, entity_id, eff_idx, &prop_key, eval_time, new_pv, None,
-                );
+                let _ = project_service
+                    .add_effect_keyframe(entity_id, eff_idx, &prop_key, eval_time, new_pv, None);
             } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                let _ = project_service.add_style_keyframe(
-                    comp_id, track_id, entity_id, style_idx, &prop_key, eval_time, new_pv, None,
-                );
+                let _ = project_service
+                    .add_style_keyframe(entity_id, style_idx, &prop_key, eval_time, new_pv, None);
             } else {
-                let _ = project_service.add_keyframe(
-                    comp_id, track_id, entity_id, base_name, eval_time, new_pv, None,
-                );
+                let _ = project_service.add_keyframe(entity_id, base_name, eval_time, new_pv, None);
             }
             if let Ok(proj_read) = project.read() {
                 history_manager.push_project_state(proj_read.clone());
@@ -361,8 +351,6 @@ pub fn process_action(
 
             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                 let _ = project_service.update_effect_keyframe_by_index(
-                    comp_id,
-                    track_id,
                     entity_id,
                     eff_idx,
                     &prop_key,
@@ -373,8 +361,6 @@ pub fn process_action(
                 );
             } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
                 let _ = project_service.update_style_keyframe_by_index(
-                    comp_id,
-                    track_id,
                     entity_id,
                     style_idx,
                     &prop_key,
@@ -385,8 +371,6 @@ pub fn process_action(
                 );
             } else {
                 let _ = project_service.update_keyframe(
-                    comp_id,
-                    track_id,
                     entity_id,
                     base_name,
                     idx,
@@ -409,15 +393,12 @@ pub fn process_action(
             };
 
             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                let _ = project_service.remove_effect_keyframe_by_index(
-                    comp_id, track_id, entity_id, eff_idx, &prop_key, idx,
-                );
-            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
                 let _ = project_service
-                    .remove_style_keyframe(comp_id, track_id, entity_id, style_idx, &prop_key, idx);
+                    .remove_effect_keyframe_by_index(entity_id, eff_idx, &prop_key, idx);
+            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
+                let _ = project_service.remove_style_keyframe(entity_id, style_idx, &prop_key, idx);
             } else {
-                let _ =
-                    project_service.remove_keyframe(comp_id, track_id, entity_id, base_name, idx);
+                let _ = project_service.remove_keyframe(entity_id, base_name, idx);
             }
             if let Ok(proj_read) = project.read() {
                 history_manager.push_project_state(proj_read.clone());

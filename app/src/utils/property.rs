@@ -38,8 +38,6 @@ pub fn update_number_property(
 ) {
     let local_time = get_local_time(service, comp_id, track_id, entity_id, time);
     let _ = service.update_property_or_keyframe(
-        comp_id,
-        track_id,
         entity_id,
         prop_name,
         local_time,
@@ -59,8 +57,6 @@ pub fn update_string_property(
 ) {
     let local_time = get_local_time(service, comp_id, track_id, entity_id, time);
     let _ = service.update_property_or_keyframe(
-        comp_id,
-        track_id,
         entity_id,
         prop_name,
         local_time,
@@ -79,7 +75,5 @@ pub fn update_property(
     value: PropertyValue,
 ) {
     let local_time = get_local_time(service, comp_id, track_id, entity_id, time);
-    let _ = service.update_property_or_keyframe(
-        comp_id, track_id, entity_id, prop_name, local_time, value, None,
-    );
+    let _ = service.update_property_or_keyframe(entity_id, prop_name, local_time, value, None);
 }

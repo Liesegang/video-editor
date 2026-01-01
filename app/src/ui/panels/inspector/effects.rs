@@ -1,5 +1,5 @@
 use super::action_handler::{ActionContext, PropertyTarget};
-use super::properties::{render_property_rows, PropertyAction, PropertyRenderContext};
+use super::properties::{render_inspector_properties_grid, PropertyAction, PropertyRenderContext};
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use crate::ui::widgets::reorderable_list::ReorderableList;
@@ -13,8 +13,6 @@ pub fn render_effects_section(
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
-    comp_id: Uuid,
-    track_id: Uuid,
     selected_entity_id: Uuid,
     current_time: f64,
     fps: f64,
@@ -24,7 +22,8 @@ pub fn render_effects_section(
     ui.heading("Effects");
     ui.separator();
 
-    ui.menu_button("Add Effect", |ui| {
+    use super::properties::render_add_button;
+    render_add_button(ui, |ui| {
         let available_effects = project_service.get_plugin_manager().get_available_effects();
         let items: Vec<(String, Option<String>, String)> = available_effects
             .into_iter()
@@ -37,7 +36,7 @@ pub fn render_effects_section(
             &items,
             |effect_id| {
                 project_service
-                    .add_effect_to_clip(comp_id, track_id, selected_entity_id, &effect_id)
+                    .add_effect_to_clip(selected_entity_id, &effect_id)
                     .ok();
                 *needs_refresh = true;
             },
@@ -94,39 +93,26 @@ pub fn render_effects_section(
                         .get_plugin_manager()
                         .get_effect_properties(&effect.effect_type);
 
-                    let mut pending_actions = Vec::new();
-                    egui::Grid::new(format!("effect_grid_{}", effect.id))
-                        .striped(true)
-                        .show(ui, |ui| {
-                            let actions = render_property_rows(
-                                ui,
-                                &defs,
-                                |name| {
-                                    effect.properties.get(name).and_then(|p| {
-                                        Some(project_service.evaluate_property_value(
-                                            p,
-                                            &effect.properties,
-                                            current_time,
-                                            fps,
-                                        ))
-                                    })
-                                },
-                                |name| effect.properties.get(name).cloned(),
-                                &PropertyRenderContext {
-                                    available_fonts: &editor_context.available_fonts,
-                                    in_grid: true,
-                                    current_time,
-                                },
-                            );
-                            pending_actions = actions;
-                        });
+                    let context = PropertyRenderContext {
+                        available_fonts: &editor_context.available_fonts,
+                        in_grid: true,
+                        current_time,
+                    };
+
+                    let pending_actions = render_inspector_properties_grid(
+                        ui,
+                        format!("effect_grid_{}", effect.id),
+                        &effect.properties,
+                        &defs,
+                        project_service,
+                        &context,
+                        fps,
+                    );
                     // Process actions outside Grid closure
                     let effect_props = effect.properties.clone();
                     let mut ctx = ActionContext::new(
                         project_service,
                         history_manager,
-                        comp_id,
-                        track_id,
                         selected_entity_id,
                         current_time,
                     );
@@ -178,7 +164,7 @@ pub fn render_effects_section(
         if ids != old_ids {
             // Update native order
             project_service
-                .update_track_clip_effects(comp_id, track_id, selected_entity_id, effects)
+                .update_track_clip_effects(selected_entity_id, effects)
                 .ok();
             *needs_refresh = true;
         }

@@ -643,6 +643,15 @@ impl Property {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PropertyTarget {
+    Clip,
+    Effect(usize),
+    Style(usize),
+    Effector(usize),
+    Decorator(usize),
+}
+
 #[derive(Serialize, Deserialize, Clone, Default, PartialEq, Eq, Debug)] // Added Debug
 #[serde(transparent)]
 pub struct PropertyMap {
@@ -681,6 +690,32 @@ impl PropertyMap {
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Property)> {
         self.properties.iter()
+    }
+
+    /// Update a property value or upsert a keyframe if the property is keyframed.
+    /// This centralizes the logic for property updates.
+    pub fn update_property_or_keyframe(
+        &mut self,
+        key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<EasingFunction>,
+    ) {
+        if let Some(prop) = self.properties.get_mut(key) {
+            if prop.evaluator == "keyframe" {
+                prop.upsert_keyframe(time, value, easing);
+            } else {
+                // If constant, update directly. If we wanted to promote to keyframe auto-magically on "add keyframe" action,
+                // that's handled by add_keyframe calling upsert_keyframe.
+                // But for simple updates (drag value), we just set constant.
+                self.properties
+                    .insert(key.to_string(), Property::constant(value));
+            }
+        } else {
+            // New property, default to constant
+            self.properties
+                .insert(key.to_string(), Property::constant(value));
+        }
     }
 
     pub fn get_constant_value(&self, key: &str) -> Option<&PropertyValue> {

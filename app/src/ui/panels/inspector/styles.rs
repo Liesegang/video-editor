@@ -1,5 +1,5 @@
 use super::action_handler::{ActionContext, PropertyTarget};
-use super::properties::{render_property_rows, PropertyAction, PropertyRenderContext};
+use super::properties::{render_inspector_properties_grid, PropertyAction, PropertyRenderContext};
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use crate::ui::widgets::reorderable_list::ReorderableList;
@@ -18,8 +18,6 @@ pub fn render_styles_section(
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
-    comp_id: Uuid,
-    track_id: Uuid,
     selected_entity_id: Uuid,
     current_time: f64,
     fps: f64,
@@ -31,65 +29,71 @@ pub fn render_styles_section(
     ui.separator();
 
     // Add buttons
+    // Add buttons
     ui.horizontal(|ui| {
-        if ui.button("+ Fill").clicked() {
-            let mut new_style = StyleInstance::new("fill", PropertyMap::new());
-            // Defualts
-            new_style.properties.set(
-                "color".to_string(),
-                Property::constant(PropertyValue::Color(Color {
-                    r: 255,
-                    g: 255,
-                    b: 255,
-                    a: 255,
-                })),
-            );
-            new_style.properties.set(
-                "offset".to_string(),
-                Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
-            );
+        use super::properties::render_add_button;
+        render_add_button(ui, |ui| {
+            if ui.button("Fill").clicked() {
+                let mut new_style = StyleInstance::new("fill", PropertyMap::new());
+                // Defualts
+                new_style.properties.set(
+                    "color".to_string(),
+                    Property::constant(PropertyValue::Color(Color {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                        a: 255,
+                    })),
+                );
+                new_style.properties.set(
+                    "offset".to_string(),
+                    Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
+                );
 
-            let mut new_styles = styles.clone();
-            new_styles.push(new_style);
+                let mut new_styles = styles.clone();
+                new_styles.push(new_style);
 
-            project_service
-                .update_track_clip_styles(comp_id, track_id, selected_entity_id, new_styles)
-                .ok();
-            *needs_refresh = true;
-        }
-        if ui.button("+ Stroke").clicked() {
-            let mut new_style = StyleInstance::new("stroke", PropertyMap::new());
-            // Defaults
-            new_style.properties.set(
-                "color".to_string(),
-                Property::constant(PropertyValue::Color(Color {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                })),
-            );
-            new_style.properties.set(
-                "width".to_string(),
-                Property::constant(PropertyValue::Number(OrderedFloat(1.0))),
-            );
-            new_style.properties.set(
-                "offset".to_string(),
-                Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
-            );
-            new_style.properties.set(
-                "miter".to_string(),
-                Property::constant(PropertyValue::Number(OrderedFloat(4.0))),
-            );
+                project_service
+                    .update_track_clip_styles(selected_entity_id, new_styles)
+                    .ok();
+                *needs_refresh = true;
+                ui.close();
+            }
+            if ui.button("Stroke").clicked() {
+                let mut new_style = StyleInstance::new("stroke", PropertyMap::new());
+                // Defaults
+                new_style.properties.set(
+                    "color".to_string(),
+                    Property::constant(PropertyValue::Color(Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    })),
+                );
+                new_style.properties.set(
+                    "width".to_string(),
+                    Property::constant(PropertyValue::Number(OrderedFloat(1.0))),
+                );
+                new_style.properties.set(
+                    "offset".to_string(),
+                    Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
+                );
+                new_style.properties.set(
+                    "miter".to_string(),
+                    Property::constant(PropertyValue::Number(OrderedFloat(4.0))),
+                );
 
-            let mut new_styles = styles.clone();
-            new_styles.push(new_style);
+                let mut new_styles = styles.clone();
+                new_styles.push(new_style);
 
-            project_service
-                .update_track_clip_styles(comp_id, track_id, selected_entity_id, new_styles)
-                .ok();
-            *needs_refresh = true;
-        }
+                project_service
+                    .update_track_clip_styles(selected_entity_id, new_styles)
+                    .ok();
+                *needs_refresh = true;
+                ui.close();
+            }
+        });
     });
 
     let mut local_styles = styles.clone();
@@ -152,39 +156,26 @@ pub fn render_styles_section(
         header_res.body(|ui| {
             let defs = get_style_definitions(&style.style_type);
 
-            let mut pending_actions = Vec::new();
-            egui::Grid::new(format!("style_grid_{}", style.id))
-                .striped(true)
-                .show(ui, |ui| {
-                    let actions = render_property_rows(
-                        ui,
-                        &defs,
-                        |name| {
-                            style.properties.get(name).and_then(|p| {
-                                Some(project_service.evaluate_property_value(
-                                    p,
-                                    &style.properties,
-                                    current_time,
-                                    fps,
-                                ))
-                            })
-                        },
-                        |name| style.properties.get(name).cloned(),
-                        &PropertyRenderContext {
-                            available_fonts: &editor_context.available_fonts,
-                            in_grid: true,
-                            current_time,
-                        },
-                    );
-                    pending_actions = actions;
-                });
+            let context = PropertyRenderContext {
+                available_fonts: &editor_context.available_fonts,
+                in_grid: true,
+                current_time,
+            };
+
+            let pending_actions = render_inspector_properties_grid(
+                ui,
+                format!("style_grid_{}", style.id),
+                &style.properties,
+                &defs,
+                project_service,
+                &context,
+                fps,
+            );
             // Process actions outside Grid closure
             let style_props = style.properties.clone();
             let mut ctx = ActionContext::new(
                 project_service,
                 history_manager,
-                comp_id,
-                track_id,
                 selected_entity_id,
                 current_time,
             );
@@ -233,7 +224,7 @@ pub fn render_styles_section(
 
     if ids != old_ids {
         project_service
-            .update_track_clip_styles(comp_id, track_id, selected_entity_id, local_styles)
+            .update_track_clip_styles(selected_entity_id, local_styles)
             .ok();
         *needs_refresh = true;
     }

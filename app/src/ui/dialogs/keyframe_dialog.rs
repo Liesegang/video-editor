@@ -241,12 +241,12 @@ pub fn show_keyframe_dialog(
             });
 
             if should_update {
-                let comp_id = match editor_context.selection.composition_id {
+                let _comp_id = match editor_context.selection.composition_id {
                     Some(id) => id,
                     None => return,
                 };
 
-                if let (Some(track_id), Some(entity_id)) = (state.track_id, state.entity_id) {
+                if let (Some(_track_id), Some(entity_id)) = (state.track_id, state.entity_id) {
                     let new_time = state.time;
                     use library::model::project::property::PropertyValue;
                     use ordered_float::OrderedFloat;
@@ -347,8 +347,6 @@ pub fn show_keyframe_dialog(
 
                     let result = if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                         project_service.update_effect_keyframe_by_index(
-                            comp_id,
-                            track_id,
                             entity_id,
                             eff_idx,
                             &prop_key,
@@ -359,8 +357,6 @@ pub fn show_keyframe_dialog(
                         )
                     } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
                         project_service.update_style_keyframe_by_index(
-                            comp_id,
-                            track_id,
                             entity_id,
                             style_idx,
                             &prop_key,
@@ -371,8 +367,6 @@ pub fn show_keyframe_dialog(
                         )
                     } else {
                         project_service.update_keyframe(
-                            comp_id,
-                            track_id,
                             entity_id,
                             base_name,
                             state.keyframe_index,

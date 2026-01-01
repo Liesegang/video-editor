@@ -353,51 +353,45 @@ impl ProjectManager {
 
     pub fn remove_clip_from_track(
         &self,
-        composition_id: Uuid,
         track_id: Uuid,
         clip_id: Uuid,
     ) -> Result<(), LibraryError> {
         handlers::clip_handler::ClipHandler::remove_clip_from_track(
             &self.project,
-            composition_id,
             track_id,
             clip_id,
         )
     }
 
-    pub fn update_clip_property(
+    pub fn update_track_clip_property(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         property_key: &str,
         value: PropertyValue,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_clip_property(
+        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
+            crate::model::project::property::PropertyTarget::Clip,
             property_key,
+            0.0,
             value,
+            None,
         )
     }
 
     pub fn update_property_or_keyframe(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_property_or_keyframe(
+        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
+            crate::model::project::property::PropertyTarget::Clip,
             property_key,
             time,
             value,
@@ -407,8 +401,6 @@ impl ProjectManager {
 
     pub fn update_keyframe(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         property_key: &str,
         index: usize,
@@ -416,11 +408,10 @@ impl ProjectManager {
         new_value: Option<PropertyValue>,
         new_easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::update_keyframe(
+        handlers::keyframe_handler::KeyframeHandler::update_keyframe_by_index(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
+            crate::model::project::property::PropertyTarget::Clip,
             property_key,
             index,
             time,
@@ -431,8 +422,6 @@ impl ProjectManager {
 
     pub fn update_effect_property_or_keyframe(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         effect_index: usize,
         property_key: &str,
@@ -440,12 +429,10 @@ impl ProjectManager {
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_effect_property_or_keyframe(
+        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
-            effect_index,
+            crate::model::project::property::PropertyTarget::Effect(effect_index),
             property_key,
             time,
             value,
@@ -455,8 +442,6 @@ impl ProjectManager {
 
     pub fn update_effect_keyframe_by_index(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         effect_index: usize,
         property_key: &str,
@@ -465,12 +450,10 @@ impl ProjectManager {
         value: Option<PropertyValue>,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::update_effect_keyframe_by_index(
+        handlers::keyframe_handler::KeyframeHandler::update_keyframe_by_index(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
-            effect_index,
+            crate::model::project::property::PropertyTarget::Effect(effect_index),
             property_key,
             keyframe_index,
             time,
@@ -481,19 +464,15 @@ impl ProjectManager {
 
     pub fn remove_effect_keyframe_by_index(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         effect_index: usize,
         property_key: &str,
         keyframe_index: usize,
     ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::remove_effect_keyframe_by_index(
+        handlers::keyframe_handler::KeyframeHandler::remove_keyframe_by_index(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
-            effect_index,
+            crate::model::project::property::PropertyTarget::Effect(effect_index),
             property_key,
             keyframe_index,
         )
@@ -501,16 +480,14 @@ impl ProjectManager {
 
     pub fn remove_keyframe(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         property_key: &str,
         index: usize,
     ) -> Result<(), LibraryError> {
         handlers::clip_handler::ClipHandler::remove_keyframe(
             &self.project,
-            composition_id,
-            track_id,
+            // composition_id, // Argument removed
+            // track_id, // Argument removed
             clip_id,
             property_key,
             index,
@@ -550,8 +527,6 @@ impl ProjectManager {
 
     pub fn add_keyframe(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         property_key: &str,
         time: f64,
@@ -560,9 +535,8 @@ impl ProjectManager {
     ) -> Result<(), LibraryError> {
         handlers::keyframe_handler::KeyframeHandler::add_keyframe(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
+            crate::model::project::property::PropertyTarget::Clip,
             property_key,
             time,
             value,
@@ -572,8 +546,6 @@ impl ProjectManager {
 
     pub fn add_effect_keyframe(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         effect_index: usize,
         property_key: &str,
@@ -581,16 +553,130 @@ impl ProjectManager {
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::add_effect_keyframe(
+        handlers::keyframe_handler::KeyframeHandler::add_keyframe(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
-            effect_index,
+            crate::model::project::property::PropertyTarget::Effect(effect_index),
             property_key,
             time,
             value,
             easing,
+        )
+    }
+
+    pub fn add_effector_keyframe(
+        &self,
+        clip_id: Uuid,
+        effector_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        handlers::keyframe_handler::KeyframeHandler::add_keyframe(
+            &self.project,
+            clip_id,
+            crate::model::project::property::PropertyTarget::Effector(effector_index),
+            property_key,
+            time,
+            value,
+            easing,
+        )
+    }
+
+    pub fn update_effector_keyframe_by_index(
+        &self,
+        clip_id: Uuid,
+        effector_index: usize,
+        property_key: &str,
+        keyframe_index: usize,
+        time: Option<f64>,
+        value: Option<PropertyValue>,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        handlers::keyframe_handler::KeyframeHandler::update_keyframe_by_index(
+            &self.project,
+            clip_id,
+            crate::model::project::property::PropertyTarget::Effector(effector_index),
+            property_key,
+            keyframe_index,
+            time,
+            value,
+            easing,
+        )
+    }
+
+    pub fn remove_effector_keyframe_by_index(
+        &self,
+        clip_id: Uuid,
+        effector_index: usize,
+        property_key: &str,
+        keyframe_index: usize,
+    ) -> Result<(), LibraryError> {
+        handlers::keyframe_handler::KeyframeHandler::remove_keyframe_by_index(
+            &self.project,
+            clip_id,
+            crate::model::project::property::PropertyTarget::Effector(effector_index),
+            property_key,
+            keyframe_index,
+        )
+    }
+
+    pub fn add_decorator_keyframe(
+        &self,
+        clip_id: Uuid,
+        decorator_index: usize,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        handlers::keyframe_handler::KeyframeHandler::add_keyframe(
+            &self.project,
+            clip_id,
+            crate::model::project::property::PropertyTarget::Decorator(decorator_index),
+            property_key,
+            time,
+            value,
+            easing,
+        )
+    }
+
+    pub fn update_decorator_keyframe_by_index(
+        &self,
+        clip_id: Uuid,
+        decorator_index: usize,
+        property_key: &str,
+        keyframe_index: usize,
+        time: Option<f64>,
+        value: Option<PropertyValue>,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        handlers::keyframe_handler::KeyframeHandler::update_keyframe_by_index(
+            &self.project,
+            clip_id,
+            crate::model::project::property::PropertyTarget::Decorator(decorator_index),
+            property_key,
+            keyframe_index,
+            time,
+            value,
+            easing,
+        )
+    }
+
+    pub fn remove_decorator_keyframe_by_index(
+        &self,
+        clip_id: Uuid,
+        decorator_index: usize,
+        property_key: &str,
+        keyframe_index: usize,
+    ) -> Result<(), LibraryError> {
+        handlers::keyframe_handler::KeyframeHandler::remove_keyframe_by_index(
+            &self.project,
+            clip_id,
+            crate::model::project::property::PropertyTarget::Decorator(decorator_index),
+            property_key,
+            keyframe_index,
         )
     }
 
@@ -632,13 +718,7 @@ impl ProjectManager {
         )
     }
 
-    pub fn add_effect_to_clip(
-        &self,
-        composition_id: Uuid,
-        track_id: Uuid,
-        clip_id: Uuid,
-        effect_id: &str,
-    ) -> Result<(), LibraryError> {
+    pub fn add_effect_to_clip(&self, clip_id: Uuid, effect_id: &str) -> Result<(), LibraryError> {
         let effect_config = self
             .plugin_manager
             .get_default_effect_config(effect_id)
@@ -649,103 +729,61 @@ impl ProjectManager {
                 ))
             })?;
 
-        handlers::clip_handler::ClipHandler::add_effect(
-            &self.project,
-            composition_id,
-            track_id,
-            clip_id,
-            effect_config,
-        )
+        handlers::clip_handler::ClipHandler::add_effect(&self.project, clip_id, effect_config)
     }
 
     pub fn update_track_clip_effects(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         effects: Vec<crate::model::project::EffectConfig>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_effects(
-            &self.project,
-            composition_id,
-            track_id,
-            clip_id,
-            effects,
-        )
+        handlers::clip_handler::ClipHandler::update_effects(&self.project, clip_id, effects)
     }
 
     pub fn update_track_clip_styles(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         styles: Vec<crate::model::project::style::StyleInstance>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_styles(
-            &self.project,
-            composition_id,
-            track_id,
-            clip_id,
-            styles,
-        )
+        handlers::clip_handler::ClipHandler::update_styles(&self.project, clip_id, styles)
     }
 
     pub fn update_track_clip_effectors(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         effectors: Vec<crate::model::project::ensemble::EffectorInstance>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_effectors(
-            &self.project,
-            composition_id,
-            track_id,
-            clip_id,
-            effectors,
-        )
+        handlers::clip_handler::ClipHandler::update_effectors(&self.project, clip_id, effectors)
     }
 
     pub fn update_track_clip_decorators(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         decorators: Vec<crate::model::project::ensemble::DecoratorInstance>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_decorators(
-            &self.project,
-            composition_id,
-            track_id,
-            clip_id,
-            decorators,
-        )
+        handlers::clip_handler::ClipHandler::update_decorators(&self.project, clip_id, decorators)
     }
 
     pub fn update_track_clip_style_property(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         style_index: usize,
         property_key: &str,
         value: PropertyValue,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_style_property(
+        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
-            style_index,
+            crate::model::project::property::PropertyTarget::Style(style_index),
             property_key,
+            0.0,
             value,
+            None,
         )
     }
 
     pub fn add_style_keyframe(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         style_index: usize,
         property_key: &str,
@@ -753,12 +791,10 @@ impl ProjectManager {
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::add_style_keyframe(
+        handlers::keyframe_handler::KeyframeHandler::add_keyframe(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
-            style_index,
+            crate::model::project::property::PropertyTarget::Style(style_index),
             property_key,
             time,
             value,
@@ -768,19 +804,15 @@ impl ProjectManager {
 
     pub fn remove_style_keyframe(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         style_index: usize,
         property_key: &str,
         keyframe_index: usize,
     ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::remove_style_keyframe(
+        handlers::keyframe_handler::KeyframeHandler::remove_keyframe_by_index(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
-            style_index,
+            crate::model::project::property::PropertyTarget::Style(style_index),
             property_key,
             keyframe_index,
         )
@@ -788,8 +820,6 @@ impl ProjectManager {
 
     pub fn update_style_keyframe_by_index(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         style_index: usize,
         property_key: &str,
@@ -798,12 +828,10 @@ impl ProjectManager {
         value: Option<PropertyValue>,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::update_style_keyframe_by_index(
+        handlers::keyframe_handler::KeyframeHandler::update_keyframe_by_index(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
-            style_index,
+            crate::model::project::property::PropertyTarget::Style(style_index),
             property_key,
             keyframe_index,
             time,
@@ -814,8 +842,6 @@ impl ProjectManager {
 
     pub fn update_style_property_or_keyframe(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         style_index: usize,
         property_key: &str,
@@ -823,12 +849,10 @@ impl ProjectManager {
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_style_property_or_keyframe(
+        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
-            style_index,
+            crate::model::project::property::PropertyTarget::Style(style_index),
             property_key,
             time,
             value,
@@ -838,8 +862,6 @@ impl ProjectManager {
 
     pub fn set_style_property_attribute(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         style_index: usize,
         property_key: &str,
@@ -848,8 +870,6 @@ impl ProjectManager {
     ) -> Result<(), LibraryError> {
         handlers::clip_handler::ClipHandler::set_style_property_attribute(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
             style_index,
             property_key,
@@ -860,8 +880,6 @@ impl ProjectManager {
 
     pub fn update_effector_property_or_keyframe(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         effector_index: usize,
         property_key: &str,
@@ -869,12 +887,10 @@ impl ProjectManager {
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_effector_property_or_keyframe(
+        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
-            effector_index,
+            crate::model::project::property::PropertyTarget::Effector(effector_index),
             property_key,
             time,
             value,
@@ -884,8 +900,6 @@ impl ProjectManager {
 
     pub fn update_decorator_property_or_keyframe(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         decorator_index: usize,
         property_key: &str,
@@ -893,12 +907,10 @@ impl ProjectManager {
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_decorator_property_or_keyframe(
+        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
-            decorator_index,
+            crate::model::project::property::PropertyTarget::Decorator(decorator_index),
             property_key,
             time,
             value,
@@ -908,8 +920,6 @@ impl ProjectManager {
 
     pub fn set_effector_property_attribute(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         effector_index: usize,
         property_key: &str,
@@ -918,8 +928,6 @@ impl ProjectManager {
     ) -> Result<(), LibraryError> {
         handlers::clip_handler::ClipHandler::set_effector_property_attribute(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
             effector_index,
             property_key,
@@ -930,8 +938,6 @@ impl ProjectManager {
 
     pub fn set_decorator_property_attribute(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         decorator_index: usize,
         property_key: &str,
@@ -940,8 +946,6 @@ impl ProjectManager {
     ) -> Result<(), LibraryError> {
         handlers::clip_handler::ClipHandler::set_decorator_property_attribute(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
             decorator_index,
             property_key,
@@ -952,8 +956,6 @@ impl ProjectManager {
 
     pub fn set_clip_property_attribute(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         property_key: &str,
         attribute_key: &str,
@@ -961,8 +963,6 @@ impl ProjectManager {
     ) -> Result<(), LibraryError> {
         handlers::clip_handler::ClipHandler::set_clip_property_attribute(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
             property_key,
             attribute_key,
@@ -972,8 +972,6 @@ impl ProjectManager {
 
     pub fn set_effect_property_attribute(
         &self,
-        composition_id: Uuid,
-        track_id: Uuid,
         clip_id: Uuid,
         effect_index: usize,
         property_key: &str,
@@ -982,8 +980,6 @@ impl ProjectManager {
     ) -> Result<(), LibraryError> {
         handlers::clip_handler::ClipHandler::set_effect_property_attribute(
             &self.project,
-            composition_id,
-            track_id,
             clip_id,
             effect_index,
             property_key,

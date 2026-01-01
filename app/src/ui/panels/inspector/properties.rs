@@ -523,3 +523,58 @@ where
     }
     actions
 }
+
+impl Clone for PropertyRenderContext<'_> {
+    fn clone(&self) -> Self {
+        Self {
+            available_fonts: self.available_fonts,
+            in_grid: self.in_grid,
+            current_time: self.current_time,
+        }
+    }
+}
+
+// Helper to standardise Grid + Property Evaluation loop
+pub fn render_inspector_properties_grid(
+    ui: &mut Ui,
+    id: impl std::hash::Hash,
+    properties: &library::model::project::property::PropertyMap,
+    definitions: &[PropertyDefinition],
+    project_service: &library::EditorService,
+    context: &PropertyRenderContext,
+    fps: f64,
+) -> Vec<PropertyAction> {
+    let mut pending_actions = Vec::new();
+
+    egui::Grid::new(id).striped(true).show(ui, |ui| {
+        // Force in_grid to true for this component
+        let grid_context = PropertyRenderContext {
+            in_grid: true,
+            ..context.clone()
+        };
+
+        let actions = render_property_rows(
+            ui,
+            definitions,
+            |name| {
+                properties.get(name).and_then(|p| {
+                    Some(project_service.evaluate_property_value(
+                        p,
+                        properties,
+                        context.current_time,
+                        fps,
+                    ))
+                })
+            },
+            |name| properties.get(name).cloned(),
+            &grid_context,
+        );
+        pending_actions = actions;
+    });
+
+    pending_actions
+}
+
+pub fn render_add_button(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
+    ui.menu_button("➕ Add", content);
+}

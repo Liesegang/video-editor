@@ -62,7 +62,6 @@ impl ClipHandler {
     /// Remove a clip from a track
     pub fn remove_clip_from_track(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
         track_id: Uuid,
         clip_id: Uuid,
     ) -> Result<(), LibraryError> {
@@ -90,52 +89,11 @@ impl ClipHandler {
         Ok(())
     }
 
-    pub fn update_clip_property(
+    /// Unified method to update property or keyframe for any target
+    pub fn update_target_property_or_keyframe(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
-        key: &str,
-        value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
-
-        // Sync struct fields with property updates
-        match key {
-            "in_frame" => {
-                if let PropertyValue::Number(n) = &value {
-                    clip.in_frame = n.into_inner().round() as u64;
-                }
-            }
-            "out_frame" => {
-                if let PropertyValue::Number(n) = &value {
-                    clip.out_frame = n.into_inner().round() as u64;
-                }
-            }
-            "source_begin_frame" => {
-                if let PropertyValue::Number(n) = &value {
-                    clip.source_begin_frame = n.into_inner().round() as i64;
-                }
-            }
-            _ => {}
-        }
-
-        clip.properties
-            .set(key.to_string(), Property::constant(value));
-        Ok(())
-    }
-
-    pub fn update_property_or_keyframe(
-        project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
-        clip_id: Uuid,
+        target: crate::model::project::property::PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
@@ -149,25 +107,39 @@ impl ClipHandler {
             .get_clip_mut(clip_id)
             .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
 
-        // Get or create property
-        if let Some(prop) = clip.properties.get_mut(property_key) {
-            if prop.evaluator == "keyframe" {
-                prop.upsert_keyframe(time, value, easing);
-            } else {
-                clip.properties
-                    .set(property_key.to_string(), Property::constant(value));
+        // Special handling for Clip struct fields sync
+        if let crate::model::project::property::PropertyTarget::Clip = target {
+            match property_key {
+                "in_frame" => {
+                    if let PropertyValue::Number(n) = &value {
+                        clip.in_frame = n.into_inner().round() as u64;
+                    }
+                }
+                "out_frame" => {
+                    if let PropertyValue::Number(n) = &value {
+                        clip.out_frame = n.into_inner().round() as u64;
+                    }
+                }
+                "source_begin_frame" => {
+                    if let PropertyValue::Number(n) = &value {
+                        clip.source_begin_frame = n.into_inner().round() as i64;
+                    }
+                }
+                _ => {}
             }
-        } else {
-            clip.properties
-                .set(property_key.to_string(), Property::constant(value));
         }
+
+        let prop_map = clip
+            .get_property_map_mut(target.clone())
+            .ok_or_else(|| LibraryError::Project(format!("Target {:?} not found", target)))?;
+
+        prop_map.update_property_or_keyframe(property_key, time, value, easing);
+
         Ok(())
     }
 
     pub fn update_keyframe(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
         property_key: &str,
         keyframe_index: usize,
@@ -227,8 +199,6 @@ impl ClipHandler {
 
     pub fn remove_keyframe(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
         property_key: &str,
         index: usize,
@@ -369,8 +339,6 @@ impl ClipHandler {
 
     pub fn add_effect(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
         effect: crate::model::project::EffectConfig,
     ) -> Result<(), LibraryError> {
@@ -388,8 +356,6 @@ impl ClipHandler {
 
     pub fn update_effects(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
         effects: Vec<crate::model::project::EffectConfig>,
     ) -> Result<(), LibraryError> {
@@ -407,8 +373,6 @@ impl ClipHandler {
 
     pub fn update_styles(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
         styles: Vec<crate::model::project::style::StyleInstance>,
     ) -> Result<(), LibraryError> {
@@ -426,8 +390,6 @@ impl ClipHandler {
 
     pub fn update_effectors(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
         effectors: Vec<crate::model::project::ensemble::EffectorInstance>,
     ) -> Result<(), LibraryError> {
@@ -445,8 +407,6 @@ impl ClipHandler {
 
     pub fn update_decorators(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
         decorators: Vec<crate::model::project::ensemble::DecoratorInstance>,
     ) -> Result<(), LibraryError> {
@@ -462,145 +422,8 @@ impl ClipHandler {
         Ok(())
     }
 
-    pub fn update_style_property(
-        project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
-        clip_id: Uuid,
-        style_index: usize,
-        property_key: &str,
-        value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
-
-        if let Some(style) = clip.styles.get_mut(style_index) {
-            style
-                .properties
-                .set(property_key.to_string(), Property::constant(value));
-            Ok(())
-        } else {
-            Err(LibraryError::Project(
-                "Style index out of range".to_string(),
-            ))
-        }
-    }
-
-    pub fn update_effect_property_or_keyframe(
-        project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
-        clip_id: Uuid,
-        effect_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
-
-        clip.update_effect_property(effect_index, property_key, time, value, easing)
-            .map_err(|e| LibraryError::Project(e.to_string()))
-    }
-
-    pub fn update_style_property_or_keyframe(
-        project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
-        clip_id: Uuid,
-        style_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
-
-        clip.update_style_property(style_index, property_key, time, value, easing)
-            .map_err(|e| LibraryError::Project(e.to_string()))
-    }
-
-    pub fn update_effector_property_or_keyframe(
-        project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
-
-        // Manual implementation since TrackClip might not have helper yet
-        if let Some(effector) = clip.effectors.get_mut(effector_index) {
-            effector.update_property_or_keyframe(property_key, time, value, easing);
-            Ok(())
-        } else {
-            Err(LibraryError::Project(
-                "Effector index out of range".to_string(),
-            ))
-        }
-    }
-
-    pub fn update_decorator_property_or_keyframe(
-        project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
-
-        // Manual implementation since TrackClip might not have helper yet
-        if let Some(decorator) = clip.decorators.get_mut(decorator_index) {
-            decorator.update_property_or_keyframe(property_key, time, value, easing);
-            Ok(())
-        } else {
-            Err(LibraryError::Project(
-                "Decorator index out of range".to_string(),
-            ))
-        }
-    }
-
     pub fn set_style_property_attribute(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
         style_index: usize,
         property_key: &str,
@@ -635,8 +458,6 @@ impl ClipHandler {
 
     pub fn set_effector_property_attribute(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
         effector_index: usize,
         property_key: &str,
@@ -671,8 +492,6 @@ impl ClipHandler {
 
     pub fn set_decorator_property_attribute(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
         decorator_index: usize,
         property_key: &str,
@@ -707,8 +526,6 @@ impl ClipHandler {
 
     pub fn set_clip_property_attribute(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
         property_key: &str,
         attribute_key: &str,
@@ -736,8 +553,6 @@ impl ClipHandler {
 
     pub fn set_effect_property_attribute(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
-        _track_id: Uuid,
         clip_id: Uuid,
         effect_index: usize,
         property_key: &str,

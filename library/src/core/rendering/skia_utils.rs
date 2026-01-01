@@ -64,8 +64,8 @@ impl GpuContext {
 }
 
 pub fn create_gpu_context(
-    share_handle: Option<usize>,
-    share_hwnd: Option<isize>,
+    #[allow(unused)] share_handle: Option<usize>,
+    #[allow(unused)] share_hwnd: Option<isize>,
 ) -> Option<GpuContext> {
     #[cfg(all(feature = "gl", target_os = "windows"))]
     {
@@ -168,8 +168,8 @@ fn create_dummy_window() -> Result<RawWindowHandle, String> {
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
 fn init_glutin_headless(
-    share_handle: Option<usize>,
-    share_hwnd: Option<isize>,
+    #[allow(unused)] share_handle: Option<usize>,
+    #[allow(unused)] share_hwnd: Option<isize>,
 ) -> Result<GpuContext, String> {
     // 1. Create Dummy Window
     let raw_window_handle = create_dummy_window()?;
