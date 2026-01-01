@@ -26,6 +26,8 @@ pub struct SkslPropertyConfig {
     pub step: Option<f64>,
     pub suffix: Option<String>,
     pub default: Option<ValueWrapper>,
+    pub min_hard_limit: Option<bool>,
+    pub max_hard_limit: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -318,11 +320,15 @@ impl EffectPlugin for SkslEffectPlugin {
                         max: p.max.unwrap_or(100.0),
                         step: p.step.unwrap_or(0.1),
                         suffix: "".to_string(),
+                        min_hard_limit: p.min_hard_limit.unwrap_or(false),
+                        max_hard_limit: p.max_hard_limit.unwrap_or(false),
                     },
                     "Int" => PropertyUiType::Integer {
                         min: p.min.unwrap_or(0.0) as i64,
                         max: p.max.unwrap_or(100.0) as i64,
                         suffix: "".to_string(),
+                        min_hard_limit: p.min_hard_limit.unwrap_or(false),
+                        max_hard_limit: p.max_hard_limit.unwrap_or(false),
                     },
                     "Bool" => PropertyUiType::Bool,
                     "Color" => PropertyUiType::Color,
@@ -385,13 +391,7 @@ impl EffectPlugin for SkslEffectPlugin {
                     None => PropertyValue::Number(OrderedFloat(0.0)), // Safe default
                 };
 
-                PropertyDefinition {
-                    name: p.name.clone(),
-                    label: p.label.clone(),
-                    ui_type,
-                    default_value,
-                    category: self.config.category.clone(),
-                }
+                PropertyDefinition::new(&p.name, ui_type, &p.label, default_value)
             })
             .collect()
     }

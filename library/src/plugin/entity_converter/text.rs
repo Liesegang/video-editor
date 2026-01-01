@@ -1,3 +1,6 @@
+use skia_safe::FontMgr;
+use skia_safe::textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle};
+
 use super::{EntityConverterPlugin, FrameEvaluationContext};
 use crate::model::frame::entity::{FrameContent, FrameObject};
 use crate::model::project::TrackClip;
@@ -47,93 +50,91 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
 
         vec![
             // Transform Properties
-            PropertyDefinition {
-                name: "position".to_string(),
-                label: "Position".to_string(),
-                ui_type: PropertyUiType::Vec2 {
+            PropertyDefinition::new(
+                "position",
+                PropertyUiType::Vec2 {
                     suffix: "px".to_string(),
                 },
-                default_value: PropertyValue::Vec2(Vec2 {
+                "Position",
+                PropertyValue::Vec2(Vec2 {
                     x: OrderedFloat(canvas_width as f64 / 2.0),
                     y: OrderedFloat(canvas_height as f64 / 2.0),
                 }),
-                category: "Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "scale".to_string(),
-                label: "Scale".to_string(),
-                ui_type: PropertyUiType::Vec2 {
+            ),
+            PropertyDefinition::new(
+                "scale",
+                PropertyUiType::Vec2 {
                     suffix: "%".to_string(),
                 },
-                default_value: PropertyValue::Vec2(Vec2 {
+                "Scale",
+                PropertyValue::Vec2(Vec2 {
                     x: OrderedFloat(100.0),
                     y: OrderedFloat(100.0),
                 }),
-                category: "Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "rotation".to_string(),
-                label: "Rotation".to_string(),
-                ui_type: PropertyUiType::Float {
+            ),
+            PropertyDefinition::new(
+                "rotation",
+                PropertyUiType::Float {
                     min: -360.0,
                     max: 360.0,
                     step: 1.0,
                     suffix: "deg".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "anchor".to_string(),
-                label: "Anchor".to_string(),
-                ui_type: PropertyUiType::Vec2 {
+                "Rotation",
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+            PropertyDefinition::new(
+                "anchor",
+                PropertyUiType::Vec2 {
                     suffix: "px".to_string(),
                 },
-                default_value: PropertyValue::Vec2(Vec2 {
+                "Anchor",
+                PropertyValue::Vec2(Vec2 {
                     x: OrderedFloat(clip_width as f64 / 2.0),
                     y: OrderedFloat(clip_height as f64 / 2.0),
                 }),
-                category: "Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "opacity".to_string(),
-                label: "Opacity".to_string(),
-                ui_type: PropertyUiType::Float {
+            ),
+            PropertyDefinition::new(
+                "opacity",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 100.0,
                     step: 1.0,
                     suffix: "%".to_string(),
+                    min_hard_limit: true,
+                    max_hard_limit: true,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Transform".to_string(),
-            },
+                "Opacity",
+                PropertyValue::Number(OrderedFloat(100.0)),
+            ),
             // Text Properties
-            PropertyDefinition {
-                name: "text".to_string(),
-                label: "Content".to_string(),
-                ui_type: PropertyUiType::Text,
-                default_value: PropertyValue::String("Text".to_string()),
-                category: "Text".to_string(),
-            },
-            PropertyDefinition {
-                name: "font_family".to_string(),
-                label: "Font".to_string(),
-                ui_type: PropertyUiType::Font,
-                default_value: PropertyValue::String("Arial".to_string()),
-                category: "Text".to_string(),
-            },
-            PropertyDefinition {
-                name: "size".to_string(),
-                label: "Font Size".to_string(),
-                ui_type: PropertyUiType::Float {
+            PropertyDefinition::new(
+                "text",
+                PropertyUiType::Text,
+                "Content",
+                PropertyValue::String("Text".to_string()),
+            ),
+            PropertyDefinition::new(
+                "font_family",
+                PropertyUiType::Font,
+                "Font",
+                PropertyValue::String("Arial".to_string()),
+            ),
+            PropertyDefinition::new(
+                "size",
+                PropertyUiType::Float {
                     min: 1.0,
                     max: 1000.0,
                     step: 1.0,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Text".to_string(),
-            },
+                "Font Size",
+                PropertyValue::Number(OrderedFloat(100.0)),
+            ),
         ]
     }
 
@@ -245,25 +246,29 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
             .unwrap_or_else(|| "Arial".to_string());
         let size = evaluator.evaluate_number(props, "size", eval_time, 12.0);
 
-        let font_mgr = skia_safe::FontMgr::default();
-        let typeface = font_mgr
-            .match_family_style(&font_name, skia_safe::FontStyle::normal())
-            .unwrap_or_else(|| {
-                font_mgr
-                    .match_family_style("Arial", skia_safe::FontStyle::normal())
-                    .expect("Failed to load default font")
-            });
+        let (width, height) = measure_text_size(&text, &font_name, size as f32);
 
-        let mut font = skia_safe::Font::default();
-        font.set_typeface(typeface);
-        font.set_size(size as f32);
-
-        let width =
-            crate::rendering::text_layout::measure_text_width(&text, &font_name, size as f32);
-        let (_, metrics) = font.metrics();
-        let top = 0.0;
-        let height = metrics.descent - metrics.ascent;
-
-        Some((0.0, top, width, height))
+        Some((0.0, 0.0, width, height))
     }
+}
+
+pub fn measure_text_size(text: &str, primary_font_name: &str, size: f32) -> (f32, f32) {
+    let mut font_collection = FontCollection::new();
+    font_collection.set_default_font_manager(FontMgr::default(), None);
+
+    let mut text_style = TextStyle::new();
+    text_style.set_font_families(&[primary_font_name]);
+    text_style.set_font_size(size);
+
+    let mut paragraph_style = ParagraphStyle::new();
+    paragraph_style.set_text_style(&text_style);
+
+    let mut builder = ParagraphBuilder::new(&paragraph_style, font_collection);
+
+    builder.add_text(text);
+
+    let mut paragraph = builder.build();
+    paragraph.layout(f32::MAX);
+
+    (paragraph.max_intrinsic_width(), paragraph.height())
 }

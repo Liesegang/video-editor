@@ -78,54 +78,58 @@ impl EffectPlugin for TileEffectPlugin {
         use ordered_float::OrderedFloat;
 
         vec![
-            PropertyDefinition {
-                name: "x".to_string(),
-                label: "X".to_string(),
-                ui_type: PropertyUiType::Float {
+            PropertyDefinition::new(
+                "x",
+                PropertyUiType::Float {
                     min: -10000.0,
                     max: 10000.0,
                     step: 1.0,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Tile".to_string(),
-            },
-            PropertyDefinition {
-                name: "y".to_string(),
-                label: "Y".to_string(),
-                ui_type: PropertyUiType::Float {
+                "X",
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+            PropertyDefinition::new(
+                "y",
+                PropertyUiType::Float {
                     min: -10000.0,
                     max: 10000.0,
                     step: 1.0,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Tile".to_string(),
-            },
-            PropertyDefinition {
-                name: "width".to_string(),
-                label: "Width".to_string(),
-                ui_type: PropertyUiType::Float {
+                "Y",
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+            PropertyDefinition::new(
+                "width",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 10000.0,
                     step: 1.0,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Tile".to_string(),
-            },
-            PropertyDefinition {
-                name: "height".to_string(),
-                label: "Height".to_string(),
-                ui_type: PropertyUiType::Float {
+                "Width",
+                PropertyValue::Number(OrderedFloat(100.0)),
+            ),
+            PropertyDefinition::new(
+                "height",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 10000.0,
                     step: 1.0,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Tile".to_string(),
-            },
+                "Height",
+                PropertyValue::Number(OrderedFloat(100.0)),
+            ),
         ]
     }
 }

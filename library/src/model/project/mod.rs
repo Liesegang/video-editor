@@ -5,7 +5,6 @@ pub mod ensemble;
 pub mod project;
 pub mod property;
 pub mod style;
-mod track_clip_factories;
 
 pub use effect::EffectConfig;
 pub use ensemble::{DecoratorInstance, EffectorInstance};
@@ -242,22 +241,22 @@ impl TrackClip {
                     suffix: "".to_string(),
                 },
                 "Position",
-            )
-            .with_default(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(0.0),
-                y: OrderedFloat(0.0),
-            })),
+                PropertyValue::Vec2(Vec2 {
+                    x: OrderedFloat(0.0),
+                    y: OrderedFloat(0.0),
+                }),
+            ),
             PropertyDefinition::new(
                 "scale",
                 PropertyUiType::Vec2 {
                     suffix: "".to_string(),
                 },
                 "Scale",
-            )
-            .with_default(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(100.0),
-                y: OrderedFloat(100.0),
-            })),
+                PropertyValue::Vec2(Vec2 {
+                    x: OrderedFloat(100.0),
+                    y: OrderedFloat(100.0),
+                }),
+            ),
             PropertyDefinition::new(
                 "rotation",
                 PropertyUiType::Float {
@@ -265,21 +264,23 @@ impl TrackClip {
                     max: 360.0,
                     step: 1.0,
                     suffix: "°".into(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
                 "Rotation",
-            )
-            .with_default(PropertyValue::Number(OrderedFloat(0.0))),
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
             PropertyDefinition::new(
                 "anchor",
                 PropertyUiType::Vec2 {
                     suffix: "".to_string(),
                 },
                 "Anchor Point",
-            )
-            .with_default(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(0.0),
-                y: OrderedFloat(0.0),
-            })),
+                PropertyValue::Vec2(Vec2 {
+                    x: OrderedFloat(0.0),
+                    y: OrderedFloat(0.0),
+                }),
+            ),
             PropertyDefinition::new(
                 "opacity",
                 PropertyUiType::Float {
@@ -287,10 +288,12 @@ impl TrackClip {
                     max: 100.0,
                     step: 1.0,
                     suffix: "%".into(),
+                    min_hard_limit: true,
+                    max_hard_limit: true,
                 },
                 "Opacity",
-            )
-            .with_default(PropertyValue::Number(OrderedFloat(100.0))),
+                PropertyValue::Number(OrderedFloat(100.0)),
+            ),
         ]
     }
 
@@ -309,6 +312,7 @@ impl TrackClip {
                     "file_path",
                     PropertyUiType::Text,
                     "File Path",
+                    PropertyValue::String("".to_string()),
                 ));
             }
             TrackClipKind::Video | TrackClipKind::Image => {
@@ -316,6 +320,7 @@ impl TrackClip {
                     "file_path",
                     PropertyUiType::Text,
                     "File Path",
+                    PropertyValue::String("".to_string()),
                 ));
                 defs.extend(Self::get_transform_definitions());
             }
@@ -324,24 +329,27 @@ impl TrackClip {
                     "text",
                     PropertyUiType::Text,
                     "Text",
+                    PropertyValue::String("".to_string()),
                 ));
-                defs.push(
-                    PropertyDefinition::new("font_family", PropertyUiType::Font, "Font Family")
-                        .with_default(PropertyValue::String("Arial".to_string())),
-                );
-                defs.push(
-                    PropertyDefinition::new(
-                        "size",
-                        PropertyUiType::Float {
-                            min: 1.0,
-                            max: 500.0,
-                            step: 1.0,
-                            suffix: "px".into(),
-                        },
-                        "Size",
-                    )
-                    .with_default(PropertyValue::Number(OrderedFloat(100.0))),
-                );
+                defs.push(PropertyDefinition::new(
+                    "font_family",
+                    PropertyUiType::Font,
+                    "Font Family",
+                    PropertyValue::String("Arial".to_string()),
+                ));
+                defs.push(PropertyDefinition::new(
+                    "size",
+                    PropertyUiType::Float {
+                        min: 1.0,
+                        max: 500.0,
+                        step: 1.0,
+                        suffix: "px".into(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    "Size",
+                    PropertyValue::Number(OrderedFloat(100.0)),
+                ));
 
                 defs.extend(Self::get_transform_definitions());
             }
@@ -350,33 +358,34 @@ impl TrackClip {
                     "path",
                     PropertyUiType::Text, // Or specialized Path editor if we had one
                     "Path Data",
+                    PropertyValue::String("".to_string()),
                 ));
-                defs.push(
-                    PropertyDefinition::new(
-                        "width",
-                        PropertyUiType::Float {
-                            min: 0.0,
-                            max: 10000.0,
-                            step: 1.0,
-                            suffix: "px".into(),
-                        },
-                        "Width",
-                    )
-                    .with_default(PropertyValue::Number(OrderedFloat(100.0))),
-                );
-                defs.push(
-                    PropertyDefinition::new(
-                        "height",
-                        PropertyUiType::Float {
-                            min: 0.0,
-                            max: 10000.0,
-                            step: 1.0,
-                            suffix: "px".into(),
-                        },
-                        "Height",
-                    )
-                    .with_default(PropertyValue::Number(OrderedFloat(100.0))),
-                );
+                defs.push(PropertyDefinition::new(
+                    "width",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 10000.0,
+                        step: 1.0,
+                        suffix: "px".into(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    "Width",
+                    PropertyValue::Number(OrderedFloat(100.0)),
+                ));
+                defs.push(PropertyDefinition::new(
+                    "height",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 10000.0,
+                        step: 1.0,
+                        suffix: "px".into(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    "Height",
+                    PropertyValue::Number(OrderedFloat(100.0)),
+                ));
 
                 defs.extend(Self::get_transform_definitions());
             }
@@ -385,6 +394,7 @@ impl TrackClip {
                     "shader",
                     PropertyUiType::MultilineText,
                     "Shader Code",
+                    PropertyValue::String("".to_string()),
                 ));
                 defs.extend(Self::get_transform_definitions());
             }

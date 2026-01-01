@@ -2,7 +2,7 @@ use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
 use crate::core::ensemble::types::DecoratorConfig;
 use crate::model::frame::color::Color;
 use crate::model::project::ensemble::DecoratorInstance;
-use crate::model::project::property::{PropertyDefinition, PropertyUiType};
+use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::{Plugin, PluginCategory};
 
@@ -45,6 +45,7 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
                     options: vec!["Char".to_string(), "Line".to_string(), "Block".to_string()],
                 },
                 "Target",
+                PropertyValue::String("Block".to_string()),
             ),
             PropertyDefinition::new(
                 "shape",
@@ -56,8 +57,14 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
                     ],
                 },
                 "Shape",
+                PropertyValue::String("Rect".to_string()),
             ),
-            PropertyDefinition::new("color", PropertyUiType::Color, "Color"),
+            PropertyDefinition::new(
+                "color",
+                PropertyUiType::Color,
+                "Color",
+                PropertyValue::Color(Color::black()),
+            ),
             PropertyDefinition::new(
                 "padding",
                 PropertyUiType::Float {
@@ -65,8 +72,11 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
                     max: 100.0,
                     step: 1.0,
                     suffix: "px".into(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
                 "Padding",
+                PropertyValue::from(0.0),
             ),
             PropertyDefinition::new(
                 "radius",
@@ -75,8 +85,11 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
                     max: 50.0,
                     step: 1.0,
                     suffix: "px".into(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
                 "Corner Radius",
+                PropertyValue::from(0.0),
             ),
         ]
     }

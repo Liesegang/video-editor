@@ -103,16 +103,19 @@ where
     for prop_def in properties {
         // 1. Render Label Column (with Keyframe Icon)
         ui.horizontal(|ui| {
-            let prop_meta = get_property(&prop_def.name);
+            let prop_meta = get_property(prop_def.name());
 
             if prop_meta.is_none() {
                 // WARN: Missing property metadata. This should not happen if data is consistent.
                 log::warn!(
                     "[WARN] Property '{}' metadata missing in properties.rs",
-                    prop_def.name
+                    prop_def.name()
                 );
                 ui.label(egui::RichText::new("⚠").color(ui.visuals().warn_fg_color))
-                    .on_hover_text(format!("Missing metadata for property '{}'", prop_def.name));
+                    .on_hover_text(format!(
+                        "Missing metadata for property '{}'",
+                        prop_def.name()
+                    ));
             }
 
             // Determine state (default to Constant/False if missing)
@@ -147,12 +150,15 @@ where
                 ui.add(egui::Button::new(egui::RichText::new(icon).color(color)).frame(false));
 
             if btn.clicked() {
-                if let Some(val) = get_value(&prop_def.name) {
-                    actions.push(PropertyAction::ToggleKeyframe(prop_def.name.clone(), val));
+                if let Some(val) = get_value(prop_def.name()) {
+                    actions.push(PropertyAction::ToggleKeyframe(
+                        prop_def.name().to_string(),
+                        val,
+                    ));
                 } else {
                     log::warn!(
                         "[WARN] Attempted to toggle keyframe for '{}' but value is missing/None",
-                        prop_def.name
+                        prop_def.name()
                     );
                 }
             }
@@ -163,17 +169,17 @@ where
                 btn.on_hover_text("Enable keyframing");
             }
 
-            ui.label(&prop_def.label);
+            ui.label(prop_def.label());
         });
 
         // 2. Render Input Column
-        match &prop_def.ui_type {
+        match prop_def.ui_type() {
             PropertyUiType::Float { step, suffix, .. } => {
-                let val_opt = get_value(&prop_def.name);
+                let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Float property '{}'",
-                        prop_def.name
+                        prop_def.name()
                     );
                 }
                 let current_val = val_opt
@@ -181,7 +187,7 @@ where
                         v.get_as::<f64>()
                             .or_else(|| v.get_as::<f32>().map(|f| f as f64))
                     })
-                    .unwrap_or(prop_def.default_value.get_as::<f64>().unwrap_or(0.0));
+                    .unwrap_or(prop_def.default_value().get_as::<f64>().unwrap_or(0.0));
 
                 let mut val_mut = current_val;
                 let response = ui.add(
@@ -193,9 +199,9 @@ where
                 handle_prop_response(
                     &mut actions,
                     &response,
-                    &prop_def.name,
+                    prop_def.name(),
                     Some(PropertyValue::Number(OrderedFloat(val_mut))),
-                    &prop_def.default_value,
+                    prop_def.default_value(),
                 );
 
                 if context.in_grid {
@@ -203,16 +209,16 @@ where
                 }
             }
             PropertyUiType::Integer { suffix, .. } => {
-                let val_opt = get_value(&prop_def.name);
+                let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Integer property '{}'",
-                        prop_def.name
+                        prop_def.name()
                     );
                 }
                 let current_val = val_opt
                     .and_then(|v| v.get_as::<i64>())
-                    .unwrap_or(prop_def.default_value.get_as::<i64>().unwrap_or(0));
+                    .unwrap_or(prop_def.default_value().get_as::<i64>().unwrap_or(0));
 
                 let mut val_mut = current_val;
                 let response = ui.add(egui::DragValue::new(&mut val_mut).speed(1.0).suffix(suffix));
@@ -220,9 +226,9 @@ where
                 handle_prop_response(
                     &mut actions,
                     &response,
-                    &prop_def.name,
+                    prop_def.name(),
                     Some(PropertyValue::Integer(val_mut)),
-                    &prop_def.default_value,
+                    prop_def.default_value(),
                 );
 
                 if context.in_grid {
@@ -230,16 +236,19 @@ where
                 }
             }
             PropertyUiType::Color => {
-                let val_opt = get_value(&prop_def.name);
+                let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Color property '{}'",
-                        prop_def.name
+                        prop_def.name()
                     );
                 }
-                let current_val = val_opt
-                    .and_then(|v| v.get_as::<Color>())
-                    .unwrap_or(prop_def.default_value.get_as::<Color>().unwrap_or_default());
+                let current_val = val_opt.and_then(|v| v.get_as::<Color>()).unwrap_or(
+                    prop_def
+                        .default_value()
+                        .get_as::<Color>()
+                        .unwrap_or_default(),
+                );
 
                 let mut color32 = egui::Color32::from_rgba_premultiplied(
                     current_val.r,
@@ -285,12 +294,12 @@ where
                             a: color32.a(),
                         };
                         actions.push(PropertyAction::Update(
-                            prop_def.name.clone(),
+                            prop_def.name().to_string(),
                             PropertyValue::Color(new_color),
                         ));
                     }
                     // Interpolation Mode UI
-                    let prop_meta = get_property(&prop_def.name);
+                    let prop_meta = get_property(prop_def.name());
                     if let Some(prop) = prop_meta {
                         if prop.evaluator == "keyframe" {
                             let current_mode = prop
@@ -300,7 +309,7 @@ where
                                 .unwrap_or_else(|| "linear".to_string());
 
                             let mut mode = current_mode.clone();
-                            egui::ComboBox::from_id_salt(format!("interp_{}", prop_def.name))
+                            egui::ComboBox::from_id_salt(format!("interp_{}", prop_def.name()))
                                 .selected_text(if mode == "hsv" { "HSV" } else { "RGB" })
                                 .width(60.0)
                                 .show_ui(ui, |ui| {
@@ -310,7 +319,7 @@ where
 
                             if mode != current_mode {
                                 actions.push(PropertyAction::SetAttribute(
-                                    prop_def.name.clone(),
+                                    prop_def.name().to_string(),
                                     "interpolation".to_string(),
                                     PropertyValue::String(mode),
                                 ));
@@ -324,22 +333,25 @@ where
                 }
             }
             PropertyUiType::Bool => {
-                let val_opt = get_value(&prop_def.name);
+                let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
-                    log::warn!("[WARN] Missing value for Bool property '{}'", prop_def.name);
+                    log::warn!(
+                        "[WARN] Missing value for Bool property '{}'",
+                        prop_def.name()
+                    );
                 }
                 let current_val = val_opt
                     .and_then(|v| v.get_as::<bool>())
-                    .unwrap_or(prop_def.default_value.get_as().unwrap_or(false));
+                    .unwrap_or(prop_def.default_value().get_as().unwrap_or(false));
                 let mut val_mut = current_val;
                 let response = ui.checkbox(&mut val_mut, "");
 
                 handle_prop_response(
                     &mut actions,
                     &response,
-                    &prop_def.name,
+                    prop_def.name(),
                     Some(PropertyValue::Boolean(val_mut)),
-                    &prop_def.default_value,
+                    prop_def.default_value(),
                 );
 
                 if context.in_grid {
@@ -347,20 +359,20 @@ where
                 }
             }
             PropertyUiType::Dropdown { options } => {
-                let val_opt = get_value(&prop_def.name);
+                let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
                     log::warn!(
                         "[WARN] Missing value for Dropdown property '{}'",
-                        prop_def.name
+                        prop_def.name()
                     );
                 }
                 let current_val = val_opt
                     .and_then(|v| v.get_as::<String>())
-                    .unwrap_or(prop_def.default_value.get_as().unwrap_or_default());
+                    .unwrap_or(prop_def.default_value().get_as().unwrap_or_default());
 
                 let mut selected = current_val.clone();
                 let response_inner =
-                    egui::ComboBox::from_id_salt(format!("combo_{}", prop_def.name))
+                    egui::ComboBox::from_id_salt(format!("combo_{}", prop_def.name()))
                         .selected_text(&selected)
                         .show_ui(ui, |ui| {
                             for opt in options {
@@ -375,7 +387,7 @@ where
 
                 if changed {
                     actions.push(PropertyAction::Update(
-                        prop_def.name.clone(),
+                        prop_def.name().to_string(),
                         PropertyValue::String(selected),
                     ));
                     actions.push(PropertyAction::Commit);
@@ -384,8 +396,8 @@ where
                 // Middle click on the collapsed combo box
                 if response_inner.response.middle_clicked() {
                     actions.push(PropertyAction::Update(
-                        prop_def.name.clone(),
-                        prop_def.default_value.clone(),
+                        prop_def.name().to_string(),
+                        prop_def.default_value().clone(),
                     ));
                     actions.push(PropertyAction::Commit);
                 }
@@ -395,16 +407,19 @@ where
                 }
             }
             PropertyUiType::Font => {
-                let val_opt = get_value(&prop_def.name);
+                let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
-                    log::warn!("[WARN] Missing value for Font property '{}'", prop_def.name);
+                    log::warn!(
+                        "[WARN] Missing value for Font property '{}'",
+                        prop_def.name()
+                    );
                 }
                 let current_val = val_opt
                     .and_then(|v| v.get_as::<String>())
-                    .unwrap_or(prop_def.default_value.get_as().unwrap_or_default());
+                    .unwrap_or(prop_def.default_value().get_as().unwrap_or_default());
 
                 let mut selected = current_val.clone();
-                egui::ComboBox::from_id_salt(format!("combo_font_{}", prop_def.name))
+                egui::ComboBox::from_id_salt(format!("combo_font_{}", prop_def.name()))
                     .selected_text(&selected)
                     .width(200.0)
                     .show_ui(ui, |ui| {
@@ -415,7 +430,7 @@ where
 
                 if selected != current_val {
                     actions.push(PropertyAction::Update(
-                        prop_def.name.clone(),
+                        prop_def.name().to_string(),
                         PropertyValue::String(selected),
                     ));
                     actions.push(PropertyAction::Commit);
@@ -425,15 +440,18 @@ where
                 }
             }
             PropertyUiType::Text | PropertyUiType::MultilineText => {
-                let val_opt = get_value(&prop_def.name);
+                let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
-                    log::warn!("[WARN] Missing value for Text property '{}'", prop_def.name);
+                    log::warn!(
+                        "[WARN] Missing value for Text property '{}'",
+                        prop_def.name()
+                    );
                 }
                 let current_val = val_opt
                     .and_then(|v| v.get_as::<String>())
-                    .unwrap_or(prop_def.default_value.get_as().unwrap_or_default());
+                    .unwrap_or(prop_def.default_value().get_as().unwrap_or_default());
                 let mut text = current_val.clone();
-                let response = if matches!(prop_def.ui_type, PropertyUiType::MultilineText) {
+                let response = if matches!(prop_def.ui_type(), PropertyUiType::MultilineText) {
                     ui.text_edit_multiline(&mut text)
                 } else {
                     ui.text_edit_singleline(&mut text)
@@ -448,9 +466,9 @@ where
                 handle_prop_response(
                     &mut actions,
                     &response,
-                    &prop_def.name,
+                    prop_def.name(),
                     new_val,
-                    &prop_def.default_value,
+                    prop_def.default_value(),
                 );
 
                 if context.in_grid {
@@ -458,12 +476,15 @@ where
                 }
             }
             PropertyUiType::Vec2 { suffix } => {
-                let val_opt = get_value(&prop_def.name);
+                let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
-                    log::warn!("[WARN] Missing value for Vec2 property '{}'", prop_def.name);
+                    log::warn!(
+                        "[WARN] Missing value for Vec2 property '{}'",
+                        prop_def.name()
+                    );
                 }
                 let current_val = val_opt.and_then(|v| v.get_as::<Vec2>()).unwrap_or_else(|| {
-                    prop_def.default_value.get_as::<Vec2>().unwrap_or(Vec2 {
+                    prop_def.default_value().get_as::<Vec2>().unwrap_or(Vec2 {
                         x: OrderedFloat(0.0),
                         y: OrderedFloat(0.0),
                     })
@@ -473,12 +494,12 @@ where
                 let mut y = current_val.y.into_inner() as f32;
 
                 let (changed, reset, committed) =
-                    render_vector_group(ui, &mut [("X", &mut x), ("Y", &mut y)], suffix);
+                    render_vector_group(ui, &mut [("X", &mut x), ("Y", &mut y)], &suffix);
 
                 if reset {
                     actions.push(PropertyAction::Update(
-                        prop_def.name.clone(),
-                        prop_def.default_value.clone(),
+                        prop_def.name().to_string(),
+                        prop_def.default_value().clone(),
                     ));
                     actions.push(PropertyAction::Commit);
                 } else {
@@ -488,7 +509,7 @@ where
                             y: OrderedFloat(y as f64),
                         };
                         actions.push(PropertyAction::Update(
-                            prop_def.name.clone(),
+                            prop_def.name().to_string(),
                             PropertyValue::Vec2(new_val),
                         ));
                     }
@@ -502,12 +523,15 @@ where
                 }
             }
             PropertyUiType::Vec3 { suffix } => {
-                let val_opt = get_value(&prop_def.name);
+                let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
-                    log::warn!("[WARN] Missing value for Vec3 property '{}'", prop_def.name);
+                    log::warn!(
+                        "[WARN] Missing value for Vec3 property '{}'",
+                        prop_def.name()
+                    );
                 }
                 let current_val = val_opt.and_then(|v| v.get_as::<Vec3>()).unwrap_or_else(|| {
-                    prop_def.default_value.get_as::<Vec3>().unwrap_or(Vec3 {
+                    prop_def.default_value().get_as::<Vec3>().unwrap_or(Vec3 {
                         x: OrderedFloat(0.0),
                         y: OrderedFloat(0.0),
                         z: OrderedFloat(0.0),
@@ -521,13 +545,13 @@ where
                 let (changed, reset, committed) = render_vector_group(
                     ui,
                     &mut [("X", &mut x), ("Y", &mut y), ("Z", &mut z)],
-                    suffix,
+                    &suffix,
                 );
 
                 if reset {
                     actions.push(PropertyAction::Update(
-                        prop_def.name.clone(),
-                        prop_def.default_value.clone(),
+                        prop_def.name().to_string(),
+                        prop_def.default_value().clone(),
                     ));
                     actions.push(PropertyAction::Commit);
                 } else {
@@ -538,7 +562,7 @@ where
                             z: OrderedFloat(z as f64),
                         };
                         actions.push(PropertyAction::Update(
-                            prop_def.name.clone(),
+                            prop_def.name().to_string(),
                             PropertyValue::Vec3(new_val),
                         ));
                     }
@@ -552,12 +576,15 @@ where
                 }
             }
             PropertyUiType::Vec4 { suffix } => {
-                let val_opt = get_value(&prop_def.name);
+                let val_opt = get_value(prop_def.name());
                 if val_opt.is_none() {
-                    log::warn!("[WARN] Missing value for Vec4 property '{}'", prop_def.name);
+                    log::warn!(
+                        "[WARN] Missing value for Vec4 property '{}'",
+                        prop_def.name()
+                    );
                 }
                 let current_val = val_opt.and_then(|v| v.get_as::<Vec4>()).unwrap_or_else(|| {
-                    prop_def.default_value.get_as::<Vec4>().unwrap_or(Vec4 {
+                    prop_def.default_value().get_as::<Vec4>().unwrap_or(Vec4 {
                         x: OrderedFloat(0.0),
                         y: OrderedFloat(0.0),
                         z: OrderedFloat(0.0),
@@ -573,13 +600,13 @@ where
                 let (changed, reset, committed) = render_vector_group(
                     ui,
                     &mut [("X", &mut x), ("Y", &mut y), ("Z", &mut z), ("W", &mut w)],
-                    suffix,
+                    &suffix,
                 );
 
                 if reset {
                     actions.push(PropertyAction::Update(
-                        prop_def.name.clone(),
-                        prop_def.default_value.clone(),
+                        prop_def.name().to_string(),
+                        prop_def.default_value().clone(),
                     ));
                     actions.push(PropertyAction::Commit);
                 } else {
@@ -591,7 +618,7 @@ where
                             w: OrderedFloat(w as f64),
                         };
                         actions.push(PropertyAction::Update(
-                            prop_def.name.clone(),
+                            prop_def.name().to_string(),
                             PropertyValue::Vec4(new_val),
                         ));
                     }
@@ -603,10 +630,6 @@ where
                 if context.in_grid {
                     ui.end_row();
                 }
-            }
-            PropertyUiType::Styles => {
-                ui.label("Styles UI handled separately");
-                ui.end_row();
             }
         }
     }

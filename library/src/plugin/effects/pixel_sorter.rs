@@ -252,31 +252,30 @@ impl EffectPlugin for PixelSorterPlugin {
         use ordered_float::OrderedFloat;
 
         vec![
-            PropertyDefinition {
-                name: "threshold".to_string(),
-                label: "Threshold".to_string(),
-                ui_type: PropertyUiType::Float {
+            PropertyDefinition::new(
+                "threshold",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 1.0,
                     step: 0.01,
                     suffix: "".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(0.5)),
-                category: "Settings".to_string(),
-            },
-            PropertyDefinition {
-                name: "direction".to_string(),
-                label: "Direction".to_string(),
-                ui_type: PropertyUiType::Dropdown {
+                "Threshold",
+                PropertyValue::Number(OrderedFloat(0.5)),
+            ),
+            PropertyDefinition::new(
+                "direction",
+                PropertyUiType::Dropdown {
                     options: vec!["horizontal".to_string(), "vertical".to_string()],
                 },
-                default_value: PropertyValue::String("horizontal".to_string()),
-                category: "Settings".to_string(),
-            },
-            PropertyDefinition {
-                name: "sort_criteria".to_string(),
-                label: "Criteria".to_string(),
-                ui_type: PropertyUiType::Dropdown {
+                "Direction",
+                PropertyValue::String("horizontal".to_string()),
+            ),
+            PropertyDefinition::new(
+                "sort_criteria",
+                PropertyUiType::Dropdown {
                     options: vec![
                         "brightness".to_string(),
                         "red".to_string(),
@@ -284,9 +283,9 @@ impl EffectPlugin for PixelSorterPlugin {
                         "blue".to_string(),
                     ],
                 },
-                default_value: PropertyValue::String("brightness".to_string()),
-                category: "Settings".to_string(),
-            },
+                "Criteria",
+                PropertyValue::String("brightness".to_string()),
+            ),
         ]
     }
 }

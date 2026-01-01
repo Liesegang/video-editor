@@ -54,18 +54,17 @@ impl ExportPlugin for PngExportPlugin {
 
     fn properties(&self) -> Vec<crate::model::project::property::PropertyDefinition> {
         use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
-        vec![PropertyDefinition {
-            name: "compression".to_string(),
-            label: "Compression".to_string(),
-            ui_type: PropertyUiType::Dropdown {
+        vec![PropertyDefinition::new(
+            "compression",
+            PropertyUiType::Dropdown {
                 options: vec![
                     "Default".to_string(),
                     "Fast".to_string(),
                     "Best".to_string(),
                 ],
             },
-            default_value: PropertyValue::String("Fast".to_string()),
-            category: "Settings".to_string(),
-        }]
+            "Compression",
+            PropertyValue::String("Fast".to_string()),
+        )]
     }
 }

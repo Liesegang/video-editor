@@ -47,74 +47,98 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
 
         vec![
             // Transform Properties
-            PropertyDefinition {
-                name: "position".to_string(),
-                label: "Position".to_string(),
-                ui_type: PropertyUiType::Vec2 {
+            PropertyDefinition::new(
+                "position",
+                PropertyUiType::Vec2 {
                     suffix: "px".to_string(),
                 },
-                default_value: PropertyValue::Vec2(Vec2 {
+                "Position",
+                PropertyValue::Vec2(Vec2 {
                     x: OrderedFloat(canvas_width as f64 / 2.0),
                     y: OrderedFloat(canvas_height as f64 / 2.0),
                 }),
-                category: "Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "scale".to_string(),
-                label: "Scale".to_string(),
-                ui_type: PropertyUiType::Vec2 {
+            ),
+            PropertyDefinition::new(
+                "scale",
+                PropertyUiType::Vec2 {
                     suffix: "%".to_string(),
                 },
-                default_value: PropertyValue::Vec2(Vec2 {
+                "Scale",
+                PropertyValue::Vec2(Vec2 {
                     x: OrderedFloat(100.0),
                     y: OrderedFloat(100.0),
                 }),
-                category: "Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "rotation".to_string(),
-                label: "Rotation".to_string(),
-                ui_type: PropertyUiType::Float {
+            ),
+            PropertyDefinition::new(
+                "rotation",
+                PropertyUiType::Float {
                     min: -360.0,
                     max: 360.0,
                     step: 1.0,
                     suffix: "deg".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "anchor".to_string(),
-                label: "Anchor".to_string(),
-                ui_type: PropertyUiType::Vec2 {
+                "Rotation",
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+            PropertyDefinition::new(
+                "anchor",
+                PropertyUiType::Vec2 {
                     suffix: "px".to_string(),
                 },
-                default_value: PropertyValue::Vec2(Vec2 {
+                "Anchor",
+                PropertyValue::Vec2(Vec2 {
                     x: OrderedFloat(clip_width as f64 / 2.0),
                     y: OrderedFloat(clip_height as f64 / 2.0),
                 }),
-                category: "Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "opacity".to_string(),
-                label: "Opacity".to_string(),
-                ui_type: PropertyUiType::Float {
+            ),
+            PropertyDefinition::new(
+                "opacity",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 100.0,
                     step: 1.0,
                     suffix: "%".to_string(),
+                    min_hard_limit: true,
+                    max_hard_limit: true,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Transform".to_string(),
-            },
+                "Opacity",
+                PropertyValue::Number(OrderedFloat(100.0)),
+            ),
             // Shader Properties
-            PropertyDefinition {
-                name: "shader".to_string(),
-                label: "Shader Code".to_string(),
-                ui_type: PropertyUiType::MultilineText,
-                default_value: PropertyValue::String("".to_string()),
-                category: "Shader".to_string(),
-            },
+            PropertyDefinition::new(
+                "shader",
+                PropertyUiType::MultilineText,
+                "Shader Code",
+                PropertyValue::String("".to_string()),
+            ),
+            PropertyDefinition::new(
+                "width",
+                PropertyUiType::Float {
+                    min: 0.0,
+                    max: 10000.0,
+                    step: 1.0,
+                    suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
+                },
+                "Width",
+                PropertyValue::Number(OrderedFloat(canvas_width as f64)),
+            ),
+            PropertyDefinition::new(
+                "height",
+                PropertyUiType::Float {
+                    min: 0.0,
+                    max: 10000.0,
+                    step: 1.0,
+                    suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
+                },
+                "Height",
+                PropertyValue::Number(OrderedFloat(canvas_height as f64)),
+            ),
         ]
     }
 
@@ -134,11 +158,18 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
 
         let shader = evaluator.require_string(props, "shader", eval_time, "sksl")?;
 
-        let comp_width = evaluator.composition.width as f64;
-        let comp_height = evaluator.composition.height as f64;
-
-        let res_x = comp_width;
-        let res_y = comp_height;
+        let res_x = evaluator.evaluate_number(
+            props,
+            "width",
+            eval_time,
+            evaluator.composition.width as f64,
+        );
+        let res_y = evaluator.evaluate_number(
+            props,
+            "height",
+            eval_time,
+            evaluator.composition.height as f64,
+        );
 
         let transform = evaluator.build_transform(props, eval_time);
         let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);

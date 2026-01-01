@@ -37,26 +37,13 @@ pub fn render_styles_section(
                     .unwrap_or_else(|| type_name.clone());
 
                 if ui.button(label).clicked() {
-                    let defs = plugin_manager.get_style_properties(&type_name);
-                    let props =
-                        library::model::project::property::PropertyMap::from_definitions(&defs);
-                    let new_style = StyleInstance::new(&type_name, props);
-
-                    let mut new_styles = styles.clone();
-                    new_styles.push(new_style);
-
-                    project_service
-                        .update_track_clip_styles(selected_entity_id, new_styles)
-                        .ok();
-
-                    // No history push needed here? Original code did push.
-                    // Wait, original code call history_manager.push_project_state.
-                    // But I need access to history_manager. It is passed as argument.
-                    // Let's use it.
-                    let current_state = project_service.get_project().read().unwrap().clone();
-                    history_manager.push_project_state(current_state);
-
-                    *needs_refresh = true;
+                    if let Err(e) = project_service.add_style(selected_entity_id, &type_name) {
+                        log::error!("Failed to add style: {}", e);
+                    } else {
+                        let current_state = project_service.get_project().read().unwrap().clone();
+                        history_manager.push_project_state(current_state);
+                        *needs_refresh = true;
+                    }
                     ui.close();
                 }
             }

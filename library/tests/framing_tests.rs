@@ -25,13 +25,25 @@ fn test_video_converter_frame_calculation() {
     };
 
     let video_fps = 60.0;
-    let clip = TrackClip::create_video(
-        None, "test.mp4", 0,   // in_frame
-        100, // out_frame
-        100, // source_begin_frame
-        100, // duration_frame
-        video_fps, 1920, // width
-        1080, // height
+    let mut clip = TrackClip::new(
+        uuid::Uuid::new_v4(),
+        None,
+        library::model::project::TrackClipKind::Video,
+        0,
+        100,
+        100,
+        Some(100),
+        video_fps,
+        library::model::project::property::PropertyMap::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    clip.source_begin_frame = 100;
+    clip.set_constant_property(
+        "file_path",
+        library::model::project::property::PropertyValue::String("test.mp4".to_string()),
     );
 
     println!("Clip FPS: {}", clip.fps);

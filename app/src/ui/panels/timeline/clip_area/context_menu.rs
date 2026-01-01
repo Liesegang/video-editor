@@ -63,25 +63,25 @@ pub fn handle_context_menu(
             let duration_frames = (duration_sec * composition_fps).round() as u64;
             let drop_out_frame = drop_in_frame + duration_frames;
 
-            let text_clip = TrackClip::create_text(
+            if let Ok(text_clip) = project_service.create_text_clip(
                 "this is sample text",
                 drop_in_frame,
                 drop_out_frame,
                 comp_width as u32,
                 comp_height as u32,
                 composition_fps,
-            );
-
-            add_clip_to_best_track(
-                project,
-                editor_context,
-                drop_track_index_opt,
-                text_clip,
-                drop_in_frame,
-                drop_out_frame,
-                project_service,
-                history_manager,
-            );
+            ) {
+                add_clip_to_best_track(
+                    project,
+                    editor_context,
+                    drop_track_index_opt,
+                    text_clip,
+                    drop_in_frame,
+                    drop_out_frame,
+                    project_service,
+                    history_manager,
+                );
+            }
             ui.close();
         }
 
@@ -90,24 +90,24 @@ pub fn handle_context_menu(
             let duration_frames = (duration_sec * composition_fps).round() as u64;
             let drop_out_frame = drop_in_frame + duration_frames;
 
-            let shape_clip = TrackClip::create_shape(
+            if let Ok(shape_clip) = project_service.create_shape_clip(
                 drop_in_frame,
                 drop_out_frame,
                 comp_width as u32,
                 comp_height as u32,
                 composition_fps,
-            );
-
-            add_clip_to_best_track(
-                project,
-                editor_context,
-                drop_track_index_opt,
-                shape_clip,
-                drop_in_frame,
-                drop_out_frame,
-                project_service,
-                history_manager,
-            );
+            ) {
+                add_clip_to_best_track(
+                    project,
+                    editor_context,
+                    drop_track_index_opt,
+                    shape_clip,
+                    drop_in_frame,
+                    drop_out_frame,
+                    project_service,
+                    history_manager,
+                );
+            }
             ui.close();
         }
 
@@ -116,24 +116,24 @@ pub fn handle_context_menu(
             let duration_frames = (duration_sec * composition_fps).round() as u64;
             let drop_out_frame = drop_in_frame + duration_frames;
 
-            let sksl_clip = TrackClip::create_sksl(
+            if let Ok(sksl_clip) = project_service.create_sksl_clip(
                 drop_in_frame,
                 drop_out_frame,
                 comp_width as u32,
                 comp_height as u32,
                 composition_fps,
-            );
-
-            add_clip_to_best_track(
-                project,
-                editor_context,
-                drop_track_index_opt,
-                sksl_clip,
-                drop_in_frame,
-                drop_out_frame,
-                project_service,
-                history_manager,
-            );
+            ) {
+                add_clip_to_best_track(
+                    project,
+                    editor_context,
+                    drop_track_index_opt,
+                    sksl_clip,
+                    drop_in_frame,
+                    drop_out_frame,
+                    project_service,
+                    history_manager,
+                );
+            }
             ui.close();
         }
     });

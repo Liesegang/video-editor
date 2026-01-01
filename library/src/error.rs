@@ -35,6 +35,8 @@ pub enum LibraryError {
     InvalidArgument(String),
     #[error("Runtime error: {0}")]
     Runtime(String),
+    #[error("Validation error: {0}")]
+    Validation(String),
 }
 
 impl From<Box<dyn std::error::Error>> for LibraryError {

@@ -379,20 +379,22 @@ impl ExportDialog {
                     .num_columns(2)
                     .show(ui, |ui| {
                         for def in definitions {
-                            ui.label(&def.label);
+                            ui.label(def.label());
 
                             let value = self
                                 .property_values
-                                .entry(def.name.clone())
-                                .or_insert(def.default_value.clone());
+                                .entry(def.name().to_string())
+                                .or_insert(def.default_value().clone());
 
-                            match &def.ui_type {
+                            match def.ui_type() {
                                 PropertyUiType::Text | PropertyUiType::MultilineText => {
                                     if let PropertyValue::String(s) = value {
                                         ui.text_edit_singleline(s);
                                     }
                                 }
-                                PropertyUiType::Integer { min, max, suffix } => {
+                                PropertyUiType::Integer {
+                                    min, max, suffix, ..
+                                } => {
                                     if let PropertyValue::Number(n) = value {
                                         let mut v = n.0 as i64;
                                         if ui
@@ -425,6 +427,7 @@ impl ExportDialog {
                                     max,
                                     step,
                                     suffix,
+                                    ..
                                 } => {
                                     if let PropertyValue::Number(n) = value {
                                         let mut v = n.0;
@@ -442,14 +445,14 @@ impl ExportDialog {
                                 }
                                 PropertyUiType::Bool => {
                                     if let PropertyValue::Boolean(b) = value {
-                                        if ui.checkbox(b, &def.name).changed() {
+                                        if ui.checkbox(b, def.name()).changed() {
                                             // Update
                                         }
                                     }
                                 }
                                 PropertyUiType::Dropdown { options } => {
                                     if let PropertyValue::String(s) = value {
-                                        egui::ComboBox::from_id_salt(&def.name)
+                                        egui::ComboBox::from_id_salt(def.name())
                                             .selected_text(s.clone())
                                             .show_ui(ui, |ui| {
                                                 for opt in options {
@@ -492,7 +495,8 @@ impl ExportDialog {
             .get_export_plugin_properties(exporter_id)
         {
             for def in defs {
-                self.property_values.insert(def.name, def.default_value);
+                self.property_values
+                    .insert(def.name().to_string(), def.default_value().clone());
             }
         }
         Ok(())

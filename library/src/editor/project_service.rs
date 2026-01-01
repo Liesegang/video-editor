@@ -7,6 +7,7 @@ use crate::model::project::property::PropertyValue;
 use crate::model::project::property::{PropertyDefinition, PropertyUiType};
 use crate::model::project::{Node, TrackClip, TrackData};
 use crate::plugin::PluginManager;
+use crate::plugin::entity_converter::measure_text_size;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -62,6 +63,321 @@ impl ProjectManager {
         *project_write = new_project.clone();
 
         Ok((new_comp_id, new_project))
+    }
+
+    // --- Clip Factory Methods ---
+
+    pub fn create_audio_clip(
+        &self,
+        reference_id: Option<Uuid>,
+        file_path: &str,
+        in_frame: u64,
+        out_frame: u64,
+        source_begin_frame: i64,
+        duration_frame: u64,
+        fps: f64,
+    ) -> TrackClip {
+        let defs =
+            TrackClip::get_definitions_for_kind(&crate::model::project::TrackClipKind::Audio);
+        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
+
+        props.set(
+            "file_path".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::String(file_path.to_string()),
+            ),
+        );
+
+        TrackClip::new(
+            Uuid::new_v4(),
+            reference_id,
+            crate::model::project::TrackClipKind::Audio,
+            in_frame,
+            out_frame,
+            source_begin_frame,
+            Some(duration_frame),
+            fps,
+            props,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    pub fn create_video_clip(
+        &self,
+        reference_id: Option<Uuid>,
+        file_path: &str,
+        in_frame: u64,
+        out_frame: u64,
+        source_begin_frame: i64,
+        duration_frame: u64,
+        fps: f64,
+        canvas_width: u32,
+        canvas_height: u32,
+    ) -> Result<TrackClip, LibraryError> {
+        let plugin = self
+            .plugin_manager
+            .get_entity_converter("video")
+            .ok_or_else(|| LibraryError::Plugin("Video converter plugin not found".to_string()))?;
+
+        let defs = plugin.get_property_definitions(
+            canvas_width as u64,
+            canvas_height as u64,
+            canvas_width as u64,
+            canvas_height as u64,
+        );
+        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
+
+        props.set(
+            "file_path".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::String(file_path.to_string()),
+            ),
+        );
+
+        Ok(TrackClip::new(
+            Uuid::new_v4(),
+            reference_id,
+            crate::model::project::TrackClipKind::Video,
+            in_frame,
+            out_frame,
+            source_begin_frame,
+            Some(duration_frame),
+            fps,
+            props,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))
+    }
+
+    pub fn create_image_clip(
+        &self,
+        reference_id: Option<Uuid>,
+        file_path: &str,
+        in_frame: u64,
+        out_frame: u64,
+        canvas_width: u32,
+        canvas_height: u32,
+        fps: f64,
+    ) -> Result<TrackClip, LibraryError> {
+        let plugin = self
+            .plugin_manager
+            .get_entity_converter("image")
+            .ok_or_else(|| LibraryError::Plugin("Image converter plugin not found".to_string()))?;
+
+        let defs = plugin.get_property_definitions(
+            canvas_width as u64,
+            canvas_height as u64,
+            canvas_width as u64,
+            canvas_height as u64,
+        );
+        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
+
+        props.set(
+            "file_path".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::String(file_path.to_string()),
+            ),
+        );
+
+        Ok(TrackClip::new(
+            Uuid::new_v4(),
+            reference_id,
+            crate::model::project::TrackClipKind::Image,
+            in_frame,
+            out_frame,
+            0,
+            None,
+            fps,
+            props,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))
+    }
+
+    pub fn create_text_clip(
+        &self,
+        text: &str,
+        in_frame: u64,
+        out_frame: u64,
+        canvas_width: u32,
+        canvas_height: u32,
+        fps: f64,
+    ) -> Result<TrackClip, LibraryError> {
+        let plugin = self
+            .plugin_manager
+            .get_entity_converter("text")
+            .ok_or_else(|| LibraryError::Plugin("Text converter plugin not found".to_string()))?;
+
+        // Measure text size
+        let (w, h) = crate::plugin::entity_converter::measure_text_size(text, "Arial", 100.0);
+
+        let defs = plugin.get_property_definitions(
+            canvas_width as u64,
+            canvas_height as u64,
+            w as u64,
+            h as u64,
+        );
+        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
+
+        props.set(
+            "text".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::String(text.to_string()),
+            ),
+        );
+
+        let mut styles = Vec::new();
+
+        // Default fill style (white)
+        if let Some(fill_plugin) = self.plugin_manager.get_style_plugin("fill") {
+            let fill_props = crate::model::project::property::PropertyMap::from_definitions(
+                &fill_plugin.properties(),
+            );
+            styles.push(crate::model::project::style::StyleInstance::new(
+                "fill", fill_props,
+            ));
+        }
+
+        Ok(TrackClip::new(
+            Uuid::new_v4(),
+            None,
+            crate::model::project::TrackClipKind::Text,
+            in_frame,
+            out_frame,
+            0,
+            None,
+            fps,
+            props,
+            styles,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))
+    }
+
+    pub fn create_shape_clip(
+        &self,
+        in_frame: u64,
+        out_frame: u64,
+        canvas_width: u32,
+        canvas_height: u32,
+        fps: f64,
+    ) -> Result<TrackClip, LibraryError> {
+        let plugin = self
+            .plugin_manager
+            .get_entity_converter("shape")
+            .ok_or_else(|| LibraryError::Plugin("Shape converter plugin not found".to_string()))?;
+
+        let defs =
+            plugin.get_property_definitions(canvas_width as u64, canvas_height as u64, 100, 100);
+        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
+
+        let heart_path = "M 50,30 A 20,20 0,0,1 90,30 C 90,55 50,85 50,85 C 50,85 10,55 10,30 A 20,20 0,0,1 50,30 Z";
+        props.set(
+            "path".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::String(heart_path.to_string()),
+            ),
+        );
+
+        let mut styles = Vec::new();
+
+        // Fill (red)
+        if let Some(fill_plugin) = self.plugin_manager.get_style_plugin("fill") {
+            let fill_props = crate::model::project::property::PropertyMap::from_definitions(
+                &fill_plugin.properties(),
+            );
+            styles.push(crate::model::project::style::StyleInstance::new(
+                "fill", fill_props,
+            ));
+        }
+
+        // Stroke (white)
+        if let Some(stroke_plugin) = self.plugin_manager.get_style_plugin("stroke") {
+            let stroke_props = crate::model::project::property::PropertyMap::from_definitions(
+                &stroke_plugin.properties(),
+            );
+            styles.push(crate::model::project::style::StyleInstance::new(
+                "stroke",
+                stroke_props,
+            ));
+        }
+
+        Ok(TrackClip::new(
+            Uuid::new_v4(),
+            None,
+            crate::model::project::TrackClipKind::Shape,
+            in_frame,
+            out_frame,
+            0,
+            None,
+            fps,
+            props,
+            styles,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))
+    }
+
+    pub fn create_sksl_clip(
+        &self,
+        in_frame: u64,
+        out_frame: u64,
+        canvas_width: u32,
+        canvas_height: u32,
+        fps: f64,
+    ) -> Result<TrackClip, LibraryError> {
+        let plugin = self
+            .plugin_manager
+            .get_entity_converter("sksl")
+            .ok_or_else(|| LibraryError::Plugin("SkSL converter plugin not found".to_string()))?;
+
+        let defs = plugin.get_property_definitions(
+            canvas_width as u64,
+            canvas_height as u64,
+            canvas_width as u64,
+            canvas_height as u64,
+        );
+        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
+
+        let default_shader = r#"
+half4 main(float2 fragCoord) {
+    float2 uv = fragCoord / iResolution.xy;
+    float3 col = 0.5 + 0.5*cos(iTime+uv.xyx+float3(0,2,4));
+    return half4(col,1.0);
+}
+"#;
+
+        props.set(
+            "shader".to_string(),
+            crate::model::project::property::Property::constant(
+                crate::model::project::property::PropertyValue::String(default_shader.to_string()),
+            ),
+        );
+
+        Ok(TrackClip::new(
+            Uuid::new_v4(),
+            None,
+            crate::model::project::TrackClipKind::SkSL,
+            in_frame,
+            out_frame,
+            0,
+            None,
+            fps,
+            props,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))
     }
 
     pub fn save_project(&self) -> Result<String, LibraryError> {
@@ -988,6 +1304,90 @@ impl ProjectManager {
         )
     }
 
+    pub fn add_style(&self, clip_id: Uuid, style_type: &str) -> Result<(), LibraryError> {
+        // 1. Get properties from PluginManager
+        let plugin = self
+            .plugin_manager
+            .get_style_plugin(style_type)
+            .ok_or_else(|| {
+                LibraryError::Plugin(format!("Style plugin '{}' not found", style_type))
+            })?;
+
+        let properties =
+            crate::model::project::property::PropertyMap::from_definitions(&plugin.properties());
+
+        // 2. Create instance
+        let instance = crate::model::project::style::StyleInstance::new(style_type, properties);
+
+        // 3. Add to clip
+        let project = self.project.read().unwrap();
+        if let Some(clip) = project.get_clip(clip_id) {
+            let mut new_styles = clip.styles.clone();
+            new_styles.push(instance);
+            drop(project); // release lock
+            self.update_track_clip_styles(clip_id, new_styles)
+        } else {
+            Err(LibraryError::Validation(format!(
+                "Clip {} not found",
+                clip_id
+            )))
+        }
+    }
+
+    pub fn add_effector(&self, clip_id: Uuid, effector_type: &str) -> Result<(), LibraryError> {
+        let defs = self.plugin_manager.get_effector_properties(effector_type);
+        if defs.is_empty() {
+            return Err(LibraryError::Plugin(format!(
+                "Effector plugin '{}' not found or has no properties",
+                effector_type
+            )));
+        }
+
+        let properties = crate::model::project::property::PropertyMap::from_definitions(&defs);
+        let instance =
+            crate::model::project::ensemble::EffectorInstance::new(effector_type, properties);
+
+        let project = self.project.read().unwrap();
+        if let Some(clip) = project.get_clip(clip_id) {
+            let mut new_effectors = clip.effectors.clone();
+            new_effectors.push(instance);
+            drop(project); // release lock
+            self.update_track_clip_effectors(clip_id, new_effectors)
+        } else {
+            Err(LibraryError::Validation(format!(
+                "Clip {} not found",
+                clip_id
+            )))
+        }
+    }
+
+    pub fn add_decorator(&self, clip_id: Uuid, decorator_type: &str) -> Result<(), LibraryError> {
+        let defs = self.plugin_manager.get_decorator_properties(decorator_type);
+        if defs.is_empty() {
+            return Err(LibraryError::Plugin(format!(
+                "Decorator plugin '{}' not found or has no properties",
+                decorator_type
+            )));
+        }
+
+        let properties = crate::model::project::property::PropertyMap::from_definitions(&defs);
+        let instance =
+            crate::model::project::ensemble::DecoratorInstance::new(decorator_type, properties);
+
+        let project = self.project.read().unwrap();
+        if let Some(clip) = project.get_clip(clip_id) {
+            let mut new_decorators = clip.decorators.clone();
+            new_decorators.push(instance);
+            drop(project); // release lock
+            self.update_track_clip_decorators(clip_id, new_decorators)
+        } else {
+            Err(LibraryError::Validation(format!(
+                "Clip {} not found",
+                clip_id
+            )))
+        }
+    }
+
     pub fn get_inspector_definitions(
         &self,
         comp_id: uuid::Uuid,
@@ -1031,15 +1431,20 @@ impl ProjectManager {
                 (w, h)
             }
             crate::model::project::TrackClipKind::Text => {
-                // Text size is hard to know without measuring.
-                // For default anchor purposes, maybe use 0 or some heuristic?
-                // Or we could fallback to the "measured" size if we had it stored?
-                // Current text creation sets anchor based on measurement at creation.
-                // Let's assume 0,0 for now or maybe 100,100?
-                // If default anchor is center, and we define center as w/2, h/2...
-                // If we pass 0,0, anchor default is 0,0.
-                (0, 0)
+                let text = clip
+                    .properties
+                    .get_string("text")
+                    .unwrap_or("Text".to_string());
+                let font_name = clip
+                    .properties
+                    .get_string("font_family")
+                    .unwrap_or("Arial".to_string());
+                let size = clip.properties.get_f64("size").unwrap_or(100.0) as f32;
+
+                let (w, h) = measure_text_size(&text, &font_name, size);
+                (w.round() as u64, h.round() as u64)
             }
+            crate::model::project::TrackClipKind::SkSL => (canvas_width, canvas_height),
             _ => (100, 100),
         };
 
@@ -1056,24 +1461,22 @@ impl ProjectManager {
         if matches!(clip.kind, crate::model::project::TrackClipKind::Video) {
             let colorspaces = ColorSpaceManager::get_available_colorspaces();
             if !colorspaces.is_empty() {
-                definitions.push(PropertyDefinition {
-                    name: "input_color_space".to_string(),
-                    label: "Input Color Space".to_string(),
-                    ui_type: PropertyUiType::Dropdown {
+                definitions.push(PropertyDefinition::new(
+                    "input_color_space",
+                    PropertyUiType::Dropdown {
                         options: colorspaces.clone(),
                     },
-                    default_value: PropertyValue::String("".to_string()),
-                    category: "OCIO".to_string(),
-                });
-                definitions.push(PropertyDefinition {
-                    name: "output_color_space".to_string(),
-                    label: "Output Color Space".to_string(),
-                    ui_type: PropertyUiType::Dropdown {
+                    "Input Color Space",
+                    PropertyValue::String("".to_string()),
+                ));
+                definitions.push(PropertyDefinition::new(
+                    "output_color_space",
+                    PropertyUiType::Dropdown {
                         options: colorspaces,
                     },
-                    default_value: PropertyValue::String("".to_string()),
-                    category: "OCIO".to_string(),
-                });
+                    "Output Color Space",
+                    PropertyValue::String("".to_string()),
+                ));
             }
         }
 

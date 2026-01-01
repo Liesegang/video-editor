@@ -47,98 +47,73 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
 
         vec![
             // Transform Properties
-            PropertyDefinition {
-                name: "position".to_string(),
-                label: "Position".to_string(),
-                ui_type: PropertyUiType::Vec2 {
+            // Transform Properties
+            PropertyDefinition::new(
+                "position",
+                PropertyUiType::Vec2 {
                     suffix: "px".to_string(),
                 },
-                default_value: PropertyValue::Vec2(Vec2 {
+                "Position",
+                PropertyValue::Vec2(Vec2 {
                     x: OrderedFloat(canvas_width as f64 / 2.0),
                     y: OrderedFloat(canvas_height as f64 / 2.0),
                 }),
-                category: "Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "scale".to_string(),
-                label: "Scale".to_string(),
-                ui_type: PropertyUiType::Vec2 {
+            ),
+            PropertyDefinition::new(
+                "scale",
+                PropertyUiType::Vec2 {
                     suffix: "%".to_string(),
                 },
-                default_value: PropertyValue::Vec2(Vec2 {
+                "Scale",
+                PropertyValue::Vec2(Vec2 {
                     x: OrderedFloat(100.0),
                     y: OrderedFloat(100.0),
                 }),
-                category: "Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "rotation".to_string(),
-                label: "Rotation".to_string(),
-                ui_type: PropertyUiType::Float {
+            ),
+            PropertyDefinition::new(
+                "rotation",
+                PropertyUiType::Float {
                     min: -360.0,
                     max: 360.0,
                     step: 1.0,
                     suffix: "deg".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "anchor".to_string(),
-                label: "Anchor".to_string(),
-                ui_type: PropertyUiType::Vec2 {
+                "Rotation",
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+            PropertyDefinition::new(
+                "anchor",
+                PropertyUiType::Vec2 {
                     suffix: "px".to_string(),
                 },
-                default_value: PropertyValue::Vec2(Vec2 {
+                "Anchor",
+                PropertyValue::Vec2(Vec2 {
                     x: OrderedFloat(clip_width as f64 / 2.0),
                     y: OrderedFloat(clip_height as f64 / 2.0),
                 }),
-                category: "Transform".to_string(),
-            },
-            PropertyDefinition {
-                name: "opacity".to_string(),
-                label: "Opacity".to_string(),
-                ui_type: PropertyUiType::Float {
+            ),
+            PropertyDefinition::new(
+                "opacity",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 100.0,
                     step: 1.0,
                     suffix: "%".to_string(),
+                    min_hard_limit: true,
+                    max_hard_limit: true,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Transform".to_string(),
-            },
+                "Opacity",
+                PropertyValue::Number(OrderedFloat(100.0)),
+            ),
             // Shape Properties
-            PropertyDefinition {
-                name: "path".to_string(),
-                label: "Path Data".to_string(),
-                ui_type: PropertyUiType::MultilineText,
-                default_value: PropertyValue::String("".to_string()),
-                category: "Shape".to_string(),
-            },
-            PropertyDefinition {
-                name: "width".to_string(),
-                label: "Width".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 10000.0,
-                    step: 1.0,
-                    suffix: "px".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Shape".to_string(),
-            },
-            PropertyDefinition {
-                name: "height".to_string(),
-                label: "Height".to_string(),
-                ui_type: PropertyUiType::Float {
-                    min: 0.0,
-                    max: 10000.0,
-                    step: 1.0,
-                    suffix: "px".to_string(),
-                },
-                default_value: PropertyValue::Number(OrderedFloat(100.0)),
-                category: "Shape".to_string(),
-            },
+            PropertyDefinition::new(
+                "path",
+                PropertyUiType::MultilineText,
+                "Path Data",
+                PropertyValue::String("".to_string()),
+            ),
         ]
     }
 

@@ -66,30 +66,32 @@ impl EffectPlugin for DilateEffectPlugin {
         use ordered_float::OrderedFloat;
 
         vec![
-            PropertyDefinition {
-                name: "radius_x".to_string(),
-                label: "Radius X".to_string(),
-                ui_type: PropertyUiType::Float {
+            PropertyDefinition::new(
+                "radius_x",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 100.0,
                     step: 0.1,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Dilate".to_string(),
-            },
-            PropertyDefinition {
-                name: "radius_y".to_string(),
-                label: "Radius Y".to_string(),
-                ui_type: PropertyUiType::Float {
+                "Radius X",
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+            PropertyDefinition::new(
+                "radius_y",
+                PropertyUiType::Float {
                     min: 0.0,
                     max: 100.0,
                     step: 0.1,
                     suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                default_value: PropertyValue::Number(OrderedFloat(0.0)),
-                category: "Dilate".to_string(),
-            },
+                "Radius Y",
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
         ]
     }
 }
