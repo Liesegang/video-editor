@@ -2,7 +2,7 @@ use super::action_handler::{ActionContext, PropertyTarget};
 use super::properties::{render_inspector_properties_grid, PropertyAction, PropertyRenderContext};
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
-use crate::ui::widgets::reorderable_list::ReorderableList;
+
 use egui::collapsing_header::CollapsingState;
 use egui::Ui;
 use library::model::project::ensemble::{DecoratorInstance, EffectorInstance};
@@ -75,13 +75,11 @@ pub fn render_ensemble_section(
     });
 
     let mut local_effectors = effectors.clone();
-    let mut effectors_changed = false;
-    let mut effector_delete_idx = None;
-    let _effector_reorder_occurred = false;
 
-    ReorderableList::new("ensemble_effectors_list", &mut local_effectors).show(
-        ui,
-        |ui, visual_index, effector, handle| {
+    crate::ui::widgets::collection_editor::CollectionEditor::new(
+        "ensemble_effectors_list",
+        &mut local_effectors,
+        |ui, visual_index, effector, handle, history_manager, project_service, needs_refresh| {
             let backend_index = effectors
                 .iter()
                 .position(|e| e.id == effector.id)
@@ -106,10 +104,6 @@ pub fn render_ensemble_section(
                     });
                 });
             });
-
-            if remove_clicked {
-                effector_delete_idx = Some(visual_index);
-            }
 
             header_res.body(|ui| {
                 let defs = get_effector_definitions(&effector.effector_type);
@@ -168,31 +162,14 @@ pub fn render_ensemble_section(
                     }
                 }
             });
+
+            remove_clicked
         },
-    );
-
-    if let Some(idx) = effector_delete_idx {
-        local_effectors.remove(idx);
-        effectors_changed = true;
-    } else {
-        // Check reordering by ID comparison
-        let local_ids: Vec<Uuid> = local_effectors.iter().map(|e| e.id).collect();
-        let current_ids: Vec<Uuid> = effectors.iter().map(|e| e.id).collect();
-        if local_ids != current_ids {
-            effectors_changed = true;
-        }
-    }
-
-    if effectors_changed {
-        project_service
-            .update_track_clip_effectors(selected_entity_id, local_effectors)
-            .ok();
-
-        let current_state = project_service.get_project().read().unwrap().clone();
-        history_manager.push_project_state(current_state);
-
-        *needs_refresh = true;
-    }
+        |new_effectors, project_service| {
+            project_service.update_track_clip_effectors(selected_entity_id, new_effectors)
+        },
+    )
+    .show(ui, history_manager, project_service, needs_refresh);
 
     ui.separator();
 
@@ -218,12 +195,11 @@ pub fn render_ensemble_section(
     });
 
     let mut local_decorators = decorators.clone();
-    let mut decorators_changed = false;
-    let mut decorator_delete_idx = None;
 
-    ReorderableList::new("ensemble_decorators_list", &mut local_decorators).show(
-        ui,
-        |ui, visual_index, decorator, handle| {
+    crate::ui::widgets::collection_editor::CollectionEditor::new(
+        "ensemble_decorators_list",
+        &mut local_decorators,
+        |ui, visual_index, decorator, handle, history_manager, project_service, needs_refresh| {
             let backend_index = decorators
                 .iter()
                 .position(|d| d.id == decorator.id)
@@ -248,10 +224,6 @@ pub fn render_ensemble_section(
                     });
                 });
             });
-
-            if remove_clicked {
-                decorator_delete_idx = Some(visual_index);
-            }
 
             header_res.body(|ui| {
                 let defs = get_decorator_definitions(&decorator.decorator_type);
@@ -310,30 +282,14 @@ pub fn render_ensemble_section(
                     }
                 }
             });
+
+            remove_clicked
         },
-    );
-
-    if let Some(idx) = decorator_delete_idx {
-        local_decorators.remove(idx);
-        decorators_changed = true;
-    } else {
-        let local_ids: Vec<Uuid> = local_decorators.iter().map(|d| d.id).collect();
-        let current_ids: Vec<Uuid> = decorators.iter().map(|d| d.id).collect();
-        if local_ids != current_ids {
-            decorators_changed = true;
-        }
-    }
-
-    if decorators_changed {
-        project_service
-            .update_track_clip_decorators(selected_entity_id, local_decorators)
-            .ok();
-
-        let current_state = project_service.get_project().read().unwrap().clone();
-        history_manager.push_project_state(current_state);
-
-        *needs_refresh = true;
-    }
+        |new_decorators, project_service| {
+            project_service.update_track_clip_decorators(selected_entity_id, new_decorators)
+        },
+    )
+    .show(ui, history_manager, project_service, needs_refresh);
 
     actions
 }
