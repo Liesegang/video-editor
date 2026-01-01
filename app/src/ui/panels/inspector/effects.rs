@@ -2,7 +2,7 @@ use super::action_handler::{ActionContext, PropertyTarget};
 use super::properties::{render_inspector_properties_grid, PropertyAction, PropertyRenderContext};
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
-use crate::ui::widgets::reorderable_list::ReorderableList;
+
 use egui::collapsing_header::CollapsingState;
 use egui::Ui;
 use library::EditorService as ProjectService;
@@ -38,6 +38,10 @@ pub fn render_effects_section(
                 project_service
                     .add_effect_to_clip(selected_entity_id, &effect_id)
                     .ok();
+
+                let current_state = project_service.get_project().read().unwrap().clone();
+                history_manager.push_project_state(current_state);
+
                 *needs_refresh = true;
             },
         );
@@ -50,20 +54,19 @@ pub fn render_effects_section(
         .and_then(|proj| proj.get_clip(selected_entity_id).cloned());
 
     if let Some(track_clip) = track_clip_ref {
-        let mut effects = track_clip.effects.clone();
+        let effects = track_clip.effects.clone();
 
-        let old_effects = effects.clone();
-        let list_id = ui.make_persistent_id(format!("effects_{}", selected_entity_id));
-        let mut needs_delete = None;
+        let mut local_effects = effects.clone();
+        let list_id = egui::Id::new(format!("effects_{}", selected_entity_id));
 
-        ReorderableList::new(list_id, &mut effects).show(
-            ui,
-            |ui, _visual_index, effect, handle| {
-                let effect_index = track_clip
-                    .effects
+        crate::ui::widgets::collection_editor::CollectionEditor::new(
+            list_id,
+            &mut local_effects,
+            |ui, visual_index, effect, handle, history_manager, project_service, needs_refresh| {
+                let effect_index = effects
                     .iter()
                     .position(|e| e.id == effect.id)
-                    .unwrap_or(_visual_index);
+                    .unwrap_or(visual_index);
                 let id = ui.make_persistent_id(format!("effect_{}", effect.id));
                 let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
 
@@ -82,10 +85,6 @@ pub fn render_effects_section(
                         });
                     });
                 });
-
-                if remove_clicked {
-                    needs_delete = Some(_visual_index);
-                }
 
                 // Render Body
                 header_res.body(|ui| {
@@ -151,22 +150,13 @@ pub fn render_effects_section(
                         }
                     }
                 });
+
+                remove_clicked
             },
-        );
-
-        if let Some(idx) = needs_delete {
-            effects.remove(idx);
-        }
-
-        // Sync reordering
-        let ids: Vec<Uuid> = effects.iter().map(|e| e.id).collect();
-        let old_ids: Vec<Uuid> = old_effects.iter().map(|e| e.id).collect();
-        if ids != old_ids {
-            // Update native order
-            project_service
-                .update_track_clip_effects(selected_entity_id, effects)
-                .ok();
-            *needs_refresh = true;
-        }
+            |new_effects, project_service| {
+                project_service.update_track_clip_effects(selected_entity_id, new_effects)
+            },
+        )
+        .show(ui, history_manager, project_service, needs_refresh);
     }
 }
