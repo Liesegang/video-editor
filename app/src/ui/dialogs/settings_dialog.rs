@@ -179,7 +179,9 @@ impl SettingsDialog {
                                 self.editing_config = default_config.clone();
                                 self.editing_registry = CommandRegistry::new(&default_config);
                             }
-                            _ => {}
+                            SettingsResult::Cancel => {
+                                // Do nothing, just close
+                            }
                         }
                     }
                 }

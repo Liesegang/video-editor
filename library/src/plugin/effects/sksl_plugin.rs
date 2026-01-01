@@ -185,7 +185,12 @@ impl EffectPlugin for SkslEffectPlugin {
                                 uniform_bytes.extend_from_slice(&b.to_le_bytes());
                                 uniform_bytes.extend_from_slice(&a.to_le_bytes());
                             }
-                            _ => {}
+                            _ => {
+                                log::warn!(
+                                    "[WARN] SkSL: Unsupported property value type: {:?}",
+                                    val
+                                );
+                            }
                         }
                     } else if let Some(def) = &prop.default {
                         match def {
@@ -225,7 +230,12 @@ impl EffectPlugin for SkslEffectPlugin {
                                 uniform_bytes.extend_from_slice(&z.to_le_bytes());
                                 uniform_bytes.extend_from_slice(&w.to_le_bytes());
                             }
-                            _ => {}
+                            _ => {
+                                log::warn!(
+                                    "[WARN] SkSL: Unsupported default value type: {:?}",
+                                    def
+                                );
+                            }
                         }
                     } else {
                         // Default zero if no value and no default.

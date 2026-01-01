@@ -104,49 +104,79 @@ where
         // 1. Render Label Column (with Keyframe Icon)
         ui.horizontal(|ui| {
             let prop_meta = get_property(&prop_def.name);
-            if let Some(prop) = prop_meta {
-                let is_keyframed = prop.evaluator == "keyframe";
-                let is_on_key = if is_keyframed {
+
+            if prop_meta.is_none() {
+                // WARN: Missing property metadata. This should not happen if data is consistent.
+                log::warn!(
+                    "[WARN] Property '{}' metadata missing in properties.rs",
+                    prop_def.name
+                );
+                ui.label(egui::RichText::new("⚠").color(ui.visuals().warn_fg_color))
+                    .on_hover_text(format!("Missing metadata for property '{}'", prop_def.name));
+            }
+
+            // Determine state (default to Constant/False if missing)
+            let (is_keyframed, is_on_key) = if let Some(ref prop) = prop_meta {
+                let is_kf = prop.evaluator == "keyframe";
+                let on_key = if is_kf {
                     prop.keyframes()
                         .iter()
                         .any(|k| (k.time.into_inner() - context.current_time).abs() < 0.001)
                 } else {
                     false
                 };
+                (is_kf, on_key)
+            } else {
+                (false, false)
+            };
 
-                let (icon, color) = if is_keyframed {
-                    if is_on_key {
-                        (
-                            ICON_DIAMOND_FILLED,
-                            ui.visuals().widgets.active.text_color(),
-                        )
-                    } else {
-                        (ICON_DIAMOND, ui.visuals().text_color())
-                    }
+            let (icon, color) = if is_keyframed {
+                if is_on_key {
+                    (
+                        ICON_DIAMOND_FILLED,
+                        ui.visuals().widgets.active.text_color(),
+                    )
                 } else {
-                    (ICON_TIMER, ui.visuals().text_color().gamma_multiply(0.5))
-                };
-
-                let btn =
-                    ui.add(egui::Button::new(egui::RichText::new(icon).color(color)).frame(false));
-                if btn.clicked() {
-                    if let Some(val) = get_value(&prop_def.name) {
-                        actions.push(PropertyAction::ToggleKeyframe(prop_def.name.clone(), val));
-                    }
+                    (ICON_DIAMOND, ui.visuals().text_color())
                 }
-                if is_keyframed {
-                    btn.on_hover_text("Toggle keyframe at current time");
+            } else {
+                (ICON_TIMER, ui.visuals().text_color().gamma_multiply(0.5))
+            };
+
+            let btn =
+                ui.add(egui::Button::new(egui::RichText::new(icon).color(color)).frame(false));
+
+            if btn.clicked() {
+                if let Some(val) = get_value(&prop_def.name) {
+                    actions.push(PropertyAction::ToggleKeyframe(prop_def.name.clone(), val));
                 } else {
-                    btn.on_hover_text("Enable keyframing");
+                    log::warn!(
+                        "[WARN] Attempted to toggle keyframe for '{}' but value is missing/None",
+                        prop_def.name
+                    );
                 }
             }
+
+            if is_keyframed {
+                btn.on_hover_text("Toggle keyframe at current time");
+            } else {
+                btn.on_hover_text("Enable keyframing");
+            }
+
             ui.label(&prop_def.label);
         });
 
         // 2. Render Input Column
         match &prop_def.ui_type {
             PropertyUiType::Float { step, suffix, .. } => {
-                let current_val = get_value(&prop_def.name)
+                let val_opt = get_value(&prop_def.name);
+                if val_opt.is_none() {
+                    log::warn!(
+                        "[WARN] Missing value for Float property '{}'",
+                        prop_def.name
+                    );
+                }
+                let current_val = val_opt
                     .and_then(|v| {
                         v.get_as::<f64>()
                             .or_else(|| v.get_as::<f32>().map(|f| f as f64))
@@ -173,7 +203,14 @@ where
                 }
             }
             PropertyUiType::Integer { suffix, .. } => {
-                let current_val = get_value(&prop_def.name)
+                let val_opt = get_value(&prop_def.name);
+                if val_opt.is_none() {
+                    log::warn!(
+                        "[WARN] Missing value for Integer property '{}'",
+                        prop_def.name
+                    );
+                }
+                let current_val = val_opt
                     .and_then(|v| v.get_as::<i64>())
                     .unwrap_or(prop_def.default_value.get_as::<i64>().unwrap_or(0));
 
@@ -193,7 +230,14 @@ where
                 }
             }
             PropertyUiType::Color => {
-                let current_val = get_value(&prop_def.name)
+                let val_opt = get_value(&prop_def.name);
+                if val_opt.is_none() {
+                    log::warn!(
+                        "[WARN] Missing value for Color property '{}'",
+                        prop_def.name
+                    );
+                }
+                let current_val = val_opt
                     .and_then(|v| v.get_as::<Color>())
                     .unwrap_or(prop_def.default_value.get_as::<Color>().unwrap_or_default());
 
@@ -280,7 +324,11 @@ where
                 }
             }
             PropertyUiType::Bool => {
-                let current_val = get_value(&prop_def.name)
+                let val_opt = get_value(&prop_def.name);
+                if val_opt.is_none() {
+                    log::warn!("[WARN] Missing value for Bool property '{}'", prop_def.name);
+                }
+                let current_val = val_opt
                     .and_then(|v| v.get_as::<bool>())
                     .unwrap_or(prop_def.default_value.get_as().unwrap_or(false));
                 let mut val_mut = current_val;
@@ -299,7 +347,14 @@ where
                 }
             }
             PropertyUiType::Dropdown { options } => {
-                let current_val = get_value(&prop_def.name)
+                let val_opt = get_value(&prop_def.name);
+                if val_opt.is_none() {
+                    log::warn!(
+                        "[WARN] Missing value for Dropdown property '{}'",
+                        prop_def.name
+                    );
+                }
+                let current_val = val_opt
                     .and_then(|v| v.get_as::<String>())
                     .unwrap_or(prop_def.default_value.get_as().unwrap_or_default());
 
@@ -340,7 +395,11 @@ where
                 }
             }
             PropertyUiType::Font => {
-                let current_val = get_value(&prop_def.name)
+                let val_opt = get_value(&prop_def.name);
+                if val_opt.is_none() {
+                    log::warn!("[WARN] Missing value for Font property '{}'", prop_def.name);
+                }
+                let current_val = val_opt
                     .and_then(|v| v.get_as::<String>())
                     .unwrap_or(prop_def.default_value.get_as().unwrap_or_default());
 
@@ -366,7 +425,11 @@ where
                 }
             }
             PropertyUiType::Text | PropertyUiType::MultilineText => {
-                let current_val = get_value(&prop_def.name)
+                let val_opt = get_value(&prop_def.name);
+                if val_opt.is_none() {
+                    log::warn!("[WARN] Missing value for Text property '{}'", prop_def.name);
+                }
+                let current_val = val_opt
                     .and_then(|v| v.get_as::<String>())
                     .unwrap_or(prop_def.default_value.get_as().unwrap_or_default());
                 let mut text = current_val.clone();
@@ -395,14 +458,16 @@ where
                 }
             }
             PropertyUiType::Vec2 { suffix } => {
-                let current_val = get_value(&prop_def.name)
-                    .and_then(|v| v.get_as::<Vec2>())
-                    .unwrap_or_else(|| {
-                        prop_def.default_value.get_as::<Vec2>().unwrap_or(Vec2 {
-                            x: OrderedFloat(0.0),
-                            y: OrderedFloat(0.0),
-                        })
-                    });
+                let val_opt = get_value(&prop_def.name);
+                if val_opt.is_none() {
+                    log::warn!("[WARN] Missing value for Vec2 property '{}'", prop_def.name);
+                }
+                let current_val = val_opt.and_then(|v| v.get_as::<Vec2>()).unwrap_or_else(|| {
+                    prop_def.default_value.get_as::<Vec2>().unwrap_or(Vec2 {
+                        x: OrderedFloat(0.0),
+                        y: OrderedFloat(0.0),
+                    })
+                });
 
                 let mut x = current_val.x.into_inner() as f32;
                 let mut y = current_val.y.into_inner() as f32;
@@ -437,15 +502,17 @@ where
                 }
             }
             PropertyUiType::Vec3 { suffix } => {
-                let current_val = get_value(&prop_def.name)
-                    .and_then(|v| v.get_as::<Vec3>())
-                    .unwrap_or_else(|| {
-                        prop_def.default_value.get_as::<Vec3>().unwrap_or(Vec3 {
-                            x: OrderedFloat(0.0),
-                            y: OrderedFloat(0.0),
-                            z: OrderedFloat(0.0),
-                        })
-                    });
+                let val_opt = get_value(&prop_def.name);
+                if val_opt.is_none() {
+                    log::warn!("[WARN] Missing value for Vec3 property '{}'", prop_def.name);
+                }
+                let current_val = val_opt.and_then(|v| v.get_as::<Vec3>()).unwrap_or_else(|| {
+                    prop_def.default_value.get_as::<Vec3>().unwrap_or(Vec3 {
+                        x: OrderedFloat(0.0),
+                        y: OrderedFloat(0.0),
+                        z: OrderedFloat(0.0),
+                    })
+                });
 
                 let mut x = current_val.x.into_inner() as f32;
                 let mut y = current_val.y.into_inner() as f32;
@@ -485,16 +552,18 @@ where
                 }
             }
             PropertyUiType::Vec4 { suffix } => {
-                let current_val = get_value(&prop_def.name)
-                    .and_then(|v| v.get_as::<Vec4>())
-                    .unwrap_or_else(|| {
-                        prop_def.default_value.get_as::<Vec4>().unwrap_or(Vec4 {
-                            x: OrderedFloat(0.0),
-                            y: OrderedFloat(0.0),
-                            z: OrderedFloat(0.0),
-                            w: OrderedFloat(0.0),
-                        })
-                    });
+                let val_opt = get_value(&prop_def.name);
+                if val_opt.is_none() {
+                    log::warn!("[WARN] Missing value for Vec4 property '{}'", prop_def.name);
+                }
+                let current_val = val_opt.and_then(|v| v.get_as::<Vec4>()).unwrap_or_else(|| {
+                    prop_def.default_value.get_as::<Vec4>().unwrap_or(Vec4 {
+                        x: OrderedFloat(0.0),
+                        y: OrderedFloat(0.0),
+                        z: OrderedFloat(0.0),
+                        w: OrderedFloat(0.0),
+                    })
+                });
 
                 let mut x = current_val.x.into_inner() as f32;
                 let mut y = current_val.y.into_inner() as f32;

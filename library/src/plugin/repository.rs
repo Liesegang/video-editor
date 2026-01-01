@@ -11,6 +11,7 @@ use crate::plugin::evaluator::PropertyEvaluatorRegistry;
 use crate::plugin::exporters::ExportPlugin;
 use crate::plugin::loaders::LoadRepository;
 use crate::plugin::traits::Plugin;
+use crate::plugin::{DecoratorPlugin, EffectorPlugin, StylePlugin};
 
 /// Generic container for plugins of a specific type.
 pub struct PluginRepository<T: ?Sized> {
@@ -43,6 +44,9 @@ pub(crate) struct PluginRegistry {
     pub load_plugins: LoadRepository,
     pub export_plugins: PluginRepository<dyn ExportPlugin>,
     pub entity_converter_plugins: PluginRepository<dyn EntityConverterPlugin>,
+    pub effector_plugins: PluginRepository<dyn EffectorPlugin>,
+    pub decorator_plugins: PluginRepository<dyn DecoratorPlugin>,
+    pub style_plugins: PluginRepository<dyn StylePlugin>,
     pub property_evaluators: PropertyEvaluatorRegistry,
     pub dynamic_libraries: Vec<Library>,
 }

@@ -40,51 +40,11 @@ pub use editor::ProjectService;
 pub use editor::RenderService;
 
 use crate::plugin::PluginManager;
-use crate::plugin::entity_converter::{
-    ImageEntityConverterPlugin, ShapeEntityConverterPlugin, SkSLEntityConverterPlugin,
-    TextEntityConverterPlugin, VideoEntityConverterPlugin,
-};
 use log::info;
 use std::fs;
 use std::io::Write;
 use std::ops::Range;
 use std::sync::Arc;
-
-// Function to create and initialize the PluginManager with built-in plugins
-pub fn create_plugin_manager() -> Arc<PluginManager> {
-    let manager = Arc::new(PluginManager::new());
-    manager.register_effect(Arc::new(crate::plugin::effects::BlurEffectPlugin::new()));
-    manager.register_effect(Arc::new(crate::plugin::effects::PixelSorterPlugin::new()));
-    manager.register_effect(Arc::new(crate::plugin::effects::DilateEffectPlugin::new()));
-    manager.register_effect(Arc::new(crate::plugin::effects::ErodeEffectPlugin::new()));
-    manager.register_effect(Arc::new(
-        crate::plugin::effects::DropShadowEffectPlugin::new(),
-    ));
-    manager.register_effect(Arc::new(
-        crate::plugin::effects::MagnifierEffectPlugin::new(),
-    ));
-    manager.register_effect(Arc::new(crate::plugin::effects::TileEffectPlugin::new()));
-
-    manager.register_load_plugin(Arc::new(crate::plugin::loaders::NativeImageLoader::new()));
-    manager.register_load_plugin(Arc::new(crate::plugin::loaders::FfmpegVideoLoader::new()));
-    manager.register_export_plugin(Arc::new(crate::plugin::exporters::PngExportPlugin::new()));
-    manager.register_export_plugin(Arc::new(crate::plugin::exporters::FfmpegExportPlugin::new()));
-    manager.register_property_plugin(Arc::new(
-        crate::plugin::properties::ConstantPropertyPlugin::new(),
-    ));
-    manager.register_property_plugin(Arc::new(
-        crate::plugin::properties::KeyframePropertyPlugin::new(),
-    ));
-    manager.register_property_plugin(Arc::new(
-        crate::plugin::properties::ExpressionPropertyPlugin::new(),
-    ));
-    manager.register_entity_converter_plugin(Arc::new(VideoEntityConverterPlugin::new()));
-    manager.register_entity_converter_plugin(Arc::new(ImageEntityConverterPlugin::new()));
-    manager.register_entity_converter_plugin(Arc::new(TextEntityConverterPlugin::new()));
-    manager.register_entity_converter_plugin(Arc::new(ShapeEntityConverterPlugin::new()));
-    manager.register_entity_converter_plugin(Arc::new(SkSLEntityConverterPlugin::new()));
-    manager
-}
 
 pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -110,7 +70,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         .skip(2)
         .filter(|s| !s.starts_with("--"))
         .collect();
-    let plugin_manager = create_plugin_manager();
+    let plugin_manager = Arc::new(PluginManager::default());
     for plugin_path in plugin_paths {
         info!("Loading property plugin {}", plugin_path);
         plugin_manager.load_property_plugin_from_file(plugin_path)?;

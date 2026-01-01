@@ -108,6 +108,7 @@ impl<'a> FrameEvaluator<'a> {
                 &FrameEvaluationContext {
                     composition: self.composition,
                     property_evaluators: &self.property_evaluators,
+                    plugin_manager: &self.plugin_manager,
                 },
                 track_clip,
                 frame_number,

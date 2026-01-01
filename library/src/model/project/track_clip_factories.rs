@@ -20,7 +20,11 @@ impl TrackClip {
         duration_frame: u64,
         fps: f64,
     ) -> Self {
-        let mut props = PropertyMap::new();
+        // Initialize properties from definitions
+        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Audio);
+        let mut props = PropertyMap::from_definitions(&defs);
+
+        // Set specific values
         props.set(
             "file_path".to_string(),
             Property::constant(PropertyValue::String(file_path.to_string())),
@@ -55,7 +59,11 @@ impl TrackClip {
         canvas_width: u32,
         canvas_height: u32,
     ) -> Self {
-        let mut props = PropertyMap::new();
+        // Initialize properties from definitions
+        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Video);
+        let mut props = PropertyMap::from_definitions(&defs);
+
+        // Update default values with specific contexts (like canvas size)
         props.set(
             "file_path".to_string(),
             Property::constant(PropertyValue::String(file_path.to_string())),
@@ -65,24 +73,6 @@ impl TrackClip {
             Property::constant(PropertyValue::Vec2(Vec2 {
                 x: OrderedFloat(canvas_width as f64 / 2.0),
                 y: OrderedFloat(canvas_height as f64 / 2.0),
-            })),
-        );
-        props.set(
-            "scale".to_string(),
-            Property::constant(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(100.0),
-                y: OrderedFloat(100.0),
-            })),
-        );
-        props.set(
-            "rotation".to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
-        );
-        props.set(
-            "anchor".to_string(),
-            Property::constant(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(0.0),
-                y: OrderedFloat(0.0),
             })),
         );
 
@@ -113,7 +103,10 @@ impl TrackClip {
         canvas_height: u32,
         fps: f64,
     ) -> Self {
-        let mut props = PropertyMap::new();
+        // Initialize properties from definitions
+        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Image);
+        let mut props = PropertyMap::from_definitions(&defs);
+
         props.set(
             "file_path".to_string(),
             Property::constant(PropertyValue::String(file_path.to_string())),
@@ -123,24 +116,6 @@ impl TrackClip {
             Property::constant(PropertyValue::Vec2(Vec2 {
                 x: OrderedFloat(canvas_width as f64 / 2.0),
                 y: OrderedFloat(canvas_height as f64 / 2.0),
-            })),
-        );
-        props.set(
-            "scale".to_string(),
-            Property::constant(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(100.0),
-                y: OrderedFloat(100.0),
-            })),
-        );
-        props.set(
-            "rotation".to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
-        );
-        props.set(
-            "anchor".to_string(),
-            Property::constant(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(0.0),
-                y: OrderedFloat(0.0),
             })),
         );
 
@@ -170,21 +145,16 @@ impl TrackClip {
         canvas_height: u32,
         fps: f64,
     ) -> Self {
-        let mut props = PropertyMap::new();
-        let font_size = 100.0;
+        // Initialize properties from definitions
+        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Text);
+        let mut props = PropertyMap::from_definitions(&defs);
 
         props.set(
             "text".to_string(),
             Property::constant(PropertyValue::String(text.to_string())),
         );
-        props.set(
-            "font_family".to_string(),
-            Property::constant(PropertyValue::String("Arial".to_string())),
-        );
-        props.set(
-            "size".to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(font_size))),
-        );
+        // Defaults for font_family and size are already set by from_definitions, but we can override if needed
+        let font_size = props.get_f64("size").unwrap_or(100.0);
 
         let mut styles = Vec::new();
 
@@ -214,26 +184,11 @@ impl TrackClip {
             })),
         );
         props.set(
-            "scale".to_string(),
-            Property::constant(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(100.0),
-                y: OrderedFloat(100.0),
-            })),
-        );
-        props.set(
-            "rotation".to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
-        );
-        props.set(
             "anchor".to_string(),
             Property::constant(PropertyValue::Vec2(Vec2 {
                 x: OrderedFloat(anchor_x),
                 y: OrderedFloat(anchor_y),
             })),
-        );
-        props.set(
-            "opacity".to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
         );
 
         TrackClip::new(
@@ -261,7 +216,9 @@ impl TrackClip {
         canvas_height: u32,
         fps: f64,
     ) -> Self {
-        let mut props = PropertyMap::new();
+        // Initialize properties from definitions
+        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Shape);
+        let mut props = PropertyMap::from_definitions(&defs);
 
         let heart_path = "M 50,30 A 20,20 0,0,1 90,30 C 90,55 50,85 50,85 C 50,85 10,55 10,30 A 20,20 0,0,1 50,30 Z";
         props.set(
@@ -319,14 +276,6 @@ impl TrackClip {
         styles.push(StyleInstance::new("stroke", stroke_props));
 
         props.set(
-            "width".to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
-        );
-        props.set(
-            "height".to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
-        );
-        props.set(
             "position".to_string(),
             Property::constant(PropertyValue::Vec2(Vec2 {
                 x: OrderedFloat(canvas_width as f64 / 2.0),
@@ -334,26 +283,11 @@ impl TrackClip {
             })),
         );
         props.set(
-            "scale".to_string(),
-            Property::constant(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(100.0),
-                y: OrderedFloat(100.0),
-            })),
-        );
-        props.set(
-            "rotation".to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
-        );
-        props.set(
             "anchor".to_string(),
             Property::constant(PropertyValue::Vec2(Vec2 {
                 x: OrderedFloat(50.0),
                 y: OrderedFloat(50.0),
             })),
-        );
-        props.set(
-            "opacity".to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
         );
 
         TrackClip::new(
@@ -381,7 +315,9 @@ impl TrackClip {
         canvas_height: u32,
         fps: f64,
     ) -> Self {
-        let mut props = PropertyMap::new();
+        // Initialize properties from definitions
+        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::SkSL);
+        let mut props = PropertyMap::from_definitions(&defs);
 
         let default_shader = r#"
 half4 main(float2 fragCoord) {
@@ -401,28 +337,6 @@ half4 main(float2 fragCoord) {
                 x: OrderedFloat(canvas_width as f64 / 2.0),
                 y: OrderedFloat(canvas_height as f64 / 2.0),
             })),
-        );
-        props.set(
-            "scale".to_string(),
-            Property::constant(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(100.0),
-                y: OrderedFloat(100.0),
-            })),
-        );
-        props.set(
-            "rotation".to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
-        );
-        props.set(
-            "anchor".to_string(),
-            Property::constant(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(canvas_width as f64 / 2.0),
-                y: OrderedFloat(canvas_height as f64 / 2.0),
-            })),
-        );
-        props.set(
-            "opacity".to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
         );
 
         TrackClip::new(

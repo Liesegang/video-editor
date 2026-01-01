@@ -49,7 +49,7 @@ impl AudioEngine {
                 }
                 Self::write_audio_data(data, channels as usize, &mut consumer, &counter_clone);
             },
-            |err| eprintln!("Audio stream error: {}", err),
+            |err| log::error!("Audio stream error: {}", err),
             None,
         )?;
 

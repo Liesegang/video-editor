@@ -25,11 +25,82 @@ use crate::plugin::loaders::{
     AssetMetadata, LoadPlugin, LoadRepository, LoadRequest, LoadResponse,
 };
 use crate::plugin::repository::{PluginRegistry, PluginRepository};
+
 use crate::plugin::traits::{Plugin, PropertyPlugin};
+use crate::plugin::{DecoratorPlugin, EffectorPlugin, StylePlugin};
+
+use crate::plugin::effects::{
+    BlurEffectPlugin, DilateEffectPlugin, DropShadowEffectPlugin, ErodeEffectPlugin,
+    MagnifierEffectPlugin, PixelSorterPlugin, TileEffectPlugin,
+};
+use crate::plugin::entity_converter::{
+    ImageEntityConverterPlugin, ShapeEntityConverterPlugin, SkSLEntityConverterPlugin,
+    TextEntityConverterPlugin, VideoEntityConverterPlugin,
+};
+use crate::plugin::exporters::{FfmpegExportPlugin, PngExportPlugin};
+use crate::plugin::loaders::{FfmpegVideoLoader, NativeImageLoader};
+use crate::plugin::properties::{
+    ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin,
+};
 
 /// Main plugin manager.
 pub struct PluginManager {
     inner: RwLock<PluginRegistry>,
+}
+
+impl Default for PluginManager {
+    fn default() -> Self {
+        let manager = Self::new();
+
+        // Standard Effects
+        manager.register_effect(Arc::new(BlurEffectPlugin::new()));
+        manager.register_effect(Arc::new(PixelSorterPlugin::new()));
+        manager.register_effect(Arc::new(DilateEffectPlugin::new()));
+        manager.register_effect(Arc::new(ErodeEffectPlugin::new()));
+        manager.register_effect(Arc::new(DropShadowEffectPlugin::new()));
+        manager.register_effect(Arc::new(MagnifierEffectPlugin::new()));
+        manager.register_effect(Arc::new(TileEffectPlugin::new()));
+
+        // Standard Loaders
+        manager.register_load_plugin(Arc::new(NativeImageLoader::new()));
+        manager.register_load_plugin(Arc::new(FfmpegVideoLoader::new()));
+
+        // Standard Exporters
+        manager.register_export_plugin(Arc::new(PngExportPlugin::new()));
+        manager.register_export_plugin(Arc::new(FfmpegExportPlugin::new()));
+
+        // Standard Property Plugins
+        manager.register_property_plugin(Arc::new(ConstantPropertyPlugin::new()));
+        manager.register_property_plugin(Arc::new(KeyframePropertyPlugin::new()));
+        manager.register_property_plugin(Arc::new(ExpressionPropertyPlugin::new()));
+
+        // Standard Entity Converters
+        manager.register_entity_converter_plugin(Arc::new(VideoEntityConverterPlugin::new()));
+        manager.register_entity_converter_plugin(Arc::new(ImageEntityConverterPlugin::new()));
+        manager.register_entity_converter_plugin(Arc::new(TextEntityConverterPlugin::new()));
+        manager.register_entity_converter_plugin(Arc::new(ShapeEntityConverterPlugin::new()));
+        manager.register_entity_converter_plugin(Arc::new(SkSLEntityConverterPlugin::new()));
+
+        // Standard Effectors
+        manager
+            .register_effector_plugin(Arc::new(crate::plugin::effectors::TransformEffectorPlugin));
+        manager
+            .register_effector_plugin(Arc::new(crate::plugin::effectors::StepDelayEffectorPlugin));
+        manager
+            .register_effector_plugin(Arc::new(crate::plugin::effectors::RandomizeEffectorPlugin));
+        manager.register_effector_plugin(Arc::new(crate::plugin::effectors::OpacityEffectorPlugin));
+
+        // Standard Decorators
+        manager.register_decorator_plugin(Arc::new(
+            crate::plugin::decorators::BackplateDecoratorPlugin,
+        ));
+
+        // Standard Styles
+        manager.register_style_plugin(Arc::new(crate::plugin::styles::FillStylePlugin));
+        manager.register_style_plugin(Arc::new(crate::plugin::styles::StrokeStylePlugin));
+
+        manager
+    }
 }
 
 impl PluginManager {
@@ -40,7 +111,9 @@ impl PluginManager {
                 load_plugins: LoadRepository::new(),
                 export_plugins: PluginRepository::new(),
                 entity_converter_plugins: PluginRepository::new(),
-
+                effector_plugins: PluginRepository::new(),
+                decorator_plugins: PluginRepository::new(),
+                style_plugins: PluginRepository::new(),
                 property_evaluators: PropertyEvaluatorRegistry::new(),
                 dynamic_libraries: Vec::new(),
             }),
@@ -74,6 +147,81 @@ impl PluginManager {
         inner
             .property_evaluators
             .register(evaluator_id, evaluator_instance);
+    }
+
+    pub fn register_effector_plugin(&self, plugin: Arc<dyn EffectorPlugin>) {
+        let mut inner = self.inner.write().unwrap();
+        inner.effector_plugins.register(plugin);
+    }
+
+    pub fn register_decorator_plugin(&self, plugin: Arc<dyn DecoratorPlugin>) {
+        let mut inner = self.inner.write().unwrap();
+        inner.decorator_plugins.register(plugin);
+    }
+
+    pub fn register_style_plugin(&self, plugin: Arc<dyn StylePlugin>) {
+        let mut inner = self.inner.write().unwrap();
+        inner.style_plugins.register(plugin);
+    }
+
+    pub fn get_effector_plugin(&self, id: &str) -> Option<Arc<dyn EffectorPlugin>> {
+        let inner = self.inner.read().unwrap();
+        inner.effector_plugins.get(id).cloned()
+    }
+
+    pub fn get_decorator_plugin(&self, id: &str) -> Option<Arc<dyn DecoratorPlugin>> {
+        let inner = self.inner.read().unwrap();
+        inner.decorator_plugins.get(id).cloned()
+    }
+
+    pub fn get_style_plugin(&self, id: &str) -> Option<Arc<dyn StylePlugin>> {
+        let inner = self.inner.read().unwrap();
+        inner.style_plugins.get(id).cloned()
+    }
+
+    pub fn get_available_effectors(&self) -> Vec<String> {
+        let inner = self.inner.read().unwrap();
+        inner
+            .effector_plugins
+            .values()
+            .map(|p| p.id().to_string())
+            .collect()
+    }
+
+    pub fn get_available_decorators(&self) -> Vec<String> {
+        let inner = self.inner.read().unwrap();
+        inner
+            .decorator_plugins
+            .values()
+            .map(|p| p.id().to_string())
+            .collect()
+    }
+
+    pub fn get_available_styles(&self) -> Vec<String> {
+        let inner = self.inner.read().unwrap();
+        inner
+            .style_plugins
+            .values()
+            .map(|p| p.id().to_string())
+            .collect()
+    }
+
+    pub fn get_effector_properties(&self, id: &str) -> Vec<PropertyDefinition> {
+        self.get_effector_plugin(id)
+            .map(|p| p.properties())
+            .unwrap_or_default()
+    }
+
+    pub fn get_decorator_properties(&self, id: &str) -> Vec<PropertyDefinition> {
+        self.get_decorator_plugin(id)
+            .map(|p| p.properties())
+            .unwrap_or_default()
+    }
+
+    pub fn get_style_properties(&self, id: &str) -> Vec<PropertyDefinition> {
+        self.get_style_plugin(id)
+            .map(|p| p.properties())
+            .unwrap_or_default()
     }
 
     /// Set the priority order for loader plugins.

@@ -196,7 +196,9 @@ impl eframe::App for RuViEApp {
                             self.history_manager.push_project_state(current_state);
                         }
                     }
-                    _ => {}
+                    _ => {
+                        log::warn!("Unhandled confirmation action: {:?}", action);
+                    }
                 }
                 // Reset dialog logic is handled inside show() which sets is_open=false,
                 // but we can set the Option to None if we want to clean up.
@@ -386,7 +388,7 @@ fn create_default_project() -> (Arc<RwLock<Project>>, Uuid) {
 }
 
 fn setup_plugin_manager(app_config: &config::AppConfig) -> Arc<library::plugin::PluginManager> {
-    let plugin_manager = library::create_plugin_manager();
+    let plugin_manager = Arc::new(library::plugin::PluginManager::default());
 
     // Load plugins from configured paths
     for path in &app_config.plugins.paths {
