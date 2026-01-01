@@ -85,8 +85,6 @@ fn render_vector_group(
     (changed, reset, committed)
 }
 
-
-
 // Helper function to render generic property rows
 // Returns a list of actions to transform the state
 pub fn render_property_rows<G, GP>(
@@ -210,28 +208,28 @@ where
                     let response = ui.color_edit_button_srgba(&mut color32);
 
                     let changed = response.changed();
-                    
+
                     // Logic to detect when the popup was open and is now closed (panel close -> commit)
                     let popup_id = response.id.with("popup");
                     let is_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
-                    
+
                     if is_open {
                         ui.data_mut(|d| d.insert_temp(popup_id, true)); // Mark as "was open"
                     } else {
                         // Not open now. Was it open?
                         let was_open = ui.data(|d| d.get_temp(popup_id).unwrap_or(false));
                         if was_open {
-                             // It just closed (or we just noticed it closed). 
-                             // Trigger commit if we tracked changes, or just trigger commit to be safe.
-                             // Since we don't track "dirty" here easily across frames without more data,
-                             // we assume if it was open and now closed, we should commit.
-                             // Actually, standard behavior is usually sufficient if we just commit on close.
-                             
-                             // However, we only want to commit if we actually changed something?
-                             // User said: "commit on panel close".
-                             
-                             actions.push(PropertyAction::Commit);
-                             ui.data_mut(|d| d.remove_temp::<bool>(popup_id));
+                            // It just closed (or we just noticed it closed).
+                            // Trigger commit if we tracked changes, or just trigger commit to be safe.
+                            // Since we don't track "dirty" here easily across frames without more data,
+                            // we assume if it was open and now closed, we should commit.
+                            // Actually, standard behavior is usually sufficient if we just commit on close.
+
+                            // However, we only want to commit if we actually changed something?
+                            // User said: "commit on panel close".
+
+                            actions.push(PropertyAction::Commit);
+                            ui.data_mut(|d| d.remove_temp::<bool>(popup_id));
                         }
                     }
 
@@ -242,12 +240,12 @@ where
                             b: color32.b(),
                             a: color32.a(),
                         };
-                         actions.push(PropertyAction::Update(
+                        actions.push(PropertyAction::Update(
                             prop_def.name.clone(),
                             PropertyValue::Color(new_color),
                         ));
                     }
-                // Interpolation Mode UI
+                    // Interpolation Mode UI
                     let prop_meta = get_property(&prop_def.name);
                     if let Some(prop) = prop_meta {
                         if prop.evaluator == "keyframe" {
