@@ -101,8 +101,7 @@ impl Hash for FrameContent {
                 OrderedFloat(*size).hash(state);
                 styles.hash(state);
                 effects.hash(state);
-                // Skip ensemble in hash (not part of cache key)
-                ensemble.is_some().hash(state);
+                ensemble.hash(state);
                 transform.hash(state);
             }
             FrameContent::Shape {
@@ -173,7 +172,7 @@ impl PartialEq for FrameContent {
                     && OrderedFloat(*s1) == OrderedFloat(*s2)
                     && st1 == st2
                     && e1 == e2
-                    && en1.is_some() == en2.is_some()
+                    && en1 == en2
                     && tr1 == tr2
             }
             (

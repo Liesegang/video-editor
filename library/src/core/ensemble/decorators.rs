@@ -1,13 +1,12 @@
 use crate::model::frame::color::Color;
 use skia_safe::{Canvas, Paint, Rect};
 
-/// Decorator（装飾）のトレイト
 pub trait Decorator: Send + Sync {
     fn draw(&self, canvas: &Canvas, bounds: Rect, paint: &Paint);
 }
 
 /// Smart Backplate（自動背景）の対象レベル
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Hash)]
 pub enum BackplateTarget {
     Char,  // 文字ごと
     Line,  // 行ごと
@@ -15,15 +14,13 @@ pub enum BackplateTarget {
     Parts, // パス/パーツごと（文字をグリフパスに分解）
 }
 
-/// Backplateの形状
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Hash)]
 pub enum BackplateShape {
     Rect,
     RoundedRect,
     Circle,
 }
 
-/// Smart Backplate Decorator
 pub struct BackplateDecorator {
     pub target: BackplateTarget,
     pub shape: BackplateShape,
@@ -95,7 +92,6 @@ impl Decorator for BackplateDecorator {
     }
 }
 
-/// シンプルな矩形Decorator
 pub struct RectDecorator {
     pub color: Color,
     pub padding: f32,
@@ -129,7 +125,6 @@ impl Decorator for RectDecorator {
     }
 }
 
-/// シンプルな円形Decorator
 pub struct CircleDecorator {
     pub color: Color,
     pub padding: f32,
