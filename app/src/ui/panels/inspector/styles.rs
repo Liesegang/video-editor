@@ -110,6 +110,7 @@ pub fn render_styles_section(
     crate::ui::widgets::collection_editor::CollectionEditor::new(
         list_id,
         &mut local_styles,
+        |s| egui::Id::new(s.id),
         |ui, visual_index, style, handle, history_manager, project_service, needs_refresh| {
             let backend_index = styles
                 .iter()

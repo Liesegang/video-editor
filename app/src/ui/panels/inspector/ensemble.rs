@@ -79,6 +79,7 @@ pub fn render_ensemble_section(
     crate::ui::widgets::collection_editor::CollectionEditor::new(
         "ensemble_effectors_list",
         &mut local_effectors,
+        |e| egui::Id::new(e.id),
         |ui, visual_index, effector, handle, history_manager, project_service, needs_refresh| {
             let backend_index = effectors
                 .iter()
@@ -199,6 +200,7 @@ pub fn render_ensemble_section(
     crate::ui::widgets::collection_editor::CollectionEditor::new(
         "ensemble_decorators_list",
         &mut local_decorators,
+        |d| egui::Id::new(d.id),
         |ui, visual_index, decorator, handle, history_manager, project_service, needs_refresh| {
             let backend_index = decorators
                 .iter()
