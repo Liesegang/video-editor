@@ -19,38 +19,8 @@ pub mod styles;
 use action_handler::{ActionContext, PropertyTarget};
 use effects::render_effects_section;
 use ensemble::render_ensemble_section;
-use properties::{render_property_rows, PropertyAction, PropertyRenderContext};
+use properties::{render_property_rows, PropertyRenderContext};
 use styles::render_styles_section;
-
-/// Process PropertyAction events using ActionContext for unified handling.
-fn process_property_actions(
-    actions: Vec<PropertyAction>,
-    ctx: &mut ActionContext,
-    target: PropertyTarget,
-    properties: &library::model::project::property::PropertyMap,
-) -> bool {
-    let mut needs_refresh = false;
-    for action in actions {
-        match action {
-            PropertyAction::Update(name, val) => {
-                ctx.handle_update(target, &name, val, |n| properties.get(n).cloned());
-                needs_refresh = true;
-            }
-            PropertyAction::Commit => {
-                ctx.handle_commit();
-            }
-            PropertyAction::ToggleKeyframe(name, val) => {
-                ctx.handle_toggle_keyframe(target, &name, val, |n| properties.get(n).cloned());
-                needs_refresh = true;
-            }
-            PropertyAction::SetAttribute(name, key, val) => {
-                ctx.handle_set_attribute(target, &name, &key, val);
-                needs_refresh = true;
-            }
-        }
-    }
-    needs_refresh
-}
 
 pub fn inspector_panel(
     ui: &mut Ui,
@@ -228,12 +198,9 @@ pub fn inspector_panel(
                                 selected_entity_id,
                                 current_time,
                             );
-                            if process_property_actions(
-                                pending_actions,
-                                &mut ctx,
-                                PropertyTarget::Clip,
-                                &properties,
-                            ) {
+                            if ctx.handle_actions(pending_actions, PropertyTarget::Clip, |n| {
+                                properties.get(n).cloned()
+                            }) {
                                 needs_refresh = true;
                             }
                         } else {
@@ -267,12 +234,9 @@ pub fn inspector_panel(
                                     selected_entity_id,
                                     current_time,
                                 );
-                                if process_property_actions(
-                                    actions,
-                                    &mut ctx,
-                                    PropertyTarget::Clip,
-                                    &properties,
-                                ) {
+                                if ctx.handle_actions(actions, PropertyTarget::Clip, |n| {
+                                    properties.get(n).cloned()
+                                }) {
                                     needs_refresh = true;
                                 }
                             }
@@ -299,7 +263,7 @@ pub fn inspector_panel(
             //--- Ensemble Section (Text only) ---
             if matches!(kind, TrackClipKind::Text) {
                 ui.add_space(5.0);
-                let ensemble_actions = render_ensemble_section(
+                render_ensemble_section(
                     ui,
                     project_service,
                     history_manager,
@@ -317,20 +281,6 @@ pub fn inspector_panel(
                         current_time,
                     },
                 );
-                let mut ctx = ActionContext::new(
-                    project_service,
-                    history_manager,
-                    selected_entity_id,
-                    current_time,
-                );
-                if process_property_actions(
-                    ensemble_actions,
-                    &mut ctx,
-                    PropertyTarget::Clip,
-                    &properties,
-                ) {
-                    needs_refresh = true;
-                }
             }
 
             // --- Effects Section ---
