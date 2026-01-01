@@ -2,6 +2,7 @@
 
 #![allow(improper_ctypes_definitions)]
 
+pub mod entity_converter;
 mod evaluator;
 mod manager;
 mod repository;
@@ -13,10 +14,11 @@ pub mod loaders;
 pub mod properties;
 
 // Re-export from submodules
+pub use entity_converter::{EntityConverterPlugin, FrameEvaluationContext};
 pub use evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
 pub use manager::{PluginInfo, PluginManager};
 pub use repository::PluginRepository;
-pub use traits::{InspectorPlugin, InspectorPluginCreateFn, Plugin, PropertyPlugin};
+pub use traits::{Plugin, PropertyPlugin};
 
 // Re-export from sub-crate modules
 pub use effects::{EffectDefinition, EffectPlugin, EffectRepository};
@@ -44,5 +46,4 @@ pub enum PluginCategory {
     Export,
     Property,
     EntityConverter,
-    Inspector,
 }

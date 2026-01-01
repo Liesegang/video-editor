@@ -11,15 +11,14 @@ mod ui;
 pub mod utils;
 
 fn main() -> eframe::Result<()> {
-    // Initialize the logger
     env_logger::init();
 
     eframe::run_native(
-        "Video Editor with Canvas",
+        "RuViE - Rust Video Editor",
         eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
+            viewport: egui::ViewportBuilder::default().with_inner_size([1920.0, 1080.0]),
             ..Default::default()
         },
-        Box::new(|cc| Ok(Box::new(app::MyApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(app::RuViEApp::new(cc)))),
     )
 }

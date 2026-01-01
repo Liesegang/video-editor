@@ -39,8 +39,11 @@ pub use editor::ProjectModel;
 pub use editor::ProjectService;
 pub use editor::RenderService;
 
-use crate::core::framing::entity_converters::BuiltinEntityConverterPlugin;
 use crate::plugin::PluginManager;
+use crate::plugin::entity_converter::{
+    ImageEntityConverterPlugin, ShapeEntityConverterPlugin, SkSLEntityConverterPlugin,
+    TextEntityConverterPlugin, VideoEntityConverterPlugin,
+};
 use log::info;
 use std::fs;
 use std::io::Write;
@@ -75,7 +78,11 @@ pub fn create_plugin_manager() -> Arc<PluginManager> {
     manager.register_property_plugin(Arc::new(
         crate::plugin::properties::ExpressionPropertyPlugin::new(),
     ));
-    manager.register_entity_converter_plugin(Arc::new(BuiltinEntityConverterPlugin::new()));
+    manager.register_entity_converter_plugin(Arc::new(VideoEntityConverterPlugin::new()));
+    manager.register_entity_converter_plugin(Arc::new(ImageEntityConverterPlugin::new()));
+    manager.register_entity_converter_plugin(Arc::new(TextEntityConverterPlugin::new()));
+    manager.register_entity_converter_plugin(Arc::new(ShapeEntityConverterPlugin::new()));
+    manager.register_entity_converter_plugin(Arc::new(SkSLEntityConverterPlugin::new()));
     manager
 }
 
@@ -137,14 +144,8 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
 
     let _property_evaluators = plugin_manager.get_property_evaluators();
 
-    let entity_converter_registry = plugin_manager.get_entity_converter_registry();
-
-    let mut render_service = RenderService::new(
-        renderer,
-        plugin_manager.clone(),
-        cache_manager.clone(),
-        entity_converter_registry.clone(),
-    );
+    let mut render_service =
+        RenderService::new(renderer, plugin_manager.clone(), cache_manager.clone());
 
     let mut export_settings = Arc::new(ExportSettings::from_project(
         project_model.project().as_ref(),

@@ -30,7 +30,7 @@ pub fn render_ensemble_section(
     let actions = vec![];
 
     ui.add_space(5.0);
-    CollapsingHeader::new(egui::RichText::new("🌊 Ensemble").strong())
+    CollapsingHeader::new(egui::RichText::new("Ensemble").strong())
         .default_open(true)
         .show(ui, |ui| {
             // --- Effectors ---

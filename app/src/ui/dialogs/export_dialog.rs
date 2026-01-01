@@ -8,7 +8,7 @@ use std::thread;
 
 use library::cache::SharedCacheManager;
 use library::editor::render_service::RenderService;
-use library::framing::entity_converters::EntityConverterRegistry;
+// use library::framing::entity_converters::EntityConverterRegistry;
 use library::model::project::project::Project;
 use library::model::project::property::PropertyUiType;
 use library::model::project::property::PropertyValue;
@@ -25,7 +25,6 @@ pub struct ExportDialog {
     // Dependencies
     plugin_manager: Arc<PluginManager>,
     cache_manager: SharedCacheManager,
-    entity_converter_registry: Arc<EntityConverterRegistry>,
 
     // Export state
     is_exporting: bool,
@@ -54,11 +53,7 @@ pub enum ExportRange {
 }
 
 impl ExportDialog {
-    pub fn new(
-        plugin_manager: Arc<PluginManager>,
-        cache_manager: SharedCacheManager,
-        entity_converter_registry: Arc<EntityConverterRegistry>,
-    ) -> Self {
+    pub fn new(plugin_manager: Arc<PluginManager>, cache_manager: SharedCacheManager) -> Self {
         Self {
             is_open: false,
             selected_exporter_id: None,
@@ -66,7 +61,6 @@ impl ExportDialog {
             output_path: "output".to_string(),
             plugin_manager,
             cache_manager,
-            entity_converter_registry,
             is_exporting: false,
             progress: 0.0,
             status_message: String::new(),
@@ -533,7 +527,6 @@ impl ExportDialog {
         let property_values_owned = self.property_values.clone();
         let plugin_manager = self.plugin_manager.clone();
         let cache_manager = self.cache_manager.clone();
-        let entity_converter_registry = self.entity_converter_registry.clone();
 
         let export_range = self.export_range;
         let custom_start = self.custom_start_frame;
@@ -582,7 +575,6 @@ impl ExportDialog {
                 renderer,
                 render_service_plugin_manager,
                 cache_manager.clone(),
-                entity_converter_registry,
             );
 
             // Construct ProjectModel

@@ -316,7 +316,51 @@ fn get_style_definitions(style_type: &str) -> Vec<PropertyDefinition> {
                 default_value: PropertyValue::Number(OrderedFloat(4.0)),
                 category: "Style".to_string(),
             },
-            // TODO: Caps, Joins, Dash Array
+            PropertyDefinition {
+                name: "cap".to_string(),
+                label: "Line Cap".to_string(),
+                ui_type: PropertyUiType::Dropdown {
+                    options: vec![
+                        "Butt".to_string(),
+                        "Round".to_string(),
+                        "Square".to_string(),
+                    ],
+                },
+                default_value: PropertyValue::String("Butt".to_string()),
+                category: "Style".to_string(),
+            },
+            PropertyDefinition {
+                name: "join".to_string(),
+                label: "Line Join".to_string(),
+                ui_type: PropertyUiType::Dropdown {
+                    options: vec![
+                        "Miter".to_string(),
+                        "Round".to_string(),
+                        "Bevel".to_string(),
+                    ],
+                },
+                default_value: PropertyValue::String("Miter".to_string()),
+                category: "Style".to_string(),
+            },
+            PropertyDefinition {
+                name: "dash_array".to_string(),
+                label: "Dash Array".to_string(),
+                ui_type: PropertyUiType::Text,
+                default_value: PropertyValue::String("".to_string()),
+                category: "Style".to_string(),
+            },
+            PropertyDefinition {
+                name: "dash_offset".to_string(),
+                label: "Dash Offset".to_string(),
+                ui_type: PropertyUiType::Float {
+                    min: -100.0,
+                    max: 100.0,
+                    step: 1.0,
+                    suffix: "px".to_string(),
+                },
+                default_value: PropertyValue::Number(OrderedFloat(0.0)),
+                category: "Style".to_string(),
+            },
         ],
         _ => vec![],
     }

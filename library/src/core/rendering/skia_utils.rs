@@ -13,7 +13,6 @@ use skia_safe::{AlphaType, ColorType, Data, ISize, Image as SkImage, ImageInfo, 
 
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use glutin::config::ConfigSurfaceTypes;
-use glutin::config::GlConfig;
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use glutin::context::ContextAttributesBuilder;
 #[cfg(feature = "gl")]

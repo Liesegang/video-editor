@@ -1,10 +1,10 @@
-use library::framing::entity_converters::{
-    EntityConverter, FrameEvaluationContext, VideoEntityConverter,
-};
 use library::model::frame::entity::FrameContent;
 use library::model::project::TrackClip;
 use library::model::project::project::Composition;
+use library::plugin::EntityConverterPlugin;
 use library::plugin::PropertyEvaluatorRegistry;
+use library::plugin::entity_converter::FrameEvaluationContext;
+use library::plugin::entity_converter::VideoEntityConverterPlugin;
 use library::plugin::properties::ConstantEvaluator;
 use std::sync::Arc;
 
@@ -36,7 +36,7 @@ fn test_video_converter_frame_calculation() {
 
     // Test Frame 0 (at 0 sec)
     // Expected: source_frame = 100 + (0/30 * 60) = 100
-    let converter = VideoEntityConverter;
+    let converter = VideoEntityConverterPlugin::new();
     let result = converter.convert_entity(&context, &clip, 0);
     assert!(result.is_some(), "Failed to convert frame 0");
     if let FrameContent::Video { frame_number, .. } = result.unwrap().content {
