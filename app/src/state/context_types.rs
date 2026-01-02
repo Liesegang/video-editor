@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::model::ui_types::{DraggedItem, GizmoHandle, TimelineDisplayMode, Vec2Def};
+use crate::model::ui_types::{GizmoHandle, TimelineDisplayMode, Vec2Def};
 use crate::model::vector::VectorEditorState;
 
 use library::animation::EasingFunction; // Added import
@@ -130,6 +130,18 @@ impl Default for GraphEditorState {
 
 use std::collections::HashSet;
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum DragStateItem {
+    Asset {
+        asset_id: Uuid,
+        pos: Option<egui::Pos2>,
+    },
+    Composition {
+        id: Uuid,
+        pos: Option<egui::Pos2>,
+    },
+}
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct SelectionState {
     pub composition_id: Option<Uuid>,
@@ -138,10 +150,13 @@ pub struct SelectionState {
     pub last_selected_track_id: Option<Uuid>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct InteractionState {
-    pub dragged_item: Option<DraggedItem>,
+    #[serde(skip)]
+    pub dragged_item: Option<DragStateItem>,
+    #[serde(skip)]
     pub active_confirmation: Option<crate::ui::dialogs::confirmation::ConfirmationDialog>,
+    #[serde(skip)]
     pub active_modal_error: Option<String>,
 
     // Drag/Drop specifics
@@ -162,42 +177,56 @@ pub struct InteractionState {
     pub gizmo_state: Option<GizmoState>,
 
     // Vector Editor State
+    #[serde(skip)]
     pub vector_editor_state: Option<VectorEditorState>,
 
     // Text Input
+    #[serde(skip)]
     pub current_time_text_input: String,
+    #[serde(skip)]
     pub is_editing_current_time: bool,
 
     // Context Menu
+    #[serde(skip)]
     pub context_menu_open_pos: Option<egui::Pos2>,
 
     // Graph Editor Selection: (Property NameRef, Keyframe Index)
     pub selected_keyframe: Option<(String, usize)>,
     #[allow(dead_code)]
+    #[serde(skip)]
     pub editing_keyframe: Option<(String, usize)>,
 
     // Body Drag State for absolute delta calculation
     pub body_drag_state: Option<BodyDragState>,
 
     // Drag-to-select state
+    #[serde(skip)]
     pub timeline_selection_drag_start: Option<egui::Pos2>,
+    #[serde(skip)]
     pub preview_selection_drag_start: Option<egui::Pos2>,
 
     // Hand Tool Logic
+    #[serde(skip)]
     pub handled_hand_tool_drag: bool,
 
     // Caching for Text/Shape bounds
+    #[serde(skip)]
     pub bounds_cache: BoundsCache,
 
     // Text Editing State
+    #[serde(skip)]
     pub editing_text_entity_id: Option<uuid::Uuid>,
+    #[serde(skip)]
     pub text_edit_buffer: String,
 
     // Import Reporting
+    #[serde(skip)]
     pub import_report: Option<ImportReport>,
 
     // Track Rename State
+    #[serde(skip)]
     pub renaming_track_id: Option<Uuid>,
+    #[serde(skip)]
     pub rename_buffer: String,
 }
 
@@ -215,15 +244,17 @@ pub struct BoundsCache {
     pub bounds: std::collections::HashMap<Uuid, (u64, (f32, f32, f32, f32))>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BodyDragState {
+    #[serde(with = "crate::model::ui_types::Pos2Def")]
     pub start_mouse_pos: egui::Pos2,
     // Map of Entity ID -> Original Position [x, y]
     pub original_positions: std::collections::HashMap<Uuid, [f32; 2]>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GizmoState {
+    #[serde(with = "crate::model::ui_types::Pos2Def")]
     pub start_mouse_pos: egui::Pos2,
     pub active_handle: GizmoHandle,
     pub original_position: [f32; 2],
@@ -234,4 +265,52 @@ pub struct GizmoState {
     pub original_anchor_y: f32,
     pub original_width: f32,
     pub original_height: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextMenuState {
+    #[serde(with = "crate::model::ui_types::Pos2Def")]
+    pub position: egui::Pos2,
+    pub open_time: f64,
+    pub search_query: String,
+    // Add other state if needed, e.g., expanded sections
+    #[serde(default)]
+    pub expanded_sections: std::collections::HashSet<String>,
+}
+
+impl ContextMenuState {
+    pub fn new(position: egui::Pos2, open_time: f64) -> Self {
+        Self {
+            position,
+            open_time,
+            search_query: String::new(),
+            expanded_sections: std::collections::HashSet::from([
+                "Input".to_string(),
+                "Geometry".to_string(),
+                "Composition".to_string(),
+                "Effect".to_string(),
+            ]),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeEditorState {
+    /// Hash of the Project topology/layout when last synced.
+    /// Used to detect external changes (Project -> Snarl Sync).
+    pub last_project_hash: u64,
+    #[serde(skip)]
+    pub last_snarl_hash: u64,
+    #[serde(skip)]
+    pub pending_navigation: Option<Uuid>,
+}
+
+impl Default for NodeEditorState {
+    fn default() -> Self {
+        Self {
+            last_project_hash: 0,
+            last_snarl_hash: 0,
+            pending_navigation: None,
+        }
+    }
 }

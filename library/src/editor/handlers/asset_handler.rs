@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
-use crate::model::project::asset::{Asset, AssetKind};
-use crate::model::project::project::Project;
+use crate::model::asset::{Asset, AssetKind};
+use crate::model::project::Project;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -20,10 +20,12 @@ impl AssetHandler {
     pub fn is_asset_used(project: &Arc<RwLock<Project>>, asset_id: Uuid) -> bool {
         if let Ok(proj) = project.read() {
             // Check all clips in the nodes registry
-            for clip in proj.all_clips() {
-                if let Some(ref r) = clip.reference_id {
-                    if *r == asset_id {
-                        return true;
+            for node in proj.nodes.values() {
+                if let crate::model::Node::Layer(layer) = node {
+                    if let crate::model::LayerContent::Media(media) = &layer.content {
+                        if media.asset_id == asset_id {
+                            return true;
+                        }
                     }
                 }
             }

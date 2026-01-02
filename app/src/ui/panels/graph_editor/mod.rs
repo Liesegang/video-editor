@@ -7,8 +7,8 @@ pub use utils::PropertyComponent;
 use utils::*;
 
 use egui::{Color32, Sense, Ui, Vec2};
-use library::model::project::project::Project;
-use library::model::project::property::{Property, PropertyMap, PropertyValue};
+use library::model::project::Project;
+use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::EditorService;
 use std::sync::{Arc, RwLock};
 
@@ -80,7 +80,7 @@ pub fn graph_editor_panel(
         let track = proj_read.get_track(track_id);
         let _ = track; // Not needed directly anymore, using entity from project
 
-        let entity = if let Some(e) = proj_read.get_clip(entity_id) {
+        let entity = if let Some(e) = proj_read.get_layer(entity_id) {
             e
         } else {
             return;
@@ -136,10 +136,14 @@ pub fn graph_editor_panel(
         }
 
         // Capture clip range for visualization
-        let (clip_start_frame, clip_end_frame, clip_fps) =
-            (entity.in_frame, entity.out_frame, composition.fps);
-        let clip_source_begin_frame = entity.source_begin_frame;
-        let clip_inherent_fps = entity.fps;
+        let (clip_start_frame, clip_end_frame, clip_fps) = {
+            let start = entity.start_time.into_inner();
+            let duration = entity.duration.into_inner();
+            let fps = composition.fps;
+            ((start * fps) as i64, ((start + duration) * fps) as i64, fps)
+        };
+        let clip_source_begin_frame = (entity.trim_in.into_inner() * composition.fps) as i64;
+        let clip_inherent_fps = composition.fps; // Fallback, should check media asset if possible
 
         for (effect_idx, effect) in entity.effects.iter().enumerate() {
             for (prop_key, prop) in effect.properties.iter() {

@@ -1,5 +1,5 @@
 use super::super::{Plugin, PropertyPlugin};
-use crate::model::project::property::{Property, PropertyValue}; // Added Property and PropertyValue
+use crate::model::property::{Property, PropertyValue}; // Added Property and PropertyValue
 use crate::plugin::{EvaluationContext, PropertyEvaluator};
 use log::warn;
 use ordered_float::OrderedFloat;

@@ -5,16 +5,16 @@
 
 use crate::animation::EasingFunction;
 use crate::error::LibraryError;
-use crate::model::project::property::{Property, PropertyValue};
+use crate::model::property::{Property, PropertyValue};
 
 /// Target types for nested property operations
 pub enum PropertyContainer<'a> {
     /// Direct clip property
-    Clip(&'a mut crate::model::project::property::PropertyMap),
+    Clip(&'a mut crate::model::property::PropertyMap),
     /// Effect property (effect index, property map)
-    Effect(&'a mut crate::model::project::EffectConfig),
+    Effect(&'a mut crate::model::EffectConfig),
     /// Style property (style index, property map)
-    Style(&'a mut crate::model::project::style::StyleInstance),
+    Style(&'a mut crate::model::style::StyleInstance),
 }
 
 impl<'a> PropertyContainer<'a> {

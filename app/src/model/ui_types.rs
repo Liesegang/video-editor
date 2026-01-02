@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GizmoHandle {
     TopLeft,
     TopRight,
@@ -12,12 +11,6 @@ pub enum GizmoHandle {
     Left,
     Right,
     Rotation,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DraggedItem {
-    Asset(Uuid),
-    Composition(Uuid),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -86,6 +79,14 @@ impl From<ColorDef> for egui::Color32 {
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "egui::Vec2")]
 pub struct Vec2Def {
+    pub x: f32,
+    pub y: f32,
+}
+
+// Serde helper for egui::Pos2
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "egui::Pos2")]
+pub struct Pos2Def {
     pub x: f32,
     pub y: f32,
 }

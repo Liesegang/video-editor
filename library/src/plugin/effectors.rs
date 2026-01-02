@@ -1,7 +1,7 @@
 use crate::core::ensemble::effectors::OpacityMode;
 use crate::core::ensemble::types::EffectorConfig;
-use crate::model::project::ensemble::EffectorInstance;
-use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+use crate::model::EffectConfig;
+use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::{Plugin, PluginCategory};
 
@@ -11,7 +11,7 @@ pub trait EffectorPlugin: Plugin {
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectorInstance,
+        instance: &EffectConfig,
         eval_time: f64,
     ) -> Option<EffectorConfig>;
 
@@ -110,7 +110,7 @@ impl EffectorPlugin for TransformEffectorPlugin {
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectorInstance,
+        instance: &EffectConfig,
         eval_time: f64,
     ) -> Option<EffectorConfig> {
         let tx = context.evaluate_number(&instance.properties, "tx", eval_time, 0.0) as f32;
@@ -205,7 +205,7 @@ impl EffectorPlugin for StepDelayEffectorPlugin {
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectorInstance,
+        instance: &EffectConfig,
         eval_time: f64,
     ) -> Option<EffectorConfig> {
         let delay = context.evaluate_number(&instance.properties, "delay", eval_time, 0.05) as f32;
@@ -316,7 +316,7 @@ impl EffectorPlugin for RandomizeEffectorPlugin {
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectorInstance,
+        instance: &EffectConfig,
         eval_time: f64,
     ) -> Option<EffectorConfig> {
         let seed = context.evaluate_number(&instance.properties, "seed", eval_time, 0.0) as u64;
@@ -385,7 +385,7 @@ impl EffectorPlugin for OpacityEffectorPlugin {
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectorInstance,
+        instance: &EffectConfig,
         eval_time: f64,
     ) -> Option<EffectorConfig> {
         let target_opacity =

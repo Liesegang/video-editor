@@ -1,5 +1,5 @@
 use crate::error::LibraryError;
-use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use crate::plugin::{EffectPlugin, Plugin};
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
@@ -292,7 +292,7 @@ impl EffectPlugin for SkslEffectPlugin {
                     .make_shader(data, &children, None)
                     .ok_or_else(|| {
                          LibraryError::Render(format!(
-                            "Failed to create runtime shader for effect '{}'. Uniform bytes: {}, Expected: {}", 
+                            "Failed to create runtime shader for effect '{}'. Uniform bytes: {}, Expected: {}",
                             self.config.name, uniform_bytes.len(), expected_uniform_size
                         ))
                     })?;
@@ -350,7 +350,7 @@ impl EffectPlugin for SkslEffectPlugin {
                     Some(ValueWrapper::Bool(b)) => PropertyValue::Boolean(*b),
                     Some(ValueWrapper::String(s)) => PropertyValue::String(s.clone()),
                     Some(ValueWrapper::Vec2(v)) => {
-                        PropertyValue::Vec2(crate::model::project::property::Vec2 {
+                        PropertyValue::Vec2(crate::model::property::Vec2 {
                             x: OrderedFloat(v[0]),
                             y: OrderedFloat(v[1]),
                         })
@@ -364,7 +364,7 @@ impl EffectPlugin for SkslEffectPlugin {
                                 a: 255,
                             })
                         } else {
-                            PropertyValue::Vec3(crate::model::project::property::Vec3 {
+                            PropertyValue::Vec3(crate::model::property::Vec3 {
                                 x: OrderedFloat(v[0]),
                                 y: OrderedFloat(v[1]),
                                 z: OrderedFloat(v[2]),
@@ -380,7 +380,7 @@ impl EffectPlugin for SkslEffectPlugin {
                                 a: (v[3] * 255.0) as u8,
                             })
                         } else {
-                            PropertyValue::Vec4(crate::model::project::property::Vec4 {
+                            PropertyValue::Vec4(crate::model::property::Vec4 {
                                 x: OrderedFloat(v[0]),
                                 y: OrderedFloat(v[1]),
                                 z: OrderedFloat(v[2]),

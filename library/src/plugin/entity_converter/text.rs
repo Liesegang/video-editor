@@ -3,7 +3,7 @@ use skia_safe::textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, Te
 
 use super::{EntityConverterPlugin, FrameEvaluationContext};
 use crate::model::frame::entity::{FrameContent, FrameObject};
-use crate::model::project::TrackClip;
+// use crate::model::project::TrackClip;
 
 pub struct TextEntityConverterPlugin;
 
@@ -42,10 +42,8 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
         canvas_height: u64,
         clip_width: u64,
         clip_height: u64,
-    ) -> Vec<crate::model::project::property::PropertyDefinition> {
-        use crate::model::project::property::{
-            PropertyDefinition, PropertyUiType, PropertyValue, Vec2,
-        };
+    ) -> Vec<crate::model::property::PropertyDefinition> {
+        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue, Vec2};
         use ordered_float::OrderedFloat;
 
         vec![
@@ -141,16 +139,17 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip,
-        frame_number: u64,
+        layer: &crate::model::Layer,
+        time: f64,
     ) -> Option<FrameObject> {
-        let props = &track_clip.properties;
-        let comp_fps = evaluator.composition.fps;
+        let props = &layer.properties;
+        let _comp_fps = evaluator.composition.fps;
 
-        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
-        let time_offset = delta_frames / comp_fps;
-        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
-        let eval_time = source_start_time + time_offset;
+        // Calculate evaluation time based on Layer timeframe
+        // eval_time = (global_time - start_time) * stretch + trim_in
+        let time_since_start = time - layer.start_time.into_inner();
+        let eval_time =
+            time_since_start * layer.time_stretch.into_inner() + layer.trim_in.into_inner();
 
         let text = evaluator.require_string(props, "text", eval_time, "text")?;
         let font = evaluator
@@ -158,47 +157,39 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
             .unwrap_or_else(|| "Arial".to_string());
         let size = evaluator.evaluate_number(props, "size", eval_time, 12.0);
 
-        let styles = evaluator.build_styles(&track_clip.styles, eval_time);
+        let styles = evaluator.build_styles(&layer.styles, eval_time);
 
         let transform = evaluator.build_transform(props, eval_time);
-        let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
+        let effects = evaluator.build_image_effects(&layer.effects, eval_time);
 
-        // Build Ensemble data from text_clip.effectors/decorators
-        let ensemble = if !track_clip.effectors.is_empty() || !track_clip.decorators.is_empty() {
+        // Build Ensemble data from layer.effectors/decorators
+        let ensemble = if !layer.effects.is_empty() || !layer.styles.is_empty() {
             let mut effector_configs = Vec::new();
             let mut decorator_configs = Vec::new();
 
             // Convert EffectorInstances to EffectorConfigs
-            for instance in &track_clip.effectors {
+            // Convert EffectConfigs to EffectorConfigs (Text Animators)
+            for instance in &layer.effects {
                 if let Some(plugin) = evaluator
                     .plugin_manager
-                    .get_effector_plugin(&instance.effector_type)
+                    .get_effector_plugin(&instance.effect_type)
                 {
                     if let Some(config) = plugin.convert(evaluator, instance, eval_time) {
                         effector_configs.push(config);
                     }
-                } else {
-                    log::warn!(
-                        "[WARN] entity_converter/text.rs: Unknown/Unsupported effector type: {}",
-                        instance.effector_type
-                    );
                 }
+                // Note: Image effects are handled separately in build_image_effects
             }
 
-            // Convert DecoratorInstances to DecoratorConfigs
-            for instance in &track_clip.decorators {
+            // Convert StyleInstances to DecoratorConfigs (Backplates)
+            for instance in &layer.styles {
                 if let Some(plugin) = evaluator
                     .plugin_manager
-                    .get_decorator_plugin(&instance.decorator_type)
+                    .get_decorator_plugin(&instance.style_type)
                 {
                     if let Some(config) = plugin.convert(evaluator, instance, eval_time) {
                         decorator_configs.push(config);
                     }
-                } else {
-                    log::warn!(
-                        "[WARN] entity_converter/text.rs: Unknown/Unsupported decorator type: {}",
-                        instance.decorator_type
-                    );
                 }
             }
 
@@ -229,16 +220,16 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
     fn get_bounds(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip,
-        frame_number: u64,
+        layer: &crate::model::Layer,
+        time: f64,
     ) -> Option<(f32, f32, f32, f32)> {
-        let props = &track_clip.properties;
-        let comp_fps = evaluator.composition.fps;
+        let props = &layer.properties;
+        let _comp_fps = evaluator.composition.fps;
 
-        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
-        let time_offset = delta_frames / comp_fps;
-        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
-        let eval_time = source_start_time + time_offset;
+        // Calculate evaluation time based on Layer timeframe
+        let time_since_start = time - layer.start_time.into_inner();
+        let eval_time =
+            time_since_start * layer.time_stretch.into_inner() + layer.trim_in.into_inner();
 
         let text = evaluator.require_string(props, "text", eval_time, "text")?;
         let font_name = evaluator
@@ -270,5 +261,17 @@ pub fn measure_text_size(text: &str, primary_font_name: &str, size: f32) -> (f32
     let mut paragraph = builder.build();
     paragraph.layout(f32::MAX);
 
-    (paragraph.max_intrinsic_width(), paragraph.height())
+    let width = paragraph.max_intrinsic_width();
+    let height = paragraph.height();
+
+    log::info!(
+        "measure_text_size: text='{}' font='{}' size={} -> w={} h={}",
+        text,
+        primary_font_name,
+        size,
+        width,
+        height
+    );
+
+    (width, height)
 }

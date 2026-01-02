@@ -6,8 +6,9 @@ pub use self::png_export::PngExportPlugin;
 
 use crate::error::LibraryError;
 use crate::model::frame::Image;
-use crate::model::project::project::{Composition, Project};
-use crate::model::project::property::PropertyDefinition;
+use crate::model::project::Composite;
+use crate::model::project::Project;
+use crate::model::property::PropertyDefinition;
 use crate::plugin::{Plugin, PluginCategory};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -53,10 +54,7 @@ pub struct ExportSettings {
 }
 
 impl ExportSettings {
-    pub fn from_project(
-        project: &Project,
-        composition: &Composition,
-    ) -> Result<Self, LibraryError> {
+    pub fn from_project(project: &Project, composition: &Composite) -> Result<Self, LibraryError> {
         let mut settings = ExportSettings::for_dimensions(
             composition.width as u32,
             composition.height as u32,

@@ -3,10 +3,11 @@ use crate::core::cache::CacheManager;
 use crate::editor::audio_service::AudioService;
 use crate::editor::project_service::ProjectManager;
 use crate::error::LibraryError;
-use crate::model::project::asset::Asset;
-use crate::model::project::project::{Composition, Project};
-use crate::model::project::property::PropertyValue;
-use crate::model::project::{TrackClip, TrackData};
+use crate::model::EffectConfig;
+use crate::model::asset::Asset;
+use crate::model::project::{Composite, Project};
+use crate::model::property::PropertyValue;
+use crate::model::{Layer, Track};
 use crate::plugin::PluginManager;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -25,45 +26,7 @@ impl Clone for EditorService {
     }
 }
 
-impl EditorService {
-    pub fn update_effector_property_or_keyframe(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_effector_property_or_keyframe(
-            clip_id,
-            effector_index,
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn update_decorator_property_or_keyframe(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_decorator_property_or_keyframe(
-            clip_id,
-            decorator_index,
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-}
+impl EditorService {}
 
 impl EditorService {
     pub fn new(
@@ -87,7 +50,7 @@ impl EditorService {
         self.project_manager.get_project()
     }
 
-    pub fn set_project(&self, project: crate::model::project::project::Project) {
+    pub fn set_project(&self, project: crate::model::project::Project) {
         let _ = self.project_manager.set_project(project);
     }
 
@@ -135,7 +98,7 @@ impl EditorService {
 
         // Hydrate Audio Cache (Orchestration logic)
         for asset in &new_project.assets {
-            if asset.kind == crate::model::project::asset::AssetKind::Audio {
+            if asset.kind == crate::model::asset::AssetKind::Audio {
                 self.audio_service
                     .trigger_audio_loading(asset.id, asset.path.clone());
             }
@@ -164,7 +127,7 @@ impl EditorService {
         if let Ok(project) = self.project_manager.get_project().read() {
             for &asset_id in &asset_ids {
                 if let Some(asset) = project.assets.iter().find(|a| a.id == asset_id) {
-                    if asset.kind == crate::model::project::asset::AssetKind::Audio {
+                    if asset.kind == crate::model::asset::AssetKind::Audio {
                         let path_clone = asset.path.clone();
                         // self.audio_service needs to trigger loading, but we are holding project read lock
                         // trigger_audio_loading doesn't seem to lock project?
@@ -202,45 +165,41 @@ impl EditorService {
 
     pub fn create_audio_clip(
         &self,
-        reference_id: Option<Uuid>,
+        reference_id: Uuid,
         file_path: &str,
-        in_frame: u64,
-        out_frame: u64,
-        source_begin_frame: i64,
-        duration_frame: u64,
-        fps: f64,
-    ) -> TrackClip {
+        start_time: f64,
+        duration: f64,
+        source_start_time: f64,
+        speed: f64,
+    ) -> Result<Layer, LibraryError> {
         self.project_manager.create_audio_clip(
             reference_id,
             file_path,
-            in_frame,
-            out_frame,
-            source_begin_frame,
-            duration_frame,
-            fps,
+            start_time,
+            duration,
+            source_start_time,
+            speed,
         )
     }
 
     pub fn create_video_clip(
         &self,
-        reference_id: Option<Uuid>,
+        reference_id: Uuid,
         file_path: &str,
-        in_frame: u64,
-        out_frame: u64,
-        source_begin_frame: i64,
-        duration_frame: u64,
-        fps: f64,
+        start_time: f64,
+        duration: f64,
+        source_start_time: f64,
+        speed: f64,
         canvas_width: u32,
         canvas_height: u32,
-    ) -> Result<TrackClip, LibraryError> {
+    ) -> Result<Layer, LibraryError> {
         self.project_manager.create_video_clip(
             reference_id,
             file_path,
-            in_frame,
-            out_frame,
-            source_begin_frame,
-            duration_frame,
-            fps,
+            start_time,
+            duration,
+            source_start_time,
+            speed,
             canvas_width,
             canvas_height,
         )
@@ -248,71 +207,71 @@ impl EditorService {
 
     pub fn create_image_clip(
         &self,
-        reference_id: Option<Uuid>,
+        reference_id: Uuid,
         file_path: &str,
-        in_frame: u64,
-        out_frame: u64,
+        start_time: f64,
+        duration: f64,
         canvas_width: u32,
         canvas_height: u32,
-        fps: f64,
-    ) -> Result<TrackClip, LibraryError> {
+        _fps: f64,
+    ) -> Result<Layer, LibraryError> {
         self.project_manager.create_image_clip(
             reference_id,
             file_path,
-            in_frame,
-            out_frame,
+            start_time,
+            duration,
             canvas_width,
             canvas_height,
-            fps,
         )
     }
 
     pub fn create_text_clip(
         &self,
         text: &str,
-        in_frame: u64,
-        out_frame: u64,
+        start_time: f64,
+        duration: f64,
         canvas_width: u32,
         canvas_height: u32,
-        fps: f64,
-    ) -> Result<TrackClip, LibraryError> {
+    ) -> Result<Layer, LibraryError> {
         self.project_manager.create_text_clip(
             text,
-            in_frame,
-            out_frame,
+            start_time,
+            duration,
             canvas_width,
             canvas_height,
-            fps,
         )
     }
 
     pub fn create_shape_clip(
         &self,
-        in_frame: u64,
-        out_frame: u64,
+        start_time: f64,
+        duration: f64,
         canvas_width: u32,
         canvas_height: u32,
-        fps: f64,
-    ) -> Result<TrackClip, LibraryError> {
-        self.project_manager.create_shape_clip(
-            in_frame,
-            out_frame,
-            canvas_width,
-            canvas_height,
-            fps,
-        )
+    ) -> Result<Layer, LibraryError> {
+        self.project_manager
+            .create_shape_clip(start_time, duration, canvas_width, canvas_height)
     }
 
     pub fn create_sksl_clip(
         &self,
-        in_frame: u64,
-        out_frame: u64,
+        start_time: f64,
+        duration: f64,
         canvas_width: u32,
         canvas_height: u32,
-        fps: f64,
-    ) -> Result<TrackClip, LibraryError> {
+    ) -> Result<Layer, LibraryError> {
         self.project_manager
-            .create_sksl_clip(in_frame, out_frame, canvas_width, canvas_height, fps)
+            .create_sksl_clip(start_time, duration, canvas_width, canvas_height)
+    }
+
+    pub fn create_reference_clip(
+        &self,
+        target_node_id: Uuid,
+        start_time: f64,
+        duration: f64,
+    ) -> Result<Layer, LibraryError> {
+        self.project_manager
+            .create_reference_clip(target_node_id, start_time, duration)
     }
 
     pub fn add_composition(
@@ -340,7 +299,7 @@ impl EditorService {
             .update_composition(id, name, width, height, fps, duration)
     }
 
-    pub fn get_composition(&self, id: Uuid) -> Result<Composition, LibraryError> {
+    pub fn get_composition(&self, id: Uuid) -> Result<Composite, LibraryError> {
         self.project_manager.get_composition(id)
     }
 
@@ -362,11 +321,7 @@ impl EditorService {
             .add_track_with_id(composition_id, track_id, track_name)
     }
 
-    pub fn get_track(
-        &self,
-        composition_id: Uuid,
-        track_id: Uuid,
-    ) -> Result<TrackData, LibraryError> {
+    pub fn get_track(&self, composition_id: Uuid, track_id: Uuid) -> Result<Track, LibraryError> {
         self.project_manager.get_track(composition_id, track_id)
     }
 
@@ -392,19 +347,11 @@ impl EditorService {
         &self,
         composition_id: Uuid,
         track_id: Uuid,
-        clip: TrackClip,
-        in_frame: u64,
-        out_frame: u64,
+        layer: Layer,
         insert_index: Option<usize>,
     ) -> Result<Uuid, LibraryError> {
-        self.project_manager.add_clip_to_track(
-            composition_id,
-            track_id,
-            clip,
-            in_frame,
-            out_frame,
-            insert_index,
-        )
+        self.project_manager
+            .add_clip_to_track(composition_id, track_id, layer, insert_index)
     }
 
     pub fn remove_clip_from_track(
@@ -432,14 +379,14 @@ impl EditorService {
         source_track_id: Uuid,
         clip_id: Uuid,
         target_track_id: Uuid,
-        new_in_frame: u64,
+        new_start_time: f64,
     ) -> Result<(), LibraryError> {
         self.project_manager.move_clip_to_track(
             composition_id,
             source_track_id,
             clip_id,
             target_track_id,
-            new_in_frame,
+            new_start_time,
         )
     }
 
@@ -449,7 +396,7 @@ impl EditorService {
         source_track_id: Uuid,
         clip_id: Uuid,
         target_track_id: Uuid,
-        new_in_frame: u64,
+        new_start_time: f64,
         target_index: Option<usize>,
     ) -> Result<(), LibraryError> {
         self.project_manager.move_clip_to_track_at_index(
@@ -457,7 +404,7 @@ impl EditorService {
             source_track_id,
             clip_id,
             target_track_id,
-            new_in_frame,
+            new_start_time,
             target_index,
         )
     }
@@ -469,7 +416,7 @@ impl EditorService {
     pub fn update_track_clip_effects(
         &self,
         clip_id: Uuid,
-        effects: Vec<crate::model::project::EffectConfig>,
+        effects: Vec<EffectConfig>,
     ) -> Result<(), LibraryError> {
         self.project_manager
             .update_track_clip_effects(clip_id, effects)
@@ -477,8 +424,8 @@ impl EditorService {
 
     pub fn evaluate_property_value(
         &self,
-        property: &crate::model::project::property::Property,
-        context: &crate::model::project::property::PropertyMap,
+        property: &crate::model::property::Property,
+        context: &crate::model::property::PropertyMap,
         time: f64,
         fps: f64,
     ) -> PropertyValue {
@@ -517,142 +464,32 @@ impl EditorService {
         )
     }
 
-    pub fn add_effector_keyframe(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.add_effector_keyframe(
-            clip_id,
-            effector_index,
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn update_effector_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-        time: Option<f64>,
-        value: Option<PropertyValue>,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_effector_keyframe_by_index(
-            clip_id,
-            effector_index,
-            property_key,
-            keyframe_index,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn remove_effector_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.remove_effector_keyframe_by_index(
-            clip_id,
-            effector_index,
-            property_key,
-            keyframe_index,
-        )
-    }
-
-    pub fn add_decorator_keyframe(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.add_decorator_keyframe(
-            clip_id,
-            decorator_index,
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn update_decorator_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-        time: Option<f64>,
-        value: Option<PropertyValue>,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_decorator_keyframe_by_index(
-            clip_id,
-            decorator_index,
-            property_key,
-            keyframe_index,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn remove_decorator_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.remove_decorator_keyframe_by_index(
-            clip_id,
-            decorator_index,
-            property_key,
-            keyframe_index,
-        )
-    }
-
     // Aliases & Sequences
 
-    pub fn update_clip_time(
+    pub fn update_clip_timing(
         &self,
         clip_id: Uuid,
-        in_frame: u64,
-        out_frame: u64,
+        start_time: f64,
+        duration: f64,
     ) -> Result<(), LibraryError> {
         self.update_clip_property(
             clip_id,
-            "in_frame",
-            PropertyValue::Number(ordered_float::OrderedFloat(in_frame as f64)),
+            "start_time",
+            PropertyValue::Number(ordered_float::OrderedFloat(start_time)),
         )?;
         self.update_clip_property(
             clip_id,
-            "out_frame",
-            PropertyValue::Number(ordered_float::OrderedFloat(out_frame as f64)),
+            "duration",
+            PropertyValue::Number(ordered_float::OrderedFloat(duration)),
         )?;
         Ok(())
     }
 
-    pub fn update_clip_source_frames(&self, clip_id: Uuid, frame: i64) -> Result<(), LibraryError> {
+    pub fn update_clip_source_start(&self, clip_id: Uuid, time: f64) -> Result<(), LibraryError> {
         self.update_clip_property(
             clip_id,
-            "source_begin_frame",
-            PropertyValue::Number(ordered_float::OrderedFloat(frame as f64)),
+            "trim_in", // or source_start_time? ClipHandler used 'trim_in' for source trimming in previous logic
+            PropertyValue::Number(ordered_float::OrderedFloat(time)),
         )
     }
 
@@ -661,7 +498,7 @@ impl EditorService {
         comp_id: Uuid,
         track_id: Uuid,
         clip_id: Uuid,
-    ) -> Vec<crate::model::project::property::PropertyDefinition> {
+    ) -> Vec<crate::model::property::PropertyDefinition> {
         self.project_manager
             .get_inspector_definitions(comp_id, track_id, clip_id)
     }
@@ -671,7 +508,7 @@ impl EditorService {
         comp_id: Uuid,
         track_id: Uuid,
         clip_id: Uuid,
-    ) -> Vec<crate::model::project::property::PropertyDefinition> {
+    ) -> Vec<crate::model::property::PropertyDefinition> {
         self.get_inspector_definitions(comp_id, track_id, clip_id)
     }
 
@@ -769,28 +606,10 @@ impl EditorService {
     pub fn update_track_clip_styles(
         &self,
         clip_id: Uuid,
-        styles: Vec<crate::model::project::style::StyleInstance>,
+        styles: Vec<crate::model::style::StyleInstance>,
     ) -> Result<(), LibraryError> {
         self.project_manager
             .update_track_clip_styles(clip_id, styles)
-    }
-
-    pub fn update_track_clip_effectors(
-        &self,
-        clip_id: Uuid,
-        effectors: Vec<crate::model::project::ensemble::EffectorInstance>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager
-            .update_track_clip_effectors(clip_id, effectors)
-    }
-
-    pub fn update_track_clip_decorators(
-        &self,
-        clip_id: Uuid,
-        decorators: Vec<crate::model::project::ensemble::DecoratorInstance>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager
-            .update_track_clip_decorators(clip_id, decorators)
     }
 
     pub fn update_track_clip_style_property(
@@ -950,49 +769,7 @@ impl EditorService {
         )
     }
 
-    pub fn set_effector_property_attribute(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.set_effector_property_attribute(
-            clip_id,
-            effector_index,
-            property_key,
-            attribute_key,
-            attribute_value,
-        )
-    }
-
-    pub fn set_decorator_property_attribute(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.set_decorator_property_attribute(
-            clip_id,
-            decorator_index,
-            property_key,
-            attribute_key,
-            attribute_value,
-        )
-    }
-
     pub fn add_style(&self, clip_id: Uuid, style_type: &str) -> Result<(), LibraryError> {
         self.project_manager.add_style(clip_id, style_type)
-    }
-
-    pub fn add_effector(&self, clip_id: Uuid, effector_type: &str) -> Result<(), LibraryError> {
-        self.project_manager.add_effector(clip_id, effector_type)
-    }
-
-    pub fn add_decorator(&self, clip_id: Uuid, decorator_type: &str) -> Result<(), LibraryError> {
-        self.project_manager.add_decorator(clip_id, decorator_type)
     }
 }

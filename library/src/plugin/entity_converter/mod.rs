@@ -1,9 +1,10 @@
+use crate::model::EffectConfig;
+use crate::model::Layer;
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::transform::{Position, Scale, Transform};
-use crate::model::project::project::Composition;
-use crate::model::project::property::{PropertyMap, PropertyValue, Vec2};
-use crate::model::project::style::StyleInstance;
-use crate::model::project::{EffectConfig, TrackClip};
+use crate::model::project::Composite;
+use crate::model::property::{PropertyMap, PropertyValue, Vec2};
+use crate::model::style::StyleInstance;
 use crate::plugin::{EvaluationContext, PluginManager, PropertyEvaluatorRegistry};
 
 pub mod effector;
@@ -21,7 +22,7 @@ pub use text::measure_text_size;
 pub use video::VideoEntityConverterPlugin;
 
 pub struct FrameEvaluationContext<'a> {
-    pub composition: &'a Composition,
+    pub composition: &'a Composite,
     pub property_evaluators: &'a PropertyEvaluatorRegistry,
     pub plugin_manager: &'a PluginManager,
 }
@@ -29,7 +30,7 @@ pub struct FrameEvaluationContext<'a> {
 impl<'a> FrameEvaluationContext<'a> {
     pub fn evaluate_property_value(
         &self,
-        property: &crate::model::project::property::Property,
+        property: &crate::model::property::Property,
         properties: &PropertyMap,
         time: f64,
     ) -> PropertyValue {
@@ -269,7 +270,7 @@ impl<'a> FrameEvaluationContext<'a> {
     }
 
     pub fn evaluate_number_array(&self, props: &PropertyMap, key: &str, time: f64) -> Vec<f64> {
-        use crate::model::project::property::PropertyValue;
+        use crate::model::property::PropertyValue;
         if let Some(prop) = props.get(key) {
             let val = self.evaluate_property_value(prop, props, time);
             if let Some(arr) = val.get_as::<Vec<PropertyValue>>() {
@@ -294,15 +295,15 @@ pub trait EntityConverterPlugin: crate::plugin::Plugin + Send + Sync {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip,
-        frame_number: u64,
+        layer: &Layer,
+        time: f64,
     ) -> Option<FrameObject>;
 
     fn get_bounds(
         &self,
         _evaluator: &FrameEvaluationContext,
-        _track_clip: &TrackClip,
-        _frame_number: u64,
+        _layer: &Layer,
+        _time: f64,
     ) -> Option<(f32, f32, f32, f32)> {
         None
     }
@@ -313,7 +314,7 @@ pub trait EntityConverterPlugin: crate::plugin::Plugin + Send + Sync {
         _canvas_height: u64,
         _clip_width: u64,
         _clip_height: u64,
-    ) -> Vec<crate::model::project::property::PropertyDefinition> {
+    ) -> Vec<crate::model::property::PropertyDefinition> {
         Vec::new()
     }
 

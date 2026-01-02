@@ -1,6 +1,6 @@
 use crate::core::audio::engine::AudioEngine;
 use crate::core::cache::CacheManager;
-use crate::model::project::project::Project;
+use crate::model::project::Project;
 use std::sync::{Arc, RwLock};
 
 pub struct AudioService {

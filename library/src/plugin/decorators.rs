@@ -1,8 +1,8 @@
 use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
 use crate::core::ensemble::types::DecoratorConfig;
 use crate::model::frame::color::Color;
-use crate::model::project::ensemble::DecoratorInstance;
-use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+use crate::model::style::StyleInstance;
 use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::{Plugin, PluginCategory};
 
@@ -12,7 +12,7 @@ pub trait DecoratorPlugin: Plugin {
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &DecoratorInstance,
+        instance: &StyleInstance,
         eval_time: f64,
     ) -> Option<DecoratorConfig>;
 
@@ -97,7 +97,7 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &DecoratorInstance,
+        instance: &StyleInstance,
         eval_time: f64,
     ) -> Option<DecoratorConfig> {
         let color =

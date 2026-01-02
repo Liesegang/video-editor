@@ -1,6 +1,6 @@
 use crate::state::context::EditorContext;
 use egui::{Color32, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, UiKind, Vec2};
-use library::model::project::property::{Property, PropertyMap, PropertyValue};
+use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::EditorService;
 
 use super::actions::Action;
@@ -203,7 +203,8 @@ pub fn draw_properties(
     .iter()
     .cycle();
 
-    for (name, property, map, component) in properties {
+    for (name, property, map, component_ref) in properties {
+        let component = *component_ref;
         let color = *color_cycle.next().unwrap();
 
         if !editor_context
@@ -269,7 +270,7 @@ pub fn draw_properties(
                                             // match component (reference) -> pattern match can deref.
                                             // If I use match *component { ... c => Some(c) } it works
                                             // Let's use `match *component` explicitly.
-                                            match *component {
+                                            match component {
                                                 PropertyComponent::Scalar => None,
                                                 c => Some(c),
                                             },
@@ -303,7 +304,7 @@ pub fn draw_properties(
                         composition_fps,
                     );
                     // Match *component here too
-                    let val_f64 = match *component {
+                    let val_f64 = match component {
                         PropertyComponent::Scalar => value_pv.get_as::<f64>(),
                         PropertyComponent::X => {
                             if let PropertyValue::Vec2(vec) = value_pv {
@@ -339,7 +340,7 @@ pub fn draw_properties(
 
                     for (i, kf) in sorted_kf.iter().enumerate() {
                         let t = kf.time.into_inner();
-                        let val_f64 = match *component {
+                        let val_f64 = match component {
                             PropertyComponent::Scalar => kf.value.get_as::<f64>(),
                             PropertyComponent::X => {
                                 if let PropertyValue::Vec2(vec) = &kf.value {
@@ -434,7 +435,7 @@ pub fn draw_properties(
                                 i,
                                 new_t.max(0.0),
                                 new_val,
-                                match *component {
+                                match component {
                                     PropertyComponent::Scalar => None,
                                     c => Some(c),
                                 },
@@ -455,7 +456,7 @@ pub fn draw_properties(
                                     time_mapper.to_source_time(t),
                                     composition_fps,
                                 );
-                                let val_at_t = match *component {
+                                let val_at_t = match component {
                                     PropertyComponent::Scalar => {
                                         value_pv.get_as::<f64>().unwrap_or(0.0)
                                     }
@@ -482,7 +483,7 @@ pub fn draw_properties(
                                         name.clone(),
                                         t.max(0.0),
                                         val_at_t,
-                                        match *component {
+                                        match component {
                                             PropertyComponent::Scalar => None,
                                             c => Some(c),
                                         },

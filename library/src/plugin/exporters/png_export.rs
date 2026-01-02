@@ -52,8 +52,8 @@ impl ExportPlugin for PngExportPlugin {
         Ok(())
     }
 
-    fn properties(&self) -> Vec<crate::model::project::property::PropertyDefinition> {
-        use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+    fn properties(&self) -> Vec<crate::model::property::PropertyDefinition> {
+        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
         vec![PropertyDefinition::new(
             "compression",
             PropertyUiType::Dropdown {

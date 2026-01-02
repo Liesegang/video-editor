@@ -1,7 +1,7 @@
 ﻿use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString, PyTuple, PyList, PyDict as PyDictType};
 use pyo3::ffi::PyThreadState; // Use PyThreadState from ffi
-use crate::model::project::property::{Property, PropertyValue, Vec2};
+use crate::model::property::{Property, PropertyValue, Vec2};
 use crate::model::frame::color::Color;
 use crate::plugin::{EvaluationContext, Plugin, PluginCategory, PluginId, PropertyEvaluator, PropertyPlugin};
 use ordered_float::OrderedFloat;

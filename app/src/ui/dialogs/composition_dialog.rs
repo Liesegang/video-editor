@@ -1,5 +1,5 @@
 use egui::TextEdit;
-use library::model::project::project::Composition;
+use library::model::project::Composite;
 use once_cell::sync::Lazy;
 use uuid::Uuid;
 
@@ -486,7 +486,7 @@ impl CompositionDialog {
         self.confirmed = false;
     }
 
-    pub fn open_for_edit(&mut self, composition: &Composition) {
+    pub fn open_for_edit(&mut self, composition: &Composite) {
         self.is_open = true;
         self.comp_id = Some(composition.id);
         self.name = composition.name.clone();

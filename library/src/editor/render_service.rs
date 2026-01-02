@@ -35,6 +35,26 @@ impl<T: Renderer> RenderService<T> {
         time: f64,
     ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
         let frame_info = self.get_frame(project_model, time);
+
+        // Trinity Path: If no objects (legacy), try render_composite
+        if frame_info.objects.is_empty() {
+            log::info!("Frame has 0 objects. Attempting Trinity render_composite path.");
+            let project = project_model.project();
+            let composition_index = project_model.composition_index();
+            if let Some(composition) = project.compositions.get(composition_index) {
+                let res = self.renderer.render_composite(project, composition, time);
+                if let Err(e) = &res {
+                    log::error!("render_composite failed: {:?}", e);
+                }
+                return res;
+            } else {
+                log::error!(
+                    "Composition index {} not found in project",
+                    composition_index
+                );
+            }
+        }
+
         self.render_from_frame_info(&frame_info)
     }
 
@@ -42,6 +62,9 @@ impl<T: Renderer> RenderService<T> {
         &mut self,
         frame_info: &FrameInfo,
     ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
+        // if let Some(graph) = &frame_info.node_graph {
+        //     return self.renderer.render_graph(graph, frame_info.now_time.0);
+        // }
         self.clear()?;
         let object_count = frame_info.objects.len();
         let _timer = ScopedTimer::debug(format!(
@@ -111,6 +134,7 @@ impl<T: Renderer> RenderService<T> {
                                 &styles,
                                 ensemble.as_ref(),
                                 &scaled_transform,
+                                1.0,
                             )
                         })?;
                     let final_image =
@@ -136,6 +160,7 @@ impl<T: Renderer> RenderService<T> {
                                 &styles,
                                 &path_effects,
                                 &scaled_transform,
+                                1.0,
                             )
                         })?;
                     let final_image =
@@ -218,9 +243,9 @@ impl<T: Renderer> RenderService<T> {
                 let mut params = effect.properties.clone();
                 params.insert(
                     "u_time".to_string(),
-                    crate::model::project::property::PropertyValue::Number(
-                        ordered_float::OrderedFloat(current_time),
-                    ),
+                    crate::model::property::PropertyValue::Number(ordered_float::OrderedFloat(
+                        current_time,
+                    )),
                 );
 
                 // Use the PluginManager to apply the effect

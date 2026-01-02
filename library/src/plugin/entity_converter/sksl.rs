@@ -1,6 +1,6 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
 use crate::model::frame::entity::{FrameContent, FrameObject};
-use crate::model::project::TrackClip;
+// use crate::model::project::TrackClip;
 
 pub struct SkSLEntityConverterPlugin;
 
@@ -39,10 +39,8 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
         canvas_height: u64,
         clip_width: u64,
         clip_height: u64,
-    ) -> Vec<crate::model::project::property::PropertyDefinition> {
-        use crate::model::project::property::{
-            PropertyDefinition, PropertyUiType, PropertyValue, Vec2,
-        };
+    ) -> Vec<crate::model::property::PropertyDefinition> {
+        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue, Vec2};
         use ordered_float::OrderedFloat;
 
         vec![
@@ -145,16 +143,16 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip,
-        frame_number: u64,
+        layer: &crate::model::Layer,
+        time: f64,
     ) -> Option<FrameObject> {
-        let props = &track_clip.properties;
-        let comp_fps = evaluator.composition.fps;
+        let props = &layer.properties;
+        let _comp_fps = evaluator.composition.fps;
 
-        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
-        let time_offset = delta_frames / comp_fps;
-        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
-        let eval_time = source_start_time + time_offset;
+        // Calculate evaluation time based on Layer timeframe
+        let time_since_start = time - layer.start_time.into_inner();
+        let eval_time =
+            time_since_start * layer.time_stretch.into_inner() + layer.trim_in.into_inner();
 
         let shader = evaluator.require_string(props, "shader", eval_time, "sksl")?;
 
@@ -172,7 +170,7 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
         );
 
         let transform = evaluator.build_transform(props, eval_time);
-        let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
+        let effects = evaluator.build_image_effects(&layer.effects, eval_time);
 
         Some(FrameObject {
             content: FrameContent::SkSL {
@@ -188,16 +186,16 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
     fn get_bounds(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip,
-        frame_number: u64,
+        layer: &crate::model::Layer,
+        time: f64,
     ) -> Option<(f32, f32, f32, f32)> {
-        let props = &track_clip.properties;
-        let comp_fps = evaluator.composition.fps;
+        let props = &layer.properties;
+        let _comp_fps = evaluator.composition.fps;
 
-        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
-        let time_offset = delta_frames / comp_fps;
-        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
-        let eval_time = source_start_time + time_offset;
+        // Calculate evaluation time based on Layer timeframe
+        let time_since_start = time - layer.start_time.into_inner();
+        let eval_time =
+            time_since_start * layer.time_stretch.into_inner() + layer.trim_in.into_inner();
 
         let width = evaluator.evaluate_number(
             props,

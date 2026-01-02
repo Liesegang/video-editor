@@ -2,7 +2,8 @@ use egui::Ui;
 use egui_phosphor::regular as icons;
 use std::sync::{Arc, RwLock};
 
-use library::model::project::project::Project;
+use library::model::asset::AssetKind; // Added Import
+use library::model::project::Project;
 use library::EditorService;
 use library::RenderServer;
 
@@ -10,7 +11,7 @@ use crate::command::{CommandId, CommandRegistry};
 use crate::state::context_types::PreviewTool;
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 use crate::{action::HistoryManager, state::context::EditorContext};
-use library::model::project::property::Vec2;
+use library::model::property::Vec2;
 
 mod action;
 pub mod clip;
@@ -53,7 +54,7 @@ pub fn preview_panel(
     history_manager: &mut HistoryManager,
     project_service: &mut EditorService,
     project: &Arc<RwLock<Project>>,
-    render_server: &Arc<RenderServer>,
+    render_server: &RenderServer,
     registry: &CommandRegistry,
 ) {
     let bottom_bar_height = 24.0;
@@ -212,6 +213,13 @@ pub fn preview_panel(
         let screen_frame_min = to_screen(frame_rect.min);
         let screen_frame_max = to_screen(frame_rect.max);
 
+        // Draw Frame Border
+        painter.rect_stroke(
+            egui::Rect::from_min_max(screen_frame_min, screen_frame_max),
+            0.0,
+            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(50)), // Faint white border
+        );
+
         // Calculate current frame and Request Render
         if let Some(comp) = editor_context.get_current_composition(&proj_read) {
             let current_frame =
@@ -259,11 +267,23 @@ pub fn preview_panel(
                         comp_idx,
                         current_frame,
                         render_scale,
-                        Some(valid_region),
+                        Some(valid_region.clone()),
                         &property_evaluators,
                         &plugin_manager,
                     );
-                    render_server.send_request(frame_info);
+
+                    // Trinity Path: If no objects, use Trinity Rendering
+                    if frame_info.objects.is_empty() {
+                        render_server.send_trinity_request(
+                            proj_read.clone(),
+                            comp.id,
+                            editor_context.timeline.current_time as f64,
+                            render_scale,
+                            Some(valid_region),
+                        );
+                    } else {
+                        render_server.send_request(frame_info);
+                    }
                 }
             }
         }
@@ -275,7 +295,9 @@ pub fn preview_panel(
         }
 
         if let Some(result) = latest_result {
-            editor_context.preview_region = result.frame_info.region;
+            if let Some(info) = &result.frame_info {
+                editor_context.preview_region = info.region.clone();
+            }
             match result.output {
                 library::rendering::renderer::RenderOutput::Image(image) => {
                     let size = [image.width as usize, image.height as usize];
@@ -424,10 +446,41 @@ pub fn preview_panel(
         let mut gui_clips: Vec<clip::PreviewClip> = Vec::new();
 
         if let Some(comp) = editor_context.get_current_composition(&proj_read) {
-            // Use flat all_clips() iterator instead of nested track traversal
-            for entity in proj_read.all_clips() {
+            // Collect all layers in the composition recursively
+            // Collect all layers in the composition recursively
+            let mut layers = Vec::new();
+            let mut stack = vec![comp.root_track_id];
+            while let Some(node_id) = stack.pop() {
+                if let Some(node) = proj_read.nodes.get(&node_id) {
+                    match node {
+                        library::model::Node::Track(track) => {
+                            stack.extend(track.children.iter().cloned());
+                        }
+                        library::model::Node::Layer(layer) => {
+                            layers.push(layer);
+                        }
+                    }
+                }
+            }
+
+            for entity in layers {
                 // Find the parent track for this clip
-                let track_id = proj_read.find_parent_track(entity.id).unwrap_or_default();
+                // In Trinity, we don't store parent pointer, but we can assume it's set if we traversed.
+                // For Gizmo needing parent track ID: we should probably find it or pass it down.
+                // But for now, let's look it up or default to nil if top level (impossible for layer).
+
+                // TODO: Optimize this lookup
+                let mut track_id = uuid::Uuid::nil();
+                // We need to find which track contains this layer.
+                // This is O(N) over all tracks.
+                for (nid, node) in &proj_read.nodes {
+                    if let library::model::Node::Track(t) = node {
+                        if t.children.contains(&entity.id) {
+                            track_id = *nid;
+                            break;
+                        }
+                    }
+                }
 
                 // Try to resolve asset ID from file_path property or similar
                 let asset_opt = if let Some(path) = entity.properties.get_string("file_path") {
@@ -480,11 +533,33 @@ pub fn preview_panel(
                             plugin_manager: &plugin_manager,
                         };
 
-                        if let Some(converter) =
-                            plugin_manager.get_entity_converter(&entity.kind.to_string())
-                        {
+                        let kind_str = match &entity.content {
+                            library::model::LayerContent::Media(m) => {
+                                if let Some(asset) =
+                                    proj_read.assets.iter().find(|a| a.id == m.asset_id)
+                                {
+                                    match asset.kind {
+                                        AssetKind::Audio => "Audio",
+                                        AssetKind::Video => "Video",
+                                        AssetKind::Image => "Image",
+                                        _ => "Media",
+                                    }
+                                } else {
+                                    "Media"
+                                }
+                            }
+                            library::model::LayerContent::Generator(g) => match g {
+                                library::model::GeneratorContent::Shape { .. } => "shape",
+                                library::model::GeneratorContent::Text { .. } => "text",
+                                library::model::GeneratorContent::SkSL { .. } => "sksl",
+                                _ => "generator",
+                            },
+                            library::model::LayerContent::Reference(_) => "Reference",
+                        };
+
+                        if let Some(converter) = plugin_manager.get_entity_converter(kind_str) {
                             if let Some((x, y, w, h)) =
-                                converter.get_bounds(&ctx, entity, current_frame)
+                                converter.get_bounds(&ctx, entity, current_frame as f64)
                             {
                                 width = Some(w);
                                 height = Some(h);
@@ -500,19 +575,18 @@ pub fn preview_panel(
                     }
                 }
 
-                let current_frame_i64 =
-                    (editor_context.timeline.current_time as f64 * comp.fps).round() as i64;
-                let delta_frames = current_frame_i64 - entity.in_frame as i64;
-                let time_offset = delta_frames as f64 / comp.fps;
-                let source_start_time = entity.source_begin_frame as f64 / entity.fps;
-                let local_time = source_start_time + time_offset;
+                let current_time = editor_context.timeline.current_time as f64;
+                // Trinity: local_time = (current_time - start_time + trim_in) * time_stretch
+                let local_time = (current_time - entity.start_time.into_inner()
+                    + entity.trim_in.into_inner())
+                    * entity.time_stretch.into_inner();
 
                 // Log Gizmo Time Calculation (throttle slightly if possible, or just spam per user request)
                 if editor_context.timeline.current_time.fract() < 0.1 {
                     log::info!(
-                        "[Gizmo] Entity: {} | CurrentFrame: {} | LocalTime: {:.4}",
+                        "[Gizmo] Entity: {} | CurrentTime: {:.4} | LocalTime: {:.4}",
                         entity.id,
-                        current_frame_i64,
+                        current_time,
                         local_time
                     );
                 }
@@ -612,7 +686,7 @@ pub fn preview_panel(
 
         // Draw Gizmo
         if editor_context.view.active_tool == PreviewTool::Select {
-            gizmo::draw_gizmo(ui, editor_context, &gui_clips, to_screen);
+            gizmo::draw_gizmo(ui, editor_context, &project, &gui_clips, to_screen);
         } else if editor_context.view.active_tool == PreviewTool::Shape {
             if let Some(state) = &editor_context.interaction.vector_editor_state {
                 if let Some(id) = editor_context.selection.selected_entities.iter().next() {

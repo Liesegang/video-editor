@@ -2,8 +2,8 @@ use super::PropertyComponent;
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use library::animation::EasingFunction;
-use library::model::project::project::Project;
-use library::model::project::property::PropertyValue;
+use library::model::project::Project;
+use library::model::property::PropertyValue;
 use library::EditorService;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
@@ -51,11 +51,15 @@ fn global_to_source_time(
     entity_id: Uuid,
     global_time: f64,
 ) -> f64 {
-    if let Some(comp) = project.get_composition(comp_id) {
-        if let Some(clip) = project.get_clip(entity_id) {
-            let in_time = clip.in_frame as f64 / comp.fps;
-            let source_start = clip.source_begin_frame as f64 / clip.fps;
-            return source_start + (global_time - in_time);
+    if project.get_composition(comp_id).is_some() {
+        if let Some(layer) = project.get_layer(entity_id) {
+            let in_time = layer.start_time.into_inner();
+            let source_start = layer.trim_in.into_inner();
+            // Local -> Source: source_time = (global - start) * speed + trim
+            // Invert: global = (source - trim) / speed + start ??
+            // Note: existing logic seems simple.
+            // Trinity Logic: global_to_source = (global - start) * speed + trim
+            return (global_time - in_time) * layer.time_stretch.into_inner() + source_start;
         }
     }
     global_time
@@ -91,7 +95,7 @@ pub fn process_action(
                 // Effect property - use flat lookup
                 let mut current_pv = None;
                 if let Ok(proj) = project.read() {
-                    if let Some(clip) = proj.get_clip(entity_id) {
+                    if let Some(clip) = proj.get_layer(entity_id) {
                         if let Some(effect) = clip.effects.get(eff_idx) {
                             if let Some(prop) = effect.properties.get(&prop_key) {
                                 let keyframes = prop.keyframes();
@@ -108,13 +112,13 @@ pub fn process_action(
                 let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                     match component {
                         Some(PropertyComponent::X) => {
-                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            PropertyValue::Vec2(library::model::property::Vec2 {
                                 x: OrderedFloat(new_val),
                                 y: old_vec.y,
                             })
                         }
                         Some(PropertyComponent::Y) => {
-                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            PropertyValue::Vec2(library::model::property::Vec2 {
                                 x: old_vec.x,
                                 y: OrderedFloat(new_val),
                             })
@@ -145,7 +149,7 @@ pub fn process_action(
                 // Style property - use flat lookup
                 let mut current_pv = None;
                 if let Ok(proj) = project.read() {
-                    if let Some(clip) = proj.get_clip(entity_id) {
+                    if let Some(clip) = proj.get_layer(entity_id) {
                         if let Some(style) = clip.styles.get(style_idx) {
                             if let Some(prop) = style.properties.get(&prop_key) {
                                 let keyframes = prop.keyframes();
@@ -162,13 +166,13 @@ pub fn process_action(
                 let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                     match component {
                         Some(PropertyComponent::X) => {
-                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            PropertyValue::Vec2(library::model::property::Vec2 {
                                 x: OrderedFloat(new_val),
                                 y: old_vec.y,
                             })
                         }
                         Some(PropertyComponent::Y) => {
-                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            PropertyValue::Vec2(library::model::property::Vec2 {
                                 x: old_vec.x,
                                 y: OrderedFloat(new_val),
                             })
@@ -198,7 +202,7 @@ pub fn process_action(
                 // Clip property - use flat lookup
                 let mut current_pv = None;
                 if let Ok(proj) = project.read() {
-                    if let Some(clip) = proj.get_clip(entity_id) {
+                    if let Some(clip) = proj.get_layer(entity_id) {
                         if let Some(prop) = clip.properties.get(base_name) {
                             let keyframes = prop.keyframes();
                             let mut sorted_kf = keyframes.clone();
@@ -213,13 +217,13 @@ pub fn process_action(
                 let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                     match component {
                         Some(PropertyComponent::X) => {
-                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            PropertyValue::Vec2(library::model::property::Vec2 {
                                 x: OrderedFloat(new_val),
                                 y: old_vec.y,
                             })
                         }
                         Some(PropertyComponent::Y) => {
-                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                            PropertyValue::Vec2(library::model::property::Vec2 {
                                 x: old_vec.x,
                                 y: OrderedFloat(new_val),
                             })
@@ -265,7 +269,7 @@ pub fn process_action(
 
             if let Ok(proj) = project.read() {
                 if let Some(comp) = proj.get_composition(comp_id) {
-                    if let Some(entity) = proj.get_clip(entity_id) {
+                    if let Some(entity) = proj.get_layer(entity_id) {
                         // Calculate source time from global time
                         eval_time = global_to_source_time(&proj, comp_id, entity_id, time);
 
@@ -310,13 +314,13 @@ pub fn process_action(
             let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_val_at_t {
                 match component {
                     Some(PropertyComponent::X) => {
-                        PropertyValue::Vec2(library::model::project::property::Vec2 {
+                        PropertyValue::Vec2(library::model::property::Vec2 {
                             x: OrderedFloat(val),
                             y: old_vec.y,
                         })
                     }
                     Some(PropertyComponent::Y) => {
-                        PropertyValue::Vec2(library::model::project::property::Vec2 {
+                        PropertyValue::Vec2(library::model::property::Vec2 {
                             x: old_vec.x,
                             y: OrderedFloat(val),
                         })
@@ -415,7 +419,7 @@ pub fn process_action(
 
             if let Ok(proj) = project.read() {
                 // Use flat O(1) lookup
-                if let Some(clip) = proj.get_clip(entity_id) {
+                if let Some(clip) = proj.get_layer(entity_id) {
                     // Effect Property
                     if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                         if let Some(effect) = clip.effects.get(eff_idx) {
@@ -432,20 +436,18 @@ pub fn process_action(
                                         editor_context.keyframe_dialog.property_name = name.clone();
                                         editor_context.keyframe_dialog.keyframe_index = idx;
                                         editor_context.keyframe_dialog.time = kf.time.into_inner();
-                                        editor_context.keyframe_dialog.value = match (
-                                            name.ends_with(".x"),
-                                            name.ends_with(".y"),
-                                        ) {
-                                            (true, _) => kf
-                                                .value
-                                                .get_as::<library::model::project::property::Vec2>()
-                                                .map_or(0.0, |v| v.x.into_inner()),
-                                            (_, true) => kf
-                                                .value
-                                                .get_as::<library::model::project::property::Vec2>()
-                                                .map_or(0.0, |v| v.y.into_inner()),
-                                            _ => kf.value.get_as::<f64>().unwrap_or(0.0),
-                                        };
+                                        editor_context.keyframe_dialog.value =
+                                            match (name.ends_with(".x"), name.ends_with(".y")) {
+                                                (true, _) => kf
+                                                    .value
+                                                    .get_as::<library::model::property::Vec2>()
+                                                    .map_or(0.0, |v| v.x.into_inner()),
+                                                (_, true) => kf
+                                                    .value
+                                                    .get_as::<library::model::property::Vec2>()
+                                                    .map_or(0.0, |v| v.y.into_inner()),
+                                                _ => kf.value.get_as::<f64>().unwrap_or(0.0),
+                                            };
                                         editor_context.keyframe_dialog.easing = kf.easing.clone();
                                     }
                                 }
@@ -468,20 +470,18 @@ pub fn process_action(
                                         editor_context.keyframe_dialog.property_name = name.clone();
                                         editor_context.keyframe_dialog.keyframe_index = idx;
                                         editor_context.keyframe_dialog.time = kf.time.into_inner();
-                                        editor_context.keyframe_dialog.value = match (
-                                            name.ends_with(".x"),
-                                            name.ends_with(".y"),
-                                        ) {
-                                            (true, _) => kf
-                                                .value
-                                                .get_as::<library::model::project::property::Vec2>()
-                                                .map_or(0.0, |v| v.x.into_inner()),
-                                            (_, true) => kf
-                                                .value
-                                                .get_as::<library::model::project::property::Vec2>()
-                                                .map_or(0.0, |v| v.y.into_inner()),
-                                            _ => kf.value.get_as::<f64>().unwrap_or(0.0),
-                                        };
+                                        editor_context.keyframe_dialog.value =
+                                            match (name.ends_with(".x"), name.ends_with(".y")) {
+                                                (true, _) => kf
+                                                    .value
+                                                    .get_as::<library::model::property::Vec2>()
+                                                    .map_or(0.0, |v| v.x.into_inner()),
+                                                (_, true) => kf
+                                                    .value
+                                                    .get_as::<library::model::property::Vec2>()
+                                                    .map_or(0.0, |v| v.y.into_inner()),
+                                                _ => kf.value.get_as::<f64>().unwrap_or(0.0),
+                                            };
                                         editor_context.keyframe_dialog.easing = kf.easing.clone();
                                     }
                                 }
@@ -506,11 +506,11 @@ pub fn process_action(
                                     match (name.ends_with(".x"), name.ends_with(".y")) {
                                         (true, _) => kf
                                             .value
-                                            .get_as::<library::model::project::property::Vec2>()
+                                            .get_as::<library::model::property::Vec2>()
                                             .map_or(0.0, |v| v.x.into_inner()),
                                         (_, true) => kf
                                             .value
-                                            .get_as::<library::model::project::property::Vec2>()
+                                            .get_as::<library::model::property::Vec2>()
                                             .map_or(0.0, |v| v.y.into_inner()),
                                         _ => kf.value.get_as::<f64>().unwrap_or(0.0),
                                     };

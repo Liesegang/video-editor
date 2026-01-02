@@ -1,4 +1,4 @@
-use library::model::project::project::Project;
+use library::model::project::Project;
 
 pub mod handler;
 

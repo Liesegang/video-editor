@@ -1,7 +1,7 @@
 use egui::Ui;
 use egui_dock::{DockState, TabViewer};
 use egui_phosphor::regular as icons;
-use library::model::project::project::Project;
+use library::model::project::Project;
 use std::sync::{Arc, RwLock};
 
 use crate::command::CommandRegistry;
@@ -21,7 +21,7 @@ pub struct AppTabViewer<'a> {
     project_service: &'a mut EditorService,
     project: &'a Arc<RwLock<Project>>,
     composition_dialog: &'a mut CompositionDialog,
-    render_server: &'a Arc<RenderServer>,
+    render_server: &'a RenderServer,
     command_registry: &'a CommandRegistry,
 }
 
@@ -32,7 +32,7 @@ impl<'a> AppTabViewer<'a> {
         project_service: &'a mut EditorService,
         project: &'a Arc<RwLock<Project>>,
         composition_dialog: &'a mut CompositionDialog,
-        render_server: &'a Arc<RenderServer>,
+        render_server: &'a RenderServer,
         command_registry: &'a CommandRegistry,
     ) -> Self {
         Self {
@@ -95,7 +95,28 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                 );
             }
             Tab::NodeGraph => {
-                node_editor::node_editor_panel(ui, &mut self.editor_context.node_graph_state);
+                let comp_id = self.editor_context.selection.composition_id;
+                node_editor::node_editor_panel(
+                    ui,
+                    &mut self.editor_context.node_graph_state,
+                    comp_id,
+                    self.project,
+                    &mut self.editor_context.node_editor_context_menu,
+                    &mut self.editor_context.node_editor_state,
+                );
+
+                // Handle Navigation Requests
+                if let Some(target_comp_id) =
+                    self.editor_context.node_editor_state.pending_navigation
+                {
+                    self.editor_context.selection.composition_id = Some(target_comp_id);
+                    // Also switch tab to Timeline? Or stay in Node Graph?
+                    // User probably wants to see the graph of the new container, so stay in Node Graph.
+                    // But if it's a "Composite", maybe they want Timeline?
+                    // For "Container Node" editing, Node Graph is primary.
+
+                    self.editor_context.node_editor_state.pending_navigation = None;
+                }
             }
         }
     }

@@ -9,9 +9,8 @@ use std::thread;
 use library::cache::SharedCacheManager;
 use library::editor::render_service::RenderService;
 // use library::framing::entity_converters::EntityConverterRegistry;
-use library::model::project::project::Project;
-use library::model::project::property::PropertyUiType;
-use library::model::project::property::PropertyValue;
+use library::model::project::Project;
+use library::model::property::{PropertyUiType, PropertyValue};
 use library::plugin::{ExportSettings, PluginManager};
 use library::rendering::skia_renderer::SkiaRenderer;
 use library::{EditorService, ExportService, ProjectModel};
@@ -572,6 +571,7 @@ impl ExportDialog {
                 composition.background_color.clone(),
                 false,
                 None,
+                Some(cache_manager.clone()),
             );
 
             let render_service_plugin_manager = plugin_manager.clone();
@@ -613,7 +613,7 @@ impl ExportDialog {
             }
             settings.parameters = json_params;
             settings.container = match property_values_owned.get("container") {
-                Some(library::model::project::property::PropertyValue::String(s)) => s.clone(),
+                Some(PropertyValue::String(s)) => s.clone(),
                 _ => {
                     if exporter_id_owned == "png_export" {
                         "png".to_string()
@@ -624,7 +624,7 @@ impl ExportDialog {
             };
 
             settings.codec = match property_values_owned.get("codec") {
-                Some(library::model::project::property::PropertyValue::String(s)) => s.clone(),
+                Some(PropertyValue::String(s)) => s.clone(),
                 _ => {
                     if exporter_id_owned == "png_export" {
                         "png".to_string()
@@ -635,7 +635,7 @@ impl ExportDialog {
             };
 
             settings.pixel_format = match property_values_owned.get("pixel_format") {
-                Some(library::model::project::property::PropertyValue::String(s)) => s.clone(),
+                Some(PropertyValue::String(s)) => s.clone(),
                 _ => "rgba".to_string(),
             };
 

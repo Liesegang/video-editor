@@ -1,7 +1,7 @@
 //! Helper functions for acquiring project locks with consistent error handling.
 
 use crate::error::LibraryError;
-use crate::model::project::project::Project;
+use crate::model::project::Project;
 use std::sync::{Arc, RwLock};
 
 /// Execute a function with a write lock on the project.

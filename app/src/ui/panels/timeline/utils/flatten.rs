@@ -1,5 +1,5 @@
-use library::model::project::project::Project;
-use library::model::project::{Node, TrackClip, TrackData};
+use library::model::project::Project;
+use library::model::{Layer, Node, Track};
 use std::collections::HashSet;
 use uuid::Uuid;
 
@@ -8,15 +8,15 @@ use uuid::Uuid;
 pub enum DisplayRow<'a> {
     /// A track header row (always shown for each track)
     TrackHeader {
-        track: &'a TrackData,
+        track: &'a Track,
         depth: usize,
         is_expanded: bool,
         visible_row_index: usize,
     },
     /// A clip row (shown when parent track is expanded)
     ClipRow {
-        clip: &'a TrackClip,
-        parent_track: &'a TrackData,
+        clip: &'a Layer,
+        parent_track: &'a Track,
         depth: usize,
         visible_row_index: usize,
         child_index: usize,
@@ -87,9 +87,9 @@ pub fn flatten_tracks_to_rows<'a>(
 
         if is_expanded {
             // Iterate in reverse: later children render on top, so show them first
-            for (child_index, child_id) in track.child_ids.iter().enumerate().rev() {
+            for (child_index, child_id) in track.children.iter().enumerate().rev() {
                 match project.get_node(*child_id) {
-                    Some(Node::Clip(clip)) => {
+                    Some(Node::Layer(clip)) => {
                         rows.push(DisplayRow::ClipRow {
                             clip,
                             parent_track: track,

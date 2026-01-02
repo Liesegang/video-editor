@@ -5,7 +5,7 @@ pub mod track_list;
 pub mod utils;
 
 use egui::Ui;
-use library::model::project::project::Project;
+use library::model::project::Project;
 use library::EditorService;
 use std::sync::{Arc, RwLock};
 
