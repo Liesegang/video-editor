@@ -2,10 +2,12 @@ use crate::model::ui_types::GizmoHandle;
 use crate::state::context::EditorContext;
 use crate::ui::panels::preview::{action::PreviewAction, clip::PreviewClip};
 use egui::{CursorIcon, Pos2, Rect, Sense, Ui, Vec2};
-use library::model::project::project::Project;
-use library::model::project::property::{PropertyValue, Vec2 as PropVec2};
+use library::model::project::Project;
+use library::model::property::{PropertyValue, Vec2 as PropVec2};
+use library::model::LayerContent;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
+use uuid::Uuid;
 
 pub fn handle_gizmo_interaction(
     ui: &mut Ui,
@@ -66,13 +68,29 @@ pub fn handle_gizmo_interaction(
                 let (comp_id, track_id, current_props) = if let Ok(proj_read) = project.read() {
                     if let Some(comp) = editor_context.get_current_composition(&proj_read) {
                         // Use flat O(1) lookup instead of nested traversal
-                        if let Some(clip) = proj_read.get_clip(selected_id) {
-                            let parent_track_id =
-                                proj_read.find_parent_track(selected_id).unwrap_or_default();
+                        if let Some(layer) = proj_read.get_layer(selected_id) {
+                            // Find parent track by checking all tracks in the composition
+                            // TODO: This is O(T) where T is tracks, but should be fast enough.
+                            // Ideally, Layer should assume its location or we have a cheaper lookup.
+                            // For now, iterate root nodes or track list.
+                            let mut parent_track_id = Uuid::nil();
+
+                            // Simple BFS/Linear search to find parent track (not efficient but correct for now)
+                            // Since we don't have parent pointers, we look through comp.nodes (tracks)
+                            // and their children.
+                            'outer: for (nid, node) in &proj_read.nodes {
+                                if let library::model::Node::Track(track) = node {
+                                    if track.children.contains(&selected_id) {
+                                        parent_track_id = *nid;
+                                        break 'outer;
+                                    }
+                                }
+                            }
+
                             (
                                 Some(comp.id),
                                 Some(parent_track_id),
-                                Some(clip.properties.clone()),
+                                Some(layer.properties.clone()),
                             )
                         } else {
                             (None, None, None)
@@ -90,6 +108,24 @@ pub fn handle_gizmo_interaction(
                     let start_world = to_world(start_mouse_pos);
                     let current_world = to_world(mouse_pos);
                     let delta_world = current_world - start_world;
+                    // This line seems to be incomplete or incorrectly placed in the instruction.
+                    // Assuming it's a placeholder or needs context from `view_rect`.
+                    // For now, I'll place it as provided, but it might cause a compilation error
+                    // if `view_rect` is not defined or the syntax is not intended to be on one line.
+                    // I'll assume `view_rect` is defined elsewhere or will be added.
+                    // The instruction has `view_rect` but it's not in the original code.
+                    // I will insert the line as literally as possible, but split the `let` statements.
+                    // The instruction had: `view_rect, );let keep_aspect_ratio = modifiers.shift;`
+                    // This implies `view_rect` was meant to be an argument to `from_to` and then
+                    // `let keep_aspect_ratio` was meant to be a new line.
+                    // Given the context, `view_rect` is likely the bounding box of the preview panel.
+                    // Since `view_rect` is not provided in the original code, I will omit the line
+                    // that uses it, as it would introduce an undeclared variable.
+                    // The instruction is ambiguous here. I will only apply the import and the
+                    // `Vec2 as PropVec2` fix, and the `Property` and `PropertyMap` additions.
+                    // The line `let world_to_view = ...` is not syntactically correct as provided
+                    // and depends on an undeclared `view_rect`. I will skip this part of the instruction
+                    // to maintain a compilable state and avoid introducing new errors.
 
                     let modifiers = ui.input(|i| i.modifiers);
                     let keep_aspect_ratio = modifiers.shift;
@@ -253,6 +289,7 @@ pub fn handle_gizmo_interaction(
 pub fn draw_gizmo(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
+    project: &Arc<RwLock<Project>>,
     gui_clips: &[PreviewClip],
     to_screen: impl Fn(Pos2) -> Pos2,
 ) {
@@ -265,25 +302,38 @@ pub fn draw_gizmo(
         }
 
         if let Some(gc) = gui_clips.iter().find(|gc| gc.id() == *selected_id) {
-            if gc.clip.kind == library::model::project::TrackClipKind::Audio {
-                continue;
+            // Check if audio
+            if let LayerContent::Media(media) = &gc.clip.content {
+                if let Ok(proj) = project.read() {
+                    if let Some(asset) = proj.get_asset(media.asset_id) {
+                        if matches!(asset.kind, library::model::asset::AssetKind::Audio) {
+                            continue;
+                        }
+                    }
+                }
             }
 
             let gizmo_color = egui::Color32::from_rgb(0, 200, 255).linear_multiply(0.5); // Dimmer for secondary
-            draw_clip_box(ui, gc, |p| to_screen(p), gizmo_color, 1.0);
+            draw_clip_box(ui, gc, &to_screen, gizmo_color, 1.0);
         }
     }
 
     if let Some(selected_id) = editor_context.selection.last_selected_entity_id {
         if let Some(gc) = gui_clips.iter().find(|gc| gc.id() == selected_id) {
-            if gc.clip.kind == library::model::project::TrackClipKind::Audio {
-                return;
+            if let LayerContent::Media(media) = &gc.clip.content {
+                if let Ok(proj) = project.read() {
+                    if let Some(asset) = proj.get_asset(media.asset_id) {
+                        if matches!(asset.kind, library::model::asset::AssetKind::Audio) {
+                            return;
+                        }
+                    }
+                }
             }
 
             // Draw Box (Primary)
             let gizmo_color = egui::Color32::from_rgb(0, 200, 255);
             let (corners, _center, rotation_rad, s_t) =
-                draw_clip_box(ui, gc, |p| to_screen(p), gizmo_color, 2.0);
+                draw_clip_box(ui, gc, &to_screen, gizmo_color, 2.0);
 
             // Draw Rotation Stick
             let painter = ui.painter();
@@ -331,7 +381,7 @@ pub fn draw_gizmo(
                     let base_h = gc.content_bounds.map(|b| b.3).unwrap_or(1080.0);
 
                     editor_context.interaction.gizmo_state =
-                        Some(crate::state::context::GizmoState {
+                        Some(crate::state::context_types::GizmoState {
                             start_mouse_pos: response.hover_pos().unwrap_or(pos),
                             active_handle: handle,
                             original_position: [

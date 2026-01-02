@@ -1,7 +1,7 @@
 use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::effect::ImageEffect;
 use crate::model::frame::transform::Transform;
-use crate::model::project::property::PropertyMap;
+use crate::model::property::PropertyMap;
 use serde::{Deserialize, Serialize};
 
 use ordered_float::OrderedFloat;

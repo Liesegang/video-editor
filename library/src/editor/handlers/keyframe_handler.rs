@@ -1,7 +1,7 @@
 use crate::error::LibraryError;
 
-use crate::model::project::project::Project;
-use crate::model::project::property::PropertyValue;
+use crate::model::project::Project;
+use crate::model::property::PropertyValue;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -12,7 +12,7 @@ impl KeyframeHandler {
     pub fn add_keyframe(
         project: &Arc<RwLock<Project>>,
         clip_id: Uuid,
-        target: crate::model::project::property::PropertyTarget,
+        target: crate::model::property::PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
@@ -23,7 +23,7 @@ impl KeyframeHandler {
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
         let clip = proj
-            .get_clip_mut(clip_id)
+            .get_layer_mut(clip_id)
             .ok_or_else(|| LibraryError::Project(format!("Clip {} not found", clip_id)))?;
 
         // Use the unified accessor
@@ -41,7 +41,7 @@ impl KeyframeHandler {
     pub fn update_keyframe_by_index(
         project: &Arc<RwLock<Project>>,
         clip_id: Uuid,
-        target: crate::model::project::property::PropertyTarget,
+        target: crate::model::property::PropertyTarget,
         property_key: &str,
         keyframe_index: usize,
         new_time: Option<f64>,
@@ -53,7 +53,7 @@ impl KeyframeHandler {
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
         let clip = proj
-            .get_clip_mut(clip_id)
+            .get_layer_mut(clip_id)
             .ok_or_else(|| LibraryError::Project(format!("Clip {} not found", clip_id)))?;
 
         let prop_map = clip
@@ -80,7 +80,7 @@ impl KeyframeHandler {
     pub fn remove_keyframe_by_index(
         project: &Arc<RwLock<Project>>,
         clip_id: Uuid,
-        target: crate::model::project::property::PropertyTarget,
+        target: crate::model::property::PropertyTarget,
         property_key: &str,
         keyframe_index: usize,
     ) -> Result<(), LibraryError> {
@@ -89,7 +89,7 @@ impl KeyframeHandler {
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
         let clip = proj
-            .get_clip_mut(clip_id)
+            .get_layer_mut(clip_id)
             .ok_or_else(|| LibraryError::Project(format!("Clip {} not found", clip_id)))?;
 
         let prop_map = clip

@@ -227,8 +227,8 @@ impl VideoReader {
             let medium = params.medium();
 
             let kind = match medium {
-                ffmpeg::media::Type::Video => crate::model::project::asset::AssetKind::Video,
-                ffmpeg::media::Type::Audio => crate::model::project::asset::AssetKind::Audio,
+                ffmpeg::media::Type::Video => crate::model::asset::AssetKind::Video,
+                ffmpeg::media::Type::Audio => crate::model::asset::AssetKind::Audio,
                 _ => continue,
             };
 
@@ -256,7 +256,7 @@ impl VideoReader {
             let mut width = None;
             let mut height = None;
 
-            if kind == crate::model::project::asset::AssetKind::Video {
+            if kind == crate::model::asset::AssetKind::Video {
                 let avg_frame_rate = stream.avg_frame_rate();
                 if avg_frame_rate.denominator() > 0 {
                     fps = Some(

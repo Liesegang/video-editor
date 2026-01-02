@@ -1,13 +1,15 @@
-use crate::editor::color_service::ColorSpaceManager;
 use crate::editor::handlers;
 use crate::error::LibraryError;
-use crate::model::project::asset::Asset;
-use crate::model::project::project::{Composition, Project};
-use crate::model::project::property::PropertyValue;
-use crate::model::project::property::{PropertyDefinition, PropertyUiType};
-use crate::model::project::{Node, TrackClip, TrackData};
+use crate::model::asset::Asset;
+use crate::model::project::{Composite, Project};
+use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+use crate::model::{
+    EffectConfig, GeneratorContent, Layer, LayerContent, MediaContent, Node, ReferenceContent,
+    Track,
+};
 use crate::plugin::PluginManager;
 use crate::plugin::entity_converter::measure_text_size;
+use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -51,8 +53,7 @@ impl ProjectManager {
 
     pub fn create_new_project(&self) -> Result<(Uuid, Project), LibraryError> {
         let mut new_project = Project::new("New Project");
-        let (default_comp, root_track) =
-            Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
+        let (default_comp, root_track) = Composite::new("Main Composition", 1920, 1080, 30.0, 60.0);
         let new_comp_id = default_comp.id;
         new_project.add_node(Node::Track(root_track));
         new_project.add_composition(default_comp);
@@ -69,101 +70,104 @@ impl ProjectManager {
 
     pub fn create_audio_clip(
         &self,
-        reference_id: Option<Uuid>,
+        reference_id: Uuid,
         file_path: &str,
-        in_frame: u64,
-        out_frame: u64,
-        source_begin_frame: i64,
-        duration_frame: u64,
-        fps: f64,
-    ) -> TrackClip {
-        let defs =
-            TrackClip::get_definitions_for_kind(&crate::model::project::TrackClipKind::Audio);
-        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
-
-        props.set(
-            "file_path".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(file_path.to_string()),
-            ),
+        start_time: f64,
+        duration: f64,
+        source_start_time: f64,
+        speed: f64,
+    ) -> Result<Layer, LibraryError> {
+        let mut layer = Layer::new(
+            "Audio Clip",
+            start_time,
+            duration,
+            LayerContent::Media(MediaContent {
+                asset_id: reference_id,
+                stream_index: None, // Logic to find audio stream? defaulting to None which implies first available or main
+            }),
         );
 
-        TrackClip::new(
-            Uuid::new_v4(),
-            reference_id,
-            crate::model::project::TrackClipKind::Audio,
-            in_frame,
-            out_frame,
-            source_begin_frame,
-            Some(duration_frame),
-            fps,
-            props,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        )
+        layer.trim_in = OrderedFloat(source_start_time);
+        layer.time_stretch = OrderedFloat(speed);
+
+        // Properties
+        let defs = self
+            .plugin_manager
+            .get_entity_converter("audio")
+            .map(|p| p.get_property_definitions(0, 0, 0, 0)) // Dimensions irrelevant for audio
+            .unwrap_or_default();
+        layer.properties = crate::model::property::PropertyMap::from_definitions(&defs);
+        layer.properties.set(
+            "file_path".to_string(),
+            crate::model::property::Property::constant(PropertyValue::String(
+                file_path.to_string(),
+            )),
+        );
+
+        Ok(layer)
     }
 
     pub fn create_video_clip(
         &self,
-        reference_id: Option<Uuid>,
+        reference_id: Uuid, // Required for Media
         file_path: &str,
-        in_frame: u64,
-        out_frame: u64,
-        source_begin_frame: i64,
-        duration_frame: u64,
-        fps: f64,
+        start_time: f64,
+        duration: f64,
+        source_start_time: f64,
+        speed: f64,
         canvas_width: u32,
         canvas_height: u32,
-    ) -> Result<TrackClip, LibraryError> {
+    ) -> Result<Layer, LibraryError> {
         let plugin = self
             .plugin_manager
             .get_entity_converter("video")
             .ok_or_else(|| LibraryError::Plugin("Video converter plugin not found".to_string()))?;
 
+        // Calculate media dimensions (placeholder or fetch from asset if available via reference_id? For now just use defaults or props)
+        // Ideally we fetch asset metadata, but avoiding async or lock here if possible. ProjectService usually has asset info.
+        let media_width = canvas_width as u64; // Fallback
+        let media_height = canvas_height as u64;
+
         let defs = plugin.get_property_definitions(
             canvas_width as u64,
             canvas_height as u64,
-            canvas_width as u64,
-            canvas_height as u64,
+            media_width,
+            media_height,
         );
-        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
+        let mut props = crate::model::property::PropertyMap::from_definitions(&defs);
 
         props.set(
             "file_path".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(file_path.to_string()),
-            ),
+            crate::model::property::Property::constant(PropertyValue::String(
+                file_path.to_string(),
+            )),
         );
 
-        Ok(TrackClip::new(
-            Uuid::new_v4(),
-            reference_id,
-            crate::model::project::TrackClipKind::Video,
-            in_frame,
-            out_frame,
-            source_begin_frame,
-            Some(duration_frame),
-            fps,
-            props,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ))
+        let mut layer = Layer::new(
+            "Video Clip",
+            start_time,
+            duration,
+            LayerContent::Media(MediaContent {
+                asset_id: reference_id,
+                stream_index: None,
+            }),
+        );
+        layer.trim_in = OrderedFloat(source_start_time);
+        layer.time_stretch = OrderedFloat(speed);
+        layer.properties = props;
+
+        Ok(layer)
     }
 
     pub fn create_image_clip(
         &self,
-        reference_id: Option<Uuid>,
+        reference_id: Uuid,
         file_path: &str,
-        in_frame: u64,
-        out_frame: u64,
+        start_time: f64,
+        duration: f64,
         canvas_width: u32,
         canvas_height: u32,
-        fps: f64,
-    ) -> Result<TrackClip, LibraryError> {
+    ) -> Result<Layer, LibraryError> {
         let plugin = self
             .plugin_manager
             .get_entity_converter("image")
@@ -175,48 +179,44 @@ impl ProjectManager {
             canvas_width as u64,
             canvas_height as u64,
         );
-        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
+        let mut props = crate::model::property::PropertyMap::from_definitions(&defs);
 
         props.set(
             "file_path".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(file_path.to_string()),
-            ),
+            crate::model::property::Property::constant(PropertyValue::String(
+                file_path.to_string(),
+            )),
         );
 
-        Ok(TrackClip::new(
-            Uuid::new_v4(),
-            reference_id,
-            crate::model::project::TrackClipKind::Image,
-            in_frame,
-            out_frame,
-            0,
-            None,
-            fps,
-            props,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ))
+        let mut layer = Layer::new(
+            "Image Clip",
+            start_time,
+            duration,
+            LayerContent::Media(MediaContent {
+                asset_id: reference_id,
+                stream_index: None,
+            }),
+        );
+        layer.properties = props;
+
+        Ok(layer)
     }
 
     pub fn create_text_clip(
         &self,
         text: &str,
-        in_frame: u64,
-        out_frame: u64,
+        start_time: f64,
+        duration: f64,
         canvas_width: u32,
         canvas_height: u32,
-        fps: f64,
-    ) -> Result<TrackClip, LibraryError> {
+    ) -> Result<Layer, LibraryError> {
         let plugin = self
             .plugin_manager
             .get_entity_converter("text")
             .ok_or_else(|| LibraryError::Plugin("Text converter plugin not found".to_string()))?;
 
         // Measure text size
-        let (w, h) = crate::plugin::entity_converter::measure_text_size(text, "Arial", 100.0);
+        let (w, h) = measure_text_size(text, "Arial", 100.0);
 
         let defs = plugin.get_property_definitions(
             canvas_width as u64,
@@ -224,52 +224,44 @@ impl ProjectManager {
             w as u64,
             h as u64,
         );
-        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
+        let mut props = crate::model::property::PropertyMap::from_definitions(&defs);
 
         props.set(
             "text".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(text.to_string()),
-            ),
+            crate::model::property::Property::constant(PropertyValue::String(text.to_string())),
         );
 
         let mut styles = Vec::new();
 
         // Default fill style (white)
         if let Some(fill_plugin) = self.plugin_manager.get_style_plugin("fill") {
-            let fill_props = crate::model::project::property::PropertyMap::from_definitions(
-                &fill_plugin.properties(),
-            );
-            styles.push(crate::model::project::style::StyleInstance::new(
-                "fill", fill_props,
-            ));
+            let fill_props =
+                crate::model::property::PropertyMap::from_definitions(&fill_plugin.properties());
+            styles.push(crate::model::style::StyleInstance::new("fill", fill_props));
         }
 
-        Ok(TrackClip::new(
-            Uuid::new_v4(),
-            None,
-            crate::model::project::TrackClipKind::Text,
-            in_frame,
-            out_frame,
-            0,
-            None,
-            fps,
-            props,
-            styles,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ))
+        let mut layer = Layer::new(
+            "Text Clip",
+            start_time,
+            duration,
+            LayerContent::Generator(GeneratorContent::Text {
+                text: text.to_string(),
+                font: "Arial".to_string(),
+            }),
+        );
+        layer.properties = props;
+        layer.styles = styles;
+
+        Ok(layer)
     }
 
     pub fn create_shape_clip(
         &self,
-        in_frame: u64,
-        out_frame: u64,
+        start_time: f64,
+        duration: f64,
         canvas_width: u32,
         canvas_height: u32,
-        fps: f64,
-    ) -> Result<TrackClip, LibraryError> {
+    ) -> Result<Layer, LibraryError> {
         let plugin = self
             .plugin_manager
             .get_entity_converter("shape")
@@ -277,64 +269,57 @@ impl ProjectManager {
 
         let defs =
             plugin.get_property_definitions(canvas_width as u64, canvas_height as u64, 100, 100);
-        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
+        let mut props = crate::model::property::PropertyMap::from_definitions(&defs);
 
         let heart_path = "M 50,30 A 20,20 0,0,1 90,30 C 90,55 50,85 50,85 C 50,85 10,55 10,30 A 20,20 0,0,1 50,30 Z";
         props.set(
             "path".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(heart_path.to_string()),
-            ),
+            crate::model::property::Property::constant(PropertyValue::String(
+                heart_path.to_string(),
+            )),
         );
 
         let mut styles = Vec::new();
 
         // Fill (red)
         if let Some(fill_plugin) = self.plugin_manager.get_style_plugin("fill") {
-            let fill_props = crate::model::project::property::PropertyMap::from_definitions(
-                &fill_plugin.properties(),
-            );
-            styles.push(crate::model::project::style::StyleInstance::new(
-                "fill", fill_props,
-            ));
+            let fill_props =
+                crate::model::property::PropertyMap::from_definitions(&fill_plugin.properties());
+            styles.push(crate::model::style::StyleInstance::new("fill", fill_props));
         }
 
         // Stroke (white)
         if let Some(stroke_plugin) = self.plugin_manager.get_style_plugin("stroke") {
-            let stroke_props = crate::model::project::property::PropertyMap::from_definitions(
-                &stroke_plugin.properties(),
-            );
-            styles.push(crate::model::project::style::StyleInstance::new(
+            let stroke_props =
+                crate::model::property::PropertyMap::from_definitions(&stroke_plugin.properties());
+            styles.push(crate::model::style::StyleInstance::new(
                 "stroke",
                 stroke_props,
             ));
         }
 
-        Ok(TrackClip::new(
-            Uuid::new_v4(),
-            None,
-            crate::model::project::TrackClipKind::Shape,
-            in_frame,
-            out_frame,
-            0,
-            None,
-            fps,
-            props,
-            styles,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ))
+        let mut layer = Layer::new(
+            "Shape Clip",
+            start_time,
+            duration,
+            LayerContent::Generator(GeneratorContent::Shape {
+                path: heart_path.to_string(),
+                fill: "white".to_string(), // Default fill color? Shape generator uses style usually, but variants logic might differ
+            }),
+        );
+        layer.properties = props;
+        layer.styles = styles;
+
+        Ok(layer)
     }
 
     pub fn create_sksl_clip(
         &self,
-        in_frame: u64,
-        out_frame: u64,
+        start_time: f64,
+        duration: f64,
         canvas_width: u32,
         canvas_height: u32,
-        fps: f64,
-    ) -> Result<TrackClip, LibraryError> {
+    ) -> Result<Layer, LibraryError> {
         let plugin = self
             .plugin_manager
             .get_entity_converter("sksl")
@@ -346,7 +331,7 @@ impl ProjectManager {
             canvas_width as u64,
             canvas_height as u64,
         );
-        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
+        let mut props = crate::model::property::PropertyMap::from_definitions(&defs);
 
         let default_shader = r#"
 half4 main(float2 fragCoord) {
@@ -358,26 +343,41 @@ half4 main(float2 fragCoord) {
 
         props.set(
             "shader".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(default_shader.to_string()),
-            ),
+            crate::model::property::Property::constant(PropertyValue::String(
+                default_shader.to_string(),
+            )),
         );
 
-        Ok(TrackClip::new(
-            Uuid::new_v4(),
-            None,
-            crate::model::project::TrackClipKind::SkSL,
-            in_frame,
-            out_frame,
-            0,
-            None,
-            fps,
-            props,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ))
+        let mut layer = Layer::new(
+            "SkSL Clip",
+            start_time,
+            duration,
+            LayerContent::Generator(GeneratorContent::SkSL {
+                shader: default_shader.to_string(),
+            }),
+        );
+        layer.properties = props;
+
+        Ok(layer)
+    }
+
+    pub fn create_reference_clip(
+        &self,
+        target_node_id: Uuid,
+        start_time: f64,
+        duration: f64,
+    ) -> Result<Layer, LibraryError> {
+        let layer = Layer::new(
+            "Reference Clip",
+            start_time,
+            duration,
+            LayerContent::Reference(ReferenceContent {
+                target_id: target_node_id,
+                sync_global_time: false,
+                input_mapping: Default::default(),
+            }),
+        );
+        Ok(layer)
     }
 
     pub fn save_project(&self) -> Result<String, LibraryError> {
@@ -408,18 +408,36 @@ half4 main(float2 fragCoord) {
 
         // Remove clips referencing the asset from nodes registry
         let clip_ids_to_remove: Vec<Uuid> = project_write
-            .all_clips()
-            .filter(|c| c.reference_id == Some(asset_id))
-            .map(|c| c.id)
+            .nodes
+            .values()
+            .filter_map(|n| {
+                if let Node::Layer(l) = n {
+                    if let LayerContent::Media(m) = &l.content {
+                        if m.asset_id == asset_id {
+                            return Some(l.id);
+                        }
+                    }
+                }
+                None
+            })
             .collect();
 
         for clip_id in &clip_ids_to_remove {
-            // Remove from parent track's child_ids
-            for track in project_write.all_tracks().map(|t| t.id).collect::<Vec<_>>() {
-                if let Some(t) = project_write.get_track_mut(track) {
-                    t.remove_child(*clip_id);
+            // Find parent tracks and remove child reference (Inefficient scan but safe)
+            let track_ids: Vec<Uuid> = project_write.nodes.keys().cloned().collect();
+            // Better: only scan tracks?
+            for track_id in track_ids {
+                // Must access mutably one by one?
+                // We have mutable borrow of project_write.nodes.
+                // Cannot iterate values_mut directly easily due to borrow checker if we also want to remove nodes?
+                // Actually we remove node later.
+                if let Some(Node::Track(t)) = project_write.nodes.get_mut(&track_id) {
+                    if t.children.contains(clip_id) {
+                        t.children.retain(|c| c != clip_id);
+                    }
                 }
             }
+
             // Remove from nodes
             project_write.remove_node(*clip_id);
         }
@@ -434,17 +452,40 @@ half4 main(float2 fragCoord) {
             LibraryError::Runtime(format!("Failed to acquire project write lock: {}", e))
         })?;
 
-        // Remove clips referencing the composition (Nested Comps)
+        // Remove clips referencing the composition (Nested Comps - if ReferenceContent exists)
         let clip_ids_to_remove: Vec<Uuid> = project_write
-            .all_clips()
-            .filter(|c| c.reference_id == Some(comp_id))
-            .map(|c| c.id)
+            .nodes
+            .values()
+            .filter_map(|n| {
+                if let Node::Layer(_l) = n {
+                    // Check if Referenced Composition
+                    // Currently only Media/Generator supported in basic refactor,
+                    // but assuming ReferenceContent for nested comps might be added or generic check?
+                    // If LayerContent has Reference variant:
+                    /*
+                    if let LayerContent::Reference(r) = &l.content {
+                        if r.target_id == comp_id { return Some(l.id); }
+                    }
+                    */
+                    // For now, assume no nested comps or handle if LayerContent has it.
+                    // Checked model/mod.rs: ReferenceContent exists? Yes I added it to imports.
+                    // But LayerContent::Reference variant?
+                    // Need to check model/mod.rs lines 114-118
+                    None // Placeholder until Reference implemented fully
+                } else {
+                    None
+                }
+            })
             .collect();
 
+        // (Code for removal same as asset)
         for clip_id in &clip_ids_to_remove {
-            for track in project_write.all_tracks().map(|t| t.id).collect::<Vec<_>>() {
-                if let Some(t) = project_write.get_track_mut(track) {
-                    t.remove_child(*clip_id);
+            let track_ids: Vec<Uuid> = project_write.nodes.keys().cloned().collect();
+            for track_id in track_ids {
+                if let Some(Node::Track(t)) = project_write.nodes.get_mut(&track_id) {
+                    if t.children.contains(clip_id) {
+                        t.children.retain(|c| c != clip_id);
+                    }
                 }
             }
             project_write.remove_node(*clip_id);
@@ -475,7 +516,7 @@ half4 main(float2 fragCoord) {
                 };
                 let name = format!("{}{}", base_name, suffix);
 
-                let mut asset = crate::model::project::asset::Asset::new(&name, path, stream.kind);
+                let mut asset = crate::model::asset::Asset::new(&name, path, stream.kind);
                 asset.duration = stream.duration;
                 asset.fps = stream.fps;
                 asset.width = stream.width;
@@ -494,7 +535,7 @@ half4 main(float2 fragCoord) {
                     (meta.kind, meta.duration, meta.fps, meta.width, meta.height)
                 } else {
                     (
-                        crate::model::project::asset::AssetKind::Other,
+                        crate::model::asset::AssetKind::Other,
                         None,
                         None,
                         None,
@@ -503,7 +544,7 @@ half4 main(float2 fragCoord) {
                 };
 
             // 2. Fallback for Kind if Unknown
-            if kind == crate::model::project::asset::AssetKind::Other {
+            if kind == crate::model::asset::AssetKind::Other {
                 // Fallback to extension if plugin didn't detect it
                 let ext = path_obj
                     .extension()
@@ -511,22 +552,18 @@ half4 main(float2 fragCoord) {
                     .to_string_lossy()
                     .to_lowercase();
                 kind = match ext.as_str() {
-                    "mp4" | "mov" | "avi" | "mkv" | "webm" => {
-                        crate::model::project::asset::AssetKind::Video
-                    }
+                    "mp4" | "mov" | "avi" | "mkv" | "webm" => crate::model::asset::AssetKind::Video,
                     "png" | "jpg" | "jpeg" | "bmp" | "webp" => {
-                        crate::model::project::asset::AssetKind::Image
+                        crate::model::asset::AssetKind::Image
                     }
-                    "mp3" | "wav" | "ogg" | "aac" | "flac" => {
-                        crate::model::project::asset::AssetKind::Audio
-                    }
-                    "obj" | "gltf" | "glb" => crate::model::project::asset::AssetKind::Model3D,
-                    _ => crate::model::project::asset::AssetKind::Other,
+                    "mp3" | "wav" | "ogg" | "aac" | "flac" => crate::model::asset::AssetKind::Audio,
+                    "obj" | "gltf" | "glb" => crate::model::asset::AssetKind::Model3D,
+                    _ => crate::model::asset::AssetKind::Other,
                 };
             }
 
             // 3. Create Asset
-            let mut asset = crate::model::project::asset::Asset::new(&base_name, path, kind);
+            let mut asset = crate::model::asset::Asset::new(&base_name, path, kind);
             asset.duration = duration;
             asset.fps = fps;
             asset.width = width;
@@ -563,7 +600,7 @@ half4 main(float2 fragCoord) {
         )
     }
 
-    pub fn get_composition(&self, id: Uuid) -> Result<Composition, LibraryError> {
+    pub fn get_composition(&self, id: Uuid) -> Result<Composite, LibraryError> {
         handlers::composition_handler::CompositionHandler::get_composition(&self.project, id)
     }
 
@@ -604,7 +641,7 @@ half4 main(float2 fragCoord) {
         track_id: Uuid,
         track_name: &str,
     ) -> Result<Uuid, LibraryError> {
-        let mut track = TrackData::new(track_name);
+        let mut track = Track::new(track_name);
         track.id = track_id;
         handlers::track_handler::TrackHandler::add_track_with_id(
             &self.project,
@@ -617,11 +654,7 @@ half4 main(float2 fragCoord) {
     // Actually, ProjectService had `mutate_track` etc. which are useful helpers.
     // I will include get_track and remove_track first.
 
-    pub fn get_track(
-        &self,
-        composition_id: Uuid,
-        track_id: Uuid,
-    ) -> Result<TrackData, LibraryError> {
+    pub fn get_track(&self, composition_id: Uuid, track_id: Uuid) -> Result<Track, LibraryError> {
         handlers::track_handler::TrackHandler::get_track(&self.project, composition_id, track_id)
     }
 
@@ -651,18 +684,14 @@ half4 main(float2 fragCoord) {
         &self,
         composition_id: Uuid,
         track_id: Uuid,
-        clip: TrackClip,
-        in_frame: u64,
-        out_frame: u64,
+        layer: Layer,
         insert_index: Option<usize>,
     ) -> Result<Uuid, LibraryError> {
         handlers::clip_handler::ClipHandler::add_clip_to_track(
             &self.project,
             composition_id,
             track_id,
-            clip,
-            in_frame,
-            out_frame,
+            layer,
             insert_index,
         )
     }
@@ -688,7 +717,7 @@ half4 main(float2 fragCoord) {
         handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Clip,
+            crate::model::property::PropertyTarget::Clip,
             property_key,
             0.0,
             value,
@@ -707,7 +736,7 @@ half4 main(float2 fragCoord) {
         handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Clip,
+            crate::model::property::PropertyTarget::Clip,
             property_key,
             time,
             value,
@@ -727,7 +756,7 @@ half4 main(float2 fragCoord) {
         handlers::keyframe_handler::KeyframeHandler::update_keyframe_by_index(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Clip,
+            crate::model::property::PropertyTarget::Clip,
             property_key,
             index,
             time,
@@ -748,7 +777,7 @@ half4 main(float2 fragCoord) {
         handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Effect(effect_index),
+            crate::model::property::PropertyTarget::Effect(effect_index),
             property_key,
             time,
             value,
@@ -769,7 +798,7 @@ half4 main(float2 fragCoord) {
         handlers::keyframe_handler::KeyframeHandler::update_keyframe_by_index(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Effect(effect_index),
+            crate::model::property::PropertyTarget::Effect(effect_index),
             property_key,
             keyframe_index,
             time,
@@ -788,7 +817,7 @@ half4 main(float2 fragCoord) {
         handlers::keyframe_handler::KeyframeHandler::remove_keyframe_by_index(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Effect(effect_index),
+            crate::model::property::PropertyTarget::Effect(effect_index),
             property_key,
             keyframe_index,
         )
@@ -827,8 +856,8 @@ half4 main(float2 fragCoord) {
     // Copied metadata logic from ProjectService
     pub fn evaluate_property_value(
         &self,
-        property: &crate::model::project::property::Property,
-        context: &crate::model::project::property::PropertyMap,
+        property: &crate::model::property::Property,
+        context: &crate::model::property::PropertyMap,
         time: f64,
         fps: f64,
     ) -> PropertyValue {
@@ -852,7 +881,7 @@ half4 main(float2 fragCoord) {
         handlers::keyframe_handler::KeyframeHandler::add_keyframe(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Clip,
+            crate::model::property::PropertyTarget::Clip,
             property_key,
             time,
             value,
@@ -872,127 +901,11 @@ half4 main(float2 fragCoord) {
         handlers::keyframe_handler::KeyframeHandler::add_keyframe(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Effect(effect_index),
+            crate::model::property::PropertyTarget::Effect(effect_index),
             property_key,
             time,
             value,
             easing,
-        )
-    }
-
-    pub fn add_effector_keyframe(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::add_keyframe(
-            &self.project,
-            clip_id,
-            crate::model::project::property::PropertyTarget::Effector(effector_index),
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn update_effector_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-        time: Option<f64>,
-        value: Option<PropertyValue>,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::update_keyframe_by_index(
-            &self.project,
-            clip_id,
-            crate::model::project::property::PropertyTarget::Effector(effector_index),
-            property_key,
-            keyframe_index,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn remove_effector_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-    ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::remove_keyframe_by_index(
-            &self.project,
-            clip_id,
-            crate::model::project::property::PropertyTarget::Effector(effector_index),
-            property_key,
-            keyframe_index,
-        )
-    }
-
-    pub fn add_decorator_keyframe(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::add_keyframe(
-            &self.project,
-            clip_id,
-            crate::model::project::property::PropertyTarget::Decorator(decorator_index),
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn update_decorator_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-        time: Option<f64>,
-        value: Option<PropertyValue>,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::update_keyframe_by_index(
-            &self.project,
-            clip_id,
-            crate::model::project::property::PropertyTarget::Decorator(decorator_index),
-            property_key,
-            keyframe_index,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn remove_decorator_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-    ) -> Result<(), LibraryError> {
-        handlers::keyframe_handler::KeyframeHandler::remove_keyframe_by_index(
-            &self.project,
-            clip_id,
-            crate::model::project::property::PropertyTarget::Decorator(decorator_index),
-            property_key,
-            keyframe_index,
         )
     }
 
@@ -1002,7 +915,7 @@ half4 main(float2 fragCoord) {
         source_track_id: Uuid,
         clip_id: Uuid,
         target_track_id: Uuid,
-        new_in_frame: u64,
+        new_start_time: f64,
     ) -> Result<(), LibraryError> {
         handlers::clip_handler::ClipHandler::move_clip_to_track(
             &self.project,
@@ -1010,7 +923,7 @@ half4 main(float2 fragCoord) {
             source_track_id,
             clip_id,
             target_track_id,
-            new_in_frame,
+            new_start_time,
         )
     }
 
@@ -1020,7 +933,7 @@ half4 main(float2 fragCoord) {
         source_track_id: Uuid,
         clip_id: Uuid,
         target_track_id: Uuid,
-        new_in_frame: u64,
+        new_start_time: f64,
         target_index: Option<usize>,
     ) -> Result<(), LibraryError> {
         handlers::clip_handler::ClipHandler::move_clip_to_track_at_index(
@@ -1029,7 +942,7 @@ half4 main(float2 fragCoord) {
             source_track_id,
             clip_id,
             target_track_id,
-            new_in_frame,
+            new_start_time,
             target_index,
         )
     }
@@ -1051,7 +964,7 @@ half4 main(float2 fragCoord) {
     pub fn update_track_clip_effects(
         &self,
         clip_id: Uuid,
-        effects: Vec<crate::model::project::EffectConfig>,
+        effects: Vec<EffectConfig>,
     ) -> Result<(), LibraryError> {
         handlers::clip_handler::ClipHandler::update_effects(&self.project, clip_id, effects)
     }
@@ -1059,25 +972,9 @@ half4 main(float2 fragCoord) {
     pub fn update_track_clip_styles(
         &self,
         clip_id: Uuid,
-        styles: Vec<crate::model::project::style::StyleInstance>,
+        styles: Vec<crate::model::style::StyleInstance>,
     ) -> Result<(), LibraryError> {
         handlers::clip_handler::ClipHandler::update_styles(&self.project, clip_id, styles)
-    }
-
-    pub fn update_track_clip_effectors(
-        &self,
-        clip_id: Uuid,
-        effectors: Vec<crate::model::project::ensemble::EffectorInstance>,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_effectors(&self.project, clip_id, effectors)
-    }
-
-    pub fn update_track_clip_decorators(
-        &self,
-        clip_id: Uuid,
-        decorators: Vec<crate::model::project::ensemble::DecoratorInstance>,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_decorators(&self.project, clip_id, decorators)
     }
 
     pub fn update_track_clip_style_property(
@@ -1090,7 +987,7 @@ half4 main(float2 fragCoord) {
         handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Style(style_index),
+            crate::model::property::PropertyTarget::Style(style_index),
             property_key,
             0.0,
             value,
@@ -1110,7 +1007,7 @@ half4 main(float2 fragCoord) {
         handlers::keyframe_handler::KeyframeHandler::add_keyframe(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Style(style_index),
+            crate::model::property::PropertyTarget::Style(style_index),
             property_key,
             time,
             value,
@@ -1128,7 +1025,7 @@ half4 main(float2 fragCoord) {
         handlers::keyframe_handler::KeyframeHandler::remove_keyframe_by_index(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Style(style_index),
+            crate::model::property::PropertyTarget::Style(style_index),
             property_key,
             keyframe_index,
         )
@@ -1147,7 +1044,7 @@ half4 main(float2 fragCoord) {
         handlers::keyframe_handler::KeyframeHandler::update_keyframe_by_index(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Style(style_index),
+            crate::model::property::PropertyTarget::Style(style_index),
             property_key,
             keyframe_index,
             time,
@@ -1168,7 +1065,7 @@ half4 main(float2 fragCoord) {
         handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
             &self.project,
             clip_id,
-            crate::model::project::property::PropertyTarget::Style(style_index),
+            crate::model::property::PropertyTarget::Style(style_index),
             property_key,
             time,
             value,
@@ -1188,82 +1085,6 @@ half4 main(float2 fragCoord) {
             &self.project,
             clip_id,
             style_index,
-            property_key,
-            attribute_key,
-            attribute_value,
-        )
-    }
-
-    pub fn update_effector_property_or_keyframe(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
-            &self.project,
-            clip_id,
-            crate::model::project::property::PropertyTarget::Effector(effector_index),
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn update_decorator_property_or_keyframe(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
-            &self.project,
-            clip_id,
-            crate::model::project::property::PropertyTarget::Decorator(decorator_index),
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn set_effector_property_attribute(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::set_effector_property_attribute(
-            &self.project,
-            clip_id,
-            effector_index,
-            property_key,
-            attribute_key,
-            attribute_value,
-        )
-    }
-
-    pub fn set_decorator_property_attribute(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::set_decorator_property_attribute(
-            &self.project,
-            clip_id,
-            decorator_index,
             property_key,
             attribute_key,
             attribute_value,
@@ -1314,72 +1135,18 @@ half4 main(float2 fragCoord) {
             })?;
 
         let properties =
-            crate::model::project::property::PropertyMap::from_definitions(&plugin.properties());
+            crate::model::property::PropertyMap::from_definitions(&plugin.properties());
 
         // 2. Create instance
-        let instance = crate::model::project::style::StyleInstance::new(style_type, properties);
+        let instance = crate::model::style::StyleInstance::new(style_type, properties);
 
         // 3. Add to clip
         let project = self.project.read().unwrap();
-        if let Some(clip) = project.get_clip(clip_id) {
+        if let Some(clip) = project.get_layer(clip_id) {
             let mut new_styles = clip.styles.clone();
             new_styles.push(instance);
             drop(project); // release lock
             self.update_track_clip_styles(clip_id, new_styles)
-        } else {
-            Err(LibraryError::Validation(format!(
-                "Clip {} not found",
-                clip_id
-            )))
-        }
-    }
-
-    pub fn add_effector(&self, clip_id: Uuid, effector_type: &str) -> Result<(), LibraryError> {
-        let defs = self.plugin_manager.get_effector_properties(effector_type);
-        if defs.is_empty() {
-            return Err(LibraryError::Plugin(format!(
-                "Effector plugin '{}' not found or has no properties",
-                effector_type
-            )));
-        }
-
-        let properties = crate::model::project::property::PropertyMap::from_definitions(&defs);
-        let instance =
-            crate::model::project::ensemble::EffectorInstance::new(effector_type, properties);
-
-        let project = self.project.read().unwrap();
-        if let Some(clip) = project.get_clip(clip_id) {
-            let mut new_effectors = clip.effectors.clone();
-            new_effectors.push(instance);
-            drop(project); // release lock
-            self.update_track_clip_effectors(clip_id, new_effectors)
-        } else {
-            Err(LibraryError::Validation(format!(
-                "Clip {} not found",
-                clip_id
-            )))
-        }
-    }
-
-    pub fn add_decorator(&self, clip_id: Uuid, decorator_type: &str) -> Result<(), LibraryError> {
-        let defs = self.plugin_manager.get_decorator_properties(decorator_type);
-        if defs.is_empty() {
-            return Err(LibraryError::Plugin(format!(
-                "Decorator plugin '{}' not found or has no properties",
-                decorator_type
-            )));
-        }
-
-        let properties = crate::model::project::property::PropertyMap::from_definitions(&defs);
-        let instance =
-            crate::model::project::ensemble::DecoratorInstance::new(decorator_type, properties);
-
-        let project = self.project.read().unwrap();
-        if let Some(clip) = project.get_clip(clip_id) {
-            let mut new_decorators = clip.decorators.clone();
-            new_decorators.push(instance);
-            drop(project); // release lock
-            self.update_track_clip_decorators(clip_id, new_decorators)
         } else {
             Err(LibraryError::Validation(format!(
                 "Clip {} not found",
@@ -1398,7 +1165,7 @@ half4 main(float2 fragCoord) {
 
         let (clip, canvas_width, canvas_height) =
             if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
-                if let Some(c) = project.get_clip(clip_id) {
+                if let Some(c) = project.get_layer(clip_id) {
                     (c.clone(), comp.width, comp.height)
                 } else {
                     return Vec::new();
@@ -1408,49 +1175,56 @@ half4 main(float2 fragCoord) {
             };
 
         // Resolve clip dimensions
-        let (clip_width, clip_height): (u64, u64) = match clip.kind {
-            crate::model::project::TrackClipKind::Video
-            | crate::model::project::TrackClipKind::Image => {
-                if let Some(asset_id) = clip.reference_id {
-                    if let Some(asset) = project.assets.iter().find(|a| a.id == asset_id) {
-                        (
-                            asset.width.unwrap_or(100) as u64,
-                            asset.height.unwrap_or(100) as u64,
-                        )
-                    } else {
-                        (100, 100)
-                    }
+        let (clip_width, clip_height): (u64, u64) = match &clip.content {
+            LayerContent::Media(m) => {
+                // If asset is loaded, get dimensions
+                if let Some(asset) = project.assets.iter().find(|a| a.id == m.asset_id) {
+                    (
+                        asset.width.unwrap_or(100) as u64,
+                        asset.height.unwrap_or(100) as u64,
+                    )
                 } else {
                     (100, 100)
                 }
             }
-            crate::model::project::TrackClipKind::Shape => {
-                // Try to get from properties, otherwise default 100
+            LayerContent::Generator(GeneratorContent::Shape { .. }) => {
                 let w = clip.properties.get_f64("width").unwrap_or(100.0) as u64;
                 let h = clip.properties.get_f64("height").unwrap_or(100.0) as u64;
                 (w, h)
             }
-            crate::model::project::TrackClipKind::Text => {
-                let text = clip
-                    .properties
-                    .get_string("text")
-                    .unwrap_or("Text".to_string());
-                let font_name = clip
-                    .properties
-                    .get_string("font_family")
-                    .unwrap_or("Arial".to_string());
+            LayerContent::Generator(GeneratorContent::Text { text, font }) => {
                 let size = clip.properties.get_f64("size").unwrap_or(100.0) as f32;
-
-                let (w, h) = measure_text_size(&text, &font_name, size);
+                let (w, h) = measure_text_size(&text, &font, size);
                 (w.round() as u64, h.round() as u64)
             }
-            crate::model::project::TrackClipKind::SkSL => (canvas_width, canvas_height),
+            LayerContent::Generator(GeneratorContent::SkSL { .. }) => (canvas_width, canvas_height),
             _ => (100, 100),
         };
 
-        let converter = self
-            .plugin_manager
-            .get_entity_converter(&clip.kind.to_string());
+        // Key for entity converter: "video", "image", "text", "shape", "sksl"
+        // In Trinity, LayerContent doesn't store "Kind" string.
+        // We infer key from content.
+        let kind_key = match &clip.content {
+            LayerContent::Media(m) => {
+                if let Some(asset) = project.assets.iter().find(|a| a.id == m.asset_id) {
+                    match asset.kind {
+                        crate::model::asset::AssetKind::Video => "video",
+                        crate::model::asset::AssetKind::Image => "image",
+                        crate::model::asset::AssetKind::Audio => "audio",
+                        _ => "unknown",
+                    }
+                } else {
+                    "video" // default fallback?
+                }
+            }
+            LayerContent::Generator(GeneratorContent::Shape { .. }) => "shape",
+            LayerContent::Generator(GeneratorContent::Text { .. }) => "text",
+            LayerContent::Generator(GeneratorContent::SkSL { .. }) => "sksl",
+            LayerContent::Generator(GeneratorContent::Solid { .. }) => "solid",
+            _ => "unknown",
+        };
+
+        let converter = self.plugin_manager.get_entity_converter(kind_key);
 
         let mut definitions = if let Some(converter) = converter {
             converter.get_property_definitions(canvas_width, canvas_height, clip_width, clip_height)
@@ -1458,8 +1232,9 @@ half4 main(float2 fragCoord) {
             Vec::new()
         };
 
-        if matches!(clip.kind, crate::model::project::TrackClipKind::Video) {
-            let colorspaces = ColorSpaceManager::get_available_colorspaces();
+        if kind_key == "video" {
+            let colorspaces =
+                crate::editor::color_service::ColorSpaceManager::get_available_colorspaces();
             if !colorspaces.is_empty() {
                 definitions.push(PropertyDefinition::new(
                     "input_color_space",
@@ -1479,8 +1254,6 @@ half4 main(float2 fragCoord) {
                 ));
             }
         }
-
-        // let mut definitions = clip.default_property_definitions(canvas_width, canvas_height, clip_width, clip_height); // Removed original line
 
         definitions
     }

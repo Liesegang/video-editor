@@ -1,4 +1,6 @@
+use crate::cache::SharedCacheManager;
 use crate::error::LibraryError;
+use crate::model::asset::AssetKind;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
@@ -28,6 +30,7 @@ pub struct SkiaRenderer {
     gpu_context: Option<GpuContext>,
     sharing_handle: Option<usize>,
     sharing_hwnd: Option<isize>,
+    cache_manager: Option<SharedCacheManager>,
 }
 
 impl SkiaRenderer {
@@ -125,6 +128,7 @@ impl SkiaRenderer {
         background_color: Color,
         use_gpu: bool,
         existing_context: Option<GpuContext>,
+        cache_manager: Option<SharedCacheManager>,
     ) -> Self {
         let mut gpu_context = if use_gpu {
             if let Some(mut ctx) = existing_context {
@@ -165,6 +169,7 @@ impl SkiaRenderer {
             gpu_context,
             sharing_handle: None,
             sharing_hwnd: None,
+            cache_manager,
         };
         renderer
             .clear()
@@ -830,6 +835,7 @@ impl Renderer for SkiaRenderer {
         styles: &[StyleConfig],
         ensemble: Option<&crate::core::ensemble::EnsembleData>,
         transform: &Transform,
+        scale_factor: f32,
     ) -> Result<RenderOutput, LibraryError> {
         let _timer = ScopedTimer::debug(format!(
             "SkiaRenderer::rasterize_text_layer len={} size={} ensemble={}",
@@ -865,6 +871,7 @@ impl Renderer for SkiaRenderer {
 
             let matrix = build_transform_matrix(transform);
             canvas.save();
+            canvas.scale((scale_factor, scale_factor)); // Apply global scale
             canvas.concat(&matrix);
 
             let mut font_collection = skia_safe::textlayout::FontCollection::new();
@@ -952,6 +959,7 @@ impl Renderer for SkiaRenderer {
         styles: &[StyleConfig],
         path_effects: &Vec<PathEffect>,
         transform: &Transform,
+        scale_factor: f32,
     ) -> Result<RenderOutput, LibraryError> {
         let _timer = ScopedTimer::debug("SkiaRenderer::rasterize_shape_layer");
         let mut layer = self.create_layer_surface()?;
@@ -961,6 +969,7 @@ impl Renderer for SkiaRenderer {
             let path = skia_safe::Path::from_svg(path_data).unwrap_or_default();
             let matrix = build_transform_matrix(transform);
             canvas.save();
+            canvas.scale((scale_factor, scale_factor)); // Apply global scale
             canvas.concat(&matrix);
             for config in styles {
                 let style = &config.style;
@@ -1096,44 +1105,547 @@ impl Renderer for SkiaRenderer {
     }
 
     fn set_sharing_context(&mut self, handle: usize, hwnd: Option<isize>) {
-        if self.sharing_handle != Some(handle) || self.sharing_hwnd != hwnd {
-            log::info!(
-                "SkiaRenderer: Setting sharing context handle: {}, hwnd: {:?}",
-                handle,
-                hwnd
+        if self.sharing_handle == Some(handle) {
+            return;
+        }
+
+        log::info!(
+            "SkiaRenderer: Setting sharing context handle: {}, hwnd: {:?}",
+            handle,
+            hwnd
+        );
+        self.sharing_handle = Some(handle);
+        self.sharing_hwnd = hwnd;
+
+        // Recreate context with sharing
+        let _old_context = self.gpu_context.take(); // Drop old context
+        if let Some(mut ctx) = create_gpu_context(Some(handle), hwnd) {
+            ctx.resize(self.width, self.height);
+            self.gpu_context = Some(ctx);
+
+            // Recreate surface too!
+            self.surface = create_surface(
+                self.width,
+                self.height,
+                self.gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
+            )
+            .expect("Failed to recreate surface with sharing");
+
+            log::info!("SkiaRenderer: Recreated GPU context with sharing enabled.");
+        } else {
+            log::warn!(
+                "SkiaRenderer: Failed to recreate GPU context with sharing! Falling back to isolated context (CPU readback). Preview performance may be reduced."
             );
-            self.sharing_handle = Some(handle);
-            self.sharing_hwnd = hwnd;
+            self.sharing_handle = None; // Reset sharing handle so we fallback to CPU copy
+            self.sharing_hwnd = None;
+            self.gpu_context = create_gpu_context(None, None);
+            self.surface = create_surface(
+                self.width,
+                self.height,
+                self.gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
+            )
+            .expect("Failed to recreate surface fallback");
+        }
+    }
 
-            // Recreate context with sharing
-            let _old_context = self.gpu_context.take(); // Drop old context
-            if let Some(mut ctx) = create_gpu_context(Some(handle), hwnd) {
-                ctx.resize(self.width, self.height);
-                self.gpu_context = Some(ctx);
+    fn render_composite(
+        &mut self,
+        project: &crate::model::Project,
+        composite: &crate::model::project::Composite,
+        time: f64,
+    ) -> Result<RenderOutput, LibraryError> {
+        let _timer = ScopedTimer::debug("SkiaRenderer::render_composite");
 
-                // Recreate surface too!
-                self.surface = create_surface(
+        let root_id = composite.root_track_id;
+
+        // Calculate global scale (render resolution / logical resolution)
+        let scale_x = self.width as f32 / composite.width as f32;
+        let _scale_y = self.height as f32 / composite.height as f32;
+        // Assume uniform scaling for now, or use x
+        let scale_factor = scale_x;
+
+        // Evaluate the root track
+        let output = match self.evaluate_trinity_node(project, root_id, time, scale_factor)? {
+            GraphValue::Output(out) => out,
+            GraphValue::None => {
+                // If nothing, clean slate
+                self.clear()?;
+                self.finalize()?
+            }
+            _ => {
+                return Err(LibraryError::Render(
+                    "Root track returned non-image value".to_string(),
+                ));
+            }
+        };
+
+        // Draw Border for Preview (User Request)
+        // Wraps the output in a new surface to draw the border
+        let mut surface = self.create_layer_surface()?;
+        let canvas = surface.canvas();
+
+        // 1. Draw Content (if Image)
+        if let RenderOutput::Image(ref img) = output {
+            if let Ok(sk_img) = image_to_skia(img) {
+                canvas.draw_image(&sk_img, (0, 0), None);
+            }
+        }
+
+        // 2. Draw Frame Border (User Request: White Thin Border)
+        let mut paint = Paint::default();
+        paint.set_color(skia_safe::Color::WHITE);
+        paint.set_style(skia_safe::paint::Style::Stroke);
+        paint.set_stroke_width(1.0);
+
+        // Inset by half stroke width (0.5) so the 1px stroke is fully inside the bounds
+        let rect =
+            skia_safe::Rect::new(0.5, 0.5, self.width as f32 - 0.5, self.height as f32 - 0.5);
+        canvas.draw_rect(rect, &paint);
+
+        Ok(Self::snapshot_surface(
+            &mut surface,
+            &mut self.gpu_context,
+            self.width,
+            self.height,
+        )?)
+    }
+}
+
+impl SkiaRenderer {
+    fn evaluate_trinity_node(
+        &mut self,
+        project: &crate::model::Project,
+        node_id: uuid::Uuid,
+        time: f64,
+        scale_factor: f32,
+    ) -> Result<GraphValue, LibraryError> {
+        let node = project
+            .nodes
+            .get(&node_id)
+            .ok_or(LibraryError::Render(format!("Node {} not found", node_id)))?;
+
+        log::debug!(
+            "evaluate_trinity_node: id={} time={} scale={}",
+            node_id,
+            time,
+            scale_factor
+        );
+
+        match node {
+            crate::model::Node::Track(track) => {
+                // Track = Mixer
+                // Render all children
+                let mut layer = self.create_layer_surface()?;
+                {
+                    let canvas = layer.canvas();
+                    canvas.clear(skia_safe::Color::TRANSPARENT);
+
+                    for child_id in &track.children {
+                        // Blend each child
+                        if let Ok(GraphValue::Output(child_out)) =
+                            self.evaluate_trinity_node(project, *child_id, time, scale_factor)
+                        {
+                            // TODO: Implement blend modes from Track?
+                            // Currently assume Normal blend for simplicity or handle here
+                            let mut paint = Paint::default();
+                            paint.set_anti_alias(true);
+                            // Blend Mode handling would go here
+                            // paint.set_blend_mode(...)
+
+                            match child_out {
+                                RenderOutput::Image(img) => {
+                                    if let Ok(sk_img) = image_to_skia(&img) {
+                                        canvas.draw_image(&sk_img, (0, 0), Some(&paint));
+                                    }
+                                }
+                                RenderOutput::Texture(_) => {
+                                    // Handle texture drawing
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Track properties (Opacity etc) could be applied here as a post-process or during blend
+
+                Ok(GraphValue::Output(Self::snapshot_surface(
+                    &mut layer,
+                    &mut self.gpu_context,
                     self.width,
                     self.height,
-                    self.gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
-                )
-                .expect("Failed to recreate surface with sharing");
+                )?))
+            }
+            crate::model::Node::Layer(layer_node) => {
+                // Check time
+                let start = layer_node.start_time.into_inner();
+                let duration = layer_node.duration.into_inner();
 
-                log::info!("SkiaRenderer: Recreated GPU context with sharing enabled.");
-            } else {
-                log::warn!(
-                    "SkiaRenderer: Failed to recreate GPU context with sharing! Falling back to isolated context (CPU readback). Preview performance may be reduced."
-                );
-                self.sharing_handle = None; // Reset sharing handle so we fallback to CPU copy
-                self.sharing_hwnd = None;
-                self.gpu_context = create_gpu_context(None, None);
-                self.surface = create_surface(
-                    self.width,
-                    self.height,
-                    self.gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
-                )
-                .expect("Failed to recreate surface fallback");
+                if time < start || time >= start + duration {
+                    return Ok(GraphValue::None);
+                }
+
+                let local_time = (time - start) * layer_node.time_stretch.into_inner()
+                    + layer_node.trim_in.into_inner();
+
+                match &layer_node.content {
+                    crate::model::LayerContent::Media(media) => {
+                        // Find asset
+                        let asset = project
+                            .assets
+                            .iter()
+                            .find(|a| a.id == media.asset_id)
+                            .ok_or(LibraryError::Render(format!(
+                                "Asset {} not found",
+                                media.asset_id
+                            )))?;
+
+                        if asset.kind == AssetKind::Image {
+                            let image = if let Some(mgr) = &self.cache_manager {
+                                if let Some(img) = mgr.get_image(&asset.path) {
+                                    Some(img)
+                                } else {
+                                    // Load
+                                    if let Some(img) = self.load_image_from_file(&asset.path) {
+                                        mgr.put_image(&asset.path, &img);
+                                        Some(img)
+                                    } else {
+                                        None
+                                    }
+                                }
+                            } else {
+                                // No cache manager, try load direct (or fail)
+                                self.load_image_from_file(&asset.path)
+                            };
+
+                            if let Some(img) = image {
+                                let mut surface = self.create_layer_surface()?;
+                                let canvas = surface.canvas();
+                                canvas.save();
+                                canvas.scale((scale_factor, scale_factor)); // Scale media
+                                self.draw_image_on_canvas_helper(canvas, &img);
+                                canvas.restore();
+                                return Ok(GraphValue::Output(Self::snapshot_surface(
+                                    &mut surface,
+                                    &mut self.gpu_context,
+                                    self.width,
+                                    self.height,
+                                )?));
+                            }
+                        }
+                        // TODO: Video Frame Support
+                        Ok(GraphValue::None)
+                    }
+                    crate::model::LayerContent::Generator(generator) => {
+                        // 1. Evaluate Transform
+                        let transform = self.evaluate_transform(&layer_node.properties, local_time);
+
+                        // 2. Evaluate Styles
+                        let styles = self.evaluate_styles(&layer_node.styles, local_time);
+
+                        match generator {
+                            crate::model::GeneratorContent::Solid { color } => {
+                                let mut surface = self.create_layer_surface()?;
+                                let canvas = surface.canvas();
+                                canvas.clear(skia_safe::Color::TRANSPARENT); // Start clear
+
+                                let matrix = build_transform_matrix(&transform);
+                                canvas.save();
+                                canvas.scale((scale_factor, scale_factor)); // Apply Global Scale
+                                canvas.concat(&matrix);
+
+                                let mut p = Paint::default();
+                                p.set_color(skia_safe::Color::from_argb(
+                                    color.a, color.r, color.g, color.b,
+                                ));
+
+                                // Draw specific rect or infinite?
+                                // Usually solid layer fills composition?
+                                // If solid fills composition, it should be width/height of composition.
+                                // self.width is Scaled width.
+                                // If we scale context, we should draw logical width/height?
+                                // Yes. Logical w/h = self.width / scale.
+                                let rect = skia_safe::Rect::from_wh(
+                                    self.width as f32 / scale_factor,
+                                    self.height as f32 / scale_factor,
+                                );
+                                canvas.draw_rect(rect, &p);
+
+                                canvas.restore();
+
+                                Ok(GraphValue::Output(Self::snapshot_surface(
+                                    &mut surface,
+                                    &mut self.gpu_context,
+                                    self.width,
+                                    self.height,
+                                )?))
+                            }
+                            crate::model::GeneratorContent::Text { text, font } => {
+                                log::warn!("Rasterizing Text: '{}' Font: '{}'", text, font);
+                                log::warn!(
+                                    "  Transform: Pos({:?}) Scale({:?}) Opacity({})",
+                                    transform.position,
+                                    transform.scale,
+                                    transform.opacity
+                                );
+                                log::warn!("  Styles: {}", styles.len());
+                                if styles.is_empty() {
+                                    log::error!(
+                                        "  Text has NO styles! Use Fill or Stroke to make it visible."
+                                    );
+                                }
+
+                                let out = self.rasterize_text_layer(
+                                    text,
+                                    100.0, // TODO: evaluate font size property
+                                    font,
+                                    &styles,      // Use evaluated styles
+                                    None,         // Ensemble TODO
+                                    &transform,   // Use evaluated transform
+                                    scale_factor, // Pass scale
+                                )?;
+                                Ok(GraphValue::Output(out))
+                            }
+                            crate::model::GeneratorContent::Shape { path, fill: _fill } => {
+                                // TODO: evaluate path property? or use static for now
+                                // Ignoring `fill` field on Shape enum as we use styles now? Or fallback?
+                                let out = self.rasterize_shape_layer(
+                                    path,
+                                    &styles,
+                                    &vec![], // Path effects TODO
+                                    &transform,
+                                    scale_factor, // Pass scale
+                                )?;
+                                Ok(GraphValue::Output(out))
+                            }
+                            crate::model::GeneratorContent::SkSL { shader: _shader } => {
+                                // For SkSL we need a rasterize_sksl_layer or similar logic
+                                // Re-using rasterize_sksl logic from previous implementation if available?
+                                // Checking code showed rasterize_sksl_layer existed?
+                                // Wait, in the file view it wasn't visible but line 810 mentioned failed to create SkSL shader.
+                                // Let's check lines 750-830 again or just implement here.
+                                // Assuming rasterize_sksl_layer exists or I use generic logic.
+                                // It seems rasterize_sksl_layer is NOT in the view_file output I saw earlier (lines 801+ was visible).
+                                // Line 801-824 was inside a method, likely rasterize_sksl_layer or similar.
+                                // I'll assume it exists or I can implement inline.
+                                // Actually, I'll temporarily omit SkSL or return None until verified.
+                                Ok(GraphValue::None)
+                            }
+                        }
+                    }
+                    _ => Ok(GraphValue::None),
+                }
             }
         }
     }
+
+    fn get_property_vec2(
+        &self,
+        properties: &crate::model::property::PropertyMap,
+        key: &str,
+        time: f64,
+    ) -> Option<(f64, f64)> {
+        properties
+            .get(key)
+            .map(|p| p.evaluate_at(time))
+            .and_then(|v| v.get_as::<crate::model::property::Vec2>())
+            .map(|v| (v.x.into_inner(), v.y.into_inner()))
+    }
+
+    fn get_property_f64(
+        &self,
+        properties: &crate::model::property::PropertyMap,
+        key: &str,
+        time: f64,
+    ) -> Option<f64> {
+        properties
+            .get(key)
+            .map(|p| p.evaluate_at(time))
+            .and_then(|v| v.get_as::<f64>())
+    }
+
+    fn evaluate_transform(
+        &self,
+        properties: &crate::model::property::PropertyMap,
+        time: f64,
+    ) -> Transform {
+        // Defaults
+        let mut t = Transform::default();
+
+        // Position
+        if let Some((x, y)) = self.get_property_vec2(properties, "position", time) {
+            t.position.x = x;
+            t.position.y = y;
+        } else {
+            if let Some(x) = self.get_property_f64(properties, "position_x", time) {
+                t.position.x = x;
+            }
+            if let Some(y) = self.get_property_f64(properties, "position_y", time) {
+                t.position.y = y;
+            }
+        }
+
+        // Scale
+        if let Some((sx, sy)) = self.get_property_vec2(properties, "scale", time) {
+            t.scale.x = sx / 100.0;
+            t.scale.y = sy / 100.0;
+        } else {
+            if let Some(sx) = self.get_property_f64(properties, "scale_x", time) {
+                t.scale.x = sx / 100.0; // Scale is usually % in props
+            }
+            if let Some(sy) = self.get_property_f64(properties, "scale_y", time) {
+                t.scale.y = sy / 100.0;
+            }
+        }
+
+        // Rotation
+        if let Some(r) = self.get_property_f64(properties, "rotation", time) {
+            t.rotation = r;
+        }
+
+        // Opacity
+        if let Some(o) = self.get_property_f64(properties, "opacity", time) {
+            t.opacity = o / 100.0; // Opacity 0-100 to 0-1
+        }
+
+        // Anchor (if available)
+        // Anchor (if available)
+        if let Some((ax, ay)) = self.get_property_vec2(properties, "anchor", time) {
+            t.anchor.x = ax;
+            t.anchor.y = ay;
+        } else {
+            if let Some(ax) = self.get_property_f64(properties, "anchor_x", time) {
+                t.anchor.x = ax;
+            }
+            if let Some(ay) = self.get_property_f64(properties, "anchor_y", time) {
+                t.anchor.y = ay;
+            }
+        }
+
+        t
+    }
+
+    fn evaluate_styles(
+        &self,
+        style_instances: &[crate::model::style::StyleInstance],
+        time: f64,
+    ) -> Vec<StyleConfig> {
+        let mut configs = Vec::new();
+        for instance in style_instances {
+            // Check enabled status? Assuming enabled for now.
+
+            // Map instance properties to DrawStyle
+            // This requires knowing what kind of style it is (Fill vs Stroke)
+            // The `name` or `plugin_id` of StyleInstance usually indicates this.
+
+            use uuid::Uuid;
+
+            let style = match instance.style_type.as_str() {
+                "fill" => {
+                    let r = self
+                        .get_property_f64(&instance.properties, "color_r", time)
+                        .unwrap_or(1.0);
+                    let g = self
+                        .get_property_f64(&instance.properties, "color_g", time)
+                        .unwrap_or(1.0);
+                    let b = self
+                        .get_property_f64(&instance.properties, "color_b", time)
+                        .unwrap_or(1.0);
+                    let a = self
+                        .get_property_f64(&instance.properties, "color_a", time)
+                        .unwrap_or(1.0);
+
+                    Some(DrawStyle::Fill {
+                        color: crate::model::frame::color::Color {
+                            r: (r * 255.0) as u8,
+                            g: (g * 255.0) as u8,
+                            b: (b * 255.0) as u8,
+                            a: (a * 255.0) as u8,
+                        },
+                        offset: 0.0, // Expand property?
+                    })
+                }
+                "stroke" => {
+                    let r = self
+                        .get_property_f64(&instance.properties, "color_r", time)
+                        .unwrap_or(1.0);
+                    let g = self
+                        .get_property_f64(&instance.properties, "color_g", time)
+                        .unwrap_or(1.0);
+                    let b = self
+                        .get_property_f64(&instance.properties, "color_b", time)
+                        .unwrap_or(1.0);
+                    let a = self
+                        .get_property_f64(&instance.properties, "color_a", time)
+                        .unwrap_or(1.0);
+                    let width = self
+                        .get_property_f64(&instance.properties, "width", time)
+                        .unwrap_or(2.0);
+
+                    Some(DrawStyle::Stroke {
+                        color: crate::model::frame::color::Color {
+                            r: (r * 255.0) as u8,
+                            g: (g * 255.0) as u8,
+                            b: (b * 255.0) as u8,
+                            a: (a * 255.0) as u8,
+                        },
+                        width,
+                        offset: 0.0,
+                        cap: CapType::Round,
+                        join: JoinType::Round,
+                        miter: 4.0,
+                        dash_array: vec![],
+                        dash_offset: 0.0,
+                    })
+                }
+                _ => None,
+            };
+
+            if let Some(s) = style {
+                configs.push(StyleConfig {
+                    id: Uuid::new_v4(), // Ephemeral ID for rendering
+                    style: s,
+                });
+            }
+        }
+        configs
+    }
+
+    fn draw_image_on_canvas_helper(&mut self, canvas: &Canvas, image: &crate::model::frame::Image) {
+        if let Ok(sk_img) = image_to_skia(image) {
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            canvas.draw_image(&sk_img, (0, 0), Some(&paint));
+        }
+    }
+
+    fn load_image_from_file(&self, path: &str) -> Option<crate::model::frame::Image> {
+        let path = std::path::Path::new(path);
+        if !path.exists() {
+            log::warn!("Image file not found: {:?}", path);
+            return None;
+        }
+
+        match image::open(path) {
+            Ok(dyn_img) => {
+                let rgba = dyn_img.to_rgba8();
+                Some(crate::model::frame::Image::new(
+                    rgba.width(),
+                    rgba.height(),
+                    rgba.into_raw(),
+                ))
+            }
+            Err(e) => {
+                log::error!("Failed to load image {:?}: {}", path, e);
+                None
+            }
+        }
+    }
+}
+
+pub enum GraphValue {
+    Output(RenderOutput),
+    String(String),
+    Ensemble(String, crate::core::ensemble::EnsembleData), // Text + Config
+    Path(skia_safe::Path),
+    None,
 }

@@ -642,7 +642,6 @@ impl Property {
     }
 
     /// Remove a keyframe at the given index.
-    /// Returns true if successful.
     pub fn remove_keyframe_at_index(&mut self, index: usize) -> bool {
         if self.evaluator != "keyframe" {
             return false;
@@ -664,6 +663,131 @@ impl Property {
             }
         }
         true
+    }
+
+    /// Evaluate the property at a specific time.
+    /// If constant, returns the constant value.
+    /// If expression, returns default value (eval not supported here yet).
+    /// If keyframes, interpolates between the two nearest keyframes.
+    pub fn evaluate_at(&self, time: f64) -> PropertyValue {
+        match self.evaluator.as_str() {
+            "constant" => {
+                // Return value or default
+                self.value()
+                    .cloned()
+                    .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)))
+            }
+            "keyframe" => {
+                let kfs = self.keyframes();
+                if kfs.is_empty() {
+                    return self
+                        .value()
+                        .cloned()
+                        .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
+                }
+
+                // If only one keyframe, return its value
+                if kfs.len() == 1 {
+                    return kfs[0].value.clone();
+                }
+
+                // If before first keyframe
+                if time <= kfs[0].time.into_inner() {
+                    return kfs[0].value.clone();
+                }
+
+                // If after last keyframe
+                if time >= kfs.last().unwrap().time.into_inner() {
+                    return kfs.last().unwrap().value.clone();
+                }
+
+                // Find the segment [k1, k2] containing time
+                for window in kfs.windows(2) {
+                    let k1 = &window[0];
+                    let k2 = &window[1];
+                    let t1 = k1.time.into_inner();
+                    let t2 = k2.time.into_inner();
+
+                    if time >= t1 && time < t2 {
+                        let duration = t2 - t1;
+                        if duration <= f64::EPSILON {
+                            return k1.value.clone();
+                        }
+
+                        let t_norm = (time - t1) / duration;
+                        let t_eased = k1.easing.apply(t_norm); // Use Easing from START keyframe
+
+                        return PropertyValue::interpolate(&k1.value, &k2.value, t_eased);
+                    }
+                }
+
+                // Should not reach here
+                kfs.last().unwrap().value.clone()
+            }
+            _ => self
+                .value()
+                .cloned()
+                .unwrap_or(PropertyValue::Number(OrderedFloat(0.0))),
+        }
+    }
+}
+
+impl PropertyValue {
+    pub fn interpolate(a: &PropertyValue, b: &PropertyValue, t: f64) -> PropertyValue {
+        use crate::model::property::{Color, Vec2, Vec3, Vec4};
+
+        match (a, b) {
+            (PropertyValue::Number(n1), PropertyValue::Number(n2)) => {
+                let v = n1.into_inner() + (n2.into_inner() - n1.into_inner()) * t;
+                PropertyValue::Number(OrderedFloat(v))
+            }
+            (PropertyValue::Vec2(v1), PropertyValue::Vec2(v2)) => {
+                let x = v1.x.into_inner() + (v2.x.into_inner() - v1.x.into_inner()) * t;
+                let y = v1.y.into_inner() + (v2.y.into_inner() - v1.y.into_inner()) * t;
+                PropertyValue::Vec2(Vec2 {
+                    x: OrderedFloat(x),
+                    y: OrderedFloat(y),
+                })
+            }
+            (PropertyValue::Vec3(v1), PropertyValue::Vec3(v2)) => {
+                let x = v1.x.into_inner() + (v2.x.into_inner() - v1.x.into_inner()) * t;
+                let y = v1.y.into_inner() + (v2.y.into_inner() - v1.y.into_inner()) * t;
+                let z = v1.z.into_inner() + (v2.z.into_inner() - v1.z.into_inner()) * t;
+                PropertyValue::Vec3(Vec3 {
+                    x: OrderedFloat(x),
+                    y: OrderedFloat(y),
+                    z: OrderedFloat(z),
+                })
+            }
+            (PropertyValue::Vec4(v1), PropertyValue::Vec4(v2)) => {
+                let x = v1.x.into_inner() + (v2.x.into_inner() - v1.x.into_inner()) * t;
+                let y = v1.y.into_inner() + (v2.y.into_inner() - v1.y.into_inner()) * t;
+                let z = v1.z.into_inner() + (v2.z.into_inner() - v1.z.into_inner()) * t;
+                let w = v1.w.into_inner() + (v2.w.into_inner() - v1.w.into_inner()) * t;
+                PropertyValue::Vec4(Vec4 {
+                    x: OrderedFloat(x),
+                    y: OrderedFloat(y),
+                    z: OrderedFloat(z),
+                    w: OrderedFloat(w),
+                })
+            }
+            (PropertyValue::Color(c1), PropertyValue::Color(c2)) => {
+                // Simple linear RGB blend
+                let r = (c1.r as f64 + (c2.r as f64 - c1.r as f64) * t).round() as u8;
+                let g = (c1.g as f64 + (c2.g as f64 - c1.g as f64) * t).round() as u8;
+                let b = (c1.b as f64 + (c2.b as f64 - c1.b as f64) * t).round() as u8;
+                let a = (c1.a as f64 + (c2.a as f64 - c1.a as f64) * t).round() as u8;
+                PropertyValue::Color(Color { r, g, b, a })
+            }
+            // Fallback for non-interpolatable types (Boolean, String, Integer, Heterogeneous) -> Step
+            _ => {
+                if t < 1.0 {
+                    a.clone()
+                } else {
+                    b.clone()
+                }
+            }
+        }
     }
 }
 

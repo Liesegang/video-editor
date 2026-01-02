@@ -1,5 +1,5 @@
-use crate::error::LibraryError;
-use crate::model::project::project::{Composition, Project};
+use crate::LibraryError;
+use crate::model::project::{Composite, Project};
 use crate::util::timing::measure_info;
 use std::fs;
 use std::sync::Arc;
@@ -48,7 +48,7 @@ impl ProjectModel {
         self.composition_index
     }
 
-    pub fn composition(&self) -> &Composition {
+    pub fn composition(&self) -> &Composite {
         &self.project.compositions[self.composition_index]
     }
 }

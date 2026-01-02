@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32, ComboBox, DragValue, TextEdit};
 use library::animation::EasingFunction;
-use library::model::project::project::Project;
+use library::model::project::Project;
 use library::EditorService;
 use std::sync::{Arc, RwLock};
 
@@ -248,7 +248,7 @@ pub fn show_keyframe_dialog(
 
                 if let (Some(_track_id), Some(entity_id)) = (state.track_id, state.entity_id) {
                     let new_time = state.time;
-                    use library::model::project::property::PropertyValue;
+                    use library::model::property::PropertyValue;
                     use ordered_float::OrderedFloat;
 
                     // Handle suffix logic
@@ -295,7 +295,7 @@ pub fn show_keyframe_dialog(
                     let mut current_pv = None;
                     if let Ok(proj) = project.read() {
                         // Use flat O(1) lookup
-                        if let Some(clip) = proj.get_clip(entity_id) {
+                        if let Some(clip) = proj.get_layer(entity_id) {
                             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
                                 if let Some(effect) = clip.effects.get(eff_idx) {
                                     if let Some(prop) = effect.properties.get(&prop_key) {
@@ -328,13 +328,13 @@ pub fn show_keyframe_dialog(
                     let new_value = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
                         match component_suffix {
                             Some(crate::ui::panels::graph_editor::PropertyComponent::X) => {
-                                PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                PropertyValue::Vec2(library::model::property::Vec2 {
                                     x: OrderedFloat(state.value),
                                     y: old_vec.y,
                                 })
                             }
                             Some(crate::ui::panels::graph_editor::PropertyComponent::Y) => {
-                                PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                PropertyValue::Vec2(library::model::property::Vec2 {
                                     x: old_vec.x,
                                     y: OrderedFloat(state.value),
                                 })

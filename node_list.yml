@@ -1097,3 +1097,133 @@ Render 3D:
   outputs:
     - name: image
       type: Image
+
+# --- Style ---
+Fill Style:
+  category: Style
+  inputs:
+    - name: color
+      type: Color
+    - name: opacity
+      type: Scalar
+    - name: blend_mode
+      type: Enum
+      options: [Normal, Multiply, Screen, Overlay, Add]
+  outputs:
+    - name: style
+      type: Style
+Stroke Style:
+  category: Style
+  inputs:
+    - name: color
+      type: Color
+    - name: width
+      type: Scalar
+    - name: opacity
+      type: Scalar
+    - name: cap
+      type: Enum
+      options: [Butt, Round, Square]
+    - name: join
+      type: Enum
+      options: [Miter, Round, Bevel]
+    - name: dash_array
+      type: List<Scalar>
+    - name: dash_offset
+      type: Scalar
+  outputs:
+    - name: style
+      type: Style
+Shadow Style:
+  category: Style
+  description: Drop Shadow Style
+  inputs:
+    - name: color
+      type: Color
+    - name: offset
+      type: Vector2
+    - name: blur
+      type: Scalar
+  outputs:
+    - name: style
+      type: Style
+
+# --- Ensemble ---
+Transform Effector:
+  category: Ensemble
+  inputs:
+    - name: translate
+      type: Vector2
+    - name: rotate
+      type: Scalar
+    - name: scale
+      type: Vector2
+    - name: target
+      type: Enum
+      options: [Char, Line, Block]
+  outputs:
+    - name: effector
+      type: Effector
+
+Step Delay Effector:
+  category: Ensemble
+  inputs:
+    - name: delay
+      type: Scalar
+    - name: duration
+      type: Scalar
+    - name: from_opacity
+      type: Scalar
+    - name: to_opacity
+      type: Scalar
+  outputs:
+    - name: effector
+      type: Effector
+
+Randomize Effector:
+  category: Ensemble
+  inputs:
+    - name: seed
+      type: Scalar
+    - name: amount
+      type: Scalar
+    - name: translate_range
+      type: Vector2
+    - name: rotate_range
+      type: Scalar
+    - name: scale_range
+      type: Vector2
+  outputs:
+    - name: effector
+      type: Effector
+
+Opacity Effector:
+  category: Ensemble
+  inputs:
+    - name: opacity
+      type: Scalar
+    - name: mode
+      type: Enum
+      options: [Set, Add, Multiply]
+  outputs:
+    - name: effector
+      type: Effector
+
+Backplate Decorator:
+  category: Ensemble
+  inputs:
+    - name: target
+      type: Enum
+      options: [Char, Line, Block]
+    - name: shape
+      type: Enum
+      options: [Rect, RoundRect, Circle]
+    - name: color
+      type: Color
+    - name: padding
+      type: Scalar
+    - name: corner_radius
+      type: Scalar
+  outputs:
+    - name: decorator
+      type: Decorator

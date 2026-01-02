@@ -3,8 +3,9 @@ use egui_phosphor::fill::DIAMOND as ICON_DIAMOND_FILLED;
 use egui_phosphor::regular::DIAMOND as ICON_DIAMOND;
 use egui_phosphor::regular::TIMER as ICON_TIMER;
 use library::model::frame::color::Color;
-use library::model::project::property::{Property, PropertyValue, Vec2, Vec3, Vec4};
-use library::model::project::property::{PropertyDefinition, PropertyUiType};
+use library::model::property::{
+    Property, PropertyDefinition, PropertyUiType, PropertyValue, Vec2, Vec3, Vec4,
+};
 use ordered_float::OrderedFloat;
 
 pub struct PropertyRenderContext<'a> {
@@ -650,7 +651,7 @@ impl Clone for PropertyRenderContext<'_> {
 pub fn render_inspector_properties_grid(
     ui: &mut Ui,
     id: impl std::hash::Hash,
-    properties: &library::model::project::property::PropertyMap,
+    properties: &library::model::property::PropertyMap,
     definitions: &[PropertyDefinition],
     project_service: &library::EditorService,
     context: &PropertyRenderContext,

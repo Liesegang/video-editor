@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
-use crate::model::project::project::Project;
-use crate::model::project::{Node, TrackData};
+use crate::model::project::Project;
+use crate::model::{Node, Track};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -24,7 +24,7 @@ impl TrackHandler {
         let root_track_id = composition.root_track_id;
 
         // Create new track
-        let new_track = TrackData::new(track_name);
+        let new_track = Track::new(track_name);
         let new_track_id = new_track.id;
 
         // Add to nodes registry
@@ -32,7 +32,7 @@ impl TrackHandler {
 
         // Add as child of root track
         if let Some(root_track) = proj.get_track_mut(root_track_id) {
-            root_track.add_child(new_track_id);
+            root_track.children.push(new_track_id);
         } else {
             return Err(LibraryError::Project(format!(
                 "Root track {} not found",
@@ -47,7 +47,7 @@ impl TrackHandler {
     pub fn add_track_with_id(
         project: &Arc<RwLock<Project>>,
         composition_id: Uuid,
-        track: TrackData,
+        track: Track,
     ) -> Result<Uuid, LibraryError> {
         let mut proj = project
             .write()
@@ -65,7 +65,7 @@ impl TrackHandler {
 
         // Add as child of root track
         if let Some(root_track) = proj.get_track_mut(root_track_id) {
-            root_track.add_child(track_id);
+            root_track.children.push(track_id);
         } else {
             return Err(LibraryError::Project(format!(
                 "Root track {} not found",
@@ -81,7 +81,7 @@ impl TrackHandler {
         project: &Arc<RwLock<Project>>,
         _composition_id: Uuid,
         track_id: Uuid,
-    ) -> Result<TrackData, LibraryError> {
+    ) -> Result<Track, LibraryError> {
         let proj = project
             .read()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
@@ -102,14 +102,23 @@ impl TrackHandler {
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
         // Remove from parent's child_ids (need to find parent first)
+        // Remove from parent's child_ids (need to find parent first)
         let parent_id = proj
-            .all_tracks()
-            .find(|t| t.child_ids.contains(&track_id))
-            .map(|t| t.id);
+            .nodes
+            .values()
+            .filter_map(|n| {
+                if let Node::Track(t) = n {
+                    if t.children.contains(&track_id) {
+                        return Some(t.id);
+                    }
+                }
+                None
+            })
+            .next();
 
         if let Some(pid) = parent_id {
             if let Some(parent) = proj.get_track_mut(pid) {
-                parent.remove_child(track_id);
+                parent.children.retain(|&id| id != track_id);
             }
         }
 
@@ -136,7 +145,7 @@ impl TrackHandler {
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
         // Create new track
-        let new_track = TrackData::new(track_name);
+        let new_track = Track::new(track_name);
         let new_track_id = new_track.id;
 
         // Add to nodes registry
@@ -144,7 +153,7 @@ impl TrackHandler {
 
         // Add as child of parent track
         if let Some(parent_track) = proj.get_track_mut(parent_track_id) {
-            parent_track.add_child(new_track_id);
+            parent_track.children.push(new_track_id);
             Ok(new_track_id)
         } else {
             Err(LibraryError::Project(format!(

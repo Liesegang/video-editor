@@ -89,8 +89,8 @@ impl ExportPlugin for FfmpegExportPlugin {
         }
     }
 
-    fn properties(&self) -> Vec<crate::model::project::property::PropertyDefinition> {
-        use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+    fn properties(&self) -> Vec<crate::model::property::PropertyDefinition> {
+        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
         use ordered_float::OrderedFloat;
         vec![
             PropertyDefinition::new(

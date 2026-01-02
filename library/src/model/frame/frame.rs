@@ -19,6 +19,7 @@ pub struct FrameInfo {
     pub render_scale: ordered_float::OrderedFloat<f64>,
     pub now_time: ordered_float::OrderedFloat<f64>,
     pub region: Option<Region>,
+    pub node_graph: Option<crate::model::node_graph::NodeGraph>,
     pub objects: Vec<FrameObject>,
 }
 
@@ -42,6 +43,7 @@ impl std::hash::Hash for FrameInfo {
         self.render_scale.hash(state);
         self.now_time.hash(state);
         self.region.hash(state);
+        self.node_graph.hash(state);
         self.objects.hash(state);
     }
 }

@@ -1,6 +1,6 @@
 use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, Style};
-use library::model::project::project::{Composition, Project};
+use library::model::project::{Composite, Project};
 use library::EditorService;
 use log::warn;
 #[allow(deprecated)]
@@ -42,7 +42,7 @@ pub struct RuViEApp {
     pub command_palette: CommandPalette,
 
     pub triggered_action: Option<CommandId>,
-    pub render_server: Arc<RenderServer>,
+    pub render_server: RenderServer,
 }
 
 impl RuViEApp {
@@ -66,10 +66,7 @@ impl RuViEApp {
         editor_context.selection.composition_id = Some(default_comp_id); // Select the default composition
         editor_context.available_fonts = library::rendering::skia_utils::get_available_fonts();
 
-        let render_server = Arc::new(RenderServer::new(
-            plugin_manager.clone(),
-            cache_manager.clone(),
-        ));
+        let render_server = RenderServer::new(plugin_manager.clone(), cache_manager.clone());
 
         let mut app = Self {
             editor_context,
@@ -377,11 +374,11 @@ fn setup_fonts(ctx: &egui::Context) {
 fn create_default_project() -> (Arc<RwLock<Project>>, Uuid) {
     let default_project = Arc::new(RwLock::new(Project::new("Default Project")));
     // Add a default composition when the app starts
-    let (default_comp, root_track) = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
+    let (default_comp, root_track) = Composite::new("Main Composition", 1920, 1080, 30.0, 60.0);
     let default_comp_id = default_comp.id;
     {
         let mut proj = default_project.write().unwrap();
-        proj.add_node(library::model::project::Node::Track(root_track));
+        proj.add_node(library::model::Node::Track(root_track));
         proj.add_composition(default_comp);
     }
     (default_project, default_comp_id)
@@ -404,7 +401,7 @@ fn setup_plugin_manager(app_config: &config::AppConfig) -> Arc<library::plugin::
     plugin_manager
 }
 
-fn setup_gpu_sharing(render_server: &Arc<RenderServer>, cc: &eframe::CreationContext<'_>) {
+fn setup_gpu_sharing(render_server: &RenderServer, cc: &eframe::CreationContext<'_>) {
     // Zero-Copy GPU Sharing: Capture the main thread's OpenGL context handle
     // and pass it to the background render server. This enables sharing of textures.
     if let Some(handle) = library::rendering::skia_utils::get_current_context_handle() {

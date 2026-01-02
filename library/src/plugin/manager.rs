@@ -9,10 +9,10 @@ use log::debug;
 
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
+use crate::model::asset::AssetKind;
 use crate::model::frame::Image;
-use crate::model::project::asset::AssetKind;
-use crate::model::project::property::PropertyDefinition;
-use crate::model::project::property::PropertyValue;
+use crate::model::property::PropertyDefinition;
+use crate::model::property::PropertyValue;
 use crate::plugin::EntityConverterPlugin;
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
@@ -38,7 +38,7 @@ use crate::plugin::entity_converter::{
     TextEntityConverterPlugin, VideoEntityConverterPlugin,
 };
 use crate::plugin::exporters::{FfmpegExportPlugin, PngExportPlugin};
-use crate::plugin::loaders::{FfmpegVideoLoader, NativeImageLoader};
+use crate::plugin::loaders::NativeImageLoader;
 use crate::plugin::properties::{
     ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin,
 };
@@ -63,7 +63,7 @@ impl Default for PluginManager {
 
         // Standard Loaders
         manager.register_load_plugin(Arc::new(NativeImageLoader::new()));
-        manager.register_load_plugin(Arc::new(FfmpegVideoLoader::new()));
+        // manager.register_load_plugin(Arc::new(FfmpegVideoLoader::new()));
 
         // Standard Exporters
         manager.register_export_plugin(Arc::new(PngExportPlugin::new()));
@@ -275,19 +275,16 @@ impl PluginManager {
             })
     }
 
-    pub fn get_default_effect_config(
-        &self,
-        effect_id: &str,
-    ) -> Option<crate::model::project::EffectConfig> {
+    pub fn get_default_effect_config(&self, effect_id: &str) -> Option<crate::model::EffectConfig> {
         let def = self.get_effect_definition(effect_id)?;
-        let mut props = crate::model::project::property::PropertyMap::new();
+        let mut props = crate::model::property::PropertyMap::new();
         for p in def.properties {
             props.set(
                 p.name().to_string(),
-                crate::model::project::property::Property::constant(p.default_value().clone()),
+                crate::model::property::Property::constant(p.default_value().clone()),
             );
         }
-        Some(crate::model::project::EffectConfig {
+        Some(crate::model::EffectConfig {
             id: uuid::Uuid::new_v4(),
             effect_type: effect_id.to_string(),
             properties: props,
@@ -603,10 +600,7 @@ impl PluginManager {
         None
     }
 
-    pub fn get_inspector_definitions(
-        &self,
-        _kind: &crate::model::project::TrackClipKind,
-    ) -> Vec<PropertyDefinition> {
+    pub fn get_inspector_definitions(&self, _kind: &str) -> Vec<PropertyDefinition> {
         // Inspector plugins removed. Return empty or implement static logic if needed.
         Vec::new()
     }

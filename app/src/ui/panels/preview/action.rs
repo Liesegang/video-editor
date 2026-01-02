@@ -1,4 +1,4 @@
-use library::model::project::property::PropertyValue;
+use library::model::property::PropertyValue;
 use uuid::Uuid;
 
 pub enum PreviewAction {

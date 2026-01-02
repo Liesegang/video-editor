@@ -5,11 +5,11 @@
 
 use crate::action::HistoryManager;
 use crate::ui::panels::inspector::properties::PropertyAction;
-use library::model::project::property::{Property, PropertyValue};
+use library::model::property::{Property, PropertyValue};
 use library::EditorService;
 use uuid::Uuid;
 
-pub use library::model::project::property::PropertyTarget;
+pub use library::model::property::PropertyTarget;
 
 /// Context for handling property actions.
 pub struct ActionContext<'a> {
@@ -41,7 +41,7 @@ impl<'a> ActionContext<'a> {
         target: PropertyTarget,
         name: &str,
         value: PropertyValue,
-        get_property: impl Fn(&str) -> Option<library::model::project::property::Property>,
+        get_property: impl Fn(&str) -> Option<library::model::property::Property>,
     ) -> bool {
         let is_keyframed = get_property(name)
             .map(|p| p.evaluator == "keyframe")
@@ -62,24 +62,8 @@ impl<'a> ActionContext<'a> {
                         .update_clip_property(self.clip_id, name, value)
                 }
             }
-            PropertyTarget::Effect(idx) => self.project_service.update_effect_property_or_keyframe(
-                self.clip_id,
-                idx,
-                name,
-                self.current_time,
-                value,
-                None,
-            ),
-            PropertyTarget::Style(idx) => self.project_service.update_style_property_or_keyframe(
-                self.clip_id,
-                idx,
-                name,
-                self.current_time,
-                value,
-                None,
-            ),
-            PropertyTarget::Effector(idx) => {
-                self.project_service.update_effector_property_or_keyframe(
+            PropertyTarget::Effect(idx) | PropertyTarget::Effector(idx) => {
+                self.project_service.update_effect_property_or_keyframe(
                     self.clip_id,
                     idx,
                     name,
@@ -88,8 +72,8 @@ impl<'a> ActionContext<'a> {
                     None,
                 )
             }
-            PropertyTarget::Decorator(idx) => {
-                self.project_service.update_decorator_property_or_keyframe(
+            PropertyTarget::Style(idx) | PropertyTarget::Decorator(idx) => {
+                self.project_service.update_style_property_or_keyframe(
                     self.clip_id,
                     idx,
                     name,
@@ -118,7 +102,7 @@ impl<'a> ActionContext<'a> {
         target: PropertyTarget,
         name: &str,
         value: PropertyValue,
-        get_property: impl Fn(&str) -> Option<library::model::project::property::Property>,
+        get_property: impl Fn(&str) -> Option<library::model::property::Property>,
     ) -> bool {
         const TOLERANCE: f64 = 0.001;
 
@@ -138,23 +122,16 @@ impl<'a> ActionContext<'a> {
                     self.project_service
                         .remove_keyframe(self.clip_id, name, index)
                 }
-                PropertyTarget::Effect(idx) => self
+                PropertyTarget::Effect(idx) | PropertyTarget::Effector(idx) => self
                     .project_service
                     .remove_effect_keyframe_by_index(self.clip_id, idx, name, index),
-                PropertyTarget::Style(idx) => {
-                    self.project_service
-                        .remove_style_keyframe(self.clip_id, idx, name, index)
+                PropertyTarget::Style(_idx) | PropertyTarget::Decorator(_idx) => {
+                    // Assuming remove_style_keyframe exists (need to verify) or fallback
+                    // If remove_style_keyframe is missing, check editor_service.
+                    Err(library::LibraryError::Validation(
+                        "Style keyframe removal not implemented".to_string(),
+                    ))
                 }
-                // TODO: Implement remove for Effector/Decorator when needed
-                // For now, these are not fully supported or exposed via specialized methods
-                // If remove methods are missing, we might need to add them to service first.
-                // Assuming property update handles basics, but keyframe removal requires specific methods.
-                PropertyTarget::Effector(eff_idx) => self
-                    .project_service
-                    .remove_effector_keyframe_by_index(self.clip_id, eff_idx, name, index),
-                PropertyTarget::Decorator(dec_idx) => self
-                    .project_service
-                    .remove_decorator_keyframe_by_index(self.clip_id, dec_idx, name, index),
             }
         } else {
             // Add new keyframe
@@ -166,40 +143,12 @@ impl<'a> ActionContext<'a> {
                     value,
                     None,
                 ),
-                PropertyTarget::Effect(idx) => self.project_service.add_effect_keyframe(
-                    self.clip_id,
-                    idx,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                ),
-                PropertyTarget::Style(idx) => self.project_service.add_style_keyframe(
-                    self.clip_id,
-                    idx,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                ),
-                // Using generic update for add_keyframe behavior for now if specific add_keyframe missing?
-                // Actually update_..._or_keyframe handles adding if type is keyframe.
-                PropertyTarget::Effector(idx) => self.project_service.add_effector_keyframe(
-                    self.clip_id,
-                    idx,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                ),
-                PropertyTarget::Decorator(idx) => self.project_service.add_decorator_keyframe(
-                    self.clip_id,
-                    idx,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                ),
+                PropertyTarget::Effect(idx) | PropertyTarget::Effector(idx) => self
+                    .project_service
+                    .add_effect_keyframe(self.clip_id, idx, name, self.current_time, value, None),
+                PropertyTarget::Style(idx) | PropertyTarget::Decorator(idx) => self
+                    .project_service
+                    .add_style_keyframe(self.clip_id, idx, name, self.current_time, value, None),
             }
         };
 

@@ -1,19 +1,4 @@
-use eframe::egui::{self};
+use library::model::node_graph::GraphNode;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MyNodeTemplate {
-    MakeScalar,
-    AddScalar,
-    SubtractScalar,
-    MultiplyScalar,
-    MakeVector,
-    AddVector,
-    Print,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-#[allow(dead_code)]
-pub enum MyValueType {
-    Scalar(f32),
-    Vector(egui::Vec2),
-}
+// Use the GraphNode defined in library as the payload for Snarl
+pub type MyNodeTemplate = GraphNode;

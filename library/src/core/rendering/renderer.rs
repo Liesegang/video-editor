@@ -33,6 +33,7 @@ pub trait Renderer {
         styles: &[StyleConfig],
         ensemble: Option<&crate::core::ensemble::EnsembleData>,
         transform: &Transform,
+        scale_factor: f32,
     ) -> Result<RenderOutput, LibraryError>;
 
     fn rasterize_shape_layer(
@@ -41,6 +42,7 @@ pub trait Renderer {
         styles: &[StyleConfig],
         path_effects: &Vec<PathEffect>,
         transform: &Transform,
+        scale_factor: f32,
     ) -> Result<RenderOutput, LibraryError>;
 
     fn rasterize_sksl_layer(
@@ -57,6 +59,23 @@ pub trait Renderer {
     fn clear(&mut self) -> Result<(), LibraryError>;
     fn get_gpu_context(&mut self) -> Option<&mut crate::rendering::skia_utils::GpuContext> {
         None
+    }
+
+    fn render_graph(
+        &mut self,
+        _graph: &crate::model::node_graph::NodeGraph,
+        _time: f64,
+    ) -> Result<RenderOutput, LibraryError> {
+        Err(LibraryError::Render("Not implemented".to_string()))
+    }
+
+    fn render_composite(
+        &mut self,
+        _project: &crate::model::Project,
+        _composite: &crate::model::project::Composite,
+        _time: f64,
+    ) -> Result<RenderOutput, LibraryError> {
+        Err(LibraryError::Render("Not implemented".to_string()))
     }
 
     fn set_sharing_context(&mut self, _handle: usize, _hwnd: Option<isize>) {}

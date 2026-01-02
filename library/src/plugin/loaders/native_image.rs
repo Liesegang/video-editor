@@ -60,7 +60,7 @@ impl LoadPlugin for NativeImageLoader {
             .map_err(|e| LibraryError::from(Box::new(e) as Box<dyn std::error::Error>))?;
 
         Ok(vec![crate::plugin::AssetMetadata {
-            kind: crate::model::project::asset::AssetKind::Image,
+            kind: crate::model::asset::AssetKind::Image,
             duration: None,
             fps: None,
             width: Some(w),

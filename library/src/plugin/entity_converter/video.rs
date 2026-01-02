@@ -1,6 +1,6 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
 use crate::model::frame::entity::{FrameContent, FrameObject, ImageSurface};
-use crate::model::project::TrackClip;
+// use crate::model::project::TrackClip;
 
 pub struct VideoEntityConverterPlugin;
 
@@ -39,10 +39,8 @@ impl EntityConverterPlugin for VideoEntityConverterPlugin {
         canvas_height: u64,
         clip_width: u64,
         clip_height: u64,
-    ) -> Vec<crate::model::project::property::PropertyDefinition> {
-        use crate::model::project::property::{
-            PropertyDefinition, PropertyUiType, PropertyValue, Vec2,
-        };
+    ) -> Vec<crate::model::property::PropertyDefinition> {
+        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue, Vec2};
         use ordered_float::OrderedFloat;
 
         vec![
@@ -124,31 +122,32 @@ impl EntityConverterPlugin for VideoEntityConverterPlugin {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip,
-        frame_number: u64,
+        layer: &crate::model::Layer,
+        time: f64,
     ) -> Option<FrameObject> {
-        let props = &track_clip.properties;
+        let props = &layer.properties;
         let comp_fps = evaluator.composition.fps;
 
-        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
-        let time_offset = delta_frames / comp_fps;
-        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
-        let eval_time = source_start_time + time_offset;
+        // Calculate evaluation time based on Layer timeframe
+        let time_since_start = time - layer.start_time.into_inner();
+        let eval_time =
+            time_since_start * layer.time_stretch.into_inner() + layer.trim_in.into_inner();
 
         let file_path = evaluator.require_string(props, "file_path", eval_time, "video")?;
         let input_color_space = evaluator.optional_string(props, "input_color_space", eval_time);
         let output_color_space = evaluator.optional_string(props, "output_color_space", eval_time);
 
-        let source_delta_frames = time_offset * track_clip.fps;
-        let source_frame_number =
-            track_clip.source_begin_frame + source_delta_frames.round() as i64;
+        // Calculate source frame number based on eval_time (seconds) and FPS
+        // Assuming video source FPS matches composition FPS for now, or using composition frame alignment.
+        // Ideally we should know source asset FPS, but Layer doesn't carry it directly yet without Asset lookup.
+        let source_frame_number = (eval_time * comp_fps).round() as i64;
 
         if source_frame_number < 0 {
             return None;
         }
 
         let transform = evaluator.build_transform(props, eval_time);
-        let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
+        let effects = evaluator.build_image_effects(&layer.effects, eval_time);
         let surface = ImageSurface {
             file_path,
             effects,

@@ -5,7 +5,7 @@ use crate::state::context::EditorContext;
 
 use egui::collapsing_header::CollapsingState;
 use egui::Ui;
-use library::model::project::style::StyleInstance;
+use library::model::style::StyleInstance;
 use library::EditorService as ProjectService;
 use uuid::Uuid;
 

@@ -1,7 +1,7 @@
 use crate::Image;
 use crate::editor::{ProjectModel, RenderService};
 use crate::error::LibraryError;
-use crate::model::project::project::{Composition, Project};
+use crate::model::project::{Composition, Project};
 use crate::plugin::PropertyEvaluatorRegistry;
 use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
 use crate::rendering::renderer::Renderer;

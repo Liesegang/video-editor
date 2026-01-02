@@ -21,6 +21,13 @@ pub struct RenderServer {
 
 enum RenderRequest {
     Render(FrameInfo),
+    RenderTrinity {
+        project: Box<crate::model::Project>,
+        composition_id: uuid::Uuid,
+        time: f64,
+        render_scale: f64,
+        region: Option<crate::model::frame::frame::Region>,
+    },
     SetSharingContext(usize, Option<isize>),
     #[allow(dead_code)]
     Shutdown,
@@ -32,7 +39,7 @@ use crate::rendering::renderer::Renderer;
 pub struct RenderResult {
     pub frame_hash: u64,
     pub output: RenderOutput,
-    pub frame_info: FrameInfo, // Return frame info to verify content if needed, though hash is mostly enough
+    pub frame_info: Option<FrameInfo>, // Made Option to handle Trinity case where we don't have FrameInfo initially
 }
 
 impl RenderServer {
@@ -51,10 +58,25 @@ impl RenderServer {
                 b: 0,
                 a: 0,
             };
-            let renderer =
-                SkiaRenderer::new(1920, 1080, current_background_color.clone(), true, None);
+            let renderer = SkiaRenderer::new(
+                1920,
+                1080,
+                current_background_color.clone(),
+                true,
+                None,
+                None,
+            );
             let mut current_width = 1920;
             let mut current_height = 1080;
+
+            let mut last_trinity_cache: Option<(
+                Box<crate::model::Project>,
+                uuid::Uuid,
+                f64,
+                f64,
+                Option<crate::model::frame::frame::Region>,
+                RenderOutput,
+            )> = None;
 
             let mut render_service = RenderService::new(renderer, plugin_manager, cache_manager);
 
@@ -94,6 +116,15 @@ impl RenderServer {
                                 // We can update `req` to `SetSharingContext(handle)` (the new one)?
                                 // Then main loop runs it again? That's wasteful but safe-ish (idempotent check inside).
                                 req = RenderRequest::SetSharingContext(handle, hwnd);
+                            }
+                        }
+                        RenderRequest::RenderTrinity { .. } => {
+                            // Trinity Request supersedes previous render requests
+                            if let RenderRequest::SetSharingContext(h, w) = req {
+                                render_service.renderer.set_sharing_context(h, w);
+                                req = next_req;
+                            } else {
+                                req = next_req;
                             }
                         }
                         RenderRequest::Render(_) => {
@@ -142,7 +173,7 @@ impl RenderServer {
                                     target_height,
                                     cached_image_data.clone(),
                                 )),
-                                frame_info,
+                                frame_info: Some(frame_info),
                             });
                             continue;
                         }
@@ -167,6 +198,7 @@ impl RenderServer {
                                 current_background_color.clone(),
                                 true,
                                 old_context,
+                                None, // Added 6th argument
                             );
                         }
 
@@ -180,7 +212,7 @@ impl RenderServer {
                                 let _ = tx_result.send(RenderResult {
                                     frame_hash: 0,
                                     output,
-                                    frame_info,
+                                    frame_info: Some(frame_info),
                                 });
                             }
                             Err(e) => {
@@ -188,12 +220,89 @@ impl RenderServer {
                             }
                         }
                     }
+                    RenderRequest::RenderTrinity {
+                        project,
+                        composition_id,
+                        time,
+                        render_scale,
+                        region,
+                    } => {
+                        log::debug!("RenderServer: Handling Trinity Request for time={}", time);
+                        // Check Cache
+                        if let Some((c_proj, c_cid, c_time, c_scale, c_region, c_out)) =
+                            &last_trinity_cache
+                        {
+                            if *c_proj == project
+                                && *c_cid == composition_id
+                                && (*c_time - time).abs() < f64::EPSILON
+                                && (*c_scale - render_scale).abs() < f64::EPSILON
+                                && *c_region == region
+                            {
+                                let _ = tx_result.send(RenderResult {
+                                    frame_hash: 0,
+                                    output: c_out.clone(), // RenderOutput needs to be Clone (it is)
+                                    frame_info: None,
+                                });
+                                continue;
+                            }
+                        }
+
+                        // Trinity Rendering path
+                        if let Some(comp) =
+                            project.compositions.iter().find(|c| c.id == composition_id)
+                        {
+                            let target_width = (comp.width as f64 * render_scale).round() as u32;
+                            let target_height = (comp.height as f64 * render_scale).round() as u32;
+
+                            // Ensure Context Size
+                            if current_width != target_width || current_height != target_height {
+                                current_width = target_width;
+                                current_height = target_height;
+
+                                let old_context = render_service.renderer.take_context();
+                                render_service.renderer = SkiaRenderer::new(
+                                    current_width,
+                                    current_height,
+                                    crate::model::frame::color::Color {
+                                        r: 0,
+                                        g: 0,
+                                        b: 0,
+                                        a: 0,
+                                    },
+                                    true,
+                                    old_context,
+                                    None,
+                                );
+                            }
+
+                            match render_service
+                                .renderer
+                                .render_composite(&project, comp, time)
+                            {
+                                Ok(output) => {
+                                    // Update Cache
+                                    last_trinity_cache = Some((
+                                        project,
+                                        composition_id,
+                                        time,
+                                        render_scale,
+                                        region,
+                                        output.clone(),
+                                    ));
+
+                                    let _ = tx_result.send(RenderResult {
+                                        frame_hash: 0,
+                                        output,
+                                        frame_info: None,
+                                    });
+                                }
+                                Err(e) => {
+                                    error!("Trinity Render Failed: {}", e);
+                                }
+                            }
+                        }
+                    }
                     RenderRequest::SetSharingContext(handle, hwnd) => {
-                        // Need to update renderer's sharing context
-                        // But RenderService holds the renderer.
-                        // Does RenderService expose mut access to renderer?
-                        // Assuming yes, or we need to add a method to RenderService.
-                        // Actually RenderService struct definition usually has `pub renderer: R`.
                         render_service.renderer.set_sharing_context(handle, hwnd);
                     }
                     RenderRequest::Shutdown => break,
@@ -210,6 +319,23 @@ impl RenderServer {
 
     pub fn send_request(&self, frame_info: FrameInfo) {
         let _ = self.tx.send(RenderRequest::Render(frame_info));
+    }
+
+    pub fn send_trinity_request(
+        &self,
+        project: crate::model::Project,
+        composition_id: uuid::Uuid,
+        time: f64,
+        render_scale: f64,
+        region: Option<crate::model::frame::frame::Region>,
+    ) {
+        let _ = self.tx.send(RenderRequest::RenderTrinity {
+            project: Box::new(project),
+            composition_id,
+            time,
+            render_scale,
+            region,
+        });
     }
 
     pub fn poll_result(&self) -> Result<RenderResult, TryRecvError> {

@@ -1,12 +1,12 @@
 use library::model::frame::frame::Region;
-use library::model::project::project::{Composition, Project};
+use library::model::project::{Composite, Project};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::state::context_types::{
-    GraphEditorState, InteractionState, KeyframeDialogState, SelectionState, TimelineState,
-    ViewState,
+    GraphEditorState, InteractionState, KeyframeDialogState, NodeEditorState, SelectionState,
+    TimelineState, ViewState,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -24,6 +24,13 @@ pub struct EditorContext {
     #[serde(skip)]
     // Assuming we don't need to persist this for now or implement Serialize manually
     pub node_graph_state: egui_snarl::Snarl<crate::model::node_graph::MyNodeTemplate>,
+
+    // Sync tracking state
+    #[serde(default)]
+    pub node_editor_state: NodeEditorState,
+
+    #[serde(skip)]
+    pub node_editor_context_menu: Option<crate::state::context_types::ContextMenuState>,
 
     #[serde(skip)]
     pub interaction: InteractionState,
@@ -43,7 +50,7 @@ pub struct EditorContext {
     pub available_fonts: Vec<String>,
 }
 
-pub use crate::state::context_types::GizmoState; // Re-export for compatibility if needed, though better to import from context_types
+// use crate::state::context_types::GizmoState; // Re-export for compatibility if needed, though better to import from context_types
 
 impl EditorContext {
     pub fn new(default_comp_id: Uuid) -> Self {
@@ -57,6 +64,8 @@ impl EditorContext {
             graph_editor: GraphEditorState::default(),
             keyframe_dialog: KeyframeDialogState::default(),
             node_graph_state: Default::default(),
+            node_editor_state: NodeEditorState::default(),
+            node_editor_context_menu: None,
             interaction: InteractionState::default(),
             preview_texture: None,
             preview_texture_id: None,
@@ -67,7 +76,7 @@ impl EditorContext {
         }
     }
 
-    pub fn get_current_composition<'a>(&self, project: &'a Project) -> Option<&'a Composition> {
+    pub fn get_current_composition<'a>(&self, project: &'a Project) -> Option<&'a Composite> {
         self.selection
             .composition_id
             .and_then(|id| project.compositions.iter().find(|&c| c.id == id))

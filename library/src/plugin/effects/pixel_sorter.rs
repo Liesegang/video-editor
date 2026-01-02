@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
 use crate::model::frame::Image;
-use crate::model::project::property::PropertyValue;
+use crate::model::property::PropertyValue;
 use crate::plugin::{EffectPlugin, Plugin};
 use image::Rgba;
 use log::debug;
@@ -246,9 +246,9 @@ impl EffectPlugin for PixelSorterPlugin {
         }))
     }
 
-    fn properties(&self) -> Vec<crate::model::project::property::PropertyDefinition> {
-        use crate::model::project::property::PropertyValue;
-        use crate::model::project::property::{PropertyDefinition, PropertyUiType};
+    fn properties(&self) -> Vec<crate::model::property::PropertyDefinition> {
+        use crate::model::property::PropertyValue;
+        use crate::model::property::{PropertyDefinition, PropertyUiType};
         use ordered_float::OrderedFloat;
 
         vec![

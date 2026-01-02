@@ -47,15 +47,14 @@ pub fn render_effects_section(
         );
     });
 
-    let track_clip_ref = project_service
+    let layer_ref = project_service
         .get_project()
         .read()
         .ok()
-        .and_then(|proj| proj.get_clip(selected_entity_id).cloned());
+        .and_then(|proj| proj.get_layer(selected_entity_id).cloned());
 
-    if let Some(track_clip) = track_clip_ref {
-        let effects = track_clip.effects.clone();
-
+    if let Some(layer) = layer_ref {
+        let effects = layer.effects.clone();
         let mut local_effects = effects.clone();
         let list_id = egui::Id::new(format!("effects_{}", selected_entity_id));
 

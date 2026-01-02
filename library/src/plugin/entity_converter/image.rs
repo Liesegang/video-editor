@@ -1,6 +1,6 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
 use crate::model::frame::entity::{FrameContent, FrameObject, ImageSurface};
-use crate::model::project::TrackClip;
+// use crate::model::project::TrackClip;
 
 pub struct ImageEntityConverterPlugin;
 
@@ -39,10 +39,8 @@ impl EntityConverterPlugin for ImageEntityConverterPlugin {
         canvas_height: u64,
         clip_width: u64,
         clip_height: u64,
-    ) -> Vec<crate::model::project::property::PropertyDefinition> {
-        use crate::model::project::property::{
-            PropertyDefinition, PropertyUiType, PropertyValue, Vec2,
-        };
+    ) -> Vec<crate::model::property::PropertyDefinition> {
+        use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue, Vec2};
         use ordered_float::OrderedFloat;
 
         vec![
@@ -111,37 +109,23 @@ impl EntityConverterPlugin for ImageEntityConverterPlugin {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        track_clip: &TrackClip,
-        frame_number: u64,
+        layer: &crate::model::Layer,
+        time: f64,
     ) -> Option<FrameObject> {
-        let props = &track_clip.properties;
-        let comp_fps = evaluator.composition.fps;
+        let props = &layer.properties;
+        let _comp_fps = evaluator.composition.fps;
 
-        let delta_frames = frame_number as f64 - track_clip.in_frame as f64;
-        let time_offset = delta_frames / comp_fps;
-        let source_start_time = track_clip.source_begin_frame as f64 / track_clip.fps;
-        let eval_time = source_start_time + time_offset;
-
-        if frame_number % 30 == 0 {
-            log::info!(
-                "[ImageRender] Frame: {} | ClipIn: {} | GlobalDelta: {:.4}s | EvalTime: {:.4}s",
-                frame_number,
-                track_clip.in_frame,
-                time_offset,
-                eval_time
-            );
-        }
+        // In Trinity, time is absolute project time (seconds).
+        // If Layer has start_time, we might want local time:
+        let eval_time = time; // - layer.start_time; // Depends on if transform/properties are relative to layer or project.
+        // For now, assume global time for properties, unless strictly relative.
+        // Legacy 'track_clip' had 'in_frame', 'source_begin_frame'.
+        // Layer has 'start_time', 'duration'.
 
         let file_path = evaluator.require_string(props, "file_path", eval_time, "image")?;
         let transform = evaluator.build_transform(props, eval_time);
-        if frame_number % 30 == 0 {
-            log::info!(
-                "[ImageRender] Resolving transform at EvalTime {:.4}: {:?}",
-                eval_time,
-                transform
-            );
-        }
-        let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
+
+        let effects = evaluator.build_image_effects(&layer.effects, eval_time);
         let surface = ImageSurface {
             file_path,
             effects,

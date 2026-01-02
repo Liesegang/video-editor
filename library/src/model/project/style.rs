@@ -1,4 +1,4 @@
-use crate::model::project::property::PropertyMap;
+use crate::model::property::PropertyMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

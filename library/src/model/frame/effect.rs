@@ -1,4 +1,4 @@
-use crate::model::project::property::PropertyValue;
+use crate::model::property::PropertyValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};

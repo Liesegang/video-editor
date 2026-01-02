@@ -1,6 +1,6 @@
 use crate::core::ensemble::effectors::OpacityMode;
 use crate::core::ensemble::types::EffectorConfig;
-use crate::model::project::ensemble::EffectorInstance;
+use crate::model::ensemble::EffectorInstance;
 use crate::plugin::entity_converter::FrameEvaluationContext;
 
 pub trait EffectorConverter: Send + Sync {

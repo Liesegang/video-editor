@@ -1,4 +1,4 @@
-use library::model::project::property::{Property, PropertyValue};
+use library::model::property::{Property, PropertyValue};
 use library::plugin::{EvaluationContext, PropertyEvaluator};
 use library::plugin::{Plugin, PropertyPlugin};
 use rand::rngs::StdRng;

@@ -1,6 +1,7 @@
 use crate::error::LibraryError;
-use crate::model::project::Node;
-use crate::model::project::project::{Composition, Project};
+use crate::model::Node;
+use crate::model::project::{Composite, Project};
+use crate::model::{LayerContent, ReferenceContent};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -49,8 +50,8 @@ impl CompositionHandler {
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
-        // Composition::new returns (Composition, TrackData)
-        let (composition, root_track) = Composition::new(name, width, height, fps, duration);
+        // Composite::new returns (Composite, Track)
+        let (composition, root_track) = Composite::new(name, width, height, fps, duration);
         let id = composition.id;
 
         // Add root track to nodes registry
@@ -63,7 +64,7 @@ impl CompositionHandler {
     pub fn remove_composition(
         project: &Arc<RwLock<Project>>,
         id: Uuid,
-    ) -> Result<Option<Composition>, LibraryError> {
+    ) -> Result<Option<Composite>, LibraryError> {
         let mut proj = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
@@ -73,7 +74,7 @@ impl CompositionHandler {
     pub fn get_composition(
         project: &Arc<RwLock<Project>>,
         id: Uuid,
-    ) -> Result<Composition, LibraryError> {
+    ) -> Result<Composite, LibraryError> {
         let proj = project
             .read()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
@@ -90,9 +91,15 @@ impl CompositionHandler {
     pub fn is_composition_used(project: &Arc<RwLock<Project>>, comp_id: Uuid) -> bool {
         if let Ok(proj) = project.read() {
             // Check all clips in the nodes registry
-            for clip in proj.all_clips() {
-                if clip.reference_id == Some(comp_id) {
-                    return true;
+            for node in proj.nodes.values() {
+                if let Node::Layer(layer) = node {
+                    if let LayerContent::Reference(ReferenceContent { target_id, .. }) =
+                        &layer.content
+                    {
+                        if *target_id == comp_id {
+                            return true;
+                        }
+                    }
                 }
             }
         }

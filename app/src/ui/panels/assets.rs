@@ -1,16 +1,14 @@
 use egui::Ui;
 use egui_extras::{Column, TableBuilder};
 use egui_phosphor::regular as icons;
-use library::model::project::asset::AssetKind;
-use library::model::project::project::Project;
+use library::model::asset::AssetKind;
+use library::model::project::Project;
 use library::EditorService;
 use std::sync::{Arc, RwLock};
 
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::{
-    action::HistoryManager,
-    model::ui_types::DraggedItem, // Added import
-    state::context::EditorContext,
+    action::HistoryManager, state::context::EditorContext, state::context_types::DragStateItem,
 };
 
 pub fn assets_panel(
@@ -323,7 +321,10 @@ pub fn assets_panel(
 
                                             if response.drag_started() {
                                                 editor_context.interaction.dragged_item =
-                                                    Some(DraggedItem::Composition(comp.id));
+                                                    Some(DragStateItem::Composition {
+                                                        id: comp.id,
+                                                        pos: None,
+                                                    });
                                             }
                                             response.on_hover_text(format!("Comp ID: {}", comp.id));
                                         });
@@ -407,8 +408,8 @@ pub fn assets_panel(
                                     row.col(|ui| {
                                         ui.push_id(asset.id, |ui| {
                                             let _is_dragged =
-                                                match editor_context.interaction.dragged_item {
-                                                    Some(DraggedItem::Asset(id)) => id == asset.id,
+                                                match &editor_context.interaction.dragged_item {
+                                                    Some(DragStateItem::Asset { asset_id: id, .. }) => *id == asset.id,
                                                     _ => false,
                                                 };
 
@@ -448,7 +449,10 @@ pub fn assets_panel(
                                             // Drag
                                             if response.drag_started() {
                                                 editor_context.interaction.dragged_item =
-                                                    Some(DraggedItem::Asset(asset.id));
+                                                    Some(DragStateItem::Asset {
+                                                        asset_id: asset.id,
+                                                        pos: response.interact_pointer_pos(),
+                                                    });
                                             }
 
                                             response

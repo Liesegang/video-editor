@@ -1,8 +1,8 @@
 use crate::state::context::EditorContext;
 use crate::ui::panels::preview::{action::PreviewAction, clip::PreviewClip, gizmo};
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
-use library::model::project::project::Project;
-use library::model::project::property::PropertyValue;
+use library::model::project::Project;
+use library::model::property::{PropertyValue, Vec2};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -82,7 +82,12 @@ impl<'a> PreviewInteractions<'a> {
                     // Check if it is a shape and get path
                     // use gui_clips to get track_id
                     if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == *id) {
-                        if matches!(gc.clip.kind, library::model::project::TrackClipKind::Shape) {
+                        if matches!(
+                            gc.clip.content,
+                            library::model::LayerContent::Generator(
+                                library::model::GeneratorContent::Shape { .. }
+                            )
+                        ) {
                             if let Some(path_str) = gc.clip.properties.get_string("path") {
                                 let state = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
                                 self.editor_context.interaction.vector_editor_state = Some(state);
@@ -178,8 +183,8 @@ impl<'a> PreviewInteractions<'a> {
         let hovered_entity_id = if active_tool == crate::state::context_types::PreviewTool::Select
             || active_tool == crate::state::context_types::PreviewTool::Text
             || active_tool == crate::state::context_types::PreviewTool::Shape
-        // Allow selection when in Shape tool
         {
+            // Allow selection when in Shape tool
             self.check_hit_test(pointer_pos, content_rect)
         } else {
             None
@@ -267,15 +272,22 @@ impl<'a> PreviewInteractions<'a> {
         }
     }
 
-    fn is_clip_visible(&self, gc: &PreviewClip, current_frame: i64) -> bool {
-        if gc.clip.kind == library::model::project::TrackClipKind::Audio {
-            return false;
+    fn is_clip_visible(&self, gc: &PreviewClip, current_time: f64) -> bool {
+        if let library::model::LayerContent::Media(media) = &gc.clip.content {
+            if let Ok(proj) = self.project.read() {
+                if let Some(asset) = proj.get_asset(media.asset_id) {
+                    if matches!(asset.kind, library::model::asset::AssetKind::Audio) {
+                        return false;
+                    }
+                }
+            }
         }
 
-        let in_frame = gc.clip.in_frame as i64;
-        let out_frame = gc.clip.out_frame as i64;
+        let start = gc.clip.start_time.into_inner();
+        // In Trinity Model, duration is f64 seconds
+        let end = start + gc.clip.duration.into_inner();
 
-        current_frame >= in_frame && current_frame < out_frame
+        current_time >= start && current_time < end
     }
 
     fn get_clip_screen_corners(&self, gc: &PreviewClip) -> [Pos2; 4] {
@@ -327,23 +339,15 @@ impl<'a> PreviewInteractions<'a> {
             return None;
         }
 
-        // Get current frame
-        let current_frame = if let Ok(proj_read) = self.project.read() {
-            if let Some(comp) = self.editor_context.get_current_composition(&proj_read) {
-                (self.editor_context.timeline.current_time as f64 * comp.fps).round() as i64
-            } else {
-                0
-            }
-        } else {
-            0
-        };
+        // Get current time
+        let current_time = self.editor_context.timeline.current_time as f64;
 
         // TODO: Z-sort properly. Here we rely on iteration order, which is track order usually.
         // Track order is bottom-to-top rendering usually? Or top-to-bottom tracks?
         // Usually lower track index = lower layer (rendered first).
         // So rev() gives top-most layer.
         for gc in self.gui_clips.iter().rev() {
-            if !self.is_clip_visible(gc, current_frame) {
+            if !self.is_clip_visible(gc, current_time) {
                 continue;
             }
 
@@ -396,7 +400,12 @@ impl<'a> PreviewInteractions<'a> {
             if let Some(id) = hovered_id {
                 let is_text = self.gui_clips.iter().any(|c| {
                     c.id() == id
-                        && matches!(c.clip.kind, library::model::project::TrackClipKind::Text)
+                        && matches!(
+                            c.clip.content,
+                            library::model::LayerContent::Generator(
+                                library::model::GeneratorContent::Text { .. }
+                            )
+                        )
                 });
                 if is_text {
                     self.editor_context.interaction.editing_text_entity_id = Some(id);
@@ -472,12 +481,10 @@ impl<'a> PreviewInteractions<'a> {
                                 entity_id: *entity_id,
                                 prop_name: "position".to_string(),
                                 time: current_time,
-                                value: PropertyValue::Vec2(
-                                    library::model::project::property::Vec2 {
-                                        x: ordered_float::OrderedFloat(new_x),
-                                        y: ordered_float::OrderedFloat(new_y),
-                                    },
-                                ),
+                                value: PropertyValue::Vec2(Vec2 {
+                                    x: ordered_float::OrderedFloat(new_x),
+                                    y: ordered_float::OrderedFloat(new_y),
+                                }),
                             });
                         }
                     }
@@ -559,19 +566,11 @@ impl<'a> PreviewInteractions<'a> {
     fn get_clips_in_box(&self, selection_rect: Rect) -> Vec<Uuid> {
         let mut found = Vec::new();
 
-        // Get current frame
-        let current_frame = if let Ok(proj_read) = self.project.read() {
-            if let Some(comp) = self.editor_context.get_current_composition(&proj_read) {
-                (self.editor_context.timeline.current_time as f64 * comp.fps).round() as i64
-            } else {
-                0
-            }
-        } else {
-            0
-        };
+        // Get current time
+        let current_time = self.editor_context.timeline.current_time as f64;
 
         for gc in self.gui_clips {
-            if !self.is_clip_visible(gc, current_frame) {
+            if !self.is_clip_visible(gc, current_time) {
                 continue;
             }
 
@@ -614,6 +613,7 @@ impl<'a> PreviewInteractions<'a> {
             .find(|gc| gc.id() == entity_id)
             .map(|gc| gc.track_id)
     }
+
     pub fn draw_text_overlay(&mut self, pending_actions: &mut Vec<PreviewAction>) {
         if let Some(id) = self.editor_context.interaction.editing_text_entity_id {
             if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == id) {

@@ -4,8 +4,10 @@ use log::debug;
 
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::frame::{FrameInfo, Region};
-use crate::model::project::project::{Composition, Project};
-use crate::model::project::{Node, TrackClip, TrackClipKind};
+
+use crate::model::project::Composite;
+use crate::model::project::Project;
+use crate::model::{GeneratorContent, Layer, LayerContent, Node};
 use crate::util::timing::ScopedTimer;
 
 use crate::plugin::FrameEvaluationContext;
@@ -13,7 +15,7 @@ use crate::plugin::{PluginManager, PropertyEvaluatorRegistry};
 
 pub struct FrameEvaluator<'a> {
     project: &'a Project,
-    composition: &'a Composition,
+    composition: &'a Composite,
     property_evaluators: Arc<PropertyEvaluatorRegistry>,
     plugin_manager: Arc<PluginManager>,
 }
@@ -21,7 +23,7 @@ pub struct FrameEvaluator<'a> {
 impl<'a> FrameEvaluator<'a> {
     pub fn new(
         project: &'a Project,
-        composition: &'a Composition,
+        composition: &'a Composite,
         property_evaluators: Arc<PropertyEvaluatorRegistry>,
         plugin_manager: Arc<PluginManager>,
     ) -> Self {
@@ -40,12 +42,13 @@ impl<'a> FrameEvaluator<'a> {
         region: Option<Region>,
     ) -> FrameInfo {
         let mut frame = self.initialize_frame(frame_number, render_scale, region);
+        let time = frame_number as f64 / self.composition.fps;
 
-        // Collect active clips from the node registry
-        let all_clips = self.collect_active_clips(frame_number);
+        // Collect active layers from the node registry
+        let active_layers = self.collect_active_layers(time);
 
-        for track_clip in all_clips {
-            if let Some(object) = self.convert_entity(track_clip, frame_number) {
+        for layer in active_layers {
+            if let Some(object) = self.convert_entity(layer, time) {
                 frame.objects.push(object);
             }
         }
@@ -67,54 +70,81 @@ impl<'a> FrameEvaluator<'a> {
             render_scale: ordered_float::OrderedFloat(render_scale),
             now_time: ordered_float::OrderedFloat(time),
             region,
+            // Trinity: NodeGraph in composition is likely legacy or separate.
+            // FrameInfo expects Option<NodeGraph>.
+            node_graph: if !self.composition.node_graph.nodes.is_empty() {
+                Some(self.composition.node_graph.clone())
+            } else {
+                None
+            },
             objects: Vec::new(),
         }
     }
 
-    fn collect_active_clips(&self, frame_number: u64) -> Vec<&TrackClip> {
-        let mut clips = Vec::new();
-        self.collect_clips_recursive(self.composition.root_track_id, frame_number, &mut clips);
-        clips
+    fn collect_active_layers(&self, time: f64) -> Vec<&Layer> {
+        let mut layers = Vec::new();
+        self.collect_layers_recursive(self.composition.root_track_id, time, &mut layers);
+        layers
     }
 
-    fn collect_clips_recursive<'b>(
+    fn collect_layers_recursive<'b>(
         &'b self,
         node_id: uuid::Uuid,
-        frame_number: u64,
-        out_clips: &mut Vec<&'b TrackClip>,
+        time: f64,
+        out_layers: &mut Vec<&'b Layer>,
     ) {
-        match self.project.get_node(node_id) {
-            Some(Node::Clip(clip)) => {
-                if clip.kind != TrackClipKind::Audio
-                    && clip.in_frame <= frame_number
-                    && clip.out_frame >= frame_number
-                {
-                    out_clips.push(clip);
+        match self.project.nodes.get(&node_id) {
+            Some(Node::Layer(layer)) => {
+                let start = layer.start_time.into_inner();
+                let duration = layer.duration.into_inner();
+                if time >= start && time < start + duration {
+                    out_layers.push(&layer);
                 }
             }
             Some(Node::Track(track)) => {
-                for child_id in &track.child_ids {
-                    self.collect_clips_recursive(*child_id, frame_number, out_clips);
+                for child_id in &track.children {
+                    self.collect_layers_recursive(*child_id, time, out_layers);
                 }
             }
             None => {}
         }
     }
 
-    fn convert_entity(&self, track_clip: &TrackClip, frame_number: u64) -> Option<FrameObject> {
-        let kind_str = track_clip.kind.to_string();
-        if let Some(converter) = self.plugin_manager.get_entity_converter(&kind_str) {
+    fn convert_entity(&self, layer: &Layer, time: f64) -> Option<FrameObject> {
+        let kind_str = match &layer.content {
+            LayerContent::Media(media) => {
+                // Inspect asset to determine type
+                if let Some(asset) = self.project.assets.iter().find(|a| a.id == media.asset_id) {
+                    match asset.kind {
+                        crate::model::asset::AssetKind::Video => "Video",
+                        crate::model::asset::AssetKind::Image => "Image",
+                        crate::model::asset::AssetKind::Audio => "Audio",
+                        _ => "Unknown",
+                    }
+                } else {
+                    "Unknown"
+                }
+            }
+            LayerContent::Generator(generator) => match generator {
+                GeneratorContent::Shape { .. } => "Shape",
+                GeneratorContent::Text { .. } => "Text",
+                GeneratorContent::Solid { .. } => "Solid",
+                GeneratorContent::SkSL { .. } => "SkSL",
+            },
+            LayerContent::Reference(_) => "Reference",
+        };
+
+        if let Some(converter) = self.plugin_manager.get_entity_converter(kind_str) {
             converter.convert_entity(
                 &FrameEvaluationContext {
                     composition: self.composition,
                     property_evaluators: &self.property_evaluators,
                     plugin_manager: &self.plugin_manager,
                 },
-                track_clip,
-                frame_number,
+                layer,
+                time,
             )
         } else {
-            log::warn!("No converter registered for entity type '{}'", kind_str);
             None
         }
     }
@@ -122,7 +152,7 @@ impl<'a> FrameEvaluator<'a> {
 
 pub fn evaluate_composition_frame(
     project: &Project,
-    composition: &Composition,
+    composition: &Composite,
     frame_number: u64,
     render_scale: f64,
     region: Option<Region>,
@@ -178,11 +208,12 @@ pub fn get_frame_from_project(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Node;
     use crate::model::frame::color::Color;
     use crate::model::frame::entity::FrameContent;
-    use crate::model::project::project::Composition;
-    use crate::model::project::property::{Property, PropertyMap, PropertyValue, Vec2};
-    use crate::model::project::{Node, TrackClip, TrackClipKind, TrackData};
+    use crate::model::project::Composite;
+    use crate::model::project::Project;
+    use crate::model::property::{Property, PropertyMap, PropertyValue, Vec2};
 
     use crate::plugin::PluginManager;
     use crate::plugin::properties::{
@@ -224,7 +255,8 @@ mod tests {
         manager
     }
 
-    fn create_dummy_clip() -> TrackClip {
+    // Updated helper to creating dummy Layer with Image content
+    fn create_dummy_layer() -> Layer {
         let mut props = PropertyMap::new();
         props.set(
             "file_path".into(),
@@ -241,30 +273,36 @@ mod tests {
             constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))),
         );
 
-        TrackClip {
+        // Mock media content
+        let content = LayerContent::Media(crate::model::MediaContent {
+            asset_id: uuid::Uuid::new_v4(), // Dummy asset ID
+            stream_index: None,
+        });
+
+        Layer {
             id: uuid::Uuid::new_v4(),
-            reference_id: None,
-            kind: TrackClipKind::Image,
-            in_frame: 0,
-            out_frame: 100,
-            source_begin_frame: 0,
-            duration_frame: None,
-            fps: 30.0,
+            name: "Dummy Layer".to_string(),
+            start_time: ordered_float::OrderedFloat(0.0),
+            duration: ordered_float::OrderedFloat(10.0), // 300 frames at 30fps
+            trim_in: ordered_float::OrderedFloat(0.0),
+            time_stretch: ordered_float::OrderedFloat(1.0),
+            content,
             properties: props,
-            effects: Vec::new(),
             styles: Vec::new(),
-            effectors: Vec::new(),
-            decorators: Vec::new(),
+            effects: Vec::new(),
+            ui_position: [0.0, 0.0],
         }
     }
 
     fn setup_test_project() -> (Project, uuid::Uuid) {
         let mut project = Project::new("Test");
-        let root_track = TrackData::new("Root");
-        let root_id = root_track.id;
-        project.add_node(Node::Track(root_track));
 
-        let comp = Composition::new_with_root("comp", 1920, 1080, 30.0, 10.0, root_id);
+        // Composite::new returns (Composite, RootTrack)
+        let (comp, root_track) = Composite::new("comp", 1920, 1080, 30.0, 10.0);
+
+        // Add root track to project nodes
+        project.add_node(crate::model::Node::Track(root_track));
+
         let comp_id = comp.id;
         project.add_composition(comp);
 
@@ -325,24 +363,29 @@ mod tests {
             constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))),
         );
 
-        let track_clip = TrackClip {
+        let layer = Layer {
             id: uuid::Uuid::new_v4(),
-            reference_id: None,
-            kind: TrackClipKind::Text,
-            in_frame: 0,
-            out_frame: 150,
-            source_begin_frame: 0,
-            duration_frame: None,
-            fps: 30.0,
+            name: "Text Layer".to_string(),
+            start_time: ordered_float::OrderedFloat(0.0),
+            duration: ordered_float::OrderedFloat(5.0),
+            trim_in: ordered_float::OrderedFloat(0.0),
+            time_stretch: ordered_float::OrderedFloat(1.0),
+            content: LayerContent::Generator(GeneratorContent::Text {
+                text: "Hello".to_string(),
+                font: "Roboto".to_string(),
+            }),
             properties: text_props,
-            effects: Vec::new(),
             styles: Vec::new(),
-            effectors: Vec::new(),
-            decorators: Vec::new(),
+            effects: Vec::new(),
+            ui_position: [0.0, 0.0],
         };
-        let clip_id = track_clip.id;
-        project.add_node(Node::Clip(track_clip));
-        project.get_track_mut(root_id).unwrap().add_child(clip_id);
+        let clip_id = layer.id;
+        project.add_node(Node::Layer(layer));
+        project
+            .get_track_mut(root_id)
+            .unwrap()
+            .children
+            .push(clip_id);
 
         let plugin_manager = create_test_plugin_manager();
         let registry = plugin_manager.get_property_evaluators();
@@ -406,48 +449,33 @@ mod tests {
             constant(PropertyValue::Number(ordered_float::OrderedFloat(100.0))),
         );
 
-        let early = TrackClip {
-            id: uuid::Uuid::new_v4(),
-            reference_id: None,
-            kind: TrackClipKind::Image,
-            in_frame: 0,
-            out_frame: 30,
-            source_begin_frame: 0,
-            duration_frame: None,
-            fps: 30.0,
-            properties: props.clone(),
-            effects: Vec::new(),
-            styles: Vec::new(),
-            effectors: vec![],
-            decorators: vec![],
-        };
+        let mut early = create_dummy_layer();
+        early.start_time = ordered_float::OrderedFloat(0.0);
+        early.duration = ordered_float::OrderedFloat(1.0); // 30 frames at 30 fps
+        early.properties = props.clone();
 
-        let late = TrackClip {
-            id: uuid::Uuid::new_v4(),
-            reference_id: None,
-            kind: TrackClipKind::Image,
-            in_frame: 150,
-            out_frame: 180,
-            source_begin_frame: 0,
-            duration_frame: None,
-            fps: 30.0,
-            properties: props,
-            effects: Vec::new(),
-            styles: Vec::new(),
-            effectors: vec![],
-            decorators: vec![],
-        };
+        let mut late = create_dummy_layer();
+        late.start_time = ordered_float::OrderedFloat(5.0); // 150 frames
+        late.duration = ordered_float::OrderedFloat(1.0);
+        late.properties = props;
 
         let early_id = early.id;
         let late_id = late.id;
-        project.add_node(Node::Clip(early));
-        project.add_node(Node::Clip(late));
-        project.get_track_mut(root_id).unwrap().add_child(early_id);
-        project.get_track_mut(root_id).unwrap().add_child(late_id);
+        project.add_node(Node::Layer(early));
+        project.add_node(Node::Layer(late));
+        project
+            .get_track_mut(root_id)
+            .unwrap()
+            .children
+            .push(early_id);
+        project
+            .get_track_mut(root_id)
+            .unwrap()
+            .children
+            .push(late_id);
 
         let plugin_manager = create_test_plugin_manager();
         let registry = plugin_manager.get_property_evaluators();
-        // let entity_converter_registry = plugin_manager.get_entity_converter_registry(); // This line is no longer needed
 
         let composition = &project.compositions[0];
         let evaluator = FrameEvaluator::new(
@@ -457,9 +485,11 @@ mod tests {
             Arc::clone(&plugin_manager),
         );
 
+        // Frame 15 -> 0.5 sec. Active (start 0, dur 1)
         let frame = evaluator.evaluate(15, 1.0, None);
         assert_eq!(frame.objects.len(), 1, "Only early entity should render");
 
+        // Frame 165 -> 5.5 sec. Active (start 5, dur 1)
         let frame_late = evaluator.evaluate(165, 1.0, None);
         assert_eq!(
             frame_late.objects.len(),
@@ -474,34 +504,39 @@ mod tests {
         let comp = &project.compositions[0];
         let root_id = comp.root_track_id;
 
-        let clip1 = create_dummy_clip();
-        let clip2 = create_dummy_clip();
+        let clip1 = create_dummy_layer();
+        let clip2 = create_dummy_layer();
         let clip1_id = clip1.id;
         let clip2_id = clip2.id;
 
         // Create child track
-        let child_track = TrackData::new("Child Track");
+        let child_track = crate::model::Track::new("Child Track");
         let child_track_id = child_track.id;
         project.add_node(Node::Track(child_track));
 
-        // Add clips
-        project.add_node(Node::Clip(clip1));
-        project.add_node(Node::Clip(clip2));
+        // Add layers
+        project.add_node(Node::Layer(clip1));
+        project.add_node(Node::Layer(clip2));
 
         // Link hierarchy
-        project.get_track_mut(root_id).unwrap().add_child(clip1_id);
         project
             .get_track_mut(root_id)
             .unwrap()
-            .add_child(child_track_id);
+            .children
+            .push(clip1_id);
+        project
+            .get_track_mut(root_id)
+            .unwrap()
+            .children
+            .push(child_track_id);
         project
             .get_track_mut(child_track_id)
             .unwrap()
-            .add_child(clip2_id);
+            .children
+            .push(clip2_id);
 
         let plugin_manager = create_test_plugin_manager();
         let registry = plugin_manager.get_property_evaluators();
-        // let entity_converter_registry = plugin_manager.get_entity_converter_registry(); // This line is no longer needed
 
         let composition = &project.compositions[0];
         let evaluator = FrameEvaluator::new(

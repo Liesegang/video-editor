@@ -1,410 +1,256 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
+use uuid::Uuid;
+
 pub mod asset;
 pub mod clip_helpers;
 pub mod effect;
 pub mod ensemble;
-pub mod project;
 pub mod property;
 pub mod style;
 
-pub use effect::EffectConfig;
-pub use ensemble::{DecoratorInstance, EffectorInstance};
-
-use crate::model::project::property::PropertyMap;
-use crate::model::project::style::StyleInstance;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use super::{Layer, Node, Track};
+use crate::model::frame::color::Color;
+use crate::model::project::asset::Asset;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-#[serde(tag = "node_type")]
-pub enum Node {
-    Track(TrackData),
-    Clip(TrackClip),
+pub struct Project {
+    pub name: String,
+
+    // --- 3. Composite (The Scope / Graph) ---
+    /// Independent timelines/compositions.
+    pub compositions: Vec<Composite>,
+
+    // --- Global Resources (New!) ---
+    /// Timeless node graphs (Particles, Physics Worlds, Shaders).
+    /// Referenced by Layers through ReferenceContent.
+    #[serde(default)]
+    pub resources: HashMap<Uuid, ResourceGraph>,
+
+    #[serde(default)]
+    pub assets: Vec<Asset>,
+
+    #[serde(default)]
+    pub export: ExportConfig,
+
+    /// Unified Node Registry (Tracks and Layers are stored flat here).
+    /// Design Choice: Global registry allows easier UUID resolution.
+    #[serde(default)]
+    pub nodes: HashMap<Uuid, Node>,
 }
 
-impl Node {
-    /// Get the ID of this node
-    pub fn id(&self) -> Uuid {
-        match self {
-            Node::Track(t) => t.id,
-            Node::Clip(c) => c.id,
-        }
-    }
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)]
+pub struct ExportConfig {
+    #[serde(default)]
+    pub container: Option<String>,
+    #[serde(default)]
+    pub codec: Option<String>,
+    #[serde(default)]
+    pub pixel_format: Option<String>,
+    #[serde(default)]
+    pub width: Option<u64>,
+    #[serde(default)]
+    pub height: Option<u64>,
+    #[serde(default)]
+    pub fps: Option<f64>,
+    #[serde(default)]
+    pub video_bitrate: Option<u64>,
+    #[serde(default)]
+    pub audio_codec: Option<String>,
+    #[serde(default)]
+    pub audio_bitrate: Option<u64>,
+    #[serde(default)]
+    pub audio_channels: Option<u16>,
+    #[serde(default)]
+    pub audio_sample_rate: Option<u32>,
+    #[serde(default)]
+    pub crf: Option<u8>,
+    #[serde(default)]
+    pub preset: Option<String>,
+    #[serde(default)]
+    pub ffmpeg_path: Option<String>,
+    #[serde(default)]
+    pub parameters: HashMap<String, Value>,
 }
 
+// Renamed from Composition
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub struct TrackData {
+pub struct Composite {
     pub id: Uuid,
     pub name: String,
+    pub width: u64,
+    pub height: u64,
+    pub fps: f64,
+    pub duration: f64, // The defined duration of this composite
+    pub background_color: Color,
+    #[serde(default = "default_color_profile")]
+    pub color_profile: String,
+
     #[serde(default)]
-    pub child_ids: Vec<Uuid>,
+    pub work_area_in: u64,
+    #[serde(default)]
+    pub work_area_out: u64,
+
+    // Reference to the root mixer track (Start of the mix tree)
+    pub root_track_id: Uuid,
+
+    // "node_graph" (Free-floating nodes) can coexist here.
+    // Composite = Track Tree + Free Node Graph
+    #[serde(default)]
+    pub node_graph: crate::model::node_graph::NodeGraph,
 }
 
-impl TrackData {
+fn default_color_profile() -> String {
+    "sRGB".to_string()
+}
+
+// Entity for Global Resources
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct ResourceGraph {
+    pub id: Uuid,
+    pub name: String,
+    pub kind: ResourceKind, // Particle, Shader, 3DScene, etc.
+    pub node_graph: crate::model::node_graph::NodeGraph,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub enum ResourceKind {
+    ParticleSystem,
+    PhysicsWorld,
+    ProceduralTexture,
+}
+
+impl Project {
     pub fn new(name: &str) -> Self {
         Self {
+            name: name.to_string(),
+            compositions: Vec::new(),
+            resources: HashMap::new(),
+            assets: Vec::new(),
+            export: ExportConfig::default(),
+            nodes: HashMap::new(),
+        }
+    }
+
+    pub fn load(json_str: &str) -> Result<Self, serde_json::Error> {
+        let project: Project = serde_json::from_str(json_str)?;
+        Ok(project)
+    }
+
+    pub fn save(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    pub fn add_composition(&mut self, composition: Composite) {
+        self.compositions.push(composition);
+    }
+
+    pub fn get_composition_mut(&mut self, id: Uuid) -> Option<&mut Composite> {
+        self.compositions.iter_mut().find(|c| c.id == id)
+    }
+
+    pub fn get_composition(&self, id: Uuid) -> Option<&Composite> {
+        self.compositions.iter().find(|c| c.id == id)
+    }
+
+    pub fn remove_composition(&mut self, id: Uuid) -> Option<Composite> {
+        let index = self.compositions.iter().position(|c| c.id == id)?;
+        Some(self.compositions.remove(index))
+    }
+
+    pub fn get_asset(&self, id: Uuid) -> Option<&Asset> {
+        self.assets.iter().find(|a| a.id == id)
+    }
+
+    // ==================== Node Registry Methods ====================
+
+    /// Add a node to the registry
+    pub fn add_node(&mut self, node: Node) {
+        self.nodes.insert(node.id(), node);
+    }
+
+    /// Get a node by ID
+    pub fn get_node(&self, id: Uuid) -> Option<&Node> {
+        self.nodes.get(&id)
+    }
+
+    /// Get a mutable node by ID
+    pub fn get_node_mut(&mut self, id: Uuid) -> Option<&mut Node> {
+        self.nodes.get_mut(&id)
+    }
+
+    /// Remove a node from the registry
+    pub fn remove_node(&mut self, id: Uuid) -> Option<Node> {
+        self.nodes.remove(&id)
+    }
+
+    // ==================== Trinity Helpers ====================
+
+    pub fn get_layer(&self, id: Uuid) -> Option<&Layer> {
+        match self.nodes.get(&id)? {
+            Node::Layer(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    pub fn get_layer_mut(&mut self, id: Uuid) -> Option<&mut Layer> {
+        match self.nodes.get_mut(&id)? {
+            Node::Layer(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    pub fn get_track(&self, id: Uuid) -> Option<&Track> {
+        match self.nodes.get(&id)? {
+            Node::Track(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    pub fn get_track_mut(&mut self, id: Uuid) -> Option<&mut Track> {
+        match self.nodes.get_mut(&id)? {
+            Node::Track(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// Find the parent track containing a given node ID
+    pub fn find_parent_track(&self, node_id: Uuid) -> Option<Uuid> {
+        for (id, node) in &self.nodes {
+            if let Node::Track(track) = node {
+                if track.children.contains(&node_id) {
+                    return Some(*id);
+                }
+            }
+        }
+        None
+    }
+}
+
+impl Composite {
+    pub fn new(name: &str, width: u64, height: u64, fps: f64, duration: f64) -> (Self, Track) {
+        let root_track = Track::new(&format!("{} - Root", name));
+
+        let comp = Self {
             id: Uuid::new_v4(),
             name: name.to_string(),
-            child_ids: Vec::new(),
-        }
-    }
-
-    /// Add a child node ID
-    pub fn add_child(&mut self, child_id: Uuid) {
-        self.child_ids.push(child_id);
-    }
-
-    /// Insert a child node ID at a specific index
-    pub fn insert_child(&mut self, index: usize, child_id: Uuid) {
-        if index <= self.child_ids.len() {
-            self.child_ids.insert(index, child_id);
-        } else {
-            self.child_ids.push(child_id);
-        }
-    }
-
-    /// Remove a child node ID
-    pub fn remove_child(&mut self, child_id: Uuid) -> bool {
-        if let Some(pos) = self.child_ids.iter().position(|id| *id == child_id) {
-            self.child_ids.remove(pos);
-            true
-        } else {
-            false
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-#[serde(rename_all = "lowercase")] // Serialize as "video", "image", etc.
-pub enum TrackClipKind {
-    Video,
-    Image,
-    Audio,
-    Text,
-    Shape,
-    SkSL,
-    Composition,
-    // Add other kinds as needed
-}
-
-impl std::fmt::Display for TrackClipKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            TrackClipKind::Video => "video",
-            TrackClipKind::Image => "image",
-            TrackClipKind::Audio => "audio",
-            TrackClipKind::Text => "text",
-            TrackClipKind::Shape => "shape",
-            TrackClipKind::SkSL => "sksl",
-            TrackClipKind::Composition => "composition",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub struct TrackClip {
-    pub id: Uuid,
-    pub reference_id: Option<Uuid>,
-    #[serde(rename = "type")]
-    pub kind: TrackClipKind,
-    #[serde(default)]
-    pub in_frame: u64,
-    #[serde(default)]
-    pub out_frame: u64,
-    #[serde(default)]
-    pub source_begin_frame: i64,
-    #[serde(default)]
-    pub duration_frame: Option<u64>,
-
-    #[serde(default = "default_fps")]
-    pub fps: f64,
-
-    #[serde(default)]
-    pub properties: PropertyMap,
-    #[serde(default)]
-    pub styles: Vec<StyleInstance>,
-    #[serde(default)]
-    pub effects: Vec<EffectConfig>,
-    #[serde(default)]
-    pub effectors: Vec<EffectorInstance>,
-    #[serde(default)]
-    pub decorators: Vec<DecoratorInstance>,
-}
-
-impl TrackClip {
-    pub fn new(
-        id: Uuid,
-        reference_id: Option<Uuid>,
-        kind: TrackClipKind,
-        in_frame: u64,
-        out_frame: u64,
-        source_begin_frame: i64,
-        duration_frame: Option<u64>,
-        fps: f64,
-        properties: PropertyMap,
-        styles: Vec<StyleInstance>,
-        effects: Vec<EffectConfig>,
-        effectors: Vec<EffectorInstance>,
-        decorators: Vec<DecoratorInstance>,
-    ) -> Self {
-        Self {
-            id,
-            reference_id,
-            kind,
-            in_frame,
-            out_frame,
-            source_begin_frame,
-            duration_frame,
+            width,
+            height,
             fps,
-            properties,
-            styles,
-            effects,
-            effectors,
-            decorators,
-        }
-    }
-
-    // Ported helper constructors from Entity
-
-    // Helper for consistency with Entity
-    pub fn set_constant_property(
-        &mut self,
-        key: &str,
-        value: crate::model::project::property::PropertyValue,
-    ) {
-        self.properties.set(
-            key.to_string(),
-            crate::model::project::property::Property::constant(value),
-        );
-    }
-
-    /// Update effect property at specified index.
-    pub fn update_effect_property(
-        &mut self,
-        effect_index: usize,
-        key: &str,
-        time: f64,
-        value: property::PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), &'static str> {
-        let effect = self
-            .effects
-            .get_mut(effect_index)
-            .ok_or("Effect not found")?;
-        effect
-            .properties
-            .update_property_or_keyframe(key, time, value, easing);
-        Ok(())
-    }
-
-    /// Update style property at specified index.
-    pub fn update_style_property(
-        &mut self,
-        style_index: usize,
-        key: &str,
-        time: f64,
-        value: property::PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), &'static str> {
-        let style = self.styles.get_mut(style_index).ok_or("Style not found")?;
-        style
-            .properties
-            .update_property_or_keyframe(key, time, value, easing);
-        Ok(())
-    }
-
-    /// Unified accessor for property maps
-    pub fn get_property_map_mut(
-        &mut self,
-        target: crate::model::project::property::PropertyTarget,
-    ) -> Option<&mut crate::model::project::property::PropertyMap> {
-        use crate::model::project::property::PropertyTarget;
-        match target {
-            PropertyTarget::Clip => Some(&mut self.properties),
-            PropertyTarget::Effect(i) => self.effects.get_mut(i).map(|e| &mut e.properties),
-            PropertyTarget::Style(i) => self.styles.get_mut(i).map(|s| &mut s.properties),
-            PropertyTarget::Effector(i) => self.effectors.get_mut(i).map(|e| &mut e.properties),
-            PropertyTarget::Decorator(i) => self.decorators.get_mut(i).map(|e| &mut e.properties),
-        }
-    }
-
-    pub fn get_transform_definitions() -> Vec<crate::model::project::property::PropertyDefinition> {
-        use crate::model::project::property::{
-            PropertyDefinition, PropertyUiType, PropertyValue, Vec2,
+            duration,
+            background_color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            color_profile: "sRGB".to_string(),
+            work_area_in: 0,
+            work_area_out: (duration * fps).ceil() as u64,
+            root_track_id: root_track.id,
+            node_graph: crate::model::node_graph::NodeGraph::new(),
         };
-        use ordered_float::OrderedFloat;
-
-        vec![
-            PropertyDefinition::new(
-                "position",
-                PropertyUiType::Vec2 {
-                    suffix: "".to_string(),
-                },
-                "Position",
-                PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(0.0),
-                    y: OrderedFloat(0.0),
-                }),
-            ),
-            PropertyDefinition::new(
-                "scale",
-                PropertyUiType::Vec2 {
-                    suffix: "".to_string(),
-                },
-                "Scale",
-                PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(100.0),
-                    y: OrderedFloat(100.0),
-                }),
-            ),
-            PropertyDefinition::new(
-                "rotation",
-                PropertyUiType::Float {
-                    min: -360.0,
-                    max: 360.0,
-                    step: 1.0,
-                    suffix: "°".into(),
-                    min_hard_limit: false,
-                    max_hard_limit: false,
-                },
-                "Rotation",
-                PropertyValue::Number(OrderedFloat(0.0)),
-            ),
-            PropertyDefinition::new(
-                "anchor",
-                PropertyUiType::Vec2 {
-                    suffix: "".to_string(),
-                },
-                "Anchor Point",
-                PropertyValue::Vec2(Vec2 {
-                    x: OrderedFloat(0.0),
-                    y: OrderedFloat(0.0),
-                }),
-            ),
-            PropertyDefinition::new(
-                "opacity",
-                PropertyUiType::Float {
-                    min: 0.0,
-                    max: 100.0,
-                    step: 1.0,
-                    suffix: "%".into(),
-                    min_hard_limit: true,
-                    max_hard_limit: true,
-                },
-                "Opacity",
-                PropertyValue::Number(OrderedFloat(100.0)),
-            ),
-        ]
+        (comp, root_track)
     }
-
-    pub fn get_definitions_for_kind(
-        kind: &TrackClipKind,
-    ) -> Vec<crate::model::project::property::PropertyDefinition> {
-        use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
-        use ordered_float::OrderedFloat;
-
-        let mut defs = vec![];
-
-        // Specific properties
-        match kind {
-            TrackClipKind::Audio => {
-                defs.push(PropertyDefinition::new(
-                    "file_path",
-                    PropertyUiType::Text,
-                    "File Path",
-                    PropertyValue::String("".to_string()),
-                ));
-            }
-            TrackClipKind::Video | TrackClipKind::Image => {
-                defs.push(PropertyDefinition::new(
-                    "file_path",
-                    PropertyUiType::Text,
-                    "File Path",
-                    PropertyValue::String("".to_string()),
-                ));
-                defs.extend(Self::get_transform_definitions());
-            }
-            TrackClipKind::Text => {
-                defs.push(PropertyDefinition::new(
-                    "text",
-                    PropertyUiType::Text,
-                    "Text",
-                    PropertyValue::String("".to_string()),
-                ));
-                defs.push(PropertyDefinition::new(
-                    "font_family",
-                    PropertyUiType::Font,
-                    "Font Family",
-                    PropertyValue::String("Arial".to_string()),
-                ));
-                defs.push(PropertyDefinition::new(
-                    "size",
-                    PropertyUiType::Float {
-                        min: 1.0,
-                        max: 500.0,
-                        step: 1.0,
-                        suffix: "px".into(),
-                        min_hard_limit: false,
-                        max_hard_limit: false,
-                    },
-                    "Size",
-                    PropertyValue::Number(OrderedFloat(100.0)),
-                ));
-
-                defs.extend(Self::get_transform_definitions());
-            }
-            TrackClipKind::Shape => {
-                defs.push(PropertyDefinition::new(
-                    "path",
-                    PropertyUiType::Text, // Or specialized Path editor if we had one
-                    "Path Data",
-                    PropertyValue::String("".to_string()),
-                ));
-                defs.push(PropertyDefinition::new(
-                    "width",
-                    PropertyUiType::Float {
-                        min: 0.0,
-                        max: 10000.0,
-                        step: 1.0,
-                        suffix: "px".into(),
-                        min_hard_limit: false,
-                        max_hard_limit: false,
-                    },
-                    "Width",
-                    PropertyValue::Number(OrderedFloat(100.0)),
-                ));
-                defs.push(PropertyDefinition::new(
-                    "height",
-                    PropertyUiType::Float {
-                        min: 0.0,
-                        max: 10000.0,
-                        step: 1.0,
-                        suffix: "px".into(),
-                        min_hard_limit: false,
-                        max_hard_limit: false,
-                    },
-                    "Height",
-                    PropertyValue::Number(OrderedFloat(100.0)),
-                ));
-
-                defs.extend(Self::get_transform_definitions());
-            }
-            TrackClipKind::SkSL => {
-                defs.push(PropertyDefinition::new(
-                    "shader",
-                    PropertyUiType::MultilineText,
-                    "Shader Code",
-                    PropertyValue::String("".to_string()),
-                ));
-                defs.extend(Self::get_transform_definitions());
-            }
-            _ => {}
-        }
-
-        defs
-    }
-}
-
-const fn default_fps() -> f64 {
-    30.0
 }

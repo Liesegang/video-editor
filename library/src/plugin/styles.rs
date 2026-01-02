@@ -1,8 +1,8 @@
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType};
 use crate::model::frame::entity::StyleConfig;
-use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
-use crate::model::project::style::StyleInstance;
+use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+use crate::model::style::StyleInstance;
 use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::{Plugin, PluginCategory};
 

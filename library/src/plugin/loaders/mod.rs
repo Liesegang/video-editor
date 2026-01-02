@@ -6,8 +6,8 @@ pub use self::native_image::NativeImageLoader;
 
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
+use crate::model::asset::AssetKind;
 use crate::model::frame::Image;
-use crate::model::project::asset::AssetKind;
 use crate::plugin::{Plugin, PluginCategory};
 use std::collections::HashMap;
 use std::sync::Arc;

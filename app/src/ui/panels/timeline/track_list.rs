@@ -1,6 +1,6 @@
 use egui::Ui;
 use egui_phosphor::regular as icons;
-use library::model::project::project::Project;
+use library::model::project::Project;
 use library::EditorService as ProjectService;
 use log::error;
 use std::sync::{Arc, RwLock};
@@ -109,7 +109,7 @@ pub fn show_track_list(
                 {
                     let mut dragged_original_index = 0;
                     if let Some(track) = proj.get_track(hovered_tid) {
-                        if let Some(pos) = track.child_ids.iter().position(|id| *id == dragged_id) {
+                        if let Some(pos) = track.children.iter().position(|id| *id == dragged_id) {
                             dragged_original_index = pos;
                         }
                         reorder_state = Some((
@@ -379,13 +379,13 @@ pub fn show_track_list(
                 let indent = *depth as f32 * 10.0;
                 let text_offset_x = 5.0 + indent + 16.0; // Extra indent for clip (no folder icon)
 
-                let clip_name = if let Some(asset_id) = clip.reference_id {
-                    asset_names
-                        .get(&asset_id)
+                let clip_name = match &clip.content {
+                    library::model::LayerContent::Media(m) => asset_names
+                        .get(&m.asset_id)
                         .cloned()
-                        .unwrap_or_else(|| "Unknown Asset".to_string())
-                } else {
-                    format!("{}", clip.kind)
+                        .unwrap_or_else(|| "Unknown Asset".to_string()),
+                    library::model::LayerContent::Generator(g) => format!("{:?}", g), // Simplified
+                    library::model::LayerContent::Reference(_) => "Reference".to_string(),
                 };
 
                 track_list_painter.text(

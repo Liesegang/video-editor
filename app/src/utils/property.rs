@@ -1,27 +1,21 @@
-use library::model::project::property::PropertyValue;
+use library::model::property::PropertyValue;
 use library::EditorService as ProjectService;
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 fn get_local_time(
     service: &ProjectService,
-    comp_id: Uuid,
+    _comp_id: Uuid,
     _track_id: Uuid,
     entity_id: Uuid,
     global_time: f64,
 ) -> f64 {
     if let Ok(project) = service.get_project().read() {
-        if let Some(comp) = project.get_composition(comp_id) {
-            // Use flat lookup from project.get_clip() instead of nested track traversal
-            if let Some(clip) = project.get_clip(entity_id) {
-                let fps = comp.fps;
-                let current_frame = (global_time * fps).round() as i64;
-                let delta_frames = current_frame - clip.in_frame as i64;
-                let time_offset = (clip.source_begin_frame as f64) / clip.fps;
-                let delta_seconds = delta_frames as f64 / fps;
-                let local_time = time_offset + delta_seconds;
-                return local_time;
-            }
+        if let Some(layer) = project.get_layer(entity_id) {
+            let relative_time = global_time - layer.start_time.into_inner();
+            let source_time =
+                relative_time * layer.time_stretch.into_inner() + layer.trim_in.into_inner();
+            return source_time;
         }
     }
     global_time

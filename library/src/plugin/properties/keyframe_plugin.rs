@@ -1,7 +1,7 @@
 use super::super::{Plugin, PropertyPlugin};
 use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
-use crate::model::project::property::{Property, PropertyValue, Vec2, Vec3, Vec4};
+use crate::model::property::{Property, PropertyValue, Vec2, Vec3, Vec4};
 use crate::plugin::{EvaluationContext, PropertyEvaluator};
 use ordered_float::OrderedFloat;
 use std::sync::Arc;

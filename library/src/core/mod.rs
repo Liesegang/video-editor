@@ -4,4 +4,5 @@ pub mod audio;
 pub mod cache;
 pub mod ensemble;
 pub mod framing;
+// pub mod graph_compiler;
 pub mod rendering;
