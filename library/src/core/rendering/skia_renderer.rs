@@ -372,15 +372,17 @@ impl SkiaRenderer {
             };
 
             // Text decomposition: measure each character
-            let mut char_data = Vec::new();
+            // Optimization: Use slices instead of allocating Strings for each char
+            let mut char_data: Vec<(&str, f32, f32)> = Vec::with_capacity(text.len());
             let mut x_pos = 0.0f32;
 
-            for ch in text.chars() {
-                let ch_str = ch.to_string();
-                let (advance, _bounds) = font.measure_str(&ch_str, None);
+            for (i, ch) in text.char_indices() {
+                let len = ch.len_utf8();
+                let ch_slice = &text[i..i + len];
+                let (advance, _bounds) = font.measure_str(ch_slice, None);
 
                 // Store char data
-                char_data.push((ch, x_pos, advance));
+                char_data.push((ch_slice, x_pos, advance));
                 x_pos += advance;
             }
 
@@ -631,9 +633,8 @@ impl SkiaRenderer {
                 paint.set_anti_alias(true);
 
                 // Draw character
-                let ch_str = ch.to_string();
                 // Use baseline_offset for accurate positioning to match standard text rendering
-                canvas.draw_str(&ch_str, (*base_x, baseline_offset), &font, &paint);
+                canvas.draw_str(ch, (*base_x, baseline_offset), &font, &paint);
 
                 canvas.restore();
             }
