@@ -372,15 +372,21 @@ impl SkiaRenderer {
             };
 
             // Text decomposition: measure each character
-            let mut char_data = Vec::new();
+            // Heuristic capacity: text.len() is a safe upper bound (bytes >= chars)
+            let mut char_data = Vec::with_capacity(text.len());
             let mut x_pos = 0.0f32;
 
-            for ch in text.chars() {
-                let ch_str = ch.to_string();
-                let (advance, _bounds) = font.measure_str(&ch_str, None);
+            let mut char_indices = text.char_indices().peekable();
+            while let Some((i, _ch)) = char_indices.next() {
+                let end = char_indices
+                    .peek()
+                    .map(|(next_i, _)| *next_i)
+                    .unwrap_or(text.len());
+                let ch_str = &text[i..end];
+                let (advance, _bounds) = font.measure_str(ch_str, None);
 
                 // Store char data
-                char_data.push((ch, x_pos, advance));
+                char_data.push((ch_str, x_pos, advance));
                 x_pos += advance;
             }
 
@@ -600,7 +606,7 @@ impl SkiaRenderer {
             }
 
             // Render each character with its transform
-            for (i, (ch, base_x, _advance)) in char_data.iter().enumerate() {
+            for (i, (ch_str, base_x, _advance)) in char_data.iter().enumerate() {
                 let ch_transform = &char_transforms[i];
 
                 // Apply character transform
@@ -631,9 +637,8 @@ impl SkiaRenderer {
                 paint.set_anti_alias(true);
 
                 // Draw character
-                let ch_str = ch.to_string();
                 // Use baseline_offset for accurate positioning to match standard text rendering
-                canvas.draw_str(&ch_str, (*base_x, baseline_offset), &font, &paint);
+                canvas.draw_str(ch_str, (*base_x, baseline_offset), &font, &paint);
 
                 canvas.restore();
             }
