@@ -24,11 +24,11 @@ impl KeyframeHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip {} not found", clip_id)))?;
+            .ok_or_else(|| LibraryError::project(format!("Clip {} not found", clip_id)))?;
 
         // Use the unified accessor
         let prop_map = clip.get_property_map_mut(target.clone()).ok_or_else(|| {
-            LibraryError::Project(format!("Target {:?} not found in clip {}", target, clip_id))
+            LibraryError::project(format!("Target {:?} not found in clip {}", target, clip_id))
         })?;
 
         // Update logic centralized in PropertyMap
@@ -54,20 +54,20 @@ impl KeyframeHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip {} not found", clip_id)))?;
+            .ok_or_else(|| LibraryError::project(format!("Clip {} not found", clip_id)))?;
 
         let prop_map = clip
             .get_property_map_mut(target.clone())
-            .ok_or_else(|| LibraryError::Project(format!("Target {:?} not found", target)))?;
+            .ok_or_else(|| LibraryError::project(format!("Target {:?} not found", target)))?;
 
         let property = prop_map
             .get_mut(property_key)
-            .ok_or_else(|| LibraryError::Project(format!("Property {} not found", property_key)))?;
+            .ok_or_else(|| LibraryError::project(format!("Property {} not found", property_key)))?;
 
         // Logic centralized in Property? Or keep here?
         // Property::update_keyframe_at_index is available
         if !property.update_keyframe_at_index(keyframe_index, new_time, new_value, new_easing) {
-            return Err(LibraryError::Project(format!(
+            return Err(LibraryError::project(format!(
                 "Failed to update keyframe at index {} for property {}",
                 keyframe_index, property_key
             )));
@@ -90,19 +90,19 @@ impl KeyframeHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip {} not found", clip_id)))?;
+            .ok_or_else(|| LibraryError::project(format!("Clip {} not found", clip_id)))?;
 
         let prop_map = clip
             .get_property_map_mut(target.clone())
-            .ok_or_else(|| LibraryError::Project(format!("Target {:?} not found", target)))?;
+            .ok_or_else(|| LibraryError::project(format!("Target {:?} not found", target)))?;
 
         let property = prop_map
             .get_mut(property_key)
-            .ok_or_else(|| LibraryError::Project(format!("Property {} not found", property_key)))?;
+            .ok_or_else(|| LibraryError::project(format!("Property {} not found", property_key)))?;
 
         // Property::remove_keyframe_at_index is available
         if !property.remove_keyframe_at_index(keyframe_index) {
-            return Err(LibraryError::Project(format!(
+            return Err(LibraryError::project(format!(
                 "Failed to remove keyframe at index {} for property {}",
                 keyframe_index, property_key
             )));

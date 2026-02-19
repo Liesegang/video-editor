@@ -80,7 +80,7 @@ impl EffectPlugin for MagnifierEffectPlugin {
                 None, // input
                 None, // crop
             )
-            .ok_or(LibraryError::Render(
+            .ok_or(LibraryError::render(
                 "Failed to create magnifier filter".to_string(),
             ))
         })

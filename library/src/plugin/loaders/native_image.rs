@@ -53,7 +53,7 @@ impl LoadPlugin for NativeImageLoader {
             Some("png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm")
         );
         if !is_supported {
-            return Err(LibraryError::Plugin("Unsupported file type".to_string()));
+            return Err(LibraryError::plugin("Unsupported file type".to_string()));
         }
 
         let (w, h) = image::image_dimensions(path)
@@ -84,7 +84,7 @@ impl LoadPlugin for NativeImageLoader {
             };
             Ok(LoadResponse { image })
         } else {
-            Err(LibraryError::Plugin(
+            Err(LibraryError::plugin(
                 "NativeImageLoader received unsupported request".to_string(),
             ))
         }

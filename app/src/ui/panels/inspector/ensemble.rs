@@ -257,7 +257,7 @@ fn add_effector(
         return;
     }
 
-    let current_state = service.get_project().read().unwrap().clone();
+    let current_state = service.with_project(|p| p.clone());
     history_manager.push_project_state(current_state);
 }
 
@@ -273,6 +273,6 @@ fn add_decorator(
         return;
     }
 
-    let current_state = service.get_project().read().unwrap().clone();
+    let current_state = service.with_project(|p| p.clone());
     history_manager.push_project_state(current_state);
 }

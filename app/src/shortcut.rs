@@ -48,10 +48,10 @@ impl ShortcutManager {
                         // Special logic for Hand Tool Interaction
                         // If we used the key for dragging (Hand Tool), do not toggle playback.
                         if cmd.id == CommandId::TogglePlayback
-                            && editor_ctx.interaction.handled_hand_tool_drag
+                            && editor_ctx.interaction.preview.handled_hand_tool_drag
                         {
                             // Reset state and consume event (don't return command)
-                            editor_ctx.interaction.handled_hand_tool_drag = false;
+                            editor_ctx.interaction.preview.handled_hand_tool_drag = false;
                             continue;
                         }
 

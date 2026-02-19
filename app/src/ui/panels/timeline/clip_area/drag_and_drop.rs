@@ -24,7 +24,7 @@ pub fn handle_drag_and_drop(
     track_spacing: f32,
 ) {
     if ui.input(|i| i.pointer.any_released()) {
-        if let Some(dragged_item) = &editor_context.interaction.dragged_item {
+        if let Some(dragged_item) = &editor_context.interaction.timeline.dragged_item {
             if let Some(mouse_pos) = response.hover_pos() {
                 let drop_time_f64 = ((mouse_pos.x - content_rect.min.x
                     + editor_context.timeline.scroll_offset.x)
@@ -263,7 +263,8 @@ pub fn handle_drag_and_drop(
                                 calculated_insert_index,
                             ) {
                                 log::error!("Failed to add clip: {:?}", e);
-                                editor_context.interaction.active_modal_error = Some(e.to_string());
+                                editor_context.interaction.general.active_modal_error =
+                                    Some(e.to_string());
                             } else {
                                 editor_context
                                     .timeline
@@ -293,8 +294,7 @@ pub fn handle_drag_and_drop(
                         }
 
                         if success {
-                            let current_state =
-                                project_service.get_project().read().unwrap().clone();
+                            let current_state = project_service.with_project(|p| p.clone());
                             history_manager.push_project_state(current_state);
                         }
                     }

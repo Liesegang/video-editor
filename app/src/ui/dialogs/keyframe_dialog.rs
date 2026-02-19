@@ -379,15 +379,14 @@ pub fn show_keyframe_dialog(
                     if let Err(_e) = result {
                         // Only show error on final interaction to avoid spamming?
                         // Or show generic error.
-                        // editor_context.interaction.active_modal_error = Some(format!("Failed to update keyframe: {}", e));
+                        // editor_context.interaction.general.active_modal_error = Some(format!("Failed to update keyframe: {}", e));
                     }
                 }
             }
 
             if should_push_history {
-                if let Ok(proj_read) = project_service.get_project().read() {
-                    history_manager.push_project_state(proj_read.clone());
-                }
+                let state = project_service.with_project(|p| p.clone());
+                history_manager.push_project_state(state);
             }
         });
 

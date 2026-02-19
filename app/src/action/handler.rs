@@ -72,11 +72,8 @@ fn handle_file_command(_ctx: &egui::Context, action: CommandId, context: ActionC
                 context.editor_context.timeline.current_time = 0.0;
 
                 context.history_manager.clear();
-                if let Ok(proj_read) = context.project_service.get_project().read() {
-                    context
-                        .history_manager
-                        .push_project_state(proj_read.clone());
-                }
+                let state = context.project_service.with_project(|p| p.clone());
+                context.history_manager.push_project_state(state);
             }
             Err(e) => error!("Failed to create new project: {}", e),
         },
@@ -89,11 +86,8 @@ fn handle_file_command(_ctx: &egui::Context, action: CommandId, context: ActionC
                     error!("Failed to load project: {}", e);
                 } else {
                     context.history_manager.clear();
-                    if let Ok(proj_read) = context.project_service.get_project().read() {
-                        context
-                            .history_manager
-                            .push_project_state(proj_read.clone());
-                    }
+                    let state = context.project_service.with_project(|p| p.clone());
+                    context.history_manager.push_project_state(state);
                     info!("Project loaded from {}", path.display());
                     context.editor_context.timeline.current_time = 0.0;
                 }
@@ -161,12 +155,7 @@ fn handle_edit_command(action: CommandId, context: ActionContext) {
                                 .selected_entities
                                 .remove(&entity_id);
                             context.editor_context.selection.last_selected_entity_id = None;
-                            let current_state = context
-                                .project_service
-                                .get_project()
-                                .read()
-                                .unwrap()
-                                .clone();
+                            let current_state = context.project_service.with_project(|p| p.clone());
                             context.history_manager.push_project_state(current_state);
                         }
                     }

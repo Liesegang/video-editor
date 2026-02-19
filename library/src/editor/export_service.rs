@@ -76,7 +76,7 @@ impl ExportService {
             composition.fps,
             (composition.duration * composition.fps).ceil().max(0.0) as u64,
         );
-        let sender = self.save_tx.as_ref().ok_or(LibraryError::Render(
+        let sender = self.save_tx.as_ref().ok_or(LibraryError::render(
             "Save queue is already closed".to_string(),
         ))?;
 
@@ -123,7 +123,7 @@ impl ExportService {
             let image = match output {
                 crate::rendering::renderer::RenderOutput::Image(img) => img,
                 crate::rendering::renderer::RenderOutput::Texture(_) => {
-                    return Err(LibraryError::Render(
+                    return Err(LibraryError::render(
                         "Export received Texture output (unsupported)".to_string(),
                     ));
                 }
@@ -150,7 +150,7 @@ impl ExportService {
                     image,
                     export_settings: Arc::clone(&settings_arc), // Use the modified settings
                 })
-                .map_err(|_| LibraryError::Render("Save queue disconnected".to_string()))?;
+                .map_err(|_| LibraryError::render("Save queue disconnected".to_string()))?;
         }
 
         Ok(())
@@ -161,7 +161,7 @@ impl ExportService {
         if let Some(handle) = self.saver_handle.take() {
             handle
                 .join()
-                .map_err(|_| LibraryError::Render("Failed to join save worker".to_string()))?;
+                .map_err(|_| LibraryError::render("Failed to join save worker".to_string()))?;
         }
         Ok(())
     }

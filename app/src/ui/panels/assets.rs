@@ -2,25 +2,22 @@ use egui::Ui;
 use egui_extras::{Column, TableBuilder};
 use egui_phosphor::regular as icons;
 use library::model::project::asset::AssetKind;
-use library::model::project::project::Project;
-use library::EditorService;
-use std::sync::{Arc, RwLock};
 
+use crate::model::ui_types::DraggedItem;
+use crate::state::context::PanelContext;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
-use crate::{
-    action::HistoryManager,
-    model::ui_types::DraggedItem, // Added import
-    state::context::EditorContext,
-};
 
 pub fn assets_panel(
     ui: &mut Ui,
-    editor_context: &mut EditorContext,
-    history_manager: &mut HistoryManager,
-    project_service: &mut EditorService,
-    project: &Arc<RwLock<Project>>,
+    ctx: &mut PanelContext,
     composition_dialog: &mut CompositionDialog,
 ) {
+    let PanelContext {
+        editor_context,
+        history_manager,
+        project_service,
+        project,
+    } = ctx;
     let mut needs_refresh = false;
 
     // Handle new composition dialog results
@@ -38,7 +35,7 @@ pub fn assets_panel(
 
         // No need to add to assets list anymore, as Compositions are separate
 
-        let current_state = project_service.get_project().read().unwrap().clone();
+        let current_state = project_service.with_project(|p| p.clone());
         history_manager.push_project_state(current_state);
         needs_refresh = true;
         composition_dialog.confirmed = false; // Reset confirmed state
@@ -60,7 +57,7 @@ pub fn assets_panel(
 
         // No need to update assets list manually
 
-        let current_state = project_service.get_project().read().unwrap().clone();
+        let current_state = project_service.with_project(|p| p.clone());
         history_manager.push_project_state(current_state);
         needs_refresh = true;
         composition_dialog.confirmed = false; // Reset confirmed state
@@ -125,13 +122,13 @@ pub fn assets_panel(
                     }
 
                     if imported_any {
-                        let current_state = project_service.get_project().read().unwrap().clone();
+                        let current_state = project_service.with_project(|p| p.clone());
                         history_manager.push_project_state(current_state);
                         needs_refresh = true;
                     }
 
                     if !report.duplicates.is_empty() || !report.errors.is_empty() {
-                        editor_context.interaction.import_report = Some(report);
+                        editor_context.interaction.general.import_report = Some(report);
                     }
                 }
             }
@@ -204,13 +201,13 @@ pub fn assets_panel(
                     });
 
                     if imported_any {
-                        let current_state = project_service.get_project().read().unwrap().clone();
+                        let current_state = project_service.with_project(|p| p.clone());
                         history_manager.push_project_state(current_state);
                         needs_refresh = true;
                     }
 
                     if !report.duplicates.is_empty() || !report.errors.is_empty() {
-                        editor_context.interaction.import_report = Some(report);
+                        editor_context.interaction.general.import_report = Some(report);
                     }
                 }
             }
@@ -303,7 +300,7 @@ pub fn assets_panel(
                                                             "This composition is used inside another timeline.\nDeleting it will remove all associated clips.\nAre you sure?",
                                                             crate::ui::dialogs::confirmation::ConfirmationAction::DeleteComposition(comp.id)
                                                         );
-                                                        editor_context.interaction.active_confirmation = Some(dialog);
+                                                        editor_context.interaction.general.active_confirmation = Some(dialog);
                                                     } else {
                                                         comp_to_remove = Some(comp.id);
                                                     }
@@ -322,7 +319,7 @@ pub fn assets_panel(
                                             }
 
                                             if response.drag_started() {
-                                                editor_context.interaction.dragged_item =
+                                                editor_context.interaction.timeline.dragged_item =
                                                     Some(DraggedItem::Composition(comp.id));
                                             }
                                             response.on_hover_text(format!("Comp ID: {}", comp.id));
@@ -407,7 +404,7 @@ pub fn assets_panel(
                                     row.col(|ui| {
                                         ui.push_id(asset.id, |ui| {
                                             let _is_dragged =
-                                                match editor_context.interaction.dragged_item {
+                                                match editor_context.interaction.timeline.dragged_item {
                                                     Some(DraggedItem::Asset(id)) => id == asset.id,
                                                     _ => false,
                                                 };
@@ -437,7 +434,7 @@ pub fn assets_panel(
                                                             "This asset is used in the timeline.\nDeleting it will remove all associated clips.\nAre you sure?",
                                                             crate::ui::dialogs::confirmation::ConfirmationAction::DeleteAsset(asset.id)
                                                         );
-                                                        editor_context.interaction.active_confirmation = Some(dialog);
+                                                        editor_context.interaction.general.active_confirmation = Some(dialog);
                                                     } else {
                                                         asset_to_remove = Some(asset.id);
                                                     }
@@ -447,7 +444,7 @@ pub fn assets_panel(
 
                                             // Drag
                                             if response.drag_started() {
-                                                editor_context.interaction.dragged_item =
+                                                editor_context.interaction.timeline.dragged_item =
                                                     Some(DraggedItem::Asset(asset.id));
                                             }
 
@@ -497,7 +494,7 @@ pub fn assets_panel(
             .remove_composition_fully(comp_id)
             .expect("Failed to remove composition");
 
-        let current_state = project_service.get_project().read().unwrap().clone();
+        let current_state = project_service.with_project(|p| p.clone());
         history_manager.push_project_state(current_state);
         needs_refresh = true;
     }
@@ -507,7 +504,7 @@ pub fn assets_panel(
             .remove_asset_fully(asset_id)
             .expect("Failed to remove asset");
 
-        let current_state = project_service.get_project().read().unwrap().clone();
+        let current_state = project_service.with_project(|p| p.clone());
         history_manager.push_project_state(current_state);
         needs_refresh = true;
     }
@@ -515,7 +512,7 @@ pub fn assets_panel(
     // Old modals removed.
 
     // Import Report Modal
-    if let Some(report) = &editor_context.interaction.import_report {
+    if let Some(report) = &editor_context.interaction.general.import_report {
         let mut open = true;
         let mut should_close = false;
 
@@ -562,7 +559,7 @@ pub fn assets_panel(
             });
 
         if !open || should_close {
-            editor_context.interaction.import_report = None;
+            editor_context.interaction.general.import_report = None;
         }
     }
 

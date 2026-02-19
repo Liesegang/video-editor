@@ -373,6 +373,7 @@ pub fn draw_properties(
 
                         let is_selected = editor_context
                             .interaction
+                            .graph_editor
                             .selected_keyframe
                             .as_ref()
                             .map_or(false, |(s_name, s_idx)| s_name == name && *s_idx == i);

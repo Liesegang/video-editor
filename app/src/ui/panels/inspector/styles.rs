@@ -40,7 +40,7 @@ pub fn render_styles_section(
                     if let Err(e) = project_service.add_style(selected_entity_id, &type_name) {
                         log::error!("Failed to add style: {}", e);
                     } else {
-                        let current_state = project_service.get_project().read().unwrap().clone();
+                        let current_state = project_service.with_project(|p| p.clone());
                         history_manager.push_project_state(current_state);
                         *needs_refresh = true;
                     }

@@ -67,7 +67,7 @@ impl EffectPlugin for TileEffectPlugin {
             // Destination is the full canvas
             let dst_rect = Rect::from_wh(canvas_width as f32, canvas_height as f32);
 
-            image_filters::tile(src_rect, dst_rect, None).ok_or(LibraryError::Render(
+            image_filters::tile(src_rect, dst_rect, None).ok_or(LibraryError::render(
                 "Failed to create tile filter".to_string(),
             ))
         })

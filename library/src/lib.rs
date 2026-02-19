@@ -1,4 +1,6 @@
 // Core internal modules
+// NOTE: Ideally pub(crate), but app still references some sub-modules directly.
+// Migrate app to use service APIs, then restrict visibility.
 pub mod core;
 
 // Editor services - public API for GUI
@@ -15,15 +17,14 @@ pub mod util;
 
 // Error types
 pub mod error;
-pub use error::LibraryError;
+pub use error::{LibraryError, PluginError, ProjectError, RenderError};
 
-// Re-export animation types from model for backward compatibility
+// Re-export animation types from model
 pub use model::animation;
 
 // Re-exports for backward compatibility
 pub use core::audio;
 pub use core::cache;
-pub use core::ensemble;
 pub use core::framing;
 pub use core::rendering;
 
@@ -36,7 +37,6 @@ pub use core::rendering::skia_renderer::SkiaRenderer;
 pub use editor::EditorService;
 pub use editor::ExportService;
 pub use editor::ProjectModel;
-pub use editor::ProjectService;
 pub use editor::RenderService;
 
 use crate::plugin::PluginManager;

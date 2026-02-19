@@ -1,15 +1,13 @@
 use egui::Ui;
 use egui_phosphor::regular as icons;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
-use library::model::project::project::Project;
-use library::EditorService;
 use library::RenderServer;
 
 use crate::command::{CommandId, CommandRegistry};
+use crate::state::context::PanelContext;
 use crate::state::context_types::PreviewTool;
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
-use crate::{action::HistoryManager, state::context::EditorContext};
 use library::model::project::property::Vec2;
 
 mod action;
@@ -49,13 +47,16 @@ impl<'a> ViewportState for PreviewViewportState<'a> {
 
 pub fn preview_panel(
     ui: &mut Ui,
-    editor_context: &mut EditorContext,
-    history_manager: &mut HistoryManager,
-    project_service: &mut EditorService,
-    project: &Arc<RwLock<Project>>,
+    ctx: &mut PanelContext,
     render_server: &Arc<RenderServer>,
     registry: &CommandRegistry,
 ) {
+    let PanelContext {
+        editor_context,
+        history_manager,
+        project_service,
+        project,
+    } = ctx;
     let bottom_bar_height = 24.0;
     let top_bar_height = 32.0; // Added top bar
     let available_rect = ui.available_rect_before_wrap();
@@ -160,7 +161,7 @@ pub fn preview_panel(
     let (_changed, response) = controller.interact_with_rect(
         preview_rect,
         &mut state,
-        &mut editor_context.interaction.handled_hand_tool_drag,
+        &mut editor_context.interaction.preview.handled_hand_tool_drag,
     );
 
     let _pointer_pos = response.hover_pos();
@@ -453,6 +454,7 @@ pub fn preview_panel(
                     let mut cached = None;
                     if let Some((cached_hash, bounds)) = editor_context
                         .interaction
+                        .preview
                         .bounds_cache
                         .bounds
                         .get(&entity.id)
@@ -492,6 +494,7 @@ pub fn preview_panel(
                                 // Update Cache
                                 editor_context
                                     .interaction
+                                    .preview
                                     .bounds_cache
                                     .bounds
                                     .insert(entity.id, (hash, (x, y, w, h)));
@@ -614,7 +617,7 @@ pub fn preview_panel(
         if editor_context.view.active_tool == PreviewTool::Select {
             gizmo::draw_gizmo(ui, editor_context, &gui_clips, to_screen);
         } else if editor_context.view.active_tool == PreviewTool::Shape {
-            if let Some(state) = &editor_context.interaction.vector_editor_state {
+            if let Some(state) = &editor_context.interaction.preview.vector_editor_state {
                 if let Some(id) = editor_context.selection.selected_entities.iter().next() {
                     if let Some(gc) = gui_clips.iter().find(|c| c.id() == *id) {
                         let renderer = crate::ui::panels::preview::vector_editor::renderer::VectorEditorRenderer {

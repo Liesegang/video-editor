@@ -113,7 +113,7 @@ where
         if changed {
             let new_items: Vec<T> = dnd_items.into_iter().map(|wrapper| wrapper.item).collect();
             if (self.on_update)(new_items.clone(), project_service).is_ok() {
-                let current_state = project_service.get_project().read().unwrap().clone();
+                let current_state = project_service.with_project(|p| p.clone());
                 history_manager.push_project_state(current_state);
                 *self.items = new_items;
                 *needs_refresh = true;

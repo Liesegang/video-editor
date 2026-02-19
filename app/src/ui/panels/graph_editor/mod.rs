@@ -7,16 +7,10 @@ pub use utils::PropertyComponent;
 use utils::*;
 
 use egui::{Color32, Sense, Ui, Vec2};
-use library::model::project::project::Project;
 use library::model::project::property::{Property, PropertyMap, PropertyValue};
-use library::EditorService;
-use std::sync::{Arc, RwLock};
 
-use crate::action::HistoryManager;
-use crate::command::CommandRegistry;
-use crate::state::context::EditorContext;
-
-use crate::command::CommandId;
+use crate::command::{CommandId, CommandRegistry};
+use crate::state::context::PanelContext;
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 
 struct GraphViewportState<'a> {
@@ -41,14 +35,13 @@ impl<'a> ViewportState for GraphViewportState<'a> {
     }
 }
 
-pub fn graph_editor_panel(
-    ui: &mut Ui,
-    editor_context: &mut EditorContext,
-    history_manager: &mut HistoryManager,
-    project_service: &mut EditorService,
-    project: &Arc<RwLock<Project>>,
-    registry: &CommandRegistry,
-) {
+pub fn graph_editor_panel(ui: &mut Ui, ctx: &mut PanelContext, registry: &CommandRegistry) {
+    let PanelContext {
+        editor_context,
+        history_manager,
+        project_service,
+        project,
+    } = ctx;
     let (comp_id, track_id, entity_id) = match (
         editor_context.selection.composition_id,
         editor_context.selection.last_selected_track_id,
@@ -350,7 +343,7 @@ pub fn graph_editor_panel(
                 let (_, graph_response) = controller.interact_with_rect(
                     graph_rect,
                     &mut state,
-                    &mut editor_context.interaction.handled_hand_tool_drag,
+                    &mut editor_context.interaction.preview.handled_hand_tool_drag,
                 );
 
                 let transform = GraphTransform::new(

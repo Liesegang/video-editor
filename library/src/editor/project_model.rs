@@ -28,7 +28,7 @@ impl ProjectModel {
 
     pub fn new(project: Arc<Project>, composition_index: usize) -> Result<Self, LibraryError> {
         if project.compositions.get(composition_index).is_none() {
-            return Err(LibraryError::Project(format!(
+            return Err(LibraryError::project(format!(
                 "Invalid composition index {}",
                 composition_index
             )));

@@ -66,7 +66,7 @@ where
                     Some(&mut ctx.direct_context),
                 )
             } else {
-                Err(LibraryError::Render(
+                Err(LibraryError::render(
                     "Texture input without GPU context".to_string(),
                 ))
             }

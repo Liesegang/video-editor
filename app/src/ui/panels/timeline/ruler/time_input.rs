@@ -20,8 +20,8 @@ pub fn show_time_input(
             ui.set_width(100.0); // Ensure this section takes 100px width
 
             // Format current_time into current_time_text_input if not editing
-            if !editor_context.interaction.is_editing_current_time {
-                editor_context.interaction.current_time_text_input =
+            if !editor_context.interaction.timeline.is_editing_current_time {
+                editor_context.interaction.timeline.current_time_text_input =
                     match editor_context.timeline.display_mode {
                         TimelineDisplayMode::Seconds => {
                             let minutes = (editor_context.timeline.current_time / 60.0).floor();
@@ -47,19 +47,25 @@ pub fn show_time_input(
             }
 
             let response = ui.add(
-                egui::TextEdit::singleline(&mut editor_context.interaction.current_time_text_input)
-                    .desired_width(ui.available_width())
-                    .font(egui::FontId::monospace(10.0)),
+                egui::TextEdit::singleline(
+                    &mut editor_context.interaction.timeline.current_time_text_input,
+                )
+                .desired_width(ui.available_width())
+                .font(egui::FontId::monospace(10.0)),
             );
 
             if response.clicked() {
-                editor_context.interaction.is_editing_current_time = true;
+                editor_context.interaction.timeline.is_editing_current_time = true;
             }
 
-            if editor_context.interaction.is_editing_current_time
+            if editor_context.interaction.timeline.is_editing_current_time
                 && (response.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)))
             {
-                let input_str = editor_context.interaction.current_time_text_input.clone();
+                let input_str = editor_context
+                    .interaction
+                    .timeline
+                    .current_time_text_input
+                    .clone();
                 let parsed_time_in_seconds = match editor_context.timeline.display_mode {
                     TimelineDisplayMode::Seconds => {
                         // Attempt to parse MM:SS.ms or just seconds
@@ -109,7 +115,7 @@ pub fn show_time_input(
                 } else {
                     log::warn!("Failed to parse time input: {}", input_str);
                     // Revert to current_time's formatted string
-                    editor_context.interaction.current_time_text_input =
+                    editor_context.interaction.timeline.current_time_text_input =
                         match editor_context.timeline.display_mode {
                             TimelineDisplayMode::Seconds => {
                                 let minutes = (editor_context.timeline.current_time / 60.0).floor();
@@ -134,7 +140,7 @@ pub fn show_time_input(
                             }
                         };
                 }
-                editor_context.interaction.is_editing_current_time = false;
+                editor_context.interaction.timeline.is_editing_current_time = false;
             }
 
             // Return the response from the TextEdit so we can attach context menu to it

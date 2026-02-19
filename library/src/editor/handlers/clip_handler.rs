@@ -1,8 +1,7 @@
 use crate::error::LibraryError;
 use crate::model::project::project::Project;
-use crate::model::project::property::{Keyframe, Property, PropertyValue};
+use crate::model::project::property::{Property, PropertyValue};
 use crate::model::project::{Node, TrackClip, TrackClipKind};
-use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -23,7 +22,7 @@ impl ClipHandler {
         if clip.kind == TrackClipKind::Composition {
             if let Some(ref_id) = clip.reference_id {
                 if !Self::validate_recursion(project, ref_id, composition_id) {
-                    return Err(LibraryError::Project(
+                    return Err(LibraryError::project(
                         "Cannot add composition: Circular reference detected".to_string(),
                     ));
                 }
@@ -36,7 +35,7 @@ impl ClipHandler {
 
         // Ensure track exists
         if proj.get_track(track_id).is_none() {
-            return Err(LibraryError::Project(format!(
+            return Err(LibraryError::project(format!(
                 "Track with ID {} not found",
                 track_id
             )));
@@ -72,13 +71,13 @@ impl ClipHandler {
         // Remove from parent track's child_ids
         if let Some(track) = proj.get_track_mut(track_id) {
             if !track.remove_child(clip_id) {
-                return Err(LibraryError::Project(format!(
+                return Err(LibraryError::project(format!(
                     "Clip {} not found in track {}",
                     clip_id, track_id
                 )));
             }
         } else {
-            return Err(LibraryError::Project(format!(
+            return Err(LibraryError::project(format!(
                 "Track {} not found",
                 track_id
             )));
@@ -105,7 +104,7 @@ impl ClipHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
+            .ok_or_else(|| LibraryError::project(format!("Clip with ID {} not found", clip_id)))?;
 
         // Special handling for Clip struct fields sync
         if let crate::model::project::property::PropertyTarget::Clip = target {
@@ -131,69 +130,10 @@ impl ClipHandler {
 
         let prop_map = clip
             .get_property_map_mut(target.clone())
-            .ok_or_else(|| LibraryError::Project(format!("Target {:?} not found", target)))?;
+            .ok_or_else(|| LibraryError::project(format!("Target {:?} not found", target)))?;
 
         prop_map.update_property_or_keyframe(property_key, time, value, easing);
 
-        Ok(())
-    }
-
-    pub fn update_keyframe(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        property_key: &str,
-        keyframe_index: usize,
-        new_time: Option<f64>,
-        new_value: Option<PropertyValue>,
-        new_easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip {} not found", clip_id)))?;
-
-        let property = clip
-            .properties
-            .get_mut(property_key)
-            .ok_or_else(|| LibraryError::Project(format!("Property {} not found", property_key)))?;
-
-        if let Some(PropertyValue::Array(promoted_array)) = property.properties.get_mut("keyframes")
-        {
-            let mut keyframes: Vec<Keyframe> = promoted_array
-                .iter()
-                .filter_map(|v| serde_json::from_value(serde_json::Value::from(v)).ok())
-                .collect();
-
-            if let Some(kf) = keyframes.get_mut(keyframe_index) {
-                if let Some(t) = new_time {
-                    kf.time = OrderedFloat(t);
-                }
-                if let Some(val) = new_value {
-                    kf.value = val;
-                }
-                if let Some(easing) = new_easing {
-                    kf.easing = easing;
-                }
-            } else {
-                return Err(LibraryError::Project(
-                    "Keyframe index out of bounds".to_string(),
-                ));
-            }
-
-            keyframes.sort_by(|a, b| a.time.cmp(&b.time));
-
-            let new_array: Vec<PropertyValue> = keyframes
-                .into_iter()
-                .filter_map(|kf| serde_json::to_value(kf).ok())
-                .map(PropertyValue::from)
-                .collect();
-
-            promoted_array.clear();
-            promoted_array.extend(new_array);
-        }
         Ok(())
     }
 
@@ -209,7 +149,7 @@ impl ClipHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip {} not found", clip_id)))?;
+            .ok_or_else(|| LibraryError::project(format!("Clip {} not found", clip_id)))?;
 
         if let Some(prop) = clip.properties.get_mut(property_key) {
             if prop.evaluator == "keyframe" {
@@ -221,7 +161,7 @@ impl ClipHandler {
             }
             Ok(())
         } else {
-            Err(LibraryError::Project(format!(
+            Err(LibraryError::project(format!(
                 "Property {} not found",
                 property_key
             )))
@@ -301,13 +241,13 @@ impl ClipHandler {
         // 1. Remove from source track's child_ids
         if let Some(source_track) = proj.get_track_mut(source_track_id) {
             if !source_track.remove_child(clip_id) {
-                return Err(LibraryError::Project(format!(
+                return Err(LibraryError::project(format!(
                     "Clip {} not found in source track",
                     clip_id
                 )));
             }
         } else {
-            return Err(LibraryError::Project(format!(
+            return Err(LibraryError::project(format!(
                 "Source track {} not found",
                 source_track_id
             )));
@@ -328,7 +268,7 @@ impl ClipHandler {
                 target_track.add_child(clip_id);
             }
         } else {
-            return Err(LibraryError::Project(format!(
+            return Err(LibraryError::project(format!(
                 "Target track {} not found",
                 target_track_id
             )));
@@ -348,7 +288,7 @@ impl ClipHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
+            .ok_or_else(|| LibraryError::project("Clip not found".to_string()))?;
 
         clip.effects.push(effect);
         Ok(())
@@ -365,7 +305,7 @@ impl ClipHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
+            .ok_or_else(|| LibraryError::project("Clip not found".to_string()))?;
 
         clip.effects = effects;
         Ok(())
@@ -382,7 +322,7 @@ impl ClipHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
+            .ok_or_else(|| LibraryError::project("Clip not found".to_string()))?;
 
         clip.styles = styles;
         Ok(())
@@ -399,7 +339,7 @@ impl ClipHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
+            .ok_or_else(|| LibraryError::project("Clip not found".to_string()))?;
 
         clip.effectors = effectors;
         Ok(())
@@ -416,7 +356,7 @@ impl ClipHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
+            .ok_or_else(|| LibraryError::project("Clip not found".to_string()))?;
 
         clip.decorators = decorators;
         Ok(())
@@ -436,7 +376,7 @@ impl ClipHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
+            .ok_or_else(|| LibraryError::project(format!("Clip with ID {} not found", clip_id)))?;
 
         if let Some(style) = clip.styles.get_mut(style_index) {
             if let Some(prop) = style.properties.get_mut(property_key) {
@@ -444,13 +384,13 @@ impl ClipHandler {
                     .insert(attribute_key.to_string(), attribute_value);
                 Ok(())
             } else {
-                Err(LibraryError::Project(format!(
+                Err(LibraryError::project(format!(
                     "Property {} not found",
                     property_key
                 )))
             }
         } else {
-            Err(LibraryError::Project(
+            Err(LibraryError::project(
                 "Style index out of range".to_string(),
             ))
         }
@@ -470,7 +410,7 @@ impl ClipHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
+            .ok_or_else(|| LibraryError::project(format!("Clip with ID {} not found", clip_id)))?;
 
         if let Some(effector) = clip.effectors.get_mut(effector_index) {
             if let Some(prop) = effector.properties.get_mut(property_key) {
@@ -478,13 +418,13 @@ impl ClipHandler {
                     .insert(attribute_key.to_string(), attribute_value);
                 Ok(())
             } else {
-                Err(LibraryError::Project(format!(
+                Err(LibraryError::project(format!(
                     "Property {} not found",
                     property_key
                 )))
             }
         } else {
-            Err(LibraryError::Project(
+            Err(LibraryError::project(
                 "Effector index out of range".to_string(),
             ))
         }
@@ -504,7 +444,7 @@ impl ClipHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
+            .ok_or_else(|| LibraryError::project(format!("Clip with ID {} not found", clip_id)))?;
 
         if let Some(decorator) = clip.decorators.get_mut(decorator_index) {
             if let Some(prop) = decorator.properties.get_mut(property_key) {
@@ -512,13 +452,13 @@ impl ClipHandler {
                     .insert(attribute_key.to_string(), attribute_value);
                 Ok(())
             } else {
-                Err(LibraryError::Project(format!(
+                Err(LibraryError::project(format!(
                     "Property {} not found",
                     property_key
                 )))
             }
         } else {
-            Err(LibraryError::Project(
+            Err(LibraryError::project(
                 "Decorator index out of range".to_string(),
             ))
         }
@@ -537,14 +477,14 @@ impl ClipHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
+            .ok_or_else(|| LibraryError::project(format!("Clip with ID {} not found", clip_id)))?;
 
         if let Some(prop) = clip.properties.get_mut(property_key) {
             prop.properties
                 .insert(attribute_key.to_string(), attribute_value);
             Ok(())
         } else {
-            Err(LibraryError::Project(format!(
+            Err(LibraryError::project(format!(
                 "Property {} not found",
                 property_key
             )))
@@ -565,7 +505,7 @@ impl ClipHandler {
 
         let clip = proj
             .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
+            .ok_or_else(|| LibraryError::project(format!("Clip with ID {} not found", clip_id)))?;
 
         if let Some(effect) = clip.effects.get_mut(effect_index) {
             if let Some(prop) = effect.properties.get_mut(property_key) {
@@ -573,13 +513,13 @@ impl ClipHandler {
                     .insert(attribute_key.to_string(), attribute_value);
                 Ok(())
             } else {
-                Err(LibraryError::Project(format!(
+                Err(LibraryError::project(format!(
                     "Property {} not found",
                     property_key
                 )))
             }
         } else {
-            Err(LibraryError::Project(
+            Err(LibraryError::project(
                 "Effect index out of range".to_string(),
             ))
         }

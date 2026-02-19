@@ -23,7 +23,7 @@ impl CompositionHandler {
             proj.compositions
                 .iter_mut()
                 .find(|c| c.id == id)
-                .ok_or(LibraryError::Project(format!(
+                .ok_or(LibraryError::project(format!(
                     "Composition not found: {}",
                     id
                 )))?;
@@ -60,6 +60,7 @@ impl CompositionHandler {
         Ok(id)
     }
 
+    #[allow(dead_code)]
     pub fn remove_composition(
         project: &Arc<RwLock<Project>>,
         id: Uuid,
@@ -81,7 +82,7 @@ impl CompositionHandler {
             .iter()
             .find(|c| c.id == id)
             .cloned()
-            .ok_or(LibraryError::Project(format!(
+            .ok_or(LibraryError::project(format!(
                 "Composition not found: {}",
                 id
             )))

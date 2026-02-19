@@ -1,12 +1,8 @@
 use egui::Ui;
 
-use library::model::project::project::Project;
 use library::model::project::TrackClipKind;
 
-use library::EditorService;
-use std::sync::{Arc, RwLock};
-
-use crate::{action::HistoryManager, state::context::EditorContext};
+use crate::state::context::PanelContext;
 
 use library::model::project::property::PropertyUiType;
 
@@ -22,13 +18,13 @@ use ensemble::render_ensemble_section;
 use properties::{render_property_rows, PropertyRenderContext};
 use styles::render_styles_section;
 
-pub fn inspector_panel(
-    ui: &mut Ui,
-    editor_context: &mut EditorContext,
-    history_manager: &mut HistoryManager,
-    project_service: &mut EditorService,
-    project: &Arc<RwLock<Project>>,
-) {
+pub fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
+    let PanelContext {
+        editor_context,
+        history_manager,
+        project_service,
+        project,
+    } = ctx;
     let mut needs_refresh = false;
 
     // Display properties of selected entity

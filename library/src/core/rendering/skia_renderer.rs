@@ -49,11 +49,11 @@ impl SkiaRenderer {
                     });
                 }
             }
-            Err(LibraryError::Render(
+            Err(LibraryError::render(
                 "Failed to get GL texture info".to_string(),
             ))
         } else {
-            Err(LibraryError::Render(
+            Err(LibraryError::render(
                 "GPU context not available".to_string(),
             ))
         }
@@ -154,7 +154,7 @@ impl SkiaRenderer {
             height,
             gpu_context.as_mut().map(|ctx| &mut ctx.direct_context),
         )
-        .map_err(|e| LibraryError::Render(format!("Cannot create Skia Surface: {}", e)))
+        .map_err(|e| LibraryError::render(format!("Cannot create Skia Surface: {}", e)))
         .expect("Cannot create Skia Surface");
 
         let mut renderer = SkiaRenderer {
@@ -168,7 +168,7 @@ impl SkiaRenderer {
         };
         renderer
             .clear()
-            .map_err(|e| LibraryError::Render(format!("Failed to clear render target: {}", e)))
+            .map_err(|e| LibraryError::render(format!("Failed to clear render target: {}", e)))
             .expect("Failed to clear render target");
         renderer
     }
@@ -661,13 +661,13 @@ fn convert_path_effect(path_effect: &PathEffect) -> Result<skia_safe::PathEffect
         PathEffect::Dash { intervals, phase } => {
             let intervals: Vec<f32> = intervals.iter().map(|&x| x as f32).collect();
             Ok(
-                SkPathEffect::dash(&intervals, *phase as f32).ok_or(LibraryError::Render(
+                SkPathEffect::dash(&intervals, *phase as f32).ok_or(LibraryError::render(
                     "Failed to create PathEffect".to_string(),
                 ))?,
             )
         }
         PathEffect::Corner { radius } => Ok(SkPathEffect::corner_path(*radius as f32).ok_or(
-            LibraryError::Render("Failed to create PathEffect".to_string()),
+            LibraryError::render("Failed to create PathEffect".to_string()),
         )?),
         PathEffect::Discrete {
             seg_length,
@@ -675,13 +675,13 @@ fn convert_path_effect(path_effect: &PathEffect) -> Result<skia_safe::PathEffect
             seed,
         } => Ok(
             SkPathEffect::discrete(*seg_length as f32, *deviation as f32, *seed as u32).ok_or(
-                LibraryError::Render("Failed to create PathEffect".to_string()),
+                LibraryError::render("Failed to create PathEffect".to_string()),
             )?,
         ),
         PathEffect::Trim { start, end } => {
             Ok(
                 SkPathEffect::trim(*start as f32, *end as f32, Mode::Normal).ok_or(
-                    LibraryError::Render("Failed to create PathEffect".to_string()),
+                    LibraryError::render("Failed to create PathEffect".to_string()),
                 )?,
             )
         }
@@ -735,7 +735,7 @@ impl Renderer for SkiaRenderer {
                         info.height,
                     )?
                 } else {
-                    return Err(LibraryError::Render(
+                    return Err(LibraryError::render(
                         "Cannot render texture without GPU context".to_string(),
                     ));
                 }
@@ -802,7 +802,7 @@ impl Renderer for SkiaRenderer {
                 let shader =
                     effect
                         .make_shader(uniforms, &[], None)
-                        .ok_or(LibraryError::Render(
+                        .ok_or(LibraryError::render(
                             "Failed to create SkSL shader".to_string(),
                         ))?;
 
@@ -1032,7 +1032,7 @@ impl Renderer for SkiaRenderer {
                         (0, 0),
                         skia_safe::image::CachingHint::Disallow,
                     ) {
-                        return Err(LibraryError::Render(
+                        return Err(LibraryError::render(
                             "Failed to read texture pixels".to_string(),
                         ));
                     }
@@ -1042,7 +1042,7 @@ impl Renderer for SkiaRenderer {
                         data: buffer,
                     })
                 } else {
-                    Err(LibraryError::Render(
+                    Err(LibraryError::render(
                         "No GPU context to read texture".to_string(),
                     ))
                 }

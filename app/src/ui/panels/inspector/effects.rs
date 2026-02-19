@@ -39,7 +39,7 @@ pub fn render_effects_section(
                     .add_effect_to_clip(selected_entity_id, &effect_id)
                     .ok();
 
-                let current_state = project_service.get_project().read().unwrap().clone();
+                let current_state = project_service.with_project(|p| p.clone());
                 history_manager.push_project_state(current_state);
 
                 *needs_refresh = true;
@@ -47,11 +47,8 @@ pub fn render_effects_section(
         );
     });
 
-    let track_clip_ref = project_service
-        .get_project()
-        .read()
-        .ok()
-        .and_then(|proj| proj.get_clip(selected_entity_id).cloned());
+    let track_clip_ref =
+        project_service.with_project(|proj| proj.get_clip(selected_entity_id).cloned());
 
     if let Some(track_clip) = track_clip_ref {
         let effects = track_clip.effects.clone();

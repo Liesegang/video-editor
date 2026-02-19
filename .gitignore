@@ -362,3 +362,5 @@ ToDo.md
 *.exp
 *.lib
 *.def
+
+.claude

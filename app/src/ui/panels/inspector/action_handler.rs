@@ -108,7 +108,7 @@ impl<'a> ActionContext<'a> {
 
     /// Handle a Commit action - saves the current project state to history.
     pub fn handle_commit(&mut self) {
-        let current_state = self.project_service.get_project().read().unwrap().clone();
+        let current_state = self.project_service.with_project(|p| p.clone());
         self.history_manager.push_project_state(current_state);
     }
 

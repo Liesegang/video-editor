@@ -19,7 +19,7 @@ pub fn handle_gizmo_interaction(
     let mut interacted_with_gizmo = false;
 
     // Extract Gizmo Information first to avoid double borrow of editor_context
-    let gizmo_drag_data = if let Some(state) = &editor_context.interaction.gizmo_state {
+    let gizmo_drag_data = if let Some(state) = &editor_context.interaction.preview.gizmo_state {
         Some((
             state.start_mouse_pos,
             state.active_handle,
@@ -50,7 +50,7 @@ pub fn handle_gizmo_interaction(
     )) = gizmo_drag_data
     {
         if ui.input(|i| i.pointer.any_released()) {
-            editor_context.interaction.gizmo_state = None;
+            editor_context.interaction.preview.gizmo_state = None;
             interacted_with_gizmo = true; // Prevent click-through to selection logic on release
 
             // Push project state to history
@@ -330,7 +330,7 @@ pub fn draw_gizmo(
                     let base_w = gc.content_bounds.map(|b| b.2).unwrap_or(1920.0);
                     let base_h = gc.content_bounds.map(|b| b.3).unwrap_or(1080.0);
 
-                    editor_context.interaction.gizmo_state =
+                    editor_context.interaction.preview.gizmo_state =
                         Some(crate::state::context::GizmoState {
                             start_mouse_pos: response.hover_pos().unwrap_or(pos),
                             active_handle: handle,

@@ -1,8 +1,21 @@
 use library::model::frame::frame::Region;
 use library::model::project::project::{Composition, Project};
+use library::EditorService;
+use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::action::HistoryManager;
+
+/// Bundles the common parameters passed to every UI panel function.
+/// This reduces parameter explosion in panel signatures.
+pub struct PanelContext<'a> {
+    pub editor_context: &'a mut EditorContext,
+    pub history_manager: &'a mut HistoryManager,
+    pub project_service: &'a mut EditorService,
+    pub project: &'a Arc<RwLock<Project>>,
+}
 
 use crate::state::context_types::{
     GraphEditorState, InteractionState, KeyframeDialogState, SelectionState, TimelineState,

@@ -56,7 +56,7 @@ impl EffectPlugin for ErodeEffectPlugin {
 
         apply_skia_filter(input, gpu_context, |_image, _width, _height| {
             image_filters::erode((radius_x as f32, radius_y as f32), None, None).ok_or(
-                LibraryError::Render("Failed to create erode filter".to_string()),
+                LibraryError::render("Failed to create erode filter".to_string()),
             )
         })
     }

@@ -138,67 +138,62 @@ pub struct SelectionState {
     pub last_selected_track_id: Option<Uuid>,
 }
 
-#[derive(Default, Clone)]
-pub struct InteractionState {
-    pub dragged_item: Option<DraggedItem>,
-    pub active_confirmation: Option<crate::ui::dialogs::confirmation::ConfirmationDialog>,
-    pub active_modal_error: Option<String>,
+// --- Sub-states split by panel responsibility ---
 
-    // Drag/Drop specifics
+/// Preview panel interaction state (gizmo, vector editor, text editing, selection drag)
+#[derive(Default, Clone)]
+pub struct PreviewInteractionState {
+    pub gizmo_state: Option<GizmoState>,
+    pub vector_editor_state: Option<VectorEditorState>,
+    pub body_drag_state: Option<BodyDragState>,
+    pub preview_selection_drag_start: Option<egui::Pos2>,
+    pub handled_hand_tool_drag: bool,
+    pub bounds_cache: BoundsCache,
+    pub editing_text_entity_id: Option<uuid::Uuid>,
+    pub text_edit_buffer: String,
+    pub is_moving_selected_entity: bool,
+}
+
+/// Timeline panel interaction state (clip drag/drop, resize, selection, track rename)
+#[derive(Default, Clone)]
+pub struct TimelineInteractionState {
+    pub dragged_item: Option<DraggedItem>,
     pub dragged_entity_original_track_id: Option<Uuid>,
     pub dragged_entity_hovered_track_id: Option<Uuid>,
     pub dragged_entity_has_moved: bool,
-
-    // Manipulation
     pub is_resizing_entity: bool,
-    pub is_moving_selected_entity: bool,
-
-    // We can't import GizmoState here easily if it depends on something else or circular dep,
-    // but GizmoState is defined in context.rs.
-    // Ideally we should move GizmoState here or to a separate file.
-    // For now, let's assume we will move GizmoState here or import it.
-    // Based on previous file read, GizmoState is in context.rs.
-    // I will MOVE GizmoState to this file to avoid circular dependency.
-    pub gizmo_state: Option<GizmoState>,
-
-    // Vector Editor State
-    pub vector_editor_state: Option<VectorEditorState>,
-
-    // Text Input
+    pub timeline_selection_drag_start: Option<egui::Pos2>,
     pub current_time_text_input: String,
     pub is_editing_current_time: bool,
-
-    // Context Menu
     pub context_menu_open_pos: Option<egui::Pos2>,
+    pub renaming_track_id: Option<Uuid>,
+    pub rename_buffer: String,
+}
 
-    // Graph Editor Selection: (Property NameRef, Keyframe Index)
+/// Graph editor interaction state (keyframe selection)
+#[derive(Default, Clone)]
+pub struct GraphEditorInteractionState {
     pub selected_keyframe: Option<(String, usize)>,
     #[allow(dead_code)]
     pub editing_keyframe: Option<(String, usize)>,
+}
 
-    // Body Drag State for absolute delta calculation
-    pub body_drag_state: Option<BodyDragState>,
-
-    // Drag-to-select state
-    pub timeline_selection_drag_start: Option<egui::Pos2>,
-    pub preview_selection_drag_start: Option<egui::Pos2>,
-
-    // Hand Tool Logic
-    pub handled_hand_tool_drag: bool,
-
-    // Caching for Text/Shape bounds
-    pub bounds_cache: BoundsCache,
-
-    // Text Editing State
-    pub editing_text_entity_id: Option<uuid::Uuid>,
-    pub text_edit_buffer: String,
-
-    // Import Reporting
+/// General interaction state (dialogs, modals, import reports)
+#[derive(Default, Clone)]
+pub struct GeneralInteractionState {
+    pub active_confirmation: Option<crate::ui::dialogs::confirmation::ConfirmationDialog>,
+    pub active_modal_error: Option<String>,
     pub import_report: Option<ImportReport>,
+}
 
-    // Track Rename State
-    pub renaming_track_id: Option<Uuid>,
-    pub rename_buffer: String,
+/// Combined interaction state that holds all sub-states.
+/// Individual panels should access only their relevant sub-state.
+#[derive(Default, Clone)]
+pub struct InteractionState {
+    pub preview: PreviewInteractionState,
+    pub timeline: TimelineInteractionState,
+    pub graph_editor: GraphEditorInteractionState,
+    pub general: GeneralInteractionState,
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]

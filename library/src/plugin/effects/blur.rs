@@ -73,7 +73,7 @@ impl EffectPlugin for BlurEffectPlugin {
                 None,
                 None,
             )
-            .ok_or(LibraryError::Render(
+            .ok_or(LibraryError::render(
                 "Failed to create blur filter".to_string(),
             ))
         })

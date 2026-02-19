@@ -1,6 +1,6 @@
 use crate::Image;
 use crate::editor::{ProjectModel, RenderService};
-use crate::error::LibraryError;
+use crate::error::{LibraryError, ProjectError, RenderError};
 use crate::model::project::project::{Composition, Project};
 use crate::plugin::PropertyEvaluatorRegistry;
 use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
@@ -109,10 +109,10 @@ impl RenderQueue {
         let sender = self
             .render_tx
             .as_ref()
-            .ok_or(LibraryError::RenderQueueClosed)?;
+            .ok_or(LibraryError::Render(RenderError::QueueClosed))?;
         sender
             .send(job)
-            .map_err(|_| LibraryError::RenderSubmitFailed)
+            .map_err(|_| LibraryError::Render(RenderError::SubmitFailed))
     }
 
     pub async fn finish(mut self) -> Result<(), LibraryError> {
@@ -129,15 +129,15 @@ impl RenderQueue {
         for handle in self.workers.drain(..) {
             task::spawn_blocking(move || handle.join())
                 .await
-                .map_err(|_| LibraryError::RenderWorkerPanicked)? // Error from spawn_blocking
-                .map_err(|_| LibraryError::RenderWorkerPanicked)?; // Error from join()
+                .map_err(|_| LibraryError::Render(RenderError::WorkerPanicked))? // Error from spawn_blocking
+                .map_err(|_| LibraryError::Render(RenderError::WorkerPanicked))?; // Error from join()
         }
 
         if let Some(handle) = self.saver_handle.take() {
             task::spawn_blocking(move || handle.join())
                 .await
-                .map_err(|_| LibraryError::RenderSaverPanicked)? // Error from spawn_blocking
-                .map_err(|_| LibraryError::RenderSaverPanicked)?; // Error from join()
+                .map_err(|_| LibraryError::Render(RenderError::SaverPanicked))? // Error from spawn_blocking
+                .map_err(|_| LibraryError::Render(RenderError::SaverPanicked))?; // Error from join()
         }
 
         Ok(())
@@ -149,9 +149,9 @@ impl RenderQueue {
             .compositions
             .get(config.composition_index)
             .cloned()
-            .ok_or(LibraryError::InvalidCompositionIndex(
+            .ok_or(LibraryError::Project(ProjectError::InvalidCompositionIndex(
                 config.composition_index,
-            ))
+            )))
     }
 
     fn spawn_saver(

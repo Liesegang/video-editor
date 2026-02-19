@@ -90,7 +90,10 @@ pub fn show_track_list(
     let mut reorder_state = None;
     if let (Some(dragged_id), Some(hovered_tid)) = (
         editor_context.selection.last_selected_entity_id,
-        editor_context.interaction.dragged_entity_hovered_track_id,
+        editor_context
+            .interaction
+            .timeline
+            .dragged_entity_hovered_track_id,
     ) {
         if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
             if let Some(ref proj) = proj_read {
@@ -144,8 +147,10 @@ pub fn show_track_list(
                     } else if parent_track.id == hovered_track_id {
                         let idx = *child_index;
                         // Check if same track reordering
-                        if let Some(original_track_id) =
-                            editor_context.interaction.dragged_entity_original_track_id
+                        if let Some(original_track_id) = editor_context
+                            .interaction
+                            .timeline
+                            .dragged_entity_original_track_id
                         {
                             if original_track_id == hovered_track_id {
                                 // Same track sort
@@ -228,8 +233,8 @@ pub fn show_track_list(
                             .button(format!("{} Rename", icons::PENCIL_SIMPLE))
                             .clicked()
                         {
-                            editor_context.interaction.renaming_track_id = Some(track.id);
-                            editor_context.interaction.rename_buffer = track.name.clone();
+                            editor_context.interaction.timeline.renaming_track_id = Some(track.id);
+                            editor_context.interaction.timeline.rename_buffer = track.name.clone();
                             ui.close();
                         }
 
@@ -307,22 +312,23 @@ pub fn show_track_list(
                 text_offset_x += 16.0;
 
                 // Check if this track is being renamed
-                if editor_context.interaction.renaming_track_id == Some(track.id) {
+                if editor_context.interaction.timeline.renaming_track_id == Some(track.id) {
                     // Draw inline TextEdit for renaming
                     let text_rect = egui::Rect::from_min_size(
                         row_rect.left_center() + egui::vec2(text_offset_x, -10.0),
                         egui::vec2(row_rect.width() - text_offset_x - 10.0, 20.0),
                     );
-                    let text_edit =
-                        egui::TextEdit::singleline(&mut editor_context.interaction.rename_buffer)
-                            .font(egui::FontId::monospace(10.0))
-                            .desired_width(text_rect.width());
+                    let text_edit = egui::TextEdit::singleline(
+                        &mut editor_context.interaction.timeline.rename_buffer,
+                    )
+                    .font(egui::FontId::monospace(10.0))
+                    .desired_width(text_rect.width());
 
                     let response = ui_content.put(text_rect, text_edit);
 
                     // Focus the text edit automatically
                     if !response.has_focus()
-                        && editor_context.interaction.renaming_track_id == Some(track.id)
+                        && editor_context.interaction.timeline.renaming_track_id == Some(track.id)
                     {
                         response.request_focus();
                     }
@@ -334,7 +340,7 @@ pub fn show_track_list(
 
                     if committed {
                         // Commit the rename
-                        let new_name = editor_context.interaction.rename_buffer.clone();
+                        let new_name = editor_context.interaction.timeline.rename_buffer.clone();
                         // Only update if name changed and is not empty
                         if !new_name.is_empty() && new_name != track.name {
                             deferred_actions.push(DeferredTrackAction::RenameTrack {
@@ -344,8 +350,8 @@ pub fn show_track_list(
                         }
 
                         // Clear rename state
-                        editor_context.interaction.renaming_track_id = None;
-                        editor_context.interaction.rename_buffer.clear();
+                        editor_context.interaction.timeline.renaming_track_id = None;
+                        editor_context.interaction.timeline.rename_buffer.clear();
                     }
                 } else {
                     // Normal track name display

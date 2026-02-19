@@ -94,7 +94,7 @@ impl EffectPlugin for PixelSorterPlugin {
                         (0, 0),
                         skia_safe::image::CachingHint::Disallow,
                     ) {
-                        return Err(LibraryError::Render(
+                        return Err(LibraryError::render(
                             "Failed to read texture pixels".to_string(),
                         ));
                     }
@@ -104,7 +104,7 @@ impl EffectPlugin for PixelSorterPlugin {
                         data: buffer,
                     }
                 } else {
-                    return Err(LibraryError::Render(
+                    return Err(LibraryError::render(
                         "Cannot read texture without GPU context".to_string(),
                     ));
                 }
@@ -232,7 +232,7 @@ impl EffectPlugin for PixelSorterPlugin {
                 }
             }
             _ => {
-                return Err(LibraryError::Plugin(format!(
+                return Err(LibraryError::plugin(format!(
                     "Unsupported sort direction: {}",
                     direction_str
                 )));

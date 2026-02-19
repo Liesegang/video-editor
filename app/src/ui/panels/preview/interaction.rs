@@ -69,6 +69,7 @@ impl<'a> PreviewInteractions<'a> {
             if self
                 .editor_context
                 .interaction
+                .preview
                 .vector_editor_state
                 .is_none()
             {
@@ -85,7 +86,8 @@ impl<'a> PreviewInteractions<'a> {
                         if matches!(gc.clip.kind, library::model::project::TrackClipKind::Shape) {
                             if let Some(path_str) = gc.clip.properties.get_string("path") {
                                 let state = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
-                                self.editor_context.interaction.vector_editor_state = Some(state);
+                                self.editor_context.interaction.preview.vector_editor_state =
+                                    Some(state);
                                 ensure_loaded = true;
                             }
                         }
@@ -128,7 +130,7 @@ impl<'a> PreviewInteractions<'a> {
 
                         let mut changed = false;
                         if let Some(state) =
-                            &mut self.editor_context.interaction.vector_editor_state
+                            &mut self.editor_context.interaction.preview.vector_editor_state
                         {
                             let mut interaction = crate::ui::panels::preview::vector_editor::interaction::VectorEditorInteraction {
                                   state,
@@ -146,7 +148,7 @@ impl<'a> PreviewInteractions<'a> {
                         if changed {
                             // Save back
                             if let Some(state) =
-                                &self.editor_context.interaction.vector_editor_state
+                                &self.editor_context.interaction.preview.vector_editor_state
                             {
                                 let new_path = crate::ui::panels::preview::vector_editor::svg_writer::to_svg_path(state);
 
@@ -226,22 +228,35 @@ impl<'a> PreviewInteractions<'a> {
                     }
 
                     if should_drag && self.editor_context.is_selected(hovered) {
-                        self.editor_context.interaction.is_moving_selected_entity = true;
+                        self.editor_context
+                            .interaction
+                            .preview
+                            .is_moving_selected_entity = true;
                         self.init_drag_state(pointer_pos);
                     }
                 } else {
                     // Started drag on background -> Box Selection
-                    self.editor_context.interaction.is_moving_selected_entity = false;
-                    self.editor_context.interaction.body_drag_state = None;
+                    self.editor_context
+                        .interaction
+                        .preview
+                        .is_moving_selected_entity = false;
+                    self.editor_context.interaction.preview.body_drag_state = None;
                     if let Some(pos) = pointer_pos {
-                        self.editor_context.interaction.preview_selection_drag_start = Some(pos);
+                        self.editor_context
+                            .interaction
+                            .preview
+                            .preview_selection_drag_start = Some(pos);
                     }
                 }
             }
 
             // Drag Move (selected entities)
             if response.dragged_by(PointerButton::Primary)
-                && self.editor_context.interaction.is_moving_selected_entity
+                && self
+                    .editor_context
+                    .interaction
+                    .preview
+                    .is_moving_selected_entity
             {
                 self.handle_drag_move(pointer_pos, pending_actions);
             }
@@ -257,13 +272,21 @@ impl<'a> PreviewInteractions<'a> {
 
         // Cleanup on release
         if self.ui.input(|i| i.pointer.any_released()) {
-            if self.editor_context.interaction.is_moving_selected_entity {
+            if self
+                .editor_context
+                .interaction
+                .preview
+                .is_moving_selected_entity
+            {
                 if let Ok(proj) = self.project.read() {
                     self.history_manager.push_project_state(proj.clone());
                 }
             }
-            self.editor_context.interaction.is_moving_selected_entity = false;
-            self.editor_context.interaction.body_drag_state = None;
+            self.editor_context
+                .interaction
+                .preview
+                .is_moving_selected_entity = false;
+            self.editor_context.interaction.preview.body_drag_state = None;
         }
     }
 
@@ -383,7 +406,7 @@ impl<'a> PreviewInteractions<'a> {
                     );
                 }
             }
-            self.editor_context.interaction.body_drag_state =
+            self.editor_context.interaction.preview.body_drag_state =
                 Some(crate::state::context_types::BodyDragState {
                     start_mouse_pos: pointer_pos,
                     original_positions,
@@ -399,17 +422,26 @@ impl<'a> PreviewInteractions<'a> {
                         && matches!(c.clip.kind, library::model::project::TrackClipKind::Text)
                 });
                 if is_text {
-                    self.editor_context.interaction.editing_text_entity_id = Some(id);
+                    self.editor_context
+                        .interaction
+                        .preview
+                        .editing_text_entity_id = Some(id);
                     if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == id) {
                         if let Some(text) = gc.clip.properties.get_string("text") {
-                            self.editor_context.interaction.text_edit_buffer = text;
+                            self.editor_context.interaction.preview.text_edit_buffer = text;
                         }
                     }
                 } else {
-                    self.editor_context.interaction.editing_text_entity_id = None;
+                    self.editor_context
+                        .interaction
+                        .preview
+                        .editing_text_entity_id = None;
                 }
             } else {
-                self.editor_context.interaction.editing_text_entity_id = None;
+                self.editor_context
+                    .interaction
+                    .preview
+                    .editing_text_entity_id = None;
             }
         }
 
@@ -454,7 +486,7 @@ impl<'a> PreviewInteractions<'a> {
     ) {
         let current_zoom = self.editor_context.view.zoom;
         if let Some(comp_id) = self.editor_context.selection.composition_id {
-            if let Some(drag_state) = &self.editor_context.interaction.body_drag_state {
+            if let Some(drag_state) = &self.editor_context.interaction.preview.body_drag_state {
                 if let Some(curr_mouse) = pointer_pos {
                     let screen_delta = curr_mouse - drag_state.start_mouse_pos;
                     let world_delta = screen_delta / current_zoom;
@@ -487,7 +519,12 @@ impl<'a> PreviewInteractions<'a> {
     }
 
     fn handle_box_selection(&mut self, _response: &Response) {
-        if let Some(start_pos) = self.editor_context.interaction.preview_selection_drag_start {
+        if let Some(start_pos) = self
+            .editor_context
+            .interaction
+            .preview
+            .preview_selection_drag_start
+        {
             if self.ui.input(|i| i.pointer.primary_down()) {
                 // Drawing Box
                 if let Some(current_pos) = self.ui.input(|i| i.pointer.interact_pos()) {
@@ -551,7 +588,10 @@ impl<'a> PreviewInteractions<'a> {
                         }
                     }
                 }
-                self.editor_context.interaction.preview_selection_drag_start = None;
+                self.editor_context
+                    .interaction
+                    .preview
+                    .preview_selection_drag_start = None;
             }
         }
     }
@@ -615,7 +655,12 @@ impl<'a> PreviewInteractions<'a> {
             .map(|gc| gc.track_id)
     }
     pub fn draw_text_overlay(&mut self, pending_actions: &mut Vec<PreviewAction>) {
-        if let Some(id) = self.editor_context.interaction.editing_text_entity_id {
+        if let Some(id) = self
+            .editor_context
+            .interaction
+            .preview
+            .editing_text_entity_id
+        {
             if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == id) {
                 let corners = self.get_clip_screen_corners(gc);
                 let min_x = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
@@ -639,7 +684,12 @@ impl<'a> PreviewInteractions<'a> {
                 let scale_factor = (gc.transform.scale.y as f32 / 100.0) * zoom;
                 let effective_size = font_size * scale_factor;
 
-                let mut text = self.editor_context.interaction.text_edit_buffer.clone();
+                let mut text = self
+                    .editor_context
+                    .interaction
+                    .preview
+                    .text_edit_buffer
+                    .clone();
                 let widget_id = self.ui.make_persistent_id(id).with("text_edit");
 
                 let response = self.ui.put(
@@ -657,7 +707,7 @@ impl<'a> PreviewInteractions<'a> {
                 }
 
                 if response.changed() {
-                    self.editor_context.interaction.text_edit_buffer = text.clone();
+                    self.editor_context.interaction.preview.text_edit_buffer = text.clone();
 
                     if let Some(comp_id) = self.editor_context.selection.composition_id {
                         pending_actions.push(PreviewAction::UpdateProperty {

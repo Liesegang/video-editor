@@ -18,7 +18,7 @@ impl TrackHandler {
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
         let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
-            LibraryError::Project(format!("Composition with ID {} not found", composition_id))
+            LibraryError::project(format!("Composition with ID {} not found", composition_id))
         })?;
 
         let root_track_id = composition.root_track_id;
@@ -34,7 +34,7 @@ impl TrackHandler {
         if let Some(root_track) = proj.get_track_mut(root_track_id) {
             root_track.add_child(new_track_id);
         } else {
-            return Err(LibraryError::Project(format!(
+            return Err(LibraryError::project(format!(
                 "Root track {} not found",
                 root_track_id
             )));
@@ -54,7 +54,7 @@ impl TrackHandler {
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
         let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
-            LibraryError::Project(format!("Composition with ID {} not found", composition_id))
+            LibraryError::project(format!("Composition with ID {} not found", composition_id))
         })?;
 
         let root_track_id = composition.root_track_id;
@@ -67,7 +67,7 @@ impl TrackHandler {
         if let Some(root_track) = proj.get_track_mut(root_track_id) {
             root_track.add_child(track_id);
         } else {
-            return Err(LibraryError::Project(format!(
+            return Err(LibraryError::project(format!(
                 "Root track {} not found",
                 root_track_id
             )));
@@ -88,7 +88,7 @@ impl TrackHandler {
 
         proj.get_track(track_id)
             .cloned()
-            .ok_or_else(|| LibraryError::Project(format!("Track with ID {} not found", track_id)))
+            .ok_or_else(|| LibraryError::project(format!("Track with ID {} not found", track_id)))
     }
 
     /// Remove a track by ID
@@ -117,7 +117,7 @@ impl TrackHandler {
         if proj.remove_node(track_id).is_some() {
             Ok(())
         } else {
-            Err(LibraryError::Project(format!(
+            Err(LibraryError::project(format!(
                 "Track with ID {} not found",
                 track_id
             )))
@@ -147,7 +147,7 @@ impl TrackHandler {
             parent_track.add_child(new_track_id);
             Ok(new_track_id)
         } else {
-            Err(LibraryError::Project(format!(
+            Err(LibraryError::project(format!(
                 "Parent track with ID {} not found",
                 parent_track_id
             )))
@@ -168,7 +168,7 @@ impl TrackHandler {
             track.name = new_name.to_string();
             Ok(())
         } else {
-            Err(LibraryError::Project(format!(
+            Err(LibraryError::project(format!(
                 "Track with ID {} not found",
                 track_id
             )))

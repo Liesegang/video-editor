@@ -1,6 +1,6 @@
 use super::super::{LoadPlugin, LoadRequest, LoadResponse, Plugin};
 use crate::cache::CacheManager;
-use crate::editor::color_service::{ColorSpaceManager, OcioProcessor};
+use crate::core::color::{ColorSpaceManager, OcioProcessor};
 use crate::error::LibraryError;
 use crate::model::frame::Image;
 use ffmpeg_next as ffmpeg;
@@ -342,7 +342,7 @@ impl LoadPlugin for FfmpegVideoLoader {
         let streams = reader.get_available_streams();
 
         if streams.is_empty() {
-            return Err(LibraryError::Plugin("No video or audio stream".to_string()));
+            return Err(LibraryError::plugin("No video or audio stream".to_string()));
         }
 
         // Generate context ID and store
@@ -382,7 +382,7 @@ impl LoadPlugin for FfmpegVideoLoader {
                     let reader = VideoReader::new(path)?;
                     let streams = reader.get_available_streams();
                     if streams.is_empty() {
-                        return Err(LibraryError::Plugin("No video or audio stream".to_string()));
+                        return Err(LibraryError::plugin("No video or audio stream".to_string()));
                     }
                     let id = self
                         .next_context_id
@@ -398,7 +398,7 @@ impl LoadPlugin for FfmpegVideoLoader {
             let image = {
                 let mut readers = self.readers.lock().unwrap();
                 let reader = readers.get_mut(&context_id).ok_or_else(|| {
-                    LibraryError::Plugin(format!("Reader for {} not found", path))
+                    LibraryError::plugin(format!("Reader for {} not found", path))
                 })?;
 
                 if let (Some(src), Some(dst)) = (input_color_space, output_color_space) {
@@ -416,7 +416,7 @@ impl LoadPlugin for FfmpegVideoLoader {
 
             Ok(LoadResponse { image })
         } else {
-            Err(LibraryError::Plugin(
+            Err(LibraryError::plugin(
                 "FfmpegVideoLoader received unsupported request".to_string(),
             ))
         }

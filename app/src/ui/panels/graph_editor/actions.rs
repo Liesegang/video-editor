@@ -73,7 +73,7 @@ pub fn process_action(
 ) {
     match action {
         Action::Select(name, idx) => {
-            editor_context.interaction.selected_keyframe = Some((name, idx));
+            editor_context.interaction.graph_editor.selected_keyframe = Some((name, idx));
         }
 
         Action::Move(name, idx, new_time, new_val, component) => {

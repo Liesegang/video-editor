@@ -9,6 +9,7 @@ use crate::command::{CommandId, CommandRegistry};
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 
 mod background;
+mod clip_interaction;
 pub mod clips;
 pub mod context_menu;
 pub mod drag_and_drop;
@@ -61,7 +62,7 @@ pub fn show_clip_area(
     let (content_rect_for_clip_area, response) =
         ui_content.allocate_at_least(ui_content.available_size(), egui::Sense::hover());
 
-    let is_dragging_item = editor_context.interaction.dragged_item.is_some();
+    let is_dragging_item = editor_context.interaction.timeline.dragged_item.is_some();
     let selected_composition_id = editor_context.selection.composition_id;
 
     // ===== PHASE 1: Extract owned data from project (scoped read lock) =====
@@ -154,15 +155,18 @@ pub fn show_clip_area(
     let (_changed, vp_response) = controller.interact_with_rect(
         content_rect_for_clip_area,
         &mut state,
-        &mut editor_context.interaction.handled_hand_tool_drag,
+        &mut editor_context.interaction.preview.handled_hand_tool_drag,
     );
 
     // Handle Box Selection State Update
-    if !editor_context.interaction.handled_hand_tool_drag {
+    if !editor_context.interaction.preview.handled_hand_tool_drag {
         if vp_response.drag_started_by(egui::PointerButton::Primary) {
             if !ui_content.input(|i| i.modifiers.alt) {
                 if let Some(pos) = vp_response.interact_pointer_pos() {
-                    editor_context.interaction.timeline_selection_drag_start = Some(pos);
+                    editor_context
+                        .interaction
+                        .timeline
+                        .timeline_selection_drag_start = Some(pos);
                 }
             }
         }
@@ -200,7 +204,11 @@ pub fn show_clip_area(
     );
 
     // ===== PHASE 5: Box Selection Logic (separate read lock scope) =====
-    if let Some(start_pos) = editor_context.interaction.timeline_selection_drag_start {
+    if let Some(start_pos) = editor_context
+        .interaction
+        .timeline
+        .timeline_selection_drag_start
+    {
         if ui_content.input(|i| i.pointer.primary_down()) {
             if let Some(current_pos) = ui_content.input(|i| i.pointer.interact_pos()) {
                 let selection_rect = egui::Rect::from_two_pos(start_pos, current_pos);
@@ -284,12 +292,15 @@ pub fn show_clip_area(
                     }
                 }
             }
-            editor_context.interaction.timeline_selection_drag_start = None;
+            editor_context
+                .interaction
+                .timeline
+                .timeline_selection_drag_start = None;
         }
     }
 
     // Final selection clearing logic
-    if !editor_context.interaction.is_resizing_entity
+    if !editor_context.interaction.timeline.is_resizing_entity
         && vp_response.clicked()
         && !clicked_on_entity
         && !is_dragging_item

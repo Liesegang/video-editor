@@ -71,7 +71,7 @@ impl ExportPlugin for FfmpegExportPlugin {
         if let Some(session) = sessions.get_mut(path) {
             session.write_frame(&image.data)
         } else {
-            Err(LibraryError::Render(
+            Err(LibraryError::render(
                 "Failed to start ffmpeg session".to_string(),
             ))
         }
@@ -277,7 +277,7 @@ impl FfmpegSession {
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| LibraryError::Render("Failed to capture ffmpeg stdin".to_string()))?;
+            .ok_or_else(|| LibraryError::render("Failed to capture ffmpeg stdin".to_string()))?;
         Ok(Self {
             child,
             stdin: Some(stdin),
@@ -290,7 +290,7 @@ impl FfmpegSession {
             stdin.flush()?;
             Ok(())
         } else {
-            Err(LibraryError::Render("FFmpeg stdin is closed".to_string()))
+            Err(LibraryError::render("FFmpeg stdin is closed".to_string()))
         }
     }
 }

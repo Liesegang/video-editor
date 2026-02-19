@@ -366,7 +366,7 @@ pub fn create_surface(
 pub fn create_raster_surface(width: u32, height: u32) -> Result<Surface, LibraryError> {
     let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
     surfaces::raster(&info, None, None)
-        .ok_or_else(|| LibraryError::Render("Cannot create Skia surface".to_string()))
+        .ok_or_else(|| LibraryError::render("Cannot create Skia surface".to_string()))
 }
 
 pub fn create_texture_surface(
@@ -385,7 +385,7 @@ pub fn create_texture_surface(
         false,
         false,
     )
-    .ok_or_else(|| LibraryError::Render("Cannot create buffer Skia surface".to_string()))
+    .ok_or_else(|| LibraryError::render("Cannot create buffer Skia surface".to_string()))
 }
 
 pub fn image_to_skia(image: &Image) -> Result<SkImage, LibraryError> {
@@ -397,7 +397,7 @@ pub fn image_to_skia(image: &Image) -> Result<SkImage, LibraryError> {
     );
     let sk_data = Data::new_copy(image.data.as_slice());
     raster_from_data(&info, sk_data, (image.width * 4) as usize)
-        .ok_or_else(|| LibraryError::Render("Failed to create Skia image".to_string()))
+        .ok_or_else(|| LibraryError::render("Failed to create Skia image".to_string()))
 }
 
 pub fn surface_to_image(
@@ -414,7 +414,7 @@ pub fn surface_to_image(
         None,
     );
     if !surface.read_pixels(&image_info, &mut buffer, row_bytes, (0, 0)) {
-        return Err(LibraryError::Render(
+        return Err(LibraryError::render(
             "Failed to read surface pixels".to_string(),
         ));
     }
@@ -456,13 +456,13 @@ pub fn create_image_from_texture(
             AlphaType::Premul,
             None,
         )
-        .ok_or(LibraryError::Render(
+        .ok_or(LibraryError::render(
             "Failed to create image from texture".to_string(),
         ))
     }
     #[cfg(not(feature = "gl"))]
     {
-        Err(LibraryError::Render("GL feature not enabled".to_string()))
+        Err(LibraryError::render("GL feature not enabled".to_string()))
     }
 }
 

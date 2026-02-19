@@ -83,6 +83,25 @@ impl EditorService {
         }
     }
 
+    /// Access the project immutably via a closure.
+    /// Prefer this over `get_project()` to avoid exposing the lock.
+    pub fn with_project<R>(&self, f: impl FnOnce(&Project) -> R) -> R {
+        let project = self.project_manager.get_project();
+        let guard = project.read().expect("Failed to acquire project read lock");
+        f(&guard)
+    }
+
+    /// Access the project mutably via a closure.
+    /// Prefer this over `get_project()` to avoid exposing the lock.
+    pub fn with_project_mut<R>(&self, f: impl FnOnce(&mut Project) -> R) -> R {
+        let project = self.project_manager.get_project();
+        let mut guard = project
+            .write()
+            .expect("Failed to acquire project write lock");
+        f(&mut guard)
+    }
+
+    #[deprecated(note = "Use with_project() or with_project_mut() instead")]
     pub fn get_project(&self) -> Arc<RwLock<Project>> {
         self.project_manager.get_project()
     }

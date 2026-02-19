@@ -92,9 +92,8 @@ impl RuViEApp {
             render_server,
         };
 
-        if let Ok(proj_read) = app.project_service.get_project().read() {
-            app.history_manager.push_project_state(proj_read.clone());
-        }
+        let initial_state = app.project_service.with_project(|p| p.clone());
+        app.history_manager.push_project_state(initial_state);
 
         setup_gpu_sharing(&app.render_server, cc);
 
@@ -169,7 +168,7 @@ impl eframe::App for RuViEApp {
         }
 
         // 6. Confirmation Dialog
-        if let Some(dialog) = &mut self.editor_context.interaction.active_confirmation {
+        if let Some(dialog) = &mut self.editor_context.interaction.general.active_confirmation {
             if let Some(action) = dialog.show(ctx) {
                 match action {
                     crate::ui::dialogs::confirmation::ConfirmationAction::DeleteAsset(id) => {
@@ -177,8 +176,7 @@ impl eframe::App for RuViEApp {
                             log::error!("Failed to remove asset: {}", e);
                         } else {
                             // Push history
-                            let current_state =
-                                self.project_service.get_project().read().unwrap().clone();
+                            let current_state = self.project_service.with_project(|p| p.clone());
                             self.history_manager.push_project_state(current_state);
                         }
                     }
@@ -191,8 +189,7 @@ impl eframe::App for RuViEApp {
                                 self.editor_context.selection.composition_id = None;
                                 self.editor_context.selection.selected_entities.clear();
                             }
-                            let current_state =
-                                self.project_service.get_project().read().unwrap().clone();
+                            let current_state = self.project_service.with_project(|p| p.clone());
                             self.history_manager.push_project_state(current_state);
                         }
                     }
@@ -207,7 +204,13 @@ impl eframe::App for RuViEApp {
         }
 
         // 7. Generic Error Modal
-        if let Some(error_msg) = self.editor_context.interaction.active_modal_error.clone() {
+        if let Some(error_msg) = self
+            .editor_context
+            .interaction
+            .general
+            .active_modal_error
+            .clone()
+        {
             let mut open = true;
             egui::Window::new("⚠ Error")
                 .collapsible(false)
@@ -219,13 +222,13 @@ impl eframe::App for RuViEApp {
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         if ui.button("OK").clicked() {
-                            self.editor_context.interaction.active_modal_error = None;
+                            self.editor_context.interaction.general.active_modal_error = None;
                         }
                     });
                 });
             if !open {
                 // Window closed via X button
-                self.editor_context.interaction.active_modal_error = None;
+                self.editor_context.interaction.general.active_modal_error = None;
             }
         }
 
@@ -304,7 +307,7 @@ impl eframe::App for RuViEApp {
         });
 
         if ctx.input(|i| i.pointer.any_released()) {
-            self.editor_context.interaction.dragged_item = None;
+            self.editor_context.interaction.timeline.dragged_item = None;
         }
 
         // Always pump audio to keep buffer full if playing (or pre-buffer)

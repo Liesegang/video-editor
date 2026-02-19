@@ -24,7 +24,7 @@ pub fn handle_context_menu(
     if response.hovered() && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary))
     {
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
-            editor_context.interaction.context_menu_open_pos = Some(pos);
+            editor_context.interaction.timeline.context_menu_open_pos = Some(pos);
         }
     }
 
@@ -46,7 +46,7 @@ pub fn handle_context_menu(
         }
 
         // Try to recover clicked position
-        if let Some(pos) = editor_context.interaction.context_menu_open_pos {
+        if let Some(pos) = editor_context.interaction.timeline.context_menu_open_pos {
             let local_x = pos.x - content_rect.min.x + editor_context.timeline.scroll_offset.x;
             let time_at_click = (local_x / pixels_per_unit).max(0.0);
             drop_in_frame = (time_at_click * composition_fps as f32).round() as u64;
@@ -197,7 +197,7 @@ fn add_clip_to_best_track(
             {
                 log::error!("Failed to add clip: {}", e);
             } else {
-                let current_state = project_service.get_project().read().unwrap().clone();
+                let current_state = project_service.with_project(|p| p.clone());
                 history_manager.push_project_state(current_state);
             }
         }

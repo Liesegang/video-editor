@@ -90,7 +90,7 @@ impl EffectPlugin for DropShadowEffectPlugin {
                     None,
                     None,
                 )
-                .ok_or(LibraryError::Render(
+                .ok_or(LibraryError::render(
                     "Failed to create drop shadow only filter".to_string(),
                 ))
             } else {
@@ -102,7 +102,7 @@ impl EffectPlugin for DropShadowEffectPlugin {
                     None,
                     None,
                 )
-                .ok_or(LibraryError::Render(
+                .ok_or(LibraryError::render(
                     "Failed to create drop shadow filter".to_string(),
                 ))
             }

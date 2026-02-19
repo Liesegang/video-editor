@@ -308,7 +308,7 @@ impl PluginManager {
         }
         let path = request.path();
         log::error!("Failed to load resource: {}", path);
-        Err(LibraryError::Plugin(format!(
+        Err(LibraryError::plugin(format!(
             "No load plugin registered for path {:?}",
             path
         )))
@@ -364,7 +364,7 @@ impl PluginManager {
         if let Some(plugin) = inner.export_plugins.get(exporter_id) {
             return plugin.export_image(path, image, settings);
         }
-        Err(LibraryError::Plugin(format!(
+        Err(LibraryError::plugin(format!(
             "Exporter '{}' not found",
             exporter_id
         )))
@@ -386,7 +386,7 @@ impl PluginManager {
         if let Some(plugin) = inner.export_plugins.get(exporter_id) {
             return plugin.finish_export(path);
         }
-        Err(LibraryError::Plugin(format!(
+        Err(LibraryError::plugin(format!(
             "Exporter '{}' not found",
             exporter_id
         )))
@@ -402,7 +402,7 @@ impl PluginManager {
         let constructor: Symbol<unsafe extern "C" fn() -> *mut T> = unsafe { library.get(symbol)? };
         let raw = unsafe { constructor() };
         if raw.is_null() {
-            return Err(LibraryError::Plugin(format!(
+            return Err(LibraryError::plugin(format!(
                 "Plugin constructor {} returned null",
                 String::from_utf8_lossy(symbol)
             )));

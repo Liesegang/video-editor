@@ -64,13 +64,13 @@ pub struct SkslEffectPlugin {
 impl SkslEffectPlugin {
     pub fn new(toml_content: &str, sksl_content: &str) -> Result<Self, LibraryError> {
         let config: SkslPluginConfig = toml::from_str(toml_content)
-            .map_err(|e| LibraryError::Plugin(format!("Failed to parse TOML: {}", e)))?;
+            .map_err(|e| LibraryError::plugin(format!("Failed to parse TOML: {}", e)))?;
 
         let result = RuntimeEffect::make_for_shader(sksl_content, None);
         let runtime_effect = match result {
             Ok(effect) => effect,
             Err(error) => {
-                return Err(LibraryError::Render(format!(
+                return Err(LibraryError::render(format!(
                     "Failed to compile SkSL: {}",
                     error
                 )));
@@ -269,7 +269,7 @@ impl EffectPlugin for SkslEffectPlugin {
                         SamplingOptions::default(),
                         None,
                     )
-                    .ok_or(LibraryError::Render(
+                    .ok_or(LibraryError::render(
                         "Failed to create input shader".to_string(),
                     ))?;
 
@@ -279,7 +279,7 @@ impl EffectPlugin for SkslEffectPlugin {
 
                 let expected_uniform_size = self.runtime_effect.uniform_size();
                 if uniform_bytes.len() != expected_uniform_size {
-                    return Err(LibraryError::Render(format!(
+                    return Err(LibraryError::render(format!(
                         "Uniform size mismatch for effect '{}': expected {} bytes, got {} bytes",
                         self.config.name,
                         expected_uniform_size,
@@ -291,7 +291,7 @@ impl EffectPlugin for SkslEffectPlugin {
                     .runtime_effect
                     .make_shader(data, &children, None)
                     .ok_or_else(|| {
-                         LibraryError::Render(format!(
+                         LibraryError::render(format!(
                             "Failed to create runtime shader for effect '{}'. Uniform bytes: {}, Expected: {}", 
                             self.config.name, uniform_bytes.len(), expected_uniform_size
                         ))
@@ -299,7 +299,7 @@ impl EffectPlugin for SkslEffectPlugin {
 
                 // Create image filter from shader.
                 // Signature guess: shader(shader, crop_rect) (2 args)
-                skia_safe::image_filters::shader(shader, None).ok_or(LibraryError::Render(
+                skia_safe::image_filters::shader(shader, None).ok_or(LibraryError::render(
                     "Failed to create shader filter".to_string(),
                 ))
             },

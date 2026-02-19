@@ -5,6 +5,7 @@ use library::model::project::project::Project;
 use std::sync::{Arc, RwLock};
 
 use crate::command::CommandRegistry;
+use crate::state::context::PanelContext;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::{
     action::HistoryManager,
@@ -16,10 +17,7 @@ use library::EditorService;
 use library::RenderServer;
 
 pub struct AppTabViewer<'a> {
-    editor_context: &'a mut EditorContext,
-    history_manager: &'a mut HistoryManager,
-    project_service: &'a mut EditorService,
-    project: &'a Arc<RwLock<Project>>,
+    ctx: PanelContext<'a>,
     composition_dialog: &'a mut CompositionDialog,
     render_server: &'a Arc<RenderServer>,
     command_registry: &'a CommandRegistry,
@@ -36,10 +34,12 @@ impl<'a> AppTabViewer<'a> {
         command_registry: &'a CommandRegistry,
     ) -> Self {
         Self {
-            editor_context,
-            history_manager,
-            project_service,
-            project,
+            ctx: PanelContext {
+                editor_context,
+                history_manager,
+                project_service,
+                project,
+            },
             composition_dialog,
             render_server,
             command_registry,
@@ -52,50 +52,21 @@ impl<'a> TabViewer for AppTabViewer<'a> {
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
         match tab {
-            Tab::Preview => preview::preview_panel(
-                ui,
-                self.editor_context,
-                self.history_manager,
-                self.project_service,
-                self.project,
-                self.render_server,
-                self.command_registry,
-            ),
-            Tab::Timeline => timeline::timeline_panel(
-                ui,
-                self.editor_context,
-                self.history_manager,
-                self.project_service,
-                self.project,
-                self.command_registry,
-            ),
-            Tab::Inspector => inspector::inspector_panel(
-                ui,
-                self.editor_context,
-                self.history_manager,
-                self.project_service,
-                self.project,
-            ),
-            Tab::Assets => assets::assets_panel(
-                ui,
-                self.editor_context,
-                self.history_manager,
-                self.project_service,
-                self.project,
-                self.composition_dialog,
-            ),
+            Tab::Preview => {
+                preview::preview_panel(ui, &mut self.ctx, self.render_server, self.command_registry)
+            }
+            Tab::Timeline => timeline::timeline_panel(ui, &mut self.ctx, self.command_registry),
+            Tab::Inspector => inspector::inspector_panel(ui, &mut self.ctx),
+            Tab::Assets => assets::assets_panel(ui, &mut self.ctx, self.composition_dialog),
             Tab::GraphEditor => {
                 crate::ui::panels::graph_editor::graph_editor_panel(
                     ui,
-                    self.editor_context,
-                    self.history_manager,
-                    self.project_service,
-                    self.project,
+                    &mut self.ctx,
                     self.command_registry,
                 );
             }
             Tab::NodeGraph => {
-                node_editor::node_editor_panel(ui, &mut self.editor_context.node_graph_state);
+                node_editor::node_editor_panel(ui, &mut self.ctx.editor_context.node_graph_state);
             }
         }
     }

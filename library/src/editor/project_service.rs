@@ -1,4 +1,4 @@
-use crate::editor::color_service::ColorSpaceManager;
+use crate::core::color::ColorSpaceManager;
 use crate::editor::handlers;
 use crate::error::LibraryError;
 use crate::model::project::asset::Asset;
@@ -120,7 +120,7 @@ impl ProjectManager {
         let plugin = self
             .plugin_manager
             .get_entity_converter("video")
-            .ok_or_else(|| LibraryError::Plugin("Video converter plugin not found".to_string()))?;
+            .ok_or_else(|| LibraryError::plugin("Video converter plugin not found".to_string()))?;
 
         let defs = plugin.get_property_definitions(
             canvas_width as u64,
@@ -167,7 +167,7 @@ impl ProjectManager {
         let plugin = self
             .plugin_manager
             .get_entity_converter("image")
-            .ok_or_else(|| LibraryError::Plugin("Image converter plugin not found".to_string()))?;
+            .ok_or_else(|| LibraryError::plugin("Image converter plugin not found".to_string()))?;
 
         let defs = plugin.get_property_definitions(
             canvas_width as u64,
@@ -213,7 +213,7 @@ impl ProjectManager {
         let plugin = self
             .plugin_manager
             .get_entity_converter("text")
-            .ok_or_else(|| LibraryError::Plugin("Text converter plugin not found".to_string()))?;
+            .ok_or_else(|| LibraryError::plugin("Text converter plugin not found".to_string()))?;
 
         // Measure text size
         let (w, h) = crate::plugin::entity_converter::measure_text_size(text, "Arial", 100.0);
@@ -273,7 +273,7 @@ impl ProjectManager {
         let plugin = self
             .plugin_manager
             .get_entity_converter("shape")
-            .ok_or_else(|| LibraryError::Plugin("Shape converter plugin not found".to_string()))?;
+            .ok_or_else(|| LibraryError::plugin("Shape converter plugin not found".to_string()))?;
 
         let defs =
             plugin.get_property_definitions(canvas_width as u64, canvas_height as u64, 100, 100);
@@ -338,7 +338,7 @@ impl ProjectManager {
         let plugin = self
             .plugin_manager
             .get_entity_converter("sksl")
-            .ok_or_else(|| LibraryError::Plugin("SkSL converter plugin not found".to_string()))?;
+            .ok_or_else(|| LibraryError::plugin("SkSL converter plugin not found".to_string()))?;
 
         let defs = plugin.get_property_definitions(
             canvas_width as u64,
@@ -1039,7 +1039,7 @@ half4 main(float2 fragCoord) {
             .plugin_manager
             .get_default_effect_config(effect_id)
             .ok_or_else(|| {
-                LibraryError::Project(format!(
+                LibraryError::project(format!(
                     "Default config for effect '{}' not found",
                     effect_id
                 ))
@@ -1310,7 +1310,7 @@ half4 main(float2 fragCoord) {
             .plugin_manager
             .get_style_plugin(style_type)
             .ok_or_else(|| {
-                LibraryError::Plugin(format!("Style plugin '{}' not found", style_type))
+                LibraryError::plugin(format!("Style plugin '{}' not found", style_type))
             })?;
 
         let properties =
@@ -1327,7 +1327,7 @@ half4 main(float2 fragCoord) {
             drop(project); // release lock
             self.update_track_clip_styles(clip_id, new_styles)
         } else {
-            Err(LibraryError::Validation(format!(
+            Err(LibraryError::validation(format!(
                 "Clip {} not found",
                 clip_id
             )))
@@ -1337,7 +1337,7 @@ half4 main(float2 fragCoord) {
     pub fn add_effector(&self, clip_id: Uuid, effector_type: &str) -> Result<(), LibraryError> {
         let defs = self.plugin_manager.get_effector_properties(effector_type);
         if defs.is_empty() {
-            return Err(LibraryError::Plugin(format!(
+            return Err(LibraryError::plugin(format!(
                 "Effector plugin '{}' not found or has no properties",
                 effector_type
             )));
@@ -1354,7 +1354,7 @@ half4 main(float2 fragCoord) {
             drop(project); // release lock
             self.update_track_clip_effectors(clip_id, new_effectors)
         } else {
-            Err(LibraryError::Validation(format!(
+            Err(LibraryError::validation(format!(
                 "Clip {} not found",
                 clip_id
             )))
@@ -1364,7 +1364,7 @@ half4 main(float2 fragCoord) {
     pub fn add_decorator(&self, clip_id: Uuid, decorator_type: &str) -> Result<(), LibraryError> {
         let defs = self.plugin_manager.get_decorator_properties(decorator_type);
         if defs.is_empty() {
-            return Err(LibraryError::Plugin(format!(
+            return Err(LibraryError::plugin(format!(
                 "Decorator plugin '{}' not found or has no properties",
                 decorator_type
             )));
@@ -1381,7 +1381,7 @@ half4 main(float2 fragCoord) {
             drop(project); // release lock
             self.update_track_clip_decorators(clip_id, new_decorators)
         } else {
-            Err(LibraryError::Validation(format!(
+            Err(LibraryError::validation(format!(
                 "Clip {} not found",
                 clip_id
             )))

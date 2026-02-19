@@ -10,7 +10,7 @@ fn get_local_time(
     entity_id: Uuid,
     global_time: f64,
 ) -> f64 {
-    if let Ok(project) = service.get_project().read() {
+    service.with_project(|project| {
         if let Some(comp) = project.get_composition(comp_id) {
             // Use flat lookup from project.get_clip() instead of nested track traversal
             if let Some(clip) = project.get_clip(entity_id) {
@@ -23,8 +23,8 @@ fn get_local_time(
                 return local_time;
             }
         }
-    }
-    global_time
+        global_time
+    })
 }
 
 pub fn update_number_property(
