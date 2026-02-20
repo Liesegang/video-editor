@@ -480,6 +480,7 @@ pub fn preview_panel(
                             composition: comp,
                             property_evaluators: &property_evaluators,
                             plugin_manager: &plugin_manager,
+                            project: &proj_read,
                         };
 
                         if let Some(converter) =

@@ -149,9 +149,9 @@ impl RenderQueue {
             .compositions
             .get(config.composition_index)
             .cloned()
-            .ok_or(LibraryError::Project(ProjectError::InvalidCompositionIndex(
-                config.composition_index,
-            )))
+            .ok_or(LibraryError::Project(
+                ProjectError::InvalidCompositionIndex(config.composition_index),
+            ))
     }
 
     fn spawn_saver(

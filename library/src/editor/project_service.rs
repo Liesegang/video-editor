@@ -988,6 +988,51 @@ half4 main(float2 fragCoord) {
         }
     }
 
+    // --- Graph Node Operations ---
+
+    pub fn add_graph_node(&self, container_id: Uuid, type_id: &str) -> Result<Uuid, LibraryError> {
+        handlers::graph_handler::GraphHandler::add_graph_node(
+            &self.project,
+            &self.plugin_manager,
+            container_id,
+            type_id,
+        )
+    }
+
+    pub fn remove_graph_node(&self, node_id: Uuid) -> Result<(), LibraryError> {
+        handlers::graph_handler::GraphHandler::remove_graph_node(&self.project, node_id)
+    }
+
+    pub fn add_graph_connection(
+        &self,
+        from: crate::model::project::PinId,
+        to: crate::model::project::PinId,
+    ) -> Result<crate::model::project::Connection, LibraryError> {
+        handlers::graph_handler::GraphHandler::add_connection(&self.project, from, to)
+    }
+
+    pub fn remove_graph_connection(&self, connection_id: Uuid) -> Result<(), LibraryError> {
+        handlers::graph_handler::GraphHandler::remove_connection(&self.project, connection_id)
+    }
+
+    pub fn update_graph_node_property(
+        &self,
+        node_id: Uuid,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<(), LibraryError> {
+        handlers::graph_handler::GraphHandler::update_graph_node_property(
+            &self.project,
+            node_id,
+            property_key,
+            time,
+            value,
+            easing,
+        )
+    }
+
     pub fn get_inspector_definitions(
         &self,
         comp_id: uuid::Uuid,

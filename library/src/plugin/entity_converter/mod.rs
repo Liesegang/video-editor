@@ -24,6 +24,7 @@ pub struct FrameEvaluationContext<'a> {
     pub composition: &'a Composition,
     pub property_evaluators: &'a PropertyEvaluatorRegistry,
     pub plugin_manager: &'a PluginManager,
+    pub project: &'a crate::model::project::project::Project,
 }
 
 impl<'a> FrameEvaluationContext<'a> {
@@ -173,6 +174,50 @@ impl<'a> FrameEvaluationContext<'a> {
                 }
             })
             .collect()
+    }
+
+    /// Build image effects for a clip, preferring graph-based effects over embedded.
+    ///
+    /// If the clip has an effect chain in the graph (via connections), those are used.
+    /// Otherwise, falls back to the embedded `clip.effects` field.
+    pub fn build_clip_effects(
+        &self,
+        track_clip: &TrackClip,
+        time: f64,
+    ) -> Vec<crate::model::frame::effect::ImageEffect> {
+        use crate::model::frame::effect::ImageEffect;
+        use crate::model::project::graph_analysis;
+
+        let effect_chain = graph_analysis::get_effect_chain(self.project, track_clip.id);
+
+        if !effect_chain.is_empty() {
+            // Graph-based: read effect GraphNodes
+            effect_chain
+                .iter()
+                .filter_map(|&node_id| {
+                    let graph_node = self.project.get_graph_node(node_id)?;
+                    let effect_type = graph_node
+                        .type_id
+                        .strip_prefix("effect.")
+                        .unwrap_or(&graph_node.type_id)
+                        .to_string();
+
+                    let mut properties = std::collections::HashMap::new();
+                    for (key, prop) in graph_node.properties.iter() {
+                        let val = self.evaluate_property_value(prop, &graph_node.properties, time);
+                        properties.insert(key.clone(), val);
+                    }
+
+                    Some(ImageEffect {
+                        effect_type,
+                        properties,
+                    })
+                })
+                .collect()
+        } else {
+            // Fallback: embedded effects
+            self.build_image_effects(&track_clip.effects, time)
+        }
     }
 
     pub fn build_styles(

@@ -2,5 +2,6 @@
 members = [
     "library",
     "app",
+    "egui_node_editor",
     "plugins/random_property",
 ]

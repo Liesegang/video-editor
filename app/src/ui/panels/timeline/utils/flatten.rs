@@ -110,7 +110,7 @@ pub fn flatten_tracks_to_rows<'a>(
                             false,
                         );
                     }
-                    None => {}
+                    _ => {}
                 }
             }
         }

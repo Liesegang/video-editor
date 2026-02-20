@@ -5,6 +5,8 @@
 pub mod entity_converter;
 mod evaluator;
 mod manager;
+pub mod node_definitions;
+pub mod node_types;
 mod repository;
 mod traits;
 
@@ -20,6 +22,7 @@ pub mod styles;
 pub use entity_converter::{EntityConverterPlugin, FrameEvaluationContext};
 pub use evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
 pub use manager::{PluginInfo, PluginManager};
+pub use node_types::{NodeCategory, NodeTypeDefinition};
 pub use repository::PluginRepository;
 pub use traits::{Plugin, PropertyPlugin};
 

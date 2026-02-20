@@ -104,7 +104,7 @@ pub(super) fn collect_descendant_clips<'a>(
         match project.get_node(*child_id) {
             Some(Node::Clip(clip)) => clips.push(clip),
             Some(Node::Track(sub_track)) => collect_descendant_clips(project, sub_track, clips),
-            None => {}
+            _ => {}
         }
     }
 }

@@ -24,6 +24,7 @@ use crate::plugin::exporters::{ExportPlugin, ExportSettings};
 use crate::plugin::loaders::{
     AssetMetadata, LoadPlugin, LoadRepository, LoadRequest, LoadResponse,
 };
+use crate::plugin::node_types::{NodeCategory, NodeTypeDefinition};
 use crate::plugin::repository::{PluginRegistry, PluginRepository};
 
 use crate::plugin::traits::{Plugin, PropertyPlugin};
@@ -99,6 +100,12 @@ impl Default for PluginManager {
         manager.register_style_plugin(Arc::new(crate::plugin::styles::FillStylePlugin));
         manager.register_style_plugin(Arc::new(crate::plugin::styles::StrokeStylePlugin));
 
+        // Auto-register NodeTypeDefinitions from existing plugins
+        manager.auto_register_node_types();
+
+        // Register all built-in node types (from node_list.yml documentation)
+        crate::plugin::node_definitions::register_all_node_types(&manager);
+
         manager
     }
 }
@@ -115,6 +122,7 @@ impl PluginManager {
                 decorator_plugins: PluginRepository::new(),
                 style_plugins: PluginRepository::new(),
                 property_evaluators: PropertyEvaluatorRegistry::new(),
+                node_types: HashMap::new(),
                 dynamic_libraries: Vec::new(),
             }),
         }
@@ -691,6 +699,180 @@ impl PluginManager {
 
         plugins.sort_by(|a, b| a.id.cmp(&b.id));
         plugins
+    }
+
+    // ==================== Node Type Definition Methods ====================
+
+    /// Register a node type definition.
+    pub fn register_node_type(&self, def: NodeTypeDefinition) {
+        let mut inner = self.inner.write().unwrap();
+        inner.node_types.insert(def.type_id.clone(), def);
+    }
+
+    /// Get a node type definition by type_id.
+    pub fn get_node_type(&self, type_id: &str) -> Option<NodeTypeDefinition> {
+        let inner = self.inner.read().unwrap();
+        inner.node_types.get(type_id).cloned()
+    }
+
+    /// Get all available node type definitions.
+    pub fn get_available_node_types(&self) -> Vec<NodeTypeDefinition> {
+        let inner = self.inner.read().unwrap();
+        inner.node_types.values().cloned().collect()
+    }
+
+    /// Get node type definitions filtered by category.
+    pub fn get_node_types_by_category(&self, category: NodeCategory) -> Vec<NodeTypeDefinition> {
+        let inner = self.inner.read().unwrap();
+        inner
+            .node_types
+            .values()
+            .filter(|def| def.category == category)
+            .cloned()
+            .collect()
+    }
+
+    /// Auto-register NodeTypeDefinitions from existing effect/style/effector/decorator plugins.
+    fn auto_register_node_types(&self) {
+        use crate::model::project::connection::{PinDataType, PinDefinition};
+
+        let inner = self.inner.read().unwrap();
+        let mut defs = Vec::new();
+
+        // Effects → NodeTypeDefinition
+        for plugin in inner.effect_plugins.plugins.values() {
+            let props = plugin.properties();
+            let mut inputs = vec![PinDefinition::input(
+                "image_in",
+                "Image",
+                PinDataType::Image,
+            )];
+            for prop in &props {
+                let pin_type = property_ui_to_pin_data_type(prop.ui_type());
+                inputs.push(PinDefinition::input(prop.name(), prop.label(), pin_type));
+            }
+            let outputs = vec![PinDefinition::output(
+                "image_out",
+                "Image",
+                PinDataType::Image,
+            )];
+
+            defs.push(
+                NodeTypeDefinition::new(
+                    &format!("effect.{}", plugin.id()),
+                    &plugin.name(),
+                    NodeCategory::Effect,
+                )
+                .with_inputs(inputs)
+                .with_outputs(outputs)
+                .with_properties(props),
+            );
+        }
+
+        // Styles → NodeTypeDefinition
+        for plugin in inner.style_plugins.plugins.values() {
+            let props = plugin.properties();
+            let mut inputs = Vec::new();
+            for prop in &props {
+                let pin_type = property_ui_to_pin_data_type(prop.ui_type());
+                inputs.push(PinDefinition::input(prop.name(), prop.label(), pin_type));
+            }
+            let outputs = vec![PinDefinition::output(
+                "style_out",
+                "Style",
+                PinDataType::Style,
+            )];
+
+            defs.push(
+                NodeTypeDefinition::new(
+                    &format!("style.{}", plugin.id()),
+                    &plugin.name(),
+                    NodeCategory::Style,
+                )
+                .with_inputs(inputs)
+                .with_outputs(outputs)
+                .with_properties(props),
+            );
+        }
+
+        // Effectors → NodeTypeDefinition
+        for plugin in inner.effector_plugins.plugins.values() {
+            let props = plugin.properties();
+            let mut inputs = Vec::new();
+            for prop in &props {
+                let pin_type = property_ui_to_pin_data_type(prop.ui_type());
+                inputs.push(PinDefinition::input(prop.name(), prop.label(), pin_type));
+            }
+            let outputs = vec![PinDefinition::output(
+                "effector_out",
+                "Effector",
+                PinDataType::Effector,
+            )];
+
+            defs.push(
+                NodeTypeDefinition::new(
+                    &format!("effector.{}", plugin.id()),
+                    &plugin.name(),
+                    NodeCategory::Effector,
+                )
+                .with_inputs(inputs)
+                .with_outputs(outputs)
+                .with_properties(props),
+            );
+        }
+
+        // Decorators → NodeTypeDefinition
+        for plugin in inner.decorator_plugins.plugins.values() {
+            let props = plugin.properties();
+            let mut inputs = Vec::new();
+            for prop in &props {
+                let pin_type = property_ui_to_pin_data_type(prop.ui_type());
+                inputs.push(PinDefinition::input(prop.name(), prop.label(), pin_type));
+            }
+            let outputs = vec![PinDefinition::output(
+                "decorator_out",
+                "Decorator",
+                PinDataType::Decorator,
+            )];
+
+            defs.push(
+                NodeTypeDefinition::new(
+                    &format!("decorator.{}", plugin.id()),
+                    &plugin.name(),
+                    NodeCategory::Decorator,
+                )
+                .with_inputs(inputs)
+                .with_outputs(outputs)
+                .with_properties(props),
+            );
+        }
+
+        drop(inner);
+
+        for def in defs {
+            self.register_node_type(def);
+        }
+    }
+}
+
+/// Convert a PropertyUiType to the closest PinDataType.
+fn property_ui_to_pin_data_type(
+    ui_type: &crate::model::project::property::PropertyUiType,
+) -> crate::model::project::connection::PinDataType {
+    use crate::model::project::connection::PinDataType;
+    use crate::model::project::property::PropertyUiType;
+    match ui_type {
+        PropertyUiType::Float { .. } => PinDataType::Scalar,
+        PropertyUiType::Integer { .. } => PinDataType::Integer,
+        PropertyUiType::Color => PinDataType::Color,
+        PropertyUiType::Text | PropertyUiType::MultilineText | PropertyUiType::Font => {
+            PinDataType::String
+        }
+        PropertyUiType::Bool => PinDataType::Boolean,
+        PropertyUiType::Vec2 { .. } => PinDataType::Vec2,
+        PropertyUiType::Vec3 { .. } => PinDataType::Vec3,
+        PropertyUiType::Vec4 { .. } => PinDataType::Scalar, // No Vec4 pin type yet
+        PropertyUiType::Dropdown { .. } => PinDataType::Enum,
     }
 }
 

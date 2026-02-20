@@ -97,7 +97,7 @@ impl<'a> FrameEvaluator<'a> {
                     self.collect_clips_recursive(*child_id, frame_number, out_clips);
                 }
             }
-            None => {}
+            _ => {}
         }
     }
 
@@ -109,6 +109,7 @@ impl<'a> FrameEvaluator<'a> {
                     composition: self.composition,
                     property_evaluators: &self.property_evaluators,
                     plugin_manager: &self.plugin_manager,
+                    project: self.project,
                 },
                 track_clip,
                 frame_number,

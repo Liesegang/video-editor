@@ -10,6 +10,7 @@ use crate::plugin::effects::EffectPlugin;
 use crate::plugin::evaluator::PropertyEvaluatorRegistry;
 use crate::plugin::exporters::ExportPlugin;
 use crate::plugin::loaders::LoadRepository;
+use crate::plugin::node_types::NodeTypeDefinition;
 use crate::plugin::traits::Plugin;
 use crate::plugin::{DecoratorPlugin, EffectorPlugin, StylePlugin};
 
@@ -48,5 +49,6 @@ pub(crate) struct PluginRegistry {
     pub decorator_plugins: PluginRepository<dyn DecoratorPlugin>,
     pub style_plugins: PluginRepository<dyn StylePlugin>,
     pub property_evaluators: PropertyEvaluatorRegistry,
+    pub node_types: HashMap<String, NodeTypeDefinition>,
     pub dynamic_libraries: Vec<Library>,
 }

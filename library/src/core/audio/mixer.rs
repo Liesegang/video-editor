@@ -14,7 +14,7 @@ fn collect_clips_recursive<'a>(project: &'a Project, node_id: Uuid) -> Vec<&'a T
                 clips.extend(collect_clips_recursive(project, *child_id));
             }
         }
-        None => {}
+        _ => {}
     }
     clips
 }

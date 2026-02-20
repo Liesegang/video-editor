@@ -249,9 +249,11 @@ pub fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                     history_manager,
                     editor_context,
                     selected_entity_id,
+                    track_id,
                     current_time,
                     fps,
                     &styles,
+                    project,
                     &mut needs_refresh,
                 );
             }
@@ -265,6 +267,7 @@ pub fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                     history_manager,
                     editor_context,
                     selected_entity_id,
+                    track_id,
                     current_time,
                     fps,
                     &effectors,
@@ -276,6 +279,7 @@ pub fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                         in_grid: false,
                         current_time,
                     },
+                    project,
                 );
             }
 
@@ -286,8 +290,10 @@ pub fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                 history_manager,
                 editor_context,
                 selected_entity_id,
+                track_id,
                 current_time,
                 fps,
+                project,
                 &mut needs_refresh,
             );
 

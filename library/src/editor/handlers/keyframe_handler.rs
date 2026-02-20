@@ -1,33 +1,47 @@
 use crate::error::LibraryError;
 
 use crate::model::project::project::Project;
-use crate::model::project::property::PropertyValue;
+use crate::model::project::property::{PropertyMap, PropertyTarget, PropertyValue};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 pub struct KeyframeHandler;
 
 impl KeyframeHandler {
-    /// Unified method to add a keyframe to any target (Clip, Effect, Style, Effector, Decorator)
+    /// Resolve the target PropertyMap from either a GraphNode or a clip's embedded data.
+    fn resolve_property_map_mut<'a>(
+        proj: &'a mut Project,
+        clip_id: Uuid,
+        target: PropertyTarget,
+    ) -> Result<&'a mut PropertyMap, LibraryError> {
+        if let PropertyTarget::GraphNode(node_id) = target {
+            let node = proj.get_graph_node_mut(node_id).ok_or_else(|| {
+                LibraryError::project(format!("Graph node {} not found", node_id))
+            })?;
+            return Ok(&mut node.properties);
+        }
+
+        let clip = proj
+            .get_clip_mut(clip_id)
+            .ok_or_else(|| LibraryError::project(format!("Clip {} not found", clip_id)))?;
+
+        clip.get_property_map_mut(target.clone()).ok_or_else(|| {
+            LibraryError::project(format!("Target {:?} not found in clip {}", target, clip_id))
+        })
+    }
+
+    /// Unified method to add a keyframe to any target (Clip, Effect, Style, Effector, Decorator, GraphNode)
     pub fn add_keyframe(
         project: &Arc<RwLock<Project>>,
         clip_id: Uuid,
-        target: crate::model::project::property::PropertyTarget,
+        target: PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
         let mut proj = super::write_project(project)?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project(format!("Clip {} not found", clip_id)))?;
-
-        // Use the unified accessor
-        let prop_map = clip.get_property_map_mut(target.clone()).ok_or_else(|| {
-            LibraryError::project(format!("Target {:?} not found in clip {}", target, clip_id))
-        })?;
+        let prop_map = Self::resolve_property_map_mut(&mut proj, clip_id, target)?;
 
         let prop = prop_map
             .get_mut(property_key)
@@ -48,7 +62,7 @@ impl KeyframeHandler {
     pub fn update_keyframe_by_index(
         project: &Arc<RwLock<Project>>,
         clip_id: Uuid,
-        target: crate::model::project::property::PropertyTarget,
+        target: PropertyTarget,
         property_key: &str,
         keyframe_index: usize,
         new_time: Option<f64>,
@@ -56,21 +70,12 @@ impl KeyframeHandler {
         new_easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
         let mut proj = super::write_project(project)?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project(format!("Clip {} not found", clip_id)))?;
-
-        let prop_map = clip
-            .get_property_map_mut(target.clone())
-            .ok_or_else(|| LibraryError::project(format!("Target {:?} not found", target)))?;
+        let prop_map = Self::resolve_property_map_mut(&mut proj, clip_id, target)?;
 
         let property = prop_map
             .get_mut(property_key)
             .ok_or_else(|| LibraryError::project(format!("Property {} not found", property_key)))?;
 
-        // Logic centralized in Property? Or keep here?
-        // Property::update_keyframe_at_index is available
         if !property.update_keyframe_at_index(keyframe_index, new_time, new_value, new_easing) {
             return Err(LibraryError::project(format!(
                 "Failed to update keyframe at index {} for property {}",
@@ -85,25 +90,17 @@ impl KeyframeHandler {
     pub fn remove_keyframe_by_index(
         project: &Arc<RwLock<Project>>,
         clip_id: Uuid,
-        target: crate::model::project::property::PropertyTarget,
+        target: PropertyTarget,
         property_key: &str,
         keyframe_index: usize,
     ) -> Result<(), LibraryError> {
         let mut proj = super::write_project(project)?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project(format!("Clip {} not found", clip_id)))?;
-
-        let prop_map = clip
-            .get_property_map_mut(target.clone())
-            .ok_or_else(|| LibraryError::project(format!("Target {:?} not found", target)))?;
+        let prop_map = Self::resolve_property_map_mut(&mut proj, clip_id, target)?;
 
         let property = prop_map
             .get_mut(property_key)
             .ok_or_else(|| LibraryError::project(format!("Property {} not found", property_key)))?;
 
-        // Property::remove_keyframe_at_index is available
         if !property.remove_keyframe_at_index(keyframe_index) {
             return Err(LibraryError::project(format!(
                 "Failed to remove keyframe at index {} for property {}",

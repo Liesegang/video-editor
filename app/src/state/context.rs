@@ -35,8 +35,7 @@ pub struct EditorContext {
 
     // Node Editor State
     #[serde(skip)]
-    // Assuming we don't need to persist this for now or implement Serialize manually
-    pub node_graph_state: egui_snarl::Snarl<crate::model::node_graph::MyNodeTemplate>,
+    pub node_editor_state: egui_node_editor::NodeEditorState,
 
     #[serde(skip)]
     pub interaction: InteractionState,
@@ -69,7 +68,7 @@ impl EditorContext {
             selection,
             graph_editor: GraphEditorState::default(),
             keyframe_dialog: KeyframeDialogState::default(),
-            node_graph_state: Default::default(),
+            node_editor_state: Default::default(),
             interaction: InteractionState::default(),
             preview_texture: None,
             preview_texture_id: None,

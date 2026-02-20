@@ -66,7 +66,7 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                 );
             }
             Tab::NodeGraph => {
-                node_editor::node_editor_panel(ui, &mut self.ctx.editor_context.node_graph_state);
+                node_editor::node_editor_panel(ui, &mut self.ctx);
             }
         }
     }

@@ -4,7 +4,7 @@ use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Node, TrackClip, TrackData};
+use super::{Connection, GraphNode, Node, PinId, TrackClip, TrackData};
 use crate::model::frame::color::Color;
 
 use crate::model::project::asset::Asset;
@@ -17,9 +17,12 @@ pub struct Project {
     pub assets: Vec<Asset>,
     #[serde(default)]
     pub export: ExportConfig,
-    /// 統一ノードレジストリ - 全Track/Clipを格納
+    /// 統一ノードレジストリ - 全Track/Clip/GraphNodeを格納
     #[serde(default)]
     pub nodes: HashMap<Uuid, Node>,
+    /// Data-flow graph connections between node pins
+    #[serde(default)]
+    pub connections: Vec<Connection>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)]
@@ -64,6 +67,7 @@ impl Project {
             assets: Vec::new(),
             export: ExportConfig::default(),
             nodes: HashMap::new(),
+            connections: Vec::new(),
         }
     }
 
@@ -166,7 +170,7 @@ impl Project {
                     self.collect_clips_recursive(*child_id, clips);
                 }
             }
-            None => {}
+            _ => {}
         }
     }
 
@@ -196,6 +200,69 @@ impl Project {
             }
         }
         None
+    }
+
+    // ==================== GraphNode Accessors ====================
+
+    /// Get a graph node by ID
+    pub fn get_graph_node(&self, id: Uuid) -> Option<&GraphNode> {
+        match self.nodes.get(&id)? {
+            Node::Graph(g) => Some(g),
+            _ => None,
+        }
+    }
+
+    /// Get a mutable graph node by ID
+    pub fn get_graph_node_mut(&mut self, id: Uuid) -> Option<&mut GraphNode> {
+        match self.nodes.get_mut(&id)? {
+            Node::Graph(g) => Some(g),
+            _ => None,
+        }
+    }
+
+    /// Iterate over all graph nodes
+    pub fn all_graph_nodes(&self) -> impl Iterator<Item = &GraphNode> {
+        self.nodes.values().filter_map(|node| match node {
+            Node::Graph(g) => Some(g),
+            _ => None,
+        })
+    }
+
+    // ==================== Connection Methods ====================
+
+    /// Add a connection
+    pub fn add_connection(&mut self, connection: Connection) {
+        self.connections.push(connection);
+    }
+
+    /// Remove a connection by ID
+    pub fn remove_connection(&mut self, connection_id: Uuid) -> Option<Connection> {
+        let pos = self
+            .connections
+            .iter()
+            .position(|c| c.id == connection_id)?;
+        Some(self.connections.remove(pos))
+    }
+
+    /// Get all connections involving a specific node
+    pub fn get_connections_for_node(&self, node_id: Uuid) -> Vec<&Connection> {
+        self.connections
+            .iter()
+            .filter(|c| c.from.node_id == node_id || c.to.node_id == node_id)
+            .collect()
+    }
+
+    /// Get the connection feeding into a specific input pin
+    pub fn get_input_connection(&self, pin: &PinId) -> Option<&Connection> {
+        self.connections
+            .iter()
+            .find(|c| c.to.node_id == pin.node_id && c.to.pin_name == pin.pin_name)
+    }
+
+    /// Remove all connections involving a specific node
+    pub fn remove_connections_for_node(&mut self, node_id: Uuid) {
+        self.connections
+            .retain(|c| c.from.node_id != node_id && c.to.node_id != node_id);
     }
 }
 

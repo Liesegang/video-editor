@@ -94,6 +94,17 @@ impl ClipHandler {
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
+        // GraphNode targets are accessed via Project.nodes, not via clip
+        if let crate::model::project::property::PropertyTarget::GraphNode(node_id) = target {
+            let mut proj = super::write_project(project)?;
+            let node = proj.get_graph_node_mut(node_id).ok_or_else(|| {
+                LibraryError::project(format!("Graph node {} not found", node_id))
+            })?;
+            node.properties
+                .update_property_or_keyframe(property_key, time, value, easing);
+            return Ok(());
+        }
+
         let mut proj = super::write_project(project)?;
 
         let clip = proj
@@ -321,15 +332,29 @@ impl ClipHandler {
         attribute_key: &str,
         attribute_value: PropertyValue,
     ) -> Result<(), LibraryError> {
+        // GraphNode targets are accessed via Project.nodes, not via clip
+        if let crate::model::project::property::PropertyTarget::GraphNode(node_id) = target {
+            let mut proj = super::write_project(project)?;
+            let node = proj.get_graph_node_mut(node_id).ok_or_else(|| {
+                LibraryError::project(format!("Graph node {} not found", node_id))
+            })?;
+            let prop = node.properties.get_mut(property_key).ok_or_else(|| {
+                LibraryError::project(format!("Property {} not found", property_key))
+            })?;
+            prop.properties
+                .insert(attribute_key.to_string(), attribute_value);
+            return Ok(());
+        }
+
         let mut proj = super::write_project(project)?;
 
         let clip = proj
             .get_clip_mut(clip_id)
             .ok_or_else(|| LibraryError::project(format!("Clip with ID {} not found", clip_id)))?;
 
-        let prop_map = clip
-            .get_property_map_mut(target)
-            .ok_or_else(|| LibraryError::project("Target not found or index out of range".to_string()))?;
+        let prop_map = clip.get_property_map_mut(target).ok_or_else(|| {
+            LibraryError::project("Target not found or index out of range".to_string())
+        })?;
 
         let prop = prop_map
             .get_mut(property_key)

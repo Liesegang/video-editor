@@ -1,0 +1,9 @@
+[package]
+name = "egui_node_editor"
+version = "0.1.0"
+edition = "2024"
+description = "A standalone egui-based node graph editor widget"
+
+[dependencies]
+egui = "0.33"
+uuid = { version = "1", features = ["v4"] }

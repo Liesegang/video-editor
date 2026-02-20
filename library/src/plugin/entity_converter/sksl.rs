@@ -172,7 +172,7 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
         );
 
         let transform = evaluator.build_transform(props, eval_time);
-        let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
+        let effects = evaluator.build_clip_effects(track_clip, eval_time);
 
         Some(FrameObject {
             content: FrameContent::SkSL {

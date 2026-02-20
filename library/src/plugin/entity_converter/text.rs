@@ -161,7 +161,7 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
         let styles = evaluator.build_styles(&track_clip.styles, eval_time);
 
         let transform = evaluator.build_transform(props, eval_time);
-        let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
+        let effects = evaluator.build_clip_effects(track_clip, eval_time);
 
         // Build Ensemble data from text_clip.effectors/decorators
         let ensemble = if !track_clip.effectors.is_empty() || !track_clip.decorators.is_empty() {

@@ -1,13 +1,19 @@
 pub mod asset;
 pub mod clip_helpers;
+pub mod connection;
 pub mod effect;
 pub mod ensemble;
+pub mod graph_analysis;
+pub mod graph_node;
+pub mod migration;
 pub mod project;
 pub mod property;
 pub mod style;
 
+pub use connection::{Connection, PinDataType, PinId};
 pub use effect::EffectConfig;
 pub use ensemble::{DecoratorInstance, EffectorInstance};
+pub use graph_node::GraphNode;
 
 use crate::model::project::property::PropertyMap;
 use crate::model::project::style::StyleInstance;
@@ -19,6 +25,7 @@ use uuid::Uuid;
 pub enum Node {
     Track(TrackData),
     Clip(TrackClip),
+    Graph(GraphNode),
 }
 
 impl Node {
@@ -27,6 +34,7 @@ impl Node {
         match self {
             Node::Track(t) => t.id,
             Node::Clip(c) => c.id,
+            Node::Graph(g) => g.id,
         }
     }
 }
@@ -225,6 +233,7 @@ impl TrackClip {
             PropertyTarget::Style(i) => self.styles.get_mut(i).map(|s| &mut s.properties),
             PropertyTarget::Effector(i) => self.effectors.get_mut(i).map(|e| &mut e.properties),
             PropertyTarget::Decorator(i) => self.decorators.get_mut(i).map(|e| &mut e.properties),
+            PropertyTarget::GraphNode(_) => None, // GraphNode properties are accessed via Project.nodes
         }
     }
 

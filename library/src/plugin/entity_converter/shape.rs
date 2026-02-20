@@ -139,7 +139,7 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
         // Uses the signature defined in mod.rs: parse_path_effects(&self, props: &PropertyMap, time: f64)
         let path_effects = evaluator.parse_path_effects(props, eval_time);
 
-        let effects = evaluator.build_image_effects(&track_clip.effects, eval_time);
+        let effects = evaluator.build_clip_effects(track_clip, eval_time);
 
         Some(FrameObject {
             content: FrameContent::Shape {

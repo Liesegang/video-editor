@@ -674,6 +674,8 @@ pub enum PropertyTarget {
     Style(usize),
     Effector(usize),
     Decorator(usize),
+    /// References a GraphNode by UUID (for the new graph-based model)
+    GraphNode(uuid::Uuid),
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, PartialEq, Eq, Debug)] // Added Debug
