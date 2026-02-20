@@ -5,6 +5,8 @@
 //! connect their own data model.
 
 pub mod drawing;
+pub mod interactions;
+pub mod node_rendering;
 pub mod state;
 pub mod theme;
 pub mod traits;

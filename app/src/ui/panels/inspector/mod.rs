@@ -9,6 +9,7 @@ use library::model::project::property::PropertyUiType;
 pub mod action_handler;
 pub mod effects;
 pub mod ensemble;
+pub mod graph_items;
 pub mod properties;
 pub mod styles;
 

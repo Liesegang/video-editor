@@ -1,4 +1,5 @@
 use super::action_handler::{ActionContext, PropertyTarget};
+use super::graph_items::{self, collect_graph_nodes, render_graph_node_item};
 use super::properties::{render_inspector_properties_grid, PropertyRenderContext};
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
@@ -7,18 +8,9 @@ use egui::collapsing_header::CollapsingState;
 use egui::Ui;
 use library::model::project::connection::PinId;
 use library::model::project::graph_analysis;
-use library::model::project::property::PropertyMap;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
-
-/// Lightweight info about a graph-based effect for UI display.
-struct GraphEffectInfo {
-    node_id: Uuid,
-    type_id: String,
-    display_name: String,
-    properties: PropertyMap,
-}
 
 pub fn render_effects_section(
     ui: &mut Ui,
@@ -36,30 +28,12 @@ pub fn render_effects_section(
     ui.heading("Effects");
     ui.separator();
 
-    // Collect graph-based effects
-    let graph_effects: Vec<GraphEffectInfo> = if let Ok(proj) = project.read() {
-        let chain = graph_analysis::get_effect_chain(&proj, selected_entity_id);
-        chain
-            .into_iter()
-            .filter_map(|node_id| {
-                let node = proj.get_graph_node(node_id)?;
-                let type_id = node.type_id.clone();
-                let display_name = project_service
-                    .get_plugin_manager()
-                    .get_node_type(&type_id)
-                    .map(|def| def.display_name.clone())
-                    .unwrap_or_else(|| type_id.clone());
-                Some(GraphEffectInfo {
-                    node_id,
-                    type_id,
-                    display_name,
-                    properties: node.properties.clone(),
-                })
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let graph_effects = collect_graph_nodes(
+        project,
+        project_service,
+        selected_entity_id,
+        |proj, clip_id| graph_analysis::get_effect_chain(proj, clip_id),
+    );
 
     let has_graph_effects = !graph_effects.is_empty();
 
@@ -72,7 +46,7 @@ pub fn render_effects_section(
         Vec::new()
     };
 
-    // Add button
+    // Add button (effects use searchable menu, not simple chain add)
     use super::properties::render_add_button;
     render_add_button(ui, |ui| {
         let available_effects = project_service.get_plugin_manager().get_available_effects();
@@ -86,11 +60,9 @@ pub fn render_effects_section(
             "add_effect_menu",
             &items,
             |effect_id| {
-                // Add as graph node + connection
                 let type_id = format!("effect.{}", effect_id);
                 match project_service.add_graph_node(track_id, &type_id) {
                     Ok(new_node_id) => {
-                        // Find the end of the current effect chain to connect to
                         let connect_from = if let Ok(proj) = project.read() {
                             let chain = graph_analysis::get_effect_chain(&proj, selected_entity_id);
                             if let Some(&last_effect) = chain.last() {
@@ -109,8 +81,7 @@ pub fn render_effects_section(
                             log::error!("Failed to connect effect: {}", e);
                         }
 
-                        let current_state = project_service.with_project(|p| p.clone());
-                        history_manager.push_project_state(current_state);
+                        graph_items::commit_to_history(project_service, history_manager);
                         *needs_refresh = true;
                     }
                     Err(e) => {
@@ -121,23 +92,30 @@ pub fn render_effects_section(
         );
     });
 
+    let context = PropertyRenderContext {
+        available_fonts: &editor_context.available_fonts,
+        in_grid: true,
+        current_time,
+    };
+
     // Render graph-based effects
     if has_graph_effects {
         for effect in &graph_effects {
-            render_graph_effect_item(
+            render_graph_node_item(
                 ui,
                 project_service,
                 history_manager,
-                editor_context,
                 selected_entity_id,
                 effect,
                 current_time,
                 fps,
+                &context,
                 needs_refresh,
+                "graph_effect",
+                false,
             );
         }
     } else if !embedded_effects.is_empty() {
-        // Legacy: render embedded effects
         render_embedded_effects(
             ui,
             project_service,
@@ -150,78 +128,6 @@ pub fn render_effects_section(
             needs_refresh,
         );
     }
-}
-
-fn render_graph_effect_item(
-    ui: &mut Ui,
-    project_service: &mut ProjectService,
-    history_manager: &mut HistoryManager,
-    editor_context: &mut EditorContext,
-    clip_id: Uuid,
-    effect: &GraphEffectInfo,
-    current_time: f64,
-    fps: f64,
-    needs_refresh: &mut bool,
-) {
-    let id = ui.make_persistent_id(format!("graph_effect_{}", effect.node_id));
-    let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
-
-    let mut remove_clicked = false;
-    let header_res = state.show_header(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(&effect.display_name).strong());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("X").clicked() {
-                    remove_clicked = true;
-                }
-            });
-        });
-    });
-
-    if remove_clicked {
-        if let Err(e) = project_service.remove_graph_node(effect.node_id) {
-            log::error!("Failed to remove effect node: {}", e);
-        } else {
-            let current_state = project_service.with_project(|p| p.clone());
-            history_manager.push_project_state(current_state);
-            *needs_refresh = true;
-        }
-    }
-
-    header_res.body(|ui| {
-        // Get property definitions from NodeTypeDefinition
-        let defs = project_service
-            .get_plugin_manager()
-            .get_node_type(&effect.type_id)
-            .map(|def| def.default_properties.clone())
-            .unwrap_or_default();
-
-        let context = PropertyRenderContext {
-            available_fonts: &editor_context.available_fonts,
-            in_grid: true,
-            current_time,
-        };
-
-        let pending_actions = render_inspector_properties_grid(
-            ui,
-            format!("graph_effect_grid_{}", effect.node_id),
-            &effect.properties,
-            &defs,
-            project_service,
-            &context,
-            fps,
-        );
-
-        let effect_props = effect.properties.clone();
-        let mut ctx = ActionContext::new(project_service, history_manager, clip_id, current_time);
-        if ctx.handle_actions(
-            pending_actions,
-            PropertyTarget::GraphNode(effect.node_id),
-            |n| effect_props.get(n).cloned(),
-        ) {
-            *needs_refresh = true;
-        }
-    });
 }
 
 /// Legacy: render embedded EffectConfig items (fallback when no graph effects exist)

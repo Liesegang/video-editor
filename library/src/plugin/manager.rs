@@ -110,6 +110,72 @@ impl Default for PluginManager {
     }
 }
 
+/// Generate register, get, get_available, and get_properties methods for a plugin category.
+macro_rules! impl_plugin_accessors {
+    (
+        $( {
+            register: $register_fn:ident,
+            get: $get_fn:ident,
+            get_available: $get_available_fn:ident,
+            get_properties: $get_properties_fn:ident,
+            field: $field:ident,
+            trait_type: $trait_type:ty
+        } ),+ $(,)?
+    ) => {
+        impl PluginManager {
+            $(
+                pub fn $register_fn(&self, plugin: Arc<$trait_type>) {
+                    let mut inner = self.inner.write().unwrap();
+                    inner.$field.register(plugin);
+                }
+
+                pub fn $get_fn(&self, id: &str) -> Option<Arc<$trait_type>> {
+                    let inner = self.inner.read().unwrap();
+                    inner.$field.get(id).cloned()
+                }
+
+                pub fn $get_available_fn(&self) -> Vec<String> {
+                    let inner = self.inner.read().unwrap();
+                    inner.$field.values().map(|p| p.id().to_string()).collect()
+                }
+
+                pub fn $get_properties_fn(&self, id: &str) -> Vec<PropertyDefinition> {
+                    self.$get_fn(id)
+                        .map(|p| p.properties())
+                        .unwrap_or_default()
+                }
+            )+
+        }
+    };
+}
+
+impl_plugin_accessors! {
+    {
+        register: register_effector_plugin,
+        get: get_effector_plugin,
+        get_available: get_available_effectors,
+        get_properties: get_effector_properties,
+        field: effector_plugins,
+        trait_type: dyn EffectorPlugin
+    },
+    {
+        register: register_decorator_plugin,
+        get: get_decorator_plugin,
+        get_available: get_available_decorators,
+        get_properties: get_decorator_properties,
+        field: decorator_plugins,
+        trait_type: dyn DecoratorPlugin
+    },
+    {
+        register: register_style_plugin,
+        get: get_style_plugin,
+        get_available: get_available_styles,
+        get_properties: get_style_properties,
+        field: style_plugins,
+        trait_type: dyn StylePlugin
+    }
+}
+
 impl PluginManager {
     pub fn new() -> Self {
         Self {
@@ -155,81 +221,6 @@ impl PluginManager {
         inner
             .property_evaluators
             .register(evaluator_id, evaluator_instance);
-    }
-
-    pub fn register_effector_plugin(&self, plugin: Arc<dyn EffectorPlugin>) {
-        let mut inner = self.inner.write().unwrap();
-        inner.effector_plugins.register(plugin);
-    }
-
-    pub fn register_decorator_plugin(&self, plugin: Arc<dyn DecoratorPlugin>) {
-        let mut inner = self.inner.write().unwrap();
-        inner.decorator_plugins.register(plugin);
-    }
-
-    pub fn register_style_plugin(&self, plugin: Arc<dyn StylePlugin>) {
-        let mut inner = self.inner.write().unwrap();
-        inner.style_plugins.register(plugin);
-    }
-
-    pub fn get_effector_plugin(&self, id: &str) -> Option<Arc<dyn EffectorPlugin>> {
-        let inner = self.inner.read().unwrap();
-        inner.effector_plugins.get(id).cloned()
-    }
-
-    pub fn get_decorator_plugin(&self, id: &str) -> Option<Arc<dyn DecoratorPlugin>> {
-        let inner = self.inner.read().unwrap();
-        inner.decorator_plugins.get(id).cloned()
-    }
-
-    pub fn get_style_plugin(&self, id: &str) -> Option<Arc<dyn StylePlugin>> {
-        let inner = self.inner.read().unwrap();
-        inner.style_plugins.get(id).cloned()
-    }
-
-    pub fn get_available_effectors(&self) -> Vec<String> {
-        let inner = self.inner.read().unwrap();
-        inner
-            .effector_plugins
-            .values()
-            .map(|p| p.id().to_string())
-            .collect()
-    }
-
-    pub fn get_available_decorators(&self) -> Vec<String> {
-        let inner = self.inner.read().unwrap();
-        inner
-            .decorator_plugins
-            .values()
-            .map(|p| p.id().to_string())
-            .collect()
-    }
-
-    pub fn get_available_styles(&self) -> Vec<String> {
-        let inner = self.inner.read().unwrap();
-        inner
-            .style_plugins
-            .values()
-            .map(|p| p.id().to_string())
-            .collect()
-    }
-
-    pub fn get_effector_properties(&self, id: &str) -> Vec<PropertyDefinition> {
-        self.get_effector_plugin(id)
-            .map(|p| p.properties())
-            .unwrap_or_default()
-    }
-
-    pub fn get_decorator_properties(&self, id: &str) -> Vec<PropertyDefinition> {
-        self.get_decorator_plugin(id)
-            .map(|p| p.properties())
-            .unwrap_or_default()
-    }
-
-    pub fn get_style_properties(&self, id: &str) -> Vec<PropertyDefinition> {
-        self.get_style_plugin(id)
-            .map(|p| p.properties())
-            .unwrap_or_default()
     }
 
     /// Set the priority order for loader plugins.
@@ -652,50 +643,26 @@ impl PluginManager {
         let inner = self.inner.read().unwrap();
         let mut plugins = Vec::new();
 
-        for p in inner.effect_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
+        macro_rules! collect_plugins {
+            ($repo:expr) => {
+                for p in $repo.plugins.values() {
+                    let v = p.version();
+                    plugins.push(PluginInfo {
+                        id: p.id().to_string(),
+                        name: p.name(),
+                        plugin_type: p.plugin_type(),
+                        category: p.category(),
+                        version: format!("{}.{}.{}", v.0, v.1, v.2),
+                        impl_type: p.impl_type(),
+                    });
+                }
+            };
         }
-        for p in inner.load_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
-        }
-        for p in inner.export_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
-        }
-        for p in inner.entity_converter_plugins.plugins.values() {
-            let v = p.version();
-            plugins.push(PluginInfo {
-                id: p.id().to_string(),
-                name: p.name(),
-                plugin_type: p.plugin_type(),
-                category: p.category(),
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                impl_type: p.impl_type(),
-            });
-        }
+
+        collect_plugins!(inner.effect_plugins);
+        collect_plugins!(inner.load_plugins);
+        collect_plugins!(inner.export_plugins);
+        collect_plugins!(inner.entity_converter_plugins);
 
         plugins.sort_by(|a, b| a.id.cmp(&b.id));
         plugins
@@ -734,135 +701,71 @@ impl PluginManager {
 
     /// Auto-register NodeTypeDefinitions from existing effect/style/effector/decorator plugins.
     fn auto_register_node_types(&self) {
-        use crate::model::project::connection::{PinDataType, PinDefinition};
+        use crate::model::project::connection::PinDataType;
 
         let inner = self.inner.read().unwrap();
         let mut defs = Vec::new();
 
-        // Effects → NodeTypeDefinition
-        for plugin in inner.effect_plugins.plugins.values() {
-            let props = plugin.properties();
-            let mut inputs = vec![PinDefinition::input(
-                "image_in",
-                "Image",
-                PinDataType::Image,
-            )];
-            for prop in &props {
-                let pin_type = property_ui_to_pin_data_type(prop.ui_type());
-                inputs.push(PinDefinition::input(prop.name(), prop.label(), pin_type));
+        let configs = [
+            AutoRegisterConfig {
+                type_prefix: "effect.",
+                category: NodeCategory::Effect,
+                chain_input: ("image_in", "Image", PinDataType::Image),
+                chain_output: ("image_out", "Image", PinDataType::Image),
+            },
+            AutoRegisterConfig {
+                type_prefix: "style.",
+                category: NodeCategory::Style,
+                chain_input: ("style_in", "Style In", PinDataType::Style),
+                chain_output: ("style_out", "Style", PinDataType::Style),
+            },
+            AutoRegisterConfig {
+                type_prefix: "effector.",
+                category: NodeCategory::Effector,
+                chain_input: ("effector_in", "Effector In", PinDataType::Effector),
+                chain_output: ("effector_out", "Effector", PinDataType::Effector),
+            },
+            AutoRegisterConfig {
+                type_prefix: "decorator.",
+                category: NodeCategory::Decorator,
+                chain_input: ("decorator_in", "Decorator In", PinDataType::Decorator),
+                chain_output: ("decorator_out", "Decorator", PinDataType::Decorator),
+            },
+        ];
+
+        // Collect (id, name, properties) from each plugin category
+        let plugin_data: Vec<Vec<(String, String, Vec<PropertyDefinition>)>> = vec![
+            inner
+                .effect_plugins
+                .values()
+                .map(|p| (p.id().to_string(), p.name(), p.properties()))
+                .collect(),
+            inner
+                .style_plugins
+                .values()
+                .map(|p| (p.id().to_string(), p.name(), p.properties()))
+                .collect(),
+            inner
+                .effector_plugins
+                .values()
+                .map(|p| (p.id().to_string(), p.name(), p.properties()))
+                .collect(),
+            inner
+                .decorator_plugins
+                .values()
+                .map(|p| (p.id().to_string(), p.name(), p.properties()))
+                .collect(),
+        ];
+
+        for (config, plugins) in configs.iter().zip(plugin_data.iter()) {
+            for (plugin_id, plugin_name, props) in plugins {
+                defs.push(build_node_type_def(
+                    config,
+                    plugin_id,
+                    plugin_name,
+                    props.clone(),
+                ));
             }
-            let outputs = vec![PinDefinition::output(
-                "image_out",
-                "Image",
-                PinDataType::Image,
-            )];
-
-            defs.push(
-                NodeTypeDefinition::new(
-                    &format!("effect.{}", plugin.id()),
-                    &plugin.name(),
-                    NodeCategory::Effect,
-                )
-                .with_inputs(inputs)
-                .with_outputs(outputs)
-                .with_properties(props),
-            );
-        }
-
-        // Styles → NodeTypeDefinition
-        for plugin in inner.style_plugins.plugins.values() {
-            let props = plugin.properties();
-            let mut inputs = Vec::new();
-            // Chain input: receives style from previous node in chain
-            inputs.push(PinDefinition::input(
-                "style_in",
-                "Style In",
-                PinDataType::Style,
-            ));
-            for prop in &props {
-                let pin_type = property_ui_to_pin_data_type(prop.ui_type());
-                inputs.push(PinDefinition::input(prop.name(), prop.label(), pin_type));
-            }
-            let outputs = vec![PinDefinition::output(
-                "style_out",
-                "Style",
-                PinDataType::Style,
-            )];
-
-            defs.push(
-                NodeTypeDefinition::new(
-                    &format!("style.{}", plugin.id()),
-                    &plugin.name(),
-                    NodeCategory::Style,
-                )
-                .with_inputs(inputs)
-                .with_outputs(outputs)
-                .with_properties(props),
-            );
-        }
-
-        // Effectors → NodeTypeDefinition
-        for plugin in inner.effector_plugins.plugins.values() {
-            let props = plugin.properties();
-            let mut inputs = Vec::new();
-            // Chain input: receives effector from previous node in chain
-            inputs.push(PinDefinition::input(
-                "effector_in",
-                "Effector In",
-                PinDataType::Effector,
-            ));
-            for prop in &props {
-                let pin_type = property_ui_to_pin_data_type(prop.ui_type());
-                inputs.push(PinDefinition::input(prop.name(), prop.label(), pin_type));
-            }
-            let outputs = vec![PinDefinition::output(
-                "effector_out",
-                "Effector",
-                PinDataType::Effector,
-            )];
-
-            defs.push(
-                NodeTypeDefinition::new(
-                    &format!("effector.{}", plugin.id()),
-                    &plugin.name(),
-                    NodeCategory::Effector,
-                )
-                .with_inputs(inputs)
-                .with_outputs(outputs)
-                .with_properties(props),
-            );
-        }
-
-        // Decorators → NodeTypeDefinition
-        for plugin in inner.decorator_plugins.plugins.values() {
-            let props = plugin.properties();
-            let mut inputs = Vec::new();
-            // Chain input: receives decorator from previous node in chain
-            inputs.push(PinDefinition::input(
-                "decorator_in",
-                "Decorator In",
-                PinDataType::Decorator,
-            ));
-            for prop in &props {
-                let pin_type = property_ui_to_pin_data_type(prop.ui_type());
-                inputs.push(PinDefinition::input(prop.name(), prop.label(), pin_type));
-            }
-            let outputs = vec![PinDefinition::output(
-                "decorator_out",
-                "Decorator",
-                PinDataType::Decorator,
-            )];
-
-            defs.push(
-                NodeTypeDefinition::new(
-                    &format!("decorator.{}", plugin.id()),
-                    &plugin.name(),
-                    NodeCategory::Decorator,
-                )
-                .with_inputs(inputs)
-                .with_outputs(outputs)
-                .with_properties(props),
-            );
         }
 
         drop(inner);
@@ -871,6 +774,51 @@ impl PluginManager {
             self.register_node_type(def);
         }
     }
+}
+
+/// Configuration for auto-registering a plugin category as node types.
+struct AutoRegisterConfig {
+    type_prefix: &'static str,
+    category: NodeCategory,
+    chain_input: (
+        &'static str,
+        &'static str,
+        crate::model::project::connection::PinDataType,
+    ),
+    chain_output: (
+        &'static str,
+        &'static str,
+        crate::model::project::connection::PinDataType,
+    ),
+}
+
+/// Build a NodeTypeDefinition from plugin metadata and config.
+fn build_node_type_def(
+    config: &AutoRegisterConfig,
+    plugin_id: &str,
+    plugin_name: &str,
+    props: Vec<PropertyDefinition>,
+) -> NodeTypeDefinition {
+    use crate::model::project::connection::PinDefinition;
+
+    let (in_name, in_label, in_type) = &config.chain_input;
+    let (out_name, out_label, out_type) = &config.chain_output;
+
+    let mut inputs = vec![PinDefinition::input(in_name, in_label, in_type.clone())];
+    for prop in &props {
+        let pin_type = property_ui_to_pin_data_type(prop.ui_type());
+        inputs.push(PinDefinition::input(prop.name(), prop.label(), pin_type));
+    }
+    let outputs = vec![PinDefinition::output(out_name, out_label, out_type.clone())];
+
+    NodeTypeDefinition::new(
+        &format!("{}{}", config.type_prefix, plugin_id),
+        plugin_name,
+        config.category,
+    )
+    .with_inputs(inputs)
+    .with_outputs(outputs)
+    .with_properties(props)
 }
 
 /// Convert a PropertyUiType to the closest PinDataType.
