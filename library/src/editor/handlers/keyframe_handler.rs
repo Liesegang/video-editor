@@ -29,8 +29,17 @@ impl KeyframeHandler {
             LibraryError::project(format!("Target {:?} not found in clip {}", target, clip_id))
         })?;
 
-        // Update logic centralized in PropertyMap
-        prop_map.update_property_or_keyframe(property_key, time, value, easing);
+        let prop = prop_map
+            .get_mut(property_key)
+            .ok_or_else(|| LibraryError::project(format!("Property {} not found", property_key)))?;
+
+        // Use upsert_keyframe which correctly converts constant → keyframe
+        if !prop.upsert_keyframe(time, value, easing) {
+            return Err(LibraryError::project(format!(
+                "Cannot add keyframe to property {} (evaluator: {})",
+                property_key, prop.evaluator
+            )));
+        }
 
         Ok(())
     }
