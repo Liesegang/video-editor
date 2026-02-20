@@ -1,36 +1,18 @@
 use crate::error::LibraryError;
 use crate::model::project::property::PropertyValue;
-use crate::plugin::{EffectPlugin, Plugin};
+use crate::plugin::EffectPlugin;
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
 use skia_safe::{TileMode, image_filters};
 use std::collections::HashMap;
 
-pub struct BlurEffectPlugin;
-
-impl BlurEffectPlugin {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Plugin for BlurEffectPlugin {
-    fn id(&self) -> &'static str {
-        "blur"
-    }
-
-    fn name(&self) -> String {
-        "Blur".to_string()
-    }
-
-    fn category(&self) -> String {
-        "Blur & Sharpen".to_string()
-    }
-
-    fn version(&self) -> (u32, u32, u32) {
-        (0, 1, 0)
-    }
-}
+super::define_effect_plugin!(
+    BlurEffectPlugin,
+    id: "blur",
+    name: "Blur",
+    category: "Blur & Sharpen",
+    version: (0, 1, 0)
+);
 
 impl EffectPlugin for BlurEffectPlugin {
     fn apply(

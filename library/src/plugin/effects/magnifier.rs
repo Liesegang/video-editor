@@ -1,36 +1,18 @@
 use crate::error::LibraryError;
 use crate::model::project::property::PropertyValue;
-use crate::plugin::{EffectPlugin, Plugin};
+use crate::plugin::EffectPlugin;
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
 use skia_safe::{Rect, image_filters};
 use std::collections::HashMap;
 
-pub struct MagnifierEffectPlugin;
-
-impl MagnifierEffectPlugin {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Plugin for MagnifierEffectPlugin {
-    fn id(&self) -> &'static str {
-        "magnifier"
-    }
-
-    fn name(&self) -> String {
-        "Magnifier".to_string()
-    }
-
-    fn category(&self) -> String {
-        "Distortion".to_string()
-    }
-
-    fn version(&self) -> (u32, u32, u32) {
-        (0, 1, 0)
-    }
-}
+super::define_effect_plugin!(
+    MagnifierEffectPlugin,
+    id: "magnifier",
+    name: "Magnifier",
+    category: "Distortion",
+    version: (0, 1, 0)
+);
 
 impl EffectPlugin for MagnifierEffectPlugin {
     fn apply(

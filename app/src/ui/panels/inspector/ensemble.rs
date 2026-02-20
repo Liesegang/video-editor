@@ -41,12 +41,12 @@ pub fn render_ensemble_section(
                         .map(|p| p.name())
                         .unwrap_or_else(|| type_name.clone());
                     if ui.button(label).clicked() {
-                        add_effector(
-                            &type_name,
+                        add_ensemble_instance(
                             project_service,
                             history_manager,
                             selected_entity_id,
-                            effectors,
+                            &type_name,
+                            true,
                         );
                         ui.close();
                         *needs_refresh = true;
@@ -149,12 +149,12 @@ pub fn render_ensemble_section(
                         .map(|p| p.name())
                         .unwrap_or_else(|| type_name.clone());
                     if ui.button(label).clicked() {
-                        add_decorator(
-                            &type_name,
+                        add_ensemble_instance(
                             project_service,
                             history_manager,
                             selected_entity_id,
-                            decorators,
+                            &type_name,
+                            false,
                         );
                         ui.close();
                         *needs_refresh = true;
@@ -245,34 +245,23 @@ pub fn render_ensemble_section(
     .show(ui, history_manager, project_service, needs_refresh);
 }
 
-fn add_effector(
-    type_name: &str,
+fn add_ensemble_instance(
     service: &mut ProjectService,
     history_manager: &mut HistoryManager,
     clip_id: Uuid,
-    _current_list: &Vec<EffectorInstance>,
-) {
-    if let Err(e) = service.add_effector(clip_id, type_name) {
-        log::error!("Failed to add effector: {}", e);
-        return;
-    }
-
-    let current_state = service.with_project(|p| p.clone());
-    history_manager.push_project_state(current_state);
-}
-
-fn add_decorator(
     type_name: &str,
-    service: &mut ProjectService,
-    history_manager: &mut HistoryManager,
-    clip_id: Uuid,
-    _current_list: &Vec<DecoratorInstance>,
+    is_effector: bool,
 ) {
-    if let Err(e) = service.add_decorator(clip_id, type_name) {
-        log::error!("Failed to add decorator: {}", e);
+    let result = if is_effector {
+        service.add_effector(clip_id, type_name)
+    } else {
+        service.add_decorator(clip_id, type_name)
+    };
+    if let Err(e) = result {
+        let kind = if is_effector { "effector" } else { "decorator" };
+        log::error!("Failed to add {}: {}", kind, e);
         return;
     }
-
     let current_state = service.with_project(|p| p.clone());
     history_manager.push_project_state(current_state);
 }

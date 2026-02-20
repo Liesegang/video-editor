@@ -13,9 +13,7 @@ impl TrackHandler {
         composition_id: Uuid,
         track_name: &str,
     ) -> Result<Uuid, LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
             LibraryError::project(format!("Composition with ID {} not found", composition_id))
@@ -49,9 +47,7 @@ impl TrackHandler {
         composition_id: Uuid,
         track: TrackData,
     ) -> Result<Uuid, LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
             LibraryError::project(format!("Composition with ID {} not found", composition_id))
@@ -82,9 +78,7 @@ impl TrackHandler {
         _composition_id: Uuid,
         track_id: Uuid,
     ) -> Result<TrackData, LibraryError> {
-        let proj = project
-            .read()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let proj = super::read_project(project)?;
 
         proj.get_track(track_id)
             .cloned()
@@ -97,9 +91,7 @@ impl TrackHandler {
         _composition_id: Uuid,
         track_id: Uuid,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         // Remove from parent's child_ids (need to find parent first)
         let parent_id = proj
@@ -131,9 +123,7 @@ impl TrackHandler {
         parent_track_id: Uuid,
         track_name: &str,
     ) -> Result<Uuid, LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         // Create new track
         let new_track = TrackData::new(track_name);
@@ -160,9 +150,7 @@ impl TrackHandler {
         track_id: Uuid,
         new_name: &str,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         if let Some(track) = proj.get_track_mut(track_id) {
             track.name = new_name.to_string();

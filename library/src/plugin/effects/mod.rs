@@ -1,3 +1,40 @@
+macro_rules! define_effect_plugin {
+    (
+        $struct_name:ident,
+        id: $id:expr,
+        name: $name:expr,
+        category: $category:expr,
+        version: ($major:expr, $minor:expr, $patch:expr)
+    ) => {
+        pub struct $struct_name;
+
+        impl $struct_name {
+            pub fn new() -> Self {
+                Self
+            }
+        }
+
+        impl $crate::plugin::Plugin for $struct_name {
+            fn id(&self) -> &'static str {
+                $id
+            }
+
+            fn name(&self) -> String {
+                $name.to_string()
+            }
+
+            fn category(&self) -> String {
+                $category.to_string()
+            }
+
+            fn version(&self) -> (u32, u32, u32) {
+                ($major, $minor, $patch)
+            }
+        }
+    };
+}
+pub(crate) use define_effect_plugin;
+
 pub mod blur;
 pub mod dilate;
 pub mod drop_shadow;

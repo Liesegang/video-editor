@@ -18,9 +18,7 @@ impl KeyframeHandler {
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         let clip = proj
             .get_clip_mut(clip_id)
@@ -48,9 +46,7 @@ impl KeyframeHandler {
         new_value: Option<PropertyValue>,
         new_easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         let clip = proj
             .get_clip_mut(clip_id)
@@ -84,9 +80,7 @@ impl KeyframeHandler {
         property_key: &str,
         keyframe_index: usize,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         let clip = proj
             .get_clip_mut(clip_id)

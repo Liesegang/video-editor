@@ -132,9 +132,9 @@ pub fn process_action(
                     new_time
                 };
 
-                let _ = project_service.update_effect_keyframe_by_index(
+                let _ = project_service.update_target_keyframe_by_index(
                     entity_id,
-                    eff_idx,
+                    library::model::project::property::PropertyTarget::Effect(eff_idx),
                     &prop_key,
                     idx,
                     Some(source_time),
@@ -185,9 +185,9 @@ pub fn process_action(
                     new_time
                 };
 
-                let _ = project_service.update_style_keyframe_by_index(
+                let _ = project_service.update_target_keyframe_by_index(
                     entity_id,
-                    style_idx,
+                    library::model::project::property::PropertyTarget::Style(style_idx),
                     &prop_key,
                     idx,
                     Some(source_time),
@@ -236,8 +236,9 @@ pub fn process_action(
                     new_time
                 };
 
-                let _ = project_service.update_keyframe(
+                let _ = project_service.update_target_keyframe_by_index(
                     entity_id,
+                    library::model::project::property::PropertyTarget::Clip,
                     base_name,
                     idx,
                     Some(source_time),
@@ -328,13 +329,32 @@ pub fn process_action(
             };
 
             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                let _ = project_service
-                    .add_effect_keyframe(entity_id, eff_idx, &prop_key, eval_time, new_pv, None);
+                let _ = project_service.add_target_keyframe(
+                    entity_id,
+                    library::model::project::property::PropertyTarget::Effect(eff_idx),
+                    &prop_key,
+                    eval_time,
+                    new_pv,
+                    None,
+                );
             } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                let _ = project_service
-                    .add_style_keyframe(entity_id, style_idx, &prop_key, eval_time, new_pv, None);
+                let _ = project_service.add_target_keyframe(
+                    entity_id,
+                    library::model::project::property::PropertyTarget::Style(style_idx),
+                    &prop_key,
+                    eval_time,
+                    new_pv,
+                    None,
+                );
             } else {
-                let _ = project_service.add_keyframe(entity_id, base_name, eval_time, new_pv, None);
+                let _ = project_service.add_target_keyframe(
+                    entity_id,
+                    library::model::project::property::PropertyTarget::Clip,
+                    base_name,
+                    eval_time,
+                    new_pv,
+                    None,
+                );
             }
             if let Ok(proj_read) = project.read() {
                 history_manager.push_project_state(proj_read.clone());
@@ -350,9 +370,9 @@ pub fn process_action(
             };
 
             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                let _ = project_service.update_effect_keyframe_by_index(
+                let _ = project_service.update_target_keyframe_by_index(
                     entity_id,
-                    eff_idx,
+                    library::model::project::property::PropertyTarget::Effect(eff_idx),
                     &prop_key,
                     idx,
                     None,
@@ -360,9 +380,9 @@ pub fn process_action(
                     Some(easing),
                 );
             } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                let _ = project_service.update_style_keyframe_by_index(
+                let _ = project_service.update_target_keyframe_by_index(
                     entity_id,
-                    style_idx,
+                    library::model::project::property::PropertyTarget::Style(style_idx),
                     &prop_key,
                     idx,
                     None,
@@ -370,8 +390,9 @@ pub fn process_action(
                     Some(easing),
                 );
             } else {
-                let _ = project_service.update_keyframe(
+                let _ = project_service.update_target_keyframe_by_index(
                     entity_id,
+                    library::model::project::property::PropertyTarget::Clip,
                     base_name,
                     idx,
                     None,
@@ -393,12 +414,26 @@ pub fn process_action(
             };
 
             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                let _ = project_service
-                    .remove_effect_keyframe_by_index(entity_id, eff_idx, &prop_key, idx);
+                let _ = project_service.remove_target_keyframe_by_index(
+                    entity_id,
+                    library::model::project::property::PropertyTarget::Effect(eff_idx),
+                    &prop_key,
+                    idx,
+                );
             } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                let _ = project_service.remove_style_keyframe(entity_id, style_idx, &prop_key, idx);
+                let _ = project_service.remove_target_keyframe_by_index(
+                    entity_id,
+                    library::model::project::property::PropertyTarget::Style(style_idx),
+                    &prop_key,
+                    idx,
+                );
             } else {
-                let _ = project_service.remove_keyframe(entity_id, base_name, idx);
+                let _ = project_service.remove_target_keyframe_by_index(
+                    entity_id,
+                    library::model::project::property::PropertyTarget::Clip,
+                    base_name,
+                    idx,
+                );
             }
             if let Ok(proj_read) = project.read() {
                 history_manager.push_project_state(proj_read.clone());

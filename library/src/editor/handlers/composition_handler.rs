@@ -16,9 +16,7 @@ impl CompositionHandler {
         fps: f64,
         duration: f64,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
         let comp =
             proj.compositions
                 .iter_mut()
@@ -45,9 +43,7 @@ impl CompositionHandler {
         fps: f64,
         duration: f64,
     ) -> Result<Uuid, LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         // Composition::new returns (Composition, TrackData)
         let (composition, root_track) = Composition::new(name, width, height, fps, duration);
@@ -65,9 +61,7 @@ impl CompositionHandler {
         project: &Arc<RwLock<Project>>,
         id: Uuid,
     ) -> Result<Option<Composition>, LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
         Ok(proj.remove_composition(id))
     }
 
@@ -75,9 +69,7 @@ impl CompositionHandler {
         project: &Arc<RwLock<Project>>,
         id: Uuid,
     ) -> Result<Composition, LibraryError> {
-        let proj = project
-            .read()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let proj = super::read_project(project)?;
         proj.compositions
             .iter()
             .find(|c| c.id == id)
@@ -89,7 +81,7 @@ impl CompositionHandler {
     }
 
     pub fn is_composition_used(project: &Arc<RwLock<Project>>, comp_id: Uuid) -> bool {
-        if let Ok(proj) = project.read() {
+        if let Ok(proj) = super::read_project(project) {
             // Check all clips in the nodes registry
             for clip in proj.all_clips() {
                 if clip.reference_id == Some(comp_id) {

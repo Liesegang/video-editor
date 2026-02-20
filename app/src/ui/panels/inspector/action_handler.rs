@@ -41,64 +41,16 @@ impl<'a> ActionContext<'a> {
         target: PropertyTarget,
         name: &str,
         value: PropertyValue,
-        get_property: impl Fn(&str) -> Option<library::model::project::property::Property>,
+        _get_property: impl Fn(&str) -> Option<library::model::project::property::Property>,
     ) -> bool {
-        let is_keyframed = get_property(name)
-            .map(|p| p.evaluator == "keyframe")
-            .unwrap_or(false);
-
-        let result = match target {
-            PropertyTarget::Clip => {
-                if is_keyframed {
-                    self.project_service.update_property_or_keyframe(
-                        self.clip_id,
-                        name,
-                        self.current_time,
-                        value,
-                        None,
-                    )
-                } else {
-                    self.project_service
-                        .update_clip_property(self.clip_id, name, value)
-                }
-            }
-            PropertyTarget::Effect(idx) => self.project_service.update_effect_property_or_keyframe(
-                self.clip_id,
-                idx,
-                name,
-                self.current_time,
-                value,
-                None,
-            ),
-            PropertyTarget::Style(idx) => self.project_service.update_style_property_or_keyframe(
-                self.clip_id,
-                idx,
-                name,
-                self.current_time,
-                value,
-                None,
-            ),
-            PropertyTarget::Effector(idx) => {
-                self.project_service.update_effector_property_or_keyframe(
-                    self.clip_id,
-                    idx,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                )
-            }
-            PropertyTarget::Decorator(idx) => {
-                self.project_service.update_decorator_property_or_keyframe(
-                    self.clip_id,
-                    idx,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                )
-            }
-        };
+        let result = self.project_service.update_target_property_or_keyframe(
+            self.clip_id,
+            target,
+            name,
+            self.current_time,
+            value,
+            None,
+        );
 
         if let Err(e) = result {
             log::error!("Failed to update property {}: {:?}", name, e);
@@ -132,75 +84,17 @@ impl<'a> ActionContext<'a> {
         });
 
         let result = if let Some(index) = keyframe_index {
-            // Remove existing keyframe
-            match target {
-                PropertyTarget::Clip => {
-                    self.project_service
-                        .remove_keyframe(self.clip_id, name, index)
-                }
-                PropertyTarget::Effect(idx) => self
-                    .project_service
-                    .remove_effect_keyframe_by_index(self.clip_id, idx, name, index),
-                PropertyTarget::Style(idx) => {
-                    self.project_service
-                        .remove_style_keyframe(self.clip_id, idx, name, index)
-                }
-                // TODO: Implement remove for Effector/Decorator when needed
-                // For now, these are not fully supported or exposed via specialized methods
-                // If remove methods are missing, we might need to add them to service first.
-                // Assuming property update handles basics, but keyframe removal requires specific methods.
-                PropertyTarget::Effector(eff_idx) => self
-                    .project_service
-                    .remove_effector_keyframe_by_index(self.clip_id, eff_idx, name, index),
-                PropertyTarget::Decorator(dec_idx) => self
-                    .project_service
-                    .remove_decorator_keyframe_by_index(self.clip_id, dec_idx, name, index),
-            }
+            self.project_service
+                .remove_target_keyframe_by_index(self.clip_id, target, name, index)
         } else {
-            // Add new keyframe
-            match target {
-                PropertyTarget::Clip => self.project_service.add_keyframe(
-                    self.clip_id,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                ),
-                PropertyTarget::Effect(idx) => self.project_service.add_effect_keyframe(
-                    self.clip_id,
-                    idx,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                ),
-                PropertyTarget::Style(idx) => self.project_service.add_style_keyframe(
-                    self.clip_id,
-                    idx,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                ),
-                // Using generic update for add_keyframe behavior for now if specific add_keyframe missing?
-                // Actually update_..._or_keyframe handles adding if type is keyframe.
-                PropertyTarget::Effector(idx) => self.project_service.add_effector_keyframe(
-                    self.clip_id,
-                    idx,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                ),
-                PropertyTarget::Decorator(idx) => self.project_service.add_decorator_keyframe(
-                    self.clip_id,
-                    idx,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                ),
-            }
+            self.project_service.add_target_keyframe(
+                self.clip_id,
+                target,
+                name,
+                self.current_time,
+                value,
+                None,
+            )
         };
 
         if let Err(e) = result {
@@ -217,30 +111,13 @@ impl<'a> ActionContext<'a> {
         attr_key: &str,
         attr_val: PropertyValue,
     ) -> bool {
-        let result = match target {
-            PropertyTarget::Clip => self.project_service.set_clip_property_attribute(
-                self.clip_id,
-                name,
-                attr_key,
-                attr_val,
-            ),
-            PropertyTarget::Effect(idx) => self.project_service.set_effect_property_attribute(
-                self.clip_id,
-                idx,
-                name,
-                attr_key,
-                attr_val,
-            ),
-            PropertyTarget::Style(idx) => self.project_service.set_style_property_attribute(
-                self.clip_id,
-                idx,
-                name,
-                attr_key,
-                attr_val,
-            ),
-            // TODO: Implement for Effector/Decorator
-            PropertyTarget::Effector(_) | PropertyTarget::Decorator(_) => Ok(()),
-        };
+        let result = self.project_service.set_property_attribute(
+            self.clip_id,
+            target,
+            name,
+            attr_key,
+            attr_val,
+        );
 
         if let Err(e) = result {
             log::error!("Failed to set attribute {} for {}: {:?}", attr_key, name, e);

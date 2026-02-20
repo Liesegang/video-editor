@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
 use crate::model::project::project::Project;
-use crate::model::project::property::{Property, PropertyValue};
+use crate::model::project::property::PropertyValue;
 use crate::model::project::{Node, TrackClip, TrackClipKind};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -29,9 +29,7 @@ impl ClipHandler {
             }
         }
 
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         // Ensure track exists
         if proj.get_track(track_id).is_none() {
@@ -64,9 +62,7 @@ impl ClipHandler {
         track_id: Uuid,
         clip_id: Uuid,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         // Remove from parent track's child_ids
         if let Some(track) = proj.get_track_mut(track_id) {
@@ -98,9 +94,7 @@ impl ClipHandler {
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         let clip = proj
             .get_clip_mut(clip_id)
@@ -135,37 +129,6 @@ impl ClipHandler {
         prop_map.update_property_or_keyframe(property_key, time, value, easing);
 
         Ok(())
-    }
-
-    pub fn remove_keyframe(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        property_key: &str,
-        index: usize,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project(format!("Clip {} not found", clip_id)))?;
-
-        if let Some(prop) = clip.properties.get_mut(property_key) {
-            if prop.evaluator == "keyframe" {
-                let mut current_keyframes = prop.keyframes();
-                if index < current_keyframes.len() {
-                    current_keyframes.remove(index);
-                    *prop = Property::keyframe(current_keyframes);
-                }
-            }
-            Ok(())
-        } else {
-            Err(LibraryError::project(format!(
-                "Property {} not found",
-                property_key
-            )))
-        }
     }
 
     fn validate_recursion(project: &Arc<RwLock<Project>>, child_id: Uuid, parent_id: Uuid) -> bool {
@@ -234,9 +197,7 @@ impl ClipHandler {
         new_in_frame: u64,
         target_index: Option<usize>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         // 1. Remove from source track's child_ids
         if let Some(source_track) = proj.get_track_mut(source_track_id) {
@@ -282,9 +243,7 @@ impl ClipHandler {
         clip_id: Uuid,
         effect: crate::model::project::EffectConfig,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         let clip = proj
             .get_clip_mut(clip_id)
@@ -299,9 +258,7 @@ impl ClipHandler {
         clip_id: Uuid,
         effects: Vec<crate::model::project::EffectConfig>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         let clip = proj
             .get_clip_mut(clip_id)
@@ -316,9 +273,7 @@ impl ClipHandler {
         clip_id: Uuid,
         styles: Vec<crate::model::project::style::StyleInstance>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         let clip = proj
             .get_clip_mut(clip_id)
@@ -333,9 +288,7 @@ impl ClipHandler {
         clip_id: Uuid,
         effectors: Vec<crate::model::project::ensemble::EffectorInstance>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         let clip = proj
             .get_clip_mut(clip_id)
@@ -350,9 +303,7 @@ impl ClipHandler {
         clip_id: Uuid,
         decorators: Vec<crate::model::project::ensemble::DecoratorInstance>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         let clip = proj
             .get_clip_mut(clip_id)
@@ -362,166 +313,30 @@ impl ClipHandler {
         Ok(())
     }
 
-    pub fn set_style_property_attribute(
+    pub fn set_property_attribute(
         project: &Arc<RwLock<Project>>,
         clip_id: Uuid,
-        style_index: usize,
+        target: crate::model::project::property::PropertyTarget,
         property_key: &str,
         attribute_key: &str,
         attribute_value: PropertyValue,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let mut proj = super::write_project(project)?;
 
         let clip = proj
             .get_clip_mut(clip_id)
             .ok_or_else(|| LibraryError::project(format!("Clip with ID {} not found", clip_id)))?;
 
-        if let Some(style) = clip.styles.get_mut(style_index) {
-            if let Some(prop) = style.properties.get_mut(property_key) {
-                prop.properties
-                    .insert(attribute_key.to_string(), attribute_value);
-                Ok(())
-            } else {
-                Err(LibraryError::project(format!(
-                    "Property {} not found",
-                    property_key
-                )))
-            }
-        } else {
-            Err(LibraryError::project(
-                "Style index out of range".to_string(),
-            ))
-        }
-    }
+        let prop_map = clip
+            .get_property_map_mut(target)
+            .ok_or_else(|| LibraryError::project("Target not found or index out of range".to_string()))?;
 
-    pub fn set_effector_property_attribute(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let prop = prop_map
+            .get_mut(property_key)
+            .ok_or_else(|| LibraryError::project(format!("Property {} not found", property_key)))?;
 
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project(format!("Clip with ID {} not found", clip_id)))?;
-
-        if let Some(effector) = clip.effectors.get_mut(effector_index) {
-            if let Some(prop) = effector.properties.get_mut(property_key) {
-                prop.properties
-                    .insert(attribute_key.to_string(), attribute_value);
-                Ok(())
-            } else {
-                Err(LibraryError::project(format!(
-                    "Property {} not found",
-                    property_key
-                )))
-            }
-        } else {
-            Err(LibraryError::project(
-                "Effector index out of range".to_string(),
-            ))
-        }
-    }
-
-    pub fn set_decorator_property_attribute(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project(format!("Clip with ID {} not found", clip_id)))?;
-
-        if let Some(decorator) = clip.decorators.get_mut(decorator_index) {
-            if let Some(prop) = decorator.properties.get_mut(property_key) {
-                prop.properties
-                    .insert(attribute_key.to_string(), attribute_value);
-                Ok(())
-            } else {
-                Err(LibraryError::project(format!(
-                    "Property {} not found",
-                    property_key
-                )))
-            }
-        } else {
-            Err(LibraryError::project(
-                "Decorator index out of range".to_string(),
-            ))
-        }
-    }
-
-    pub fn set_clip_property_attribute(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project(format!("Clip with ID {} not found", clip_id)))?;
-
-        if let Some(prop) = clip.properties.get_mut(property_key) {
-            prop.properties
-                .insert(attribute_key.to_string(), attribute_value);
-            Ok(())
-        } else {
-            Err(LibraryError::project(format!(
-                "Property {} not found",
-                property_key
-            )))
-        }
-    }
-
-    pub fn set_effect_property_attribute(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        effect_index: usize,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project(format!("Clip with ID {} not found", clip_id)))?;
-
-        if let Some(effect) = clip.effects.get_mut(effect_index) {
-            if let Some(prop) = effect.properties.get_mut(property_key) {
-                prop.properties
-                    .insert(attribute_key.to_string(), attribute_value);
-                Ok(())
-            } else {
-                Err(LibraryError::project(format!(
-                    "Property {} not found",
-                    property_key
-                )))
-            }
-        } else {
-            Err(LibraryError::project(
-                "Effect index out of range".to_string(),
-            ))
-        }
+        prop.properties
+            .insert(attribute_key.to_string(), attribute_value);
+        Ok(())
     }
 }

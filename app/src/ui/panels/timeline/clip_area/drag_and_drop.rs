@@ -26,17 +26,16 @@ pub fn handle_drag_and_drop(
     if ui.input(|i| i.pointer.any_released()) {
         if let Some(dragged_item) = &editor_context.interaction.timeline.dragged_item {
             if let Some(mouse_pos) = response.hover_pos() {
-                let drop_time_f64 = ((mouse_pos.x - content_rect.min.x
-                    + editor_context.timeline.scroll_offset.x)
-                    / pixels_per_unit)
-                    .max(0.0) as f64;
-
-                let visible_row_index = ((mouse_pos.y - content_rect.min.y
-                    + editor_context.timeline.scroll_offset.y)
-                    / (row_height + track_spacing))
-                    .floor() as usize;
-
-                let drop_in_frame = (drop_time_f64 * composition_fps).round() as u64;
+                let (drop_in_frame, visible_row_index) =
+                    super::super::utils::pos_to_timeline_location(
+                        mouse_pos,
+                        content_rect,
+                        editor_context.timeline.scroll_offset,
+                        pixels_per_unit,
+                        composition_fps,
+                        row_height,
+                        track_spacing,
+                    );
 
                 if let Some(comp_id) = editor_context.selection.composition_id {
                     // ===== PHASE 1: Read all needed data, extract owned values =====

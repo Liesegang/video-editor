@@ -47,14 +47,18 @@ pub fn handle_context_menu(
 
         // Try to recover clicked position
         if let Some(pos) = editor_context.interaction.timeline.context_menu_open_pos {
-            let local_x = pos.x - content_rect.min.x + editor_context.timeline.scroll_offset.x;
-            let time_at_click = (local_x / pixels_per_unit).max(0.0);
-            drop_in_frame = (time_at_click * composition_fps as f32).round() as u64;
-
-            let local_y = pos.y - content_rect.min.y + editor_context.timeline.scroll_offset.y;
-            let track_idx = (local_y / (row_height + track_spacing)).floor() as isize;
-            if track_idx >= 0 && track_idx < num_tracks as isize {
-                drop_track_index_opt = Some(track_idx as usize);
+            let (frame, row_idx) = super::super::utils::pos_to_timeline_location(
+                pos,
+                content_rect,
+                editor_context.timeline.scroll_offset,
+                pixels_per_unit,
+                composition_fps,
+                row_height,
+                track_spacing,
+            );
+            drop_in_frame = frame;
+            if row_idx < num_tracks {
+                drop_track_index_opt = Some(row_idx);
             }
         }
 

@@ -345,36 +345,29 @@ pub fn show_keyframe_dialog(
                         PropertyValue::Number(OrderedFloat(state.value))
                     };
 
-                    let result = if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                        project_service.update_effect_keyframe_by_index(
-                            entity_id,
-                            eff_idx,
-                            &prop_key,
-                            state.keyframe_index,
-                            Some(new_time),
-                            Some(new_value),
-                            Some(state.easing.clone()),
-                        )
-                    } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                        project_service.update_style_keyframe_by_index(
-                            entity_id,
-                            style_idx,
-                            &prop_key,
-                            state.keyframe_index,
-                            Some(new_time),
-                            Some(new_value),
-                            Some(state.easing.clone()),
-                        )
+                    let target = if let Some((eff_idx, _)) = parse_key(base_name) {
+                        library::model::project::property::PropertyTarget::Effect(eff_idx)
+                    } else if let Some((style_idx, _)) = parse_style_key(base_name) {
+                        library::model::project::property::PropertyTarget::Style(style_idx)
                     } else {
-                        project_service.update_keyframe(
-                            entity_id,
-                            base_name,
-                            state.keyframe_index,
-                            Some(new_time),
-                            Some(new_value),
-                            Some(state.easing.clone()),
-                        )
+                        library::model::project::property::PropertyTarget::Clip
                     };
+                    let prop_key = if let Some((_, pk)) = parse_key(base_name) {
+                        pk
+                    } else if let Some((_, pk)) = parse_style_key(base_name) {
+                        pk
+                    } else {
+                        base_name.to_string()
+                    };
+                    let result = project_service.update_target_keyframe_by_index(
+                        entity_id,
+                        target,
+                        &prop_key,
+                        state.keyframe_index,
+                        Some(new_time),
+                        Some(new_value),
+                        Some(state.easing.clone()),
+                    );
 
                     if let Err(_e) = result {
                         // Only show error on final interaction to avoid spamming?

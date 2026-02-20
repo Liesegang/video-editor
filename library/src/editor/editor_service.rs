@@ -26,46 +26,6 @@ impl Clone for EditorService {
 }
 
 impl EditorService {
-    pub fn update_effector_property_or_keyframe(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_effector_property_or_keyframe(
-            clip_id,
-            effector_index,
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn update_decorator_property_or_keyframe(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_decorator_property_or_keyframe(
-            clip_id,
-            decorator_index,
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-}
-
-impl EditorService {
     pub fn new(
         project: Arc<RwLock<Project>>,
         plugin_manager: Arc<PluginManager>,
@@ -505,147 +465,6 @@ impl EditorService {
             .evaluate_property_value(property, context, time, fps)
     }
 
-    pub fn add_keyframe(
-        &self,
-        clip_id: Uuid,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager
-            .add_keyframe(clip_id, property_key, time, value, easing)
-    }
-
-    pub fn add_effect_keyframe(
-        &self,
-        clip_id: Uuid,
-        effect_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.add_effect_keyframe(
-            clip_id,
-            effect_index,
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn add_effector_keyframe(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.add_effector_keyframe(
-            clip_id,
-            effector_index,
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn update_effector_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-        time: Option<f64>,
-        value: Option<PropertyValue>,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_effector_keyframe_by_index(
-            clip_id,
-            effector_index,
-            property_key,
-            keyframe_index,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn remove_effector_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.remove_effector_keyframe_by_index(
-            clip_id,
-            effector_index,
-            property_key,
-            keyframe_index,
-        )
-    }
-
-    pub fn add_decorator_keyframe(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.add_decorator_keyframe(
-            clip_id,
-            decorator_index,
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn update_decorator_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-        time: Option<f64>,
-        value: Option<PropertyValue>,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_decorator_keyframe_by_index(
-            clip_id,
-            decorator_index,
-            property_key,
-            keyframe_index,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn remove_decorator_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.remove_decorator_keyframe_by_index(
-            clip_id,
-            decorator_index,
-            property_key,
-            keyframe_index,
-        )
-    }
-
     // Aliases & Sequences
 
     pub fn update_clip_time(
@@ -706,71 +525,6 @@ impl EditorService {
             .update_property_or_keyframe(clip_id, property_key, time, value, easing)
     }
 
-    pub fn update_keyframe(
-        &self,
-        clip_id: Uuid,
-        property_key: &str,
-        index: usize,
-        new_time: Option<f64>,
-        new_value: Option<PropertyValue>,
-        new_easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_keyframe(
-            clip_id,
-            property_key,
-            index,
-            new_time,
-            new_value,
-            new_easing,
-        )
-    }
-
-    pub fn update_effect_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        effect_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-        new_time: Option<f64>,
-        new_value: Option<PropertyValue>,
-        new_easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_effect_keyframe_by_index(
-            clip_id,
-            effect_index,
-            property_key,
-            keyframe_index,
-            new_time,
-            new_value,
-            new_easing,
-        )
-    }
-
-    pub fn remove_effect_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        effect_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.remove_effect_keyframe_by_index(
-            clip_id,
-            effect_index,
-            property_key,
-            keyframe_index,
-        )
-    }
-
-    pub fn remove_keyframe(
-        &self,
-        clip_id: Uuid,
-        property_key: &str,
-        index: usize,
-    ) -> Result<(), LibraryError> {
-        self.project_manager
-            .remove_keyframe(clip_id, property_key, index)
-    }
-
     pub fn has_asset_with_path(&self, path: &str) -> bool {
         self.project_manager.has_asset_with_path(path)
     }
@@ -812,194 +566,84 @@ impl EditorService {
             .update_track_clip_decorators(clip_id, decorators)
     }
 
-    pub fn update_track_clip_style_property(
+    pub fn set_property_attribute(
         &self,
         clip_id: Uuid,
-        style_index: usize,
+        target: crate::model::project::property::PropertyTarget,
         property_key: &str,
-        value: PropertyValue,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
     ) -> Result<(), LibraryError> {
-        self.project_manager.update_track_clip_style_property(
+        self.project_manager.set_property_attribute(
             clip_id,
-            style_index,
+            target,
             property_key,
-            value,
+            attribute_key,
+            attribute_value,
         )
     }
 
-    pub fn add_style_keyframe(
+    pub fn add_target_keyframe(
         &self,
         clip_id: Uuid,
-        style_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.add_style_keyframe(
-            clip_id,
-            style_index,
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn update_effect_property_or_keyframe(
-        &self,
-        clip_id: Uuid,
-        effect_index: usize,
+        target: crate::model::project::property::PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        self.project_manager.update_effect_property_or_keyframe(
-            clip_id,
-            effect_index,
-            property_key,
-            time,
-            value,
-            easing,
-        )
+        self.project_manager
+            .add_target_keyframe(clip_id, target, property_key, time, value, easing)
     }
 
-    pub fn update_style_keyframe_by_index(
+    pub fn update_target_keyframe_by_index(
         &self,
         clip_id: Uuid,
-        style_index: usize,
+        target: crate::model::project::property::PropertyTarget,
         property_key: &str,
         keyframe_index: usize,
-        new_time: Option<f64>,
-        new_value: Option<PropertyValue>,
-        new_easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_style_keyframe_by_index(
-            clip_id,
-            style_index,
-            property_key,
-            keyframe_index,
-            new_time,
-            new_value,
-            new_easing,
-        )
-    }
-
-    pub fn update_style_property_or_keyframe(
-        &self,
-        clip_id: Uuid,
-        style_index: usize,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
+        time: Option<f64>,
+        value: Option<PropertyValue>,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        self.project_manager.update_style_property_or_keyframe(
+        self.project_manager.update_target_keyframe_by_index(
             clip_id,
-            style_index,
+            target,
             property_key,
+            keyframe_index,
             time,
             value,
             easing,
         )
     }
 
-    pub fn remove_style_keyframe(
+    pub fn remove_target_keyframe_by_index(
         &self,
         clip_id: Uuid,
-        style_index: usize,
+        target: crate::model::project::property::PropertyTarget,
         property_key: &str,
         keyframe_index: usize,
     ) -> Result<(), LibraryError> {
-        self.project_manager.remove_style_keyframe(
-            clip_id,
-            style_index,
-            property_key,
-            keyframe_index,
-        )
+        self.project_manager
+            .remove_target_keyframe_by_index(clip_id, target, property_key, keyframe_index)
     }
 
-    pub fn set_style_property_attribute(
+    pub fn update_target_property_or_keyframe(
         &self,
         clip_id: Uuid,
-        style_index: usize,
+        target: crate::model::project::property::PropertyTarget,
         property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        self.project_manager.set_style_property_attribute(
+        self.project_manager.update_target_property_or_keyframe(
             clip_id,
-            style_index,
+            target,
             property_key,
-            attribute_key,
-            attribute_value,
-        )
-    }
-
-    pub fn set_clip_property_attribute(
-        &self,
-        clip_id: Uuid,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.set_clip_property_attribute(
-            clip_id,
-            property_key,
-            attribute_key,
-            attribute_value,
-        )
-    }
-
-    pub fn set_effect_property_attribute(
-        &self,
-        clip_id: Uuid,
-        effect_index: usize,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.set_effect_property_attribute(
-            clip_id,
-            effect_index,
-            property_key,
-            attribute_key,
-            attribute_value,
-        )
-    }
-
-    pub fn set_effector_property_attribute(
-        &self,
-        clip_id: Uuid,
-        effector_index: usize,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.set_effector_property_attribute(
-            clip_id,
-            effector_index,
-            property_key,
-            attribute_key,
-            attribute_value,
-        )
-    }
-
-    pub fn set_decorator_property_attribute(
-        &self,
-        clip_id: Uuid,
-        decorator_index: usize,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.set_decorator_property_attribute(
-            clip_id,
-            decorator_index,
-            property_key,
-            attribute_key,
-            attribute_value,
+            time,
+            value,
+            easing,
         )
     }
 

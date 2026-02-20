@@ -1,36 +1,18 @@
 use crate::error::LibraryError;
 use crate::model::project::property::PropertyValue;
-use crate::plugin::{EffectPlugin, Plugin};
+use crate::plugin::EffectPlugin;
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
 use skia_safe::{Color, image_filters};
 use std::collections::HashMap;
 
-pub struct DropShadowEffectPlugin;
-
-impl DropShadowEffectPlugin {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Plugin for DropShadowEffectPlugin {
-    fn id(&self) -> &'static str {
-        "drop_shadow"
-    }
-
-    fn name(&self) -> String {
-        "Drop Shadow".to_string()
-    }
-
-    fn category(&self) -> String {
-        "Perspective".to_string()
-    }
-
-    fn version(&self) -> (u32, u32, u32) {
-        (0, 1, 0)
-    }
-}
+super::define_effect_plugin!(
+    DropShadowEffectPlugin,
+    id: "drop_shadow",
+    name: "Drop Shadow",
+    category: "Perspective",
+    version: (0, 1, 0)
+);
 
 impl EffectPlugin for DropShadowEffectPlugin {
     fn apply(
