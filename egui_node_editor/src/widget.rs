@@ -1,13 +1,21 @@
 //! Main node editor widget.
 
 use egui::{self, Color32, Pos2, Rect, Stroke, StrokeKind, Vec2};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::drawing::{draw_bezier_connection, draw_grid};
-use crate::state::{ConnectingState, ContextMenuState, DragState, NodeEditorState};
+use crate::state::{
+    BoxSelectState, ConnectingState, ContextMenuState, DragState, NodeContextMenuState,
+    NodeEditorState, ResizeState,
+};
 use crate::theme::NodeEditorTheme;
 use crate::traits::{NodeEditorDataSource, NodeEditorMutator};
 use crate::types::{NodeDisplay, PinInfo};
+
+// ---------------------------------------------------------------------------
+// PendingActions
+// ---------------------------------------------------------------------------
 
 /// Pending mutations collected during the render phase, applied after.
 #[derive(Default)]
@@ -15,11 +23,14 @@ pub struct PendingActions {
     pub nodes_to_remove: Vec<Uuid>,
     pub connections_to_remove: Vec<Uuid>,
     pub connections_to_add: Vec<(Uuid, String, Uuid, String)>,
-    pub nodes_to_add: Vec<(Uuid, String)>, // (container_id, type_id)
+    pub nodes_to_add: Vec<(Uuid, String)>,
+    /// (node_id, from_container, to_container)
+    pub nodes_to_move: Vec<(Uuid, Uuid, Uuid)>,
+    /// Optional: node selected in editor (for inspector sync).
+    pub selected_node: Option<Uuid>,
 }
 
 impl PendingActions {
-    /// Apply all pending mutations.
     pub fn apply(self, mutator: &mut dyn NodeEditorMutator) {
         for node_id in self.nodes_to_remove {
             let _ = mutator.remove_node(node_id);
@@ -33,6 +44,9 @@ impl PendingActions {
         for (container_id, type_id) in self.nodes_to_add {
             let _ = mutator.add_node(container_id, &type_id);
         }
+        for (node_id, from_container, to_container) in self.nodes_to_move {
+            let _ = mutator.move_node(node_id, from_container, to_container);
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -40,10 +54,26 @@ impl PendingActions {
             && self.connections_to_remove.is_empty()
             && self.connections_to_add.is_empty()
             && self.nodes_to_add.is_empty()
+            && self.nodes_to_move.is_empty()
     }
 }
 
-/// The main node editor widget.
+// ---------------------------------------------------------------------------
+// Pin position tracking
+// ---------------------------------------------------------------------------
+
+/// Screen position of a rendered pin.
+struct PinScreen {
+    pos: Pos2,
+    node_id: Uuid,
+    name: String,
+    is_output: bool,
+}
+
+// ---------------------------------------------------------------------------
+// NodeEditorWidget
+// ---------------------------------------------------------------------------
+
 pub struct NodeEditorWidget<'a> {
     state: &'a mut NodeEditorState,
     theme: &'a NodeEditorTheme,
@@ -61,6 +91,11 @@ impl<'a> NodeEditorWidget<'a> {
         source: &dyn NodeEditorDataSource,
         mutator: &dyn NodeEditorMutator,
     ) -> PendingActions {
+        // Ensure zoom is valid
+        if self.state.zoom <= 0.0 {
+            self.state.zoom = 1.0;
+        }
+
         let container_id = match self.state.current_container {
             Some(id) => id,
             None => {
@@ -71,16 +106,13 @@ impl<'a> NodeEditorWidget<'a> {
             }
         };
 
-        // Collect children
         let child_ids = source.get_container_children(container_id);
-        if child_ids.is_empty() {
-            if source.get_container_name(container_id).is_none() {
-                ui.label("Container not found");
-                return PendingActions::default();
-            }
+        if child_ids.is_empty() && source.get_container_name(container_id).is_none() {
+            ui.label("Container not found");
+            return PendingActions::default();
         }
 
-        // Ensure all nodes have positions
+        // Ensure all top-level children have positions
         let mut offset_y = 0.0_f32;
         for &child_id in &child_ids {
             self.state
@@ -88,10 +120,10 @@ impl<'a> NodeEditorWidget<'a> {
                 .entry(child_id)
                 .or_insert_with(|| {
                     let pos = Pos2::new(50.0, 50.0 + offset_y);
-                    offset_y += 150.0;
+                    offset_y += 200.0;
                     pos
                 });
-            offset_y += 150.0;
+            offset_y += 200.0;
         }
 
         // Breadcrumb bar
@@ -113,8 +145,23 @@ impl<'a> NodeEditorWidget<'a> {
         let (canvas_response, painter) =
             ui.allocate_painter(available.size(), egui::Sense::click_and_drag());
         let canvas_rect = canvas_response.rect;
+        // Zoom via scroll wheel
+        if let Some(hover) = ui.input(|i| i.pointer.hover_pos()) {
+            if canvas_rect.contains(hover) {
+                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll != 0.0 {
+                    let old_zoom = self.state.zoom;
+                    let new_zoom = (old_zoom + scroll * 0.002).clamp(0.2, 3.0);
+                    // Adjust pan so the point under the cursor stays stable
+                    let graph_pos = (hover - canvas_rect.min - self.state.pan) / old_zoom;
+                    self.state.pan = hover - canvas_rect.min - graph_pos * new_zoom;
+                    self.state.zoom = new_zoom;
+                }
+            }
+        }
+        let zoom = self.state.zoom; // re-read after potential update
 
-        // Handle panning
+        // Panning
         if canvas_response.dragged_by(egui::PointerButton::Middle) {
             self.state.pan += canvas_response.drag_delta();
         }
@@ -126,29 +173,53 @@ impl<'a> NodeEditorWidget<'a> {
             canvas_rect,
             self.state.pan,
             self.theme.grid_color,
-            self.theme.grid_spacing,
+            self.theme.grid_spacing * zoom,
         );
 
-        // Draw connections
+        // ---- Phase 1: Draw nodes & collect pin positions ----
+        let mut pin_screens: Vec<PinScreen> = Vec::new();
+        let mut node_interactions: Vec<NodeInteraction> = Vec::new();
+
+        for &child_id in &child_ids {
+            let Some(display) = source.get_node_display(child_id) else {
+                continue;
+            };
+            let is_active = source.is_node_active(child_id);
+            let is_expanded = self.state.expanded_containers.contains(&child_id);
+
+            self.draw_node(
+                source,
+                &painter,
+                canvas_rect.min,
+                zoom,
+                child_id,
+                &display,
+                is_active,
+                is_expanded,
+                &mut pin_screens,
+                &mut node_interactions,
+            );
+        }
+
+        // Build lookup: (node_id, pin_name, is_output) -> screen pos
+        let pin_pos_map: HashMap<(Uuid, &str, bool), Pos2> = pin_screens
+            .iter()
+            .map(|p| ((p.node_id, p.name.as_str(), p.is_output), p.pos))
+            .collect();
+
+        // ---- Phase 2: Draw connections ON TOP of nodes ----
         let connections = source.get_connections();
         for conn in &connections {
-            let from_in = child_ids.contains(&conn.from_node);
-            let to_in = child_ids.contains(&conn.to_node);
-            if !from_in && !to_in {
-                continue;
-            }
+            // from_pin is output side; to_pin is input side
+            // Try exact match first, then fallback to opposite direction (for port pins)
+            let from_pos = pin_pos_map
+                .get(&(conn.from_node, conn.from_pin.as_str(), true))
+                .or_else(|| pin_pos_map.get(&(conn.from_node, conn.from_pin.as_str(), false)));
+            let to_pos = pin_pos_map
+                .get(&(conn.to_node, conn.to_pin.as_str(), false))
+                .or_else(|| pin_pos_map.get(&(conn.to_node, conn.to_pin.as_str(), true)));
 
-            let from_pos = self.get_pin_screen_pos(
-                source,
-                conn.from_node,
-                &conn.from_pin,
-                true,
-                canvas_rect.min,
-            );
-            let to_pos =
-                self.get_pin_screen_pos(source, conn.to_node, &conn.to_pin, false, canvas_rect.min);
-
-            if let (Some(from_p), Some(to_p)) = (from_pos, to_pos) {
+            if let (Some(&from_p), Some(&to_p)) = (from_pos, to_pos) {
                 let color = if self.state.selected_connections.contains(&conn.id) {
                     self.theme.connection_selected_color
                 } else if let Some(type_id) = source.get_node_type_id(conn.from_node) {
@@ -160,16 +231,22 @@ impl<'a> NodeEditorWidget<'a> {
             }
         }
 
-        // Draw connection being created
+        // Draw connecting line (drag in progress)
         if let Some(ref connecting) = self.state.connecting {
-            let start = self.get_pin_screen_pos(
-                source,
-                connecting.from_node,
-                &connecting.from_pin,
-                connecting.is_output,
-                canvas_rect.min,
-            );
-            if let Some(start_pos) = start {
+            let start = pin_pos_map
+                .get(&(
+                    connecting.from_node,
+                    connecting.from_pin.as_str(),
+                    connecting.is_output,
+                ))
+                .or_else(|| {
+                    pin_pos_map.get(&(
+                        connecting.from_node,
+                        connecting.from_pin.as_str(),
+                        !connecting.is_output,
+                    ))
+                });
+            if let Some(&start_pos) = start {
                 draw_bezier_connection(
                     &painter,
                     start_pos,
@@ -179,44 +256,48 @@ impl<'a> NodeEditorWidget<'a> {
             }
         }
 
-        // Draw nodes and collect interaction data
-        let mut node_interactions: Vec<NodeInteraction> = Vec::new();
-
-        for &child_id in &child_ids {
-            let Some(display) = source.get_node_display(child_id) else {
-                continue;
-            };
-
-            let is_active = source.is_node_active(child_id);
-            let is_expanded = self.state.expanded_containers.contains(&child_id);
-
-            self.draw_node(
-                source,
-                &painter,
-                canvas_rect.min,
-                child_id,
-                &display,
-                is_active,
-                is_expanded,
-                &mut node_interactions,
+        // Draw box selection rectangle
+        if let Some(ref bs) = self.state.box_selecting {
+            let sel_rect = Rect::from_two_pos(bs.start, bs.current);
+            painter.rect_filled(
+                sel_rect,
+                0.0,
+                Color32::from_rgba_unmultiplied(100, 150, 255, 30),
+            );
+            painter.rect_stroke(
+                sel_rect,
+                0.0,
+                Stroke::new(1.0, Color32::from_rgb(100, 150, 255)),
+                StrokeKind::Outside,
             );
         }
 
-        // Handle interactions
-        self.handle_interactions(ui, &canvas_response, &node_interactions, mutator)
+        // ---- Phase 3: Handle interactions ----
+        self.handle_interactions(
+            ui,
+            &canvas_response,
+            &node_interactions,
+            &pin_screens,
+            mutator,
+        )
     }
 
-    /// Draw a single node (handles both normal and expanded containers).
+    // -----------------------------------------------------------------------
+    // Node drawing
+    // -----------------------------------------------------------------------
+
     #[allow(clippy::too_many_arguments)]
     fn draw_node(
         &mut self,
         source: &dyn NodeEditorDataSource,
         painter: &egui::Painter,
         canvas_min: Pos2,
+        zoom: f32,
         node_id: Uuid,
         display: &NodeDisplay,
         is_active: bool,
         is_expanded: bool,
+        pin_screens: &mut Vec<PinScreen>,
         interactions: &mut Vec<NodeInteraction>,
     ) {
         let (node_type_id, display_name, pins) = match display {
@@ -242,16 +323,35 @@ impl<'a> NodeEditorWidget<'a> {
             .get(&node_id)
             .copied()
             .unwrap_or(Pos2::ZERO);
-        let screen_pos = pos + self.state.pan + canvas_min.to_vec2();
+        let screen_pos = canvas_min + (pos.to_vec2() * zoom) + self.state.pan;
 
         let input_pins: Vec<&PinInfo> = pins.iter().filter(|p| !p.is_output).collect();
         let output_pins: Vec<&PinInfo> = pins.iter().filter(|p| p.is_output).collect();
         let pin_count = input_pins.len().max(output_pins.len());
 
+        // Initialize child positions early (needed for expanded height calculation)
+        if let NodeDisplay::Container { child_ids, .. } = display {
+            let mut next_y = 10.0f32;
+            for &child_id in child_ids {
+                if !self.state.node_positions.contains_key(&child_id) {
+                    self.state
+                        .node_positions
+                        .insert(child_id, Pos2::new(10.0, next_y));
+                    next_y += 100.0;
+                }
+            }
+        }
+
+        let header_h = self.theme.header_height * zoom;
+        let pin_row_h = self.theme.pin_row_height * zoom;
+        let pin_r = self.theme.pin_radius * zoom;
+        let pin_margin = self.theme.pin_margin * zoom;
+        let rounding = self.theme.node_rounding * zoom;
+
         // Calculate expanded children height
-        let expanded_children_height = if is_expanded {
+        let auto_expanded_h = if is_expanded {
             if let NodeDisplay::Container { child_ids, .. } = display {
-                self.calculate_expanded_height(source, child_ids)
+                self.calc_expanded_h(source, child_ids, zoom, 0)
             } else {
                 0.0
             }
@@ -259,513 +359,607 @@ impl<'a> NodeEditorWidget<'a> {
             0.0
         };
 
-        let node_height = self.theme.header_height
-            + pin_count as f32 * self.theme.pin_row_height
-            + 8.0
-            + expanded_children_height;
-        let node_height = node_height.max(self.theme.header_height + 8.0);
-
-        // Expanded containers are wider
-        let node_width = if is_expanded {
-            self.theme.node_width * 2.0
+        let auto_w = if is_expanded {
+            self.theme.node_width * zoom * 2.0
         } else {
-            self.theme.node_width
+            self.theme.node_width * zoom
+        };
+        let auto_h = (header_h + pin_count as f32 * pin_row_h + 8.0 * zoom + auto_expanded_h)
+            .max(header_h + 8.0 * zoom);
+
+        // Use custom size if available (for containers), else auto
+        let (node_w, node_h) = if let Some(custom) = self.state.container_sizes.get(&node_id) {
+            (
+                (custom.x * zoom).max(auto_w.min(self.theme.node_width * zoom)),
+                (custom.y * zoom).max(header_h + 8.0 * zoom),
+            )
+        } else {
+            (auto_w, auto_h)
         };
 
-        let node_rect = Rect::from_min_size(screen_pos, Vec2::new(node_width, node_height));
-        let is_selected = self.state.selected_nodes.contains(&node_id);
+        let node_rect = Rect::from_min_size(screen_pos, Vec2::new(node_w, node_h));
 
-        // Dim factor for inactive nodes
+        // Push interaction BEFORE drawing children so .rev() finds children first
+        interactions.push(NodeInteraction {
+            id: node_id,
+            rect: node_rect,
+            is_container: matches!(display, NodeDisplay::Container { .. }),
+        });
+
+        let is_selected = self.state.selected_nodes.contains(&node_id);
         let dim = if is_active { 1.0 } else { 0.4 };
 
-        // Node body
-        let body_color = if is_selected {
-            dim_color(self.theme.node_body_selected_color, dim)
-        } else {
-            dim_color(self.theme.node_body_color, dim)
-        };
-        painter.rect_filled(node_rect, self.theme.node_rounding, body_color);
+        // Body
+        let body_color = dim_color(
+            if is_selected {
+                self.theme.node_body_selected_color
+            } else {
+                self.theme.node_body_color
+            },
+            dim,
+        );
+        painter.rect_filled(node_rect, rounding, body_color);
 
-        // Selection outline
         if is_selected {
             painter.rect_stroke(
                 node_rect,
-                self.theme.node_rounding,
-                Stroke::new(2.0, self.theme.selection_color),
+                rounding,
+                Stroke::new(2.0 * zoom, self.theme.selection_color),
                 StrokeKind::Outside,
             );
         }
 
         // Header
-        let header_rect =
-            Rect::from_min_size(screen_pos, Vec2::new(node_width, self.theme.header_height));
-        let header_color = dim_color((self.theme.header_color)(&node_type_id), dim);
+        let header_rect = Rect::from_min_size(screen_pos, Vec2::new(node_w, header_h));
         painter.rect_filled(
             header_rect,
             egui::CornerRadius {
-                nw: self.theme.node_rounding as u8,
-                ne: self.theme.node_rounding as u8,
+                nw: rounding as u8,
+                ne: rounding as u8,
                 sw: 0,
                 se: 0,
             },
-            header_color,
+            dim_color((self.theme.header_color)(&node_type_id), dim),
         );
 
-        // Expansion indicator for containers
         let header_text = if matches!(display, NodeDisplay::Container { .. }) {
-            let arrow = if is_expanded { "\u{25BC}" } else { "\u{25B6}" };
-            format!("{} {}", arrow, display_name)
+            format!(
+                "{} {}",
+                if is_expanded { "\u{25BC}" } else { "\u{25B6}" },
+                display_name
+            )
         } else {
             display_name.clone()
         };
-
         painter.text(
             header_rect.center(),
             egui::Align2::CENTER_CENTER,
             &header_text,
-            egui::FontId::proportional(12.0),
+            egui::FontId::proportional(12.0 * zoom),
             dim_color(Color32::WHITE, dim),
         );
 
-        // Draw pins
-        let pin_start_y = screen_pos.y + self.theme.header_height + 4.0;
+        // Pins
+        let pin_start_y = screen_pos.y + header_h + 4.0 * zoom;
         let pin_color = dim_color((self.theme.pin_color)(&node_type_id), dim);
         let label_color = dim_color(self.theme.pin_label_color, dim);
 
         for (i, pin) in input_pins.iter().enumerate() {
-            let pin_center = Pos2::new(
-                screen_pos.x + self.theme.pin_margin,
-                pin_start_y
-                    + i as f32 * self.theme.pin_row_height
-                    + self.theme.pin_row_height / 2.0,
-            );
-            painter.circle_filled(pin_center, self.theme.pin_radius, pin_color);
+            let cy = pin_start_y + i as f32 * pin_row_h + pin_row_h / 2.0;
+            let cx = screen_pos.x + pin_margin;
+            let p = Pos2::new(cx, cy);
+            painter.circle_filled(p, pin_r, pin_color);
             painter.text(
-                pin_center + Vec2::new(self.theme.pin_radius + 4.0, 0.0),
+                p + Vec2::new(pin_r + 4.0 * zoom, 0.0),
                 egui::Align2::LEFT_CENTER,
                 &pin.display_name,
-                egui::FontId::proportional(10.0),
+                egui::FontId::proportional(10.0 * zoom),
                 label_color,
             );
+            pin_screens.push(PinScreen {
+                pos: p,
+                node_id,
+                name: pin.name.clone(),
+                is_output: false,
+            });
         }
 
         for (i, pin) in output_pins.iter().enumerate() {
-            let pin_center = Pos2::new(
-                screen_pos.x + node_width - self.theme.pin_margin,
-                pin_start_y
-                    + i as f32 * self.theme.pin_row_height
-                    + self.theme.pin_row_height / 2.0,
-            );
-            painter.circle_filled(pin_center, self.theme.pin_radius, pin_color);
+            let cy = pin_start_y + i as f32 * pin_row_h + pin_row_h / 2.0;
+            let cx = screen_pos.x + node_w - pin_margin;
+            let p = Pos2::new(cx, cy);
+            painter.circle_filled(p, pin_r, pin_color);
             painter.text(
-                pin_center + Vec2::new(-self.theme.pin_radius - 4.0, 0.0),
+                p + Vec2::new(-pin_r - 4.0 * zoom, 0.0),
                 egui::Align2::RIGHT_CENTER,
                 &pin.display_name,
-                egui::FontId::proportional(10.0),
+                egui::FontId::proportional(10.0 * zoom),
                 label_color,
             );
+            pin_screens.push(PinScreen {
+                pos: p,
+                node_id,
+                name: pin.name.clone(),
+                is_output: true,
+            });
         }
 
-        let own_pins_height = pin_count as f32 * self.theme.pin_row_height;
+        let own_pins_h = pin_count as f32 * pin_row_h;
 
-        // Draw expanded children inside the container
+        // Expanded children — draw as full nodes inside container
         if is_expanded {
             if let NodeDisplay::Container { child_ids, .. } = display {
-                let children_y = pin_start_y + own_pins_height + 8.0;
-                let inner_padding = 8.0;
+                let children_y = pin_start_y + own_pins_h + 8.0 * zoom;
+                let pad = 8.0 * zoom;
 
-                // Separator line between pins and children
                 painter.line_segment(
                     [
-                        Pos2::new(screen_pos.x + 4.0, children_y - 4.0),
-                        Pos2::new(screen_pos.x + node_width - 4.0, children_y - 4.0),
+                        Pos2::new(screen_pos.x + 4.0 * zoom, children_y - 4.0 * zoom),
+                        Pos2::new(screen_pos.x + node_w - 4.0 * zoom, children_y - 4.0 * zoom),
                     ],
                     Stroke::new(1.0, Color32::from_rgb(60, 60, 60)),
                 );
 
-                // Draw each child as a mini-node inside
-                let mut child_y = children_y;
+                // Children are positioned relative to the container interior
+                let interior_origin = Pos2::new(screen_pos.x + pad, children_y);
+                let child_canvas_min = Pos2::new(
+                    interior_origin.x - self.state.pan.x,
+                    interior_origin.y - self.state.pan.y,
+                );
+
                 for &child_id in child_ids {
                     let Some(child_display) = source.get_node_display(child_id) else {
                         continue;
                     };
-
                     let child_active = source.is_node_active(child_id);
-                    let child_dim = if child_active { 1.0 } else { 0.4 };
+                    let child_expanded = self.state.expanded_containers.contains(&child_id);
 
-                    let (child_type_id, child_name, child_pins) = match &child_display {
-                        NodeDisplay::Graph {
-                            type_id,
-                            display_name,
-                            pins,
-                        } => (type_id.clone(), display_name.clone(), pins.clone()),
-                        NodeDisplay::Container { name, pins, .. } => {
-                            ("track".to_string(), name.clone(), pins.clone())
-                        }
-                        NodeDisplay::Leaf { kind_label, pins } => (
-                            format!("clip.{}", kind_label),
-                            kind_label.clone(),
-                            pins.clone(),
-                        ),
-                    };
-
-                    let child_input_pins: Vec<&PinInfo> =
-                        child_pins.iter().filter(|p| !p.is_output).collect();
-                    let child_output_pins: Vec<&PinInfo> =
-                        child_pins.iter().filter(|p| p.is_output).collect();
-                    let child_pin_count = child_input_pins.len().max(child_output_pins.len());
-
-                    let child_inner_width = node_width - inner_padding * 2.0;
-                    let child_header_h = 20.0;
-                    let child_pin_row_h = 16.0;
-                    let child_height =
-                        child_header_h + child_pin_count as f32 * child_pin_row_h + 6.0;
-                    let child_height = child_height.max(child_header_h + 6.0);
-
-                    let child_rect = Rect::from_min_size(
-                        Pos2::new(screen_pos.x + inner_padding, child_y),
-                        Vec2::new(child_inner_width, child_height),
+                    self.draw_node(
+                        source,
+                        painter,
+                        child_canvas_min,
+                        zoom,
+                        child_id,
+                        &child_display,
+                        child_active,
+                        child_expanded,
+                        pin_screens,
+                        interactions,
                     );
-
-                    // Child body
-                    let child_body = dim_color(Color32::from_rgb(35, 35, 40), child_dim);
-                    painter.rect_filled(child_rect, 3.0, child_body);
-
-                    // Child header
-                    let child_header_rect = Rect::from_min_size(
-                        child_rect.min,
-                        Vec2::new(child_inner_width, child_header_h),
-                    );
-                    let child_header_color =
-                        dim_color((self.theme.header_color)(&child_type_id), child_dim);
-                    painter.rect_filled(
-                        child_header_rect,
-                        egui::CornerRadius {
-                            nw: 3,
-                            ne: 3,
-                            sw: 0,
-                            se: 0,
-                        },
-                        child_header_color,
-                    );
-                    painter.text(
-                        child_header_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        &child_name,
-                        egui::FontId::proportional(10.0),
-                        dim_color(Color32::WHITE, child_dim),
-                    );
-
-                    // Child pins
-                    let child_pin_start = child_rect.min.y + child_header_h + 3.0;
-                    let child_pin_color =
-                        dim_color((self.theme.pin_color)(&child_type_id), child_dim);
-                    let child_label_color = dim_color(self.theme.pin_label_color, child_dim);
-
-                    for (i, pin) in child_input_pins.iter().enumerate() {
-                        let cy =
-                            child_pin_start + i as f32 * child_pin_row_h + child_pin_row_h / 2.0;
-                        let cx = child_rect.min.x + 8.0;
-                        painter.circle_filled(Pos2::new(cx, cy), 3.5, child_pin_color);
-                        painter.text(
-                            Pos2::new(cx + 6.0, cy),
-                            egui::Align2::LEFT_CENTER,
-                            &pin.display_name,
-                            egui::FontId::proportional(9.0),
-                            child_label_color,
-                        );
-                    }
-
-                    for (i, pin) in child_output_pins.iter().enumerate() {
-                        let cy =
-                            child_pin_start + i as f32 * child_pin_row_h + child_pin_row_h / 2.0;
-                        let cx = child_rect.max.x - 8.0;
-                        painter.circle_filled(Pos2::new(cx, cy), 3.5, child_pin_color);
-                        painter.text(
-                            Pos2::new(cx - 6.0, cy),
-                            egui::Align2::RIGHT_CENTER,
-                            &pin.display_name,
-                            egui::FontId::proportional(9.0),
-                            child_label_color,
-                        );
-                    }
-
-                    // Store interaction for child node (allow pin connections)
-                    interactions.push(NodeInteraction {
-                        id: child_id,
-                        rect: child_rect,
-                        input_pins: child_input_pins.iter().map(|p| p.name.clone()).collect(),
-                        output_pins: child_output_pins.iter().map(|p| p.name.clone()).collect(),
-                        pin_start_y: child_pin_start,
-                        pin_row_height: child_pin_row_h,
-                        pin_margin: 8.0,
-                        node_width: child_inner_width,
-                        is_container: matches!(child_display, NodeDisplay::Container { .. }),
-                    });
-
-                    child_y += child_height + 4.0;
                 }
             }
         }
 
-        interactions.push(NodeInteraction {
-            id: node_id,
-            rect: node_rect,
-            input_pins: input_pins.iter().map(|p| p.name.clone()).collect(),
-            output_pins: output_pins.iter().map(|p| p.name.clone()).collect(),
-            pin_start_y,
-            pin_row_height: self.theme.pin_row_height,
-            pin_margin: self.theme.pin_margin,
-            node_width,
-            is_container: matches!(display, NodeDisplay::Container { .. }),
-        });
+        // Resize handle for containers (bottom-right corner)
+        if matches!(display, NodeDisplay::Container { .. }) {
+            let handle_size = 8.0 * zoom;
+            let handle_rect = Rect::from_min_size(
+                Pos2::new(node_rect.max.x - handle_size, node_rect.max.y - handle_size),
+                Vec2::new(handle_size, handle_size),
+            );
+            // Draw small triangle
+            let pts = [
+                handle_rect.right_bottom(),
+                Pos2::new(handle_rect.left(), handle_rect.bottom()),
+                Pos2::new(handle_rect.right(), handle_rect.top()),
+            ];
+            painter.add(egui::Shape::convex_polygon(
+                pts.to_vec(),
+                Color32::from_rgb(100, 100, 120),
+                Stroke::NONE,
+            ));
+        }
+
+        // Port pins: when expanded, draw container output pins as inputs inside
+        // and container input pins as outputs inside (bridge for internal connections)
+        if is_expanded {
+            if let NodeDisplay::Container { .. } = display {
+                let port_y = node_rect.max.y - 16.0 * zoom;
+                let port_r = pin_r * 0.8;
+                let port_col = Color32::from_rgb(200, 200, 100);
+
+                // Output pins → draw as input (right side) inside for children to connect TO
+                // Children's outputs flow right → this port pin receives on the right side
+                for pin in &output_pins {
+                    let p = Pos2::new(screen_pos.x + node_w - pin_margin - 16.0 * zoom, port_y);
+                    painter.circle_filled(p, port_r, port_col);
+                    painter.text(
+                        p + Vec2::new(-port_r - 3.0 * zoom, 0.0),
+                        egui::Align2::RIGHT_CENTER,
+                        &format!("{} \u{2192}", pin.display_name),
+                        egui::FontId::proportional(9.0 * zoom),
+                        Color32::from_rgb(200, 200, 100),
+                    );
+                    // Register as INPUT so children's outputs can connect here
+                    pin_screens.push(PinScreen {
+                        pos: p,
+                        node_id,
+                        name: pin.name.clone(),
+                        is_output: false,
+                    });
+                }
+            }
+        }
     }
 
-    /// Calculate the total height needed for expanded container children.
-    fn calculate_expanded_height(
+    /// Calculate height needed for expanded children based on their positions.
+    fn calc_expanded_h(
         &self,
         source: &dyn NodeEditorDataSource,
         child_ids: &[Uuid],
+        zoom: f32,
+        _depth: usize,
     ) -> f32 {
-        let child_header_h = 20.0;
-        let child_pin_row_h = 16.0;
-        let mut total = 8.0; // top separator padding
+        let min_h = 150.0 * zoom;
+        let mut max_bottom: f32 = 0.0;
 
-        for &child_id in child_ids {
-            let Some(display) = source.get_node_display(child_id) else {
-                continue;
+        for &cid in child_ids {
+            let pos = self
+                .state
+                .node_positions
+                .get(&cid)
+                .copied()
+                .unwrap_or(Pos2::ZERO);
+            let node_h = if let Some(d) = source.get_node_display(cid) {
+                let pin_count = match &d {
+                    NodeDisplay::Graph { pins, .. }
+                    | NodeDisplay::Container { pins, .. }
+                    | NodeDisplay::Leaf { pins, .. } => {
+                        let ic = pins.iter().filter(|p| !p.is_output).count();
+                        let oc = pins.iter().filter(|p| p.is_output).count();
+                        ic.max(oc)
+                    }
+                };
+                self.theme.header_height + pin_count as f32 * self.theme.pin_row_height + 8.0
+            } else {
+                self.theme.header_height + 8.0
             };
-            let pins = match &display {
-                NodeDisplay::Graph { pins, .. } => pins,
-                NodeDisplay::Container { pins, .. } => pins,
-                NodeDisplay::Leaf { pins, .. } => pins,
-            };
-            let input_count = pins.iter().filter(|p| !p.is_output).count();
-            let output_count = pins.iter().filter(|p| p.is_output).count();
-            let pin_count = input_count.max(output_count);
-            let child_height = child_header_h + pin_count as f32 * child_pin_row_h + 6.0;
-            let child_height = child_height.max(child_header_h + 6.0);
-            total += child_height + 4.0;
+            max_bottom = max_bottom.max(pos.y + node_h);
         }
 
-        total
+        (max_bottom * zoom + 20.0 * zoom).max(min_h)
     }
+
+    // -----------------------------------------------------------------------
+    // Interactions
+    // -----------------------------------------------------------------------
 
     fn handle_interactions(
         &mut self,
         ui: &egui::Ui,
         canvas_response: &egui::Response,
         nodes: &[NodeInteraction],
+        pin_screens: &[PinScreen],
         mutator: &dyn NodeEditorMutator,
     ) -> PendingActions {
         let mut pending = PendingActions::default();
         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
+        let hit_radius = self.theme.pin_radius * self.state.zoom * 4.0;
+        let zoom = self.state.zoom;
 
-        // Handle node dragging
+        // --- Active drag: node move, resize, box select ---
         if canvas_response.dragged_by(egui::PointerButton::Primary) {
+            let delta = canvas_response.drag_delta();
             if self.state.dragging.is_some() {
-                let delta = canvas_response.drag_delta();
+                let inv_zoom = 1.0 / zoom;
                 let drag_ids: Vec<Uuid> = self
                     .state
                     .dragging
                     .as_ref()
                     .map(|d| d.node_ids.clone())
                     .unwrap_or_default();
-                for node_id in &drag_ids {
-                    if let Some(pos) = self.state.node_positions.get_mut(node_id) {
-                        *pos += delta;
+                for nid in &drag_ids {
+                    if let Some(pos) = self.state.node_positions.get_mut(nid) {
+                        *pos += delta * inv_zoom;
                     }
+                }
+            } else if self.state.resizing.is_some() {
+                let inv_zoom = 1.0 / zoom;
+                if let Some(ref rs) = self.state.resizing {
+                    let nid = rs.node_id;
+                    let new_size = rs.start_size + delta * inv_zoom;
+                    let min_w = self.theme.node_width;
+                    let min_h = self.theme.header_height + 20.0;
+                    self.state
+                        .container_sizes
+                        .insert(nid, Vec2::new(new_size.x.max(min_w), new_size.y.max(min_h)));
+                    // Update start for next delta
+                }
+                // Accumulate: update start_size to current
+                if let Some(ref mut rs) = self.state.resizing {
+                    rs.start_size = self
+                        .state
+                        .container_sizes
+                        .get(&rs.node_id)
+                        .copied()
+                        .unwrap_or(rs.start_size);
+                }
+            } else if let Some(ref mut bs) = self.state.box_selecting {
+                if let Some(pos) = pointer_pos {
+                    bs.current = pos;
                 }
             }
         }
 
+        // --- Drag stop ---
         if canvas_response.drag_stopped_by(egui::PointerButton::Primary) {
-            // Finish connection creation
+            // Finish connection
             if let Some(connecting) = self.state.connecting.take() {
                 if let Some(pos) = pointer_pos {
-                    for node in nodes {
-                        if !node.rect.contains(pos) {
+                    let mut best: Option<(f32, &PinScreen)> = None;
+                    for ps in pin_screens {
+                        if ps.node_id == connecting.from_node {
                             continue;
                         }
-                        if connecting.is_output {
-                            for (i, pin_name) in node.input_pins.iter().enumerate() {
-                                let pin_y = node.pin_start_y
-                                    + i as f32 * node.pin_row_height
-                                    + node.pin_row_height / 2.0;
-                                let pin_pos = Pos2::new(node.rect.min.x + node.pin_margin, pin_y);
-                                if pos.distance(pin_pos) < self.theme.pin_radius * 3.0 {
-                                    pending.connections_to_add.push((
-                                        connecting.from_node,
-                                        connecting.from_pin.clone(),
-                                        node.id,
-                                        pin_name.clone(),
-                                    ));
-                                    break;
-                                }
+                        if ps.is_output == connecting.is_output {
+                            continue;
+                        }
+                        let d = pos.distance(ps.pos);
+                        if d < hit_radius {
+                            if best.is_none() || d < best.unwrap().0 {
+                                best = Some((d, ps));
                             }
+                        }
+                    }
+                    if let Some((_, target)) = best {
+                        if connecting.is_output {
+                            pending.connections_to_add.push((
+                                connecting.from_node,
+                                connecting.from_pin.clone(),
+                                target.node_id,
+                                target.name.clone(),
+                            ));
                         } else {
-                            for (i, pin_name) in node.output_pins.iter().enumerate() {
-                                let pin_y = node.pin_start_y
-                                    + i as f32 * node.pin_row_height
-                                    + node.pin_row_height / 2.0;
-                                let pin_pos = Pos2::new(
-                                    node.rect.min.x + node.node_width - node.pin_margin,
-                                    pin_y,
-                                );
-                                if pos.distance(pin_pos) < self.theme.pin_radius * 3.0 {
-                                    pending.connections_to_add.push((
-                                        node.id,
-                                        pin_name.clone(),
-                                        connecting.from_node,
-                                        connecting.from_pin.clone(),
-                                    ));
-                                    break;
-                                }
+                            pending.connections_to_add.push((
+                                target.node_id,
+                                target.name.clone(),
+                                connecting.from_node,
+                                connecting.from_pin.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // Finish box selection
+            if let Some(bs) = self.state.box_selecting.take() {
+                let sel_rect = Rect::from_two_pos(bs.start, bs.current);
+                if !ui.input(|i| i.modifiers.shift) {
+                    self.state.selected_nodes.clear();
+                }
+                for node in nodes {
+                    if sel_rect.intersects(node.rect) {
+                        self.state.selected_nodes.insert(node.id);
+                    }
+                }
+            }
+
+            // Finish node drag — check for reparent
+            if let Some(ref drag) = self.state.dragging {
+                if let Some(pos) = pointer_pos {
+                    let drag_ids = drag.node_ids.clone();
+                    // Find if dropped onto a container
+                    let mut target_container: Option<Uuid> = None;
+                    for node in nodes.iter().rev() {
+                        if node.is_container
+                            && node.rect.contains(pos)
+                            && !drag_ids.contains(&node.id)
+                        {
+                            target_container = Some(node.id);
+                            break;
+                        }
+                    }
+                    // Check if any node changed container
+                    if let Some(target) = target_container {
+                        for &nid in &drag_ids {
+                            // Find current parent
+                            let current_parent = nodes
+                                .iter()
+                                .find(|n| {
+                                    n.is_container
+                                        && n.id != nid
+                                        && n.rect.contains(pos)
+                                        && n.id != target
+                                })
+                                .map(|n| n.id);
+                            let from = current_parent
+                                .or(self.state.current_container)
+                                .unwrap_or(target);
+                            if from != target {
+                                pending.nodes_to_move.push((nid, from, target));
                             }
                         }
                     }
                 }
             }
+
             self.state.dragging = None;
+            self.state.resizing = None;
         }
 
-        // Handle click / drag start
+        // --- Drag start ---
         if canvas_response.drag_started_by(egui::PointerButton::Primary) {
             if let Some(pos) = pointer_pos {
-                let mut hit_pin = false;
-
-                for node in nodes {
-                    if !node.rect.contains(pos) {
-                        continue;
-                    }
-
-                    // Check output pins
-                    for (i, pin_name) in node.output_pins.iter().enumerate() {
-                        let pin_y = node.pin_start_y
-                            + i as f32 * node.pin_row_height
-                            + node.pin_row_height / 2.0;
-                        let pin_pos =
-                            Pos2::new(node.rect.min.x + node.node_width - node.pin_margin, pin_y);
-                        if pos.distance(pin_pos) < self.theme.pin_radius * 3.0 {
-                            self.state.connecting = Some(ConnectingState {
-                                from_node: node.id,
-                                from_pin: pin_name.clone(),
-                                is_output: true,
-                                mouse_pos: pos,
-                            });
-                            hit_pin = true;
-                            break;
+                // 1. Check pin hit
+                let mut best_pin: Option<(f32, &PinScreen)> = None;
+                for ps in pin_screens {
+                    let d = pos.distance(ps.pos);
+                    if d < hit_radius {
+                        if best_pin.is_none() || d < best_pin.unwrap().0 {
+                            best_pin = Some((d, ps));
                         }
-                    }
-                    if hit_pin {
-                        break;
-                    }
-
-                    // Check input pins
-                    for (i, pin_name) in node.input_pins.iter().enumerate() {
-                        let pin_y = node.pin_start_y
-                            + i as f32 * node.pin_row_height
-                            + node.pin_row_height / 2.0;
-                        let pin_pos = Pos2::new(node.rect.min.x + node.pin_margin, pin_y);
-                        if pos.distance(pin_pos) < self.theme.pin_radius * 3.0 {
-                            self.state.connecting = Some(ConnectingState {
-                                from_node: node.id,
-                                from_pin: pin_name.clone(),
-                                is_output: false,
-                                mouse_pos: pos,
-                            });
-                            hit_pin = true;
-                            break;
-                        }
-                    }
-                    if hit_pin {
-                        break;
                     }
                 }
 
-                if !hit_pin {
-                    // Check if clicking on a node header (for dragging)
-                    for node in nodes {
-                        let header_rect = Rect::from_min_size(
-                            node.rect.min,
-                            Vec2::new(node.node_width, self.theme.header_height),
-                        );
-                        if header_rect.contains(pos) {
-                            if !ui.input(|i| i.modifiers.shift) {
-                                self.state.selected_nodes.clear();
+                if let Some((_, ps)) = best_pin {
+                    self.state.connecting = Some(ConnectingState {
+                        from_node: ps.node_id,
+                        from_pin: ps.name.clone(),
+                        is_output: ps.is_output,
+                        mouse_pos: pos,
+                    });
+                } else {
+                    // 2. Check resize handle (container bottom-right)
+                    let mut hit_resize = false;
+                    let handle_size = 8.0 * zoom;
+                    for node in nodes.iter().rev() {
+                        if node.is_container {
+                            let handle_rect = Rect::from_min_size(
+                                Pos2::new(
+                                    node.rect.max.x - handle_size,
+                                    node.rect.max.y - handle_size,
+                                ),
+                                Vec2::new(handle_size, handle_size),
+                            );
+                            if handle_rect.contains(pos) {
+                                let current_size = self
+                                    .state
+                                    .container_sizes
+                                    .get(&node.id)
+                                    .copied()
+                                    .unwrap_or(node.rect.size() / zoom);
+                                self.state.resizing = Some(ResizeState {
+                                    node_id: node.id,
+                                    start_size: current_size,
+                                    mouse_start: pos,
+                                });
+                                hit_resize = true;
+                                break;
                             }
-                            self.state.selected_nodes.insert(node.id);
+                        }
+                    }
 
-                            let drag_ids: Vec<Uuid> =
-                                self.state.selected_nodes.iter().copied().collect();
-                            let start_positions: Vec<Pos2> = drag_ids
-                                .iter()
-                                .map(|id| {
-                                    self.state
-                                        .node_positions
-                                        .get(id)
-                                        .copied()
-                                        .unwrap_or(Pos2::ZERO)
-                                })
-                                .collect();
-                            self.state.dragging = Some(DragState {
-                                node_ids: drag_ids,
-                                start_positions,
-                                mouse_start: pos,
+                    if !hit_resize {
+                        // 3. Check node header for dragging
+                        let header_h = self.theme.header_height * zoom;
+                        let mut hit_header = false;
+                        for node in nodes.iter().rev() {
+                            let header_rect = Rect::from_min_size(
+                                node.rect.min,
+                                Vec2::new(node.rect.width(), header_h),
+                            );
+                            if header_rect.contains(pos) {
+                                if !ui.input(|i| i.modifiers.shift) {
+                                    self.state.selected_nodes.clear();
+                                }
+                                self.state.selected_nodes.insert(node.id);
+                                pending.selected_node = Some(node.id);
+
+                                let drag_ids: Vec<Uuid> =
+                                    self.state.selected_nodes.iter().copied().collect();
+                                let start_positions: Vec<Pos2> = drag_ids
+                                    .iter()
+                                    .map(|id| {
+                                        self.state
+                                            .node_positions
+                                            .get(id)
+                                            .copied()
+                                            .unwrap_or(Pos2::ZERO)
+                                    })
+                                    .collect();
+                                self.state.dragging = Some(DragState {
+                                    node_ids: drag_ids,
+                                    start_positions,
+                                    mouse_start: pos,
+                                });
+                                hit_header = true;
+                                break;
+                            }
+                        }
+
+                        // 4. Empty space → box selection
+                        if !hit_header {
+                            self.state.box_selecting = Some(BoxSelectState {
+                                start: pos,
+                                current: pos,
                             });
-                            break;
                         }
                     }
                 }
             }
         }
 
-        // Update connecting line endpoint
+        // --- Update connecting line ---
         if let Some(ref mut connecting) = self.state.connecting {
             if let Some(pos) = pointer_pos {
                 connecting.mouse_pos = pos;
             }
         }
 
-        // Handle double-click on containers → toggle inline expansion (no shift needed)
+        // --- Double-click: toggle container expansion ---
+        // Find the smallest (most specific) container containing the click position
         if canvas_response.double_clicked() {
             if let Some(pos) = pointer_pos {
+                let mut best: Option<(Uuid, f32)> = None;
                 for node in nodes {
                     if node.is_container && node.rect.contains(pos) {
-                        if !self.state.expanded_containers.remove(&node.id) {
-                            self.state.expanded_containers.insert(node.id);
+                        let area = node.rect.area();
+                        if best.is_none() || area < best.unwrap().1 {
+                            best = Some((node.id, area));
                         }
-                        break;
+                    }
+                }
+                if let Some((id, _)) = best {
+                    if !self.state.expanded_containers.remove(&id) {
+                        self.state.expanded_containers.insert(id);
                     }
                 }
             }
         }
 
-        // Handle click on empty space (deselect)
+        // --- Single click: select node or deselect ---
         if canvas_response.clicked() {
             if let Some(pos) = pointer_pos {
-                let hit = nodes.iter().any(|n| n.rect.contains(pos));
+                let mut hit = false;
+                for node in nodes.iter().rev() {
+                    if node.rect.contains(pos) {
+                        if !ui.input(|i| i.modifiers.shift) {
+                            self.state.selected_nodes.clear();
+                        }
+                        self.state.selected_nodes.insert(node.id);
+                        pending.selected_node = Some(node.id);
+                        hit = true;
+                        break;
+                    }
+                }
                 if !hit {
                     self.state.selected_nodes.clear();
                     self.state.selected_connections.clear();
                 }
+                self.state.context_menu = None;
+                self.state.node_context_menu = None;
             }
         }
 
-        // Right-click context menu
+        // --- Right-click ---
         if canvas_response.secondary_clicked() {
             if let Some(pos) = pointer_pos {
-                if let Some(cid) = self.state.current_container {
-                    self.state.context_menu = Some(ContextMenuState {
-                        screen_pos: pos,
-                        container_id: cid,
-                    });
-                    self.state.context_search.clear();
+                let mut hit_node = false;
+                for node in nodes.iter().rev() {
+                    if node.rect.contains(pos) {
+                        self.state.node_context_menu = Some(NodeContextMenuState {
+                            screen_pos: pos,
+                            node_id: node.id,
+                        });
+                        self.state.context_menu = None;
+                        hit_node = true;
+                        break;
+                    }
+                }
+                if !hit_node {
+                    if let Some(cid) = self.state.current_container {
+                        self.state.context_menu = Some(ContextMenuState {
+                            screen_pos: pos,
+                            container_id: cid,
+                        });
+                        self.state.context_search.clear();
+                    }
+                    self.state.node_context_menu = None;
                 }
             }
         }
 
-        // Render context menu
+        // --- Render "Add Node" context menu ---
         if let Some(ref menu) = self.state.context_menu.clone() {
             let mut close = false;
             let popup_id = ui.make_persistent_id("node_editor_context_menu");
@@ -777,31 +971,17 @@ impl<'a> NodeEditorWidget<'a> {
                         ui.set_max_width(250.0);
                         ui.label("Add Node");
                         ui.separator();
-
-                        // Search field
-                        let search_id = ui.make_persistent_id("node_search_field");
                         let response = ui.text_edit_singleline(&mut self.state.context_search);
+                        if !response.has_focus() {
+                            response.request_focus();
+                        }
                         if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                             close = true;
                         }
-                        if response.gained_focus() || self.state.context_search.is_empty() {
-                            response.request_focus();
-                            let _ = search_id;
-                        }
-
                         ui.separator();
 
                         let node_types = mutator.get_available_node_types();
                         let search_lower = self.state.context_search.to_lowercase();
-
-                        let mut categories: Vec<String> = node_types
-                            .iter()
-                            .map(|nt| nt.category.clone())
-                            .collect::<std::collections::HashSet<_>>()
-                            .into_iter()
-                            .collect();
-                        categories.sort();
-
                         let has_search = !search_lower.is_empty();
 
                         egui::ScrollArea::vertical()
@@ -823,6 +1003,13 @@ impl<'a> NodeEditorWidget<'a> {
                                         }
                                     }
                                 } else {
+                                    let mut categories: Vec<String> = node_types
+                                        .iter()
+                                        .map(|nt| nt.category.clone())
+                                        .collect::<std::collections::HashSet<_>>()
+                                        .into_iter()
+                                        .collect();
+                                    categories.sort();
                                     for category in &categories {
                                         ui.menu_button(category, |ui| {
                                             for nt in &node_types {
@@ -840,91 +1027,71 @@ impl<'a> NodeEditorWidget<'a> {
                                     }
                                 }
                             });
-
-                        ui.separator();
-                        if ui.button("Close").clicked() {
-                            close = true;
-                        }
                     });
                 });
-
             if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.state.context_menu = None;
             }
         }
 
-        // Delete key
+        // --- Render node context menu (right-click on node) ---
+        if let Some(ref menu) = self.state.node_context_menu.clone() {
+            let mut close = false;
+            let sel_count = self.state.selected_nodes.len();
+            let popup_id = ui.make_persistent_id("node_context_menu");
+            egui::Area::new(popup_id)
+                .order(egui::Order::Foreground)
+                .fixed_pos(menu.screen_pos)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::menu(ui.style()).show(ui, |ui| {
+                        ui.set_max_width(180.0);
+                        if sel_count > 1 {
+                            let label = format!("Delete Selected ({})", sel_count);
+                            if ui.button(&label).clicked() {
+                                let to_remove: Vec<Uuid> =
+                                    self.state.selected_nodes.iter().copied().collect();
+                                pending.nodes_to_remove.extend(to_remove);
+                                self.state.selected_nodes.clear();
+                                close = true;
+                            }
+                        } else {
+                            if ui.button("Delete Node").clicked() {
+                                pending.nodes_to_remove.push(menu.node_id);
+                                self.state.selected_nodes.remove(&menu.node_id);
+                                close = true;
+                            }
+                        }
+                    });
+                });
+            if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.state.node_context_menu = None;
+            }
+        }
+
+        // --- Delete key ---
         if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
             let to_remove: Vec<Uuid> = self.state.selected_nodes.iter().copied().collect();
             pending.nodes_to_remove.extend(to_remove);
             self.state.selected_nodes.clear();
-
-            let conns_to_remove: Vec<Uuid> =
-                self.state.selected_connections.iter().copied().collect();
-            pending.connections_to_remove.extend(conns_to_remove);
+            let conns: Vec<Uuid> = self.state.selected_connections.iter().copied().collect();
+            pending.connections_to_remove.extend(conns);
             self.state.selected_connections.clear();
         }
 
         pending
     }
-
-    /// Get the screen position of a pin on a node.
-    fn get_pin_screen_pos(
-        &self,
-        source: &dyn NodeEditorDataSource,
-        node_id: Uuid,
-        pin_name: &str,
-        is_output: bool,
-        canvas_min: Pos2,
-    ) -> Option<Pos2> {
-        let node_pos = self.state.node_positions.get(&node_id)?.to_vec2();
-        let screen_offset = self.state.pan + canvas_min.to_vec2() + node_pos;
-        let pin_start_y = self.theme.header_height + 4.0;
-
-        let display = source.get_node_display(node_id)?;
-        let pins = match &display {
-            NodeDisplay::Graph { pins, .. } => pins.clone(),
-            NodeDisplay::Leaf { pins, .. } => pins.clone(),
-            NodeDisplay::Container { pins, .. } => pins.clone(),
-        };
-
-        let is_expanded = self.state.expanded_containers.contains(&node_id);
-        let node_width = if is_expanded {
-            self.theme.node_width * 2.0
-        } else {
-            self.theme.node_width
-        };
-
-        let filtered: Vec<&PinInfo> = pins.iter().filter(|p| p.is_output == is_output).collect();
-        let idx = filtered.iter().position(|p| p.name == pin_name)?;
-
-        let x = if is_output {
-            screen_offset.x + node_width - self.theme.pin_margin
-        } else {
-            screen_offset.x + self.theme.pin_margin
-        };
-        let y = screen_offset.y
-            + pin_start_y
-            + idx as f32 * self.theme.pin_row_height
-            + self.theme.pin_row_height / 2.0;
-
-        Some(Pos2::new(x, y))
-    }
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 struct NodeInteraction {
     id: Uuid,
     rect: Rect,
-    input_pins: Vec<String>,
-    output_pins: Vec<String>,
-    pin_start_y: f32,
-    pin_row_height: f32,
-    pin_margin: f32,
-    node_width: f32,
     is_container: bool,
 }
 
-/// Dim a color by a factor (0.0 = fully dimmed, 1.0 = original).
 fn dim_color(color: Color32, factor: f32) -> Color32 {
     if factor >= 1.0 {
         return color;

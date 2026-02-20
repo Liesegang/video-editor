@@ -30,6 +30,18 @@ pub trait NodeEditorDataSource {
         let _ = id;
         true
     }
+
+    /// Check if a specific input pin on a node is connected.
+    fn is_pin_connected(&self, node_id: Uuid, pin_name: &str) -> bool {
+        let _ = (node_id, pin_name);
+        false
+    }
+
+    /// Get display string for an unconnected pin's current value.
+    fn get_pin_value_display(&self, node_id: Uuid, pin_name: &str) -> Option<String> {
+        let _ = (node_id, pin_name);
+        None
+    }
 }
 
 /// Mutation interface for the node editor.
@@ -51,6 +63,17 @@ pub trait NodeEditorMutator {
 
     /// Remove a connection by ID.
     fn remove_connection(&mut self, connection_id: Uuid) -> Result<(), String>;
+
+    /// Move a node from one container to another.
+    fn move_node(
+        &mut self,
+        node_id: Uuid,
+        from_container: Uuid,
+        to_container: Uuid,
+    ) -> Result<(), String> {
+        let _ = (node_id, from_container, to_container);
+        Err("not supported".into())
+    }
 
     /// Get all available node types for the context menu.
     fn get_available_node_types(&self) -> Vec<NodeTypeInfo>;

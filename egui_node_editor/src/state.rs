@@ -20,14 +20,26 @@ pub struct NodeEditorState {
     pub dragging: Option<DragState>,
     /// Connection creation state.
     pub connecting: Option<ConnectingState>,
-    /// Context menu state.
+    /// Context menu state (right-click on empty space).
     pub context_menu: Option<ContextMenuState>,
+    /// Node-specific context menu (right-click on a node).
+    pub node_context_menu: Option<NodeContextMenuState>,
     /// Current container being viewed.
     pub current_container: Option<Uuid>,
     /// Containers expanded inline.
     pub expanded_containers: HashSet<Uuid>,
     /// Search text for context menu.
     pub context_search: String,
+    /// Inline pin value being edited: (node_id, pin_name).
+    pub editing_pin: Option<(Uuid, String)>,
+    /// Buffer for inline pin value editing.
+    pub editing_pin_value: String,
+    /// Box selection state.
+    pub box_selecting: Option<BoxSelectState>,
+    /// Custom container sizes (overrides auto-calculated size).
+    pub container_sizes: HashMap<Uuid, egui::Vec2>,
+    /// Resize handle drag state.
+    pub resizing: Option<ResizeState>,
 }
 
 pub struct DragState {
@@ -47,4 +59,21 @@ pub struct ConnectingState {
 pub struct ContextMenuState {
     pub screen_pos: egui::Pos2,
     pub container_id: Uuid,
+}
+
+#[derive(Clone)]
+pub struct NodeContextMenuState {
+    pub screen_pos: egui::Pos2,
+    pub node_id: Uuid,
+}
+
+pub struct BoxSelectState {
+    pub start: egui::Pos2,
+    pub current: egui::Pos2,
+}
+
+pub struct ResizeState {
+    pub node_id: Uuid,
+    pub start_size: egui::Vec2,
+    pub mouse_start: egui::Pos2,
 }

@@ -773,6 +773,12 @@ impl PluginManager {
         for plugin in inner.style_plugins.plugins.values() {
             let props = plugin.properties();
             let mut inputs = Vec::new();
+            // Chain input: receives style from previous node in chain
+            inputs.push(PinDefinition::input(
+                "style_in",
+                "Style In",
+                PinDataType::Style,
+            ));
             for prop in &props {
                 let pin_type = property_ui_to_pin_data_type(prop.ui_type());
                 inputs.push(PinDefinition::input(prop.name(), prop.label(), pin_type));
@@ -799,6 +805,12 @@ impl PluginManager {
         for plugin in inner.effector_plugins.plugins.values() {
             let props = plugin.properties();
             let mut inputs = Vec::new();
+            // Chain input: receives effector from previous node in chain
+            inputs.push(PinDefinition::input(
+                "effector_in",
+                "Effector In",
+                PinDataType::Effector,
+            ));
             for prop in &props {
                 let pin_type = property_ui_to_pin_data_type(prop.ui_type());
                 inputs.push(PinDefinition::input(prop.name(), prop.label(), pin_type));
@@ -825,6 +837,12 @@ impl PluginManager {
         for plugin in inner.decorator_plugins.plugins.values() {
             let props = plugin.properties();
             let mut inputs = Vec::new();
+            // Chain input: receives decorator from previous node in chain
+            inputs.push(PinDefinition::input(
+                "decorator_in",
+                "Decorator In",
+                PinDataType::Decorator,
+            ));
             for prop in &props {
                 let pin_type = property_ui_to_pin_data_type(prop.ui_type());
                 inputs.push(PinDefinition::input(prop.name(), prop.label(), pin_type));

@@ -77,14 +77,32 @@ pub fn render_styles_section(
                     .unwrap_or_else(|| type_name.clone());
 
                 if ui.button(label).clicked() {
-                    // Add as graph node + connection
+                    // Add as graph node, inserting into the style chain
                     let graph_type_id = format!("style.{}", type_name);
                     match project_service.add_graph_node(track_id, &graph_type_id) {
                         Ok(new_node_id) => {
-                            // Connect style_out → clip's style input
+                            let clip_style_pin = PinId::new(selected_entity_id, "style_in");
+
+                            // Check if clip's style_in already has a connection
+                            let existing_conn = project.read().ok().and_then(|proj| {
+                                graph_analysis::get_input_connection(&proj, &clip_style_pin)
+                                    .map(|c| (c.id, c.from.clone()))
+                            });
+
+                            if let Some((conn_id, prev_from)) = existing_conn {
+                                // Chain: disconnect old, connect old→new.style_in, new→clip
+                                let _ = project_service.remove_graph_connection(conn_id);
+                                let _ = project_service.add_graph_connection(
+                                    prev_from,
+                                    PinId::new(new_node_id, "style_in"),
+                                );
+                            }
+
+                            // Connect new node's output to clip's style input
                             let from = PinId::new(new_node_id, "style_out");
-                            let to = PinId::new(selected_entity_id, "style_in");
-                            if let Err(e) = project_service.add_graph_connection(from, to) {
+                            if let Err(e) =
+                                project_service.add_graph_connection(from, clip_style_pin)
+                            {
                                 log::error!("Failed to connect style: {}", e);
                             }
                             let current_state = project_service.with_project(|p| p.clone());

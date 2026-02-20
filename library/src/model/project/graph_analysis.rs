@@ -58,25 +58,51 @@ pub fn get_associated_decorators(project: &Project, clip_id: Uuid) -> Vec<Uuid> 
     get_associated_nodes_by_category(project, clip_id, "decorator.")
 }
 
-/// Get nodes of a specific category that are connected to a given node.
+/// Get nodes of a specific category connected to a given node, following the chain.
+///
+/// With chaining (e.g., `style_A.style_out → style_B.style_in, style_B.style_out → clip.style_in`),
+/// this follows the chain backwards from the clip's input pin and collects all nodes.
+/// Returns them in processing order (furthest from clip first, nearest last).
 fn get_associated_nodes_by_category(
     project: &Project,
     node_id: Uuid,
     type_prefix: &str,
 ) -> Vec<Uuid> {
-    project
-        .connections
-        .iter()
-        .filter(|c| c.to.node_id == node_id)
-        .filter_map(|c| {
-            let source_node = project.get_graph_node(c.from.node_id)?;
-            if source_node.type_id.starts_with(type_prefix) {
-                Some(c.from.node_id)
-            } else {
-                None
+    // Derive pin name from type prefix (e.g., "style." → "style_in")
+    let pin_category = type_prefix.trim_end_matches('.');
+    let input_pin_name = format!("{}_in", pin_category);
+
+    let mut chain = Vec::new();
+    let mut current_pin = PinId::new(node_id, &input_pin_name);
+
+    loop {
+        // Find connection feeding into the current input pin
+        let conn = project.connections.iter().find(|c| c.to == current_pin);
+
+        match conn {
+            Some(c) => {
+                let source_id = c.from.node_id;
+                // Verify it's the right node type
+                let is_correct_type = project
+                    .get_graph_node(source_id)
+                    .map(|g| g.type_id.starts_with(type_prefix))
+                    .unwrap_or(false);
+
+                if !is_correct_type || chain.contains(&source_id) {
+                    break;
+                }
+
+                chain.push(source_id);
+                // Follow the chain: check this node's own input pin
+                current_pin = PinId::new(source_id, &input_pin_name);
             }
-        })
-        .collect()
+            None => break,
+        }
+    }
+
+    // Reverse so the order is from furthest (applied first) to nearest (closest to clip)
+    chain.reverse();
+    chain
 }
 
 /// Validate a connection before adding it.
@@ -100,7 +126,7 @@ pub fn validate_connection(project: &Project, conn: &Connection) -> Result<(), S
         return Err("Cannot connect a node to itself".to_string());
     }
 
-    // No duplicate connections to same input pin
+    // No duplicate connections to same input pin (each input accepts at most one connection)
     if project
         .connections
         .iter()

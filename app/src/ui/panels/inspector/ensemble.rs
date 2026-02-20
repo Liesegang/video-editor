@@ -90,9 +90,29 @@ pub fn render_ensemble_section(
                         let graph_type_id = format!("effector.{}", type_name);
                         match project_service.add_graph_node(track_id, &graph_type_id) {
                             Ok(new_node_id) => {
+                                let clip_effector_pin =
+                                    PinId::new(selected_entity_id, "effector_in");
+
+                                // Check if clip's effector_in already has a connection
+                                let existing_conn = project.read().ok().and_then(|proj| {
+                                    graph_analysis::get_input_connection(&proj, &clip_effector_pin)
+                                        .map(|c| (c.id, c.from.clone()))
+                                });
+
+                                if let Some((conn_id, prev_from)) = existing_conn {
+                                    // Chain: disconnect old, connect old→new.effector_in, new→clip
+                                    let _ = project_service.remove_graph_connection(conn_id);
+                                    let _ = project_service.add_graph_connection(
+                                        prev_from,
+                                        PinId::new(new_node_id, "effector_in"),
+                                    );
+                                }
+
+                                // Connect new node's output to clip's effector input
                                 let from = PinId::new(new_node_id, "effector_out");
-                                let to = PinId::new(selected_entity_id, "effector_in");
-                                if let Err(e) = project_service.add_graph_connection(from, to) {
+                                if let Err(e) =
+                                    project_service.add_graph_connection(from, clip_effector_pin)
+                                {
                                     log::error!("Failed to connect effector: {}", e);
                                 }
                                 let current_state = project_service.with_project(|p| p.clone());
@@ -156,9 +176,29 @@ pub fn render_ensemble_section(
                         let graph_type_id = format!("decorator.{}", type_name);
                         match project_service.add_graph_node(track_id, &graph_type_id) {
                             Ok(new_node_id) => {
+                                let clip_decorator_pin =
+                                    PinId::new(selected_entity_id, "decorator_in");
+
+                                // Check if clip's decorator_in already has a connection
+                                let existing_conn = project.read().ok().and_then(|proj| {
+                                    graph_analysis::get_input_connection(&proj, &clip_decorator_pin)
+                                        .map(|c| (c.id, c.from.clone()))
+                                });
+
+                                if let Some((conn_id, prev_from)) = existing_conn {
+                                    // Chain: disconnect old, connect old→new.decorator_in, new→clip
+                                    let _ = project_service.remove_graph_connection(conn_id);
+                                    let _ = project_service.add_graph_connection(
+                                        prev_from,
+                                        PinId::new(new_node_id, "decorator_in"),
+                                    );
+                                }
+
+                                // Connect new node's output to clip's decorator input
                                 let from = PinId::new(new_node_id, "decorator_out");
-                                let to = PinId::new(selected_entity_id, "decorator_in");
-                                if let Err(e) = project_service.add_graph_connection(from, to) {
+                                if let Err(e) =
+                                    project_service.add_graph_connection(from, clip_decorator_pin)
+                                {
                                     log::error!("Failed to connect decorator: {}", e);
                                 }
                                 let current_state = project_service.with_project(|p| p.clone());

@@ -17,6 +17,15 @@ pub struct VideoEditorDataSource<'a> {
 
 impl NodeEditorDataSource for VideoEditorDataSource<'_> {
     fn get_container_children(&self, container_id: Uuid) -> Vec<Uuid> {
+        // Check if this is a composition ID
+        if let Some(comp) = self
+            .project
+            .compositions
+            .iter()
+            .find(|c| c.id == container_id)
+        {
+            return vec![comp.root_track_id];
+        }
         match self.project.get_node(container_id) {
             Some(Node::Track(track)) => track.child_ids.clone(),
             _ => vec![],
@@ -24,6 +33,10 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
     }
 
     fn get_container_name(&self, id: Uuid) -> Option<String> {
+        // Check compositions first
+        if let Some(comp) = self.project.compositions.iter().find(|c| c.id == id) {
+            return Some(comp.name.clone());
+        }
         match self.project.get_node(id) {
             Some(Node::Track(track)) => Some(track.name.clone()),
             _ => None,
@@ -31,6 +44,12 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
     }
 
     fn find_parent_container(&self, node_id: Uuid) -> Option<Uuid> {
+        // Check if node is a root track of a composition
+        for comp in &self.project.compositions {
+            if comp.root_track_id == node_id {
+                return Some(comp.id);
+            }
+        }
         for (id, node) in self.project.nodes.iter() {
             if let Node::Track(track) = node {
                 if track.child_ids.contains(&node_id) {
@@ -178,8 +197,14 @@ pub struct VideoEditorMutator<'a> {
 
 impl NodeEditorMutator for VideoEditorMutator<'_> {
     fn add_node(&mut self, container_id: Uuid, type_id: &str) -> Result<Uuid, String> {
+        // Resolve composition ID to root_track_id if needed
+        let actual_container = self
+            .project_service
+            .get_composition(container_id)
+            .map(|c| c.root_track_id)
+            .unwrap_or(container_id);
         self.project_service
-            .add_graph_node(container_id, type_id)
+            .add_graph_node(actual_container, type_id)
             .map_err(|e| e.to_string())
     }
 
