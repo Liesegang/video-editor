@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 /// Represents a single row in the timeline display
 #[derive(Debug)]
-pub enum DisplayRow<'a> {
+pub(in crate::ui::panels::timeline) enum DisplayRow<'a> {
     /// A track header row (always shown for each track)
     TrackHeader {
         track: &'a TrackData,
@@ -26,7 +26,7 @@ pub enum DisplayRow<'a> {
 }
 
 impl<'a> DisplayRow<'a> {
-    pub fn visible_row_index(&self) -> usize {
+    pub(in crate::ui::panels::timeline) fn visible_row_index(&self) -> usize {
         match self {
             DisplayRow::TrackHeader {
                 visible_row_index, ..
@@ -37,7 +37,7 @@ impl<'a> DisplayRow<'a> {
         }
     }
 
-    pub fn track_id(&self) -> Uuid {
+    pub(in crate::ui::panels::timeline) fn track_id(&self) -> Uuid {
         match self {
             DisplayRow::TrackHeader { track, .. } => track.id,
             DisplayRow::ClipRow { parent_track, .. } => parent_track.id,
@@ -49,7 +49,7 @@ impl<'a> DisplayRow<'a> {
 /// - Track header always shown
 /// - When collapsed: clips are drawn on the track header row (handled by clips.rs)
 /// - When expanded: each clip gets its own row below the header
-pub fn flatten_tracks_to_rows<'a>(
+pub(in crate::ui::panels::timeline) fn flatten_tracks_to_rows<'a>(
     project: &'a Project,
     root_track_ids: &[Uuid],
     expanded_tracks: &HashSet<Uuid>,

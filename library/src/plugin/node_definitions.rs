@@ -7,7 +7,7 @@ use crate::plugin::PluginManager;
 use crate::plugin::node_types::{NodeCategory, NodeTypeDefinition};
 
 /// Register all built-in node type definitions.
-pub fn register_all_node_types(manager: &PluginManager) {
+pub(crate) fn register_all_node_types(manager: &PluginManager) {
     for def in all_node_definitions() {
         manager.register_node_type(def);
     }

@@ -1,7 +1,7 @@
-pub mod flatten;
+pub(super) mod flatten;
 
 /// Converts a screen position to timeline coordinates (frame number and row index).
-pub fn pos_to_timeline_location(
+pub(super) fn pos_to_timeline_location(
     pos: egui::Pos2,
     content_rect: egui::Rect,
     scroll_offset: egui::Vec2,

@@ -1,7 +1,7 @@
-pub mod assets;
-pub mod inspector;
-pub mod preview;
+pub(crate) mod assets;
+pub(crate) mod inspector;
+pub(crate) mod preview;
 
-pub mod graph_editor;
-pub mod node_editor;
-pub mod timeline;
+pub(crate) mod graph_editor;
+pub(crate) mod node_editor;
+pub(crate) mod timeline;

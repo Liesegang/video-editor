@@ -6,18 +6,18 @@ use library::model::project::property::PropertyValue;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-pub struct PreviewInteractions<'a> {
-    pub ui: &'a mut Ui,
-    pub editor_context: &'a mut EditorContext,
-    pub project: &'a Arc<RwLock<Project>>,
-    pub history_manager: &'a mut crate::action::HistoryManager,
-    pub gui_clips: &'a [PreviewClip<'a>],
-    pub to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>, // Closure wrapper
-    pub to_world: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
+pub(super) struct PreviewInteractions<'a> {
+    pub(super) ui: &'a mut Ui,
+    pub(super) editor_context: &'a mut EditorContext,
+    pub(super) project: &'a Arc<RwLock<Project>>,
+    pub(super) history_manager: &'a mut crate::action::HistoryManager,
+    pub(super) gui_clips: &'a [PreviewClip<'a>],
+    pub(super) to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>, // Closure wrapper
+    pub(super) to_world: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
 }
 
 impl<'a> PreviewInteractions<'a> {
-    pub fn new(
+    pub(super) fn new(
         ui: &'a mut Ui,
         editor_context: &'a mut EditorContext,
         project: &'a Arc<RwLock<Project>>,
@@ -37,7 +37,7 @@ impl<'a> PreviewInteractions<'a> {
         }
     }
 
-    pub fn handle(
+    pub(super) fn handle(
         &mut self,
         response: &Response,
         content_rect: Rect,
@@ -660,7 +660,7 @@ impl<'a> PreviewInteractions<'a> {
             .find(|gc| gc.id() == entity_id)
             .map(|gc| gc.track_id)
     }
-    pub fn draw_text_overlay(&mut self, pending_actions: &mut Vec<PreviewAction>) {
+    pub(super) fn draw_text_overlay(&mut self, pending_actions: &mut Vec<PreviewAction>) {
         if let Some(id) = self
             .editor_context
             .interaction

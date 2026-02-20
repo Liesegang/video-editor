@@ -7,7 +7,7 @@ use crate::{action::HistoryManager, state::context::EditorContext};
 
 use super::super::geometry::TimelineGeometry;
 
-pub fn handle_drag_drop_and_context_menu(
+pub(super) fn handle_drag_drop_and_context_menu(
     ui: &mut Ui,
     response: &egui::Response,
     content_rect: egui::Rect,

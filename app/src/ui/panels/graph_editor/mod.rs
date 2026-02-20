@@ -1,9 +1,9 @@
-pub mod actions;
-pub mod drawing;
-pub mod utils;
+mod actions;
+mod drawing;
+mod utils;
 
 use actions::*;
-pub use utils::PropertyComponent;
+pub(crate) use utils::PropertyComponent;
 use utils::*;
 
 use egui::{Color32, Sense, Ui, Vec2};
@@ -35,7 +35,7 @@ impl<'a> ViewportState for GraphViewportState<'a> {
     }
 }
 
-pub fn graph_editor_panel(ui: &mut Ui, ctx: &mut PanelContext, registry: &CommandRegistry) {
+pub(crate) fn graph_editor_panel(ui: &mut Ui, ctx: &mut PanelContext, registry: &CommandRegistry) {
     let PanelContext {
         editor_context,
         history_manager,

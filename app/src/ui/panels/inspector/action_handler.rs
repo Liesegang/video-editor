@@ -3,25 +3,25 @@
 
 // Action handler is now actively used by mod.rs, effects.rs, and styles.rs
 
+use super::properties::PropertyAction;
 use crate::action::HistoryManager;
-use crate::ui::panels::inspector::properties::PropertyAction;
 use library::model::project::property::{Property, PropertyValue};
 use library::EditorService;
 use uuid::Uuid;
 
-pub use library::model::project::property::PropertyTarget;
+pub(super) use library::model::project::property::PropertyTarget;
 
 /// Context for handling property actions.
-pub struct ActionContext<'a> {
-    pub project_service: &'a mut EditorService,
-    pub history_manager: &'a mut HistoryManager,
-    pub clip_id: Uuid,
-    pub current_time: f64,
+pub(super) struct ActionContext<'a> {
+    project_service: &'a mut EditorService,
+    history_manager: &'a mut HistoryManager,
+    clip_id: Uuid,
+    current_time: f64,
 }
 
 impl<'a> ActionContext<'a> {
     /// Create a new ActionContext.
-    pub fn new(
+    pub(super) fn new(
         project_service: &'a mut EditorService,
         history_manager: &'a mut HistoryManager,
         clip_id: Uuid,
@@ -36,7 +36,7 @@ impl<'a> ActionContext<'a> {
     }
 
     /// Handle an Update action - updates the property value.
-    pub fn handle_update(
+    fn handle_update(
         &mut self,
         target: PropertyTarget,
         name: &str,
@@ -59,13 +59,13 @@ impl<'a> ActionContext<'a> {
     }
 
     /// Handle a Commit action - saves the current project state to history.
-    pub fn handle_commit(&mut self) {
+    fn handle_commit(&mut self) {
         let current_state = self.project_service.with_project(|p| p.clone());
         self.history_manager.push_project_state(current_state);
     }
 
     /// Handle a ToggleKeyframe action - adds or removes a keyframe at current time.
-    pub fn handle_toggle_keyframe(
+    fn handle_toggle_keyframe(
         &mut self,
         target: PropertyTarget,
         name: &str,
@@ -104,7 +104,7 @@ impl<'a> ActionContext<'a> {
     }
 
     /// Handle a SetAttribute action - sets a property attribute.
-    pub fn handle_set_attribute(
+    fn handle_set_attribute(
         &mut self,
         target: PropertyTarget,
         name: &str,
@@ -126,7 +126,7 @@ impl<'a> ActionContext<'a> {
     }
 
     /// Process a list of PropertyActions, handling updates and history commits.
-    pub fn handle_actions(
+    pub(super) fn handle_actions(
         &mut self,
         actions: Vec<PropertyAction>,
         target: PropertyTarget,

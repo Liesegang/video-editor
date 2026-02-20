@@ -6,7 +6,7 @@ use library::EditorService;
 use super::actions::Action;
 use super::utils::{GraphTransform, PropertyComponent, TimeMapper};
 
-pub fn draw_background(
+pub(super) fn draw_background(
     painter: &Painter,
     transform: &GraphTransform,
     ruler_rect: Rect,
@@ -36,7 +36,7 @@ pub fn draw_background(
     );
 }
 
-pub fn draw_grid(painter: &Painter, transform: &GraphTransform, ruler_rect: Rect) {
+pub(super) fn draw_grid(painter: &Painter, transform: &GraphTransform, ruler_rect: Rect) {
     let graph_rect = transform.graph_rect;
     let pixels_per_second = transform.zoom_x;
     let pixels_per_unit = transform.zoom_y;
@@ -140,7 +140,7 @@ pub fn draw_grid(painter: &Painter, transform: &GraphTransform, ruler_rect: Rect
     }
 }
 
-pub fn draw_playhead(
+pub(super) fn draw_playhead(
     painter: &Painter,
     transform: &GraphTransform,
     ruler_rect: Rect,
@@ -175,7 +175,7 @@ pub fn draw_playhead(
     }
 }
 
-pub fn draw_properties(
+pub(super) fn draw_properties(
     ui: &mut Ui,
     painter: &Painter,
     response: &Response,

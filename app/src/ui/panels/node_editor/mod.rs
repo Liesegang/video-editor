@@ -1,4 +1,4 @@
-pub mod adapter;
+mod adapter;
 
 use crate::state::context::PanelContext;
 
@@ -7,7 +7,7 @@ use egui_node_editor::{NodeEditorTheme, NodeEditorWidget};
 use library::model::project::node::Node;
 
 /// Main node editor panel function.
-pub fn node_editor_panel(ui: &mut egui::Ui, ctx: &mut PanelContext) {
+pub(crate) fn node_editor_panel(ui: &mut egui::Ui, ctx: &mut PanelContext) {
     let project = ctx.project.clone();
     let Ok(proj_read) = project.read() else {
         ui.label("Failed to read project");

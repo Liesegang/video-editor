@@ -32,7 +32,7 @@ pub struct SkiaRenderer {
 }
 
 impl SkiaRenderer {
-    pub fn render_to_texture(&mut self) -> Result<TextureInfo, LibraryError> {
+    pub(crate) fn render_to_texture(&mut self) -> Result<TextureInfo, LibraryError> {
         let _timer = ScopedTimer::debug("SkiaRenderer::render_to_texture");
         if let Some(context) = self.gpu_context.as_mut() {
             context.direct_context.flush_and_submit();
@@ -60,7 +60,7 @@ impl SkiaRenderer {
         }
     }
 
-    pub fn take_context(&mut self) -> Option<GpuContext> {
+    pub(crate) fn take_context(&mut self) -> Option<GpuContext> {
         self.gpu_context.take()
     }
 

@@ -9,10 +9,10 @@ use library::plugin::PluginManager;
 use uuid::Uuid;
 
 /// Read-only data source backed by a Project + PluginManager.
-pub struct VideoEditorDataSource<'a> {
-    pub project: &'a Project,
-    pub plugin_manager: &'a PluginManager,
-    pub current_frame: u64,
+pub(super) struct VideoEditorDataSource<'a> {
+    pub(super) project: &'a Project,
+    pub(super) plugin_manager: &'a PluginManager,
+    pub(super) current_frame: u64,
 }
 
 impl NodeEditorDataSource for VideoEditorDataSource<'_> {
@@ -164,8 +164,8 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
 }
 
 /// Read-only adapter for render phase (only get_available_node_types is used).
-pub struct ReadOnlyMutator<'a> {
-    pub project_service: &'a library::EditorService,
+pub(super) struct ReadOnlyMutator<'a> {
+    pub(super) project_service: &'a library::EditorService,
 }
 
 impl NodeEditorMutator for ReadOnlyMutator<'_> {
@@ -195,8 +195,8 @@ impl NodeEditorMutator for ReadOnlyMutator<'_> {
 }
 
 /// Mutation adapter backed by EditorService.
-pub struct VideoEditorMutator<'a> {
-    pub project_service: &'a mut library::EditorService,
+pub(super) struct VideoEditorMutator<'a> {
+    pub(super) project_service: &'a mut library::EditorService,
 }
 
 impl NodeEditorMutator for VideoEditorMutator<'_> {

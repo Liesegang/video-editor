@@ -2,7 +2,7 @@ use crate::model::ui_types::TimelineDisplayMode;
 use crate::state::context::EditorContext;
 use egui::Ui;
 
-pub fn show_time_input(
+pub(super) fn show_time_input(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     composition_fps: f64,

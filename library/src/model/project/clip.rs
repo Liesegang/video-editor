@@ -160,7 +160,8 @@ impl TrackClip {
         }
     }
 
-    pub fn get_transform_definitions() -> Vec<crate::model::project::property::PropertyDefinition> {
+    pub(crate) fn get_transform_definitions()
+    -> Vec<crate::model::project::property::PropertyDefinition> {
         use crate::model::project::property::{
             PropertyDefinition, PropertyUiType, PropertyValue, Vec2,
         };

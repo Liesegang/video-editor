@@ -1,6 +1,6 @@
 use crate::model::vector::VectorEditorState;
 
-pub fn to_svg_path(state: &VectorEditorState) -> String {
+pub(in crate::ui::panels::preview) fn to_svg_path(state: &VectorEditorState) -> String {
     if state.path.points.is_empty() {
         return String::new();
     }

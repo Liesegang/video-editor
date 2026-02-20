@@ -10,11 +10,11 @@ use crate::action::HistoryManager;
 
 /// Bundles the common parameters passed to every UI panel function.
 /// This reduces parameter explosion in panel signatures.
-pub struct PanelContext<'a> {
-    pub editor_context: &'a mut EditorContext,
-    pub history_manager: &'a mut HistoryManager,
-    pub project_service: &'a mut EditorService,
-    pub project: &'a Arc<RwLock<Project>>,
+pub(crate) struct PanelContext<'a> {
+    pub(crate) editor_context: &'a mut EditorContext,
+    pub(crate) history_manager: &'a mut HistoryManager,
+    pub(crate) project_service: &'a mut EditorService,
+    pub(crate) project: &'a Arc<RwLock<Project>>,
 }
 
 use crate::state::context_types::{
@@ -23,42 +23,42 @@ use crate::state::context_types::{
 };
 
 #[derive(Serialize, Deserialize)]
-pub struct EditorContext {
-    pub timeline: TimelineState,
-    pub view: ViewState,
-    pub selection: SelectionState,
+pub(crate) struct EditorContext {
+    pub(crate) timeline: TimelineState,
+    pub(crate) view: ViewState,
+    pub(crate) selection: SelectionState,
     // Added graph_editor state
-    pub graph_editor: GraphEditorState,
+    pub(crate) graph_editor: GraphEditorState,
 
     // Added keyframe_dialog state
-    pub keyframe_dialog: KeyframeDialogState,
+    pub(crate) keyframe_dialog: KeyframeDialogState,
 
     // Node Editor State
     #[serde(skip)]
-    pub node_editor_state: egui_node_editor::NodeEditorState,
+    pub(crate) node_editor_state: egui_node_editor::NodeEditorState,
 
     #[serde(skip)]
-    pub interaction: InteractionState,
+    pub(crate) interaction: InteractionState,
 
     #[serde(skip)]
-    pub preview_texture: Option<egui::TextureHandle>,
+    pub(crate) preview_texture: Option<egui::TextureHandle>,
     #[serde(skip)]
-    pub preview_texture_id: Option<u32>, // Raw GL texture ID
+    pub(crate) preview_texture_id: Option<u32>, // Raw GL texture ID
     #[serde(skip)]
-    pub preview_texture_width: u32,
+    pub(crate) preview_texture_width: u32,
     #[serde(skip)]
-    pub preview_texture_height: u32,
+    pub(crate) preview_texture_height: u32,
     #[serde(skip)]
-    pub preview_region: Option<Region>,
+    pub(crate) preview_region: Option<Region>,
 
     #[serde(skip)]
-    pub available_fonts: Vec<String>,
+    pub(crate) available_fonts: Vec<String>,
 }
 
-pub use crate::state::context_types::GizmoState; // Re-export for compatibility if needed, though better to import from context_types
+pub(crate) use crate::state::context_types::GizmoState; // Re-export for compatibility if needed, though better to import from context_types
 
 impl EditorContext {
-    pub fn new(default_comp_id: Uuid) -> Self {
+    pub(crate) fn new(default_comp_id: Uuid) -> Self {
         let mut selection = SelectionState::default();
         selection.composition_id = Some(default_comp_id);
 
@@ -79,13 +79,16 @@ impl EditorContext {
         }
     }
 
-    pub fn get_current_composition<'a>(&self, project: &'a Project) -> Option<&'a Composition> {
+    pub(crate) fn get_current_composition<'a>(
+        &self,
+        project: &'a Project,
+    ) -> Option<&'a Composition> {
         self.selection
             .composition_id
             .and_then(|id| project.compositions.iter().find(|&c| c.id == id))
     }
 
-    pub fn select_clip(&mut self, entity_id: Uuid, track_id: Uuid) {
+    pub(crate) fn select_clip(&mut self, entity_id: Uuid, track_id: Uuid) {
         self.selection.selected_entities.clear();
         self.selection.selected_entities.insert(entity_id);
         self.selection.last_selected_entity_id = Some(entity_id);
@@ -93,13 +96,13 @@ impl EditorContext {
     }
 
     #[allow(dead_code)]
-    pub fn add_selection(&mut self, entity_id: Uuid, track_id: Uuid) {
+    pub(crate) fn add_selection(&mut self, entity_id: Uuid, track_id: Uuid) {
         self.selection.selected_entities.insert(entity_id);
         self.selection.last_selected_entity_id = Some(entity_id);
         self.selection.last_selected_track_id = Some(track_id);
     }
 
-    pub fn toggle_selection(&mut self, entity_id: Uuid, track_id: Uuid) {
+    pub(crate) fn toggle_selection(&mut self, entity_id: Uuid, track_id: Uuid) {
         if self.selection.selected_entities.contains(&entity_id) {
             self.selection.selected_entities.remove(&entity_id);
             if self.selection.last_selected_entity_id == Some(entity_id) {
@@ -119,7 +122,7 @@ impl EditorContext {
         }
     }
 
-    pub fn is_selected(&self, entity_id: Uuid) -> bool {
+    pub(crate) fn is_selected(&self, entity_id: Uuid) -> bool {
         self.selection.selected_entities.contains(&entity_id)
     }
 }

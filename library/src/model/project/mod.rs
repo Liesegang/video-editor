@@ -1,12 +1,12 @@
 pub mod asset;
 pub mod clip;
-pub mod clip_helpers;
+pub(crate) mod clip_helpers;
 pub mod connection;
 pub mod effect;
 pub mod ensemble;
 pub mod graph_analysis;
 pub mod graph_node;
-pub mod migration;
+pub(crate) mod migration;
 pub mod node;
 pub mod project;
 pub mod property;

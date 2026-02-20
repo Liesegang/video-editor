@@ -1,23 +1,21 @@
-pub mod clip_area;
-pub mod controls;
-pub mod geometry;
-pub mod ruler;
-pub mod track_list;
-pub mod utils;
+mod clip_area;
+mod controls;
+mod geometry;
+mod ruler;
+mod track_list;
+mod utils;
 
 use egui::Ui;
 
 use crate::command::CommandRegistry;
 use crate::state::context::PanelContext;
+use clip_area::show_clip_area;
+use controls::show_timeline_controls;
 use geometry::TimelineGeometry;
+use ruler::show_timeline_ruler;
+use track_list::show_track_list;
 
-// Re-export functions for easier access
-pub use clip_area::show_clip_area;
-pub use controls::show_timeline_controls;
-pub use ruler::show_timeline_ruler;
-pub use track_list::show_track_list;
-
-pub fn timeline_panel(ui: &mut Ui, ctx: &mut PanelContext, registry: &CommandRegistry) {
+pub(crate) fn timeline_panel(ui: &mut Ui, ctx: &mut PanelContext, registry: &CommandRegistry) {
     let current_composition_fps: f64;
     // CRITICAL CHANGE: Scope the read lock to only where `project_lock` is needed.
     {

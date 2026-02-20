@@ -8,7 +8,7 @@ mod draw;
 mod ticks;
 mod time_input;
 
-pub fn show_timeline_ruler(
+pub(super) fn show_timeline_ruler(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     project_service: &ProjectService,

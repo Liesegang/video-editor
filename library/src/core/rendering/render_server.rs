@@ -30,7 +30,7 @@ use crate::rendering::renderer::RenderOutput;
 use crate::rendering::renderer::Renderer;
 
 pub struct RenderResult {
-    pub frame_hash: u64,
+    pub(crate) frame_hash: u64,
     pub output: RenderOutput,
     pub frame_info: FrameInfo, // Return frame info to verify content if needed, though hash is mostly enough
 }

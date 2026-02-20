@@ -3,15 +3,15 @@
 //! This module contains all services that the GUI (app crate) should use
 //! to interact with the library.
 
-pub mod audio_service;
-pub mod color_service;
+pub(crate) mod audio_service;
+pub(crate) mod color_service;
 mod editor_clip_ops;
 mod editor_graph_ops;
 mod editor_project_ops;
 pub mod editor_service;
 pub mod export_service;
 pub(crate) mod handlers;
-pub mod ocio_shim;
+pub(crate) mod ocio_shim;
 pub mod project_model;
 pub(crate) mod project_service;
 

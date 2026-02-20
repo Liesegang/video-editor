@@ -12,7 +12,7 @@ use crate::{action::HistoryManager, model::ui_types::DraggedItem, state::context
 
 use super::super::geometry::TimelineGeometry;
 
-pub fn handle_drag_and_drop(
+pub(super) fn handle_drag_and_drop(
     ui: &mut Ui,
     response: &egui::Response,
     content_rect: egui::Rect,

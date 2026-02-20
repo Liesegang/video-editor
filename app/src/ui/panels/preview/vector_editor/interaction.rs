@@ -3,15 +3,19 @@ use egui::{Pos2, Response, Ui};
 use library::model::frame::transform::Transform;
 use library::model::vector::{HandleType, PointType};
 
-pub struct VectorEditorInteraction<'a> {
-    pub state: &'a mut VectorEditorState,
-    pub transform: Transform,
-    pub to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
-    pub to_world: Box<dyn Fn(Pos2) -> Pos2 + 'a>, // Screen -> World (still transformed by object)
+pub(in crate::ui::panels::preview) struct VectorEditorInteraction<'a> {
+    pub(in crate::ui::panels::preview) state: &'a mut VectorEditorState,
+    pub(in crate::ui::panels::preview) transform: Transform,
+    pub(in crate::ui::panels::preview) to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
+    pub(in crate::ui::panels::preview) to_world: Box<dyn Fn(Pos2) -> Pos2 + 'a>, // Screen -> World (still transformed by object)
 }
 
 impl<'a> VectorEditorInteraction<'a> {
-    pub fn handle(&mut self, ui: &Ui, _response: &Response) -> (bool, bool) {
+    pub(in crate::ui::panels::preview) fn handle(
+        &mut self,
+        ui: &Ui,
+        _response: &Response,
+    ) -> (bool, bool) {
         // changed, captured
         let mut changed = false;
         let mut captured = false;

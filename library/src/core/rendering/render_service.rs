@@ -11,7 +11,7 @@ use crate::util::timing::{ScopedTimer, measure_debug};
 use std::sync::Arc;
 
 pub struct RenderService<T: Renderer> {
-    pub renderer: T,
+    pub(crate) renderer: T,
     cache_manager: SharedCacheManager,
     plugin_manager: Arc<PluginManager>,
 }
@@ -38,7 +38,7 @@ impl<T: Renderer> RenderService<T> {
         self.render_from_frame_info(&frame_info)
     }
 
-    pub fn render_from_frame_info(
+    pub(crate) fn render_from_frame_info(
         &mut self,
         frame_info: &FrameInfo,
     ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
@@ -174,7 +174,7 @@ impl<T: Renderer> RenderService<T> {
         measure_debug("RenderService::finalize", || self.renderer.finalize())
     }
 
-    pub fn clear(&mut self) -> Result<(), LibraryError> {
+    pub(crate) fn clear(&mut self) -> Result<(), LibraryError> {
         measure_debug("RenderService::clear", || self.renderer.clear())
     }
 

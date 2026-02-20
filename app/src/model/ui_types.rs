@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum GizmoHandle {
+pub(crate) enum GizmoHandle {
     TopLeft,
     TopRight,
     BottomLeft,
@@ -15,7 +15,7 @@ pub enum GizmoHandle {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DraggedItem {
+pub(crate) enum DraggedItem {
     Asset(Uuid),
     Composition(Uuid),
 }
@@ -32,7 +32,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub fn all() -> &'static [Tab] {
+    pub(crate) fn all() -> &'static [Tab] {
         &[
             Tab::Preview,
             Tab::Timeline,
@@ -43,7 +43,7 @@ impl Tab {
         ]
     }
 
-    pub fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Tab::Preview => "Preview",
             Tab::Timeline => "Timeline",
@@ -56,11 +56,11 @@ impl Tab {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CompositionPreset {
-    pub name: String,
-    pub width: u64,
-    pub height: u64,
-    pub fps: f64,
+pub(crate) struct CompositionPreset {
+    pub(crate) name: String,
+    pub(crate) width: u64,
+    pub(crate) height: u64,
+    pub(crate) fps: f64,
 }
 
 impl CompositionPreset {
@@ -91,7 +91,7 @@ pub struct Vec2Def {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TimelineDisplayMode {
+pub(crate) enum TimelineDisplayMode {
     Seconds,
     Frames,
     SecondsAndFrames,
@@ -100,7 +100,7 @@ pub enum TimelineDisplayMode {
 use library::plugin::PluginCategory;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SettingsTab {
+pub(crate) enum SettingsTab {
     Shortcuts,
     PluginPaths,
     PluginList(PluginCategory, Option<String>), // Category, Type Filter

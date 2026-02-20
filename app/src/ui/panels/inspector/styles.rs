@@ -14,7 +14,7 @@ use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-pub fn render_styles_section(
+pub(super) fn render_styles_section(
     ui: &mut Ui,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,

@@ -48,13 +48,13 @@ use windows_sys::Win32::Graphics::OpenGL::{HGLRC, wglShareLists};
 pub struct GpuContext {
     pub(crate) _display: glutin::display::Display,
     pub(crate) _surface: glutin::surface::Surface<WindowSurface>,
-    pub context: glutin::context::PossiblyCurrentContext,
-    pub direct_context: skia_safe::gpu::DirectContext,
+    pub(crate) context: glutin::context::PossiblyCurrentContext,
+    pub(crate) direct_context: skia_safe::gpu::DirectContext,
     pub(crate) _hwnd: usize,
 }
 
 impl GpuContext {
-    pub fn resize(&mut self, width: u32, height: u32) {
+    pub(crate) fn resize(&mut self, width: u32, height: u32) {
         self._surface.resize(
             &self.context,
             std::num::NonZeroU32::new(width.max(1)).unwrap(),
@@ -63,7 +63,7 @@ impl GpuContext {
     }
 }
 
-pub fn create_gpu_context(
+pub(crate) fn create_gpu_context(
     #[allow(unused)] share_handle: Option<usize>,
     #[allow(unused)] share_hwnd: Option<isize>,
 ) -> Option<GpuContext> {
@@ -341,7 +341,7 @@ fn init_glutin_headless(
     })
 }
 
-pub fn create_surface(
+pub(crate) fn create_surface(
     width: u32,
     height: u32,
     context: Option<&mut DirectContext>,
@@ -363,13 +363,13 @@ pub fn create_surface(
     create_raster_surface(width, height)
 }
 
-pub fn create_raster_surface(width: u32, height: u32) -> Result<Surface, LibraryError> {
+pub(crate) fn create_raster_surface(width: u32, height: u32) -> Result<Surface, LibraryError> {
     let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
     surfaces::raster(&info, None, None)
         .ok_or_else(|| LibraryError::render("Cannot create Skia surface".to_string()))
 }
 
-pub fn create_texture_surface(
+pub(crate) fn create_texture_surface(
     width: u32,
     height: u32,
     context: &mut DirectContext,
@@ -388,7 +388,7 @@ pub fn create_texture_surface(
     .ok_or_else(|| LibraryError::render("Cannot create buffer Skia surface".to_string()))
 }
 
-pub fn image_to_skia(image: &Image) -> Result<SkImage, LibraryError> {
+pub(crate) fn image_to_skia(image: &Image) -> Result<SkImage, LibraryError> {
     let info = ImageInfo::new(
         ISize::new(image.width as i32, image.height as i32),
         ColorType::RGBA8888,
@@ -400,7 +400,7 @@ pub fn image_to_skia(image: &Image) -> Result<SkImage, LibraryError> {
         .ok_or_else(|| LibraryError::render("Failed to create Skia image".to_string()))
 }
 
-pub fn surface_to_image(
+pub(crate) fn surface_to_image(
     surface: &mut Surface,
     width: u32,
     height: u32,
@@ -425,7 +425,7 @@ pub fn surface_to_image(
     })
 }
 
-pub fn create_image_from_texture(
+pub(crate) fn create_image_from_texture(
     context: &mut DirectContext,
     texture_id: u32,
     width: u32,

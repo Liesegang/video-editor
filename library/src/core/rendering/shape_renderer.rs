@@ -4,7 +4,7 @@ use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, JoinType, PathEffect};
 use skia_safe::{Canvas, Paint, PaintStyle};
 
-pub fn draw_shape_fill_on_canvas(
+pub(crate) fn draw_shape_fill_on_canvas(
     canvas: &Canvas,
     path: &skia_safe::Path,
     color: &Color,
@@ -51,7 +51,7 @@ pub fn draw_shape_fill_on_canvas(
     Ok(())
 }
 
-pub fn draw_shape_stroke_on_canvas(
+pub(crate) fn draw_shape_stroke_on_canvas(
     canvas: &Canvas,
     path: &skia_safe::Path,
     color: &Color,

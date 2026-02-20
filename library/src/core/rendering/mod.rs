@@ -1,10 +1,10 @@
-pub mod paint_utils;
-pub mod queue;
+pub(crate) mod paint_utils;
+pub(crate) mod queue;
 pub mod render_server;
 pub mod render_service;
 pub mod renderer;
-pub mod shader_utils;
-pub mod shape_renderer;
+pub(crate) mod shader_utils;
+pub(crate) mod shape_renderer;
 pub mod skia_renderer;
 pub mod skia_utils;
-pub mod text_renderer;
+pub(crate) mod text_renderer;

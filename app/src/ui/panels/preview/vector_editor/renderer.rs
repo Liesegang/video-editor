@@ -1,14 +1,14 @@
 use crate::model::vector::VectorEditorState;
 use egui::{Color32, Painter, Pos2, Stroke};
 
-pub struct VectorEditorRenderer<'a> {
-    pub state: &'a VectorEditorState,
-    pub transform: library::model::frame::transform::Transform,
-    pub to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
+pub(in crate::ui::panels::preview) struct VectorEditorRenderer<'a> {
+    pub(in crate::ui::panels::preview) state: &'a VectorEditorState,
+    pub(in crate::ui::panels::preview) transform: library::model::frame::transform::Transform,
+    pub(in crate::ui::panels::preview) to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
 }
 
 impl<'a> VectorEditorRenderer<'a> {
-    pub fn draw(&self, painter: &Painter) {
+    pub(in crate::ui::panels::preview) fn draw(&self, painter: &Painter) {
         let to_screen = &self.to_screen;
 
         let local_to_screen = |x: f32, y: f32| -> Pos2 {

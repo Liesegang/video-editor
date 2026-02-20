@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 
-pub fn show_timeline_controls(
+pub(super) fn show_timeline_controls(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     _history_manager: &mut HistoryManager,

@@ -109,7 +109,7 @@ pub(super) fn collect_descendant_clips<'a>(
     }
 }
 
-pub fn calculate_insert_index(
+pub(in crate::ui::panels::timeline) fn calculate_insert_index(
     mouse_y: f32,
     content_rect_min_y: f32,
     scroll_offset_y: f32,
@@ -153,7 +153,7 @@ pub fn calculate_insert_index(
     None
 }
 
-pub fn draw_clips(
+pub(super) fn draw_clips(
     ui_content: &mut Ui,
     content_rect_for_clip_area: egui::Rect,
     editor_context: &mut EditorContext,
@@ -415,7 +415,7 @@ pub fn draw_clips(
     clicked_on_entity
 }
 
-pub fn get_clips_in_box(
+pub(super) fn get_clips_in_box(
     rect: egui::Rect,
     editor_context: &EditorContext,
     project: &Project,

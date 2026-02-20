@@ -2,7 +2,7 @@ use crate::model::vector::VectorEditorState;
 use library::model::vector::{ControlPoint, PointType, VectorPath};
 use skia_safe::PathVerb;
 
-pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
+pub(in crate::ui::panels::preview) fn parse_svg_path(path_data: &str) -> VectorEditorState {
     let path = match skia_safe::utils::parse_path::from_svg(path_data) {
         Some(p) => p,
         None => return VectorEditorState::default(),

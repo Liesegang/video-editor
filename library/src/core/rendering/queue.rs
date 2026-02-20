@@ -24,14 +24,14 @@ struct SaveTask {
 }
 
 #[derive(Debug)]
-pub struct FrameRenderJob {
-    pub frame_index: u64,
-    pub frame_time: f64,
-    pub output_path: String,
+pub(crate) struct FrameRenderJob {
+    pub(crate) frame_index: u64,
+    pub(crate) frame_time: f64,
+    pub(crate) output_path: String,
 }
 
 impl FrameRenderJob {
-    pub fn new(frame_index: u64, frame_time: f64, output_path: impl Into<String>) -> Self {
+    pub(crate) fn new(frame_index: u64, frame_time: f64, output_path: impl Into<String>) -> Self {
         Self {
             frame_index,
             frame_time,
@@ -40,16 +40,16 @@ impl FrameRenderJob {
     }
 }
 
-pub struct RenderQueueConfig {
-    pub project: Arc<Project>,
-    pub composition_index: usize,
-    pub plugin_manager: Arc<PluginManager>,
-    pub property_evaluators: Arc<PropertyEvaluatorRegistry>,
-    pub cache_manager: Arc<crate::cache::CacheManager>,
-    pub export_format: ExportFormat,
-    pub export_settings: Arc<ExportSettings>,
-    pub worker_count: Option<usize>,
-    pub save_queue_bound: usize,
+pub(crate) struct RenderQueueConfig {
+    pub(crate) project: Arc<Project>,
+    pub(crate) composition_index: usize,
+    pub(crate) plugin_manager: Arc<PluginManager>,
+    pub(crate) property_evaluators: Arc<PropertyEvaluatorRegistry>,
+    pub(crate) cache_manager: Arc<crate::cache::CacheManager>,
+    pub(crate) export_format: ExportFormat,
+    pub(crate) export_settings: Arc<ExportSettings>,
+    pub(crate) worker_count: Option<usize>,
+    pub(crate) save_queue_bound: usize,
 }
 
 impl RenderQueueConfig {
@@ -68,7 +68,7 @@ impl RenderQueueConfig {
     }
 }
 
-pub struct RenderQueue {
+pub(crate) struct RenderQueue {
     render_tx: Option<mpsc::Sender<FrameRenderJob>>,
     #[allow(dead_code)]
     save_tx: Option<mpsc::SyncSender<SaveTask>>,
@@ -77,7 +77,7 @@ pub struct RenderQueue {
 }
 
 impl RenderQueue {
-    pub fn new(config: RenderQueueConfig, total_frames: u64) -> Result<Self, LibraryError> {
+    pub(crate) fn new(config: RenderQueueConfig, total_frames: u64) -> Result<Self, LibraryError> {
         let composition = Self::composition_for(&config)?;
         let (save_tx, saver_handle) = Self::spawn_saver(
             Arc::clone(&config.plugin_manager),
@@ -106,7 +106,7 @@ impl RenderQueue {
         })
     }
 
-    pub fn submit(&self, job: FrameRenderJob) -> Result<(), LibraryError> {
+    pub(crate) fn submit(&self, job: FrameRenderJob) -> Result<(), LibraryError> {
         let sender = self
             .render_tx
             .as_ref()
@@ -116,7 +116,7 @@ impl RenderQueue {
             .map_err(|_| LibraryError::Render(RenderError::SubmitFailed))
     }
 
-    pub async fn finish(mut self) -> Result<(), LibraryError> {
+    pub(crate) async fn finish(mut self) -> Result<(), LibraryError> {
         // Made async
         self.shutdown().await
     }

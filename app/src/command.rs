@@ -3,7 +3,7 @@ use crate::model::ui_types::Tab;
 use eframe::egui::{Key, Modifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum CommandId {
+pub(crate) enum CommandId {
     // File Menu
     NewProject,
     LoadProject,
@@ -31,18 +31,18 @@ pub enum CommandId {
 }
 
 #[derive(Clone, PartialEq)]
-pub struct Command {
-    pub id: CommandId,
-    pub text: String,
-    pub shortcut: Option<(Modifiers, Key)>,
-    pub shortcut_text: String,
-    pub allow_when_focused: bool,
-    pub trigger_on_release: bool,
+pub(crate) struct Command {
+    pub(crate) id: CommandId,
+    pub(crate) text: String,
+    pub(crate) shortcut: Option<(Modifiers, Key)>,
+    pub(crate) shortcut_text: String,
+    pub(crate) allow_when_focused: bool,
+    pub(crate) trigger_on_release: bool,
 }
 
 #[derive(Clone)]
-pub struct CommandRegistry {
-    pub commands: Vec<Command>,
+pub(crate) struct CommandRegistry {
+    pub(crate) commands: Vec<Command>,
 }
 
 fn get_shortcut_text(shortcut: &Option<(Modifiers, Key)>) -> String {
@@ -89,7 +89,7 @@ impl Command {
 }
 // ...
 impl CommandRegistry {
-    pub fn new(config: &AppConfig) -> Self {
+    pub(crate) fn new(config: &AppConfig) -> Self {
         let mut commands = vec![
             // File Menu
             Command::new(
@@ -214,7 +214,7 @@ impl CommandRegistry {
         Self { commands }
     }
 
-    pub fn find(&self, id: CommandId) -> Option<&Command> {
+    pub(crate) fn find(&self, id: CommandId) -> Option<&Command> {
         self.commands.iter().find(|&cmd| cmd.id == id)
     }
 }

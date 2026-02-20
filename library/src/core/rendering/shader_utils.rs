@@ -1,6 +1,6 @@
 use skia_safe::RuntimeEffect;
 
-pub const STANDARD_UNIFORMS: &str = r#"
+pub(crate) const STANDARD_UNIFORMS: &str = r#"
 uniform float3 iResolution;
 uniform float iTime;
 uniform float iTimeDelta;
@@ -9,7 +9,7 @@ uniform float4 iMouse;
 uniform float4 iDate;
 "#;
 
-pub fn preprocess_shader(code: &str) -> String {
+pub(crate) fn preprocess_shader(code: &str) -> String {
     let compiler = shaderc::Compiler::new().unwrap();
     let options = shaderc::CompileOptions::new().unwrap();
 
@@ -44,16 +44,16 @@ pub fn preprocess_shader(code: &str) -> String {
     }
 }
 
-pub struct ShaderContext {
-    pub resolution: (f32, f32),
-    pub time: f32,
-    pub time_delta: f32,
-    pub frame: f32,
-    pub mouse: (f32, f32, f32, f32),
-    pub date: (f32, f32, f32, f32),
+pub(crate) struct ShaderContext {
+    pub(crate) resolution: (f32, f32),
+    pub(crate) time: f32,
+    pub(crate) time_delta: f32,
+    pub(crate) frame: f32,
+    pub(crate) mouse: (f32, f32, f32, f32),
+    pub(crate) date: (f32, f32, f32, f32),
 }
 
-pub fn bind_standard_uniforms(effect: &RuntimeEffect, data: &mut [u8], ctx: &ShaderContext) {
+pub(crate) fn bind_standard_uniforms(effect: &RuntimeEffect, data: &mut [u8], ctx: &ShaderContext) {
     let mut write_f32 = |offset: usize, val: f32| {
         if offset + 4 <= data.len() {
             let bytes = val.to_le_bytes();

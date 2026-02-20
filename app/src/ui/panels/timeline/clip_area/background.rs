@@ -2,7 +2,7 @@ use egui::{Color32, Painter, Rect};
 
 use super::super::geometry::TimelineGeometry;
 
-pub fn draw_track_backgrounds(
+pub(super) fn draw_track_backgrounds(
     painter: &Painter,
     content_rect: Rect,
     num_tracks: usize,

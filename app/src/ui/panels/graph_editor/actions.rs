@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
-pub enum Action {
+pub(super) enum Action {
     Select(String, usize),
     Move(String, usize, f64, f64, Option<PropertyComponent>), // prop_key, index, new_time, new_value, component
     Add(String, f64, f64, Option<PropertyComponent>),         // prop_key, time, value, component
@@ -61,7 +61,7 @@ fn global_to_source_time(
     global_time
 }
 
-pub fn process_action(
+pub(super) fn process_action(
     action: Action,
     comp_id: Uuid,
     track_id: Uuid,

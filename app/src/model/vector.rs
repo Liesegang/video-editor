@@ -3,12 +3,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct VectorEditorState {
-    pub path: VectorPath, // Use the library model
+pub(crate) struct VectorEditorState {
+    pub(crate) path: VectorPath, // Use the library model
     #[serde(skip)]
-    pub selected_point_indices: HashSet<usize>,
+    pub(crate) selected_point_indices: HashSet<usize>,
     #[serde(skip)]
-    pub selected_handle: Option<(usize, HandleType)>, // Point Index, Handle Type
+    pub(crate) selected_handle: Option<(usize, HandleType)>, // Point Index, Handle Type
 }
 
 impl Default for VectorEditorState {

@@ -1,7 +1,7 @@
 use library::model::project::property::PropertyValue;
 use uuid::Uuid;
 
-pub enum PreviewAction {
+pub(super) enum PreviewAction {
     UpdateProperty {
         comp_id: Uuid,
         track_id: Uuid,

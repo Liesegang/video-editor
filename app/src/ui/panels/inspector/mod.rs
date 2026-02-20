@@ -6,12 +6,12 @@ use crate::state::context::PanelContext;
 
 use library::model::project::property::PropertyUiType;
 
-pub mod action_handler;
-pub mod effects;
-pub mod ensemble;
-pub mod graph_items;
-pub mod properties;
-pub mod styles;
+mod action_handler;
+mod effects;
+mod ensemble;
+mod graph_items;
+mod properties;
+mod styles;
 
 use action_handler::{ActionContext, PropertyTarget};
 use effects::render_effects_section;
@@ -19,7 +19,7 @@ use ensemble::render_ensemble_section;
 use properties::{render_property_rows, PropertyRenderContext};
 use styles::render_styles_section;
 
-pub fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
+pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
     let PanelContext {
         editor_context,
         history_manager,

@@ -7,7 +7,7 @@ use crate::model::ui_types::DraggedItem;
 use crate::state::context::PanelContext;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 
-pub fn assets_panel(
+pub(crate) fn assets_panel(
     ui: &mut Ui,
     ctx: &mut PanelContext,
     composition_dialog: &mut CompositionDialog,

@@ -11,11 +11,11 @@ use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 use library::model::project::property::Vec2;
 
 mod action;
-pub mod clip;
+mod clip;
 mod gizmo;
 mod grid;
 mod interaction;
-pub mod vector_editor;
+mod vector_editor;
 
 use action::PreviewAction;
 
@@ -45,7 +45,7 @@ impl<'a> ViewportState for PreviewViewportState<'a> {
     }
 }
 
-pub fn preview_panel(
+pub(crate) fn preview_panel(
     ui: &mut Ui,
     ctx: &mut PanelContext,
     render_server: &Arc<RenderServer>,

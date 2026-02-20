@@ -7,7 +7,7 @@ use library::model::project::property::{PropertyValue, Vec2 as PropVec2};
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 
-pub fn handle_gizmo_interaction(
+pub(super) fn handle_gizmo_interaction(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     project: &Arc<RwLock<Project>>,
@@ -250,7 +250,7 @@ pub fn handle_gizmo_interaction(
     interacted_with_gizmo
 }
 
-pub fn draw_gizmo(
+pub(super) fn draw_gizmo(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     gui_clips: &[PreviewClip],

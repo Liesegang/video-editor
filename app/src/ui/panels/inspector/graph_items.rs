@@ -15,15 +15,15 @@ use uuid::Uuid;
 
 /// Lightweight info about a graph-based node for UI display.
 /// Replaces GraphEffectInfo, GraphEnsembleInfo, and GraphStyleInfo.
-pub struct GraphNodeInfo {
-    pub node_id: Uuid,
-    pub type_id: String,
-    pub display_name: String,
-    pub properties: PropertyMap,
+pub(super) struct GraphNodeInfo {
+    pub(super) node_id: Uuid,
+    pub(super) type_id: String,
+    pub(super) display_name: String,
+    pub(super) properties: PropertyMap,
 }
 
 /// Collect graph-based nodes associated with a clip, using the given ID retrieval function.
-pub fn collect_graph_nodes(
+pub(super) fn collect_graph_nodes(
     project: &Arc<RwLock<library::model::project::project::Project>>,
     project_service: &mut ProjectService,
     clip_id: Uuid,
@@ -54,24 +54,24 @@ pub fn collect_graph_nodes(
 }
 
 /// Configuration for adding a node into a chain (effector, decorator, or style).
-pub struct ChainConfig {
-    pub category_prefix: &'static str,
-    pub input_pin_name: &'static str,
-    pub output_pin_name: &'static str,
+pub(super) struct ChainConfig {
+    category_prefix: &'static str,
+    input_pin_name: &'static str,
+    output_pin_name: &'static str,
 }
 
 impl ChainConfig {
-    pub const EFFECTOR: Self = Self {
+    pub(super) const EFFECTOR: Self = Self {
         category_prefix: "effector",
         input_pin_name: "effector_in",
         output_pin_name: "effector_out",
     };
-    pub const DECORATOR: Self = Self {
+    pub(super) const DECORATOR: Self = Self {
         category_prefix: "decorator",
         input_pin_name: "decorator_in",
         output_pin_name: "decorator_out",
     };
-    pub const STYLE: Self = Self {
+    pub(super) const STYLE: Self = Self {
         category_prefix: "style",
         input_pin_name: "style_in",
         output_pin_name: "style_out",
@@ -79,7 +79,7 @@ impl ChainConfig {
 }
 
 /// Add a graph node to a chain, handling existing connections.
-pub fn add_node_to_chain(
+fn add_node_to_chain(
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
     project: &Arc<RwLock<library::model::project::project::Project>>,
@@ -123,7 +123,7 @@ pub fn add_node_to_chain(
 }
 
 /// Render an add button for a chain-based plugin category (effector, decorator, or style).
-pub fn render_chain_add_button(
+pub(super) fn render_chain_add_button(
     ui: &mut Ui,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
@@ -159,7 +159,7 @@ pub fn render_chain_add_button(
 
 /// Render a single graph-based item (effect, effector, decorator, or style)
 /// with a collapsible header and property grid.
-pub fn render_graph_node_item(
+pub(super) fn render_graph_node_item(
     ui: &mut Ui,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,

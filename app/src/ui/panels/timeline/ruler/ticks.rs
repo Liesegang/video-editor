@@ -1,4 +1,4 @@
-pub fn get_nice_time_intervals(
+pub(super) fn get_nice_time_intervals(
     pixels_per_unit: f32,
     nice_steps: &[f32],
     target_pixels_per_major_tick: f32,
@@ -32,7 +32,7 @@ pub fn get_nice_time_intervals(
     (major_interval, minor_interval)
 }
 
-pub fn get_frame_intervals(pixels_per_unit: f32, _fps: f32) -> (f32, f32, bool) {
+pub(super) fn get_frame_intervals(pixels_per_unit: f32, _fps: f32) -> (f32, f32, bool) {
     // bool indicates if it's purely frames
     // pixels_per_unit is pixels per frame
     let nice_steps = &[1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0];

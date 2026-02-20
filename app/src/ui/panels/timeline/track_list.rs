@@ -30,7 +30,7 @@ enum DeferredTrackAction {
     },
 }
 
-pub fn show_track_list(
+pub(super) fn show_track_list(
     ui_content: &mut Ui,
     editor_context: &mut EditorContext,
     history_manager: &mut HistoryManager,

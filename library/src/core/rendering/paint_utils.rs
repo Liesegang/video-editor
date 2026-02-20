@@ -9,7 +9,7 @@ use skia_safe::path_effect::PathEffect as SkPathEffect;
 use skia_safe::trim_path_effect::Mode;
 use skia_safe::{Matrix, Paint, PaintStyle, Point, Surface};
 
-pub fn build_transform_matrix(transform: &Transform) -> Matrix {
+pub(crate) fn build_transform_matrix(transform: &Transform) -> Matrix {
     let anchor = Point::new(transform.anchor.x as f32, transform.anchor.y as f32);
     let mut matrix = Matrix::new_identity();
     matrix.pre_translate((
@@ -21,7 +21,7 @@ pub fn build_transform_matrix(transform: &Transform) -> Matrix {
     matrix
 }
 
-pub fn create_stroke_paint(
+pub(crate) fn create_stroke_paint(
     color: &Color,
     width: f32,
     cap: &CapType,
@@ -49,7 +49,7 @@ pub fn create_stroke_paint(
     paint
 }
 
-pub fn snapshot_surface(
+pub(crate) fn snapshot_surface(
     surface: &mut Surface,
     gpu_context: &mut Option<GpuContext>,
     width: u32,
@@ -75,9 +75,7 @@ pub fn snapshot_surface(
     Ok(RenderOutput::Image(image))
 }
 
-pub fn convert_path_effect(
-    path_effect: &PathEffect,
-) -> Result<skia_safe::PathEffect, LibraryError> {
+fn convert_path_effect(path_effect: &PathEffect) -> Result<skia_safe::PathEffect, LibraryError> {
     match path_effect {
         PathEffect::Dash { intervals, phase } => {
             let intervals: Vec<f32> = intervals.iter().map(|&x| x as f32).collect();
@@ -109,7 +107,7 @@ pub fn convert_path_effect(
     }
 }
 
-pub fn apply_path_effects(
+pub(crate) fn apply_path_effects(
     path_effects: &Vec<PathEffect>,
     paint: &mut Paint,
 ) -> Result<(), LibraryError> {

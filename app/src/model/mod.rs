@@ -1,3 +1,3 @@
 // pub mod assets;
-pub mod ui_types;
-pub mod vector;
+pub(crate) mod ui_types;
+pub(crate) mod vector;

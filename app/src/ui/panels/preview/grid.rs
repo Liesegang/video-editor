@@ -1,6 +1,6 @@
 use egui::{Painter, Rect, Vec2};
 
-pub fn draw_grid(painter: &Painter, rect: Rect, pan: Vec2, zoom: f32) {
+pub(super) fn draw_grid(painter: &Painter, rect: Rect, pan: Vec2, zoom: f32) {
     let grid_size = 100.0 * zoom;
 
     if grid_size > 10.0 {

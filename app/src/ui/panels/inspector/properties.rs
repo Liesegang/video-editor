@@ -7,14 +7,14 @@ use library::model::project::property::{Property, PropertyValue, Vec2, Vec3, Vec
 use library::model::project::property::{PropertyDefinition, PropertyUiType};
 use ordered_float::OrderedFloat;
 
-pub struct PropertyRenderContext<'a> {
-    pub available_fonts: &'a [String],
-    pub in_grid: bool,
-    pub current_time: f64,
+pub(super) struct PropertyRenderContext<'a> {
+    pub(super) available_fonts: &'a [String],
+    pub(super) in_grid: bool,
+    pub(super) current_time: f64,
 }
 
 #[derive(Debug)]
-pub enum PropertyAction {
+pub(super) enum PropertyAction {
     Update(String, PropertyValue),
     Commit,
     ToggleKeyframe(String, PropertyValue),
@@ -87,7 +87,7 @@ fn render_vector_group(
 
 // Helper function to render generic property rows
 // Returns a list of actions to transform the state
-pub fn render_property_rows<G, GP>(
+pub(super) fn render_property_rows<G, GP>(
     ui: &mut Ui,
     properties: &[PropertyDefinition],
     get_value: G,
@@ -647,7 +647,7 @@ impl Clone for PropertyRenderContext<'_> {
 }
 
 // Helper to standardise Grid + Property Evaluation loop
-pub fn render_inspector_properties_grid(
+pub(super) fn render_inspector_properties_grid(
     ui: &mut Ui,
     id: impl std::hash::Hash,
     properties: &library::model::project::property::PropertyMap,
@@ -687,6 +687,6 @@ pub fn render_inspector_properties_grid(
     pending_actions
 }
 
-pub fn render_add_button(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
+pub(super) fn render_add_button(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
     ui.menu_button("➕ Add", content);
 }

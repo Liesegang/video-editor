@@ -5,7 +5,7 @@ pub mod editor;
 pub mod error;
 pub mod model;
 pub mod plugin;
-pub mod util;
+pub(crate) mod util;
 
 // Error types
 pub use error::{LibraryError, PluginError, ProjectError, RenderError};

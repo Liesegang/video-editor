@@ -2,7 +2,7 @@ use super::ticks;
 use crate::state::context::EditorContext;
 use egui::{Painter, Rect};
 
-pub fn draw_ruler_marks(
+pub(super) fn draw_ruler_marks(
     painter: &Painter,
     rect: Rect,
     _editor_context: &EditorContext,

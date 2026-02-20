@@ -12,7 +12,7 @@ use skia_safe::{Canvas, Paint};
 /// This draws the ensemble-processed text (with per-character transforms,
 /// effectors, and decorators) onto the given canvas. The caller is responsible
 /// for surface creation and snapshot.
-pub fn render_ensemble_text(
+pub(crate) fn render_ensemble_text(
     canvas: &Canvas,
     text: &str,
     size: f64,
