@@ -1,6 +1,10 @@
+pub mod paint_utils;
 pub mod queue;
 pub mod render_server;
+pub mod render_service;
 pub mod renderer;
 pub mod shader_utils;
+pub mod shape_renderer;
 pub mod skia_renderer;
 pub mod skia_utils;
+pub mod text_renderer;

@@ -1,7 +1,8 @@
 use crate::cache::CacheManager;
 use crate::model::project::asset::Asset;
+use crate::model::project::clip::TrackClip;
+use crate::model::project::node::Node;
 use crate::model::project::project::{Composition, Project};
-use crate::model::project::{Node, TrackClip};
 use uuid::Uuid;
 
 /// Recursively collect all clips from the project starting at a given node

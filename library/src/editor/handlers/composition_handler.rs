@@ -1,5 +1,5 @@
 use crate::error::LibraryError;
-use crate::model::project::Node;
+use crate::model::project::node::Node;
 use crate::model::project::project::{Composition, Project};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;

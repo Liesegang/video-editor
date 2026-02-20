@@ -1,39 +1,39 @@
 use egui::Ui;
+use library::model::project::clip::TrackClip;
+use library::model::project::node::Node;
 use library::model::project::project::Project;
-use library::model::project::{Node, TrackClip, TrackData};
+use library::model::project::track::TrackData;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 
+use super::super::geometry::TimelineGeometry;
 use super::super::utils::flatten::{flatten_tracks_to_rows, DisplayRow};
 use super::clip_interaction::{draw_single_clip, DeferredClipAction};
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn calculate_clip_rect(
     in_frame: u64,
     out_frame: u64,
     track_index: usize,
     scroll_offset: egui::Vec2,
-    pixels_per_unit: f32,
-    row_height: f32,
-    track_spacing: f32,
-    composition_fps: f64,
+    geo: &TimelineGeometry,
     base_offset: egui::Vec2,
 ) -> egui::Rect {
     let timeline_duration = out_frame.saturating_sub(in_frame);
-    let initial_x = base_offset.x + (in_frame as f32 / composition_fps as f32) * pixels_per_unit
+    let initial_x = base_offset.x
+        + (in_frame as f32 / geo.composition_fps as f32) * geo.pixels_per_unit
         - scroll_offset.x;
     let initial_y =
-        base_offset.y - scroll_offset.y + track_index as f32 * (row_height + track_spacing);
+        base_offset.y - scroll_offset.y + track_index as f32 * (geo.row_height + geo.track_spacing);
 
-    let width = (timeline_duration as f32 / composition_fps as f32) * pixels_per_unit;
+    let width = (timeline_duration as f32 / geo.composition_fps as f32) * geo.pixels_per_unit;
     let safe_width = width.max(1.0);
 
     egui::Rect::from_min_size(
         egui::pos2(initial_x, initial_y),
-        egui::vec2(safe_width, row_height),
+        egui::vec2(safe_width, geo.row_height),
     )
 }
 
@@ -109,13 +109,11 @@ pub(super) fn collect_descendant_clips<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn calculate_insert_index(
     mouse_y: f32,
     content_rect_min_y: f32,
     scroll_offset_y: f32,
-    row_height: f32,
-    track_spacing: f32,
+    geo: &TimelineGeometry,
     display_rows: &[DisplayRow],
     project: &Project,
     _root_track_ids: &[Uuid],
@@ -130,7 +128,7 @@ pub fn calculate_insert_index(
         let current_y_in_clip_area = mouse_y - content_rect_min_y + scroll_offset_y;
 
         let hovered_row_index =
-            (current_y_in_clip_area / (row_height + track_spacing)).floor() as isize;
+            (current_y_in_clip_area / (geo.row_height + geo.track_spacing)).floor() as isize;
         let header_row_index = header_idx as isize;
 
         let raw_target_index = hovered_row_index - header_row_index - 1;
@@ -155,7 +153,6 @@ pub fn calculate_insert_index(
     None
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn draw_clips(
     ui_content: &mut Ui,
     content_rect_for_clip_area: egui::Rect,
@@ -164,11 +161,10 @@ pub fn draw_clips(
     history_manager: &mut HistoryManager,
     project: &Arc<RwLock<Project>>,
     root_track_ids: &[Uuid],
-    pixels_per_unit: f32,
-    row_height: f32,
-    track_spacing: f32,
-    composition_fps: f64,
+    geo: &TimelineGeometry,
 ) -> bool {
+    let row_height = geo.row_height;
+    let track_spacing = geo.track_spacing;
     let mut clicked_on_entity = false;
     let mut deferred_actions: Vec<DeferredClipAction> = Vec::new();
 
@@ -200,8 +196,7 @@ pub fn draw_clips(
                     mouse_pos.y,
                     content_rect_for_clip_area.min.y,
                     editor_context.timeline.scroll_offset.y,
-                    row_height,
-                    track_spacing,
+                    geo,
                     &display_rows,
                     &proj_read,
                     root_track_ids,
@@ -260,10 +255,7 @@ pub fn draw_clips(
                                 clip,
                                 track,
                                 *visible_row_index,
-                                pixels_per_unit,
-                                row_height,
-                                track_spacing,
-                                composition_fps,
+                                geo,
                                 is_summary_clip,
                                 &mut clicked_on_entity,
                                 &display_rows,
@@ -290,10 +282,7 @@ pub fn draw_clips(
                         clip,
                         parent_track,
                         *visible_row_index,
-                        pixels_per_unit,
-                        row_height,
-                        track_spacing,
-                        composition_fps,
+                        geo,
                         false,
                         &mut clicked_on_entity,
                         &display_rows,
@@ -426,16 +415,12 @@ pub fn draw_clips(
     clicked_on_entity
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn get_clips_in_box(
     rect: egui::Rect,
     editor_context: &EditorContext,
     project: &Project,
     root_track_ids: &[Uuid],
-    pixels_per_unit: f32,
-    row_height: f32,
-    track_spacing: f32,
-    composition_fps: f64,
+    geo: &TimelineGeometry,
     rect_offset: egui::Vec2,
 ) -> Vec<(Uuid, Uuid)> {
     let mut found_clips = Vec::new();
@@ -479,10 +464,7 @@ pub fn get_clips_in_box(
                 clip.out_frame,
                 row_idx,
                 editor_context.timeline.scroll_offset,
-                pixels_per_unit,
-                row_height,
-                track_spacing,
-                composition_fps,
+                geo,
                 rect_offset,
             );
 

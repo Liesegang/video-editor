@@ -1,12 +1,15 @@
 use egui::{epaint::StrokeKind, Ui};
 use egui_phosphor::regular as icons;
+use library::model::project::clip::{TrackClip, TrackClipKind};
+use library::model::project::node::Node;
 use library::model::project::project::Project;
-use library::model::project::{Node, TrackClip, TrackClipKind, TrackData};
+use library::model::project::track::TrackData;
 use library::EditorService as ProjectService;
 use uuid::Uuid;
 
 use crate::state::context::EditorContext;
 
+use super::super::geometry::TimelineGeometry;
 use super::super::utils::flatten::DisplayRow;
 use super::clips::{calculate_clip_rect, calculate_insert_index, draw_waveform};
 
@@ -66,7 +69,6 @@ pub(super) fn find_track_containing_clip(
     None
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_single_clip(
     ui_content: &mut Ui,
     content_rect_for_clip_area: egui::Rect,
@@ -78,15 +80,16 @@ pub(super) fn draw_single_clip(
     clip: &TrackClip,
     track: &TrackData,
     row_index: usize,
-    pixels_per_unit: f32,
-    row_height: f32,
-    track_spacing: f32,
-    composition_fps: f64,
+    geo: &TimelineGeometry,
     is_summary_clip: bool,
     clicked_on_entity: &mut bool,
     display_rows: &[DisplayRow],
     reorder_state: &Option<(Uuid, Uuid, usize, usize, usize)>,
 ) {
+    let pixels_per_unit = geo.pixels_per_unit;
+    let row_height = geo.row_height;
+    let track_spacing = geo.track_spacing;
+    let composition_fps = geo.composition_fps;
     // Determine Color based on kind using helper
     let (r, g, b) = clip.display_color();
     let clip_color = egui::Color32::from_rgb(r, g, b);
@@ -148,10 +151,7 @@ pub(super) fn draw_single_clip(
         clip.out_frame,
         visual_row_index,
         editor_context.timeline.scroll_offset,
-        pixels_per_unit,
-        row_height,
-        track_spacing,
-        composition_fps,
+        geo,
         content_rect_for_clip_area.min.to_vec2(),
     );
     let safe_width = initial_clip_rect.width();
@@ -552,8 +552,7 @@ pub(super) fn draw_single_clip(
                     mouse_pos.y,
                     content_rect_for_clip_area.min.y,
                     editor_context.timeline.scroll_offset.y,
-                    row_height,
-                    track_spacing,
+                    geo,
                     display_rows,
                     project,
                     root_track_ids,

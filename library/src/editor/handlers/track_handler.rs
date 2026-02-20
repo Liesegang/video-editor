@@ -1,6 +1,7 @@
 use crate::error::LibraryError;
+use crate::model::project::node::Node;
 use crate::model::project::project::Project;
-use crate::model::project::{Node, TrackData};
+use crate::model::project::track::TrackData;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 

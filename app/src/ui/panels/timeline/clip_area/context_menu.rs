@@ -1,10 +1,13 @@
 use egui::Ui;
+use library::model::project::clip::TrackClip;
+use library::model::project::node::Node;
 use library::model::project::project::Project;
-use library::model::project::{Node, TrackClip};
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
+
+use super::super::geometry::TimelineGeometry;
 
 pub fn handle_context_menu(
     ui: &mut Ui,
@@ -14,12 +17,13 @@ pub fn handle_context_menu(
     project: &Arc<RwLock<Project>>,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
-    pixels_per_unit: f32,
-    composition_fps: f64,
+    geo: &TimelineGeometry,
     num_tracks: usize,
-    row_height: f32,
-    track_spacing: f32,
 ) {
+    let pixels_per_unit = geo.pixels_per_unit;
+    let composition_fps = geo.composition_fps;
+    let row_height = geo.row_height;
+    let track_spacing = geo.track_spacing;
     // Capture right-click position BEFORE the context menu opens/draws
     if response.hovered() && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary))
     {

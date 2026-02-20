@@ -1,5 +1,5 @@
-use crate::model::project::TrackClip;
-use crate::model::project::TrackClipKind;
+use crate::model::project::clip::TrackClip;
+use crate::model::project::clip::TrackClipKind;
 
 impl TrackClip {
     // --- UI / Display Helpers ---

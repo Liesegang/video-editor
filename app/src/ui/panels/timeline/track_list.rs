@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 
+use super::geometry::TimelineGeometry;
+
 /// Deferred actions to execute after read lock is released
 #[derive(Debug)]
 enum DeferredTrackAction {
@@ -97,13 +99,18 @@ pub fn show_track_list(
     ) {
         if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
             if let Some(ref proj) = proj_read {
+                let insert_geo = TimelineGeometry {
+                    pixels_per_unit: 0.0,
+                    row_height,
+                    track_spacing,
+                    composition_fps: 0.0,
+                };
                 if let Some((target_index, header_idx)) =
                     super::clip_area::clips::calculate_insert_index(
                         mouse_pos.y,
                         track_list_rect.min.y,
                         editor_context.timeline.scroll_offset.y,
-                        row_height,
-                        track_spacing,
+                        &insert_geo,
                         &display_rows,
                         proj,
                         &root_track_ids,

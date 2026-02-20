@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 
+use super::geometry::TimelineGeometry;
 use crate::command::{CommandId, CommandRegistry};
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 
@@ -45,20 +46,18 @@ impl<'a> ViewportState for TimelineViewportState<'a> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn show_clip_area(
     ui_content: &mut Ui,
     editor_context: &mut EditorContext,
     history_manager: &mut HistoryManager,
     project_service: &mut ProjectService,
     project: &Arc<RwLock<Project>>,
-    pixels_per_unit: f32,
-    _num_tracks_ignored: usize,
-    row_height: f32,
-    track_spacing: f32,
-    composition_fps: f64,
+    geo: &TimelineGeometry,
     registry: &CommandRegistry,
 ) -> (egui::Rect, egui::Response) {
+    let row_height = geo.row_height;
+    let track_spacing = geo.track_spacing;
+    let composition_fps = geo.composition_fps;
     let (content_rect_for_clip_area, response) =
         ui_content.allocate_at_least(ui_content.available_size(), egui::Sense::hover());
 
@@ -100,11 +99,8 @@ pub fn show_clip_area(
         &painter,
         content_rect_for_clip_area,
         num_visible_tracks,
-        row_height,
-        track_spacing,
-        editor_context.timeline.scroll_offset.y,
-        editor_context.timeline.scroll_offset.x,
-        pixels_per_unit,
+        geo,
+        editor_context.timeline.scroll_offset,
         current_comp_duration,
     );
 
@@ -181,11 +177,8 @@ pub fn show_clip_area(
         project,
         project_service,
         history_manager,
-        pixels_per_unit,
-        composition_fps,
+        geo,
         num_visible_tracks,
-        row_height,
-        track_spacing,
     );
 
     // ===== PHASE 4: Draw clips (separate read lock scope) =====
@@ -197,10 +190,7 @@ pub fn show_clip_area(
         history_manager,
         project,
         &root_track_ids,
-        pixels_per_unit,
-        row_height,
-        track_spacing,
-        composition_fps,
+        geo,
     );
 
     // ===== PHASE 5: Box Selection Logic (separate read lock scope) =====
@@ -238,10 +228,7 @@ pub fn show_clip_area(
                             editor_context,
                             &proj_read,
                             &root_track_ids,
-                            pixels_per_unit,
-                            row_height,
-                            track_spacing,
-                            composition_fps,
+                            geo,
                             content_rect_for_clip_area.min.to_vec2(),
                         )
                     } else {

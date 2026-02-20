@@ -364,3 +364,4 @@ ToDo.md
 *.def
 
 .claude
+.mcp.json

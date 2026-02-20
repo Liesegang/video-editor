@@ -1,3 +1,5 @@
+use std::sync::{Arc, RwLock};
+
 use library::model::project::project::Project;
 
 pub mod handler;
@@ -25,6 +27,16 @@ impl HistoryManager {
         }
         self.undo_stack.push(project);
         self.redo_stack.clear();
+    }
+
+    /// Returns an RAII guard that auto-pushes the current project state on drop.
+    /// Call `.cancel()` if the mutation fails and history should not be recorded.
+    pub fn begin_mutation<'a>(&'a mut self, project: &'a Arc<RwLock<Project>>) -> HistoryGuard<'a> {
+        HistoryGuard {
+            manager: self,
+            project,
+            active: true,
+        }
     }
 
     /// Undoes the last action.
@@ -59,5 +71,30 @@ impl HistoryManager {
     pub fn clear(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
+    }
+}
+
+/// RAII guard that auto-pushes project state to history on drop.
+/// Created by [`HistoryManager::begin_mutation`].
+pub struct HistoryGuard<'a> {
+    manager: &'a mut HistoryManager,
+    project: &'a Arc<RwLock<Project>>,
+    active: bool,
+}
+
+impl HistoryGuard<'_> {
+    /// Cancel the auto-push (e.g., if the mutation failed).
+    pub fn cancel(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for HistoryGuard<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            if let Ok(proj) = self.project.read() {
+                self.manager.push_project_state(proj.clone());
+            }
+        }
     }
 }

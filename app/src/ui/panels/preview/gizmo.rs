@@ -265,7 +265,7 @@ pub fn draw_gizmo(
         }
 
         if let Some(gc) = gui_clips.iter().find(|gc| gc.id() == *selected_id) {
-            if gc.clip.kind == library::model::project::TrackClipKind::Audio {
+            if gc.clip.kind == library::model::project::clip::TrackClipKind::Audio {
                 continue;
             }
 
@@ -276,7 +276,7 @@ pub fn draw_gizmo(
 
     if let Some(selected_id) = editor_context.selection.last_selected_entity_id {
         if let Some(gc) = gui_clips.iter().find(|gc| gc.id() == selected_id) {
-            if gc.clip.kind == library::model::project::TrackClipKind::Audio {
+            if gc.clip.kind == library::model::project::clip::TrackClipKind::Audio {
                 return;
             }
 

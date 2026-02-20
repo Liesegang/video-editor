@@ -1,5 +1,5 @@
 use library::model::frame::entity::FrameContent;
-use library::model::project::TrackClip;
+use library::model::project::clip::TrackClip;
 use library::model::project::project::Composition;
 use library::plugin::EntityConverterPlugin;
 use library::plugin::PropertyEvaluatorRegistry;
@@ -30,7 +30,7 @@ fn test_video_converter_frame_calculation() {
     let mut clip = TrackClip::new(
         uuid::Uuid::new_v4(),
         None,
-        library::model::project::TrackClipKind::Video,
+        library::model::project::clip::TrackClipKind::Video,
         0,
         100,
         100,

@@ -1,6 +1,6 @@
+use crate::core::rendering::render_service::RenderService;
 use crate::core::rendering::renderer::Renderer;
 use crate::editor::project_model::ProjectModel;
-use crate::editor::render_service::RenderService;
 use crate::error::LibraryError;
 use crate::model::frame::Image;
 use crate::plugin::{ExportFormat, ExportSettings, PluginManager};

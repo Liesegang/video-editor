@@ -1,6 +1,6 @@
 use egui::Ui;
 
-use library::model::project::TrackClipKind;
+use library::model::project::clip::TrackClipKind;
 
 use crate::state::context::PanelContext;
 

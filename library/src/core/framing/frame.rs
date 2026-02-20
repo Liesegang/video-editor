@@ -4,8 +4,9 @@ use log::debug;
 
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::frame::{FrameInfo, Region};
+use crate::model::project::clip::{TrackClip, TrackClipKind};
+use crate::model::project::node::Node;
 use crate::model::project::project::{Composition, Project};
-use crate::model::project::{Node, TrackClip, TrackClipKind};
 use crate::util::timing::ScopedTimer;
 
 use crate::plugin::FrameEvaluationContext;
@@ -181,9 +182,11 @@ mod tests {
     use super::*;
     use crate::model::frame::color::Color;
     use crate::model::frame::entity::FrameContent;
+    use crate::model::project::clip::{TrackClip, TrackClipKind};
+    use crate::model::project::node::Node;
     use crate::model::project::project::Composition;
     use crate::model::project::property::{Property, PropertyMap, PropertyValue, Vec2};
-    use crate::model::project::{Node, TrackClip, TrackClipKind, TrackData};
+    use crate::model::project::track::TrackData;
 
     use crate::plugin::PluginManager;
     use crate::plugin::properties::{

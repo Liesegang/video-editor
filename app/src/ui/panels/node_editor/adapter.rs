@@ -3,8 +3,8 @@
 use egui_node_editor::{
     ConnectionView, NodeDisplay, NodeEditorDataSource, NodeEditorMutator, NodeTypeInfo, PinInfo,
 };
+use library::model::project::node::Node;
 use library::model::project::project::Project;
-use library::model::project::Node;
 use library::plugin::PluginManager;
 use uuid::Uuid;
 
@@ -95,12 +95,16 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
                 let mut pins = Vec::new();
 
                 // Output: image (except audio)
-                if !matches!(clip.kind, library::model::project::TrackClipKind::Audio) {
+                if !matches!(
+                    clip.kind,
+                    library::model::project::clip::TrackClipKind::Audio
+                ) {
                     pins.push(PinInfo::output("image_out", "Image"));
                 }
 
                 // Input: property definitions for this clip kind
-                let defs = library::model::project::TrackClip::get_definitions_for_kind(&clip.kind);
+                let defs =
+                    library::model::project::clip::TrackClip::get_definitions_for_kind(&clip.kind);
                 for def in &defs {
                     // Skip file_path — not editable via node connections
                     if def.name() == "file_path" {
@@ -221,8 +225,8 @@ impl NodeEditorMutator for VideoEditorMutator<'_> {
         to_node: Uuid,
         to_pin: &str,
     ) -> Result<(), String> {
-        let from = library::model::project::PinId::new(from_node, from_pin);
-        let to = library::model::project::PinId::new(to_node, to_pin);
+        let from = library::model::project::connection::PinId::new(from_node, from_pin);
+        let to = library::model::project::connection::PinId::new(to_node, to_pin);
         self.project_service
             .add_graph_connection(from, to)
             .map(|_| ())

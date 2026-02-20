@@ -1,9 +1,10 @@
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::transform::{Position, Scale, Transform};
+use crate::model::project::clip::TrackClip;
+use crate::model::project::effect::EffectConfig;
 use crate::model::project::project::Composition;
 use crate::model::project::property::{PropertyMap, PropertyValue, Vec2};
 use crate::model::project::style::StyleInstance;
-use crate::model::project::{EffectConfig, TrackClip};
 use crate::plugin::{EvaluationContext, PluginManager, PropertyEvaluatorRegistry};
 
 pub mod effector;

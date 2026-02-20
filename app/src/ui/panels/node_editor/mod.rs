@@ -4,7 +4,7 @@ use crate::state::context::PanelContext;
 
 use adapter::{VideoEditorDataSource, VideoEditorMutator};
 use egui_node_editor::{NodeEditorTheme, NodeEditorWidget};
-use library::model::project::Node;
+use library::model::project::node::Node;
 
 /// Main node editor panel function.
 pub fn node_editor_panel(ui: &mut egui::Ui, ctx: &mut PanelContext) {

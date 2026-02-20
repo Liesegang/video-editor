@@ -1,5 +1,6 @@
 pub mod clip_area;
 pub mod controls;
+pub mod geometry;
 pub mod ruler;
 pub mod track_list;
 pub mod utils;
@@ -8,6 +9,7 @@ use egui::Ui;
 
 use crate::command::CommandRegistry;
 use crate::state::context::PanelContext;
+use geometry::TimelineGeometry;
 
 // Re-export functions for easier access
 pub use clip_area::show_clip_area;
@@ -65,7 +67,7 @@ pub fn timeline_panel(ui: &mut Ui, ctx: &mut PanelContext, registry: &CommandReg
         ui.with_layout(
             egui::Layout::left_to_right(egui::Align::TOP),
             |ui_content| {
-                let (num_tracks, row_height, track_spacing) = show_track_list(
+                let (_num_tracks, row_height, track_spacing) = show_track_list(
                     ui_content,
                     ctx.editor_context,
                     ctx.history_manager,
@@ -76,17 +78,20 @@ pub fn timeline_panel(ui: &mut Ui, ctx: &mut PanelContext, registry: &CommandReg
 
                 ui_content.separator();
 
+                let geo = TimelineGeometry {
+                    pixels_per_unit,
+                    row_height,
+                    track_spacing,
+                    composition_fps: current_composition_fps,
+                };
+
                 let (clip_area_rect, _) = show_clip_area(
                     ui_content,
                     ctx.editor_context,
                     ctx.history_manager,
                     ctx.project_service,
                     ctx.project,
-                    pixels_per_unit,
-                    num_tracks,
-                    row_height,
-                    track_spacing,
-                    current_composition_fps,
+                    &geo,
                     registry,
                 );
 

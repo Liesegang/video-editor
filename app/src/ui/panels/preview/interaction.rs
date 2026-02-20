@@ -83,7 +83,10 @@ impl<'a> PreviewInteractions<'a> {
                     // Check if it is a shape and get path
                     // use gui_clips to get track_id
                     if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == *id) {
-                        if matches!(gc.clip.kind, library::model::project::TrackClipKind::Shape) {
+                        if matches!(
+                            gc.clip.kind,
+                            library::model::project::clip::TrackClipKind::Shape
+                        ) {
                             if let Some(path_str) = gc.clip.properties.get_string("path") {
                                 let state = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
                                 self.editor_context.interaction.preview.vector_editor_state =
@@ -291,7 +294,7 @@ impl<'a> PreviewInteractions<'a> {
     }
 
     fn is_clip_visible(&self, gc: &PreviewClip, current_frame: i64) -> bool {
-        if gc.clip.kind == library::model::project::TrackClipKind::Audio {
+        if gc.clip.kind == library::model::project::clip::TrackClipKind::Audio {
             return false;
         }
 
@@ -419,7 +422,10 @@ impl<'a> PreviewInteractions<'a> {
             if let Some(id) = hovered_id {
                 let is_text = self.gui_clips.iter().any(|c| {
                     c.id() == id
-                        && matches!(c.clip.kind, library::model::project::TrackClipKind::Text)
+                        && matches!(
+                            c.clip.kind,
+                            library::model::project::clip::TrackClipKind::Text
+                        )
                 });
                 if is_text {
                     self.editor_context

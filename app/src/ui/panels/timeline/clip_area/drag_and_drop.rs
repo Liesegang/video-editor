@@ -1,14 +1,16 @@
 use egui::Ui;
 use library::model::project::asset::AssetKind;
+use library::model::project::clip::TrackClip;
+use library::model::project::clip::TrackClipKind;
 use library::model::project::project::Project;
 use library::model::project::property::PropertyValue;
-use library::model::project::TrackClip;
-use library::model::project::TrackClipKind;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use crate::{action::HistoryManager, model::ui_types::DraggedItem, state::context::EditorContext};
+
+use super::super::geometry::TimelineGeometry;
 
 pub fn handle_drag_and_drop(
     ui: &mut Ui,
@@ -18,11 +20,12 @@ pub fn handle_drag_and_drop(
     project: &Arc<RwLock<Project>>,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
-    pixels_per_unit: f32,
-    composition_fps: f64,
-    row_height: f32,
-    track_spacing: f32,
+    geo: &TimelineGeometry,
 ) {
+    let pixels_per_unit = geo.pixels_per_unit;
+    let composition_fps = geo.composition_fps;
+    let row_height = geo.row_height;
+    let track_spacing = geo.track_spacing;
     if ui.input(|i| i.pointer.any_released()) {
         if let Some(dragged_item) = &editor_context.interaction.timeline.dragged_item {
             if let Some(mouse_pos) = response.hover_pos() {
@@ -115,7 +118,7 @@ pub fn handle_drag_and_drop(
                                             if let Some(header_idx) = display_rows.iter().position(|r| r.track_id() == tid && matches!(r, super::super::utils::flatten::DisplayRow::TrackHeader{..})) {
                                                  let raw_index = visible_row_index as isize - header_idx as isize - 1;
                                                  if let Some(track) = proj_read.get_track(tid) {
-                                                     let clip_count = track.child_ids.iter().filter(|id| matches!(proj_read.get_node(**id), Some(library::model::project::Node::Clip(_)))).count();
+                                                     let clip_count = track.child_ids.iter().filter(|id| matches!(proj_read.get_node(**id), Some(library::model::project::node::Node::Clip(_)))).count();
                                                      let max_index = clip_count as isize;
                                                      let inverted = max_index - raw_index;
                                                      calculated_insert_index = Some(inverted.clamp(0, max_index) as usize);

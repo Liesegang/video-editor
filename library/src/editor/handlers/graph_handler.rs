@@ -1,7 +1,7 @@
 use crate::error::LibraryError;
-use crate::model::project::Node;
 use crate::model::project::connection::{Connection, PinId};
 use crate::model::project::graph_node::GraphNode;
+use crate::model::project::node::Node;
 use crate::model::project::project::Project;
 use crate::model::project::property::PropertyMap;
 use crate::plugin::PluginManager;

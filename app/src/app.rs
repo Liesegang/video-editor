@@ -384,7 +384,7 @@ fn create_default_project() -> (Arc<RwLock<Project>>, Uuid) {
     let default_comp_id = default_comp.id;
     {
         let mut proj = default_project.write().unwrap();
-        proj.add_node(library::model::project::Node::Track(root_track));
+        proj.add_node(library::model::project::node::Node::Track(root_track));
         proj.add_composition(default_comp);
     }
     (default_project, default_comp_id)

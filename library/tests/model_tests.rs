@@ -1,7 +1,9 @@
 use library::model::project::asset::{Asset, AssetKind};
+use library::model::project::clip::TrackClip;
+use library::model::project::node::Node;
 use library::model::project::project::{Composition, Project};
 use library::model::project::property::PropertyMap;
-use library::model::project::{Node, TrackClip, TrackData};
+use library::model::project::track::TrackData;
 
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
@@ -29,7 +31,7 @@ fn test_project_serialization_roundtrip() {
     let mut clip = TrackClip::new(
         Uuid::new_v4(),
         Some(asset_id),
-        library::model::project::TrackClipKind::Video,
+        library::model::project::clip::TrackClipKind::Video,
         0,
         100,
         100,
@@ -113,7 +115,7 @@ fn test_node_based_structure() {
     let mut clip1 = TrackClip::new(
         Uuid::new_v4(),
         None,
-        library::model::project::TrackClipKind::Image,
+        library::model::project::clip::TrackClipKind::Image,
         0,
         50,
         100,
@@ -133,7 +135,7 @@ fn test_node_based_structure() {
     let mut clip2 = TrackClip::new(
         Uuid::new_v4(),
         None,
-        library::model::project::TrackClipKind::Image,
+        library::model::project::clip::TrackClipKind::Image,
         51,
         100,
         100,

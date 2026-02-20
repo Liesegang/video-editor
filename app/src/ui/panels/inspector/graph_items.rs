@@ -22,15 +22,6 @@ pub struct GraphNodeInfo {
     pub properties: PropertyMap,
 }
 
-/// Commit the current project state to history after a graph mutation.
-pub fn commit_to_history(
-    project_service: &mut ProjectService,
-    history_manager: &mut HistoryManager,
-) {
-    let current_state = project_service.with_project(|p| p.clone());
-    history_manager.push_project_state(current_state);
-}
-
 /// Collect graph-based nodes associated with a clip, using the given ID retrieval function.
 pub fn collect_graph_nodes(
     project: &Arc<RwLock<library::model::project::project::Project>>,
@@ -122,7 +113,7 @@ pub fn add_node_to_chain(
             if let Err(e) = project_service.add_graph_connection(from, clip_pin) {
                 log::error!("Failed to connect {}: {}", config.category_prefix, e);
             }
-            commit_to_history(project_service, history_manager);
+            drop(history_manager.begin_mutation(project));
             *needs_refresh = true;
         }
         Err(e) => {
@@ -172,6 +163,7 @@ pub fn render_graph_node_item(
     ui: &mut Ui,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
+    project: &Arc<RwLock<library::model::project::project::Project>>,
     clip_id: Uuid,
     item: &GraphNodeInfo,
     current_time: f64,
@@ -200,7 +192,7 @@ pub fn render_graph_node_item(
         if let Err(e) = project_service.remove_graph_node(item.node_id) {
             log::error!("Failed to remove {} node: {}", id_prefix, e);
         } else {
-            commit_to_history(project_service, history_manager);
+            drop(history_manager.begin_mutation(project));
             *needs_refresh = true;
         }
     }

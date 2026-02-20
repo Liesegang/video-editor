@@ -1,6 +1,6 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
 use crate::model::frame::entity::{FrameContent, FrameObject};
-use crate::model::project::TrackClip;
+use crate::model::project::clip::TrackClip;
 
 pub struct ShapeEntityConverterPlugin;
 

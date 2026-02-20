@@ -4,7 +4,11 @@ use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Connection, GraphNode, Node, PinId, TrackClip, TrackData};
+use super::clip::TrackClip;
+use super::connection::{Connection, PinId};
+use super::graph_node::GraphNode;
+use super::node::Node;
+use super::track::TrackData;
 use crate::model::frame::color::Color;
 
 use crate::model::project::asset::Asset;

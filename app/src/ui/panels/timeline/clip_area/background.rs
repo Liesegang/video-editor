@@ -1,20 +1,22 @@
 use egui::{Color32, Painter, Rect};
 
+use super::super::geometry::TimelineGeometry;
+
 pub fn draw_track_backgrounds(
     painter: &Painter,
     content_rect: Rect,
     num_tracks: usize,
-    row_height: f32,
-    track_spacing: f32,
-    scroll_offset_y: f32,
-    // New params for duration visualization
-    scroll_offset_x: f32,
-    pixels_per_unit: f32,
+    geo: &TimelineGeometry,
+    scroll_offset: egui::Vec2,
     duration_sec: f64,
 ) {
+    let row_height = geo.row_height;
+    let track_spacing = geo.track_spacing;
+    let pixels_per_unit = geo.pixels_per_unit;
+
     // 1. Draw Track Rows
     for i in 0..num_tracks {
-        let y = content_rect.min.y + (i as f32 * (row_height + track_spacing)) - scroll_offset_y;
+        let y = content_rect.min.y + (i as f32 * (row_height + track_spacing)) - scroll_offset.y;
         let track_rect = Rect::from_min_size(
             egui::pos2(content_rect.min.x, y),
             egui::vec2(content_rect.width(), row_height),
@@ -32,7 +34,7 @@ pub fn draw_track_backgrounds(
 
     // 2. Draw Duration Visuals (End Line + Dimming)
     let content_start_x = content_rect.min.x;
-    let end_x_screen = content_start_x - scroll_offset_x + (duration_sec as f32 * pixels_per_unit);
+    let end_x_screen = content_start_x - scroll_offset.x + (duration_sec as f32 * pixels_per_unit);
 
     // Ensure we are within bounds visually if needed, though painter clips usually.
     // Drawing overlay for "out of bounds" area (right of duration)

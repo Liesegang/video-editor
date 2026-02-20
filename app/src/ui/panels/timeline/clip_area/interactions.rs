@@ -5,7 +5,8 @@ use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
 
-#[allow(clippy::too_many_arguments)]
+use super::super::geometry::TimelineGeometry;
+
 pub fn handle_drag_drop_and_context_menu(
     ui: &mut Ui,
     response: &egui::Response,
@@ -14,11 +15,8 @@ pub fn handle_drag_drop_and_context_menu(
     project: &Arc<RwLock<Project>>,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
-    pixels_per_unit: f32,
-    composition_fps: f64,
+    geo: &TimelineGeometry,
     num_tracks: usize,
-    row_height: f32,
-    track_spacing: f32,
 ) {
     // 1. Drag and Drop
     super::drag_and_drop::handle_drag_and_drop(
@@ -29,10 +27,7 @@ pub fn handle_drag_drop_and_context_menu(
         project,
         project_service,
         history_manager,
-        pixels_per_unit,
-        composition_fps,
-        row_height,
-        track_spacing,
+        geo,
     );
 
     // 2. Context Menu
@@ -44,10 +39,7 @@ pub fn handle_drag_drop_and_context_menu(
         project,
         project_service,
         history_manager,
-        pixels_per_unit,
-        composition_fps,
+        geo,
         num_tracks,
-        row_height,
-        track_spacing,
     );
 }

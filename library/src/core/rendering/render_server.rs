@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::thread;
 
+use super::render_service::RenderService;
 use crate::cache::SharedCacheManager;
-use crate::editor::RenderService;
 use crate::model::frame::Image;
 use crate::model::frame::frame::FrameInfo;
 use crate::plugin::PluginManager;

@@ -1,11 +1,14 @@
 use crate::core::color::ColorSpaceManager;
 use crate::editor::handlers;
+use crate::editor::handlers::clip_factory::ClipFactory;
 use crate::error::LibraryError;
 use crate::model::project::asset::Asset;
+use crate::model::project::clip::TrackClip;
+use crate::model::project::node::Node;
 use crate::model::project::project::{Composition, Project};
 use crate::model::project::property::PropertyValue;
 use crate::model::project::property::{PropertyDefinition, PropertyUiType};
-use crate::model::project::{Node, TrackClip, TrackData};
+use crate::model::project::track::TrackData;
 use crate::plugin::PluginManager;
 use crate::plugin::entity_converter::measure_text_size;
 use std::sync::{Arc, RwLock};
@@ -65,7 +68,7 @@ impl ProjectManager {
         Ok((new_comp_id, new_project))
     }
 
-    // --- Clip Factory Methods ---
+    // --- Clip Factory Methods (delegated to ClipFactory) ---
 
     pub fn create_audio_clip(
         &self,
@@ -77,31 +80,14 @@ impl ProjectManager {
         duration_frame: u64,
         fps: f64,
     ) -> TrackClip {
-        let defs =
-            TrackClip::get_definitions_for_kind(&crate::model::project::TrackClipKind::Audio);
-        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
-
-        props.set(
-            "file_path".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(file_path.to_string()),
-            ),
-        );
-
-        TrackClip::new(
-            Uuid::new_v4(),
+        ClipFactory::create_audio_clip(
             reference_id,
-            crate::model::project::TrackClipKind::Audio,
+            file_path,
             in_frame,
             out_frame,
             source_begin_frame,
-            Some(duration_frame),
+            duration_frame,
             fps,
-            props,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
         )
     }
 
@@ -117,41 +103,18 @@ impl ProjectManager {
         canvas_width: u32,
         canvas_height: u32,
     ) -> Result<TrackClip, LibraryError> {
-        let plugin = self
-            .plugin_manager
-            .get_entity_converter("video")
-            .ok_or_else(|| LibraryError::plugin("Video converter plugin not found".to_string()))?;
-
-        let defs = plugin.get_property_definitions(
-            canvas_width as u64,
-            canvas_height as u64,
-            canvas_width as u64,
-            canvas_height as u64,
-        );
-        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
-
-        props.set(
-            "file_path".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(file_path.to_string()),
-            ),
-        );
-
-        Ok(TrackClip::new(
-            Uuid::new_v4(),
+        ClipFactory::create_video_clip(
+            &self.plugin_manager,
             reference_id,
-            crate::model::project::TrackClipKind::Video,
+            file_path,
             in_frame,
             out_frame,
             source_begin_frame,
-            Some(duration_frame),
+            duration_frame,
             fps,
-            props,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ))
+            canvas_width,
+            canvas_height,
+        )
     }
 
     pub fn create_image_clip(
@@ -164,41 +127,16 @@ impl ProjectManager {
         canvas_height: u32,
         fps: f64,
     ) -> Result<TrackClip, LibraryError> {
-        let plugin = self
-            .plugin_manager
-            .get_entity_converter("image")
-            .ok_or_else(|| LibraryError::plugin("Image converter plugin not found".to_string()))?;
-
-        let defs = plugin.get_property_definitions(
-            canvas_width as u64,
-            canvas_height as u64,
-            canvas_width as u64,
-            canvas_height as u64,
-        );
-        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
-
-        props.set(
-            "file_path".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(file_path.to_string()),
-            ),
-        );
-
-        Ok(TrackClip::new(
-            Uuid::new_v4(),
+        ClipFactory::create_image_clip(
+            &self.plugin_manager,
             reference_id,
-            crate::model::project::TrackClipKind::Image,
+            file_path,
             in_frame,
             out_frame,
-            0,
-            None,
+            canvas_width,
+            canvas_height,
             fps,
-            props,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ))
+        )
     }
 
     pub fn create_text_clip(
@@ -210,56 +148,15 @@ impl ProjectManager {
         canvas_height: u32,
         fps: f64,
     ) -> Result<TrackClip, LibraryError> {
-        let plugin = self
-            .plugin_manager
-            .get_entity_converter("text")
-            .ok_or_else(|| LibraryError::plugin("Text converter plugin not found".to_string()))?;
-
-        // Measure text size
-        let (w, h) = crate::plugin::entity_converter::measure_text_size(text, "Arial", 100.0);
-
-        let defs = plugin.get_property_definitions(
-            canvas_width as u64,
-            canvas_height as u64,
-            w as u64,
-            h as u64,
-        );
-        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
-
-        props.set(
-            "text".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(text.to_string()),
-            ),
-        );
-
-        let mut styles = Vec::new();
-
-        // Default fill style (white)
-        if let Some(fill_plugin) = self.plugin_manager.get_style_plugin("fill") {
-            let fill_props = crate::model::project::property::PropertyMap::from_definitions(
-                &fill_plugin.properties(),
-            );
-            styles.push(crate::model::project::style::StyleInstance::new(
-                "fill", fill_props,
-            ));
-        }
-
-        Ok(TrackClip::new(
-            Uuid::new_v4(),
-            None,
-            crate::model::project::TrackClipKind::Text,
+        ClipFactory::create_text_clip(
+            &self.plugin_manager,
+            text,
             in_frame,
             out_frame,
-            0,
-            None,
+            canvas_width,
+            canvas_height,
             fps,
-            props,
-            styles,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ))
+        )
     }
 
     pub fn create_shape_clip(
@@ -270,61 +167,14 @@ impl ProjectManager {
         canvas_height: u32,
         fps: f64,
     ) -> Result<TrackClip, LibraryError> {
-        let plugin = self
-            .plugin_manager
-            .get_entity_converter("shape")
-            .ok_or_else(|| LibraryError::plugin("Shape converter plugin not found".to_string()))?;
-
-        let defs =
-            plugin.get_property_definitions(canvas_width as u64, canvas_height as u64, 100, 100);
-        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
-
-        let heart_path = "M 50,30 A 20,20 0,0,1 90,30 C 90,55 50,85 50,85 C 50,85 10,55 10,30 A 20,20 0,0,1 50,30 Z";
-        props.set(
-            "path".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(heart_path.to_string()),
-            ),
-        );
-
-        let mut styles = Vec::new();
-
-        // Fill (red)
-        if let Some(fill_plugin) = self.plugin_manager.get_style_plugin("fill") {
-            let fill_props = crate::model::project::property::PropertyMap::from_definitions(
-                &fill_plugin.properties(),
-            );
-            styles.push(crate::model::project::style::StyleInstance::new(
-                "fill", fill_props,
-            ));
-        }
-
-        // Stroke (white)
-        if let Some(stroke_plugin) = self.plugin_manager.get_style_plugin("stroke") {
-            let stroke_props = crate::model::project::property::PropertyMap::from_definitions(
-                &stroke_plugin.properties(),
-            );
-            styles.push(crate::model::project::style::StyleInstance::new(
-                "stroke",
-                stroke_props,
-            ));
-        }
-
-        Ok(TrackClip::new(
-            Uuid::new_v4(),
-            None,
-            crate::model::project::TrackClipKind::Shape,
+        ClipFactory::create_shape_clip(
+            &self.plugin_manager,
             in_frame,
             out_frame,
-            0,
-            None,
+            canvas_width,
+            canvas_height,
             fps,
-            props,
-            styles,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ))
+        )
     }
 
     pub fn create_sksl_clip(
@@ -335,49 +185,14 @@ impl ProjectManager {
         canvas_height: u32,
         fps: f64,
     ) -> Result<TrackClip, LibraryError> {
-        let plugin = self
-            .plugin_manager
-            .get_entity_converter("sksl")
-            .ok_or_else(|| LibraryError::plugin("SkSL converter plugin not found".to_string()))?;
-
-        let defs = plugin.get_property_definitions(
-            canvas_width as u64,
-            canvas_height as u64,
-            canvas_width as u64,
-            canvas_height as u64,
-        );
-        let mut props = crate::model::project::property::PropertyMap::from_definitions(&defs);
-
-        let default_shader = r#"
-half4 main(float2 fragCoord) {
-    float2 uv = fragCoord / iResolution.xy;
-    float3 col = 0.5 + 0.5*cos(iTime+uv.xyx+float3(0,2,4));
-    return half4(col,1.0);
-}
-"#;
-
-        props.set(
-            "shader".to_string(),
-            crate::model::project::property::Property::constant(
-                crate::model::project::property::PropertyValue::String(default_shader.to_string()),
-            ),
-        );
-
-        Ok(TrackClip::new(
-            Uuid::new_v4(),
-            None,
-            crate::model::project::TrackClipKind::SkSL,
+        ClipFactory::create_sksl_clip(
+            &self.plugin_manager,
             in_frame,
             out_frame,
-            0,
-            None,
+            canvas_width,
+            canvas_height,
             fps,
-            props,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ))
+        )
     }
 
     pub fn save_project(&self) -> Result<String, LibraryError> {
@@ -857,7 +672,7 @@ half4 main(float2 fragCoord) {
     pub fn update_track_clip_effects(
         &self,
         clip_id: Uuid,
-        effects: Vec<crate::model::project::EffectConfig>,
+        effects: Vec<crate::model::project::effect::EffectConfig>,
     ) -> Result<(), LibraryError> {
         handlers::clip_handler::ClipHandler::update_effects(&self.project, clip_id, effects)
     }
@@ -1005,9 +820,9 @@ half4 main(float2 fragCoord) {
 
     pub fn add_graph_connection(
         &self,
-        from: crate::model::project::PinId,
-        to: crate::model::project::PinId,
-    ) -> Result<crate::model::project::Connection, LibraryError> {
+        from: crate::model::project::connection::PinId,
+        to: crate::model::project::connection::PinId,
+    ) -> Result<crate::model::project::connection::Connection, LibraryError> {
         handlers::graph_handler::GraphHandler::add_connection(&self.project, from, to)
     }
 
@@ -1054,8 +869,8 @@ half4 main(float2 fragCoord) {
 
         // Resolve clip dimensions
         let (clip_width, clip_height): (u64, u64) = match clip.kind {
-            crate::model::project::TrackClipKind::Video
-            | crate::model::project::TrackClipKind::Image => {
+            crate::model::project::clip::TrackClipKind::Video
+            | crate::model::project::clip::TrackClipKind::Image => {
                 if let Some(asset_id) = clip.reference_id {
                     if let Some(asset) = project.assets.iter().find(|a| a.id == asset_id) {
                         (
@@ -1069,13 +884,13 @@ half4 main(float2 fragCoord) {
                     (100, 100)
                 }
             }
-            crate::model::project::TrackClipKind::Shape => {
+            crate::model::project::clip::TrackClipKind::Shape => {
                 // Try to get from properties, otherwise default 100
                 let w = clip.properties.get_f64("width").unwrap_or(100.0) as u64;
                 let h = clip.properties.get_f64("height").unwrap_or(100.0) as u64;
                 (w, h)
             }
-            crate::model::project::TrackClipKind::Text => {
+            crate::model::project::clip::TrackClipKind::Text => {
                 let text = clip
                     .properties
                     .get_string("text")
@@ -1089,7 +904,7 @@ half4 main(float2 fragCoord) {
                 let (w, h) = measure_text_size(&text, &font_name, size);
                 (w.round() as u64, h.round() as u64)
             }
-            crate::model::project::TrackClipKind::SkSL => (canvas_width, canvas_height),
+            crate::model::project::clip::TrackClipKind::SkSL => (canvas_width, canvas_height),
             _ => (100, 100),
         };
 
@@ -1103,7 +918,7 @@ half4 main(float2 fragCoord) {
             Vec::new()
         };
 
-        if matches!(clip.kind, crate::model::project::TrackClipKind::Video) {
+        if matches!(clip.kind, crate::model::project::clip::TrackClipKind::Video) {
             let colorspaces = ColorSpaceManager::get_available_colorspaces();
             if !colorspaces.is_empty() {
                 definitions.push(PropertyDefinition::new(

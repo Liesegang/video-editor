@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 
 use library::cache::SharedCacheManager;
-use library::editor::render_service::RenderService;
+use library::core::rendering::render_service::RenderService;
 // use library::framing::entity_converters::EntityConverterRegistry;
 use library::model::project::project::Project;
 use library::model::project::property::PropertyUiType;

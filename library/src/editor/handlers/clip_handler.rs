@@ -1,7 +1,8 @@
 use crate::error::LibraryError;
+use crate::model::project::clip::{TrackClip, TrackClipKind};
+use crate::model::project::node::Node;
 use crate::model::project::project::Project;
 use crate::model::project::property::PropertyValue;
-use crate::model::project::{Node, TrackClip, TrackClipKind};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -252,7 +253,7 @@ impl ClipHandler {
     pub fn add_effect(
         project: &Arc<RwLock<Project>>,
         clip_id: Uuid,
-        effect: crate::model::project::EffectConfig,
+        effect: crate::model::project::effect::EffectConfig,
     ) -> Result<(), LibraryError> {
         let mut proj = super::write_project(project)?;
 
@@ -267,7 +268,7 @@ impl ClipHandler {
     pub fn update_effects(
         project: &Arc<RwLock<Project>>,
         clip_id: Uuid,
-        effects: Vec<crate::model::project::EffectConfig>,
+        effects: Vec<crate::model::project::effect::EffectConfig>,
     ) -> Result<(), LibraryError> {
         let mut proj = super::write_project(project)?;
 

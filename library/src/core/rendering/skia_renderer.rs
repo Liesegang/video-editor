@@ -1,7 +1,7 @@
 use crate::error::LibraryError;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
-use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
+use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::entity::StyleConfig;
 use crate::model::frame::transform::Transform;
 use crate::rendering::renderer::{RenderOutput, Renderer, TextureInfo};
@@ -11,14 +11,15 @@ use crate::rendering::skia_utils::{
     surface_to_image,
 };
 use crate::util::timing::ScopedTimer;
-use log::{debug, trace};
+use log::debug;
 use skia_safe::path_effect::PathEffect as SkPathEffect;
-use skia_safe::trim_path_effect::Mode;
 
 use skia_safe::{
-    AlphaType, Canvas, Color as SkColor, ColorType, CubicResampler, ISize, ImageInfo, Matrix,
-    Paint, PaintStyle, Point, SamplingOptions, Surface,
+    AlphaType, Canvas, Color as SkColor, ColorType, CubicResampler, ISize, ImageInfo, Paint,
+    PaintStyle, SamplingOptions, Surface,
 };
+
+use super::{paint_utils, shape_renderer, text_renderer};
 
 pub struct SkiaRenderer {
     width: u32,
@@ -59,62 +60,6 @@ impl SkiaRenderer {
         }
     }
 
-    fn create_stroke_paint(
-        color: &Color,
-        width: f32,
-        cap: &CapType,
-        join: &JoinType,
-        miter: f32,
-    ) -> Paint {
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_color(skia_safe::Color::from_argb(
-            color.a, color.r, color.g, color.b,
-        ));
-        paint.set_style(PaintStyle::Stroke);
-        paint.set_stroke_width(width);
-        paint.set_stroke_cap(match cap {
-            CapType::Round => skia_safe::paint::Cap::Round,
-            CapType::Square => skia_safe::paint::Cap::Square,
-            CapType::Butt => skia_safe::paint::Cap::Butt,
-        });
-        paint.set_stroke_join(match join {
-            JoinType::Round => skia_safe::paint::Join::Round,
-            JoinType::Bevel => skia_safe::paint::Join::Bevel,
-            JoinType::Miter => skia_safe::paint::Join::Miter,
-        });
-        paint.set_stroke_miter(miter);
-        paint
-    }
-
-    fn snapshot_surface(
-        surface: &mut Surface,
-        gpu_context: &mut Option<GpuContext>,
-        width: u32,
-        height: u32,
-    ) -> Result<RenderOutput, LibraryError> {
-        if let Some(ctx) = gpu_context.as_mut() {
-            ctx.direct_context.flush_and_submit();
-            if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
-                surface,
-                skia_safe::surface::BackendHandleAccess::FlushRead,
-            ) {
-                if let Some(gl_info) = texture.gl_texture_info() {
-                    return Ok(RenderOutput::Texture(TextureInfo {
-                        texture_id: gl_info.id,
-                        width,
-                        height,
-                    }));
-                }
-            }
-        }
-
-        let image = surface_to_image(surface, width, height)?;
-        Ok(RenderOutput::Image(image))
-    }
-}
-
-impl SkiaRenderer {
     pub fn take_context(&mut self) -> Option<GpuContext> {
         self.gpu_context.take()
     }
@@ -190,129 +135,7 @@ impl SkiaRenderer {
         )
     }
 
-    fn draw_shape_fill_on_canvas(
-        &self,
-        canvas: &Canvas,
-        path: &skia_safe::Path,
-        color: &Color,
-        path_effects: &Vec<PathEffect>,
-        offset: f64,
-    ) -> Result<(), LibraryError> {
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_color(skia_safe::Color::from_argb(
-            color.a, color.r, color.g, color.b,
-        ));
-        apply_path_effects(path_effects, &mut paint)?;
-
-        if offset >= 0.0 {
-            // Positive offset: Stroke and Fill to expand
-            if offset > 0.0 {
-                paint.set_style(PaintStyle::StrokeAndFill);
-                paint.set_stroke_width((offset * 2.0) as f32);
-                paint.set_stroke_join(skia_safe::paint::Join::Round);
-            } else {
-                paint.set_style(PaintStyle::Fill);
-            }
-            canvas.draw_path(path, &paint);
-        } else {
-            // Negative offset: Draw Fill, then Erase edges
-            // 1. Draw original Fill
-            paint.set_style(PaintStyle::Fill);
-            canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default());
-            canvas.draw_path(path, &paint);
-
-            // 2. Erase (DstOut) the border stroke
-            let mut erase_paint = Paint::default();
-            erase_paint.set_anti_alias(true);
-            erase_paint.set_style(PaintStyle::Stroke);
-            erase_paint.set_stroke_width((-offset * 2.0) as f32);
-            erase_paint.set_stroke_join(skia_safe::paint::Join::Round);
-            erase_paint.set_blend_mode(skia_safe::BlendMode::DstOut);
-
-            apply_path_effects(path_effects, &mut erase_paint)?;
-
-            canvas.draw_path(path, &erase_paint);
-            canvas.restore();
-        }
-        Ok(())
-    }
-
-    fn draw_shape_stroke_on_canvas(
-        &self,
-        canvas: &Canvas,
-        path: &skia_safe::Path,
-        color: &Color,
-        path_effects: &Vec<PathEffect>,
-        width: f64,
-        offset: f64,
-        cap: CapType,
-        join: JoinType,
-        miter: f64,
-        dash_array: &Vec<f64>,
-        dash_offset: f64,
-    ) -> Result<(), LibraryError> {
-        if width <= 0.0 {
-            return Ok(());
-        }
-
-        // Prepare base stroke paint
-        let mut stroke_paint =
-            Self::create_stroke_paint(color, width as f32, &cap, &join, miter as f32);
-
-        // Path Effects (Dash + others)
-        let mut effects_to_apply = Vec::new();
-        if !dash_array.is_empty() {
-            effects_to_apply.push(PathEffect::Dash {
-                intervals: dash_array.clone(),
-                phase: dash_offset,
-            });
-        }
-        effects_to_apply.extend_from_slice(path_effects);
-
-        if offset == 0.0 {
-            // Standard Stroke
-            stroke_paint.set_style(PaintStyle::Stroke);
-            stroke_paint.set_stroke_width(width as f32);
-            apply_path_effects(&effects_to_apply, &mut stroke_paint)?;
-            canvas.draw_path(path, &stroke_paint);
-            return Ok(());
-        }
-
-        // Offset Stroke Logic
-        let outer_r = offset.abs() + width / 2.0;
-        let inner_r = offset.abs() - width / 2.0;
-
-        canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default()); // Isolate blending
-
-        // Setup Clipping
-        if offset > 0.0 {
-            canvas.clip_path(path, skia_safe::ClipOp::Difference, true);
-        } else {
-            canvas.clip_path(path, skia_safe::ClipOp::Intersect, true);
-        }
-
-        // Apply path effects to paint before drawing
-        apply_path_effects(&effects_to_apply, &mut stroke_paint)?;
-
-        // Draw Outer (Base)
-        stroke_paint.set_style(PaintStyle::Stroke);
-        stroke_paint.set_stroke_width((outer_r * 2.0) as f32);
-        canvas.draw_path(path, &stroke_paint);
-
-        // Erase Inner (Hole)
-        if inner_r > 0.0 {
-            let mut erase_paint = stroke_paint.clone();
-            erase_paint.set_blend_mode(skia_safe::BlendMode::DstOut);
-            erase_paint.set_stroke_width((inner_r * 2.0) as f32);
-            canvas.draw_path(path, &erase_paint);
-        }
-
-        canvas.restore();
-        Ok(())
-    }
-
-    /// Render text with ensemble effectors and decorators
+    /// Render text with ensemble effectors and decorators.
     fn rasterize_ensemble_text(
         &mut self,
         text: &str,
@@ -321,398 +144,26 @@ impl SkiaRenderer {
         styles: &[StyleConfig],
         ensemble_data: &crate::core::ensemble::EnsembleData,
         transform: &Transform,
-        current_time: f32, // Current time in seconds for time-based animations
+        current_time: f32,
     ) -> Result<RenderOutput, LibraryError> {
-        use crate::core::ensemble::types::{DecoratorConfig, EffectorConfig, TransformData};
-
-        log::debug!(
-            "Ensemble rendering: {} effectors, {} decorators",
-            ensemble_data.effector_configs.len(),
-            ensemble_data.decorator_configs.len()
-        );
-
         let mut layer = self.create_layer_surface()?;
         {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
 
-            let matrix = build_transform_matrix(transform);
-            canvas.save();
-            canvas.concat(&matrix);
-
-            // Create font
-            let font_mgr = skia_safe::FontMgr::default();
-            let typeface = font_mgr
-                .match_family_style(font_name, skia_safe::FontStyle::default())
-                .unwrap_or_else(|| {
-                    font_mgr
-                        .legacy_make_typeface(None, skia_safe::FontStyle::default())
-                        .unwrap()
-                });
-            let font = skia_safe::Font::from_typeface(typeface, size as f32);
-
-            // Get font metrics for accurate baseline positioning
-            let (_, metrics) = font.metrics();
-            // metrics.ascent is negative (distance above baseline), so negate it
-            let baseline_offset = -metrics.ascent;
-
-            // Get base color from first style
-            let base_color = if let Some(config) = styles.first() {
-                match &config.style {
-                    DrawStyle::Fill { color, .. } => color.clone(),
-                    DrawStyle::Stroke { color, .. } => color.clone(),
-                }
-            } else {
-                crate::model::frame::color::Color {
-                    r: 255,
-                    g: 255,
-                    b: 255,
-                    a: 255,
-                }
-            };
-
-            // Text decomposition: measure each character
-            let mut char_data = Vec::new();
-            let mut x_pos = 0.0f32;
-
-            for ch in text.chars() {
-                let ch_str = ch.to_string();
-                let (advance, _bounds) = font.measure_str(&ch_str, None);
-
-                // Store char data
-                char_data.push((ch, x_pos, advance));
-                x_pos += advance;
-            }
-
-            let total_chars = char_data.len();
-
-            // Apply effectors to build transform data for each char
-            let mut char_transforms: Vec<TransformData> =
-                vec![TransformData::identity(); total_chars];
-
-            // Apply each effector
-            for effector_config in &ensemble_data.effector_configs {
-                match effector_config {
-                    EffectorConfig::Transform {
-                        translate,
-                        rotate,
-                        scale,
-                        ..
-                    } => {
-                        // Apply uniform transform to all chars
-                        for transform_data in &mut char_transforms {
-                            transform_data.translate.0 += translate.0;
-                            transform_data.translate.1 += translate.1;
-                            transform_data.rotate += rotate;
-                            transform_data.scale.0 *= scale.0;
-                            transform_data.scale.1 *= scale.1;
-                        }
-                    }
-                    EffectorConfig::StepDelay {
-                        delay_per_element,
-                        duration,
-                        from_opacity,
-                        to_opacity,
-                        ..
-                    } => {
-                        // Apply step delay: animate opacity per character based on time
-                        for (i, transform_data) in char_transforms.iter_mut().enumerate() {
-                            // Calculate when this character's animation starts
-                            let char_start_time = i as f32 * delay_per_element;
-
-                            // Calculate animation progress for this character
-                            let progress = if current_time < char_start_time {
-                                0.0 // Animation hasn't started yet
-                            } else if current_time > char_start_time + duration {
-                                1.0 // Animation completed
-                            } else {
-                                // Animation in progress
-                                (current_time - char_start_time) / duration
-                            };
-
-                            // Interpolate opacity based on progress
-                            let opacity = from_opacity + (to_opacity - from_opacity) * progress;
-                            transform_data.opacity *= opacity / 100.0;
-                        }
-                    }
-                    EffectorConfig::Opacity { target_opacity, .. } => {
-                        // Apply uniform opacity
-                        for transform_data in &mut char_transforms {
-                            transform_data.opacity *= target_opacity / 100.0;
-                        }
-                    }
-                    EffectorConfig::Randomize {
-                        translate_range,
-                        rotate_range,
-                        scale_range: _scale_range, // TODO: Implement scale randomization
-                        seed,
-                        ..
-                    } => {
-                        // Simple pseudo-random based on seed and index
-                        for (i, transform_data) in char_transforms.iter_mut().enumerate() {
-                            let hash = (seed.wrapping_mul(31).wrapping_add(i as u64)) as f32;
-                            let rand_tx = ((hash * 12.9898).sin() * 43758.5453).fract();
-                            let rand_ty = ((hash * 78.233).sin() * 43758.5453).fract();
-                            let rand_rot = ((hash * 39.123).sin() * 43758.5453).fract();
-
-                            transform_data.translate.0 += (rand_tx - 0.5) * translate_range.0 * 2.0;
-                            transform_data.translate.1 += (rand_ty - 0.5) * translate_range.1 * 2.0;
-                            transform_data.rotate += (rand_rot - 0.5) * rotate_range * 2.0;
-                        }
-                    }
-                }
-            }
-
-            // Apply patches (character-level overrides)
-            for (index, patch) in &ensemble_data.patches {
-                if *index < char_transforms.len() {
-                    char_transforms[*index] = char_transforms[*index].combine(patch);
-                }
-            }
-
-            // Render decorators (backplate)
-            // Render decorators (backplate)
-            // Render decorators (backplate)
-            for decorator_config in &ensemble_data.decorator_configs {
-                log::warn!(
-                    "DEBUG: Renderer processing decorator: {:?}",
-                    decorator_config
-                );
-                match decorator_config {
-                    DecoratorConfig::Backplate {
-                        target,
-                        shape,
-                        color,
-                        padding,
-                        corner_radius,
-                    } => {
-                        use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
-
-                        log::warn!(
-                            "DEBUG: Rendering Backplate - Target: {:?}, Shape: {:?}, Color: {:?}",
-                            target,
-                            shape,
-                            color
-                        );
-
-                        // Helper function to draw a single backplate
-                        let draw_backplate = |canvas: &Canvas, rect: skia_safe::Rect| {
-                            log::warn!("DEBUG: Drawing Backplate Rect: {:?}", rect);
-                            let mut paint = Paint::default();
-                            paint.set_color(skia_safe::Color::from_argb(
-                                color.a, color.r, color.g, color.b,
-                            ));
-                            paint.set_anti_alias(true);
-
-                            match shape {
-                                BackplateShape::Rect => {
-                                    canvas.draw_rect(rect, &paint);
-                                }
-                                BackplateShape::RoundedRect => {
-                                    let rrect = skia_safe::RRect::new_rect_xy(
-                                        rect,
-                                        *corner_radius,
-                                        *corner_radius,
-                                    );
-                                    canvas.draw_rrect(rrect, &paint);
-                                }
-                                BackplateShape::Circle => {
-                                    // Draw circle centered in rect
-                                    let center_x = rect.center_x();
-                                    let center_y = rect.center_y();
-                                    let radius = (rect.width().min(rect.height()) / 2.0).max(0.0);
-                                    canvas.draw_circle((center_x, center_y), radius, &paint);
-                                }
-                            }
-                        };
-
-                        match target {
-                            BackplateTarget::Char => {
-                                // Draw backplate for each character individually
-                                for (i, (_ch, base_x, advance)) in char_data.iter().enumerate() {
-                                    if let Some(ch_transform) = char_transforms.get(i) {
-                                        canvas.save();
-
-                                        // Apply same transform logic as character rendering
-                                        let char_center_x = base_x + (size as f32 / 2.0);
-                                        let char_center_y = 0.0; // Baseline is 0 in local coords
-
-                                        // Translate to character center
-                                        canvas.translate((char_center_x, char_center_y));
-                                        // Apply effector transforms
-                                        canvas.translate((
-                                            ch_transform.translate.0,
-                                            ch_transform.translate.1,
-                                        ));
-                                        canvas.rotate(ch_transform.rotate, None);
-                                        canvas.scale((ch_transform.scale.0, ch_transform.scale.1));
-                                        // Translate back
-                                        canvas.translate((-char_center_x, -char_center_y));
-
-                                        // Calculate bounds relative to baseline
-                                        let top = baseline_offset + metrics.ascent;
-                                        let bottom = baseline_offset + metrics.descent;
-
-                                        let char_rect = skia_safe::Rect::from_xywh(
-                                            *base_x - padding.3,
-                                            top - padding.0,
-                                            *advance + padding.1 + padding.3,
-                                            (bottom - top) + padding.0 + padding.2,
-                                        );
-                                        draw_backplate(canvas, char_rect);
-
-                                        canvas.restore();
-                                    }
-                                }
-                            }
-                            BackplateTarget::Block | BackplateTarget::Line => {
-                                // Draw backplate for entire text
-                                let total_width = x_pos;
-                                let top = baseline_offset + metrics.ascent;
-                                let bottom = baseline_offset + metrics.descent;
-
-                                let backplate_rect = skia_safe::Rect::from_xywh(
-                                    -padding.0,
-                                    top - padding.0,
-                                    total_width + padding.0 + padding.2,
-                                    (bottom - top) + padding.0 + padding.2,
-                                );
-                                draw_backplate(canvas, backplate_rect);
-                            }
-                            BackplateTarget::Parts => {
-                                // TODO: Parts target for advanced word/sentence grouping
-                                // For now, fall back to Block
-                                let total_width = x_pos;
-                                let top = baseline_offset + metrics.ascent;
-                                let bottom = baseline_offset + metrics.descent;
-
-                                let backplate_rect = skia_safe::Rect::from_xywh(
-                                    -padding.0,
-                                    top - padding.0,
-                                    total_width + padding.0 + padding.2,
-                                    (bottom - top) + padding.0 + padding.2,
-                                );
-                                draw_backplate(canvas, backplate_rect);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Render each character with its transform
-            for (i, (ch, base_x, _advance)) in char_data.iter().enumerate() {
-                let ch_transform = &char_transforms[i];
-
-                // Apply character transform
-                canvas.save();
-
-                let char_center_x = base_x + size as f32 / 2.0;
-                let char_center_y = 0.0;
-
-                // Translate to character center
-                canvas.translate((char_center_x, char_center_y));
-                // Apply effector transforms
-                canvas.translate((ch_transform.translate.0, ch_transform.translate.1));
-                canvas.rotate(ch_transform.rotate, None);
-                canvas.scale((ch_transform.scale.0, ch_transform.scale.1));
-                // Translate back
-                canvas.translate((-char_center_x, -char_center_y));
-
-                // Create paint with opacity
-                let mut paint = Paint::default();
-                let final_alpha =
-                    (base_color.a as f32 * ch_transform.opacity).clamp(0.0, 255.0) as u8;
-                paint.set_color(skia_safe::Color::from_argb(
-                    final_alpha,
-                    base_color.r,
-                    base_color.g,
-                    base_color.b,
-                ));
-                paint.set_anti_alias(true);
-
-                // Draw character
-                let ch_str = ch.to_string();
-                // Use baseline_offset for accurate positioning to match standard text rendering
-                canvas.draw_str(&ch_str, (*base_x, baseline_offset), &font, &paint);
-
-                canvas.restore();
-            }
-
-            canvas.restore();
+            text_renderer::render_ensemble_text(
+                canvas,
+                text,
+                size,
+                font_name,
+                styles,
+                ensemble_data,
+                transform,
+                current_time,
+            );
         }
-        Self::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
+        paint_utils::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
     }
-}
-
-fn build_transform_matrix(transform: &Transform) -> Matrix {
-    let anchor = Point::new(transform.anchor.x as f32, transform.anchor.y as f32);
-    let mut matrix = Matrix::new_identity();
-    matrix.pre_translate((
-        transform.position.x as f32 - anchor.x,
-        transform.position.y as f32 - anchor.y,
-    ));
-    matrix.pre_rotate(transform.rotation as f32, anchor);
-    matrix.pre_scale((transform.scale.x as f32, transform.scale.y as f32), anchor);
-    matrix
-}
-
-fn convert_path_effect(path_effect: &PathEffect) -> Result<skia_safe::PathEffect, LibraryError> {
-    match path_effect {
-        PathEffect::Dash { intervals, phase } => {
-            let intervals: Vec<f32> = intervals.iter().map(|&x| x as f32).collect();
-            Ok(
-                SkPathEffect::dash(&intervals, *phase as f32).ok_or(LibraryError::render(
-                    "Failed to create PathEffect".to_string(),
-                ))?,
-            )
-        }
-        PathEffect::Corner { radius } => Ok(SkPathEffect::corner_path(*radius as f32).ok_or(
-            LibraryError::render("Failed to create PathEffect".to_string()),
-        )?),
-        PathEffect::Discrete {
-            seg_length,
-            deviation,
-            seed,
-        } => Ok(
-            SkPathEffect::discrete(*seg_length as f32, *deviation as f32, *seed as u32).ok_or(
-                LibraryError::render("Failed to create PathEffect".to_string()),
-            )?,
-        ),
-        PathEffect::Trim { start, end } => {
-            Ok(
-                SkPathEffect::trim(*start as f32, *end as f32, Mode::Normal).ok_or(
-                    LibraryError::render("Failed to create PathEffect".to_string()),
-                )?,
-            )
-        }
-    }
-}
-
-fn apply_path_effects(
-    path_effects: &Vec<PathEffect>,
-    paint: &mut Paint,
-) -> Result<(), LibraryError> {
-    if !path_effects.is_empty() {
-        let mut composed_effect: Option<skia_safe::PathEffect> = None;
-        for effect in path_effects {
-            trace!("Applying path effect {:?}", effect);
-            match convert_path_effect(effect) {
-                Ok(sk_path_effect) => {
-                    composed_effect = match composed_effect {
-                        Some(e) => Some(SkPathEffect::compose(e, sk_path_effect)),
-                        None => Some(sk_path_effect),
-                    };
-                }
-                Err(e) => {
-                    log::warn!("Failed to apply path effect {:?}: {}", effect, e);
-                }
-            }
-        }
-        if let Some(composed) = composed_effect {
-            paint.set_path_effect(composed);
-        }
-    }
-    Ok(())
 }
 
 impl Renderer for SkiaRenderer {
@@ -742,7 +193,7 @@ impl Renderer for SkiaRenderer {
             }
         };
 
-        let matrix = build_transform_matrix(transform);
+        let matrix = paint_utils::build_transform_matrix(transform);
 
         canvas.save();
         canvas.concat(&matrix);
@@ -810,7 +261,7 @@ impl Renderer for SkiaRenderer {
                 paint.set_shader(shader);
                 paint.set_alpha_f(transform.opacity as f32);
 
-                let matrix = build_transform_matrix(transform);
+                let matrix = paint_utils::build_transform_matrix(transform);
                 canvas.save();
                 canvas.concat(&matrix);
                 let rect = skia_safe::Rect::from_wh(resolution.0, resolution.1);
@@ -819,7 +270,7 @@ impl Renderer for SkiaRenderer {
             }
         }
 
-        Self::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
+        paint_utils::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
     }
 
     fn rasterize_text_layer(
@@ -863,7 +314,7 @@ impl Renderer for SkiaRenderer {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
 
-            let matrix = build_transform_matrix(transform);
+            let matrix = paint_utils::build_transform_matrix(transform);
             canvas.save();
             canvas.concat(&matrix);
 
@@ -904,7 +355,7 @@ impl Renderer for SkiaRenderer {
                         dash_offset,
                     } => {
                         let effective_width = (width + offset * 2.0).max(0.0);
-                        let mut paint = Self::create_stroke_paint(
+                        let mut paint = paint_utils::create_stroke_paint(
                             color,
                             effective_width as f32,
                             cap,
@@ -943,7 +394,7 @@ impl Renderer for SkiaRenderer {
 
             canvas.restore();
         }
-        Self::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
+        paint_utils::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
     }
 
     fn rasterize_shape_layer(
@@ -959,14 +410,14 @@ impl Renderer for SkiaRenderer {
             let canvas: &Canvas = layer.canvas();
             canvas.clear(skia_safe::Color::from_argb(0, 0, 0, 0));
             let path = skia_safe::Path::from_svg(path_data).unwrap_or_default();
-            let matrix = build_transform_matrix(transform);
+            let matrix = paint_utils::build_transform_matrix(transform);
             canvas.save();
             canvas.concat(&matrix);
             for config in styles {
                 let style = &config.style;
                 match style {
                     DrawStyle::Fill { color, offset } => {
-                        self.draw_shape_fill_on_canvas(
+                        shape_renderer::draw_shape_fill_on_canvas(
                             canvas,
                             &path,
                             color,
@@ -984,7 +435,7 @@ impl Renderer for SkiaRenderer {
                         dash_array,
                         dash_offset,
                     } => {
-                        self.draw_shape_stroke_on_canvas(
+                        shape_renderer::draw_shape_stroke_on_canvas(
                             canvas,
                             &path,
                             color,
@@ -1002,7 +453,7 @@ impl Renderer for SkiaRenderer {
             }
             canvas.restore();
         }
-        Self::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
+        paint_utils::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
     }
 
     fn read_surface(&mut self, output: &RenderOutput) -> Result<Image, LibraryError> {

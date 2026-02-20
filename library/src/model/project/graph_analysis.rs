@@ -6,8 +6,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
-use super::Node;
 use super::connection::{Connection, PinId};
+use super::node::Node;
 use super::project::Project;
 
 /// Get the chain of effect nodes connected to a clip's image_out pin.
@@ -254,9 +254,10 @@ mod tests {
     use super::*;
     use crate::model::project::connection::Connection;
     use crate::model::project::graph_node::GraphNode;
+    use crate::model::project::node::Node;
     use crate::model::project::project::Composition;
     use crate::model::project::property::PropertyMap;
-    use crate::model::project::{Node, TrackData};
+    use crate::model::project::track::TrackData;
 
     fn setup_project() -> (Project, Uuid, Uuid) {
         let mut project = Project::new("Test");
@@ -284,10 +285,10 @@ mod tests {
         let (mut project, root_id, _) = setup_project();
 
         // Create a clip and an effect node
-        let clip = crate::model::project::TrackClip {
+        let clip = crate::model::project::clip::TrackClip {
             id: Uuid::new_v4(),
             reference_id: None,
-            kind: crate::model::project::TrackClipKind::Image,
+            kind: crate::model::project::clip::TrackClipKind::Image,
             in_frame: 0,
             out_frame: 100,
             source_begin_frame: 0,
@@ -323,10 +324,10 @@ mod tests {
     fn test_get_effect_chain_multiple() {
         let (mut project, root_id, _) = setup_project();
 
-        let clip = crate::model::project::TrackClip {
+        let clip = crate::model::project::clip::TrackClip {
             id: Uuid::new_v4(),
             reference_id: None,
-            kind: crate::model::project::TrackClipKind::Image,
+            kind: crate::model::project::clip::TrackClipKind::Image,
             in_frame: 0,
             out_frame: 100,
             source_begin_frame: 0,
@@ -390,10 +391,10 @@ mod tests {
     fn test_topological_sort_linear() {
         let (mut project, root_id, _) = setup_project();
 
-        let clip = crate::model::project::TrackClip {
+        let clip = crate::model::project::clip::TrackClip {
             id: Uuid::new_v4(),
             reference_id: None,
-            kind: crate::model::project::TrackClipKind::Image,
+            kind: crate::model::project::clip::TrackClipKind::Image,
             in_frame: 0,
             out_frame: 100,
             source_begin_frame: 0,

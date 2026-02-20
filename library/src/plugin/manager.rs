@@ -277,7 +277,7 @@ impl PluginManager {
     pub fn get_default_effect_config(
         &self,
         effect_id: &str,
-    ) -> Option<crate::model::project::EffectConfig> {
+    ) -> Option<crate::model::project::effect::EffectConfig> {
         let def = self.get_effect_definition(effect_id)?;
         let mut props = crate::model::project::property::PropertyMap::new();
         for p in def.properties {
@@ -286,7 +286,7 @@ impl PluginManager {
                 crate::model::project::property::Property::constant(p.default_value().clone()),
             );
         }
-        Some(crate::model::project::EffectConfig {
+        Some(crate::model::project::effect::EffectConfig {
             id: uuid::Uuid::new_v4(),
             effect_type: effect_id.to_string(),
             properties: props,
@@ -604,7 +604,7 @@ impl PluginManager {
 
     pub fn get_inspector_definitions(
         &self,
-        _kind: &crate::model::project::TrackClipKind,
+        _kind: &crate::model::project::clip::TrackClipKind,
     ) -> Vec<PropertyDefinition> {
         // Inspector plugins removed. Return empty or implement static logic if needed.
         Vec::new()

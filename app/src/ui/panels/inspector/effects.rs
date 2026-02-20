@@ -1,5 +1,5 @@
 use super::action_handler::{ActionContext, PropertyTarget};
-use super::graph_items::{self, collect_graph_nodes, render_graph_node_item};
+use super::graph_items::{collect_graph_nodes, render_graph_node_item};
 use super::properties::{render_inspector_properties_grid, PropertyRenderContext};
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
@@ -81,7 +81,7 @@ pub fn render_effects_section(
                             log::error!("Failed to connect effect: {}", e);
                         }
 
-                        graph_items::commit_to_history(project_service, history_manager);
+                        drop(history_manager.begin_mutation(project));
                         *needs_refresh = true;
                     }
                     Err(e) => {
@@ -105,6 +105,7 @@ pub fn render_effects_section(
                 ui,
                 project_service,
                 history_manager,
+                project,
                 selected_entity_id,
                 effect,
                 current_time,
@@ -137,7 +138,7 @@ fn render_embedded_effects(
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
     selected_entity_id: Uuid,
-    effects: &[library::model::project::EffectConfig],
+    effects: &[library::model::project::effect::EffectConfig],
     current_time: f64,
     fps: f64,
     needs_refresh: &mut bool,

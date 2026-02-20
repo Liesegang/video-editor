@@ -1,5 +1,5 @@
 use library::model::frame::transform::Transform;
-use library::model::project::TrackClip;
+use library::model::project::clip::TrackClip;
 use uuid::Uuid;
 
 pub struct PreviewClip<'a> {

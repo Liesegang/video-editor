@@ -2,9 +2,9 @@
 
 use uuid::Uuid;
 
-use super::Node;
 use super::connection::{Connection, PinId};
 use super::graph_node::GraphNode;
+use super::node::Node;
 use super::project::Project;
 
 /// Migrate all embedded effects, styles, effectors, and decorators in all clips
@@ -155,10 +155,12 @@ fn migrate_clip_embedded(project: &mut Project, clip_id: Uuid, parent_track_id: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::project::clip::{TrackClip, TrackClipKind};
     use crate::model::project::effect::EffectConfig;
+    use crate::model::project::node::Node;
     use crate::model::project::property::{Property, PropertyMap, PropertyValue};
     use crate::model::project::style::StyleInstance;
-    use crate::model::project::{Node, TrackClip, TrackClipKind, TrackData};
+    use crate::model::project::track::TrackData;
     use ordered_float::OrderedFloat;
 
     #[test]

@@ -1,5 +1,6 @@
+use super::render_service::RenderService;
 use crate::Image;
-use crate::editor::{ProjectModel, RenderService};
+use crate::editor::ProjectModel;
 use crate::error::{LibraryError, ProjectError, RenderError};
 use crate::model::project::project::{Composition, Project};
 use crate::plugin::PropertyEvaluatorRegistry;

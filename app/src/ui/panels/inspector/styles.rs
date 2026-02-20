@@ -73,6 +73,7 @@ pub fn render_styles_section(
                 ui,
                 project_service,
                 history_manager,
+                project,
                 selected_entity_id,
                 style,
                 current_time,

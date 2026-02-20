@@ -1,5 +1,7 @@
+use library::model::project::clip::TrackClip;
+use library::model::project::node::Node;
 use library::model::project::project::Project;
-use library::model::project::{Node, TrackClip, TrackData};
+use library::model::project::track::TrackData;
 use std::collections::HashSet;
 use uuid::Uuid;
 
