@@ -15,6 +15,56 @@ use super::clips::{calculate_clip_rect, calculate_insert_index, draw_waveform};
 
 const EDGE_DRAG_WIDTH: f32 = 5.0;
 
+// ── Pure frame-calculation helpers (testable without UI) ──
+
+/// Compute the maximum allowed out_frame based on source media duration.
+/// Returns `u64::MAX` when the clip has no known duration (infinite extension).
+pub(super) fn compute_source_max_out_frame(
+    in_frame: u64,
+    out_frame: u64,
+    source_begin_frame: i64,
+    duration_frame: Option<u64>,
+) -> u64 {
+    if let Some(duration) = duration_frame {
+        let source_end_offset = duration as i64 - source_begin_frame;
+        if source_end_offset > 0 {
+            in_frame.saturating_add(source_end_offset as u64)
+        } else {
+            // source_begin_frame >= duration — should not normally happen, but
+            // fall back to the current out_frame so the clip stays valid.
+            out_frame
+        }
+    } else {
+        u64::MAX
+    }
+}
+
+/// Compute new in_frame when resizing from the left edge.
+/// Clamps to `[0, out_frame - 1]` so the clip keeps at least 1 frame.
+pub(super) fn compute_resize_left_frame(in_frame: u64, out_frame: u64, dt_frames: i64) -> u64 {
+    ((in_frame as i64 + dt_frames).max(0) as u64).min(out_frame.saturating_sub(1))
+}
+
+/// Compute new out_frame when resizing from the right edge.
+/// Clamps to `[in_frame + 1, source_max_out_frame]`.
+pub(super) fn compute_resize_right_frame(
+    in_frame: u64,
+    out_frame: u64,
+    dt_frames: i64,
+    source_max_out_frame: u64,
+) -> u64 {
+    ((out_frame as i64 + dt_frames).max(in_frame as i64 + 1) as u64).min(source_max_out_frame)
+}
+
+/// Compute new (in_frame, out_frame) when dragging a clip horizontally.
+/// Preserves clip duration and clamps so `in_frame >= 0`.
+pub(super) fn compute_drag_frames(in_frame: u64, out_frame: u64, dt_frames: i64) -> (u64, u64) {
+    let duration = out_frame.saturating_sub(in_frame);
+    let new_in_frame = (in_frame as i64 + dt_frames).max(0) as u64;
+    let new_out_frame = new_in_frame + duration;
+    (new_in_frame, new_out_frame)
+}
+
 /// Deferred actions collected during UI phase, executed after read lock is released
 #[derive(Debug)]
 pub(super) enum DeferredClipAction {
@@ -178,14 +228,27 @@ pub(super) fn draw_single_clip(
 
     if !is_summary_clip {
         clip_resp.context_menu(|ui| {
-            if ui.button(format!("{} Remove", icons::TRASH)).clicked() {
-                if let Some(_comp_id) = editor_context.selection.composition_id {
-                    deferred_actions.push(DeferredClipAction::RemoveClip {
-                        track_id: track.id,
-                        clip_id: clip.id,
-                    });
-                    ui.ctx().request_repaint();
-                    ui.close();
+            use crate::ui::widgets::context_menu::{show_context_menu, ContextMenuBuilder};
+
+            #[derive(Clone)]
+            enum ClipAction {
+                Remove,
+            }
+
+            let menu = ContextMenuBuilder::new()
+                .danger_action(icons::TRASH, "Remove", ClipAction::Remove)
+                .build();
+            if let Some(action) = show_context_menu(ui, &menu) {
+                match action {
+                    ClipAction::Remove => {
+                        if let Some(_comp_id) = editor_context.selection.composition_id {
+                            deferred_actions.push(DeferredClipAction::RemoveClip {
+                                track_id: track.id,
+                                clip_id: clip.id,
+                            });
+                            ui.ctx().request_repaint();
+                        }
+                    }
                 }
             }
         });
@@ -238,16 +301,12 @@ pub(super) fn draw_single_clip(
             let mut new_in_frame = clip.in_frame;
             let mut new_out_frame = clip.out_frame;
 
-            let source_max_out_frame = if let Some(duration) = clip.duration_frame {
-                let source_end_offset = duration as i64 - clip.source_begin_frame;
-                if source_end_offset > 0 {
-                    clip.in_frame.saturating_add(source_end_offset as u64)
-                } else {
-                    clip.in_frame
-                }
-            } else {
-                u64::MAX
-            };
+            let source_max_out_frame = compute_source_max_out_frame(
+                clip.in_frame,
+                clip.out_frame,
+                clip.source_begin_frame,
+                clip.duration_frame,
+            );
 
             let delta_x = if left.dragged() {
                 left.drag_delta().x
@@ -261,12 +320,14 @@ pub(super) fn draw_single_clip(
             let dt_frames = dt_frames_f32.round() as i64;
 
             if left.dragged() {
-                new_in_frame = ((new_in_frame as i64 + dt_frames).max(0) as u64)
-                    .min(new_out_frame.saturating_sub(1));
+                new_in_frame = compute_resize_left_frame(new_in_frame, new_out_frame, dt_frames);
             } else if right.dragged() {
-                new_out_frame = ((new_out_frame as i64 + dt_frames).max(new_in_frame as i64 + 1)
-                    as u64)
-                    .min(source_max_out_frame);
+                new_out_frame = compute_resize_right_frame(
+                    new_in_frame,
+                    new_out_frame,
+                    dt_frames,
+                    source_max_out_frame,
+                );
             }
 
             if new_in_frame != clip.in_frame || new_out_frame != clip.out_frame {
@@ -458,9 +519,8 @@ pub(super) fn draw_single_clip(
                         if let Some(_tid) =
                             find_track_containing_clip(project, root_track_ids, entity_id)
                         {
-                            let new_in_frame = (c.in_frame as i64 + dt_frames).max(0) as u64;
-                            let new_out_frame =
-                                (c.out_frame as i64 + dt_frames).max(new_in_frame as i64) as u64;
+                            let (new_in_frame, new_out_frame) =
+                                compute_drag_frames(c.in_frame, c.out_frame, dt_frames);
 
                             deferred_actions.push(DeferredClipAction::UpdateClipTime {
                                 clip_id: c.id,
@@ -586,5 +646,328 @@ pub(super) fn draw_single_clip(
             .interaction
             .timeline
             .dragged_entity_hovered_track_id = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use library::model::project::clip::{TrackClip, TrackClipKind};
+    use library::model::project::node::Node;
+    use library::model::project::project::Project;
+    use library::model::project::track::TrackData;
+
+    // ── Domain: compute_source_max_out_frame ──
+
+    #[test]
+    fn source_max_no_duration_returns_max() {
+        let result = compute_source_max_out_frame(10, 50, 0, None);
+        assert_eq!(result, u64::MAX);
+    }
+
+    #[test]
+    fn source_max_with_duration_computes_correctly() {
+        // duration=100 frames, source_begin=0, in_frame=10 → max out = 10+100 = 110
+        let result = compute_source_max_out_frame(10, 50, 0, Some(100));
+        assert_eq!(result, 110);
+    }
+
+    #[test]
+    fn source_max_with_offset_begin() {
+        // duration=100, source_begin=30, in_frame=10 → remaining=70, max out = 10+70 = 80
+        let result = compute_source_max_out_frame(10, 50, 30, Some(100));
+        assert_eq!(result, 80);
+    }
+
+    #[test]
+    fn source_max_begin_exceeds_duration_returns_out_frame() {
+        // BUG FIX: source_begin_frame >= duration_frame should return out_frame, not in_frame
+        let result = compute_source_max_out_frame(10, 50, 120, Some(100));
+        assert_eq!(result, 50); // Should be out_frame (50), not in_frame (10)
+    }
+
+    #[test]
+    fn source_max_begin_equals_duration_returns_out_frame() {
+        let result = compute_source_max_out_frame(10, 50, 100, Some(100));
+        assert_eq!(result, 50); // offset = 0, falls into <= 0 branch
+    }
+
+    // ── Domain: compute_resize_left_frame ──
+
+    #[test]
+    fn resize_left_shrinks_clip() {
+        // Clip at frames 10-50, drag right by 5 → new in_frame = 15
+        let result = compute_resize_left_frame(10, 50, 5);
+        assert_eq!(result, 15);
+    }
+
+    #[test]
+    fn resize_left_extends_clip() {
+        // Clip at frames 10-50, drag left by 5 → new in_frame = 5
+        let result = compute_resize_left_frame(10, 50, -5);
+        assert_eq!(result, 5);
+    }
+
+    #[test]
+    fn resize_left_clamps_to_zero() {
+        // Clip at frames 10-50, drag left by 20 → clamped to 0
+        let result = compute_resize_left_frame(10, 50, -20);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn resize_left_clamps_to_out_minus_one() {
+        // Clip at frames 10-50, drag right by 100 → clamped to 49 (out-1)
+        let result = compute_resize_left_frame(10, 50, 100);
+        assert_eq!(result, 49);
+    }
+
+    #[test]
+    fn resize_left_preserves_minimum_one_frame() {
+        // Clip at frames 10-11 (1 frame), drag right by 0 → stays at 10
+        let result = compute_resize_left_frame(10, 11, 0);
+        assert_eq!(result, 10);
+    }
+
+    // ── Domain: compute_resize_right_frame ──
+
+    #[test]
+    fn resize_right_extends_clip() {
+        // Clip at frames 10-50, drag right by 10 → new out_frame = 60
+        let result = compute_resize_right_frame(10, 50, 10, u64::MAX);
+        assert_eq!(result, 60);
+    }
+
+    #[test]
+    fn resize_right_shrinks_clip() {
+        // Clip at frames 10-50, drag left by 10 → new out_frame = 40
+        let result = compute_resize_right_frame(10, 50, -10, u64::MAX);
+        assert_eq!(result, 40);
+    }
+
+    #[test]
+    fn resize_right_clamps_to_in_plus_one() {
+        // Clip at frames 10-50, drag left by 100 → clamped to 11 (in+1)
+        let result = compute_resize_right_frame(10, 50, -100, u64::MAX);
+        assert_eq!(result, 11);
+    }
+
+    #[test]
+    fn resize_right_clamps_to_source_max() {
+        // Clip at frames 10-50, drag right by 100 → clamped to source max 80
+        let result = compute_resize_right_frame(10, 50, 100, 80);
+        assert_eq!(result, 80);
+    }
+
+    #[test]
+    fn resize_right_source_max_less_than_in_plus_one() {
+        // Edge case: source_max < in_frame + 1 (pathological)
+        // Both clamps conflict → in_frame + 1 wins via max, then min caps it
+        let result = compute_resize_right_frame(10, 50, -100, 5);
+        assert_eq!(result, 5); // min(11, 5) = 5 — still clipped by source_max
+    }
+
+    // ── Domain: compute_drag_frames ──
+
+    #[test]
+    fn drag_preserves_duration() {
+        // Clip at frames 10-20 (duration=10), drag right by 5
+        let (new_in, new_out) = compute_drag_frames(10, 20, 5);
+        assert_eq!(new_in, 15);
+        assert_eq!(new_out, 25);
+        assert_eq!(new_out - new_in, 10); // Duration preserved
+    }
+
+    #[test]
+    fn drag_left_clamps_at_zero_preserves_duration() {
+        // BUG FIX: Clip at frames 10-20 (duration=10), drag left by 100
+        // Old code: new_in=0, new_out=max(-80, 0)=0 → ZERO-LENGTH CLIP!
+        // Fixed:    new_in=0, new_out=0+10=10 → duration preserved
+        let (new_in, new_out) = compute_drag_frames(10, 20, -100);
+        assert_eq!(new_in, 0);
+        assert_eq!(new_out, 10);
+        assert_eq!(new_out - new_in, 10); // Duration preserved!
+    }
+
+    #[test]
+    fn drag_to_exact_zero() {
+        // Clip at frames 10-20, drag left by exactly 10
+        let (new_in, new_out) = compute_drag_frames(10, 20, -10);
+        assert_eq!(new_in, 0);
+        assert_eq!(new_out, 10);
+    }
+
+    #[test]
+    fn drag_no_movement() {
+        let (new_in, new_out) = compute_drag_frames(10, 20, 0);
+        assert_eq!(new_in, 10);
+        assert_eq!(new_out, 20);
+    }
+
+    #[test]
+    fn drag_single_frame_clip_preserves_duration() {
+        // 1-frame clip at frame 5-6
+        let (new_in, new_out) = compute_drag_frames(5, 6, -100);
+        assert_eq!(new_in, 0);
+        assert_eq!(new_out, 1);
+        assert_eq!(new_out - new_in, 1);
+    }
+
+    // ── Domain: find_track_containing_clip ──
+
+    fn make_test_project() -> (Project, Uuid, Uuid, Uuid, Uuid) {
+        let mut project = Project::new("test");
+
+        let track_id = Uuid::new_v4();
+        let clip_id_1 = Uuid::new_v4();
+        let clip_id_2 = Uuid::new_v4();
+
+        let mut track = TrackData::new("Test Track");
+        track.id = track_id;
+        track.child_ids = vec![clip_id_1, clip_id_2];
+
+        let clip1 = TrackClip::new(
+            clip_id_1,
+            None,
+            TrackClipKind::Video,
+            0,
+            30,
+            0,
+            Some(100),
+            30.0,
+            Default::default(),
+        );
+        let clip2 = TrackClip::new(
+            clip_id_2,
+            None,
+            TrackClipKind::Audio,
+            10,
+            50,
+            0,
+            Some(200),
+            30.0,
+            Default::default(),
+        );
+
+        project.nodes.insert(track_id, Node::Track(track));
+        project.nodes.insert(clip_id_1, Node::Clip(clip1));
+        project.nodes.insert(clip_id_2, Node::Clip(clip2));
+
+        (project, track_id, clip_id_1, clip_id_2, Uuid::new_v4())
+    }
+
+    #[test]
+    fn find_clip_in_direct_track() {
+        let (project, track_id, clip_id_1, _, _) = make_test_project();
+        let result = find_track_containing_clip(&project, &[track_id], clip_id_1);
+        assert_eq!(result, Some(track_id));
+    }
+
+    #[test]
+    fn find_clip_not_in_any_track() {
+        let (project, track_id, _, _, _) = make_test_project();
+        let missing_id = Uuid::new_v4();
+        let result = find_track_containing_clip(&project, &[track_id], missing_id);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn find_clip_in_nested_track() {
+        let (mut project, track_id, _, clip_id_2, _) = make_test_project();
+
+        // Create a sub-track and move clip_id_2 into it
+        let sub_track_id = Uuid::new_v4();
+        let mut sub_track = TrackData::new("Sub Track");
+        sub_track.id = sub_track_id;
+        sub_track.child_ids = vec![clip_id_2];
+
+        // Remove clip_id_2 from main track, add sub_track instead
+        if let Some(Node::Track(t)) = project.nodes.get_mut(&track_id) {
+            t.child_ids.retain(|id| *id != clip_id_2);
+            t.child_ids.push(sub_track_id);
+        }
+        project.nodes.insert(sub_track_id, Node::Track(sub_track));
+
+        let result = find_track_containing_clip(&project, &[track_id], clip_id_2);
+        assert_eq!(result, Some(sub_track_id));
+    }
+
+    #[test]
+    fn find_clip_with_empty_root_tracks() {
+        let (project, _, clip_id_1, _, _) = make_test_project();
+        let result = find_track_containing_clip(&project, &[], clip_id_1);
+        assert_eq!(result, None);
+    }
+
+    // ── Domain: Deferred action ordering (horizontal drag + track move) ──
+
+    #[test]
+    fn drag_then_move_should_preserve_horizontal_position() {
+        // Simulate the scenario where UpdateClipTime and MoveClipToTrack both
+        // fire in the same frame. UpdateClipTime runs first (horizontal drag)
+        // then MoveClipToTrack should use the UPDATED in_frame, not the stale one.
+        //
+        // Clip starts at frames 10-20 (duration=10).
+        // Horizontal drag moves it to 15-25.
+        // MoveClipToTrack should use in_frame=15 (current), not 10 (stale).
+        let original_in = 10u64;
+        let original_out = 20u64;
+        let dt_frames = 5i64;
+
+        let (new_in, new_out) = compute_drag_frames(original_in, original_out, dt_frames);
+        assert_eq!(new_in, 15);
+        assert_eq!(new_out, 25);
+
+        // After UpdateClipTime sets (15, 25), MoveClipToTrack should read 15
+        // as current_in_frame, NOT use original_in=10 which would reset to (10, 20).
+        assert_ne!(
+            new_in, original_in,
+            "Horizontal drag should change in_frame"
+        );
+    }
+
+    #[test]
+    fn drag_far_left_then_move_preserves_clamped_position() {
+        // Clip at frames 100-200 (duration=100). Drag far left by -500.
+        let (new_in, new_out) = compute_drag_frames(100, 200, -500);
+        assert_eq!(new_in, 0);
+        assert_eq!(new_out, 100);
+
+        // MoveClipToTrack should use 0 (current), not 100 (stale).
+        // Duration must be preserved.
+        assert_eq!(new_out - new_in, 100);
+    }
+
+    // ── Domain: compute_source_max_out_frame edge cases ──
+
+    #[test]
+    fn source_max_negative_begin_frame() {
+        // source_begin_frame can be negative (trimmed start before 0)
+        // duration=100, source_begin=-10 → offset=110, max = 10+110=120
+        let result = compute_source_max_out_frame(10, 50, -10, Some(100));
+        assert_eq!(result, 120);
+    }
+
+    #[test]
+    fn source_max_large_duration() {
+        // Very long source media
+        let result = compute_source_max_out_frame(0, 30, 0, Some(u64::MAX / 2));
+        assert_eq!(result, u64::MAX / 2);
+    }
+
+    // ── Domain: Resize edge cases ──
+
+    #[test]
+    fn resize_left_on_clip_starting_at_zero() {
+        // Clip at frames 0-30, try to extend left (impossible, already at 0)
+        let result = compute_resize_left_frame(0, 30, -10);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn resize_right_on_one_frame_clip() {
+        // Clip at frames 10-11 (1 frame), try to shrink right (impossible)
+        let result = compute_resize_right_frame(10, 11, -10, u64::MAX);
+        assert_eq!(result, 11); // min clamp: in_frame + 1 = 11
     }
 }

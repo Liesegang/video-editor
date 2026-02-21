@@ -274,37 +274,36 @@ pub(crate) fn assets_panel(
                                             let response =
                                                 ui.selectable_label(is_selected, &comp.name);
 
-                                            // Interactions (same as before)
+                                            // Interactions
                                             response.context_menu(|ui| {
-                                                if ui
-                                                    .button(format!(
-                                                        "{} Edit Properties",
-                                                        icons::PENCIL_SIMPLE
-                                                    ))
-                                                    .clicked()
-                                                {
-                                                    composition_dialog.open_for_edit(comp);
-                                                    ui.close();
-                                                }
-                                                if ui
-                                                    .button(format!(
-                                                        "{} Delete Composition",
-                                                        icons::TRASH
-                                                    ))
-                                                    .clicked()
-                                                {
-                                                    if project_service.is_composition_used(comp.id) {
-                                                        let mut dialog = crate::ui::dialogs::confirmation::ConfirmationDialog::new();
-                                                        dialog.open(
-                                                            "⚠ Confirm Composition Deletion",
-                                                            "This composition is used inside another timeline.\nDeleting it will remove all associated clips.\nAre you sure?",
-                                                            crate::ui::dialogs::confirmation::ConfirmationAction::DeleteComposition(comp.id)
-                                                        );
-                                                        editor_context.interaction.general.active_confirmation = Some(dialog);
-                                                    } else {
-                                                        comp_to_remove = Some(comp.id);
+                                                use crate::ui::widgets::context_menu::{ContextMenuBuilder, show_context_menu};
+
+                                                #[derive(Clone)]
+                                                enum CompAction { Edit, Delete }
+
+                                                let menu = ContextMenuBuilder::new()
+                                                    .action_with_icon(icons::PENCIL_SIMPLE, "Edit Properties", CompAction::Edit)
+                                                    .danger_action(icons::TRASH, "Delete Composition", CompAction::Delete)
+                                                    .build();
+                                                if let Some(action) = show_context_menu(ui, &menu) {
+                                                    match action {
+                                                        CompAction::Edit => {
+                                                            composition_dialog.open_for_edit(comp);
+                                                        }
+                                                        CompAction::Delete => {
+                                                            if project_service.is_composition_used(comp.id) {
+                                                                let mut dialog = crate::ui::dialogs::confirmation::ConfirmationDialog::new();
+                                                                dialog.open(
+                                                                    "⚠ Confirm Composition Deletion",
+                                                                    "This composition is used inside another timeline.\nDeleting it will remove all associated clips.\nAre you sure?",
+                                                                    crate::ui::dialogs::confirmation::ConfirmationAction::DeleteComposition(comp.id)
+                                                                );
+                                                                editor_context.interaction.general.active_confirmation = Some(dialog);
+                                                            } else {
+                                                                comp_to_remove = Some(comp.id);
+                                                            }
+                                                        }
                                                     }
-                                                    ui.close();
                                                 }
                                             });
 
@@ -420,25 +419,30 @@ pub(crate) fn assets_panel(
 
                                             // Context Menu
                                             response.context_menu(|ui| {
-                                                if ui
-                                                    .button(format!(
-                                                        "{} Delete Asset",
-                                                        icons::TRASH
-                                                    ))
-                                                    .clicked()
-                                                {
-                                                    if project_service.is_asset_used(asset.id) {
-                                                        let mut dialog = crate::ui::dialogs::confirmation::ConfirmationDialog::new();
-                                                        dialog.open(
-                                                            "⚠ Confirm Deletion",
-                                                            "This asset is used in the timeline.\nDeleting it will remove all associated clips.\nAre you sure?",
-                                                            crate::ui::dialogs::confirmation::ConfirmationAction::DeleteAsset(asset.id)
-                                                        );
-                                                        editor_context.interaction.general.active_confirmation = Some(dialog);
-                                                    } else {
-                                                        asset_to_remove = Some(asset.id);
+                                                use crate::ui::widgets::context_menu::{ContextMenuBuilder, show_context_menu};
+
+                                                #[derive(Clone)]
+                                                enum AssetAction { Delete }
+
+                                                let menu = ContextMenuBuilder::new()
+                                                    .danger_action(icons::TRASH, "Delete Asset", AssetAction::Delete)
+                                                    .build();
+                                                if let Some(action) = show_context_menu(ui, &menu) {
+                                                    match action {
+                                                        AssetAction::Delete => {
+                                                            if project_service.is_asset_used(asset.id) {
+                                                                let mut dialog = crate::ui::dialogs::confirmation::ConfirmationDialog::new();
+                                                                dialog.open(
+                                                                    "⚠ Confirm Deletion",
+                                                                    "This asset is used in the timeline.\nDeleting it will remove all associated clips.\nAre you sure?",
+                                                                    crate::ui::dialogs::confirmation::ConfirmationAction::DeleteAsset(asset.id)
+                                                                );
+                                                                editor_context.interaction.general.active_confirmation = Some(dialog);
+                                                            } else {
+                                                                asset_to_remove = Some(asset.id);
+                                                            }
+                                                        }
                                                     }
-                                                    ui.close();
                                                 }
                                             });
 

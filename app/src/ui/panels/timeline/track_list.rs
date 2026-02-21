@@ -219,47 +219,54 @@ pub(super) fn show_track_list(
                     .on_hover_text(format!("Track ID: {}", track.id));
 
                 track_interaction_response.context_menu(|ui| {
+                    use crate::ui::widgets::context_menu::{show_context_menu, ContextMenuBuilder};
+
                     if let Some(comp_id) = editor_context.selection.composition_id {
-                        // Add Sub-Track option
-                        if ui
-                            .button(format!("{} Add Sub-Track", icons::FOLDER_PLUS))
-                            .clicked()
-                        {
-                            deferred_actions.push(DeferredTrackAction::AddSubTrack {
-                                comp_id,
-                                parent_track_id: track.id,
-                            });
-                            tracks_to_expand.push(track.id);
-                            ui.close();
+                        #[derive(Clone)]
+                        enum TrackAction {
+                            AddSubTrack,
+                            Rename,
+                            Remove,
                         }
 
-                        ui.separator();
-
-                        // Rename Track option
-                        if ui
-                            .button(format!("{} Rename", icons::PENCIL_SIMPLE))
-                            .clicked()
-                        {
-                            editor_context.interaction.timeline.renaming_track_id = Some(track.id);
-                            editor_context.interaction.timeline.rename_buffer = track.name.clone();
-                            ui.close();
-                        }
-
-                        ui.separator();
-
-                        if ui
-                            .button(format!("{} Remove Track", icons::TRASH))
-                            .clicked()
-                        {
-                            deferred_actions.push(DeferredTrackAction::RemoveTrack {
-                                comp_id,
-                                track_id: track.id,
-                            });
-                            // Mark for deselection if this track was selected
-                            if editor_context.selection.last_selected_track_id == Some(track.id) {
-                                tracks_to_deselect.push(track.id);
+                        let menu = ContextMenuBuilder::new()
+                            .action_with_icon(
+                                icons::FOLDER_PLUS,
+                                "Add Sub-Track",
+                                TrackAction::AddSubTrack,
+                            )
+                            .separator()
+                            .action_with_icon(icons::PENCIL_SIMPLE, "Rename", TrackAction::Rename)
+                            .separator()
+                            .danger_action(icons::TRASH, "Remove Track", TrackAction::Remove)
+                            .build();
+                        if let Some(action) = show_context_menu(ui, &menu) {
+                            match action {
+                                TrackAction::AddSubTrack => {
+                                    deferred_actions.push(DeferredTrackAction::AddSubTrack {
+                                        comp_id,
+                                        parent_track_id: track.id,
+                                    });
+                                    tracks_to_expand.push(track.id);
+                                }
+                                TrackAction::Rename => {
+                                    editor_context.interaction.timeline.renaming_track_id =
+                                        Some(track.id);
+                                    editor_context.interaction.timeline.rename_buffer =
+                                        track.name.clone();
+                                }
+                                TrackAction::Remove => {
+                                    deferred_actions.push(DeferredTrackAction::RemoveTrack {
+                                        comp_id,
+                                        track_id: track.id,
+                                    });
+                                    if editor_context.selection.last_selected_track_id
+                                        == Some(track.id)
+                                    {
+                                        tracks_to_deselect.push(track.id);
+                                    }
+                                }
                             }
-                            ui.close();
                         }
                     }
                 });
@@ -413,16 +420,23 @@ pub(super) fn show_track_list(
     }
 
     track_list_response.context_menu(|ui_content| {
+        use crate::ui::widgets::context_menu::{show_context_menu, ContextMenuBuilder};
+
         if let Some(comp_id) = editor_context.selection.composition_id {
-            if ui_content
-                .add(egui::Button::new(egui::RichText::new(format!(
-                    "{} Add Track",
-                    icons::PLUS
-                ))))
-                .clicked()
-            {
-                deferred_actions.push(DeferredTrackAction::AddTrack { comp_id });
-                ui_content.close();
+            #[derive(Clone)]
+            enum EmptyAreaAction {
+                AddTrack,
+            }
+
+            let menu = ContextMenuBuilder::new()
+                .action_with_icon(icons::PLUS, "Add Track", EmptyAreaAction::AddTrack)
+                .build();
+            if let Some(action) = show_context_menu(ui_content, &menu) {
+                match action {
+                    EmptyAreaAction::AddTrack => {
+                        deferred_actions.push(DeferredTrackAction::AddTrack { comp_id });
+                    }
+                }
             }
         } else {
             ui_content.label("Select a Composition first");

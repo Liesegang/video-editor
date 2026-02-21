@@ -190,3 +190,54 @@ impl CommandPalette {
         executed_command
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Domain: Toggle Lifecycle ──
+
+    #[test]
+    fn toggle_opens_when_closed() {
+        let mut palette = CommandPalette::new();
+        assert!(!palette.is_open);
+
+        palette.toggle();
+
+        assert!(palette.is_open);
+    }
+
+    #[test]
+    fn toggle_closes_when_open() {
+        let mut palette = CommandPalette::new();
+        palette.toggle(); // open
+        palette.toggle(); // close
+
+        assert!(!palette.is_open);
+    }
+
+    #[test]
+    fn toggle_clears_query_on_reopen() {
+        let mut palette = CommandPalette::new();
+        palette.toggle(); // open
+        palette.query = "test query".to_string();
+        palette.toggle(); // close
+        palette.toggle(); // reopen
+
+        assert!(
+            palette.query.is_empty(),
+            "Query should be cleared on reopen"
+        );
+    }
+
+    #[test]
+    fn toggle_resets_selected_index_on_reopen() {
+        let mut palette = CommandPalette::new();
+        palette.toggle(); // open
+        palette.selected_index = 5;
+        palette.toggle(); // close
+        palette.toggle(); // reopen
+
+        assert_eq!(palette.selected_index, 0, "Index should reset on reopen");
+    }
+}

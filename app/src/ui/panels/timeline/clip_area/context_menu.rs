@@ -5,9 +5,17 @@ use library::model::project::project::Project;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 
+use crate::ui::widgets::context_menu::{show_context_menu, ContextMenuBuilder};
 use crate::{action::HistoryManager, state::context::EditorContext};
 
 use super::super::geometry::TimelineGeometry;
+
+#[derive(Clone)]
+enum ClipAreaAction {
+    AddTextLayer,
+    AddShapeLayer,
+    AddSkSLLayer,
+}
 
 pub(super) fn handle_context_menu(
     ui: &mut Ui,
@@ -32,7 +40,7 @@ pub(super) fn handle_context_menu(
         }
     }
 
-    // Context Menu for adding Text/Shape
+    // Context Menu for adding Text/Shape/SkSL
     response.context_menu(|ui| {
         let mut drop_in_frame =
             (editor_context.timeline.current_time * composition_fps as f32).round() as u64;
@@ -66,90 +74,61 @@ pub(super) fn handle_context_menu(
             }
         }
 
-        if ui.button("Add Text Layer").clicked() {
-            let duration_sec = 5.0;
-            let duration_frames = (duration_sec * composition_fps).round() as u64;
+        let menu = ContextMenuBuilder::new()
+            .action("Add Text Layer", ClipAreaAction::AddTextLayer)
+            .action("Add Shape Layer", ClipAreaAction::AddShapeLayer)
+            .action("Add SkSL Layer", ClipAreaAction::AddSkSLLayer)
+            .build();
+
+        if let Some(action) = show_context_menu(ui, &menu) {
+            let duration_sec: f64 = 5.0;
+            let duration_frames = (duration_sec * composition_fps as f64).round() as u64;
             let drop_out_frame = drop_in_frame + duration_frames;
 
-            if let Ok(text_clip) = project_service.create_text_clip(
-                "this is sample text",
-                drop_in_frame,
-                drop_out_frame,
-                comp_width as u32,
-                comp_height as u32,
-                composition_fps,
-            ) {
+            let clip_result = match action {
+                ClipAreaAction::AddTextLayer => project_service.create_text_clip(
+                    "this is sample text",
+                    drop_in_frame,
+                    drop_out_frame,
+                    comp_width as u32,
+                    comp_height as u32,
+                    composition_fps,
+                ),
+                ClipAreaAction::AddShapeLayer => project_service.create_shape_clip(
+                    drop_in_frame,
+                    drop_out_frame,
+                    comp_width as u32,
+                    comp_height as u32,
+                    composition_fps,
+                ),
+                ClipAreaAction::AddSkSLLayer => project_service.create_sksl_clip(
+                    drop_in_frame,
+                    drop_out_frame,
+                    comp_width as u32,
+                    comp_height as u32,
+                    composition_fps,
+                ),
+            };
+
+            if let Ok(clip) = clip_result {
                 add_clip_to_best_track(
                     project,
                     editor_context,
                     drop_track_index_opt,
-                    text_clip,
+                    clip,
                     drop_in_frame,
                     drop_out_frame,
                     project_service,
                     history_manager,
                 );
             }
-            ui.close();
-        }
-
-        if ui.button("Add Shape Layer").clicked() {
-            let duration_sec = 5.0;
-            let duration_frames = (duration_sec * composition_fps).round() as u64;
-            let drop_out_frame = drop_in_frame + duration_frames;
-
-            if let Ok(shape_clip) = project_service.create_shape_clip(
-                drop_in_frame,
-                drop_out_frame,
-                comp_width as u32,
-                comp_height as u32,
-                composition_fps,
-            ) {
-                add_clip_to_best_track(
-                    project,
-                    editor_context,
-                    drop_track_index_opt,
-                    shape_clip,
-                    drop_in_frame,
-                    drop_out_frame,
-                    project_service,
-                    history_manager,
-                );
-            }
-            ui.close();
-        }
-
-        if ui.button("Add SkSL Layer").clicked() {
-            let duration_sec = 5.0;
-            let duration_frames = (duration_sec * composition_fps).round() as u64;
-            let drop_out_frame = drop_in_frame + duration_frames;
-
-            if let Ok(sksl_clip) = project_service.create_sksl_clip(
-                drop_in_frame,
-                drop_out_frame,
-                comp_width as u32,
-                comp_height as u32,
-                composition_fps,
-            ) {
-                add_clip_to_best_track(
-                    project,
-                    editor_context,
-                    drop_track_index_opt,
-                    sksl_clip,
-                    drop_in_frame,
-                    drop_out_frame,
-                    project_service,
-                    history_manager,
-                );
-            }
-            ui.close();
         }
     });
 }
 
 fn add_clip_to_best_track(
     project: &Arc<RwLock<Project>>,
-    editor_context: &EditorContext,
+    editor_context: &mut EditorContext,
     drop_track_index_opt: Option<usize>,
     clip: TrackClip,
     in_frame: u64,
@@ -177,20 +156,14 @@ fn add_clip_to_best_track(
                     }
                 }
 
-                // Fallback to root track if not found
+                // Fallback: find first child track under root
                 if track_id_opt.is_none() {
-                    // Use the root track itself or find first child track
                     if let Some(root_track) = proj_read.get_track(root_track_id) {
-                        // If root track has child tracks, use the first one; otherwise use root
                         for child_id in &root_track.child_ids {
                             if let Some(Node::Track(_)) = proj_read.get_node(*child_id) {
                                 track_id_opt = Some(*child_id);
                                 break;
                             }
-                        }
-                        // If no child tracks, use root track itself
-                        if track_id_opt.is_none() {
-                            track_id_opt = Some(root_track_id);
                         }
                     }
                 }
@@ -198,8 +171,21 @@ fn add_clip_to_best_track(
         }
     }
 
-    if let Some(track_id) = track_id_opt {
-        if let Some(comp_id) = editor_context.selection.composition_id {
+    if let Some(comp_id) = editor_context.selection.composition_id {
+        // If no child track was found, create one
+        if track_id_opt.is_none() {
+            match project_service.add_track(comp_id, "New Track") {
+                Ok(new_track_id) => {
+                    track_id_opt = Some(new_track_id);
+                    editor_context.timeline.expanded_tracks.insert(new_track_id);
+                }
+                Err(e) => {
+                    log::error!("Failed to create track for clip: {}", e);
+                }
+            }
+        }
+
+        if let Some(track_id) = track_id_opt {
             if let Err(e) = project_service
                 .add_clip_to_track(comp_id, track_id, clip, in_frame, out_frame, None)
             {

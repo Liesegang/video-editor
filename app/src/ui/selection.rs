@@ -10,11 +10,11 @@ pub enum SelectionAction {
 
 impl SelectionAction {
     pub fn from_modifiers(modifiers: &Modifiers) -> Self {
-        if modifiers.shift && modifiers.ctrl {
+        if modifiers.shift && modifiers.command {
             SelectionAction::Remove
         } else if modifiers.shift {
             SelectionAction::Add
-        } else if modifiers.ctrl {
+        } else if modifiers.command {
             SelectionAction::Toggle
         } else {
             SelectionAction::Replace
@@ -70,5 +70,128 @@ pub fn get_box_action<T>(modifiers: &Modifiers, items_in_box: Vec<T>) -> BoxActi
         // So I will keep `Toggle => BoxAction::Add` for now unless "XOR" is requested.
         // Note: `Remove` is explicitly requested.
         SelectionAction::Remove => BoxAction::Remove(items_in_box),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::Modifiers;
+
+    // ── Domain: SelectionAction (modifier → action mapping) ──
+
+    #[test]
+    fn no_modifiers_yields_replace() {
+        let action = SelectionAction::from_modifiers(&Modifiers::NONE);
+        assert_eq!(action, SelectionAction::Replace);
+    }
+
+    #[test]
+    fn shift_yields_add() {
+        let action = SelectionAction::from_modifiers(&Modifiers::SHIFT);
+        assert_eq!(action, SelectionAction::Add);
+    }
+
+    #[test]
+    fn command_yields_toggle() {
+        let mods = Modifiers {
+            command: true,
+            ..Modifiers::NONE
+        };
+        let action = SelectionAction::from_modifiers(&mods);
+        assert_eq!(action, SelectionAction::Toggle);
+    }
+
+    #[test]
+    fn shift_command_yields_remove() {
+        let mods = Modifiers {
+            shift: true,
+            command: true,
+            ..Modifiers::NONE
+        };
+        let action = SelectionAction::from_modifiers(&mods);
+        assert_eq!(action, SelectionAction::Remove);
+    }
+
+    // ── Domain: ClickAction (modifier + hover → click behavior) ──
+
+    #[test]
+    fn click_item_no_modifiers_selects() {
+        let action = get_click_action(&Modifiers::NONE, Some(42));
+        assert_eq!(action, ClickAction::Select(42));
+    }
+
+    #[test]
+    fn click_item_shift_adds() {
+        let action = get_click_action(&Modifiers::SHIFT, Some(42));
+        assert_eq!(action, ClickAction::Add(42));
+    }
+
+    #[test]
+    fn click_item_command_toggles() {
+        let mods = Modifiers {
+            command: true,
+            ..Modifiers::NONE
+        };
+        let action = get_click_action(&mods, Some(42));
+        assert_eq!(action, ClickAction::Toggle(42));
+    }
+
+    #[test]
+    fn click_item_shift_command_removes() {
+        let mods = Modifiers {
+            shift: true,
+            command: true,
+            ..Modifiers::NONE
+        };
+        let action = get_click_action(&mods, Some(42));
+        assert_eq!(action, ClickAction::Remove(42));
+    }
+
+    #[test]
+    fn click_empty_no_modifiers_clears() {
+        let action: ClickAction<i32> = get_click_action(&Modifiers::NONE, None);
+        assert_eq!(action, ClickAction::Clear);
+    }
+
+    #[test]
+    fn click_empty_shift_does_nothing() {
+        let action: ClickAction<i32> = get_click_action(&Modifiers::SHIFT, None);
+        assert_eq!(action, ClickAction::DoNothing);
+    }
+
+    #[test]
+    fn click_empty_command_does_nothing() {
+        let mods = Modifiers {
+            command: true,
+            ..Modifiers::NONE
+        };
+        let action: ClickAction<i32> = get_click_action(&mods, None);
+        assert_eq!(action, ClickAction::DoNothing);
+    }
+
+    // ── Domain: BoxAction (modifier + box selection → action) ──
+
+    #[test]
+    fn box_no_modifiers_replaces() {
+        let action = get_box_action(&Modifiers::NONE, vec![1, 2, 3]);
+        assert_eq!(action, BoxAction::Replace(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn box_shift_adds() {
+        let action = get_box_action(&Modifiers::SHIFT, vec![1, 2]);
+        assert_eq!(action, BoxAction::Add(vec![1, 2]));
+    }
+
+    #[test]
+    fn box_shift_command_removes() {
+        let mods = Modifiers {
+            shift: true,
+            command: true,
+            ..Modifiers::NONE
+        };
+        let action = get_box_action(&mods, vec![1, 2]);
+        assert_eq!(action, BoxAction::Remove(vec![1, 2]));
     }
 }

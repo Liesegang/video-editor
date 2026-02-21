@@ -365,3 +365,7 @@ ToDo.md
 
 .claude
 .mcp.json
+
+# egui_kittest snapshot diffs
+*.diff.png
+*.new.png

@@ -10,7 +10,7 @@ mod editor_graph_ops;
 mod editor_project_ops;
 pub mod editor_service;
 pub mod export_service;
-pub(crate) mod handlers;
+pub mod handlers;
 pub(crate) mod ocio_shim;
 pub mod project_model;
 pub(crate) mod project_service;

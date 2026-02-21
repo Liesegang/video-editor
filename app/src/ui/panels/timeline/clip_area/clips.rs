@@ -360,9 +360,11 @@ pub(super) fn draw_clips(
                 new_in_frame,
                 new_out_frame,
             } => {
-                project_service
-                    .update_clip_time(clip_id, new_in_frame, new_out_frame)
-                    .ok();
+                if let Err(e) =
+                    project_service.update_clip_time(clip_id, new_in_frame, new_out_frame)
+                {
+                    log::error!("Failed to update clip time: {:?}", e);
+                }
             }
             DeferredClipAction::MoveClipToTrack {
                 comp_id,
@@ -372,15 +374,27 @@ pub(super) fn draw_clips(
                 in_frame,
                 target_index,
             } => {
+                // Read the clip's CURRENT in_frame, which may have been updated
+                // by a preceding UpdateClipTime action in the same frame.
+                // Using the stale `in_frame` from the READ phase would overwrite
+                // the horizontal drag applied by UpdateClipTime.
+                let current_in_frame = project_service
+                    .with_project(|p| p.get_clip(clip_id).map(|c| c.in_frame))
+                    .unwrap_or(in_frame);
+
                 if let Err(e) = project_service.move_clip_to_track_at_index(
                     comp_id,
                     original_track_id,
                     clip_id,
                     target_track_id,
-                    in_frame,
+                    current_in_frame,
                     target_index,
                 ) {
                     log::error!("Failed to move entity: {:?}", e);
+                    // Rollback selection state: clip is still on the original track
+                    if editor_context.selection.last_selected_track_id == Some(target_track_id) {
+                        editor_context.selection.last_selected_track_id = Some(original_track_id);
+                    }
                 }
             }
             DeferredClipAction::RemoveClip { track_id, clip_id } => {
@@ -474,4 +488,163 @@ pub(super) fn get_clips_in_box(
         }
     }
     found_clips
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::geometry::TimelineGeometry;
+    use super::*;
+
+    fn default_geo() -> TimelineGeometry {
+        TimelineGeometry {
+            pixels_per_unit: 100.0, // 100 pixels per second
+            row_height: 30.0,
+            track_spacing: 2.0,
+            composition_fps: 30.0,
+        }
+    }
+
+    // ── Domain: calculate_clip_rect ──
+
+    #[test]
+    fn clip_rect_basic_position() {
+        let geo = default_geo();
+        let rect = calculate_clip_rect(
+            0,                // in_frame
+            30,               // out_frame (1 second at 30fps)
+            0,                // track_index (first row)
+            egui::Vec2::ZERO, // scroll_offset
+            &geo,
+            egui::Vec2::ZERO, // base_offset
+        );
+        // x = 0/30 * 100 - 0 = 0
+        // y = 0 * (30+2) = 0
+        // width = 30/30 * 100 = 100
+        assert!((rect.min.x - 0.0).abs() < 0.01);
+        assert!((rect.min.y - 0.0).abs() < 0.01);
+        assert!((rect.width() - 100.0).abs() < 0.01);
+        assert!((rect.height() - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn clip_rect_with_offset_frames() {
+        let geo = default_geo();
+        let rect = calculate_clip_rect(
+            30, // in_frame (1 sec)
+            60, // out_frame (2 sec)
+            0,
+            egui::Vec2::ZERO,
+            &geo,
+            egui::Vec2::ZERO,
+        );
+        // x = 30/30 * 100 = 100
+        // width = 30/30 * 100 = 100
+        assert!((rect.min.x - 100.0).abs() < 0.01);
+        assert!((rect.width() - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn clip_rect_on_second_row() {
+        let geo = default_geo();
+        let rect = calculate_clip_rect(
+            0,
+            30,
+            1, // second row
+            egui::Vec2::ZERO,
+            &geo,
+            egui::Vec2::ZERO,
+        );
+        // y = 1 * (30 + 2) = 32
+        assert!((rect.min.y - 32.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn clip_rect_with_scroll() {
+        let geo = default_geo();
+        let rect = calculate_clip_rect(
+            0,
+            30,
+            0,
+            egui::vec2(50.0, 10.0), // scrolled
+            &geo,
+            egui::Vec2::ZERO,
+        );
+        // x = 0 - 50 = -50
+        // y = 0 - 10 = -10
+        assert!((rect.min.x - (-50.0)).abs() < 0.01);
+        assert!((rect.min.y - (-10.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn clip_rect_with_base_offset() {
+        let geo = default_geo();
+        let rect = calculate_clip_rect(
+            0,
+            30,
+            0,
+            egui::Vec2::ZERO,
+            &geo,
+            egui::vec2(100.0, 50.0), // base offset
+        );
+        // x = 100 + 0 = 100
+        // y = 50 + 0 = 50
+        assert!((rect.min.x - 100.0).abs() < 0.01);
+        assert!((rect.min.y - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn clip_rect_zero_duration_has_min_width() {
+        let geo = default_geo();
+        let rect = calculate_clip_rect(
+            10,
+            10, // zero duration!
+            0,
+            egui::Vec2::ZERO,
+            &geo,
+            egui::Vec2::ZERO,
+        );
+        // width = max(0, 1.0) = 1.0 (minimum width)
+        assert!((rect.width() - 1.0).abs() < 0.01);
+    }
+
+    // ── Domain: calculate_insert_index ──
+
+    #[test]
+    fn insert_index_with_empty_track() {
+        use super::super::super::utils::flatten::DisplayRow;
+        use library::model::project::node::Node;
+        use library::model::project::track::TrackData;
+
+        let mut project = Project::new("test");
+        let track_id = Uuid::new_v4();
+        let mut track = TrackData::new("Track");
+        track.id = track_id;
+        project.nodes.insert(track_id, Node::Track(track.clone()));
+
+        let display_rows = vec![DisplayRow::TrackHeader {
+            track: project.get_track(track_id).unwrap(),
+            depth: 0,
+            is_expanded: true,
+            visible_row_index: 0,
+        }];
+
+        let geo = default_geo();
+        // Mouse at y = header row area → row index 0
+        let result = calculate_insert_index(
+            5.0, // mouse_y (within first row)
+            0.0, // content_rect_min_y
+            0.0, // scroll_offset_y
+            &geo,
+            &display_rows,
+            &project,
+            &[track_id],
+            track_id,
+        );
+        // Empty track: clip_count=0, raw_target_index = 0-0-1 = -1
+        // inverted = 0 - (-1) = 1, clamped to [0, 0] = 0
+        assert!(result.is_some());
+        let (index, header_idx) = result.unwrap();
+        assert_eq!(header_idx, 0);
+        assert_eq!(index, 0);
+    }
 }

@@ -500,9 +500,13 @@ impl CompositionDialog {
     }
 
     fn update_active_preset(&mut self) {
+        const FPS_EPSILON: f64 = 0.001;
+
         // Check general presets first
         for (i, preset) in PRESETS.iter().enumerate() {
-            if preset.width == self.width && preset.height == self.height && preset.fps == self.fps
+            if preset.width == self.width
+                && preset.height == self.height
+                && (preset.fps - self.fps).abs() < FPS_EPSILON
             {
                 self.active_preset = ActivePreset::General(i);
                 return;
@@ -519,7 +523,7 @@ impl CompositionDialog {
 
         // Check FPS presets
         for (i, preset) in FPS_PRESETS.iter().enumerate() {
-            if preset.fps == self.fps {
+            if (preset.fps - self.fps).abs() < FPS_EPSILON {
                 self.active_preset = ActivePreset::Fps(i);
                 return;
             }
@@ -529,6 +533,9 @@ impl CompositionDialog {
     }
 
     fn apply_preset(&mut self, preset_idx: usize) {
+        if preset_idx == 0 {
+            return; // "Custom" pseudo-preset has no values to apply
+        }
         let preset = &PRESETS[preset_idx];
         self.width = preset.width;
         self.height = preset.height;
@@ -777,8 +784,291 @@ impl CompositionDialog {
     }
 
     fn is_customized_from_preset(&self, preset: &CompositionPreset) -> bool {
+        const FPS_EPSILON: f64 = 0.001;
         (preset.width != 0 && preset.width != self.width)
             || (preset.height != 0 && preset.height != self.height)
-            || (preset.fps != 0.0 && preset.fps != self.fps)
+            || (preset.fps != 0.0 && (preset.fps - self.fps).abs() >= FPS_EPSILON)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+    use egui_kittest::Harness;
+    use library::model::project::project::Composition;
+
+    // ── Domain: Default State ──
+
+    #[test]
+    fn default_has_standard_values() {
+        let dialog = CompositionDialog::default();
+        assert!(!dialog.is_open);
+        assert_eq!(dialog.name, "New Composition");
+        assert_eq!(dialog.width, 1920);
+        assert_eq!(dialog.height, 1080);
+        assert_eq!(dialog.fps, 29.97);
+        assert_eq!(dialog.duration, 60.0);
+        assert!(!dialog.edit_mode);
+        assert!(!dialog.confirmed);
+    }
+
+    // ── Domain: Open Mode (new vs edit) ──
+
+    #[test]
+    fn open_for_new_resets_all_fields() {
+        let mut dialog = CompositionDialog::default();
+        dialog.name = "Modified".to_string();
+        dialog.width = 800;
+        dialog.fps = 12.0;
+
+        dialog.open_for_new();
+
+        assert!(dialog.is_open);
+        assert!(!dialog.edit_mode);
+        assert_eq!(dialog.name, "New Composition");
+        assert_eq!(dialog.width, 1920);
+        assert_eq!(dialog.fps, 29.97);
+    }
+
+    #[test]
+    fn open_for_edit_populates_from_composition() {
+        let mut dialog = CompositionDialog::default();
+        let (comp, _) = Composition::new("My Comp", 3840, 2160, 60.0, 30.0);
+
+        dialog.open_for_edit(&comp);
+
+        assert!(dialog.is_open);
+        assert!(dialog.edit_mode);
+        assert_eq!(dialog.comp_id, Some(comp.id));
+        assert_eq!(dialog.name, "My Comp");
+        assert_eq!(dialog.width, 3840);
+        assert_eq!(dialog.height, 2160);
+        assert_eq!(dialog.fps, 60.0);
+        assert_eq!(dialog.duration, 30.0);
+    }
+
+    // ── Domain: Preset Detection ──
+
+    #[test]
+    fn known_general_preset_is_detected() {
+        let mut dialog = CompositionDialog::default();
+        dialog.width = 1920;
+        dialog.height = 1080;
+        dialog.fps = 29.97;
+        dialog.update_active_preset();
+
+        match &dialog.active_preset {
+            ActivePreset::General(idx) => {
+                assert!(*idx > 0, "Should not match Custom (index 0)");
+            }
+            other => panic!("Expected General preset, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn unknown_values_fall_back_to_custom() {
+        let mut dialog = CompositionDialog::default();
+        dialog.width = 999;
+        dialog.height = 777;
+        dialog.fps = 13.37;
+        dialog.update_active_preset();
+
+        assert_eq!(dialog.active_preset, ActivePreset::Custom);
+    }
+
+    #[test]
+    fn resolution_only_match_detects_resolution_preset() {
+        let mut dialog = CompositionDialog::default();
+        dialog.width = 1920;
+        dialog.height = 1080;
+        dialog.fps = 99.0; // non-standard FPS, no general match
+        dialog.update_active_preset();
+
+        match &dialog.active_preset {
+            ActivePreset::Resolution(_) => {} // Expected
+            ActivePreset::General(_) => {}    // Also acceptable
+            other => panic!("Expected Resolution or General preset, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn fps_only_match_detects_fps_preset() {
+        let mut dialog = CompositionDialog::default();
+        dialog.width = 999;
+        dialog.height = 777;
+        dialog.fps = 24.0; // standard FPS, non-standard resolution
+        dialog.update_active_preset();
+
+        match &dialog.active_preset {
+            ActivePreset::Fps(_) => {} // Expected
+            other => panic!("Expected Fps preset, got {:?}", other),
+        }
+    }
+
+    // ── Domain: Dialog UI Rendering ──
+
+    #[test]
+    fn new_mode_shows_new_composition_title() {
+        let mut dialog = CompositionDialog::default();
+        dialog.open_for_new();
+
+        let harness = Harness::builder()
+            .with_size(egui::vec2(500.0, 500.0))
+            .build(move |ctx| {
+                dialog.show(ctx);
+            });
+        assert!(harness
+            .query_by_label("New Composition Properties")
+            .is_some());
+    }
+
+    #[test]
+    fn edit_mode_shows_edit_composition_title() {
+        let mut dialog = CompositionDialog::default();
+        let (comp, _) = Composition::new("Test", 1920, 1080, 30.0, 10.0);
+        dialog.open_for_edit(&comp);
+
+        let harness = Harness::builder()
+            .with_size(egui::vec2(500.0, 500.0))
+            .build(move |ctx| {
+                dialog.show(ctx);
+            });
+        assert!(harness
+            .query_by_label("Edit Composition Properties")
+            .is_some());
+    }
+
+    #[test]
+    fn shows_form_labels() {
+        let mut dialog = CompositionDialog::default();
+        dialog.open_for_new();
+
+        let harness = Harness::builder()
+            .with_size(egui::vec2(500.0, 500.0))
+            .build(move |ctx| {
+                dialog.show(ctx);
+            });
+
+        assert!(harness.query_by_label("Composition Name:").is_some());
+        assert!(harness.query_by_label("Width:").is_some());
+        assert!(harness.query_by_label("Height:").is_some());
+        assert!(harness.query_by_label("FPS:").is_some());
+        assert!(harness.query_by_label("Duration:").is_some());
+    }
+
+    #[test]
+    fn hidden_when_not_open() {
+        let harness = Harness::builder()
+            .with_size(egui::vec2(500.0, 500.0))
+            .build(|ctx| {
+                let mut d = CompositionDialog::default(); // is_open = false
+                d.show(ctx);
+            });
+        assert!(harness
+            .query_by_label("New Composition Properties")
+            .is_none());
+    }
+
+    // ── Domain: Dialog Interaction (Dynamic / Selenium-style) ──
+
+    #[test]
+    fn click_ok_confirms_dialog() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let dialog = Rc::new(RefCell::new({
+            let mut d = CompositionDialog::default();
+            d.open_for_new();
+            d
+        }));
+
+        let d = dialog.clone();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(500.0, 500.0))
+            .build(move |ctx| {
+                d.borrow_mut().show(ctx);
+            });
+
+        harness.get_by_label("OK").click();
+        harness.run_steps(2);
+
+        assert!(dialog.borrow().confirmed);
+    }
+
+    #[test]
+    fn click_cancel_does_not_confirm() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let dialog = Rc::new(RefCell::new({
+            let mut d = CompositionDialog::default();
+            d.open_for_new();
+            d
+        }));
+
+        let d = dialog.clone();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(500.0, 500.0))
+            .build(move |ctx| {
+                d.borrow_mut().show(ctx);
+            });
+
+        harness.get_by_label("Cancel").click();
+        harness.run_steps(2);
+
+        assert!(!dialog.borrow().confirmed);
+    }
+
+    #[test]
+    fn dialog_closes_after_ok() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let dialog = Rc::new(RefCell::new({
+            let mut d = CompositionDialog::default();
+            d.open_for_new();
+            d
+        }));
+
+        let d = dialog.clone();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(500.0, 500.0))
+            .build(move |ctx| {
+                d.borrow_mut().show(ctx);
+            });
+
+        assert!(dialog.borrow().is_open);
+
+        harness.get_by_label("OK").click();
+        harness.run_steps(2);
+
+        assert!(!dialog.borrow().is_open);
+    }
+
+    #[test]
+    fn dialog_closes_after_cancel() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let dialog = Rc::new(RefCell::new({
+            let mut d = CompositionDialog::default();
+            d.open_for_new();
+            d
+        }));
+
+        let d = dialog.clone();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(500.0, 500.0))
+            .build(move |ctx| {
+                d.borrow_mut().show(ctx);
+            });
+
+        assert!(dialog.borrow().is_open);
+
+        harness.get_by_label("Cancel").click();
+        harness.run_steps(2);
+
+        assert!(!dialog.borrow().is_open);
     }
 }

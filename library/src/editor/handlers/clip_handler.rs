@@ -32,11 +32,23 @@ impl ClipHandler {
 
         let mut proj = super::write_project(project)?;
 
-        // Ensure track exists
+        // Ensure composition exists
+        let composition = proj.get_composition(composition_id).ok_or_else(|| {
+            LibraryError::project(format!("Composition with ID {} not found", composition_id))
+        })?;
+
+        // Ensure track exists and belongs to this composition's tree
         if proj.get_track(track_id).is_none() {
             return Err(LibraryError::project(format!(
                 "Track with ID {} not found",
                 track_id
+            )));
+        }
+        let root_track_id = composition.root_track_id;
+        if !proj.is_node_in_tree(root_track_id, track_id) {
+            return Err(LibraryError::project(format!(
+                "Track {} does not belong to composition {}",
+                track_id, composition_id
             )));
         }
 

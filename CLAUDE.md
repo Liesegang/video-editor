@@ -142,11 +142,63 @@ Node (enum)
 
 ## テスト
 
-- テストファイル: `library/tests/e2e_video.rs`, `library/tests/regression.rs`
+### テスト実行コマンド
+
+```bash
+# library ユニットテスト
+cargo test -p library
+
+# app UI テスト (egui_kittest)
+cargo test -p app
+
+# 全テスト
+cargo test --workspace
+
+# ignored テストを含む (E2E、リグレッション)
+cargo test -p library -- --ignored
+
+# スナップショット更新 (意図的な UI 変更後)
+UPDATE_SNAPSHOTS=true cargo test -p app
+```
+
+### テスト構成
+
+| 種類 | 場所 | フレームワーク | 実行方法 |
+|------|------|---------------|----------|
+| ユニットテスト | `library/src/` 内 `#[cfg(test)]` | 標準 | `cargo test -p library` |
+| 統合テスト | `library/tests/` | 標準 | `cargo test -p library` |
+| GUI テスト | `app/src/` 内 `#[cfg(test)]` | egui_kittest | `cargo test -p app` |
+| E2E/リグレッション | `library/tests/` | 標準 (`#[ignore]`) | `cargo test -p library -- --ignored` |
+
 - テストデータ: `test_data/` (画像、動画、音声、プロジェクトJSON)
-- ビジュアルリグレッションテスト: レンダリング結果をリファレンス画像とピクセル比較
 - レンダリング出力: `./rendered/` ディレクトリ
-- テストは `#[ignore]` 属性付きのものが多く、明示的に `--ignored` フラグが必要
+- スナップショット差分: `*.diff.png`, `*.new.png` は gitignore 済み
+
+### GUI テスト (egui_kittest)
+
+`egui_kittest` を使用したアクセシビリティツリーベースの UI テスト:
+- `Harness::builder().build()` / `build_ui()` でウィジェットを描画
+- `get_by_label()` / `query_by_label()` で要素を検索
+- `.click()`, `.key_press()` で操作をシミュレート
+- `harness.snapshot("name")` でビジュアルリグレッション
+- TextEdit を含む UI は `run_steps(N)` を使う (`run()` は max_steps 超過エラーになる)
+
+## Claude向けテスト指示
+
+### コード変更時のテスト実行ルール
+
+1. **library/ の変更後**: 必ず `cargo check` → `cargo test -p library` を実行
+2. **app/ の変更後**: 必ず `cargo check` → `cargo test -p app` を実行
+3. **両方の変更後**: `cargo check` → `cargo test --workspace` を実行
+4. テストが失敗した場合は修正してから完了とする
+
+### テストの作成・更新ルール
+
+1. **新しいウィジェットを作成した場合**: 同ファイル内に `#[cfg(test)] mod tests` で egui_kittest テストを追加
+2. **既存ウィジェットの動作を変更した場合**: 関連するテストを更新
+3. **library のロジックを変更した場合**: 影響するユニットテスト / 統合テストを確認・更新
+4. **スナップショットテストが失敗した場合**: 意図的な変更なら `UPDATE_SNAPSHOTS=true` で更新、バグなら修正
+5. テストは日本語コメント OK、テスト関数名は英語の snake_case
 
 ## CI/CD
 

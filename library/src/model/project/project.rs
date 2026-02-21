@@ -206,6 +206,21 @@ impl Project {
         None
     }
 
+    /// Check whether `node_id` is reachable from `root_id` in the track tree.
+    pub fn is_node_in_tree(&self, root_id: Uuid, node_id: Uuid) -> bool {
+        if root_id == node_id {
+            return true;
+        }
+        if let Some(Node::Track(track)) = self.nodes.get(&root_id) {
+            for child_id in &track.child_ids {
+                if self.is_node_in_tree(*child_id, node_id) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     // ==================== GraphNode Accessors ====================
 
     /// Get a graph node by ID

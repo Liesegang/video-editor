@@ -43,6 +43,21 @@ impl<'a> PreviewInteractions<'a> {
         content_rect: Rect,
         pending_actions: &mut Vec<PreviewAction>,
     ) {
+        // Invalidate stale drag state if selection changed externally (e.g. from timeline)
+        if let Some(drag_state) = &self.editor_context.interaction.preview.body_drag_state {
+            let all_still_selected = drag_state
+                .original_positions
+                .keys()
+                .all(|id| self.editor_context.selection.selected_entities.contains(id));
+            if !all_still_selected {
+                self.editor_context.interaction.preview.body_drag_state = None;
+                self.editor_context
+                    .interaction
+                    .preview
+                    .is_moving_selected_entity = false;
+            }
+        }
+
         let pointer_pos = self.ui.input(|i| i.pointer.hover_pos());
         let active_tool = self.editor_context.view.active_tool.clone();
 

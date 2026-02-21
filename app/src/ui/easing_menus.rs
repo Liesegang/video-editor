@@ -125,3 +125,139 @@ pub fn show_easing_menu(
         );
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui;
+    use egui_kittest::kittest::Queryable;
+    use egui_kittest::Harness;
+
+    // ── Domain: Top-Level Easing Items ──
+
+    #[test]
+    fn shows_linear_and_constant() {
+        let harness = Harness::builder()
+            .with_size(egui::vec2(200.0, 600.0))
+            .build_ui(|ui| {
+                show_easing_menu(ui, None, |_| {});
+            });
+        assert!(harness.query_by_label("Linear").is_some());
+        assert!(harness.query_by_label("Constant").is_some());
+    }
+
+    // ── Domain: Category Buttons ──
+
+    #[test]
+    fn shows_all_easing_category_buttons() {
+        let harness = Harness::builder()
+            .with_size(egui::vec2(200.0, 600.0))
+            .build_ui(|ui| {
+                show_easing_menu(ui, None, |_| {});
+            });
+        assert!(harness.query_by_label("Sine").is_some());
+        assert!(harness.query_by_label("Quad").is_some());
+        assert!(harness.query_by_label("Cubic").is_some());
+        assert!(harness.query_by_label("Quart").is_some());
+        assert!(harness.query_by_label("Quint").is_some());
+        assert!(harness.query_by_label("Expo").is_some());
+        assert!(harness.query_by_label("Circ").is_some());
+        assert!(harness.query_by_label("Back").is_some());
+        assert!(harness.query_by_label("Elastic").is_some());
+        assert!(harness.query_by_label("Bounce").is_some());
+        assert!(harness.query_by_label("Custom").is_some());
+    }
+
+    // ── Domain: Current Selection Highlighting ──
+
+    #[test]
+    fn renders_with_current_easing_selected() {
+        let current = EasingFunction::Linear;
+        let harness = Harness::builder()
+            .with_size(egui::vec2(200.0, 600.0))
+            .build_ui(move |ui| {
+                show_easing_menu(ui, Some(&current), |_| {});
+            });
+        // Should render without panic; Linear is highlighted via selectable_label
+        assert!(harness.query_by_label("Linear").is_some());
+    }
+
+    // ── Domain: Interaction (Dynamic / Selenium-style) ──
+
+    #[test]
+    fn click_linear_triggers_callback() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let selected: Rc<RefCell<Vec<EasingFunction>>> = Rc::new(RefCell::new(Vec::new()));
+        let s = selected.clone();
+
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(200.0, 600.0))
+            .build_ui(move |ui| {
+                let s2 = s.clone();
+                show_easing_menu(ui, None, move |easing| {
+                    s2.borrow_mut().push(easing);
+                });
+            });
+
+        harness.get_by_label("Linear").click();
+        harness.run();
+
+        let results = selected.borrow();
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], EasingFunction::Linear));
+    }
+
+    #[test]
+    fn click_constant_triggers_callback() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let selected: Rc<RefCell<Vec<EasingFunction>>> = Rc::new(RefCell::new(Vec::new()));
+        let s = selected.clone();
+
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(200.0, 600.0))
+            .build_ui(move |ui| {
+                let s2 = s.clone();
+                show_easing_menu(ui, None, move |easing| {
+                    s2.borrow_mut().push(easing);
+                });
+            });
+
+        harness.get_by_label("Constant").click();
+        harness.run();
+
+        let results = selected.borrow();
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], EasingFunction::Constant));
+    }
+
+    #[test]
+    fn reselecting_current_easing_still_triggers_callback() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let selected: Rc<RefCell<Vec<EasingFunction>>> = Rc::new(RefCell::new(Vec::new()));
+        let s = selected.clone();
+        let current = EasingFunction::Linear;
+
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(200.0, 600.0))
+            .build_ui(move |ui| {
+                let s2 = s.clone();
+                show_easing_menu(ui, Some(&current), move |easing| {
+                    s2.borrow_mut().push(easing);
+                });
+            });
+
+        // Even though Linear is already selected, clicking it should still fire callback
+        harness.get_by_label("Linear").click();
+        harness.run();
+
+        let results = selected.borrow();
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], EasingFunction::Linear));
+    }
+}

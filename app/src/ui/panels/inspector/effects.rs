@@ -43,47 +43,49 @@ pub(super) fn render_effects_section(
     // Add button (effects use searchable menu, not simple chain add)
     use super::properties::render_add_button;
     render_add_button(ui, |ui| {
+        use crate::ui::widgets::context_menu::{show_searchable_context_menu, SearchableItem};
+
         let available_effects = project_service.get_plugin_manager().get_available_effects();
-        let items: Vec<(String, Option<String>, String)> = available_effects
+        let items: Vec<SearchableItem<String>> = available_effects
             .into_iter()
-            .map(|(id, name, category)| (name, Some(category), id))
+            .map(|(id, name, category)| SearchableItem {
+                label: name,
+                category: Some(category),
+                icon: None,
+                action: id,
+                enabled: true,
+                keywords: vec![],
+            })
             .collect();
 
-        crate::ui::widgets::searchable_context_menu::show_searchable_menu(
-            ui,
-            "add_effect_menu",
-            &items,
-            |effect_id| {
-                let type_id = format!("effect.{}", effect_id);
-                match project_service.add_graph_node(track_id, &type_id) {
-                    Ok(new_node_id) => {
-                        let connect_from = if let Ok(proj) = project.read() {
-                            let chain = graph_analysis::get_effect_chain(&proj, selected_entity_id);
-                            if let Some(&last_effect) = chain.last() {
-                                PinId::new(last_effect, "image_out")
-                            } else {
-                                PinId::new(selected_entity_id, "image_out")
-                            }
+        if let Some(effect_id) = show_searchable_context_menu(ui, "add_effect_menu", &items) {
+            let type_id = format!("effect.{}", effect_id);
+            match project_service.add_graph_node(track_id, &type_id) {
+                Ok(new_node_id) => {
+                    let connect_from = if let Ok(proj) = project.read() {
+                        let chain = graph_analysis::get_effect_chain(&proj, selected_entity_id);
+                        if let Some(&last_effect) = chain.last() {
+                            PinId::new(last_effect, "image_out")
                         } else {
                             PinId::new(selected_entity_id, "image_out")
-                        };
-
-                        let connect_to = PinId::new(new_node_id, "image_in");
-                        if let Err(e) =
-                            project_service.add_graph_connection(connect_from, connect_to)
-                        {
-                            log::error!("Failed to connect effect: {}", e);
                         }
+                    } else {
+                        PinId::new(selected_entity_id, "image_out")
+                    };
 
-                        drop(history_manager.begin_mutation(project));
-                        *needs_refresh = true;
+                    let connect_to = PinId::new(new_node_id, "image_in");
+                    if let Err(e) = project_service.add_graph_connection(connect_from, connect_to) {
+                        log::error!("Failed to connect effect: {}", e);
                     }
-                    Err(e) => {
-                        log::error!("Failed to add effect graph node: {}", e);
-                    }
+
+                    drop(history_manager.begin_mutation(project));
+                    *needs_refresh = true;
                 }
-            },
-        );
+                Err(e) => {
+                    log::error!("Failed to add effect graph node: {}", e);
+                }
+            }
+        }
     });
 
     let context = PropertyRenderContext {

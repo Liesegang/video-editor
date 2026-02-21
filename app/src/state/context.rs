@@ -106,13 +106,9 @@ impl EditorContext {
         if self.selection.selected_entities.contains(&entity_id) {
             self.selection.selected_entities.remove(&entity_id);
             if self.selection.last_selected_entity_id == Some(entity_id) {
-                // If we removed the last selected (primary), just pick another arbitrary one or None
-                // For valid UX, ideally we pick the previous one but we don't track history.
-                // Just set to None or a random one.
-                self.selection.last_selected_entity_id =
-                    self.selection.selected_entities.iter().next().cloned();
-                // We lose track_id context if we pick random.
-                // It's acceptable for "last selected" to be None if the primary was deselected.
+                // We don't track entity→track mapping, so we can't recover the
+                // track_id for a remaining entity. Clear both to stay consistent.
+                self.selection.last_selected_entity_id = None;
                 self.selection.last_selected_track_id = None;
             }
         } else {
@@ -124,5 +120,202 @@ impl EditorContext {
 
     pub(crate) fn is_selected(&self, entity_id: Uuid) -> bool {
         self.selection.selected_entities.contains(&entity_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Domain: Single Selection (replace semantics) ──
+
+    #[test]
+    fn select_clip_replaces_entire_selection() {
+        let mut ctx = EditorContext::new(Uuid::new_v4());
+        let entity_a = Uuid::new_v4();
+        let entity_b = Uuid::new_v4();
+        let track = Uuid::new_v4();
+
+        ctx.select_clip(entity_a, track);
+        ctx.select_clip(entity_b, track);
+
+        assert!(
+            !ctx.is_selected(entity_a),
+            "Previous selection should be cleared"
+        );
+        assert!(ctx.is_selected(entity_b));
+        assert_eq!(ctx.selection.selected_entities.len(), 1);
+    }
+
+    #[test]
+    fn select_clip_updates_last_selected() {
+        let mut ctx = EditorContext::new(Uuid::new_v4());
+        let entity = Uuid::new_v4();
+        let track = Uuid::new_v4();
+
+        ctx.select_clip(entity, track);
+
+        assert_eq!(ctx.selection.last_selected_entity_id, Some(entity));
+        assert_eq!(ctx.selection.last_selected_track_id, Some(track));
+    }
+
+    // ── Domain: Additive Selection ──
+
+    #[test]
+    fn add_selection_preserves_existing() {
+        let mut ctx = EditorContext::new(Uuid::new_v4());
+        let entity_a = Uuid::new_v4();
+        let entity_b = Uuid::new_v4();
+        let track = Uuid::new_v4();
+
+        ctx.select_clip(entity_a, track);
+        ctx.add_selection(entity_b, track);
+
+        assert!(ctx.is_selected(entity_a));
+        assert!(ctx.is_selected(entity_b));
+        assert_eq!(ctx.selection.selected_entities.len(), 2);
+    }
+
+    // ── Domain: Toggle Selection ──
+
+    #[test]
+    fn toggle_adds_when_not_selected() {
+        let mut ctx = EditorContext::new(Uuid::new_v4());
+        let entity = Uuid::new_v4();
+        let track = Uuid::new_v4();
+
+        ctx.toggle_selection(entity, track);
+
+        assert!(ctx.is_selected(entity));
+        assert_eq!(ctx.selection.last_selected_entity_id, Some(entity));
+        assert_eq!(ctx.selection.last_selected_track_id, Some(track));
+    }
+
+    #[test]
+    fn toggle_removes_when_already_selected() {
+        let mut ctx = EditorContext::new(Uuid::new_v4());
+        let entity = Uuid::new_v4();
+        let track = Uuid::new_v4();
+
+        ctx.select_clip(entity, track);
+        ctx.toggle_selection(entity, track);
+
+        assert!(!ctx.is_selected(entity));
+    }
+
+    #[test]
+    fn toggle_off_primary_clears_last_selected_track() {
+        let mut ctx = EditorContext::new(Uuid::new_v4());
+        let entity = Uuid::new_v4();
+        let track = Uuid::new_v4();
+
+        ctx.select_clip(entity, track);
+        ctx.toggle_selection(entity, track);
+
+        assert_eq!(ctx.selection.last_selected_entity_id, None);
+        assert_eq!(ctx.selection.last_selected_track_id, None);
+    }
+
+    #[test]
+    fn toggle_off_primary_with_others_picks_remaining_entity() {
+        let mut ctx = EditorContext::new(Uuid::new_v4());
+        let entity_a = Uuid::new_v4();
+        let entity_b = Uuid::new_v4();
+        let track = Uuid::new_v4();
+
+        ctx.select_clip(entity_a, track);
+        ctx.add_selection(entity_b, track);
+        // entity_b is now the primary (last selected)
+        ctx.toggle_selection(entity_b, track);
+
+        assert!(
+            ctx.is_selected(entity_a),
+            "Other entity should remain selected"
+        );
+        assert!(
+            !ctx.is_selected(entity_b),
+            "Toggled entity should be removed"
+        );
+        // Both last_selected fields are cleared to stay consistent
+        // (we don't track entity→track mapping for remaining entities)
+        assert_eq!(ctx.selection.last_selected_entity_id, None);
+        assert_eq!(ctx.selection.last_selected_track_id, None);
+    }
+
+    // ── Domain: Initial State ──
+
+    #[test]
+    fn new_context_has_composition_set() {
+        let comp_id = Uuid::new_v4();
+        let ctx = EditorContext::new(comp_id);
+
+        assert_eq!(ctx.selection.composition_id, Some(comp_id));
+        assert!(ctx.selection.selected_entities.is_empty());
+        assert_eq!(ctx.selection.last_selected_entity_id, None);
+    }
+
+    // ── Domain: body_drag_state invalidation on selection change ──
+
+    #[test]
+    fn body_drag_state_stale_when_selection_changes() {
+        use crate::state::context_types::BodyDragState;
+
+        let mut ctx = EditorContext::new(Uuid::new_v4());
+        let entity_a = Uuid::new_v4();
+        let entity_b = Uuid::new_v4();
+        let track = Uuid::new_v4();
+
+        // Start with entity_a selected, simulate preview drag
+        ctx.select_clip(entity_a, track);
+        let mut positions = std::collections::HashMap::new();
+        positions.insert(entity_a, [100.0_f32, 200.0]);
+        ctx.interaction.preview.body_drag_state = Some(BodyDragState {
+            start_mouse_pos: egui::pos2(0.0, 0.0),
+            original_positions: positions,
+        });
+
+        // Timeline changes selection to entity_b
+        ctx.select_clip(entity_b, track);
+
+        // body_drag_state still references entity_a, which is no longer selected
+        let drag_state = ctx.interaction.preview.body_drag_state.as_ref().unwrap();
+        let all_still_selected = drag_state
+            .original_positions
+            .keys()
+            .all(|id| ctx.selection.selected_entities.contains(id));
+
+        assert!(
+            !all_still_selected,
+            "Drag state should be stale after selection change"
+        );
+    }
+
+    #[test]
+    fn body_drag_state_valid_when_selection_unchanged() {
+        use crate::state::context_types::BodyDragState;
+
+        let mut ctx = EditorContext::new(Uuid::new_v4());
+        let entity_a = Uuid::new_v4();
+        let track = Uuid::new_v4();
+
+        ctx.select_clip(entity_a, track);
+        let mut positions = std::collections::HashMap::new();
+        positions.insert(entity_a, [100.0_f32, 200.0]);
+        ctx.interaction.preview.body_drag_state = Some(BodyDragState {
+            start_mouse_pos: egui::pos2(0.0, 0.0),
+            original_positions: positions,
+        });
+
+        // Selection hasn't changed
+        let drag_state = ctx.interaction.preview.body_drag_state.as_ref().unwrap();
+        let all_still_selected = drag_state
+            .original_positions
+            .keys()
+            .all(|id| ctx.selection.selected_entities.contains(id));
+
+        assert!(
+            all_still_selected,
+            "Drag state should be valid when selection is unchanged"
+        );
     }
 }
