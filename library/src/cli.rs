@@ -1,9 +1,9 @@
 use crate::SkiaRenderer;
-use crate::core::rendering::render_service::RenderService;
-use crate::editor::export_service::ExportService;
-use crate::editor::project_model::ProjectModel;
 use crate::error::LibraryError;
 use crate::plugin::{ExportSettings, PluginManager};
+use crate::rendering::render_service::RenderService;
+use crate::service::export_service::ExportService;
+use crate::service::project_model::ProjectModel;
 use log::info;
 use std::fs;
 use std::io::Write;
@@ -64,7 +64,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         None,
     );
 
-    let cache_manager = Arc::new(crate::core::cache::CacheManager::new());
+    let cache_manager = Arc::new(crate::rendering::cache::CacheManager::new());
 
     let _property_evaluators = plugin_manager.get_property_evaluators();
 
@@ -96,7 +96,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
         let start_sample = (start_time * sample_rate as f64).round() as u64;
         let frames = (duration * sample_rate as f64).round() as usize;
 
-        let audio_data = crate::core::audio::mixer::mix_samples(
+        let audio_data = crate::audio::mixer::mix_samples(
             &project_model.project().assets,
             project_model.project().as_ref(),
             project_model.composition(),

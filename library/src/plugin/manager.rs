@@ -9,38 +9,38 @@ use log::debug;
 
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
-use crate::model::frame::Image;
-use crate::model::project::asset::AssetKind;
-use crate::model::project::property::PropertyDefinition;
-use crate::model::project::property::PropertyValue;
 use crate::plugin::EntityConverterPlugin;
+use crate::project::asset::AssetKind;
+use crate::project::property::PropertyDefinition;
+use crate::project::property::PropertyValue;
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
+use crate::runtime::Image;
 
-use crate::plugin::PluginCategory;
-use crate::plugin::effects::{EffectDefinition, EffectPlugin};
-use crate::plugin::evaluator::PropertyEvaluatorRegistry;
-use crate::plugin::exporters::{ExportPlugin, ExportSettings};
-use crate::plugin::loaders::{
+use crate::builtin::effects::{EffectDefinition, EffectPlugin};
+use crate::builtin::exporters::{ExportPlugin, ExportSettings};
+use crate::builtin::loaders::{
     AssetMetadata, LoadPlugin, LoadRepository, LoadRequest, LoadResponse,
 };
+use crate::plugin::PluginCategory;
+use crate::plugin::evaluator::PropertyEvaluatorRegistry;
 use crate::plugin::node_types::{NodeCategory, NodeTypeDefinition};
 use crate::plugin::repository::{PluginRegistry, PluginRepository};
 
 use crate::plugin::traits::{Plugin, PropertyPlugin};
 use crate::plugin::{DecoratorPlugin, EffectorPlugin, StylePlugin};
 
-use crate::plugin::effects::{
+use crate::builtin::effects::{
     BlurEffectPlugin, DilateEffectPlugin, DropShadowEffectPlugin, ErodeEffectPlugin,
     MagnifierEffectPlugin, PixelSorterPlugin, TileEffectPlugin,
 };
-use crate::plugin::entity_converter::{
+use crate::builtin::entity_converter::{
     ImageEntityConverterPlugin, ShapeEntityConverterPlugin, SkSLEntityConverterPlugin,
     TextEntityConverterPlugin, VideoEntityConverterPlugin,
 };
-use crate::plugin::exporters::{FfmpegExportPlugin, PngExportPlugin};
-use crate::plugin::loaders::{FfmpegVideoLoader, NativeImageLoader};
-use crate::plugin::properties::{
+use crate::builtin::exporters::{FfmpegExportPlugin, PngExportPlugin};
+use crate::builtin::loaders::{FfmpegVideoLoader, NativeImageLoader};
+use crate::builtin::properties::{
     ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin,
 };
 
@@ -84,21 +84,22 @@ impl Default for PluginManager {
 
         // Standard Effectors
         manager
-            .register_effector_plugin(Arc::new(crate::plugin::effectors::TransformEffectorPlugin));
+            .register_effector_plugin(Arc::new(crate::builtin::effectors::TransformEffectorPlugin));
         manager
-            .register_effector_plugin(Arc::new(crate::plugin::effectors::StepDelayEffectorPlugin));
+            .register_effector_plugin(Arc::new(crate::builtin::effectors::StepDelayEffectorPlugin));
         manager
-            .register_effector_plugin(Arc::new(crate::plugin::effectors::RandomizeEffectorPlugin));
-        manager.register_effector_plugin(Arc::new(crate::plugin::effectors::OpacityEffectorPlugin));
+            .register_effector_plugin(Arc::new(crate::builtin::effectors::RandomizeEffectorPlugin));
+        manager
+            .register_effector_plugin(Arc::new(crate::builtin::effectors::OpacityEffectorPlugin));
 
         // Standard Decorators
         manager.register_decorator_plugin(Arc::new(
-            crate::plugin::decorators::BackplateDecoratorPlugin,
+            crate::builtin::decorators::BackplateDecoratorPlugin,
         ));
 
         // Standard Styles
-        manager.register_style_plugin(Arc::new(crate::plugin::styles::FillStylePlugin));
-        manager.register_style_plugin(Arc::new(crate::plugin::styles::StrokeStylePlugin));
+        manager.register_style_plugin(Arc::new(crate::builtin::styles::FillStylePlugin));
+        manager.register_style_plugin(Arc::new(crate::builtin::styles::StrokeStylePlugin));
 
         // Auto-register NodeTypeDefinitions from existing plugins
         manager.auto_register_node_types();
@@ -277,16 +278,16 @@ impl PluginManager {
     pub fn get_default_effect_config(
         &self,
         effect_id: &str,
-    ) -> Option<crate::model::project::effect::EffectConfig> {
+    ) -> Option<crate::project::effect::EffectConfig> {
         let def = self.get_effect_definition(effect_id)?;
-        let mut props = crate::model::project::property::PropertyMap::new();
+        let mut props = crate::project::property::PropertyMap::new();
         for p in def.properties {
             props.set(
                 p.name().to_string(),
-                crate::model::project::property::Property::constant(p.default_value().clone()),
+                crate::project::property::Property::constant(p.default_value().clone()),
             );
         }
-        Some(crate::model::project::effect::EffectConfig {
+        Some(crate::project::effect::EffectConfig {
             id: uuid::Uuid::new_v4(),
             effect_type: effect_id.to_string(),
             properties: props,
@@ -564,7 +565,7 @@ impl PluginManager {
                     let sksl_content =
                         std::fs::read_to_string(&shader_path).map_err(|e| LibraryError::Io(e))?;
 
-                    match crate::plugin::effects::SkslEffectPlugin::new(
+                    match crate::builtin::effects::SkslEffectPlugin::new(
                         &toml_content,
                         &sksl_content,
                     ) {
@@ -604,7 +605,7 @@ impl PluginManager {
 
     pub fn get_inspector_definitions(
         &self,
-        _kind: &crate::model::project::clip::TrackClipKind,
+        _kind: &crate::project::clip::TrackClipKind,
     ) -> Vec<PropertyDefinition> {
         // Inspector plugins removed. Return empty or implement static logic if needed.
         Vec::new()
@@ -701,7 +702,7 @@ impl PluginManager {
 
     /// Auto-register NodeTypeDefinitions from existing effect/style/effector/decorator plugins.
     fn auto_register_node_types(&self) {
-        use crate::model::project::connection::PinDataType;
+        use crate::project::connection::PinDataType;
 
         let inner = self.inner.read().unwrap();
         let mut defs = Vec::new();
@@ -783,12 +784,12 @@ struct AutoRegisterConfig {
     chain_input: (
         &'static str,
         &'static str,
-        crate::model::project::connection::PinDataType,
+        crate::project::connection::PinDataType,
     ),
     chain_output: (
         &'static str,
         &'static str,
-        crate::model::project::connection::PinDataType,
+        crate::project::connection::PinDataType,
     ),
 }
 
@@ -799,7 +800,7 @@ fn build_node_type_def(
     plugin_name: &str,
     props: Vec<PropertyDefinition>,
 ) -> NodeTypeDefinition {
-    use crate::model::project::connection::PinDefinition;
+    use crate::project::connection::PinDefinition;
 
     let (in_name, in_label, in_type) = &config.chain_input;
     let (out_name, out_label, out_type) = &config.chain_output;
@@ -823,10 +824,10 @@ fn build_node_type_def(
 
 /// Convert a PropertyUiType to the closest PinDataType.
 fn property_ui_to_pin_data_type(
-    ui_type: &crate::model::project::property::PropertyUiType,
-) -> crate::model::project::connection::PinDataType {
-    use crate::model::project::connection::PinDataType;
-    use crate::model::project::property::PropertyUiType;
+    ui_type: &crate::project::property::PropertyUiType,
+) -> crate::project::connection::PinDataType {
+    use crate::project::connection::PinDataType;
+    use crate::project::property::PropertyUiType;
     match ui_type {
         PropertyUiType::Float { .. } => PinDataType::Scalar,
         PropertyUiType::Integer { .. } => PinDataType::Integer,

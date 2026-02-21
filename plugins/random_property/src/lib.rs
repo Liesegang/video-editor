@@ -1,6 +1,6 @@
-use library::model::project::property::{Property, PropertyValue};
 use library::plugin::{EvaluationContext, PropertyEvaluator};
 use library::plugin::{Plugin, PropertyPlugin};
+use library::project::property::{Property, PropertyValue};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;

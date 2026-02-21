@@ -6,7 +6,7 @@ use std::sync::Arc;
 use log::warn;
 use ordered_float::OrderedFloat;
 
-use crate::model::project::property::{Property, PropertyMap, PropertyValue};
+use crate::project::property::{Property, PropertyMap, PropertyValue};
 
 /// Registry for property evaluators.
 pub struct PropertyEvaluatorRegistry {

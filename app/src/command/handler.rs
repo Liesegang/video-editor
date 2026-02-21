@@ -1,0 +1,207 @@
+use std::fs;
+use std::io::Write;
+// use std::sync::{Arc, RwLock};
+use eframe::egui;
+use egui_dock::DockState;
+use log::{error, info, warn};
+
+use library::EditorService;
+
+use crate::command::history::HistoryManager;
+use crate::command::CommandId;
+use crate::context::context::EditorContext;
+use crate::types::Tab;
+
+pub struct ActionContext<'a> {
+    pub editor_context: &'a mut EditorContext,
+    pub project_service: &'a mut EditorService,
+    pub history_manager: &'a mut HistoryManager,
+    pub dock_state: &'a mut DockState<Tab>,
+}
+
+pub fn handle_command(
+    ctx: &egui::Context,
+    action: CommandId,
+    context: ActionContext,
+    trigger_settings: &mut bool,
+) {
+    match action {
+        // File / Project Operations
+        CommandId::NewProject
+        | CommandId::LoadProject
+        | CommandId::Save
+        | CommandId::SaveAs
+        | CommandId::Export => {
+            handle_file_command(ctx, action, context);
+        }
+
+        // Edit Operations
+        CommandId::Undo | CommandId::Redo | CommandId::Delete => {
+            handle_edit_command(action, context);
+        }
+
+        // View / UI Operations
+        CommandId::ResetLayout
+        | CommandId::TogglePlayback
+        | CommandId::TogglePanel(_)
+        | CommandId::HandTool => {
+            handle_view_command(action, context);
+        }
+
+        // Global / Misc Operations
+        CommandId::Settings => {
+            *trigger_settings = true;
+        }
+        CommandId::ShowCommandPalette => {
+            // Handled in MyApp::update explicitly to open dialog
+        }
+        CommandId::Quit => {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+}
+
+fn handle_file_command(_ctx: &egui::Context, action: CommandId, context: ActionContext) {
+    match action {
+        CommandId::NewProject => match context.project_service.create_new_project() {
+            Ok(new_comp_id) => {
+                context.editor_context.selection.composition_id = Some(new_comp_id);
+                context.editor_context.selection.last_selected_track_id = None;
+                context.editor_context.selection.last_selected_entity_id = None;
+                context.editor_context.selection.selected_entities.clear();
+                context.editor_context.timeline.current_time = 0.0;
+
+                context.history_manager.clear();
+                let state = context.project_service.with_project(|p| p.clone());
+                context.history_manager.push_project_state(state);
+            }
+            Err(e) => error!("Failed to create new project: {}", e),
+        },
+        CommandId::LoadProject => {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Project File", &["json"])
+                .pick_file()
+            {
+                if let Err(e) = context.project_service.load_project_from_path(&path) {
+                    error!("Failed to load project: {}", e);
+                } else {
+                    context.history_manager.clear();
+                    let state = context.project_service.with_project(|p| p.clone());
+                    context.history_manager.push_project_state(state);
+                    info!("Project loaded from {}", path.display());
+                    context.editor_context.timeline.current_time = 0.0;
+                }
+            }
+        }
+        CommandId::Save | CommandId::SaveAs => {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Project File", &["json"])
+                .set_file_name("project.json")
+                .save_file()
+            {
+                match context.project_service.save_project() {
+                    Ok(json_str) => match fs::File::create(&path) {
+                        Ok(mut file) => {
+                            if let Err(e) = file.write_all(json_str.as_bytes()) {
+                                error!("Failed to write project to file: {}", e);
+                            } else {
+                                info!("Project saved to {}", path.display());
+                            }
+                        }
+                        Err(e) => error!("Failed to create file: {}", e),
+                    },
+                    Err(e) => error!("Failed to save project: {}", e),
+                }
+            }
+        }
+        CommandId::Export => {
+            // Handled elsewhere or placeholder
+        }
+        _ => {}
+    }
+}
+
+fn handle_edit_command(action: CommandId, context: ActionContext) {
+    match action {
+        CommandId::Undo => {
+            if let Some(prev_state) = context.history_manager.undo() {
+                context.project_service.set_project(prev_state);
+            } else {
+                warn!("Undo stack is empty (or at initial state).");
+            }
+        }
+        CommandId::Redo => {
+            if let Some(next_state) = context.history_manager.redo() {
+                context.project_service.set_project(next_state);
+            } else {
+                warn!("Redo stack is empty.");
+            }
+        }
+        CommandId::Delete => {
+            if let Some(_comp_id) = context.editor_context.selection.composition_id {
+                if let Some(track_id) = context.editor_context.selection.last_selected_track_id {
+                    if let Some(entity_id) =
+                        context.editor_context.selection.last_selected_entity_id
+                    {
+                        if let Err(e) = context
+                            .project_service
+                            .remove_clip_from_track(track_id, entity_id)
+                        {
+                            error!("Failed to remove entity: {:?}", e);
+                        } else {
+                            context
+                                .editor_context
+                                .selection
+                                .selected_entities
+                                .remove(&entity_id);
+                            context.editor_context.selection.last_selected_entity_id = None;
+                            let current_state = context.project_service.with_project(|p| p.clone());
+                            context.history_manager.push_project_state(current_state);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_view_command(action: CommandId, context: ActionContext) {
+    match action {
+        CommandId::ResetLayout => {
+            *context.dock_state = crate::panels::tab_viewer::create_initial_dock_state();
+        }
+        CommandId::TogglePlayback => {
+            let is_playing = !context.editor_context.timeline.is_playing;
+            context.editor_context.timeline.is_playing = is_playing;
+
+            if is_playing {
+                context
+                    .project_service
+                    .reset_audio_pump(context.editor_context.timeline.current_time as f64);
+                if let Err(e) = context.project_service.get_audio_engine().play() {
+                    log::error!("Failed to play audio: {}", e);
+                }
+            } else {
+                // Flush the buffer immediately to stop sound
+                context
+                    .project_service
+                    .reset_audio_pump(context.editor_context.timeline.current_time as f64);
+                if let Err(e) = context.project_service.get_audio_engine().pause() {
+                    log::error!("Failed to pause audio: {}", e);
+                }
+            }
+        }
+        CommandId::TogglePanel(tab) => {
+            if let Some(index) = context.dock_state.find_tab(&tab) {
+                context.dock_state.remove_tab(index);
+            } else {
+                context.dock_state.push_to_focused_leaf(tab);
+            }
+        }
+        CommandId::HandTool => {
+            // Handled by ViewportController logic elsewhere usually
+        }
+        _ => {}
+    }
+}

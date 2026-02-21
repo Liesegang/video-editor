@@ -1,7 +1,7 @@
 //! Node type definitions for the data-flow graph.
 
-use crate::model::project::connection::PinDefinition;
-use crate::model::project::property::PropertyDefinition;
+use crate::project::connection::PinDefinition;
+use crate::project::property::PropertyDefinition;
 
 /// Category of a node type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

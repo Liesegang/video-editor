@@ -1,9 +1,9 @@
-use library::model::project::asset::{Asset, AssetKind};
-use library::model::project::clip::TrackClip;
-use library::model::project::node::Node;
-use library::model::project::project::{Composition, Project};
-use library::model::project::property::PropertyMap;
-use library::model::project::track::TrackData;
+use library::project::asset::{Asset, AssetKind};
+use library::project::clip::TrackClip;
+use library::project::node::Node;
+use library::project::project::{Composition, Project};
+use library::project::property::PropertyMap;
+use library::project::track::TrackData;
 
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
@@ -31,7 +31,7 @@ fn test_project_serialization_roundtrip() {
     let mut clip = TrackClip::new(
         Uuid::new_v4(),
         Some(asset_id),
-        library::model::project::clip::TrackClipKind::Video,
+        library::project::clip::TrackClipKind::Video,
         0,
         100,
         100,
@@ -74,8 +74,8 @@ fn test_property_serialization() {
     let mut props = PropertyMap::new();
     props.set(
         "opacity".to_string(),
-        library::model::project::property::Property::constant(
-            library::model::project::property::PropertyValue::Number(OrderedFloat(0.5)),
+        library::project::property::Property::constant(
+            library::project::property::PropertyValue::Number(OrderedFloat(0.5)),
         ),
     );
 
@@ -84,7 +84,7 @@ fn test_property_serialization() {
         serde_json::from_str(&json).expect("Failed to deserialize props");
 
     let val = loaded_props.get("opacity").expect("Missing opacity");
-    if let library::model::project::property::PropertyValue::Number(n) = val.value().unwrap() {
+    if let library::project::property::PropertyValue::Number(n) = val.value().unwrap() {
         assert_eq!(*n, OrderedFloat(0.5));
     } else {
         panic!("Wrong value type");
@@ -111,7 +111,7 @@ fn test_node_based_structure() {
     let mut clip1 = TrackClip::new(
         Uuid::new_v4(),
         None,
-        library::model::project::clip::TrackClipKind::Image,
+        library::project::clip::TrackClipKind::Image,
         0,
         50,
         100,
@@ -121,13 +121,13 @@ fn test_node_based_structure() {
     );
     clip1.set_constant_property(
         "file_path",
-        library::model::project::property::PropertyValue::String("/path/to/image.png".to_string()),
+        library::project::property::PropertyValue::String("/path/to/image.png".to_string()),
     );
     clip1.source_begin_frame = 0;
     let mut clip2 = TrackClip::new(
         Uuid::new_v4(),
         None,
-        library::model::project::clip::TrackClipKind::Image,
+        library::project::clip::TrackClipKind::Image,
         51,
         100,
         100,
@@ -137,7 +137,7 @@ fn test_node_based_structure() {
     );
     clip2.set_constant_property(
         "file_path",
-        library::model::project::property::PropertyValue::String("/path/to/image2.png".to_string()),
+        library::project::property::PropertyValue::String("/path/to/image2.png".to_string()),
     );
     clip2.source_begin_frame = 0;
     let clip1_id = clip1.id;

@@ -1,6 +1,6 @@
 use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, Style};
-use library::model::project::project::{Composition, Project};
+use library::project::project::{Composition, Project};
 use library::EditorService;
 use log::warn;
 #[allow(deprecated)]
@@ -9,20 +9,18 @@ use std::fs;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-use crate::action::{
-    handler::{handle_command, ActionContext},
-    HistoryManager,
-};
+use crate::command::handler::{handle_command, ActionContext};
+use crate::command::history::HistoryManager;
+use crate::command::shortcut::ShortcutManager;
 use crate::command::{CommandId, CommandRegistry};
 use crate::config;
-use crate::model::ui_types::Tab;
-use crate::shortcut::ShortcutManager;
-use crate::state::context::EditorContext;
-use crate::ui::command_palette::CommandPalette;
-use crate::ui::dialogs::composition_dialog::CompositionDialog;
-use crate::ui::dialogs::export_dialog::ExportDialog;
-use crate::ui::dialogs::settings_dialog::SettingsDialog;
-use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
+use crate::context::context::EditorContext;
+use crate::dialogs::composition_dialog::CompositionDialog;
+use crate::dialogs::export_dialog::ExportDialog;
+use crate::dialogs::settings_dialog::SettingsDialog;
+use crate::panels::tab_viewer::{create_initial_dock_state, AppTabViewer};
+use crate::types::Tab;
+use crate::widgets::command_palette::CommandPalette;
 use library::RenderServer;
 
 pub struct RuViEApp {
@@ -116,7 +114,7 @@ impl eframe::App for RuViEApp {
                 && !self.editor_context.keyframe_dialog.is_open;
             // Disable menu bar if a modal is open
             ui.add_enabled_ui(main_ui_enabled, |ui| {
-                crate::ui::menu::menu_bar(
+                crate::menu::menu_bar(
                     ui,
                     &self.command_registry,
                     &mut self.dock_state,
@@ -131,12 +129,12 @@ impl eframe::App for RuViEApp {
         if is_listening {
             is_listening_for_shortcut = true;
         }
-        if let Some(crate::ui::dialogs::settings_dialog::SettingsResult::Save) = result {
+        if let Some(crate::dialogs::settings_dialog::SettingsResult::Save) = result {
             self.command_registry = self.settings_dialog.command_registry.clone();
             self.app_config = self.settings_dialog.config.clone();
 
             // Apply theme when config changes
-            crate::ui::theme::apply_theme(ctx, &self.app_config);
+            crate::theme::apply_theme(ctx, &self.app_config);
 
             // Apply new config
             config::save_config(&self.app_config);
@@ -153,7 +151,7 @@ impl eframe::App for RuViEApp {
         }
 
         if self.editor_context.keyframe_dialog.is_open {
-            crate::ui::dialogs::keyframe_dialog::show_keyframe_dialog(
+            crate::dialogs::keyframe_dialog::show_keyframe_dialog(
                 ctx,
                 &mut self.editor_context,
                 &mut self.history_manager,
@@ -171,7 +169,7 @@ impl eframe::App for RuViEApp {
         if let Some(dialog) = &mut self.editor_context.interaction.general.active_confirmation {
             if let Some(action) = dialog.show(ctx) {
                 match action {
-                    crate::ui::dialogs::confirmation::ConfirmationAction::DeleteAsset(id) => {
+                    crate::dialogs::confirmation::ConfirmationAction::DeleteAsset(id) => {
                         if let Err(e) = self.project_service.remove_asset_fully(id) {
                             log::error!("Failed to remove asset: {}", e);
                         } else {
@@ -180,7 +178,7 @@ impl eframe::App for RuViEApp {
                             self.history_manager.push_project_state(current_state);
                         }
                     }
-                    crate::ui::dialogs::confirmation::ConfirmationAction::DeleteComposition(id) => {
+                    crate::dialogs::confirmation::ConfirmationAction::DeleteComposition(id) => {
                         if let Err(e) = self.project_service.remove_composition_fully(id) {
                             log::error!("Failed to remove composition: {}", e);
                         } else {
@@ -336,7 +334,7 @@ fn setup_theme(ctx: &egui::Context, config: &config::AppConfig) {
     let mut visuals = Visuals::dark();
     visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(255, 120, 0);
     ctx.set_visuals(visuals);
-    crate::ui::theme::apply_theme(ctx, config);
+    crate::theme::apply_theme(ctx, config);
 }
 
 fn setup_fonts(ctx: &egui::Context) {
@@ -384,7 +382,7 @@ fn create_default_project() -> (Arc<RwLock<Project>>, Uuid) {
     let default_comp_id = default_comp.id;
     {
         let mut proj = default_project.write().unwrap();
-        proj.add_node(library::model::project::node::Node::Track(root_track));
+        proj.add_node(library::project::node::Node::Track(root_track));
         proj.add_composition(default_comp);
     }
     (default_project, default_comp_id)

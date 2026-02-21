@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use libloading::Library;
 
+use crate::builtin::effects::EffectPlugin;
+use crate::builtin::exporters::ExportPlugin;
+use crate::builtin::loaders::LoadRepository;
 use crate::plugin::EntityConverterPlugin;
-use crate::plugin::effects::EffectPlugin;
 use crate::plugin::evaluator::PropertyEvaluatorRegistry;
-use crate::plugin::exporters::ExportPlugin;
-use crate::plugin::loaders::LoadRepository;
 use crate::plugin::node_types::NodeTypeDefinition;
 use crate::plugin::traits::Plugin;
 use crate::plugin::{DecoratorPlugin, EffectorPlugin, StylePlugin};

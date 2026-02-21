@@ -1,8 +1,7 @@
-//! Plugin system for effects, loaders, exporters, property evaluators, and more.
+//! Plugin system infrastructure: traits, registry, and manager.
 
 #![allow(improper_ctypes_definitions)]
 
-pub mod entity_converter;
 mod evaluator;
 mod manager;
 pub mod node_definitions;
@@ -10,42 +9,38 @@ pub mod node_types;
 mod repository;
 mod traits;
 
-pub mod decorators;
-pub mod effectors;
-pub mod effects;
-pub mod exporters;
-pub mod loaders;
-pub mod properties;
-pub mod styles;
-
 // Re-export from submodules
-pub use entity_converter::{EntityConverterPlugin, FrameEvaluationContext};
 pub use evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
 pub use manager::{PluginInfo, PluginManager};
 pub use node_types::{NodeCategory, NodeTypeDefinition};
 pub use repository::PluginRepository;
 pub use traits::{Plugin, PropertyPlugin};
 
-// Re-export from sub-crate modules
-pub use decorators::DecoratorPlugin;
-pub use effectors::EffectorPlugin;
-pub use effects::{EffectDefinition, EffectPlugin, EffectRepository};
-pub use exporters::{ExportFormat, ExportPlugin, ExportRepository, ExportSettings};
-pub use loaders::{AssetMetadata, LoadPlugin, LoadRepository, LoadRequest, LoadResponse};
-pub use styles::StylePlugin;
+// Re-export from builtin for backward compatibility
+pub use crate::builtin::decorators::DecoratorPlugin;
+pub use crate::builtin::effectors::EffectorPlugin;
+pub use crate::builtin::effects::{EffectDefinition, EffectPlugin, EffectRepository};
+pub use crate::builtin::entity_converter::{EntityConverterPlugin, FrameEvaluationContext};
+pub use crate::builtin::exporters::{ExportFormat, ExportPlugin, ExportRepository, ExportSettings};
+pub use crate::builtin::loaders::{
+    AssetMetadata, LoadPlugin, LoadRepository, LoadRequest, LoadResponse,
+};
+pub use crate::builtin::styles::StylePlugin;
 
-// Re-export plugin implementations
-pub use effects::blur::BlurEffectPlugin;
-pub use effects::dilate::DilateEffectPlugin;
-pub use effects::drop_shadow::DropShadowEffectPlugin;
-pub use effects::erode::ErodeEffectPlugin;
-pub use effects::magnifier::MagnifierEffectPlugin;
-pub use effects::tile::TileEffectPlugin;
-pub use exporters::ffmpeg_export::FfmpegExportPlugin;
-pub use exporters::png_export::PngExportPlugin;
-pub use loaders::ffmpeg_video::FfmpegVideoLoader;
-pub use loaders::native_image::NativeImageLoader;
-pub use properties::{ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin};
+// Re-export concrete implementations for backward compatibility
+pub use crate::builtin::effects::blur::BlurEffectPlugin;
+pub use crate::builtin::effects::dilate::DilateEffectPlugin;
+pub use crate::builtin::effects::drop_shadow::DropShadowEffectPlugin;
+pub use crate::builtin::effects::erode::ErodeEffectPlugin;
+pub use crate::builtin::effects::magnifier::MagnifierEffectPlugin;
+pub use crate::builtin::effects::tile::TileEffectPlugin;
+pub use crate::builtin::exporters::ffmpeg_export::FfmpegExportPlugin;
+pub use crate::builtin::exporters::png_export::PngExportPlugin;
+pub use crate::builtin::loaders::ffmpeg_video::FfmpegVideoLoader;
+pub use crate::builtin::loaders::native_image::NativeImageLoader;
+pub use crate::builtin::properties::{
+    ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin,
+};
 
 // Plugin category enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

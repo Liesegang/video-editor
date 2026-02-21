@@ -1,11 +1,11 @@
-use library::model::frame::entity::FrameContent;
-use library::model::project::clip::TrackClip;
-use library::model::project::project::Composition;
+use library::builtin::entity_converter::FrameEvaluationContext;
+use library::builtin::entity_converter::VideoEntityConverterPlugin;
+use library::builtin::properties::ConstantEvaluator;
 use library::plugin::EntityConverterPlugin;
 use library::plugin::PropertyEvaluatorRegistry;
-use library::plugin::entity_converter::FrameEvaluationContext;
-use library::plugin::entity_converter::VideoEntityConverterPlugin;
-use library::plugin::properties::ConstantEvaluator;
+use library::project::clip::TrackClip;
+use library::project::project::Composition;
+use library::runtime::entity::FrameContent;
 use std::sync::Arc;
 
 #[test]
@@ -18,7 +18,7 @@ fn test_video_converter_frame_calculation() {
     let registry = Arc::new(registry);
 
     let plugin_manager = Arc::new(library::plugin::PluginManager::new());
-    let project = library::model::project::project::Project::new("Test");
+    let project = library::project::project::Project::new("Test");
     let context = FrameEvaluationContext {
         composition: &comp,
         property_evaluators: &registry,
@@ -30,18 +30,18 @@ fn test_video_converter_frame_calculation() {
     let mut clip = TrackClip::new(
         uuid::Uuid::new_v4(),
         None,
-        library::model::project::clip::TrackClipKind::Video,
+        library::project::clip::TrackClipKind::Video,
         0,
         100,
         100,
         Some(100),
         video_fps,
-        library::model::project::property::PropertyMap::new(),
+        library::project::property::PropertyMap::new(),
     );
     clip.source_begin_frame = 100;
     clip.set_constant_property(
         "file_path",
-        library::model::project::property::PropertyValue::String("test.mp4".to_string()),
+        library::project::property::PropertyValue::String("test.mp4".to_string()),
     );
 
     println!("Clip FPS: {}", clip.fps);

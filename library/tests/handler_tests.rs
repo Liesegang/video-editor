@@ -4,14 +4,14 @@
 
 use std::sync::{Arc, RwLock};
 
-use library::model::project::clip::TrackClipKind;
-use library::model::project::node::Node;
-use library::model::project::project::{Composition, Project};
 use library::plugin::PluginManager;
+use library::project::clip::TrackClipKind;
+use library::project::node::Node;
+use library::project::project::{Composition, Project};
 
-use library::editor::handlers::clip_factory::ClipFactory;
-use library::editor::handlers::clip_handler::ClipHandler;
-use library::editor::handlers::track_handler::TrackHandler;
+use library::service::handlers::clip_factory::ClipFactory;
+use library::service::handlers::clip_handler::ClipHandler;
+use library::service::handlers::track_handler::TrackHandler;
 
 /// Helper: create a Project with one composition and its root track.
 fn setup_project() -> (Arc<RwLock<Project>>, uuid::Uuid, uuid::Uuid) {
@@ -381,7 +381,7 @@ fn test_add_clip_rejects_orphan_track() {
     let plugin_manager = PluginManager::default();
 
     // 孤立トラック (どのコンポジションのツリーにも属さない) を直接追加
-    let orphan_track = library::model::project::track::TrackData::new("Orphan Track");
+    let orphan_track = library::project::track::TrackData::new("Orphan Track");
     let orphan_track_id = orphan_track.id;
     {
         let mut proj = project.write().unwrap();
@@ -504,7 +504,7 @@ fn test_ui_flow_add_track_subtrack_text_clip() {
     let text_value = clip.properties.get_constant_value("text");
     assert!(text_value.is_some(), "Clip should have 'text' property");
     match text_value.unwrap() {
-        library::model::project::property::PropertyValue::String(s) => {
+        library::project::property::PropertyValue::String(s) => {
             assert_eq!(s, sample_text, "Text property should match");
         }
         _ => panic!("'text' property should be a String"),

@@ -2,9 +2,9 @@
 //!
 //! Reference: node_list.yml (documentation only, not loaded at runtime).
 
-use crate::model::project::connection::{PinDataType, PinDefinition};
 use crate::plugin::PluginManager;
 use crate::plugin::node_types::{NodeCategory, NodeTypeDefinition};
+use crate::project::connection::{PinDataType, PinDefinition};
 
 /// Register all built-in node type definitions.
 pub(crate) fn register_all_node_types(manager: &PluginManager) {
@@ -776,8 +776,8 @@ fn threed_nodes() -> Vec<NodeTypeDefinition> {
 }
 
 fn style_nodes() -> Vec<NodeTypeDefinition> {
-    use crate::model::frame::color::Color;
-    use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+    use crate::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+    use crate::runtime::color::Color;
     use PinDataType::*;
     let nc = NodeCategory::Style;
 
@@ -924,7 +924,7 @@ fn style_nodes() -> Vec<NodeTypeDefinition> {
 }
 
 fn effector_nodes() -> Vec<NodeTypeDefinition> {
-    use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+    use crate::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
     use PinDataType::*;
     let nc = NodeCategory::Effector;
 
@@ -1161,8 +1161,8 @@ fn effector_nodes() -> Vec<NodeTypeDefinition> {
 }
 
 fn decorator_nodes() -> Vec<NodeTypeDefinition> {
-    use crate::model::frame::color::Color;
-    use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+    use crate::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+    use crate::runtime::color::Color;
     use PinDataType::*;
     let nc = NodeCategory::Decorator;
 
