@@ -449,7 +449,8 @@ impl ProjectManager {
         out_frame: u64,
         insert_index: Option<usize>,
     ) -> Result<Uuid, LibraryError> {
-        handlers::clip_handler::ClipHandler::add_clip_to_track(
+        let clip_kind = clip.kind.clone();
+        let clip_id = handlers::clip_handler::ClipHandler::add_clip_to_track(
             &self.project,
             composition_id,
             track_id,
@@ -457,7 +458,20 @@ impl ProjectManager {
             in_frame,
             out_frame,
             insert_index,
-        )
+        )?;
+
+        // Auto-create default graph nodes (transform, style.fill) for the new clip
+        if let Err(e) = handlers::clip_handler::ClipHandler::setup_clip_graph_nodes(
+            &self.project,
+            &self.plugin_manager,
+            track_id,
+            clip_id,
+            &clip_kind,
+        ) {
+            log::warn!("Failed to setup graph nodes for clip {}: {}", clip_id, e);
+        }
+
+        Ok(clip_id)
     }
 
     pub fn remove_clip_from_track(
@@ -655,52 +669,6 @@ impl ProjectManager {
         )
     }
 
-    pub fn add_effect_to_clip(&self, clip_id: Uuid, effect_id: &str) -> Result<(), LibraryError> {
-        let effect_config = self
-            .plugin_manager
-            .get_default_effect_config(effect_id)
-            .ok_or_else(|| {
-                LibraryError::project(format!(
-                    "Default config for effect '{}' not found",
-                    effect_id
-                ))
-            })?;
-
-        handlers::clip_handler::ClipHandler::add_effect(&self.project, clip_id, effect_config)
-    }
-
-    pub fn update_track_clip_effects(
-        &self,
-        clip_id: Uuid,
-        effects: Vec<crate::model::project::effect::EffectConfig>,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_effects(&self.project, clip_id, effects)
-    }
-
-    pub fn update_track_clip_styles(
-        &self,
-        clip_id: Uuid,
-        styles: Vec<crate::model::project::style::StyleInstance>,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_styles(&self.project, clip_id, styles)
-    }
-
-    pub fn update_track_clip_effectors(
-        &self,
-        clip_id: Uuid,
-        effectors: Vec<crate::model::project::ensemble::EffectorInstance>,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_effectors(&self.project, clip_id, effectors)
-    }
-
-    pub fn update_track_clip_decorators(
-        &self,
-        clip_id: Uuid,
-        decorators: Vec<crate::model::project::ensemble::DecoratorInstance>,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_decorators(&self.project, clip_id, decorators)
-    }
-
     pub fn set_property_attribute(
         &self,
         clip_id: Uuid,
@@ -717,90 +685,6 @@ impl ProjectManager {
             attribute_key,
             attribute_value,
         )
-    }
-
-    pub fn add_style(&self, clip_id: Uuid, style_type: &str) -> Result<(), LibraryError> {
-        // 1. Get properties from PluginManager
-        let plugin = self
-            .plugin_manager
-            .get_style_plugin(style_type)
-            .ok_or_else(|| {
-                LibraryError::plugin(format!("Style plugin '{}' not found", style_type))
-            })?;
-
-        let properties =
-            crate::model::project::property::PropertyMap::from_definitions(&plugin.properties());
-
-        // 2. Create instance
-        let instance = crate::model::project::style::StyleInstance::new(style_type, properties);
-
-        // 3. Add to clip
-        let project = self.project.read().unwrap();
-        if let Some(clip) = project.get_clip(clip_id) {
-            let mut new_styles = clip.styles.clone();
-            new_styles.push(instance);
-            drop(project); // release lock
-            self.update_track_clip_styles(clip_id, new_styles)
-        } else {
-            Err(LibraryError::validation(format!(
-                "Clip {} not found",
-                clip_id
-            )))
-        }
-    }
-
-    pub fn add_effector(&self, clip_id: Uuid, effector_type: &str) -> Result<(), LibraryError> {
-        let defs = self.plugin_manager.get_effector_properties(effector_type);
-        if defs.is_empty() {
-            return Err(LibraryError::plugin(format!(
-                "Effector plugin '{}' not found or has no properties",
-                effector_type
-            )));
-        }
-
-        let properties = crate::model::project::property::PropertyMap::from_definitions(&defs);
-        let instance =
-            crate::model::project::ensemble::EffectorInstance::new(effector_type, properties);
-
-        let project = self.project.read().unwrap();
-        if let Some(clip) = project.get_clip(clip_id) {
-            let mut new_effectors = clip.effectors.clone();
-            new_effectors.push(instance);
-            drop(project); // release lock
-            self.update_track_clip_effectors(clip_id, new_effectors)
-        } else {
-            Err(LibraryError::validation(format!(
-                "Clip {} not found",
-                clip_id
-            )))
-        }
-    }
-
-    pub fn add_decorator(&self, clip_id: Uuid, decorator_type: &str) -> Result<(), LibraryError> {
-        let defs = self.plugin_manager.get_decorator_properties(decorator_type);
-        if defs.is_empty() {
-            return Err(LibraryError::plugin(format!(
-                "Decorator plugin '{}' not found or has no properties",
-                decorator_type
-            )));
-        }
-
-        let properties = crate::model::project::property::PropertyMap::from_definitions(&defs);
-        let instance =
-            crate::model::project::ensemble::DecoratorInstance::new(decorator_type, properties);
-
-        let project = self.project.read().unwrap();
-        if let Some(clip) = project.get_clip(clip_id) {
-            let mut new_decorators = clip.decorators.clone();
-            new_decorators.push(instance);
-            drop(project); // release lock
-            self.update_track_clip_decorators(clip_id, new_decorators)
-        } else {
-            Err(LibraryError::validation(format!(
-                "Clip {} not found",
-                clip_id
-            )))
-        }
     }
 
     // --- Graph Node Operations ---

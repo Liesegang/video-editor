@@ -246,9 +246,7 @@ fn render_embedded_effectors(
 
             remove_clicked
         },
-        |new_effectors, project_service| {
-            project_service.update_track_clip_effectors(selected_entity_id, new_effectors)
-        },
+        |_new_effectors, _project_service| Ok(()),
     )
     .show(ui, history_manager, project_service, needs_refresh);
 }
@@ -337,9 +335,7 @@ fn render_embedded_decorators(
 
             remove_clicked
         },
-        |new_decorators, project_service| {
-            project_service.update_track_clip_decorators(selected_entity_id, new_decorators)
-        },
+        |_new_decorators, _project_service| Ok(()),
     )
     .show(ui, history_manager, project_service, needs_refresh);
 }

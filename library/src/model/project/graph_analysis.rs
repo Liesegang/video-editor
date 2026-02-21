@@ -48,14 +48,60 @@ pub fn get_associated_styles(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
     get_associated_nodes_by_category(project, clip_id, "style.")
 }
 
-/// Get effector nodes associated with a clip.
+/// Get effector nodes in the shape chain between clip and style node.
+///
+/// Follows the shape_out → shape_in chain from clip to style node,
+/// collecting all effector.* nodes encountered.
 pub fn get_associated_effectors(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
-    get_associated_nodes_by_category(project, clip_id, "effector.")
+    get_shape_chain_nodes_by_prefix(project, clip_id, "effector.")
 }
 
-/// Get decorator nodes associated with a clip.
+/// Get decorator nodes in the shape chain between clip and style node.
+///
+/// Follows the shape_out → shape_in chain from clip to style node,
+/// collecting all decorator.* nodes encountered.
 pub fn get_associated_decorators(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
-    get_associated_nodes_by_category(project, clip_id, "decorator.")
+    get_shape_chain_nodes_by_prefix(project, clip_id, "decorator.")
+}
+
+/// Follow the shape chain from clip.shape_out and collect nodes matching a type prefix.
+fn get_shape_chain_nodes_by_prefix(
+    project: &Project,
+    clip_id: Uuid,
+    type_prefix: &str,
+) -> Vec<Uuid> {
+    let mut result = Vec::new();
+    let mut current_pin = PinId::new(clip_id, "shape_out");
+
+    loop {
+        // Find connection from current shape_out
+        let conn = project
+            .connections
+            .iter()
+            .find(|c| c.from == current_pin && c.to.pin_name == "shape_in");
+
+        match conn {
+            Some(c) => {
+                let next_id = c.to.node_id;
+                // Check if it matches the prefix
+                let matches = project
+                    .get_graph_node(next_id)
+                    .map(|g| g.type_id.starts_with(type_prefix))
+                    .unwrap_or(false);
+                if matches {
+                    if result.contains(&next_id) {
+                        break; // Cycle guard
+                    }
+                    result.push(next_id);
+                }
+                // Continue following the chain (whether it matched or not)
+                current_pin = PinId::new(next_id, "shape_out");
+            }
+            None => break,
+        }
+    }
+
+    result
 }
 
 /// Get nodes of a specific category connected to a given node, following the chain.
@@ -249,6 +295,136 @@ fn is_effect_node(project: &Project, node_id: Uuid) -> bool {
         .unwrap_or(false)
 }
 
+/// Resolved context for a clip: all associated graph nodes discovered via connections.
+#[derive(Debug, Clone)]
+pub struct ClipNodeContext {
+    /// The `compositing.transform` node (position/rotation/scale/anchor/opacity).
+    pub transform_node: Option<Uuid>,
+    /// Effect chain in processing order (clip → effect1 → effect2 …).
+    pub effect_chain: Vec<Uuid>,
+    /// Style chain (fill/stroke nodes, furthest-from-clip first).
+    pub style_chain: Vec<Uuid>,
+    /// Effector chain.
+    pub effector_chain: Vec<Uuid>,
+    /// Decorator chain.
+    pub decorator_chain: Vec<Uuid>,
+}
+
+/// Resolve all graph nodes associated with a clip.
+///
+/// This is the single source of truth for determining which graph nodes
+/// belong to a clip, used by inspector, preview gizmo, and cascade cleanup.
+///
+/// Handles both data flows:
+/// - Text/Shape: `clip.shape_out → fill.shape_in → fill.image_out → transform.image_in`
+/// - Video/Image: `clip.image_out → transform.image_in`
+pub fn resolve_clip_context(project: &Project, clip_id: Uuid) -> ClipNodeContext {
+    // First, try the shape_out path (text/shape clips)
+    let (style_chain, transform_from_shape) = get_shape_chain(project, clip_id);
+    // If no shape chain, try the direct image_out path (video/image clips)
+    let transform_node = transform_from_shape.or_else(|| get_connected_transform(project, clip_id));
+
+    ClipNodeContext {
+        transform_node,
+        effect_chain: get_effect_chain(project, clip_id),
+        style_chain,
+        effector_chain: get_associated_effectors(project, clip_id),
+        decorator_chain: get_associated_decorators(project, clip_id),
+    }
+}
+
+/// Follow the shape chain: clip.shape_out → [effector/decorator]* → style → transform.
+///
+/// Now traverses through effector/decorator nodes in the shape chain
+/// before reaching the style node. Returns (style_nodes, transform_node_id).
+fn get_shape_chain(project: &Project, clip_id: Uuid) -> (Vec<Uuid>, Option<Uuid>) {
+    let mut style_nodes = Vec::new();
+    let mut transform_node = None;
+
+    // Follow the shape chain from clip.shape_out until we find a style node
+    let mut current_pin = PinId::new(clip_id, "shape_out");
+    let mut visited = HashSet::new();
+
+    let style_node_id = loop {
+        let conn = project
+            .connections
+            .iter()
+            .find(|c| c.from == current_pin && c.to.pin_name == "shape_in");
+
+        match conn {
+            Some(c) => {
+                let next_id = c.to.node_id;
+                if !visited.insert(next_id) {
+                    break None; // Cycle guard
+                }
+                if let Some(gn) = project.get_graph_node(next_id) {
+                    if gn.type_id.starts_with("style.") {
+                        break Some(next_id);
+                    }
+                }
+                // Not a style node (effector/decorator) — continue
+                current_pin = PinId::new(next_id, "shape_out");
+            }
+            None => break None,
+        }
+    };
+
+    if let Some(fill_id) = style_node_id {
+        style_nodes.push(fill_id);
+        // Follow fill.image_out → transform.image_in
+        let fill_image_out = PinId::new(fill_id, "image_out");
+        for c2 in &project.connections {
+            if c2.from == fill_image_out
+                && c2.to.pin_name == "image_in"
+                && project
+                    .get_graph_node(c2.to.node_id)
+                    .map(|g| g.type_id == "compositing.transform")
+                    .unwrap_or(false)
+            {
+                transform_node = Some(c2.to.node_id);
+            }
+        }
+    }
+
+    (style_nodes, transform_node)
+}
+
+/// Find the compositing.transform node connected to clip.image_out.
+///
+/// For video/image clips: `clip.image_out → transform.image_in`
+fn get_connected_transform(project: &Project, clip_id: Uuid) -> Option<Uuid> {
+    let clip_image_out = PinId::new(clip_id, "image_out");
+
+    project
+        .connections
+        .iter()
+        .find(|c| {
+            c.from == clip_image_out
+                && c.to.pin_name == "image_in"
+                && project
+                    .get_graph_node(c.to.node_id)
+                    .map(|g| g.type_id == "compositing.transform")
+                    .unwrap_or(false)
+        })
+        .map(|c| c.to.node_id)
+}
+
+/// Collect all graph node IDs associated with a clip (for cascade cleanup).
+///
+/// Returns the union of transform, effect, style, effector, and decorator nodes.
+pub fn collect_all_associated_nodes(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
+    let ctx = resolve_clip_context(project, clip_id);
+    let mut nodes = Vec::new();
+    if let Some(t) = ctx.transform_node {
+        nodes.push(t);
+    }
+    nodes.extend(ctx.effect_chain);
+    nodes.extend(ctx.style_chain);
+    nodes.extend(ctx.effector_chain);
+    nodes.extend(ctx.decorator_chain);
+    nodes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,10 +471,6 @@ mod tests {
             duration_frame: None,
             fps: 30.0,
             properties: PropertyMap::new(),
-            styles: vec![],
-            effects: vec![],
-            effectors: vec![],
-            decorators: vec![],
         };
         let clip_id = clip.id;
 
@@ -334,10 +506,6 @@ mod tests {
             duration_frame: None,
             fps: 30.0,
             properties: PropertyMap::new(),
-            styles: vec![],
-            effects: vec![],
-            effectors: vec![],
-            decorators: vec![],
         };
         let clip_id = clip.id;
 
@@ -401,10 +569,6 @@ mod tests {
             duration_frame: None,
             fps: 30.0,
             properties: PropertyMap::new(),
-            styles: vec![],
-            effects: vec![],
-            effectors: vec![],
-            decorators: vec![],
         };
         let clip_id = clip.id;
 

@@ -1,3 +1,4 @@
+use crate::core::evaluation::output::ShapeGroup;
 use crate::error::LibraryError;
 use crate::model::frame::Image;
 
@@ -35,6 +36,13 @@ pub trait Renderer {
         transform: &Transform,
     ) -> Result<RenderOutput, LibraryError>;
 
+    fn rasterize_grouped_shapes(
+        &mut self,
+        groups: &[ShapeGroup],
+        styles: &[StyleConfig],
+        transform: &Transform,
+    ) -> Result<RenderOutput, LibraryError>;
+
     fn rasterize_shape_layer(
         &mut self,
         path_data: &str,
@@ -60,4 +68,14 @@ pub trait Renderer {
     }
 
     fn set_sharing_context(&mut self, _handle: usize, _hwnd: Option<isize>) {}
+
+    /// Apply a transform to an image, producing a new image on an offscreen surface.
+    ///
+    /// Creates a layer the same size as the current renderer surface, draws `layer`
+    /// with the given transform, and returns the composited result.
+    fn transform_layer(
+        &mut self,
+        layer: &RenderOutput,
+        transform: &Transform,
+    ) -> Result<RenderOutput, LibraryError>;
 }

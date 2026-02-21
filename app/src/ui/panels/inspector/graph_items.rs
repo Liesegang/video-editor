@@ -63,13 +63,13 @@ pub(super) struct ChainConfig {
 impl ChainConfig {
     pub(super) const EFFECTOR: Self = Self {
         category_prefix: "effector",
-        input_pin_name: "effector_in",
-        output_pin_name: "effector_out",
+        input_pin_name: "shape_in",
+        output_pin_name: "shape_out",
     };
     pub(super) const DECORATOR: Self = Self {
         category_prefix: "decorator",
-        input_pin_name: "decorator_in",
-        output_pin_name: "decorator_out",
+        input_pin_name: "shape_in",
+        output_pin_name: "shape_out",
     };
     pub(super) const STYLE: Self = Self {
         category_prefix: "style",

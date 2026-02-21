@@ -45,28 +45,14 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                     e.out_frame,
                     e.source_begin_frame,
                     e.duration_frame,
-                    e.effects.clone(),
-                    e.styles.clone(),
-                    e.effectors.clone(),
-                    e.decorators.clone(),
                 )
             })
         } else {
             None
         };
 
-        if let Some((
-            kind,
-            properties,
-            in_frame,
-            out_frame,
-            source_begin_frame,
-            duration_frame,
-            _effects,
-            styles,
-            effectors,
-            decorators,
-        )) = entity_data
+        if let Some((kind, properties, in_frame, out_frame, source_begin_frame, duration_frame)) =
+            entity_data
         {
             if editor_context.selection.selected_entities.len() > 1 {
                 ui.heading(format!(
@@ -253,7 +239,7 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                     track_id,
                     current_time,
                     fps,
-                    &styles,
+                    &Vec::new(), // Embedded styles removed; graph-based styles used via node editor
                     project,
                     &mut needs_refresh,
                 );
@@ -271,8 +257,8 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                     track_id,
                     current_time,
                     fps,
-                    &effectors,
-                    &decorators,
+                    &Vec::new(), // Embedded effectors removed; graph-based used via node editor
+                    &Vec::new(), // Embedded decorators removed; graph-based used via node editor
                     &mut needs_refresh,
                     &properties,
                     &PropertyRenderContext {

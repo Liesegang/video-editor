@@ -38,10 +38,6 @@ fn test_project_serialization_roundtrip() {
         Some(100),
         60.0,
         PropertyMap::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
     );
     clip.source_begin_frame = 0;
     let clip_id = clip.id;
@@ -122,10 +118,6 @@ fn test_node_based_structure() {
         Some(50),
         30.0,
         PropertyMap::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
     );
     clip1.set_constant_property(
         "file_path",
@@ -142,10 +134,6 @@ fn test_node_based_structure() {
         Some(50),
         30.0,
         PropertyMap::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
     );
     clip2.set_constant_property(
         "file_path",

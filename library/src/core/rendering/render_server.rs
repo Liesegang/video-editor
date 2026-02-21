@@ -4,11 +4,14 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::thread;
+use uuid::Uuid;
 
 use super::render_service::RenderService;
 use crate::cache::SharedCacheManager;
+use crate::core::evaluation::engine::EvalEngine;
 use crate::model::frame::Image;
 use crate::model::frame::frame::FrameInfo;
+use crate::model::project::project::Project;
 use crate::plugin::PluginManager;
 use crate::rendering::skia_renderer::SkiaRenderer;
 
@@ -19,8 +22,18 @@ pub struct RenderServer {
     handle: Option<thread::JoinHandle<()>>,
 }
 
+/// Parameters for composition-based rendering via EvalEngine.
+pub struct CompositionRenderParams {
+    pub project: Project,
+    pub composition_id: Uuid,
+    pub frame_number: u64,
+    pub render_scale: f64,
+    pub region: Option<crate::model::frame::frame::Region>,
+}
+
 enum RenderRequest {
     Render(FrameInfo),
+    RenderComposition(CompositionRenderParams),
     SetSharingContext(usize, Option<isize>),
     #[allow(dead_code)]
     Shutdown,
@@ -56,7 +69,11 @@ impl RenderServer {
             let mut current_width = 1920;
             let mut current_height = 1080;
 
-            let mut render_service = RenderService::new(renderer, plugin_manager, cache_manager);
+            let mut render_service =
+                RenderService::new(renderer, plugin_manager.clone(), cache_manager.clone());
+
+            // Create the pull-based evaluation engine
+            let eval_engine = EvalEngine::with_default_evaluators();
 
             loop {
                 // Get the next request (blocking)
@@ -75,41 +92,15 @@ impl RenderServer {
                         }
                         RenderRequest::SetSharingContext(handle, hwnd) => {
                             render_service.renderer.set_sharing_context(handle, hwnd);
-                            // We handled it immediately.
-                            // We do NOT update `req` because `req` might be a pending Render request we still want to process.
-                            // If `req` was also SetSharing, it's fine, we processed it (or will process it if we don't handle `req` variants differently).
-                            // Actually, if `req` matches variants in the main loop, we should check `req`'s type.
-                            // But simplify: just apply sharing here.
-                            // NOTE: If `req` was SetSharingContext(old_handle), and we just set(new_handle), then `req` is outdated.
-                            // But executing `req` (SetSharing) again with old handle is bad.
-                            // So if `req` is SetSharing, we shound discard/update it?
                             if let RenderRequest::SetSharingContext(_, _) = req {
-                                // req is an old sharing request, superseded or just done.
-                                // Since we processed next_req (new handle), we should drop old req?
-                                // But what if `req` was Render? We keep it.
-                                // So:
-                                // If req is SetSharing, update it to something innocuous? Or just let it run?
-                                // Running SetSharing(old) after SetSharing(new) reverts the change!
-                                // So we MUST NOT let `req` run if it is an old SetSharing.
-                                // We can update `req` to `SetSharingContext(handle)` (the new one)?
-                                // Then main loop runs it again? That's wasteful but safe-ish (idempotent check inside).
                                 req = RenderRequest::SetSharingContext(handle, hwnd);
                             }
                         }
-                        RenderRequest::Render(_) => {
-                            // New render request.
+                        RenderRequest::Render(_) | RenderRequest::RenderComposition(_) => {
                             if let RenderRequest::SetSharingContext(h, w) = req {
-                                // Previous `req` was sharing. We MUST execute it before switching to new Render.
-                                // But we can't execute it here easily without potentially executing it TWICE if `SetSharingContext` case above also ran?
-                                // Wait, `SetSharingContext` case only runs if `next_req` is SetSharing.
-                                // Here `next_req` is Render.
-                                // `req` is SetSharing.
-                                // So `SetSharing` is pending.
-                                // We should apply it now?
                                 render_service.renderer.set_sharing_context(h, w);
-                                req = next_req; // Now we can switch to new Render.
+                                req = next_req;
                             } else {
-                                // req was Render or Shutdown.
                                 req = next_req;
                             }
                         }
@@ -136,7 +127,7 @@ impl RenderServer {
                         // Check cache
                         if let Some(cached_image_data) = cache.get(&frame_info) {
                             let _ = tx_result.send(RenderResult {
-                                frame_hash: 0, // Hash is no longer used/needed for identification in the same way, or we can compute a cheap hash if needed for Result
+                                frame_hash: 0,
                                 output: RenderOutput::Image(Image::new(
                                     target_width,
                                     target_height,
@@ -188,12 +179,91 @@ impl RenderServer {
                             }
                         }
                     }
+                    RenderRequest::RenderComposition(params) => {
+                        let composition =
+                            match params.project.get_composition(params.composition_id) {
+                                Some(comp) => comp,
+                                None => {
+                                    error!("Composition {} not found", params.composition_id);
+                                    continue;
+                                }
+                            };
+
+                        let render_scale = params.render_scale;
+                        let (target_width, target_height) = if let Some(region) = &params.region {
+                            (
+                                (region.width * render_scale).round() as u32,
+                                (region.height * render_scale).round() as u32,
+                            )
+                        } else {
+                            (
+                                (composition.width as f64 * render_scale).round() as u32,
+                                (composition.height as f64 * render_scale).round() as u32,
+                            )
+                        };
+
+                        let bg_color = composition.background_color.clone();
+
+                        if current_width != target_width
+                            || current_height != target_height
+                            || current_background_color != bg_color
+                        {
+                            current_width = target_width;
+                            current_height = target_height;
+                            current_background_color = bg_color.clone();
+
+                            let old_context = render_service.renderer.take_context();
+                            render_service.renderer = SkiaRenderer::new(
+                                current_width,
+                                current_height,
+                                current_background_color.clone(),
+                                true,
+                                old_context,
+                            );
+                        }
+
+                        render_service.renderer.clear().ok();
+
+                        let property_evaluators = plugin_manager.get_property_evaluators();
+
+                        match eval_engine.evaluate_composition(
+                            &params.project,
+                            composition,
+                            &plugin_manager,
+                            &mut render_service.renderer,
+                            &cache_manager,
+                            property_evaluators,
+                            params.frame_number,
+                            params.render_scale,
+                            params.region.clone(),
+                        ) {
+                            Ok(output) => {
+                                // Build a minimal FrameInfo for the result
+                                let frame_info = FrameInfo {
+                                    width: composition.width,
+                                    height: composition.height,
+                                    background_color: bg_color,
+                                    color_profile: String::new(),
+                                    render_scale: ordered_float::OrderedFloat(params.render_scale),
+                                    now_time: ordered_float::OrderedFloat(
+                                        params.frame_number as f64 / composition.fps,
+                                    ),
+                                    region: params.region,
+                                    objects: vec![],
+                                };
+
+                                let _ = tx_result.send(RenderResult {
+                                    frame_hash: 0,
+                                    output,
+                                    frame_info,
+                                });
+                            }
+                            Err(e) => {
+                                error!("EvalEngine render failed: {}", e);
+                            }
+                        }
+                    }
                     RenderRequest::SetSharingContext(handle, hwnd) => {
-                        // Need to update renderer's sharing context
-                        // But RenderService holds the renderer.
-                        // Does RenderService expose mut access to renderer?
-                        // Assuming yes, or we need to add a method to RenderService.
-                        // Actually RenderService struct definition usually has `pub renderer: R`.
                         render_service.renderer.set_sharing_context(handle, hwnd);
                     }
                     RenderRequest::Shutdown => break,
@@ -210,6 +280,11 @@ impl RenderServer {
 
     pub fn send_request(&self, frame_info: FrameInfo) {
         let _ = self.tx.send(RenderRequest::Render(frame_info));
+    }
+
+    /// Send a composition render request using the pull-based EvalEngine.
+    pub fn send_composition_request(&self, params: CompositionRenderParams) {
+        let _ = self.tx.send(RenderRequest::RenderComposition(params));
     }
 
     pub fn poll_result(&self) -> Result<RenderResult, TryRecvError> {

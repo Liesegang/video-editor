@@ -296,24 +296,11 @@ pub fn show_keyframe_dialog(
                     if let Ok(proj) = project.read() {
                         // Use flat O(1) lookup
                         if let Some(clip) = proj.get_clip(entity_id) {
-                            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                                if let Some(effect) = clip.effects.get(eff_idx) {
-                                    if let Some(prop) = effect.properties.get(&prop_key) {
-                                        if let Some(kf) = prop.keyframes().get(state.keyframe_index)
-                                        {
-                                            current_pv = Some(kf.value.clone());
-                                        }
-                                    }
-                                }
-                            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                                if let Some(style) = clip.styles.get(style_idx) {
-                                    if let Some(prop) = style.properties.get(&prop_key) {
-                                        if let Some(kf) = prop.keyframes().get(state.keyframe_index)
-                                        {
-                                            current_pv = Some(kf.value.clone());
-                                        }
-                                    }
-                                }
+                            if let Some((_eff_idx, _prop_key)) = parse_key(base_name) {
+                                // Embedded effects removed; graph node properties handled separately
+                            } else if let Some((_style_idx, _prop_key)) = parse_style_key(base_name)
+                            {
+                                // Embedded styles removed; graph node properties handled separately
                             } else {
                                 if let Some(prop) = clip.properties.get(base_name) {
                                     if let Some(kf) = prop.keyframes().get(state.keyframe_index) {

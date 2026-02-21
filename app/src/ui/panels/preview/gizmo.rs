@@ -31,6 +31,7 @@ pub(super) fn handle_gizmo_interaction(
             state.original_height,
             state.original_anchor_x,
             state.original_anchor_y,
+            state.transform_node_id,
         ))
     } else {
         None
@@ -47,6 +48,7 @@ pub(super) fn handle_gizmo_interaction(
         orig_h,
         _orig_ax,
         _orig_ay,
+        transform_node_id,
     )) = gizmo_drag_data
     {
         if ui.input(|i| i.pointer.any_released()) {
@@ -213,36 +215,49 @@ pub(super) fn handle_gizmo_interaction(
                     // Apply Updates
                     let current_time = editor_context.timeline.current_time as f64;
 
-                    pending_actions.push(PreviewAction::UpdateProperty {
-                        comp_id,
-                        track_id,
-                        entity_id: selected_id,
-                        prop_name: "scale".to_string(),
-                        time: current_time,
-                        value: PropertyValue::Vec2(PropVec2 {
+                    // Helper: push transform property update to the correct target
+                    let push_transform_update =
+                        |actions: &mut Vec<PreviewAction>, prop: &str, val: PropertyValue| {
+                            if let Some(node_id) = transform_node_id {
+                                actions.push(PreviewAction::UpdateGraphNodeProperty {
+                                    node_id,
+                                    prop_name: prop.to_string(),
+                                    time: current_time,
+                                    value: val,
+                                });
+                            } else {
+                                actions.push(PreviewAction::UpdateProperty {
+                                    comp_id,
+                                    track_id,
+                                    entity_id: selected_id,
+                                    prop_name: prop.to_string(),
+                                    time: current_time,
+                                    value: val,
+                                });
+                            }
+                        };
+
+                    push_transform_update(
+                        pending_actions,
+                        "scale",
+                        PropertyValue::Vec2(PropVec2 {
                             x: OrderedFloat(new_scale_x as f64),
                             y: OrderedFloat(new_scale_y as f64),
                         }),
-                    });
-                    pending_actions.push(PreviewAction::UpdateProperty {
-                        comp_id,
-                        track_id,
-                        entity_id: selected_id,
-                        prop_name: "position".to_string(),
-                        time: current_time,
-                        value: PropertyValue::Vec2(PropVec2 {
+                    );
+                    push_transform_update(
+                        pending_actions,
+                        "position",
+                        PropertyValue::Vec2(PropVec2 {
                             x: OrderedFloat(new_pos_x as f64),
                             y: OrderedFloat(new_pos_y as f64),
                         }),
-                    });
-                    pending_actions.push(PreviewAction::UpdateProperty {
-                        comp_id,
-                        track_id,
-                        entity_id: selected_id,
-                        prop_name: "rotation".to_string(),
-                        time: current_time,
-                        value: PropertyValue::Number(OrderedFloat(new_rotation as f64)),
-                    });
+                    );
+                    push_transform_update(
+                        pending_actions,
+                        "rotation",
+                        PropertyValue::Number(OrderedFloat(new_rotation as f64)),
+                    );
                 }
             }
         }
@@ -345,6 +360,7 @@ pub(super) fn draw_gizmo(
                             original_anchor_y: gc.transform.anchor.y as f32,
                             original_width: base_w,
                             original_height: base_h,
+                            transform_node_id: gc.transform_node_id,
                         });
                 }
             }

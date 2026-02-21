@@ -10,4 +10,11 @@ pub(super) enum PreviewAction {
         time: f64,
         value: PropertyValue,
     },
+    /// Update a property on a graph node (e.g. compositing.transform).
+    UpdateGraphNodeProperty {
+        node_id: Uuid,
+        prop_name: String,
+        time: f64,
+        value: PropertyValue,
+    },
 }

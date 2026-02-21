@@ -503,19 +503,37 @@ impl<'a> PreviewInteractions<'a> {
                         let new_x = orig_pos[0] as f64 + world_delta.x as f64;
                         let new_y = orig_pos[1] as f64 + world_delta.y as f64;
 
-                        if let Some(tid) = self.get_track_id(*entity_id) {
+                        let position_value =
+                            PropertyValue::Vec2(library::model::project::property::Vec2 {
+                                x: ordered_float::OrderedFloat(new_x),
+                                y: ordered_float::OrderedFloat(new_y),
+                            });
+
+                        // Check for transform node
+                        let transform_node = if let Ok(proj) = self.project.read() {
+                            library::model::project::graph_analysis::resolve_clip_context(
+                                &proj, *entity_id,
+                            )
+                            .transform_node
+                        } else {
+                            None
+                        };
+
+                        if let Some(node_id) = transform_node {
+                            pending_actions.push(PreviewAction::UpdateGraphNodeProperty {
+                                node_id,
+                                prop_name: "position".to_string(),
+                                time: current_time,
+                                value: position_value,
+                            });
+                        } else if let Some(tid) = self.get_track_id(*entity_id) {
                             pending_actions.push(PreviewAction::UpdateProperty {
                                 comp_id,
                                 track_id: tid,
                                 entity_id: *entity_id,
                                 prop_name: "position".to_string(),
                                 time: current_time,
-                                value: PropertyValue::Vec2(
-                                    library::model::project::property::Vec2 {
-                                        x: ordered_float::OrderedFloat(new_x),
-                                        y: ordered_float::OrderedFloat(new_y),
-                                    },
-                                ),
+                                value: position_value,
                             });
                         }
                     }

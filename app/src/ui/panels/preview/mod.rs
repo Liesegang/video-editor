@@ -218,10 +218,7 @@ pub(crate) fn preview_panel(
             let current_frame =
                 (editor_context.timeline.current_time as f64 * comp.fps).round() as u64;
 
-            if let Some(comp_idx) = proj_read.compositions.iter().position(|c| c.id == comp.id) {
-                let plugin_manager = project_service.get_plugin_manager();
-                let property_evaluators = plugin_manager.get_property_evaluators();
-
+            {
                 let render_scale = ((editor_context.view.zoom
                     * ui.ctx().pixels_per_point()
                     * editor_context.view.preview_resolution)
@@ -255,16 +252,15 @@ pub(crate) fn preview_panel(
                 };
 
                 if let Some(valid_region) = region {
-                    let frame_info = library::framing::get_frame_from_project(
-                        &proj_read,
-                        comp_idx,
-                        current_frame,
-                        render_scale,
-                        Some(valid_region),
-                        &property_evaluators,
-                        &plugin_manager,
+                    render_server.send_composition_request(
+                        library::rendering::render_server::CompositionRenderParams {
+                            project: proj_read.clone(),
+                            composition_id: comp.id,
+                            frame_number: current_frame,
+                            render_scale,
+                            region: Some(valid_region),
+                        },
                     );
-                    render_server.send_request(frame_info);
                 }
             }
         }
@@ -521,14 +517,26 @@ pub(crate) fn preview_panel(
                     );
                 }
 
+                // Look up transform node for this clip
+                let clip_ctx = library::model::project::graph_analysis::resolve_clip_context(
+                    &proj_read, entity.id,
+                );
+                let transform_node_id = clip_ctx.transform_node;
+
+                // Choose property source: transform graph node if available, else clip properties
+                let transform_props = transform_node_id
+                    .and_then(|tid| proj_read.get_graph_node(tid))
+                    .map(|n| &n.properties);
+
+                let prop_source = transform_props.unwrap_or(&entity.properties);
+
                 let get_val = |key: &str, default: f32| {
-                    entity
-                        .properties
+                    prop_source
                         .get(key)
                         .map(|p| {
                             project_service.evaluate_property_value(
                                 p,
-                                &entity.properties,
+                                prop_source,
                                 local_time,
                                 comp.fps,
                             )
@@ -538,13 +546,12 @@ pub(crate) fn preview_panel(
                 };
 
                 let get_vec2 = |key: &str, default: [f32; 2]| {
-                    entity
-                        .properties
+                    prop_source
                         .get(key)
                         .map(|p| {
                             let val = project_service.evaluate_property_value(
                                 p,
-                                &entity.properties,
+                                prop_source,
                                 local_time,
                                 comp.fps,
                             );
@@ -593,6 +600,7 @@ pub(crate) fn preview_panel(
                     clip: entity,
                     track_id,
                     transform,
+                    transform_node_id,
                     content_bounds,
                 };
                 gui_clips.push(gc);
@@ -653,6 +661,15 @@ pub(crate) fn preview_panel(
                     time,
                     value,
                 );
+            }
+            PreviewAction::UpdateGraphNodeProperty {
+                node_id,
+                prop_name,
+                time,
+                value,
+            } => {
+                let _ = project_service
+                    .update_graph_node_property(node_id, &prop_name, time, value, None);
             }
         }
     }

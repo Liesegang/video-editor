@@ -4,5 +4,6 @@ pub mod audio;
 pub mod cache;
 pub mod color;
 pub mod ensemble;
+pub mod evaluation;
 pub mod framing;
 pub mod rendering;

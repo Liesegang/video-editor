@@ -94,6 +94,9 @@ fn all_node_definitions() -> Vec<NodeTypeDefinition> {
         image_nodes(),
         particle_nodes(),
         threed_nodes(),
+        style_nodes(),
+        effector_nodes(),
+        decorator_nodes(),
     ]
     .concat()
 }
@@ -286,13 +289,14 @@ fn compositing_nodes() -> Vec<NodeTypeDefinition> {
     vec![
         node("compositing.transform", "Transform", nc)
             .with_inputs(vec![
-                inp("image", "Image", Image),
+                inp("image_in", "Image", Image),
                 inp("position", "Position", Vec2),
                 inp("rotation", "Rotation", Scalar),
                 inp("scale", "Scale", Vec2),
                 inp("anchor", "Anchor", Vec2),
+                inp("opacity", "Opacity", Scalar),
             ])
-            .with_outputs(vec![out("image", "Image", Image)]),
+            .with_outputs(vec![out("image_out", "Image", Image)]),
         node("compositing.composite", "Composite", nc)
             .with_description("Blend N images with individual blend modes")
             .with_inputs(vec![
@@ -771,6 +775,456 @@ fn threed_nodes() -> Vec<NodeTypeDefinition> {
     ]
 }
 
+fn style_nodes() -> Vec<NodeTypeDefinition> {
+    use crate::model::frame::color::Color;
+    use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+    use PinDataType::*;
+    let nc = NodeCategory::Style;
+
+    let prop = PropertyDefinition::new;
+    vec![
+        node("style.fill", "Fill", nc)
+            .with_description("Solid color fill style")
+            .with_inputs(vec![inp("shape_in", "Shape In", Shape)])
+            .with_outputs(vec![out("image_out", "Image Out", Image)])
+            .with_properties(vec![
+                prop(
+                    "color",
+                    PropertyUiType::Color,
+                    "Color",
+                    PropertyValue::Color(Color::white()),
+                ),
+                prop(
+                    "opacity",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        suffix: "".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: true,
+                    },
+                    "Opacity",
+                    PropertyValue::from(1.0),
+                ),
+                prop(
+                    "offset",
+                    PropertyUiType::Float {
+                        min: -50.0,
+                        max: 50.0,
+                        step: 1.0,
+                        suffix: "px".into(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    "Offset",
+                    PropertyValue::from(0.0),
+                ),
+            ]),
+        node("style.stroke", "Stroke", nc)
+            .with_description("Stroke outline style")
+            .with_inputs(vec![inp("shape_in", "Shape In", Shape)])
+            .with_outputs(vec![out("image_out", "Image Out", Image)])
+            .with_properties(vec![
+                prop(
+                    "color",
+                    PropertyUiType::Color,
+                    "Color",
+                    PropertyValue::Color(Color::white()),
+                ),
+                prop(
+                    "width",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "px".into(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    "Width",
+                    PropertyValue::from(1.0),
+                ),
+                prop(
+                    "opacity",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        suffix: "".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: true,
+                    },
+                    "Opacity",
+                    PropertyValue::from(1.0),
+                ),
+                prop(
+                    "offset",
+                    PropertyUiType::Float {
+                        min: -50.0,
+                        max: 50.0,
+                        step: 1.0,
+                        suffix: "px".into(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    "Offset",
+                    PropertyValue::from(0.0),
+                ),
+                prop(
+                    "join",
+                    PropertyUiType::Dropdown {
+                        options: vec!["Miter".into(), "Round".into(), "Bevel".into()],
+                    },
+                    "Join",
+                    PropertyValue::String("Round".into()),
+                ),
+                prop(
+                    "cap",
+                    PropertyUiType::Dropdown {
+                        options: vec!["Butt".into(), "Round".into(), "Square".into()],
+                    },
+                    "Cap",
+                    PropertyValue::String("Round".into()),
+                ),
+                prop(
+                    "miter_limit",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 0.1,
+                        suffix: "".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: false,
+                    },
+                    "Miter Limit",
+                    PropertyValue::from(4.0),
+                ),
+                prop(
+                    "dash_array",
+                    PropertyUiType::Text,
+                    "Dash Array",
+                    PropertyValue::String("".into()),
+                ),
+                prop(
+                    "dash_offset",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 1000.0,
+                        step: 1.0,
+                        suffix: "px".into(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    "Dash Offset",
+                    PropertyValue::from(0.0),
+                ),
+            ]),
+    ]
+}
+
+fn effector_nodes() -> Vec<NodeTypeDefinition> {
+    use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+    use PinDataType::*;
+    let nc = NodeCategory::Effector;
+
+    let prop = PropertyDefinition::new;
+    vec![
+        node("effector.transform", "Transform Effector", nc)
+            .with_description("Per-character transform (translate, rotate, scale)")
+            .with_inputs(vec![inp("shape_in", "Shape In", Shape)])
+            .with_outputs(vec![out("shape_out", "Shape Out", Shape)])
+            .with_properties(vec![
+                prop(
+                    "tx",
+                    PropertyUiType::Float {
+                        min: -1000.0,
+                        max: 1000.0,
+                        step: 1.0,
+                        suffix: "px".into(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    "Translate X",
+                    PropertyValue::from(0.0),
+                ),
+                prop(
+                    "ty",
+                    PropertyUiType::Float {
+                        min: -1000.0,
+                        max: 1000.0,
+                        step: 1.0,
+                        suffix: "px".into(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    "Translate Y",
+                    PropertyValue::from(0.0),
+                ),
+                prop(
+                    "scale_x",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 10.0,
+                        step: 0.1,
+                        suffix: "".into(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    "Scale X",
+                    PropertyValue::from(1.0),
+                ),
+                prop(
+                    "scale_y",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 10.0,
+                        step: 0.1,
+                        suffix: "".into(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    "Scale Y",
+                    PropertyValue::from(1.0),
+                ),
+                prop(
+                    "rotation",
+                    PropertyUiType::Float {
+                        min: -360.0,
+                        max: 360.0,
+                        step: 1.0,
+                        suffix: "\u{b0}".into(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    "Rotation",
+                    PropertyValue::from(0.0),
+                ),
+            ]),
+        node("effector.step_delay", "Step Delay", nc)
+            .with_description("Staggered reveal per character")
+            .with_inputs(vec![inp("shape_in", "Shape In", Shape)])
+            .with_outputs(vec![out("shape_out", "Shape Out", Shape)])
+            .with_properties(vec![
+                prop(
+                    "delay",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 5.0,
+                        step: 0.01,
+                        suffix: "s".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: false,
+                    },
+                    "Delay",
+                    PropertyValue::from(0.05),
+                ),
+                prop(
+                    "duration",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 5.0,
+                        step: 0.01,
+                        suffix: "s".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: false,
+                    },
+                    "Duration",
+                    PropertyValue::from(0.2),
+                ),
+                prop(
+                    "from_opacity",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "%".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: true,
+                    },
+                    "From Opacity",
+                    PropertyValue::from(0.0),
+                ),
+                prop(
+                    "to_opacity",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "%".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: true,
+                    },
+                    "To Opacity",
+                    PropertyValue::from(100.0),
+                ),
+            ]),
+        node("effector.randomize", "Randomize", nc)
+            .with_description("Random per-character transform jitter")
+            .with_inputs(vec![inp("shape_in", "Shape In", Shape)])
+            .with_outputs(vec![out("shape_out", "Shape Out", Shape)])
+            .with_properties(vec![
+                prop(
+                    "seed",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: false,
+                    },
+                    "Seed",
+                    PropertyValue::from(0.0),
+                ),
+                prop(
+                    "amount",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        suffix: "".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: true,
+                    },
+                    "Amount",
+                    PropertyValue::from(1.0),
+                ),
+                prop(
+                    "translate_range",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 500.0,
+                        step: 1.0,
+                        suffix: "px".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: false,
+                    },
+                    "Translate Range",
+                    PropertyValue::from(50.0),
+                ),
+                prop(
+                    "rotate_range",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 360.0,
+                        step: 1.0,
+                        suffix: "\u{b0}".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: false,
+                    },
+                    "Rotate Range",
+                    PropertyValue::from(15.0),
+                ),
+                prop(
+                    "scale_range",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 5.0,
+                        step: 0.1,
+                        suffix: "".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: false,
+                    },
+                    "Scale Range",
+                    PropertyValue::from(0.5),
+                ),
+            ]),
+        node("effector.opacity", "Opacity Effector", nc)
+            .with_description("Per-character opacity control")
+            .with_inputs(vec![inp("shape_in", "Shape In", Shape)])
+            .with_outputs(vec![out("shape_out", "Shape Out", Shape)])
+            .with_properties(vec![
+                prop(
+                    "opacity",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "%".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: true,
+                    },
+                    "Opacity",
+                    PropertyValue::from(0.0),
+                ),
+                prop(
+                    "mode",
+                    PropertyUiType::Dropdown {
+                        options: vec!["Set".into(), "Add".into(), "Multiply".into()],
+                    },
+                    "Mode",
+                    PropertyValue::String("Set".into()),
+                ),
+            ]),
+    ]
+}
+
+fn decorator_nodes() -> Vec<NodeTypeDefinition> {
+    use crate::model::frame::color::Color;
+    use crate::model::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+    use PinDataType::*;
+    let nc = NodeCategory::Decorator;
+
+    let prop = PropertyDefinition::new;
+    vec![
+        node("decorator.backplate", "Backplate", nc)
+            .with_description("Background shape behind text characters/lines/blocks")
+            .with_inputs(vec![inp("shape_in", "Shape In", Shape)])
+            .with_outputs(vec![out("shape_out", "Shape Out", Shape)])
+            .with_properties(vec![
+                prop(
+                    "target",
+                    PropertyUiType::Dropdown {
+                        options: vec!["Char".into(), "Line".into(), "Block".into()],
+                    },
+                    "Target",
+                    PropertyValue::String("Block".into()),
+                ),
+                prop(
+                    "shape",
+                    PropertyUiType::Dropdown {
+                        options: vec!["Rect".into(), "RoundRect".into(), "Circle".into()],
+                    },
+                    "Shape",
+                    PropertyValue::String("Rect".into()),
+                ),
+                prop(
+                    "color",
+                    PropertyUiType::Color,
+                    "Color",
+                    PropertyValue::Color(Color::black()),
+                ),
+                prop(
+                    "padding",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "px".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: false,
+                    },
+                    "Padding",
+                    PropertyValue::from(0.0),
+                ),
+                prop(
+                    "radius",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 50.0,
+                        step: 1.0,
+                        suffix: "px".into(),
+                        min_hard_limit: true,
+                        max_hard_limit: false,
+                    },
+                    "Corner Radius",
+                    PropertyValue::from(0.0),
+                ),
+            ]),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,7 +1232,7 @@ mod tests {
     #[test]
     fn test_all_node_definitions_count() {
         let defs = all_node_definitions();
-        assert_eq!(defs.len(), 92, "Expected 92 node definitions");
+        assert_eq!(defs.len(), 99, "Expected 99 node definitions");
     }
 
     #[test]
@@ -814,5 +1268,8 @@ mod tests {
         assert!(categories.contains(&NodeCategory::Image));
         assert!(categories.contains(&NodeCategory::Particles));
         assert!(categories.contains(&NodeCategory::ThreeD));
+        assert!(categories.contains(&NodeCategory::Style));
+        assert!(categories.contains(&NodeCategory::Effector));
+        assert!(categories.contains(&NodeCategory::Decorator));
     }
 }

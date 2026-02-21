@@ -92,7 +92,9 @@ pub(super) fn process_action(
                 let mut current_pv = None;
                 if let Ok(proj) = project.read() {
                     if let Some(clip) = proj.get_clip(entity_id) {
-                        if let Some(effect) = clip.effects.get(eff_idx) {
+                        if let Some(effect) =
+                            None::<&library::model::project::effect::EffectConfig>.as_ref()
+                        {
                             if let Some(prop) = effect.properties.get(&prop_key) {
                                 let keyframes = prop.keyframes();
                                 let mut sorted_kf = keyframes.clone();
@@ -146,7 +148,9 @@ pub(super) fn process_action(
                 let mut current_pv = None;
                 if let Ok(proj) = project.read() {
                     if let Some(clip) = proj.get_clip(entity_id) {
-                        if let Some(style) = clip.styles.get(style_idx) {
+                        if let Some(style) =
+                            None::<&library::model::project::style::StyleInstance>.as_ref()
+                        {
                             if let Some(prop) = style.properties.get(&prop_key) {
                                 let keyframes = prop.keyframes();
                                 let mut sorted_kf = keyframes.clone();
@@ -271,7 +275,9 @@ pub(super) fn process_action(
                         eval_time = global_to_source_time(&proj, comp_id, entity_id, time);
 
                         if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                            if let Some(effect) = entity.effects.get(eff_idx) {
+                            if let Some(effect) =
+                                None::<&library::model::project::effect::EffectConfig>.as_ref()
+                            {
                                 if let Some(prop) = effect.properties.get(&prop_key) {
                                     current_val_at_t =
                                         Some(project_service.evaluate_property_value(
@@ -283,7 +289,9 @@ pub(super) fn process_action(
                                 }
                             }
                         } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                            if let Some(style) = entity.styles.get(style_idx) {
+                            if let Some(style) =
+                                None::<&library::model::project::style::StyleInstance>.as_ref()
+                            {
                                 if let Some(prop) = style.properties.get(&prop_key) {
                                     current_val_at_t =
                                         Some(project_service.evaluate_property_value(
@@ -453,7 +461,9 @@ pub(super) fn process_action(
                 if let Some(clip) = proj.get_clip(entity_id) {
                     // Effect Property
                     if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                        if let Some(effect) = clip.effects.get(eff_idx) {
+                        if let Some(effect) =
+                            None::<&library::model::project::effect::EffectConfig>.as_ref()
+                        {
                             if let Some(prop) = effect.properties.get(&prop_key) {
                                 if prop.evaluator == "keyframe" {
                                     let keyframes = prop.keyframes();
@@ -489,7 +499,9 @@ pub(super) fn process_action(
                     }
                     // Style Property
                     else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                        if let Some(style) = clip.styles.get(style_idx) {
+                        if let Some(style) =
+                            None::<&library::model::project::style::StyleInstance>.as_ref()
+                        {
                             if let Some(prop) = style.properties.get(&prop_key) {
                                 if prop.evaluator == "keyframe" {
                                     let keyframes = prop.keyframes();

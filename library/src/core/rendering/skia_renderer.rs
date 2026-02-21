@@ -1,3 +1,4 @@
+use crate::core::evaluation::output::ShapeGroup;
 use crate::error::LibraryError;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
@@ -397,6 +398,145 @@ impl Renderer for SkiaRenderer {
         paint_utils::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
     }
 
+    fn rasterize_grouped_shapes(
+        &mut self,
+        groups: &[ShapeGroup],
+        styles: &[StyleConfig],
+        transform: &Transform,
+    ) -> Result<RenderOutput, LibraryError> {
+        let _timer = ScopedTimer::debug("SkiaRenderer::rasterize_grouped_shapes");
+        let mut layer = self.create_layer_surface()?;
+        {
+            let canvas: &Canvas = layer.canvas();
+            canvas.clear(skia_safe::Color::TRANSPARENT);
+
+            let matrix = paint_utils::build_transform_matrix(transform);
+            canvas.save();
+            canvas.concat(&matrix);
+
+            for group in groups {
+                canvas.save();
+
+                // Apply per-group transform around the group's center
+                let cx = group.base_position.0 + group.bounds.2 / 2.0;
+                let cy = group.base_position.1 + group.bounds.3 / 2.0;
+
+                canvas.translate((cx, cy));
+                canvas.translate((group.transform.translate.0, group.transform.translate.1));
+                canvas.rotate(group.transform.rotate, None);
+                canvas.scale((group.transform.scale.0, group.transform.scale.1));
+                canvas.translate((-cx, -cy));
+
+                // 1. Draw behind-decorations
+                for deco in &group.decorations {
+                    if deco.behind {
+                        if let Some(deco_path) = skia_safe::Path::from_svg(&deco.path) {
+                            let mut paint = Paint::default();
+                            paint.set_color(skia_safe::Color::from_argb(
+                                deco.color.a,
+                                deco.color.r,
+                                deco.color.g,
+                                deco.color.b,
+                            ));
+                            paint.set_anti_alias(true);
+                            canvas.draw_path(&deco_path, &paint);
+                        }
+                    }
+                }
+
+                // 2. Draw main glyph path with styles
+                if !group.path.is_empty() {
+                    if let Some(glyph_path) = skia_safe::Path::from_svg(&group.path) {
+                        for config in styles {
+                            match &config.style {
+                                DrawStyle::Fill { color, offset } => {
+                                    let final_alpha = (color.a as f32 * group.transform.opacity)
+                                        .clamp(0.0, 255.0)
+                                        as u8;
+                                    let mut paint = Paint::default();
+                                    paint.set_color(skia_safe::Color::from_argb(
+                                        final_alpha,
+                                        color.r,
+                                        color.g,
+                                        color.b,
+                                    ));
+                                    paint.set_anti_alias(true);
+                                    if *offset > 0.0 {
+                                        paint.set_style(PaintStyle::StrokeAndFill);
+                                        paint.set_stroke_width((*offset * 2.0) as f32);
+                                        paint.set_stroke_join(skia_safe::paint::Join::Round);
+                                    } else {
+                                        paint.set_style(PaintStyle::Fill);
+                                    }
+                                    canvas.draw_path(&glyph_path, &paint);
+                                }
+                                DrawStyle::Stroke {
+                                    color,
+                                    width,
+                                    offset,
+                                    cap,
+                                    join,
+                                    miter,
+                                    dash_array,
+                                    dash_offset,
+                                } => {
+                                    let effective_width = (width + offset * 2.0).max(0.0);
+                                    let final_alpha = (color.a as f32 * group.transform.opacity)
+                                        .clamp(0.0, 255.0)
+                                        as u8;
+                                    let mut paint = paint_utils::create_stroke_paint(
+                                        &Color {
+                                            r: color.r,
+                                            g: color.g,
+                                            b: color.b,
+                                            a: final_alpha,
+                                        },
+                                        effective_width as f32,
+                                        cap,
+                                        join,
+                                        *miter as f32,
+                                    );
+                                    if !dash_array.is_empty() {
+                                        let intervals: Vec<f32> =
+                                            dash_array.iter().map(|&x| x as f32).collect();
+                                        if let Some(effect) =
+                                            SkPathEffect::dash(&intervals, *dash_offset as f32)
+                                        {
+                                            paint.set_path_effect(effect);
+                                        }
+                                    }
+                                    canvas.draw_path(&glyph_path, &paint);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 3. Draw front-decorations
+                for deco in &group.decorations {
+                    if !deco.behind {
+                        if let Some(deco_path) = skia_safe::Path::from_svg(&deco.path) {
+                            let mut paint = Paint::default();
+                            paint.set_color(skia_safe::Color::from_argb(
+                                deco.color.a,
+                                deco.color.r,
+                                deco.color.g,
+                                deco.color.b,
+                            ));
+                            paint.set_anti_alias(true);
+                            canvas.draw_path(&deco_path, &paint);
+                        }
+                    }
+                }
+
+                canvas.restore();
+            }
+
+            canvas.restore();
+        }
+        paint_utils::snapshot_surface(&mut layer, &mut self.gpu_context, self.width, self.height)
+    }
+
     fn rasterize_shape_layer(
         &mut self,
         path_data: &str,
@@ -544,6 +684,55 @@ impl Renderer for SkiaRenderer {
 
     fn get_gpu_context(&mut self) -> Option<&mut crate::rendering::skia_utils::GpuContext> {
         self.gpu_context.as_mut()
+    }
+
+    fn transform_layer(
+        &mut self,
+        layer: &RenderOutput,
+        transform: &Transform,
+    ) -> Result<RenderOutput, LibraryError> {
+        let mut offscreen = self.create_layer_surface()?;
+        {
+            let canvas = offscreen.canvas();
+            canvas.clear(skia_safe::Color::TRANSPARENT);
+
+            let src_image = match layer {
+                RenderOutput::Image(img) => image_to_skia(img)?,
+                RenderOutput::Texture(info) => {
+                    if let Some(ctx) = self.gpu_context.as_mut() {
+                        create_image_from_texture(
+                            &mut ctx.direct_context,
+                            info.texture_id,
+                            info.width,
+                            info.height,
+                        )?
+                    } else {
+                        return Err(LibraryError::render(
+                            "Cannot render texture without GPU context",
+                        ));
+                    }
+                }
+            };
+
+            let matrix = paint_utils::build_transform_matrix(transform);
+            canvas.save();
+            canvas.concat(&matrix);
+
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_alpha_f(transform.opacity as f32);
+
+            let cubic_resampler = CubicResampler::mitchell();
+            let sampling = SamplingOptions::from(cubic_resampler);
+            canvas.draw_image_with_sampling_options(&src_image, (0, 0), sampling, Some(&paint));
+            canvas.restore();
+        }
+        paint_utils::snapshot_surface(
+            &mut offscreen,
+            &mut self.gpu_context,
+            self.width,
+            self.height,
+        )
     }
 
     fn set_sharing_context(&mut self, handle: usize, hwnd: Option<isize>) {

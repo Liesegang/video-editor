@@ -242,60 +242,6 @@ impl EditorService {
         )
     }
 
-    // --- Effect / Style / Ensemble Operations ---
-
-    pub fn add_effect_to_clip(&self, clip_id: Uuid, effect_id: &str) -> Result<(), LibraryError> {
-        self.project_manager.add_effect_to_clip(clip_id, effect_id)
-    }
-
-    pub fn update_track_clip_effects(
-        &self,
-        clip_id: Uuid,
-        effects: Vec<crate::model::project::effect::EffectConfig>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager
-            .update_track_clip_effects(clip_id, effects)
-    }
-
-    pub fn update_track_clip_styles(
-        &self,
-        clip_id: Uuid,
-        styles: Vec<crate::model::project::style::StyleInstance>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager
-            .update_track_clip_styles(clip_id, styles)
-    }
-
-    pub fn update_track_clip_effectors(
-        &self,
-        clip_id: Uuid,
-        effectors: Vec<crate::model::project::ensemble::EffectorInstance>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager
-            .update_track_clip_effectors(clip_id, effectors)
-    }
-
-    pub fn update_track_clip_decorators(
-        &self,
-        clip_id: Uuid,
-        decorators: Vec<crate::model::project::ensemble::DecoratorInstance>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager
-            .update_track_clip_decorators(clip_id, decorators)
-    }
-
-    pub fn add_style(&self, clip_id: Uuid, style_type: &str) -> Result<(), LibraryError> {
-        self.project_manager.add_style(clip_id, style_type)
-    }
-
-    pub fn add_effector(&self, clip_id: Uuid, effector_type: &str) -> Result<(), LibraryError> {
-        self.project_manager.add_effector(clip_id, effector_type)
-    }
-
-    pub fn add_decorator(&self, clip_id: Uuid, decorator_type: &str) -> Result<(), LibraryError> {
-        self.project_manager.add_decorator(clip_id, decorator_type)
-    }
-
     // --- Property / Keyframe Operations ---
 
     pub fn evaluate_property_value(

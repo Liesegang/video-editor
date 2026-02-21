@@ -57,7 +57,94 @@ impl ClipHandler {
         Ok(clip_id)
     }
 
-    /// Remove a clip from a track
+    /// Create a layer sub-track with default graph nodes for a newly added clip.
+    ///
+    /// Creates a layer (sub-track) containing the clip and its graph nodes:
+    /// - For text/shape: `clip.shape_out → fill.shape_in`, `fill.image_out → transform.image_in`
+    /// - For video/image/sksl: `clip.image_out → transform.image_in`
+    /// - Always: `transform.image_out → layer.image_out` (container output connection)
+    pub fn setup_clip_graph_nodes(
+        project: &Arc<RwLock<Project>>,
+        plugin_manager: &crate::plugin::PluginManager,
+        track_id: Uuid,
+        clip_id: Uuid,
+        clip_kind: &TrackClipKind,
+    ) -> Result<(), LibraryError> {
+        use crate::model::project::connection::PinId;
+        use crate::model::project::track::TrackData;
+
+        // Audio clips don't need graph nodes
+        if *clip_kind == TrackClipKind::Audio {
+            return Ok(());
+        }
+
+        // 1. Create a layer sub-track and move the clip into it
+        let layer_id = {
+            let mut proj = super::write_project(project)?;
+
+            let mut layer = TrackData::new("Layer");
+            let layer_id = layer.id;
+
+            // Move clip from parent track to layer
+            if let Some(parent_track) = proj.get_track_mut(track_id) {
+                parent_track.remove_child(clip_id);
+                parent_track.add_child(layer_id);
+            }
+            layer.add_child(clip_id);
+            proj.add_node(Node::Track(layer));
+
+            layer_id
+        };
+
+        // 2. Create compositing.transform node inside the layer
+        let transform_id = super::graph_handler::GraphHandler::add_graph_node(
+            project,
+            plugin_manager,
+            layer_id,
+            "compositing.transform",
+        )?;
+
+        // 3. Create connections based on clip kind
+        if *clip_kind == TrackClipKind::Text || *clip_kind == TrackClipKind::Shape {
+            // Text/Shape: clip.shape_out → fill.shape_in → fill.image_out → transform.image_in
+            let fill_id = super::graph_handler::GraphHandler::add_graph_node(
+                project,
+                plugin_manager,
+                layer_id,
+                "style.fill",
+            )?;
+
+            super::graph_handler::GraphHandler::add_connection(
+                project,
+                PinId::new(clip_id, "shape_out"),
+                PinId::new(fill_id, "shape_in"),
+            )?;
+            super::graph_handler::GraphHandler::add_connection(
+                project,
+                PinId::new(fill_id, "image_out"),
+                PinId::new(transform_id, "image_in"),
+            )?;
+        } else {
+            // Video/Image/SkSL: clip.image_out → transform.image_in
+            super::graph_handler::GraphHandler::add_connection(
+                project,
+                PinId::new(clip_id, "image_out"),
+                PinId::new(transform_id, "image_in"),
+            )?;
+        }
+
+        // 4. Container output: transform.image_out → layer.image_out
+        super::graph_handler::GraphHandler::add_connection(
+            project,
+            PinId::new(transform_id, "image_out"),
+            PinId::new(layer_id, "image_out"),
+        )?;
+
+        Ok(())
+    }
+
+    /// Remove a clip from a track, along with all associated graph nodes
+    /// (transform, effects, styles, effectors, decorators).
     pub fn remove_clip_from_track(
         project: &Arc<RwLock<Project>>,
         track_id: Uuid,
@@ -65,7 +152,32 @@ impl ClipHandler {
     ) -> Result<(), LibraryError> {
         let mut proj = super::write_project(project)?;
 
-        // Remove from parent track's child_ids
+        // 1. Collect all associated graph nodes before removing anything
+        let associated_nodes =
+            crate::model::project::graph_analysis::collect_all_associated_nodes(&proj, clip_id);
+
+        // 2. Remove associated graph nodes (connections are cleaned up per node)
+        for node_id in &associated_nodes {
+            // Remove from parent track's child_ids
+            let parent_track_ids: Vec<Uuid> = proj
+                .nodes
+                .iter()
+                .filter_map(|(tid, n)| match n {
+                    Node::Track(t) if t.child_ids.contains(node_id) => Some(*tid),
+                    _ => None,
+                })
+                .collect();
+
+            for tid in parent_track_ids {
+                if let Some(track) = proj.get_track_mut(tid) {
+                    track.remove_child(*node_id);
+                }
+            }
+            proj.remove_connections_for_node(*node_id);
+            proj.remove_node(*node_id);
+        }
+
+        // 3. Remove clip from parent track's child_ids
         if let Some(track) = proj.get_track_mut(track_id) {
             if !track.remove_child(clip_id) {
                 return Err(LibraryError::project(format!(
@@ -80,7 +192,8 @@ impl ClipHandler {
             )));
         }
 
-        // Remove from nodes registry
+        // 4. Remove clip connections and node
+        proj.remove_connections_for_node(clip_id);
         proj.remove_node(clip_id);
         Ok(())
     }
@@ -247,81 +360,6 @@ impl ClipHandler {
             )));
         }
 
-        Ok(())
-    }
-
-    pub fn add_effect(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        effect: crate::model::project::effect::EffectConfig,
-    ) -> Result<(), LibraryError> {
-        let mut proj = super::write_project(project)?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project("Clip not found".to_string()))?;
-
-        clip.effects.push(effect);
-        Ok(())
-    }
-
-    pub fn update_effects(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        effects: Vec<crate::model::project::effect::EffectConfig>,
-    ) -> Result<(), LibraryError> {
-        let mut proj = super::write_project(project)?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project("Clip not found".to_string()))?;
-
-        clip.effects = effects;
-        Ok(())
-    }
-
-    pub fn update_styles(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        styles: Vec<crate::model::project::style::StyleInstance>,
-    ) -> Result<(), LibraryError> {
-        let mut proj = super::write_project(project)?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project("Clip not found".to_string()))?;
-
-        clip.styles = styles;
-        Ok(())
-    }
-
-    pub fn update_effectors(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        effectors: Vec<crate::model::project::ensemble::EffectorInstance>,
-    ) -> Result<(), LibraryError> {
-        let mut proj = super::write_project(project)?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project("Clip not found".to_string()))?;
-
-        clip.effectors = effectors;
-        Ok(())
-    }
-
-    pub fn update_decorators(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        decorators: Vec<crate::model::project::ensemble::DecoratorInstance>,
-    ) -> Result<(), LibraryError> {
-        let mut proj = super::write_project(project)?;
-
-        let clip = proj
-            .get_clip_mut(clip_id)
-            .ok_or_else(|| LibraryError::project("Clip not found".to_string()))?;
-
-        clip.decorators = decorators;
         Ok(())
     }
 

@@ -1,12 +1,28 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::model::frame::draw_type::BlendMode;
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct TrackData {
     pub id: Uuid,
     pub name: String,
     #[serde(default)]
     pub child_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub blend_mode: BlendMode,
+    #[serde(default = "default_opacity")]
+    pub opacity: f64,
+    #[serde(default = "default_visible")]
+    pub visible: bool,
+}
+
+fn default_opacity() -> f64 {
+    1.0
+}
+
+fn default_visible() -> bool {
+    true
 }
 
 impl TrackData {
@@ -15,6 +31,9 @@ impl TrackData {
             id: Uuid::new_v4(),
             name: name.to_string(),
             child_ids: Vec::new(),
+            blend_mode: BlendMode::default(),
+            opacity: 1.0,
+            visible: true,
         }
     }
 

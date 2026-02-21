@@ -37,14 +37,8 @@ pub(super) fn render_effects_section(
 
     let has_graph_effects = !graph_effects.is_empty();
 
-    // Collect embedded effects (legacy fallback)
-    let embedded_effects = if !has_graph_effects {
-        project_service
-            .with_project(|proj| proj.get_clip(selected_entity_id).map(|c| c.effects.clone()))
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    // Embedded effects have been removed; only graph-based effects are used
+    let embedded_effects: Vec<library::model::project::effect::EffectConfig> = Vec::new();
 
     // Add button (effects use searchable menu, not simple chain add)
     use super::properties::render_add_button;
@@ -210,8 +204,9 @@ fn render_embedded_effects(
 
             remove_clicked
         },
-        |new_effects, project_service| {
-            project_service.update_track_clip_effects(selected_entity_id, new_effects)
+        |_new_effects, _project_service| {
+            // Embedded effects no longer exist; graph-based effects are managed via node editor
+            Ok(())
         },
     )
     .show(ui, history_manager, project_service, needs_refresh);

@@ -91,15 +91,19 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
                 })
             }
             Node::Clip(clip) => {
+                use library::model::project::clip::TrackClipKind;
                 let kind_label = format!("{}", clip.kind);
                 let mut pins = Vec::new();
 
-                // Output: image (except audio)
-                if !matches!(
-                    clip.kind,
-                    library::model::project::clip::TrackClipKind::Audio
-                ) {
-                    pins.push(PinInfo::output("image_out", "Image"));
+                // Output pin depends on clip kind
+                match clip.kind {
+                    TrackClipKind::Text | TrackClipKind::Shape => {
+                        pins.push(PinInfo::output("shape_out", "Shape"));
+                    }
+                    TrackClipKind::Audio => {}
+                    _ => {
+                        pins.push(PinInfo::output("image_out", "Image"));
+                    }
                 }
 
                 // Input: property definitions for this clip kind
@@ -113,10 +117,10 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
                     pins.push(PinInfo::input(def.name(), def.label()));
                 }
 
-                // Special connection pins
-                pins.push(PinInfo::input("style_in", "Style"));
-                pins.push(PinInfo::input("effector_in", "Effector"));
-                pins.push(PinInfo::input("decorator_in", "Decorator"));
+                // Shape output pin (for text/shape ensemble chain)
+                if clip.kind == TrackClipKind::Text || clip.kind == TrackClipKind::Shape {
+                    pins.push(PinInfo::output("shape_out", "Shape"));
+                }
 
                 Some(NodeDisplay::Leaf { kind_label, pins })
             }

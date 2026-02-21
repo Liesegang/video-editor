@@ -229,4 +229,6 @@ pub(crate) struct GizmoState {
     pub(crate) original_anchor_y: f32,
     pub(crate) original_width: f32,
     pub(crate) original_height: f32,
+    /// The compositing.transform graph node ID (if any).
+    pub(crate) transform_node_id: Option<uuid::Uuid>,
 }

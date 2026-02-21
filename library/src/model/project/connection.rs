@@ -31,10 +31,6 @@ pub enum PinDataType {
     Enum,
     /// Style output (fill/stroke)
     Style,
-    /// Effector output
-    Effector,
-    /// Decorator output
-    Decorator,
     /// Video resource
     Video,
     /// Font reference
@@ -53,6 +49,8 @@ pub enum PinDataType {
     Object3D,
     /// 3D material
     Material,
+    /// Shape data (text glyphs, SVG path, etc.)
+    Shape,
     /// Generic vector (N-dimensional)
     Vector,
     /// List/array of values

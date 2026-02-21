@@ -3,6 +3,22 @@ use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 
+/// Blend mode for track compositing.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum BlendMode {
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Add,
+}
+
+impl Default for BlendMode {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum JoinType {
     Round,

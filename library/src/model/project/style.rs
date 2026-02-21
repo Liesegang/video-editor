@@ -19,4 +19,12 @@ impl StyleInstance {
             properties,
         }
     }
+
+    pub fn new_with_id(id: Uuid, style_type: &str, properties: PropertyMap) -> Self {
+        Self {
+            id,
+            style_type: style_type.to_string(),
+            properties,
+        }
+    }
 }

@@ -722,14 +722,14 @@ impl PluginManager {
             AutoRegisterConfig {
                 type_prefix: "effector.",
                 category: NodeCategory::Effector,
-                chain_input: ("effector_in", "Effector In", PinDataType::Effector),
-                chain_output: ("effector_out", "Effector", PinDataType::Effector),
+                chain_input: ("shape_in", "Shape In", PinDataType::Shape),
+                chain_output: ("shape_out", "Shape Out", PinDataType::Shape),
             },
             AutoRegisterConfig {
                 type_prefix: "decorator.",
                 category: NodeCategory::Decorator,
-                chain_input: ("decorator_in", "Decorator In", PinDataType::Decorator),
-                chain_output: ("decorator_out", "Decorator", PinDataType::Decorator),
+                chain_input: ("shape_in", "Shape In", PinDataType::Shape),
+                chain_output: ("shape_out", "Shape Out", PinDataType::Shape),
             },
         ];
 

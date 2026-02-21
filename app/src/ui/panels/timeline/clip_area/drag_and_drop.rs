@@ -234,10 +234,6 @@ pub(super) fn handle_drag_and_drop(
                                     None,
                                     target_fps,
                                     library::model::project::property::PropertyMap::new(),
-                                    Vec::new(),
-                                    Vec::new(),
-                                    Vec::new(),
-                                    Vec::new(),
                                 );
                                 comp_entity.in_frame = drop_in_frame;
                                 comp_entity.out_frame = drop_out;

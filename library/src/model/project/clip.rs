@@ -1,10 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::effect::EffectConfig;
-use super::ensemble::{DecoratorInstance, EffectorInstance};
-use super::property::{self, PropertyMap};
-use super::style::StyleInstance;
+use super::property::PropertyMap;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(rename_all = "lowercase")] // Serialize as "video", "image", etc.
@@ -54,14 +51,6 @@ pub struct TrackClip {
 
     #[serde(default)]
     pub properties: PropertyMap,
-    #[serde(default)]
-    pub styles: Vec<StyleInstance>,
-    #[serde(default)]
-    pub effects: Vec<EffectConfig>,
-    #[serde(default)]
-    pub effectors: Vec<EffectorInstance>,
-    #[serde(default)]
-    pub decorators: Vec<DecoratorInstance>,
 }
 
 impl TrackClip {
@@ -75,10 +64,6 @@ impl TrackClip {
         duration_frame: Option<u64>,
         fps: f64,
         properties: PropertyMap,
-        styles: Vec<StyleInstance>,
-        effects: Vec<EffectConfig>,
-        effectors: Vec<EffectorInstance>,
-        decorators: Vec<DecoratorInstance>,
     ) -> Self {
         Self {
             id,
@@ -90,10 +75,6 @@ impl TrackClip {
             duration_frame,
             fps,
             properties,
-            styles,
-            effects,
-            effectors,
-            decorators,
         }
     }
 
@@ -109,42 +90,8 @@ impl TrackClip {
         );
     }
 
-    /// Update effect property at specified index.
-    pub fn update_effect_property(
-        &mut self,
-        effect_index: usize,
-        key: &str,
-        time: f64,
-        value: property::PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), &'static str> {
-        let effect = self
-            .effects
-            .get_mut(effect_index)
-            .ok_or("Effect not found")?;
-        effect
-            .properties
-            .update_property_or_keyframe(key, time, value, easing);
-        Ok(())
-    }
-
-    /// Update style property at specified index.
-    pub fn update_style_property(
-        &mut self,
-        style_index: usize,
-        key: &str,
-        time: f64,
-        value: property::PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), &'static str> {
-        let style = self.styles.get_mut(style_index).ok_or("Style not found")?;
-        style
-            .properties
-            .update_property_or_keyframe(key, time, value, easing);
-        Ok(())
-    }
-
-    /// Unified accessor for property maps
+    /// Unified accessor for property maps.
+    /// For GraphNode targets, use `Project::get_graph_node_mut()` instead.
     pub fn get_property_map_mut(
         &mut self,
         target: crate::model::project::property::PropertyTarget,
@@ -152,11 +99,8 @@ impl TrackClip {
         use crate::model::project::property::PropertyTarget;
         match target {
             PropertyTarget::Clip => Some(&mut self.properties),
-            PropertyTarget::Effect(i) => self.effects.get_mut(i).map(|e| &mut e.properties),
-            PropertyTarget::Style(i) => self.styles.get_mut(i).map(|s| &mut s.properties),
-            PropertyTarget::Effector(i) => self.effectors.get_mut(i).map(|e| &mut e.properties),
-            PropertyTarget::Decorator(i) => self.decorators.get_mut(i).map(|e| &mut e.properties),
             PropertyTarget::GraphNode(_) => None, // GraphNode properties are accessed via Project.nodes
+            _ => None,
         }
     }
 

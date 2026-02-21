@@ -158,55 +158,21 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
             .unwrap_or_else(|| "Arial".to_string());
         let size = evaluator.evaluate_number(props, "size", eval_time, 12.0);
 
-        let styles = evaluator.build_styles(&track_clip.styles, eval_time);
+        let styles = evaluator.build_styles_from_graph(track_clip.id, eval_time);
 
         let transform = evaluator.build_transform(props, eval_time);
         let effects = evaluator.build_clip_effects(track_clip, eval_time);
 
-        // Build Ensemble data from text_clip.effectors/decorators
-        let ensemble = if !track_clip.effectors.is_empty() || !track_clip.decorators.is_empty() {
-            let mut effector_configs = Vec::new();
-            let mut decorator_configs = Vec::new();
+        // Build Ensemble data from graph-connected effectors/decorators
+        let effector_configs = evaluator.build_effectors_from_graph(track_clip.id, eval_time);
+        let decorator_configs = evaluator.build_decorators_from_graph(track_clip.id, eval_time);
 
-            // Convert EffectorInstances to EffectorConfigs
-            for instance in &track_clip.effectors {
-                if let Some(plugin) = evaluator
-                    .plugin_manager
-                    .get_effector_plugin(&instance.effector_type)
-                {
-                    if let Some(config) = plugin.convert(evaluator, instance, eval_time) {
-                        effector_configs.push(config);
-                    }
-                } else {
-                    log::warn!(
-                        "[WARN] entity_converter/text.rs: Unknown/Unsupported effector type: {}",
-                        instance.effector_type
-                    );
-                }
-            }
-
-            // Convert DecoratorInstances to DecoratorConfigs
-            for instance in &track_clip.decorators {
-                if let Some(plugin) = evaluator
-                    .plugin_manager
-                    .get_decorator_plugin(&instance.decorator_type)
-                {
-                    if let Some(config) = plugin.convert(evaluator, instance, eval_time) {
-                        decorator_configs.push(config);
-                    }
-                } else {
-                    log::warn!(
-                        "[WARN] entity_converter/text.rs: Unknown/Unsupported decorator type: {}",
-                        instance.decorator_type
-                    );
-                }
-            }
-
+        let ensemble = if !effector_configs.is_empty() || !decorator_configs.is_empty() {
             Some(crate::core::ensemble::EnsembleData {
                 enabled: true,
                 effector_configs,
                 decorator_configs,
-                patches: std::collections::HashMap::new(), // Patches not yet in UI
+                patches: std::collections::HashMap::new(),
             })
         } else {
             None

@@ -4,7 +4,6 @@ use crate::model::project::clip::TrackClip;
 use crate::model::project::effect::EffectConfig;
 use crate::model::project::project::Composition;
 use crate::model::project::property::{PropertyMap, PropertyValue, Vec2};
-use crate::model::project::style::StyleInstance;
 use crate::plugin::{EvaluationContext, PluginManager, PropertyEvaluatorRegistry};
 
 pub mod effector;
@@ -191,48 +190,125 @@ impl<'a> FrameEvaluationContext<'a> {
 
         let effect_chain = graph_analysis::get_effect_chain(self.project, track_clip.id);
 
-        if !effect_chain.is_empty() {
-            // Graph-based: read effect GraphNodes
-            effect_chain
-                .iter()
-                .filter_map(|&node_id| {
-                    let graph_node = self.project.get_graph_node(node_id)?;
-                    let effect_type = graph_node
-                        .type_id
-                        .strip_prefix("effect.")
-                        .unwrap_or(&graph_node.type_id)
-                        .to_string();
+        // Read effect chain from graph connections
+        effect_chain
+            .iter()
+            .filter_map(|&node_id| {
+                let graph_node = self.project.get_graph_node(node_id)?;
+                let effect_type = graph_node
+                    .type_id
+                    .strip_prefix("effect.")
+                    .unwrap_or(&graph_node.type_id)
+                    .to_string();
 
-                    let mut properties = std::collections::HashMap::new();
-                    for (key, prop) in graph_node.properties.iter() {
-                        let val = self.evaluate_property_value(prop, &graph_node.properties, time);
-                        properties.insert(key.clone(), val);
-                    }
+                let mut properties = std::collections::HashMap::new();
+                for (key, prop) in graph_node.properties.iter() {
+                    let val = self.evaluate_property_value(prop, &graph_node.properties, time);
+                    properties.insert(key.clone(), val);
+                }
 
-                    Some(ImageEffect {
-                        effect_type,
-                        properties,
-                    })
+                Some(ImageEffect {
+                    effect_type,
+                    properties,
                 })
-                .collect()
-        } else {
-            // Fallback: embedded effects
-            self.build_image_effects(&track_clip.effects, time)
-        }
+            })
+            .collect()
     }
 
-    pub fn build_styles(
+    /// Build styles from graph nodes connected to a clip.
+    pub fn build_styles_from_graph(
         &self,
-        styles: &[StyleInstance],
+        clip_id: uuid::Uuid,
         time: f64,
     ) -> Vec<crate::model::frame::entity::StyleConfig> {
-        styles
+        use crate::model::project::graph_analysis;
+
+        let style_ids = graph_analysis::get_associated_styles(self.project, clip_id);
+        style_ids
             .iter()
-            .filter_map(|s| {
-                if let Some(plugin) = self.plugin_manager.get_style_plugin(&s.style_type) {
-                    plugin.convert(self, s, time)
+            .filter_map(|&node_id| {
+                let graph_node = self.project.get_graph_node(node_id)?;
+                let style_type = graph_node
+                    .type_id
+                    .strip_prefix("style.")
+                    .unwrap_or(&graph_node.type_id);
+
+                if let Some(plugin) = self.plugin_manager.get_style_plugin(style_type) {
+                    // Build a temporary StyleInstance from the graph node for the plugin
+                    let instance = crate::model::project::style::StyleInstance::new_with_id(
+                        node_id,
+                        style_type,
+                        graph_node.properties.clone(),
+                    );
+                    plugin.convert(self, &instance, time)
                 } else {
-                    log::warn!("Unknown style type: {}", s.style_type);
+                    log::warn!("Unknown style type: {}", style_type);
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Build effector configs from graph nodes connected to a clip.
+    pub fn build_effectors_from_graph(
+        &self,
+        clip_id: uuid::Uuid,
+        time: f64,
+    ) -> Vec<crate::core::ensemble::types::EffectorConfig> {
+        use crate::model::project::graph_analysis;
+
+        let effector_ids = graph_analysis::get_associated_effectors(self.project, clip_id);
+        effector_ids
+            .iter()
+            .filter_map(|&node_id| {
+                let graph_node = self.project.get_graph_node(node_id)?;
+                let effector_type = graph_node
+                    .type_id
+                    .strip_prefix("effector.")
+                    .unwrap_or(&graph_node.type_id);
+
+                if let Some(plugin) = self.plugin_manager.get_effector_plugin(effector_type) {
+                    let instance = crate::model::project::ensemble::EffectorInstance::new_with_id(
+                        node_id,
+                        effector_type,
+                        graph_node.properties.clone(),
+                    );
+                    plugin.convert(self, &instance, time)
+                } else {
+                    log::warn!("Unknown effector type: {}", effector_type);
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Build decorator configs from graph nodes connected to a clip.
+    pub fn build_decorators_from_graph(
+        &self,
+        clip_id: uuid::Uuid,
+        time: f64,
+    ) -> Vec<crate::core::ensemble::types::DecoratorConfig> {
+        use crate::model::project::graph_analysis;
+
+        let decorator_ids = graph_analysis::get_associated_decorators(self.project, clip_id);
+        decorator_ids
+            .iter()
+            .filter_map(|&node_id| {
+                let graph_node = self.project.get_graph_node(node_id)?;
+                let decorator_type = graph_node
+                    .type_id
+                    .strip_prefix("decorator.")
+                    .unwrap_or(&graph_node.type_id);
+
+                if let Some(plugin) = self.plugin_manager.get_decorator_plugin(decorator_type) {
+                    let instance = crate::model::project::ensemble::DecoratorInstance::new_with_id(
+                        node_id,
+                        decorator_type,
+                        graph_node.properties.clone(),
+                    );
+                    plugin.convert(self, &instance, time)
+                } else {
+                    log::warn!("Unknown decorator type: {}", decorator_type);
                     None
                 }
             })

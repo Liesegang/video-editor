@@ -188,8 +188,9 @@ fn render_embedded_styles(
 
             remove_clicked
         },
-        |new_styles, project_service| {
-            project_service.update_track_clip_styles(selected_entity_id, new_styles)
+        |_new_styles, _project_service| {
+            // Embedded styles no longer exist; graph-based styles are managed via node editor
+            Ok(())
         },
     )
     .show(ui, history_manager, project_service, needs_refresh);

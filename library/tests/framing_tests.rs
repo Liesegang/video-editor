@@ -37,10 +37,6 @@ fn test_video_converter_frame_calculation() {
         Some(100),
         video_fps,
         library::model::project::property::PropertyMap::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
     );
     clip.source_begin_frame = 100;
     clip.set_constant_property(

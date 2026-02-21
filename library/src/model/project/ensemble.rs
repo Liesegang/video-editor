@@ -18,6 +18,14 @@ impl EffectorInstance {
             properties,
         }
     }
+
+    pub fn new_with_id(id: Uuid, effector_type: &str, properties: PropertyMap) -> Self {
+        Self {
+            id,
+            effector_type: effector_type.to_string(),
+            properties,
+        }
+    }
 }
 
 impl PartialEq for EffectorInstance {
@@ -46,6 +54,14 @@ impl DecoratorInstance {
     pub fn new(decorator_type: &str, properties: PropertyMap) -> Self {
         Self {
             id: Uuid::new_v4(),
+            decorator_type: decorator_type.to_string(),
+            properties,
+        }
+    }
+
+    pub fn new_with_id(id: Uuid, decorator_type: &str, properties: PropertyMap) -> Self {
+        Self {
+            id,
             decorator_type: decorator_type.to_string(),
             properties,
         }

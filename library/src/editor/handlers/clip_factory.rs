@@ -34,10 +34,6 @@ impl ClipFactory {
             Some(duration_frame),
             fps,
             props,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
         )
     }
 
@@ -80,10 +76,6 @@ impl ClipFactory {
             Some(duration_frame),
             fps,
             props,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
         ))
     }
 
@@ -124,10 +116,6 @@ impl ClipFactory {
             None,
             fps,
             props,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
         ))
     }
 
@@ -160,15 +148,8 @@ impl ClipFactory {
             Property::constant(PropertyValue::String(text.to_string())),
         );
 
-        let mut styles = Vec::new();
-
-        // Default fill style (white)
-        if let Some(fill_plugin) = plugin_manager.get_style_plugin("fill") {
-            let fill_props = PropertyMap::from_definitions(&fill_plugin.properties());
-            styles.push(crate::model::project::style::StyleInstance::new(
-                "fill", fill_props,
-            ));
-        }
+        // Default fill style is now created as a graph node (style.fill)
+        // by the caller after clip creation.
 
         Ok(TrackClip::new(
             Uuid::new_v4(),
@@ -180,10 +161,6 @@ impl ClipFactory {
             None,
             fps,
             props,
-            styles,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
         ))
     }
 
@@ -209,24 +186,8 @@ impl ClipFactory {
             Property::constant(PropertyValue::String(heart_path.to_string())),
         );
 
-        let mut styles = Vec::new();
-
-        // Fill (red)
-        if let Some(fill_plugin) = plugin_manager.get_style_plugin("fill") {
-            let fill_props = PropertyMap::from_definitions(&fill_plugin.properties());
-            styles.push(crate::model::project::style::StyleInstance::new(
-                "fill", fill_props,
-            ));
-        }
-
-        // Stroke (white)
-        if let Some(stroke_plugin) = plugin_manager.get_style_plugin("stroke") {
-            let stroke_props = PropertyMap::from_definitions(&stroke_plugin.properties());
-            styles.push(crate::model::project::style::StyleInstance::new(
-                "stroke",
-                stroke_props,
-            ));
-        }
+        // Default fill and stroke styles are now created as graph nodes
+        // by the caller after clip creation.
 
         Ok(TrackClip::new(
             Uuid::new_v4(),
@@ -238,10 +199,6 @@ impl ClipFactory {
             None,
             fps,
             props,
-            styles,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
         ))
     }
 
@@ -288,10 +245,6 @@ half4 main(float2 fragCoord) {
             None,
             fps,
             props,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
         ))
     }
 }

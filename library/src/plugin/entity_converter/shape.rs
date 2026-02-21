@@ -134,7 +134,7 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
         let path = evaluator.require_string(props, "path", eval_time, "shape")?;
         let transform = evaluator.build_transform(props, eval_time);
 
-        let styles = evaluator.build_styles(&track_clip.styles, eval_time);
+        let styles = evaluator.build_styles_from_graph(track_clip.id, eval_time);
 
         // Uses the signature defined in mod.rs: parse_path_effects(&self, props: &PropertyMap, time: f64)
         let path_effects = evaluator.parse_path_effects(props, eval_time);
