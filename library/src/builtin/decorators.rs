@@ -1,20 +1,9 @@
-use crate::builtin::entity_converter::FrameEvaluationContext;
-use crate::evaluation::ensemble::config::DecoratorConfig;
-use crate::evaluation::ensemble::decorators::{BackplateShape, BackplateTarget};
 use crate::plugin::{Plugin, PluginCategory};
-use crate::project::ensemble::DecoratorInstance;
 use crate::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use crate::runtime::color::Color;
 
 pub trait DecoratorPlugin: Plugin {
     fn properties(&self) -> Vec<PropertyDefinition>;
-
-    fn convert(
-        &self,
-        context: &FrameEvaluationContext,
-        instance: &DecoratorInstance,
-        eval_time: f64,
-    ) -> Option<DecoratorConfig>;
 
     fn plugin_type(&self) -> PluginCategory {
         PluginCategory::Decorator
@@ -92,47 +81,5 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
                 PropertyValue::from(0.0),
             ),
         ]
-    }
-
-    fn convert(
-        &self,
-        context: &FrameEvaluationContext,
-        instance: &DecoratorInstance,
-        eval_time: f64,
-    ) -> Option<DecoratorConfig> {
-        let color =
-            context.evaluate_color(&instance.properties, "color", eval_time, Color::black());
-
-        let padding_val =
-            context.evaluate_number(&instance.properties, "padding", eval_time, 0.0) as f32;
-        let radius = context.evaluate_number(&instance.properties, "radius", eval_time, 0.0) as f32;
-
-        let target_str = context
-            .require_string(&instance.properties, "target", eval_time, "Block")
-            .unwrap_or("Block".to_string());
-
-        let target = match target_str.as_str() {
-            "Char" => BackplateTarget::Char,
-            "Line" => BackplateTarget::Line,
-            _ => BackplateTarget::Block,
-        };
-
-        let shape_str = context
-            .require_string(&instance.properties, "shape", eval_time, "Rect")
-            .unwrap_or("Rect".to_string());
-
-        let shape = match shape_str.as_str() {
-            "RoundRect" => BackplateShape::RoundedRect,
-            "Circle" => BackplateShape::Circle,
-            _ => BackplateShape::Rect,
-        };
-
-        Some(DecoratorConfig::Backplate {
-            target,
-            shape,
-            color,
-            padding: (padding_val, padding_val, padding_val, padding_val),
-            corner_radius: radius,
-        })
     }
 }

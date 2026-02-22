@@ -1,5 +1,5 @@
 use crate::error::LibraryError;
-use crate::evaluation::output::ShapeGroup;
+use crate::pipeline::output::ShapeGroup;
 use crate::rendering::renderer::{RenderOutput, Renderer, TextureInfo};
 use crate::rendering::shader_utils::{self, ShaderContext};
 use crate::rendering::skia_utils::{
@@ -143,7 +143,7 @@ impl SkiaRenderer {
         size: f64,
         font_name: &String,
         styles: &[StyleConfig],
-        ensemble_data: &crate::evaluation::ensemble::EnsembleData,
+        ensemble_data: &crate::pipeline::ensemble::EnsembleData,
         transform: &Transform,
         current_time: f32,
     ) -> Result<RenderOutput, LibraryError> {
@@ -280,7 +280,7 @@ impl Renderer for SkiaRenderer {
         size: f64,
         font_name: &String,
         styles: &[StyleConfig],
-        ensemble: Option<&crate::evaluation::ensemble::EnsembleData>,
+        ensemble: Option<&crate::pipeline::ensemble::EnsembleData>,
         transform: &Transform,
     ) -> Result<RenderOutput, LibraryError> {
         let _timer = ScopedTimer::debug(format!(

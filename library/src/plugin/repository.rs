@@ -8,7 +8,6 @@ use libloading::Library;
 use crate::builtin::effects::EffectPlugin;
 use crate::builtin::exporters::ExportPlugin;
 use crate::builtin::loaders::LoadRepository;
-use crate::plugin::EntityConverterPlugin;
 use crate::plugin::evaluator::PropertyEvaluatorRegistry;
 use crate::plugin::node_types::NodeTypeDefinition;
 use crate::plugin::traits::Plugin;
@@ -44,7 +43,6 @@ pub(crate) struct PluginRegistry {
     pub effect_plugins: PluginRepository<dyn EffectPlugin>,
     pub load_plugins: LoadRepository,
     pub export_plugins: PluginRepository<dyn ExportPlugin>,
-    pub entity_converter_plugins: PluginRepository<dyn EntityConverterPlugin>,
     pub effector_plugins: PluginRepository<dyn EffectorPlugin>,
     pub decorator_plugins: PluginRepository<dyn DecoratorPlugin>,
     pub style_plugins: PluginRepository<dyn StylePlugin>,

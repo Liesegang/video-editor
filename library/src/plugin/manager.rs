@@ -9,7 +9,6 @@ use log::debug;
 
 use crate::cache::CacheManager;
 use crate::error::LibraryError;
-use crate::plugin::EntityConverterPlugin;
 use crate::project::asset::AssetKind;
 use crate::project::property::PropertyDefinition;
 use crate::project::property::PropertyValue;
@@ -33,10 +32,6 @@ use crate::plugin::{DecoratorPlugin, EffectorPlugin, StylePlugin};
 use crate::builtin::effects::{
     BlurEffectPlugin, DilateEffectPlugin, DropShadowEffectPlugin, ErodeEffectPlugin,
     MagnifierEffectPlugin, PixelSorterPlugin, TileEffectPlugin,
-};
-use crate::builtin::entity_converter::{
-    ImageEntityConverterPlugin, ShapeEntityConverterPlugin, SkSLEntityConverterPlugin,
-    TextEntityConverterPlugin, VideoEntityConverterPlugin,
 };
 use crate::builtin::exporters::{FfmpegExportPlugin, PngExportPlugin};
 use crate::builtin::loaders::{FfmpegVideoLoader, NativeImageLoader};
@@ -74,13 +69,6 @@ impl Default for PluginManager {
         manager.register_property_plugin(Arc::new(ConstantPropertyPlugin::new()));
         manager.register_property_plugin(Arc::new(KeyframePropertyPlugin::new()));
         manager.register_property_plugin(Arc::new(ExpressionPropertyPlugin::new()));
-
-        // Standard Entity Converters
-        manager.register_entity_converter_plugin(Arc::new(VideoEntityConverterPlugin::new()));
-        manager.register_entity_converter_plugin(Arc::new(ImageEntityConverterPlugin::new()));
-        manager.register_entity_converter_plugin(Arc::new(TextEntityConverterPlugin::new()));
-        manager.register_entity_converter_plugin(Arc::new(ShapeEntityConverterPlugin::new()));
-        manager.register_entity_converter_plugin(Arc::new(SkSLEntityConverterPlugin::new()));
 
         // Standard Effectors
         manager
@@ -184,7 +172,6 @@ impl PluginManager {
                 effect_plugins: PluginRepository::new(),
                 load_plugins: LoadRepository::new(),
                 export_plugins: PluginRepository::new(),
-                entity_converter_plugins: PluginRepository::new(),
                 effector_plugins: PluginRepository::new(),
                 decorator_plugins: PluginRepository::new(),
                 style_plugins: PluginRepository::new(),
@@ -208,11 +195,6 @@ impl PluginManager {
     pub fn register_export_plugin(&self, plugin: Arc<dyn ExportPlugin>) {
         let mut inner = self.inner.write().unwrap();
         inner.export_plugins.register(plugin);
-    }
-
-    pub fn register_entity_converter_plugin(&self, plugin: Arc<dyn EntityConverterPlugin>) {
-        let mut inner = self.inner.write().unwrap();
-        inner.entity_converter_plugins.register(plugin);
     }
 
     pub fn register_property_plugin(&self, plugin: Arc<dyn PropertyPlugin>) {
@@ -476,21 +458,6 @@ impl PluginManager {
         }
     }
 
-    pub fn load_entity_converter_plugin_from_file<P: AsRef<Path>>(
-        &self,
-        path: P,
-    ) -> Result<(), LibraryError> {
-        unsafe {
-            self.load_plugin_generic::<dyn EntityConverterPlugin>(
-                path.as_ref(),
-                b"create_entity_converter_plugin",
-                |inner, plugin| {
-                    inner.entity_converter_plugins.register(plugin);
-                },
-            )
-        }
-    }
-
     pub fn load_plugins_from_directory<P: AsRef<Path>>(
         &self,
         dir_path: P,
@@ -525,11 +492,6 @@ impl PluginManager {
                     }
                     if let Err(e) = self.load_export_plugin_from_file(&path) {
                         log::debug!("Not an export plugin: {}", e);
-                    } else {
-                        continue;
-                    }
-                    if let Err(e) = self.load_entity_converter_plugin_from_file(&path) {
-                        log::debug!("Not an entity converter plugin: {}", e);
                     } else {
                         continue;
                     }
@@ -593,16 +555,6 @@ impl PluginManager {
         Arc::new(inner.property_evaluators.clone())
     }
 
-    pub fn get_entity_converter(&self, kind: &str) -> Option<Arc<dyn EntityConverterPlugin>> {
-        let inner = self.inner.read().unwrap();
-        for plugin in inner.entity_converter_plugins.values() {
-            if plugin.supports_kind(kind) {
-                return Some(plugin.clone());
-            }
-        }
-        None
-    }
-
     pub fn get_inspector_definitions(
         &self,
         _kind: &crate::project::clip::TrackClipKind,
@@ -663,7 +615,6 @@ impl PluginManager {
         collect_plugins!(inner.effect_plugins);
         collect_plugins!(inner.load_plugins);
         collect_plugins!(inner.export_plugins);
-        collect_plugins!(inner.entity_converter_plugins);
 
         plugins.sort_by(|a, b| a.id.cmp(&b.id));
         plugins

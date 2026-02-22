@@ -267,11 +267,6 @@ fn settings_panel(
                                              state.active_tab = SettingsTab::PluginList(PluginCategory::Effect, Some("SkSL".to_string()));
                                          }
                                     });
-
-                                // Entity Converters
-                                if ui.selectable_label(matches!(state.active_tab, SettingsTab::PluginList(PluginCategory::EntityConverter, _)), "Entity Converters").clicked() {
-                                    state.active_tab = SettingsTab::PluginList(PluginCategory::EntityConverter, None);
-                                }
                             });
 
                         if ui.selectable_label(matches!(state.active_tab, SettingsTab::Theme), "Theme").clicked() {

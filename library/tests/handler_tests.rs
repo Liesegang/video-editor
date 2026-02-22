@@ -13,6 +13,11 @@ use library::service::handlers::clip_factory::ClipFactory;
 use library::service::handlers::clip_handler::ClipHandler;
 use library::service::handlers::track_handler::TrackHandler;
 
+/// Helper: create a PluginManager (still needed for setup_clip_graph_nodes).
+fn make_plugin_manager() -> PluginManager {
+    PluginManager::default()
+}
+
 /// Helper: create a Project with one composition and its root track.
 fn setup_project() -> (Arc<RwLock<Project>>, uuid::Uuid, uuid::Uuid) {
     let mut project = Project::new("Test Project");
@@ -46,14 +51,13 @@ fn test_add_track_to_composition() {
 fn test_add_text_clip_creates_full_graph() {
     // テキストクリップ追加時にレイヤー + fill + transform + 正しい接続が作成される
     let (project, comp_id, _root_track_id) = setup_project();
-    let plugin_manager = PluginManager::default();
+    let plugin_manager = make_plugin_manager();
 
     // 1. トラックを追加
     let track_id = TrackHandler::add_track(&project, comp_id, "Video Track").unwrap();
 
     // 2. テキストクリップを作成
-    let text_clip =
-        ClipFactory::create_text_clip(&plugin_manager, "Hello", 0, 90, 1920, 1080, 30.0).unwrap();
+    let text_clip = ClipFactory::create_text_clip("Hello", 0, 90, 30.0);
     let clip_kind = text_clip.kind.clone();
 
     // 3. クリップをトラックに追加
@@ -163,11 +167,10 @@ fn test_add_text_clip_creates_full_graph() {
 fn test_add_shape_clip_creates_fill_chain() {
     // シェイプクリップも同様の fill チェーンが作成される
     let (project, comp_id, _) = setup_project();
-    let plugin_manager = PluginManager::default();
+    let plugin_manager = make_plugin_manager();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "Shape Track").unwrap();
-    let shape_clip =
-        ClipFactory::create_shape_clip(&plugin_manager, 0, 60, 1920, 1080, 30.0).unwrap();
+    let shape_clip = ClipFactory::create_shape_clip(0, 60, 30.0);
     let clip_kind = shape_clip.kind.clone();
     assert_eq!(clip_kind, TrackClipKind::Shape);
 
@@ -203,20 +206,10 @@ fn test_add_shape_clip_creates_fill_chain() {
 fn test_add_image_clip_creates_direct_image_chain() {
     // Image クリップは fill なしで直接 image_out → transform の接続
     let (project, comp_id, _) = setup_project();
-    let plugin_manager = PluginManager::default();
+    let plugin_manager = make_plugin_manager();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "Image Track").unwrap();
-    let image_clip = ClipFactory::create_image_clip(
-        &plugin_manager,
-        None,
-        "/path/to/image.png",
-        0,
-        90,
-        1920,
-        1080,
-        30.0,
-    )
-    .unwrap();
+    let image_clip = ClipFactory::create_image_clip(None, "/path/to/image.png", 0, 90, 30.0);
     let clip_kind = image_clip.kind.clone();
 
     let clip_id =
@@ -264,11 +257,10 @@ fn test_add_image_clip_creates_direct_image_chain() {
 fn test_remove_clip_cleans_up_graph() {
     // クリップ削除時にレイヤー・グラフノード・接続が全て削除される
     let (project, comp_id, _) = setup_project();
-    let plugin_manager = PluginManager::default();
+    let plugin_manager = make_plugin_manager();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "Track").unwrap();
-    let text_clip =
-        ClipFactory::create_text_clip(&plugin_manager, "Test", 0, 30, 1920, 1080, 30.0).unwrap();
+    let text_clip = ClipFactory::create_text_clip("Test", 0, 30, 30.0);
     let clip_kind = text_clip.kind.clone();
     let clip_id =
         ClipHandler::add_clip_to_track(&project, comp_id, track_id, text_clip, 0, 30, None)
@@ -315,14 +307,12 @@ fn test_remove_clip_cleans_up_graph() {
 fn test_add_clip_rejects_nonexistent_composition() {
     // 存在しないコンポジションIDを指定した場合、クリップ追加は失敗すべき
     let (project, _comp_id, _root_track_id) = setup_project();
-    let plugin_manager = PluginManager::default();
 
     // 正規のトラックを追加
     let track_id = TrackHandler::add_track(&project, _comp_id, "Track").unwrap();
 
     // テキストクリップを作成
-    let clip =
-        ClipFactory::create_text_clip(&plugin_manager, "Hello", 0, 90, 1920, 1080, 30.0).unwrap();
+    let clip = ClipFactory::create_text_clip("Hello", 0, 90, 30.0);
 
     // 存在しないコンポジションIDで追加を試みる
     let fake_comp_id = uuid::Uuid::new_v4();
@@ -339,7 +329,6 @@ fn test_add_clip_rejects_nonexistent_composition() {
 fn test_add_clip_rejects_track_not_in_composition() {
     // 別のコンポジションに属するトラックにクリップを追加しようとした場合、失敗すべき
     let (project, comp_a_id, _root_a) = setup_project();
-    let plugin_manager = PluginManager::default();
 
     // 2つ目のコンポジションを作成
     let (comp_b, root_track_b) = Composition::new("Comp B", 1920, 1080, 30.0, 60.0);
@@ -354,8 +343,7 @@ fn test_add_clip_rejects_track_not_in_composition() {
     let track_in_b = TrackHandler::add_track(&project, comp_b_id, "Track in B").unwrap();
 
     // テキストクリップを作成
-    let clip =
-        ClipFactory::create_text_clip(&plugin_manager, "Hello", 0, 90, 1920, 1080, 30.0).unwrap();
+    let clip = ClipFactory::create_text_clip("Hello", 0, 90, 30.0);
 
     // コンポジションAのIDだが、コンポジションBのトラックを指定 → 失敗すべき
     let result = ClipHandler::add_clip_to_track(&project, comp_a_id, track_in_b, clip, 0, 90, None);
@@ -378,7 +366,6 @@ fn test_add_clip_rejects_track_not_in_composition() {
 fn test_add_clip_rejects_orphan_track() {
     // どのコンポジションにも属さない孤立トラックにクリップを追加しようとした場合、失敗すべき
     let (project, comp_id, _root_track_id) = setup_project();
-    let plugin_manager = PluginManager::default();
 
     // 孤立トラック (どのコンポジションのツリーにも属さない) を直接追加
     let orphan_track = library::project::track::TrackData::new("Orphan Track");
@@ -389,8 +376,7 @@ fn test_add_clip_rejects_orphan_track() {
     }
 
     // テキストクリップを作成
-    let clip =
-        ClipFactory::create_text_clip(&plugin_manager, "Hello", 0, 90, 1920, 1080, 30.0).unwrap();
+    let clip = ClipFactory::create_text_clip("Hello", 0, 90, 30.0);
 
     // 孤立トラックに追加を試みる → 失敗すべき
     let result =
@@ -413,7 +399,7 @@ fn test_add_clip_rejects_orphan_track() {
 #[test]
 fn test_ui_flow_add_track_subtrack_text_clip() {
     let (project, comp_id, root_track_id) = setup_project();
-    let plugin_manager = PluginManager::default();
+    let plugin_manager = make_plugin_manager();
 
     // ──── Step 1: 「Add Track」ボタン押下 ────
     // UI: track_list.rs → DeferredTrackAction::AddTrack → project_service.add_track()
@@ -456,16 +442,7 @@ fn test_ui_flow_add_track_subtrack_text_clip() {
     let duration_frames = (5.0_f64 * fps).round() as u64; // 5秒 = 150フレーム
     let out_frame = in_frame + duration_frames;
 
-    let text_clip = ClipFactory::create_text_clip(
-        &plugin_manager,
-        sample_text,
-        in_frame,
-        out_frame,
-        1920,
-        1080,
-        fps,
-    )
-    .unwrap();
+    let text_clip = ClipFactory::create_text_clip(sample_text, in_frame, out_frame, fps);
     let clip_kind = text_clip.kind.clone();
     assert_eq!(clip_kind, TrackClipKind::Text);
 

@@ -7,12 +7,11 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 
 use library::cache::SharedCacheManager;
-use library::rendering::render_service::RenderService;
-// use library::framing::entity_converters::EntityConverterRegistry;
 use library::plugin::{ExportSettings, PluginManager};
 use library::project::project::Project;
 use library::project::property::PropertyUiType;
 use library::project::property::PropertyValue;
+use library::rendering::renderer::Renderer;
 use library::rendering::skia_renderer::SkiaRenderer;
 use library::{EditorService, ExportService, ProjectModel};
 
@@ -566,30 +565,13 @@ impl ExportDialog {
         thread::spawn(move || {
             // Initialize Renderer inside thread (requires context)
             let composition = &project_snapshot.compositions[comp_index];
-            let renderer = SkiaRenderer::new(
+            let mut renderer = SkiaRenderer::new(
                 composition.width as u32,
                 composition.height as u32,
                 composition.background_color.clone(),
                 false,
                 None,
             );
-
-            let render_service_plugin_manager = plugin_manager.clone();
-            let mut render_service = RenderService::new(
-                renderer,
-                render_service_plugin_manager,
-                cache_manager.clone(),
-            );
-
-            // Construct ProjectModel
-            let project_model =
-                match ProjectModel::new(Arc::new(project_snapshot.clone()), comp_index) {
-                    Ok(pm) => pm,
-                    Err(e) => {
-                        error!("Failed to create project model: {}", e);
-                        return; // Should report error to UI
-                    }
-                };
 
             // Build ExportSettings
             let mut settings = ExportSettings::for_dimensions(
@@ -663,9 +645,9 @@ impl ExportDialog {
                 let frames = (duration * sample_rate as f64).round() as usize;
 
                 let audio_data = library::audio::mixer::mix_samples(
-                    &project_model.project().assets,
-                    project_model.project(),
-                    project_model.composition(),
+                    &project_snapshot.assets,
+                    &project_snapshot,
+                    composition,
                     &cache_manager,
                     start_sample,
                     frames,
@@ -740,8 +722,10 @@ impl ExportDialog {
                 let range = current_frame..end;
 
                 if let Err(e) = export_service.render_range(
-                    &mut render_service,
-                    &project_model,
+                    &project_snapshot,
+                    composition,
+                    &mut renderer,
+                    &cache_manager,
                     range,
                     stem_str,
                 ) {

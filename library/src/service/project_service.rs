@@ -1,4 +1,3 @@
-use crate::builtin::entity_converter::measure_text_size;
 use crate::error::LibraryError;
 use crate::plugin::PluginManager;
 use crate::project::asset::Asset;
@@ -100,11 +99,10 @@ impl ProjectManager {
         source_begin_frame: i64,
         duration_frame: u64,
         fps: f64,
-        canvas_width: u32,
-        canvas_height: u32,
+        _canvas_width: u32,
+        _canvas_height: u32,
     ) -> Result<TrackClip, LibraryError> {
-        ClipFactory::create_video_clip(
-            &self.plugin_manager,
+        Ok(ClipFactory::create_video_clip(
             reference_id,
             file_path,
             in_frame,
@@ -112,9 +110,7 @@ impl ProjectManager {
             source_begin_frame,
             duration_frame,
             fps,
-            canvas_width,
-            canvas_height,
-        )
+        ))
     }
 
     pub fn create_image_clip(
@@ -123,20 +119,17 @@ impl ProjectManager {
         file_path: &str,
         in_frame: u64,
         out_frame: u64,
-        canvas_width: u32,
-        canvas_height: u32,
+        _canvas_width: u32,
+        _canvas_height: u32,
         fps: f64,
     ) -> Result<TrackClip, LibraryError> {
-        ClipFactory::create_image_clip(
-            &self.plugin_manager,
+        Ok(ClipFactory::create_image_clip(
             reference_id,
             file_path,
             in_frame,
             out_frame,
-            canvas_width,
-            canvas_height,
             fps,
-        )
+        ))
     }
 
     pub fn create_text_clip(
@@ -144,55 +137,35 @@ impl ProjectManager {
         text: &str,
         in_frame: u64,
         out_frame: u64,
-        canvas_width: u32,
-        canvas_height: u32,
+        _canvas_width: u32,
+        _canvas_height: u32,
         fps: f64,
     ) -> Result<TrackClip, LibraryError> {
-        ClipFactory::create_text_clip(
-            &self.plugin_manager,
-            text,
-            in_frame,
-            out_frame,
-            canvas_width,
-            canvas_height,
-            fps,
-        )
+        Ok(ClipFactory::create_text_clip(
+            text, in_frame, out_frame, fps,
+        ))
     }
 
     pub fn create_shape_clip(
         &self,
         in_frame: u64,
         out_frame: u64,
-        canvas_width: u32,
-        canvas_height: u32,
+        _canvas_width: u32,
+        _canvas_height: u32,
         fps: f64,
     ) -> Result<TrackClip, LibraryError> {
-        ClipFactory::create_shape_clip(
-            &self.plugin_manager,
-            in_frame,
-            out_frame,
-            canvas_width,
-            canvas_height,
-            fps,
-        )
+        Ok(ClipFactory::create_shape_clip(in_frame, out_frame, fps))
     }
 
     pub fn create_sksl_clip(
         &self,
         in_frame: u64,
         out_frame: u64,
-        canvas_width: u32,
-        canvas_height: u32,
+        _canvas_width: u32,
+        _canvas_height: u32,
         fps: f64,
     ) -> Result<TrackClip, LibraryError> {
-        ClipFactory::create_sksl_clip(
-            &self.plugin_manager,
-            in_frame,
-            out_frame,
-            canvas_width,
-            canvas_height,
-            fps,
-        )
+        Ok(ClipFactory::create_sksl_clip(in_frame, out_frame, fps))
     }
 
     pub fn save_project(&self) -> Result<String, LibraryError> {
@@ -734,73 +707,19 @@ impl ProjectManager {
 
     pub fn get_inspector_definitions(
         &self,
-        comp_id: uuid::Uuid,
+        _comp_id: uuid::Uuid,
         _track_id: uuid::Uuid,
         clip_id: uuid::Uuid,
     ) -> Vec<PropertyDefinition> {
         let project = self.project.read().unwrap();
 
-        let (clip, canvas_width, canvas_height) =
-            if let Some(comp) = project.compositions.iter().find(|c| c.id == comp_id) {
-                if let Some(c) = project.get_clip(clip_id) {
-                    (c.clone(), comp.width, comp.height)
-                } else {
-                    return Vec::new();
-                }
-            } else {
-                return Vec::new();
-            };
-
-        // Resolve clip dimensions
-        let (clip_width, clip_height): (u64, u64) = match clip.kind {
-            crate::project::clip::TrackClipKind::Video
-            | crate::project::clip::TrackClipKind::Image => {
-                if let Some(asset_id) = clip.reference_id {
-                    if let Some(asset) = project.assets.iter().find(|a| a.id == asset_id) {
-                        (
-                            asset.width.unwrap_or(100) as u64,
-                            asset.height.unwrap_or(100) as u64,
-                        )
-                    } else {
-                        (100, 100)
-                    }
-                } else {
-                    (100, 100)
-                }
-            }
-            crate::project::clip::TrackClipKind::Shape => {
-                // Try to get from properties, otherwise default 100
-                let w = clip.properties.get_f64("width").unwrap_or(100.0) as u64;
-                let h = clip.properties.get_f64("height").unwrap_or(100.0) as u64;
-                (w, h)
-            }
-            crate::project::clip::TrackClipKind::Text => {
-                let text = clip
-                    .properties
-                    .get_string("text")
-                    .unwrap_or("Text".to_string());
-                let font_name = clip
-                    .properties
-                    .get_string("font_family")
-                    .unwrap_or("Arial".to_string());
-                let size = clip.properties.get_f64("size").unwrap_or(100.0) as f32;
-
-                let (w, h) = measure_text_size(&text, &font_name, size);
-                (w.round() as u64, h.round() as u64)
-            }
-            crate::project::clip::TrackClipKind::SkSL => (canvas_width, canvas_height),
-            _ => (100, 100),
-        };
-
-        let converter = self
-            .plugin_manager
-            .get_entity_converter(&clip.kind.to_string());
-
-        let mut definitions = if let Some(converter) = converter {
-            converter.get_property_definitions(canvas_width, canvas_height, clip_width, clip_height)
+        let clip = if let Some(c) = project.get_clip(clip_id) {
+            c.clone()
         } else {
-            Vec::new()
+            return Vec::new();
         };
+
+        let mut definitions = TrackClip::get_definitions_for_kind(&clip.kind);
 
         if matches!(clip.kind, crate::project::clip::TrackClipKind::Video) {
             let colorspaces = ColorSpaceManager::get_available_colorspaces();
@@ -823,8 +742,6 @@ impl ProjectManager {
                 ));
             }
         }
-
-        // let mut definitions = clip.default_property_definitions(canvas_width, canvas_height, clip_width, clip_height); // Removed original line
 
         definitions
     }

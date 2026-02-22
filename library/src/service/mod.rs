@@ -4,6 +4,7 @@
 //! to interact with the library.
 
 pub(crate) mod audio_service;
+pub mod bounds;
 pub mod editor_service;
 pub mod export_service;
 pub mod handlers;

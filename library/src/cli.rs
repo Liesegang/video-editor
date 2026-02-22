@@ -1,7 +1,6 @@
 use crate::SkiaRenderer;
 use crate::error::LibraryError;
 use crate::plugin::{ExportSettings, PluginManager};
-use crate::rendering::render_service::RenderService;
 use crate::service::export_service::ExportService;
 use crate::service::project_model::ProjectModel;
 use log::info;
@@ -56,7 +55,7 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
     }
 
     let composition = project_model.composition();
-    let renderer = SkiaRenderer::new(
+    let mut renderer = SkiaRenderer::new(
         composition.width as u32,
         composition.height as u32,
         composition.background_color.clone(),
@@ -65,11 +64,6 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
     );
 
     let cache_manager = Arc::new(crate::rendering::cache::CacheManager::new());
-
-    let _property_evaluators = plugin_manager.get_property_evaluators();
-
-    let mut render_service =
-        RenderService::new(renderer, plugin_manager.clone(), cache_manager.clone());
 
     let mut export_settings = Arc::new(ExportSettings::from_project(
         project_model.project().as_ref(),
@@ -141,8 +135,10 @@ pub fn run(args: Vec<String>) -> Result<(), LibraryError> {
     );
 
     export_service.render_range(
-        &mut render_service,
-        &project_model,
+        project_model.project().as_ref(),
+        project_model.composition(),
+        &mut renderer,
+        &cache_manager,
         final_frame_range,
         &output_stem,
     )?;

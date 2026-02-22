@@ -3,7 +3,6 @@
 pub mod decorators;
 pub mod effectors;
 pub mod effects;
-pub mod entity_converter;
 pub mod exporters;
 pub mod loaders;
 pub mod properties;

@@ -272,7 +272,7 @@ pub(crate) fn preview_panel(
         }
 
         if let Some(result) = latest_result {
-            editor_context.preview_region = result.frame_info.region;
+            editor_context.preview_region = result.region;
             match result.output {
                 library::rendering::renderer::RenderOutput::Image(image) => {
                     let size = [image.width as usize, image.height as usize];
@@ -472,30 +472,24 @@ pub(crate) fn preview_panel(
                         let current_frame =
                             (editor_context.timeline.current_time as f64 * comp.fps).round() as u64;
 
-                        let ctx = library::builtin::entity_converter::FrameEvaluationContext {
-                            composition: comp,
-                            property_evaluators: &property_evaluators,
-                            plugin_manager: &plugin_manager,
-                            project: &proj_read,
-                        };
-
-                        if let Some(converter) =
-                            plugin_manager.get_entity_converter(&entity.kind.to_string())
+                        if let Some((x, y, w, h)) =
+                            library::service::bounds::get_clip_content_bounds(
+                                entity,
+                                comp.fps,
+                                current_frame,
+                                &property_evaluators,
+                            )
                         {
-                            if let Some((x, y, w, h)) =
-                                converter.get_bounds(&ctx, entity, current_frame)
-                            {
-                                width = Some(w);
-                                height = Some(h);
-                                content_point = Some([x, y]);
-                                // Update Cache
-                                editor_context
-                                    .interaction
-                                    .preview
-                                    .bounds_cache
-                                    .bounds
-                                    .insert(entity.id, (hash, (x, y, w, h)));
-                            }
+                            width = Some(w);
+                            height = Some(h);
+                            content_point = Some([x, y]);
+                            // Update Cache
+                            editor_context
+                                .interaction
+                                .preview
+                                .bounds_cache
+                                .bounds
+                                .insert(entity.id, (hash, (x, y, w, h)));
                         }
                     }
                 }

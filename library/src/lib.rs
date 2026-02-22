@@ -3,7 +3,12 @@ pub mod audio;
 pub mod builtin;
 mod cli;
 pub mod error;
-pub mod evaluation;
+pub mod pipeline;
+
+// Backward compatibility: `evaluation` re-exports from `pipeline`
+pub mod evaluation {
+    pub use crate::pipeline::*;
+}
 pub mod plugin;
 pub mod project;
 pub mod rendering;
@@ -31,7 +36,6 @@ pub use crate::runtime::Image;
 
 // Service types
 pub use rendering::render_server::{RenderResult, RenderServer};
-pub use rendering::render_service::RenderService;
 pub use rendering::skia_renderer::SkiaRenderer;
 pub use service::EditorService;
 pub use service::ExportService;

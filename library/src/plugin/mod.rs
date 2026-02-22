@@ -20,7 +20,6 @@ pub use traits::{Plugin, PropertyPlugin};
 pub use crate::builtin::decorators::DecoratorPlugin;
 pub use crate::builtin::effectors::EffectorPlugin;
 pub use crate::builtin::effects::{EffectDefinition, EffectPlugin, EffectRepository};
-pub use crate::builtin::entity_converter::{EntityConverterPlugin, FrameEvaluationContext};
 pub use crate::builtin::exporters::{ExportFormat, ExportPlugin, ExportRepository, ExportSettings};
 pub use crate::builtin::loaders::{
     AssetMetadata, LoadPlugin, LoadRepository, LoadRequest, LoadResponse,
@@ -49,7 +48,6 @@ pub enum PluginCategory {
     Load,
     Export,
     Property,
-    EntityConverter,
     Effector,
     Decorator,
     Style,

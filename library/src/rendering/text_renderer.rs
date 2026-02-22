@@ -1,12 +1,34 @@
 use super::paint_utils::build_transform_matrix;
-use crate::evaluation::ensemble::EnsembleData;
-use crate::evaluation::ensemble::config::{DecoratorConfig, EffectorConfig};
-use crate::evaluation::ensemble::decorators::{BackplateShape, BackplateTarget};
-use crate::evaluation::ensemble::types::TransformData;
+use crate::pipeline::ensemble::EnsembleData;
+use crate::pipeline::ensemble::config::{DecoratorConfig, EffectorConfig};
+use crate::pipeline::ensemble::decorators::{BackplateShape, BackplateTarget};
+use crate::pipeline::ensemble::types::TransformData;
 use crate::runtime::draw_type::DrawStyle;
 use crate::runtime::entity::StyleConfig;
 use crate::runtime::transform::Transform;
-use skia_safe::{Canvas, Paint};
+use skia_safe::textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle};
+use skia_safe::{Canvas, FontMgr, Paint};
+
+/// Measure the bounding box of a text string rendered with the given font and size.
+pub fn measure_text_size(text: &str, primary_font_name: &str, size: f32) -> (f32, f32) {
+    let mut font_collection = FontCollection::new();
+    font_collection.set_default_font_manager(FontMgr::default(), None);
+
+    let mut text_style = TextStyle::new();
+    text_style.set_font_families(&[primary_font_name]);
+    text_style.set_font_size(size);
+
+    let mut paragraph_style = ParagraphStyle::new();
+    paragraph_style.set_text_style(&text_style);
+
+    let mut builder = ParagraphBuilder::new(&paragraph_style, font_collection);
+    builder.add_text(text);
+
+    let mut paragraph = builder.build();
+    paragraph.layout(f32::MAX);
+
+    (paragraph.max_intrinsic_width(), paragraph.height())
+}
 
 /// Render text with ensemble effectors and decorators onto a canvas.
 ///

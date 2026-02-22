@@ -1,5 +1,5 @@
 use crate::error::LibraryError;
-use crate::evaluation::output::ShapeGroup;
+use crate::pipeline::output::ShapeGroup;
 use crate::runtime::Image;
 
 use crate::runtime::draw_type::PathEffect;
@@ -32,7 +32,7 @@ pub trait Renderer {
         size: f64,
         font_name: &String,
         styles: &[StyleConfig],
-        ensemble: Option<&crate::evaluation::ensemble::EnsembleData>,
+        ensemble: Option<&crate::pipeline::ensemble::EnsembleData>,
         transform: &Transform,
     ) -> Result<RenderOutput, LibraryError>;
 

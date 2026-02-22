@@ -1,9 +1,11 @@
+use crate::cache::SharedCacheManager;
 use crate::error::LibraryError;
+use crate::pipeline::engine::EvalEngine;
 use crate::plugin::{ExportFormat, ExportSettings, PluginManager};
-use crate::rendering::render_service::RenderService;
-use crate::rendering::renderer::Renderer;
+use crate::project::project::{Composition, Project};
+use crate::rendering::renderer::{RenderOutput, Renderer};
+use crate::rendering::skia_renderer::SkiaRenderer;
 use crate::runtime::Image;
-use crate::service::project_model::ProjectModel;
 use crate::timing::{ScopedTimer, measure_info};
 use log::{error, info};
 
@@ -26,6 +28,8 @@ pub struct ExportService {
     export_settings: Arc<ExportSettings>,
     exporter_id: String,
     temp_files: Vec<String>,
+    eval_engine: EvalEngine,
+    plugin_manager: Arc<PluginManager>,
 }
 
 impl ExportService {
@@ -35,11 +39,12 @@ impl ExportService {
         export_settings: Arc<ExportSettings>,
         save_queue_bound: usize,
     ) -> Self {
+        let pm_for_saver = Arc::clone(&plugin_manager);
         let queue_bound = save_queue_bound.max(1);
         let (save_tx, save_rx) = mpsc::sync_channel::<SaveTask>(queue_bound);
         let saver_handle = thread::spawn(move || {
             while let Ok(task) = save_rx.recv() {
-                if let Err(err) = plugin_manager.export_image(
+                if let Err(err) = pm_for_saver.export_image(
                     &task.exporter_id,
                     &task.output_path,
                     &task.image,
@@ -60,22 +65,21 @@ impl ExportService {
             export_settings,
             exporter_id,
             temp_files: Vec::new(),
-            // ...
+            eval_engine: EvalEngine::with_default_evaluators(),
+            plugin_manager,
         }
     }
 
-    pub fn render_range<T: Renderer>(
+    pub fn render_range(
         &mut self,
-        render_service: &mut RenderService<T>,
-        project_model: &ProjectModel,
+        project: &Project,
+        composition: &Composition,
+        renderer: &mut SkiaRenderer,
+        cache_manager: &SharedCacheManager,
         frame_range: Range<u64>,
         output_stem: &str,
     ) -> Result<(), LibraryError> {
-        let composition = project_model.composition();
-        let (fps, total_frames) = (
-            composition.fps,
-            (composition.duration * composition.fps).ceil().max(0.0) as u64,
-        );
+        let total_frames = (composition.duration * composition.fps).ceil().max(0.0) as u64;
         let sender = self.save_tx.as_ref().ok_or(LibraryError::render(
             "Save queue is already closed".to_string(),
         ))?;
@@ -85,15 +89,11 @@ impl ExportService {
         let export_format = settings_struct.export_format();
 
         // Setup Output Paths
-        let mut base_template = output_stem.replace("{project}", &project_model.project().name);
+        let mut base_template = output_stem.replace("{project}", &project.name);
         base_template = base_template.replace("{composition}", &composition.name);
         let has_frame_token = base_template.contains("{frame");
 
         let video_output = if matches!(export_format, ExportFormat::Video) {
-            // Audio is now handled by the caller (ExportDialog/lib.rs) who pre-renders it
-            // and adds "audio_source" to ExportSettings.
-
-            // Render Video
             let clean_stem = if has_frame_token {
                 Self::format_frame_token_in_string(&base_template, frame_range.start)
             } else {
@@ -115,14 +115,25 @@ impl ExportService {
             info!("Render frame {}:", frame_index);
             let _frame_scope = ScopedTimer::info(format!("Frame {} total", frame_index));
 
-            let frame_time = frame_index as f64 / fps;
+            let property_evaluators = self.plugin_manager.get_property_evaluators();
+            renderer.clear()?;
             let output = measure_info(format!("Frame {}: renderer pass", frame_index), || {
-                render_service.render_frame(project_model, frame_time)
+                self.eval_engine.evaluate_composition(
+                    project,
+                    composition,
+                    &self.plugin_manager,
+                    renderer,
+                    cache_manager,
+                    property_evaluators,
+                    frame_index,
+                    1.0,
+                    None,
+                )
             })?;
 
             let image = match output {
-                crate::rendering::renderer::RenderOutput::Image(img) => img,
-                crate::rendering::renderer::RenderOutput::Texture(_) => {
+                RenderOutput::Image(img) => img,
+                RenderOutput::Texture(_) => {
                     return Err(LibraryError::render(
                         "Export received Texture output (unsupported)".to_string(),
                     ));
@@ -148,7 +159,7 @@ impl ExportService {
                     frame_index,
                     output_path,
                     image,
-                    export_settings: Arc::clone(&settings_arc), // Use the modified settings
+                    export_settings: Arc::clone(&settings_arc),
                 })
                 .map_err(|_| LibraryError::render("Save queue disconnected".to_string()))?;
         }
