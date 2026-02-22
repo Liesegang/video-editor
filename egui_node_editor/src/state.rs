@@ -30,16 +30,14 @@ pub struct NodeEditorState {
     pub expanded_containers: HashSet<Uuid>,
     /// Search text for context menu.
     pub context_search: String,
-    /// Inline pin value being edited: (node_id, pin_name).
-    pub editing_pin: Option<(Uuid, String)>,
-    /// Buffer for inline pin value editing.
-    pub editing_pin_value: String,
     /// Box selection state.
     pub box_selecting: Option<BoxSelectState>,
     /// Custom container sizes (overrides auto-calculated size).
     pub container_sizes: HashMap<Uuid, egui::Vec2>,
     /// Resize handle drag state.
     pub resizing: Option<ResizeState>,
+    /// Edge-specific context menu (right-click on a connection).
+    pub edge_context_menu: Option<EdgeContextMenuState>,
 }
 
 pub struct DragState {
@@ -76,4 +74,11 @@ pub struct ResizeState {
     pub node_id: Uuid,
     pub start_size: egui::Vec2,
     pub mouse_start: egui::Pos2,
+}
+
+/// Context menu for right-clicking on an edge (connection).
+#[derive(Clone)]
+pub struct EdgeContextMenuState {
+    pub screen_pos: egui::Pos2,
+    pub connection_id: Uuid,
 }

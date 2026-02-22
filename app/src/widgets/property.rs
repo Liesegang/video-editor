@@ -1,6 +1,5 @@
 use library::project::property::PropertyValue;
 use library::EditorService as ProjectService;
-use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 fn get_local_time(
@@ -25,44 +24,6 @@ fn get_local_time(
         }
         global_time
     })
-}
-
-pub fn update_number_property(
-    service: &ProjectService,
-    comp_id: Uuid,
-    track_id: Uuid,
-    entity_id: Uuid,
-    prop_name: &str,
-    time: f64,
-    value: f64,
-) {
-    let local_time = get_local_time(service, comp_id, track_id, entity_id, time);
-    let _ = service.update_property_or_keyframe(
-        entity_id,
-        prop_name,
-        local_time,
-        PropertyValue::Number(OrderedFloat(value)),
-        None,
-    );
-}
-
-pub fn update_string_property(
-    service: &ProjectService,
-    comp_id: Uuid,
-    track_id: Uuid,
-    entity_id: Uuid,
-    prop_name: &str,
-    time: f64,
-    value: String,
-) {
-    let local_time = get_local_time(service, comp_id, track_id, entity_id, time);
-    let _ = service.update_property_or_keyframe(
-        entity_id,
-        prop_name,
-        local_time,
-        PropertyValue::String(value),
-        None,
-    );
 }
 
 pub fn update_property(

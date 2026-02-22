@@ -2,7 +2,31 @@
 
 use uuid::Uuid;
 
-use crate::types::{ConnectionView, NodeDisplay, NodeTypeInfo};
+use crate::types::{ConnectionView, NodeDisplay, NodeTypeInfo, PinDataType};
+
+/// Editable value for an input pin (displayed inline in the node editor).
+#[derive(Clone, Debug)]
+pub enum PinEditValue {
+    Scalar(f64),
+    Integer(i64),
+    Boolean(bool),
+    Color([f32; 4]),
+    Vec2(f64, f64),
+    Vec3(f64, f64, f64),
+    String(String),
+    Enum {
+        selected: usize,
+        options: Vec<String>,
+    },
+    None,
+}
+
+/// Information about a pin's property value for inline editing.
+#[derive(Clone, Debug)]
+pub struct PinPropertyInfo {
+    pub value: PinEditValue,
+    pub data_type: PinDataType,
+}
 
 /// Read-only data source for the node editor.
 pub trait NodeEditorDataSource {
@@ -42,6 +66,12 @@ pub trait NodeEditorDataSource {
         let _ = (node_id, pin_name);
         None
     }
+
+    /// Get property info for inline editing of an input pin.
+    fn get_pin_property(&self, node_id: Uuid, pin_name: &str) -> Option<PinPropertyInfo> {
+        let _ = (node_id, pin_name);
+        None
+    }
 }
 
 /// Mutation interface for the node editor.
@@ -72,6 +102,17 @@ pub trait NodeEditorMutator {
         to_container: Uuid,
     ) -> Result<(), String> {
         let _ = (node_id, from_container, to_container);
+        Err("not supported".into())
+    }
+
+    /// Set a pin's value from a string representation (for inline editing).
+    fn set_pin_value(
+        &mut self,
+        node_id: Uuid,
+        pin_name: &str,
+        value_str: &str,
+    ) -> Result<(), String> {
+        let _ = (node_id, pin_name, value_str);
         Err("not supported".into())
     }
 

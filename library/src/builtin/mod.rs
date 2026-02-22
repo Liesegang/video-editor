@@ -6,7 +6,6 @@ pub mod effects;
 pub mod exporters;
 pub mod loaders;
 pub mod properties;
-pub(crate) mod python_evaluator;
 pub mod styles;
 
 // Re-export plugin trait impls

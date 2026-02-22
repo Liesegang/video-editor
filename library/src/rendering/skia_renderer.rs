@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
 use crate::pipeline::output::ShapeGroup;
-use crate::rendering::renderer::{RenderOutput, Renderer, TextureInfo};
+use crate::rendering::renderer::{BlendMode, RenderOutput, Renderer, TextureInfo};
 use crate::rendering::shader_utils::{self, ShaderContext};
 use crate::rendering::skia_utils::{
     GpuContext, create_gpu_context, create_image_from_texture, create_surface, image_to_skia,
@@ -33,34 +33,6 @@ pub struct SkiaRenderer {
 }
 
 impl SkiaRenderer {
-    pub(crate) fn render_to_texture(&mut self) -> Result<TextureInfo, LibraryError> {
-        let _timer = ScopedTimer::debug("SkiaRenderer::render_to_texture");
-        if let Some(context) = self.gpu_context.as_mut() {
-            context.direct_context.flush_and_submit();
-
-            // Get the backend texture from the surface if possible
-            if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
-                &mut self.surface,
-                skia_safe::surface::BackendHandleAccess::FlushRead,
-            ) {
-                if let Some(gl_info) = texture.gl_texture_info() {
-                    return Ok(TextureInfo {
-                        texture_id: gl_info.id,
-                        width: self.width,
-                        height: self.height,
-                    });
-                }
-            }
-            Err(LibraryError::render(
-                "Failed to get GL texture info".to_string(),
-            ))
-        } else {
-            Err(LibraryError::render(
-                "GPU context not available".to_string(),
-            ))
-        }
-    }
-
     pub(crate) fn take_context(&mut self) -> Option<GpuContext> {
         self.gpu_context.take()
     }
@@ -143,7 +115,7 @@ impl SkiaRenderer {
         size: f64,
         font_name: &String,
         styles: &[StyleConfig],
-        ensemble_data: &crate::pipeline::ensemble::EnsembleData,
+        ensemble_data: &crate::pipeline::ensemble::config::EnsembleData,
         transform: &Transform,
         current_time: f32,
     ) -> Result<RenderOutput, LibraryError> {
@@ -280,7 +252,7 @@ impl Renderer for SkiaRenderer {
         size: f64,
         font_name: &String,
         styles: &[StyleConfig],
-        ensemble: Option<&crate::pipeline::ensemble::EnsembleData>,
+        ensemble: Option<&crate::pipeline::ensemble::config::EnsembleData>,
         transform: &Transform,
     ) -> Result<RenderOutput, LibraryError> {
         let _timer = ScopedTimer::debug(format!(
@@ -726,6 +698,83 @@ impl Renderer for SkiaRenderer {
             let sampling = SamplingOptions::from(cubic_resampler);
             canvas.draw_image_with_sampling_options(&src_image, (0, 0), sampling, Some(&paint));
             canvas.restore();
+        }
+        paint_utils::snapshot_surface(
+            &mut offscreen,
+            &mut self.gpu_context,
+            self.width,
+            self.height,
+        )
+    }
+
+    fn blend_images(
+        &mut self,
+        background: &RenderOutput,
+        foreground: &RenderOutput,
+        blend_mode: BlendMode,
+        opacity: f64,
+    ) -> Result<RenderOutput, LibraryError> {
+        let mut offscreen = self.create_layer_surface()?;
+        {
+            let canvas = offscreen.canvas();
+            canvas.clear(skia_safe::Color::TRANSPARENT);
+
+            let bg_skia = match background {
+                RenderOutput::Image(img) => image_to_skia(img)?,
+                RenderOutput::Texture(info) => {
+                    if let Some(ctx) = self.gpu_context.as_mut() {
+                        create_image_from_texture(
+                            &mut ctx.direct_context,
+                            info.texture_id,
+                            info.width,
+                            info.height,
+                        )?
+                    } else {
+                        return Err(LibraryError::render(
+                            "Cannot render texture without GPU context",
+                        ));
+                    }
+                }
+            };
+
+            let fg_skia = match foreground {
+                RenderOutput::Image(img) => image_to_skia(img)?,
+                RenderOutput::Texture(info) => {
+                    if let Some(ctx) = self.gpu_context.as_mut() {
+                        create_image_from_texture(
+                            &mut ctx.direct_context,
+                            info.texture_id,
+                            info.width,
+                            info.height,
+                        )?
+                    } else {
+                        return Err(LibraryError::render(
+                            "Cannot render texture without GPU context",
+                        ));
+                    }
+                }
+            };
+
+            let cubic_resampler = CubicResampler::mitchell();
+            let sampling = SamplingOptions::from(cubic_resampler);
+
+            // Draw background
+            canvas.draw_image_with_sampling_options(&bg_skia, (0, 0), sampling, None);
+
+            // Draw foreground with blend mode and opacity
+            let sk_blend_mode = match blend_mode {
+                BlendMode::Normal => skia_safe::BlendMode::SrcOver,
+                BlendMode::Multiply => skia_safe::BlendMode::Multiply,
+                BlendMode::Screen => skia_safe::BlendMode::Screen,
+                BlendMode::Overlay => skia_safe::BlendMode::Overlay,
+            };
+
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_alpha_f(opacity as f32);
+            paint.set_blend_mode(sk_blend_mode);
+
+            canvas.draw_image_with_sampling_options(&fg_skia, (0, 0), sampling, Some(&paint));
         }
         paint_utils::snapshot_surface(
             &mut offscreen,

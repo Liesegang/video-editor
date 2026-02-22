@@ -43,9 +43,11 @@ pub fn get_effect_chain(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
     chain
 }
 
-/// Get style nodes associated with a clip (connected to its style input pins).
+/// Get style nodes associated with a clip via the shape chain.
+///
+/// Follows the shape_out → shape_in chain from clip to find style.* nodes.
 pub fn get_associated_styles(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
-    get_associated_nodes_by_category(project, clip_id, "style.")
+    get_shape_chain_nodes_by_prefix(project, clip_id, "style.")
 }
 
 /// Get effector nodes in the shape chain between clip and style node.
@@ -102,53 +104,6 @@ fn get_shape_chain_nodes_by_prefix(
     }
 
     result
-}
-
-/// Get nodes of a specific category connected to a given node, following the chain.
-///
-/// With chaining (e.g., `style_A.style_out → style_B.style_in, style_B.style_out → clip.style_in`),
-/// this follows the chain backwards from the clip's input pin and collects all nodes.
-/// Returns them in processing order (furthest from clip first, nearest last).
-fn get_associated_nodes_by_category(
-    project: &Project,
-    node_id: Uuid,
-    type_prefix: &str,
-) -> Vec<Uuid> {
-    // Derive pin name from type prefix (e.g., "style." → "style_in")
-    let pin_category = type_prefix.trim_end_matches('.');
-    let input_pin_name = format!("{}_in", pin_category);
-
-    let mut chain = Vec::new();
-    let mut current_pin = PinId::new(node_id, &input_pin_name);
-
-    loop {
-        // Find connection feeding into the current input pin
-        let conn = project.connections.iter().find(|c| c.to == current_pin);
-
-        match conn {
-            Some(c) => {
-                let source_id = c.from.node_id;
-                // Verify it's the right node type
-                let is_correct_type = project
-                    .get_graph_node(source_id)
-                    .map(|g| g.type_id.starts_with(type_prefix))
-                    .unwrap_or(false);
-
-                if !is_correct_type || chain.contains(&source_id) {
-                    break;
-                }
-
-                chain.push(source_id);
-                // Follow the chain: check this node's own input pin
-                current_pin = PinId::new(source_id, &input_pin_name);
-            }
-            None => break,
-        }
-    }
-
-    // Reverse so the order is from furthest (applied first) to nearest (closest to clip)
-    chain.reverse();
-    chain
 }
 
 /// Validate a connection before adding it.
@@ -371,42 +326,54 @@ fn get_shape_chain(project: &Project, clip_id: Uuid) -> (Vec<Uuid>, Option<Uuid>
 
     if let Some(fill_id) = style_node_id {
         style_nodes.push(fill_id);
-        // Follow fill.image_out → transform.image_in
-        let fill_image_out = PinId::new(fill_id, "image_out");
-        for c2 in &project.connections {
-            if c2.from == fill_image_out
-                && c2.to.pin_name == "image_in"
-                && project
-                    .get_graph_node(c2.to.node_id)
-                    .map(|g| g.type_id == "compositing.transform")
-                    .unwrap_or(false)
-            {
-                transform_node = Some(c2.to.node_id);
-            }
-        }
+        // Follow fill.image_out through effects to find transform
+        transform_node = find_transform_in_image_chain(project, fill_id);
     }
 
     (style_nodes, transform_node)
 }
 
-/// Find the compositing.transform node connected to clip.image_out.
+/// Follow the image_out → image_in chain from a starting node to find the compositing.transform.
 ///
-/// For video/image clips: `clip.image_out → transform.image_in`
-fn get_connected_transform(project: &Project, clip_id: Uuid) -> Option<Uuid> {
-    let clip_image_out = PinId::new(clip_id, "image_out");
+/// Handles effects between the starting node (clip or style) and the transform.
+fn find_transform_in_image_chain(project: &Project, start_node: Uuid) -> Option<Uuid> {
+    let mut current_pin = PinId::new(start_node, "image_out");
+    let mut visited = HashSet::new();
 
-    project
-        .connections
-        .iter()
-        .find(|c| {
-            c.from == clip_image_out
-                && c.to.pin_name == "image_in"
-                && project
-                    .get_graph_node(c.to.node_id)
+    loop {
+        let conn = project
+            .connections
+            .iter()
+            .find(|c| c.from == current_pin && c.to.pin_name == "image_in");
+
+        match conn {
+            Some(c) => {
+                let next_id = c.to.node_id;
+                if !visited.insert(next_id) {
+                    return None; // Cycle guard
+                }
+
+                if project
+                    .get_graph_node(next_id)
                     .map(|g| g.type_id == "compositing.transform")
                     .unwrap_or(false)
-        })
-        .map(|c| c.to.node_id)
+                {
+                    return Some(next_id);
+                }
+
+                // Effect or other node — continue following the chain
+                current_pin = PinId::new(next_id, "image_out");
+            }
+            None => return None,
+        }
+    }
+}
+
+/// Find the compositing.transform node connected to clip.image_out.
+///
+/// For video/image clips: follows `clip.image_out → [effects] → transform.image_in`
+fn get_connected_transform(project: &Project, clip_id: Uuid) -> Option<Uuid> {
+    find_transform_in_image_chain(project, clip_id)
 }
 
 /// Collect all graph node IDs associated with a clip (for cascade cleanup).

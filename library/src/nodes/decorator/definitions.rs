@@ -1,4 +1,4 @@
-use super::{inp, node, out};
+use crate::nodes::{inp, node, out};
 use crate::plugin::node_types::{NodeCategory, NodeTypeDefinition};
 use crate::project::connection::PinDataType;
 use crate::project::property::{PropertyDefinition, PropertyUiType, PropertyValue};

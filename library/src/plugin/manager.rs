@@ -777,21 +777,7 @@ fn build_node_type_def(
 fn property_ui_to_pin_data_type(
     ui_type: &crate::project::property::PropertyUiType,
 ) -> crate::project::connection::PinDataType {
-    use crate::project::connection::PinDataType;
-    use crate::project::property::PropertyUiType;
-    match ui_type {
-        PropertyUiType::Float { .. } => PinDataType::Scalar,
-        PropertyUiType::Integer { .. } => PinDataType::Integer,
-        PropertyUiType::Color => PinDataType::Color,
-        PropertyUiType::Text | PropertyUiType::MultilineText | PropertyUiType::Font => {
-            PinDataType::String
-        }
-        PropertyUiType::Bool => PinDataType::Boolean,
-        PropertyUiType::Vec2 { .. } => PinDataType::Vec2,
-        PropertyUiType::Vec3 { .. } => PinDataType::Vec3,
-        PropertyUiType::Vec4 { .. } => PinDataType::Scalar, // No Vec4 pin type yet
-        PropertyUiType::Dropdown { .. } => PinDataType::Enum,
-    }
+    ui_type.pin_data_type()
 }
 
 /// Information about a registered plugin.

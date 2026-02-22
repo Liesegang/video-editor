@@ -27,6 +27,13 @@ impl EvalEngine {
             _ => "image_out",
         };
 
+        log::debug!(
+            "[ImageChain] clip={} kind={:?} primary_pin={}",
+            clip_id,
+            clip_kind,
+            primary_pin
+        );
+
         // Evaluate the clip's primary output
         let clip_output = ctx.evaluate_pin(clip_id, primary_pin)?;
 
@@ -43,6 +50,13 @@ impl EvalEngine {
 
             let terminal_node_id = loop {
                 let downstream = ctx.find_downstream(current_id, current_out_pin);
+                log::debug!(
+                    "[ImageChain] shape chain: {} downstream from {}.{}: {:?}",
+                    downstream.len(),
+                    current_id,
+                    current_out_pin,
+                    downstream
+                );
                 let next = downstream.iter().find(|(_, pin)| pin == "shape_in");
                 match next {
                     Some((next_id, _)) => {
@@ -53,19 +67,32 @@ impl EvalEngine {
                             .map(|g| g.type_id.starts_with("style."))
                             .unwrap_or(false);
                         if is_style {
+                            log::debug!("[ImageChain] Found style node {}", next_id);
                             break Some(next_id);
                         }
                         // Effector/decorator — continue following shape chain
                         current_id = next_id;
                         current_out_pin = "shape_out";
                     }
-                    None => break None,
+                    None => {
+                        log::warn!(
+                            "[ImageChain] No shape_in downstream found for {}",
+                            current_id
+                        );
+                        break None;
+                    }
                 }
             };
 
             let fill_id = match terminal_node_id {
                 Some(id) => id,
-                None => return Ok(None),
+                None => {
+                    log::warn!(
+                        "[ImageChain] No terminal style node for text/shape clip {}",
+                        clip_id
+                    );
+                    return Ok(None);
+                }
             };
 
             // Evaluate fill/stroke's image_out (pulls shape_in recursively)

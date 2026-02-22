@@ -15,8 +15,8 @@ impl<'a> VectorEditorRenderer<'a> {
             let lx = x - self.transform.anchor.x as f32;
             let ly = y - self.transform.anchor.y as f32;
 
-            let sx = self.transform.scale.x as f32 / 100.0;
-            let sy = self.transform.scale.y as f32 / 100.0;
+            let sx = self.transform.scale.x as f32;
+            let sy = self.transform.scale.y as f32;
 
             let angle_rad = (self.transform.rotation as f32).to_radians();
             let cos = angle_rad.cos();

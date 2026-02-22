@@ -3,23 +3,14 @@ pub mod audio;
 pub mod builtin;
 mod cli;
 pub mod error;
+pub mod nodes;
 pub mod pipeline;
-
-// Backward compatibility: `evaluation` re-exports from `pipeline`
-pub mod evaluation {
-    pub use crate::pipeline::*;
-}
 pub mod plugin;
 pub mod project;
 pub mod rendering;
 pub mod runtime;
 pub mod service;
 pub(crate) mod timing;
-
-// Backward compatibility: `editor` re-exports from `service`
-pub mod editor {
-    pub use crate::service::*;
-}
 
 // Error types
 pub use error::{LibraryError, PluginError, ProjectError, RenderError};

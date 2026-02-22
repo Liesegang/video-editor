@@ -34,23 +34,53 @@ pub(crate) fn draw_node_chrome(
     zoom: f32,
 ) {
     let dim = if is_active { 1.0 } else { 0.4 };
+    let border_color = Color32::from_rgb(70, 70, 80);
 
-    // Body
-    let body_color = dim_color(
-        if is_selected {
-            theme.node_body_selected_color
-        } else {
-            theme.node_body_color
-        },
-        dim,
-    );
-    painter.rect_filled(layout.node_rect, layout.rounding, body_color);
-
-    if is_selected {
+    if is_container {
+        // Containers: border-only (no background fill), just header + stroke
         painter.rect_stroke(
             layout.node_rect,
             layout.rounding,
-            Stroke::new(2.0 * zoom, theme.selection_color),
+            Stroke::new(
+                if is_selected { 2.0 * zoom } else { 1.0 * zoom },
+                dim_color(
+                    if is_selected {
+                        theme.selection_color
+                    } else {
+                        border_color
+                    },
+                    dim,
+                ),
+            ),
+            StrokeKind::Outside,
+        );
+    } else {
+        // Regular nodes: filled body + outline
+        let body_color = dim_color(
+            if is_selected {
+                theme.node_body_selected_color
+            } else {
+                theme.node_body_color
+            },
+            dim,
+        );
+        painter.rect_filled(layout.node_rect, layout.rounding, body_color);
+
+        // Always draw outline for better visibility
+        painter.rect_stroke(
+            layout.node_rect,
+            layout.rounding,
+            Stroke::new(
+                if is_selected { 2.0 * zoom } else { 1.0 * zoom },
+                dim_color(
+                    if is_selected {
+                        theme.selection_color
+                    } else {
+                        border_color
+                    },
+                    dim,
+                ),
+            ),
             StrokeKind::Outside,
         );
     }
@@ -63,8 +93,8 @@ pub(crate) fn draw_node_chrome(
         egui::CornerRadius {
             nw: layout.rounding as u8,
             ne: layout.rounding as u8,
-            sw: 0,
-            se: 0,
+            sw: if is_container { 0 } else { 0 },
+            se: if is_container { 0 } else { 0 },
         },
         dim_color((theme.header_color)(node_type_id), dim),
     );
@@ -92,22 +122,23 @@ pub(crate) fn draw_pins(
     painter: &egui::Painter,
     layout: &NodeLayout,
     theme: &NodeEditorTheme,
-    node_type_id: &str,
+    _node_type_id: &str,
     node_id: Uuid,
     input_pins: &[&PinInfo],
     output_pins: &[&PinInfo],
     is_active: bool,
     zoom: f32,
     pin_screens: &mut Vec<PinScreen>,
+    container_id: Option<Uuid>,
 ) {
     let dim = if is_active { 1.0 } else { 0.4 };
-    let pin_color = dim_color((theme.pin_color)(node_type_id), dim);
     let label_color = dim_color(theme.pin_label_color, dim);
 
     for (i, pin) in input_pins.iter().enumerate() {
         let cy = layout.pin_start_y + i as f32 * layout.pin_row_h + layout.pin_row_h / 2.0;
         let cx = layout.screen_pos.x + layout.pin_margin;
         let p = Pos2::new(cx, cy);
+        let pin_color = dim_color((theme.pin_type_color)(&pin.data_type), dim);
         painter.circle_filled(p, layout.pin_r, pin_color);
         painter.text(
             p + Vec2::new(layout.pin_r + 4.0 * zoom, 0.0),
@@ -121,6 +152,8 @@ pub(crate) fn draw_pins(
             node_id,
             name: pin.name.clone(),
             is_output: false,
+            data_type: pin.data_type.clone(),
+            container_id,
         });
     }
 
@@ -128,6 +161,7 @@ pub(crate) fn draw_pins(
         let cy = layout.pin_start_y + i as f32 * layout.pin_row_h + layout.pin_row_h / 2.0;
         let cx = layout.screen_pos.x + layout.node_w - layout.pin_margin;
         let p = Pos2::new(cx, cy);
+        let pin_color = dim_color((theme.pin_type_color)(&pin.data_type), dim);
         painter.circle_filled(p, layout.pin_r, pin_color);
         painter.text(
             p + Vec2::new(-layout.pin_r - 4.0 * zoom, 0.0),
@@ -141,6 +175,8 @@ pub(crate) fn draw_pins(
             node_id,
             name: pin.name.clone(),
             is_output: true,
+            data_type: pin.data_type.clone(),
+            container_id,
         });
     }
 }
@@ -165,6 +201,10 @@ pub(crate) fn draw_resize_handle(painter: &egui::Painter, node_rect: Rect, zoom:
 }
 
 /// Draw port pins for expanded containers (bridge pins).
+///
+/// Port pins are internal connection points inside expanded containers.
+/// They are drawn at the same Y position as the external output pins
+/// (merged position), with a diamond shape for visual distinction.
 pub(crate) fn draw_port_pins(
     painter: &egui::Painter,
     layout: &NodeLayout,
@@ -172,29 +212,46 @@ pub(crate) fn draw_port_pins(
     output_pins: &[&PinInfo],
     zoom: f32,
     pin_screens: &mut Vec<PinScreen>,
+    container_id: Option<Uuid>,
 ) {
-    let port_y = layout.node_rect.max.y - 16.0 * zoom;
-    let port_r = layout.pin_r * 0.8;
+    let port_r = layout.pin_r * 0.7;
     let port_col = Color32::from_rgb(200, 200, 100);
+    let inset = 16.0 * zoom; // offset inward from the external pin
 
-    for pin in output_pins {
-        let p = Pos2::new(
-            layout.screen_pos.x + layout.node_w - layout.pin_margin - 16.0 * zoom,
-            port_y,
-        );
-        painter.circle_filled(p, port_r, port_col);
+    for (i, pin) in output_pins.iter().enumerate() {
+        // Same Y as external output pin (matching draw_pins layout)
+        let cy = layout.pin_start_y + i as f32 * layout.pin_row_h + layout.pin_row_h / 2.0;
+        let cx = layout.screen_pos.x + layout.node_w - layout.pin_margin - inset;
+        let p = Pos2::new(cx, cy);
+
+        // Draw diamond shape instead of circle for visual distinction
+        let d = port_r;
+        let diamond_pts = vec![
+            Pos2::new(p.x, p.y - d),
+            Pos2::new(p.x + d, p.y),
+            Pos2::new(p.x, p.y + d),
+            Pos2::new(p.x - d, p.y),
+        ];
+        painter.add(egui::Shape::convex_polygon(
+            diamond_pts,
+            port_col,
+            Stroke::NONE,
+        ));
+
         painter.text(
             p + Vec2::new(-port_r - 3.0 * zoom, 0.0),
             egui::Align2::RIGHT_CENTER,
             &format!("{} \u{2192}", pin.display_name),
             egui::FontId::proportional(9.0 * zoom),
-            Color32::from_rgb(200, 200, 100),
+            port_col,
         );
         pin_screens.push(PinScreen {
             pos: p,
             node_id,
             name: pin.name.clone(),
             is_output: false,
+            data_type: pin.data_type.clone(),
+            container_id,
         });
     }
 }

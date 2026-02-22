@@ -1,5 +1,5 @@
 use super::action_handler::{ActionContext, PropertyTarget};
-use super::graph_items::{collect_graph_nodes, render_graph_node_item};
+use super::graph_items::collect_graph_nodes;
 use super::properties::{render_inspector_properties_grid, PropertyRenderContext};
 use crate::command::history::HistoryManager;
 use crate::context::context::EditorContext;
@@ -62,20 +62,55 @@ pub(super) fn render_effects_section(
             let type_id = format!("effect.{}", effect_id);
             match project_service.add_graph_node(track_id, &type_id) {
                 Ok(new_node_id) => {
-                    let connect_from = if let Ok(proj) = project.read() {
-                        let chain = graph_analysis::get_effect_chain(&proj, selected_entity_id);
-                        if let Some(&last_effect) = chain.last() {
-                            PinId::new(last_effect, "image_out")
+                    // Resolve clip context to find insertion point and transform
+                    let (connect_from_id, old_transform_conn, transform_id) = {
+                        if let Ok(proj) = project.read() {
+                            let ctx =
+                                graph_analysis::resolve_clip_context(&proj, selected_entity_id);
+
+                            // Insert after last effect, or after style (for text/shape),
+                            // or after clip itself
+                            let from_id = ctx
+                                .effect_chain
+                                .last()
+                                .copied()
+                                .or_else(|| ctx.style_chain.last().copied())
+                                .unwrap_or(selected_entity_id);
+
+                            // Find existing connection to transform.image_in
+                            let old_conn = ctx.transform_node.and_then(|t| {
+                                proj.connections
+                                    .iter()
+                                    .find(|c| c.to == PinId::new(t, "image_in"))
+                                    .map(|c| c.id)
+                            });
+
+                            (from_id, old_conn, ctx.transform_node)
                         } else {
-                            PinId::new(selected_entity_id, "image_out")
+                            (selected_entity_id, None, None)
                         }
-                    } else {
-                        PinId::new(selected_entity_id, "image_out")
                     };
 
+                    // Remove old connection to transform (to make room for new chain)
+                    if let Some(conn_id) = old_transform_conn {
+                        let _ = project_service.remove_graph_connection(conn_id);
+                    }
+
+                    // Connect source → new_effect.image_in
+                    let connect_from = PinId::new(connect_from_id, "image_out");
                     let connect_to = PinId::new(new_node_id, "image_in");
                     if let Err(e) = project_service.add_graph_connection(connect_from, connect_to) {
-                        log::error!("Failed to connect effect: {}", e);
+                        log::error!("Failed to connect effect input: {}", e);
+                    }
+
+                    // Connect new_effect.image_out → transform.image_in
+                    if let Some(t_id) = transform_id {
+                        if let Err(e) = project_service.add_graph_connection(
+                            PinId::new(new_node_id, "image_out"),
+                            PinId::new(t_id, "image_in"),
+                        ) {
+                            log::error!("Failed to connect effect to transform: {}", e);
+                        }
                     }
 
                     drop(history_manager.begin_mutation(project));
@@ -94,24 +129,20 @@ pub(super) fn render_effects_section(
         current_time,
     };
 
-    // Render graph-based effects
+    // Render graph-based effects with drag-and-drop reordering
     if has_graph_effects {
-        for effect in &graph_effects {
-            render_graph_node_item(
-                ui,
-                project_service,
-                history_manager,
-                project,
-                selected_entity_id,
-                effect,
-                current_time,
-                fps,
-                &context,
-                needs_refresh,
-                "graph_effect",
-                false,
-            );
-        }
+        render_reorderable_graph_effects(
+            ui,
+            project_service,
+            history_manager,
+            project,
+            selected_entity_id,
+            graph_effects,
+            current_time,
+            fps,
+            &context,
+            needs_refresh,
+        );
     } else if !embedded_effects.is_empty() {
         render_embedded_effects(
             ui,
@@ -124,6 +155,109 @@ pub(super) fn render_effects_section(
             fps,
             needs_refresh,
         );
+    }
+}
+
+/// Render graph-based effects with drag-and-drop reordering support.
+#[allow(clippy::too_many_arguments)]
+fn render_reorderable_graph_effects(
+    ui: &mut Ui,
+    project_service: &mut ProjectService,
+    history_manager: &mut HistoryManager,
+    project: &Arc<RwLock<library::project::project::Project>>,
+    clip_id: Uuid,
+    graph_effects: Vec<super::graph_items::GraphNodeInfo>,
+    current_time: f64,
+    fps: f64,
+    context: &PropertyRenderContext,
+    needs_refresh: &mut bool,
+) {
+    use egui_dnd::dnd;
+
+    // Build DnD wrapper items
+    let mut dnd_items: Vec<(egui::Id, Uuid)> = graph_effects
+        .iter()
+        .map(|e| (egui::Id::new(e.node_id), e.node_id))
+        .collect();
+    let old_order: Vec<Uuid> = dnd_items.iter().map(|(_, id)| *id).collect();
+
+    let response = dnd(ui, egui::Id::new("graph_effects_dnd")).show(
+        dnd_items.iter_mut(),
+        |ui, (_dnd_id, node_id), handle, _state| {
+            // Find the corresponding graph effect info
+            if let Some(effect) = graph_effects.iter().find(|e| e.node_id == *node_id) {
+                let id = ui.make_persistent_id(format!("graph_effect_{}", effect.node_id));
+                let state = CollapsingState::load_with_default_open(ui.ctx(), id, false);
+
+                let mut remove_clicked = false;
+                let header_res = state.show_header(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        handle.ui(ui, |ui| {
+                            ui.label("::");
+                        });
+                        ui.label(egui::RichText::new(&effect.display_name).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("X").clicked() {
+                                remove_clicked = true;
+                            }
+                        });
+                    });
+                });
+
+                if remove_clicked {
+                    if let Err(e) = project_service.remove_graph_node(effect.node_id) {
+                        log::error!("Failed to remove effect node: {}", e);
+                    } else {
+                        drop(history_manager.begin_mutation(project));
+                        *needs_refresh = true;
+                    }
+                }
+
+                header_res.body(|ui| {
+                    let defs = project_service
+                        .get_plugin_manager()
+                        .get_node_type(&effect.type_id)
+                        .map(|def| def.default_properties.clone())
+                        .unwrap_or_default();
+
+                    let item_actions = render_inspector_properties_grid(
+                        ui,
+                        format!("graph_effect_grid_{}", effect.node_id),
+                        &effect.properties,
+                        &defs,
+                        project_service,
+                        context,
+                        fps,
+                    );
+
+                    let item_props = effect.properties.clone();
+                    let mut ctx =
+                        ActionContext::new(project_service, history_manager, clip_id, current_time);
+                    if ctx.handle_actions(
+                        item_actions,
+                        PropertyTarget::GraphNode(effect.node_id),
+                        |n| item_props.get(n).cloned(),
+                    ) {
+                        *needs_refresh = true;
+                    }
+                });
+            }
+        },
+    );
+
+    if response.final_update().is_some() {
+        response.update_vec(&mut dnd_items);
+        let new_order: Vec<Uuid> = dnd_items.iter().map(|(_, id)| *id).collect();
+
+        if new_order != old_order {
+            if let Err(e) = project_service.reorder_effect_chain(clip_id, &new_order) {
+                log::error!("Failed to reorder effect chain: {}", e);
+            } else {
+                let current_state = project_service.with_project(|p| p.clone());
+                history_manager.push_project_state(current_state);
+                *needs_refresh = true;
+            }
+        }
     }
 }
 

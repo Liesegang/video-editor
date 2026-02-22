@@ -11,6 +11,7 @@ use library::project::project::{Composition, Project};
 
 use library::service::handlers::clip_factory::ClipFactory;
 use library::service::handlers::clip_handler::ClipHandler;
+use library::service::handlers::graph_handler::GraphHandler;
 use library::service::handlers::track_handler::TrackHandler;
 
 /// Helper: create a PluginManager (still needed for setup_clip_graph_nodes).
@@ -592,5 +593,267 @@ fn test_ui_flow_add_track_subtrack_text_clip() {
         total_connections >= 3,
         "At least 3 connections needed for text rendering pipeline, got {}",
         total_connections
+    );
+}
+
+// ==================== Effect chain reorder tests ====================
+
+#[test]
+fn test_reorder_effect_chain_swaps_two_effects() {
+    // エフェクトチェーンの順序を入れ替えると接続が再配線される
+    let (project, comp_id, _) = setup_project();
+    let plugin_manager = make_plugin_manager();
+
+    let track_id = TrackHandler::add_track(&project, comp_id, "Track").unwrap();
+    let image_clip = ClipFactory::create_image_clip(None, "/path/to/image.png", 0, 90, 30.0);
+    let clip_kind = image_clip.kind.clone();
+    let clip_id =
+        ClipHandler::add_clip_to_track(&project, comp_id, track_id, image_clip, 0, 90, None)
+            .unwrap();
+    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
+        .unwrap();
+
+    // レイヤーIDとtransform IDを取得
+    let (layer_id, transform_id) = {
+        let proj = project.read().unwrap();
+        let track = proj.get_track(track_id).unwrap();
+        let layer_id = track.child_ids[0];
+        let layer = proj.get_track(layer_id).unwrap();
+        let transform_id = *layer
+            .child_ids
+            .iter()
+            .find(|id| {
+                proj.get_graph_node(**id)
+                    .map_or(false, |n| n.type_id.contains("transform"))
+            })
+            .unwrap();
+        (layer_id, transform_id)
+    };
+
+    // 2つのエフェクトを追加: clip → blur → glow → transform
+    let blur_id =
+        GraphHandler::add_graph_node(&project, &plugin_manager, layer_id, "effect.blur").unwrap();
+    let glow_id =
+        GraphHandler::add_graph_node(&project, &plugin_manager, layer_id, "effect.glow").unwrap();
+
+    // 既存のclip→transformの接続を削除
+    {
+        let proj = project.read().unwrap();
+        let old_conn_id = proj
+            .connections
+            .iter()
+            .find(|c| {
+                c.from.node_id == clip_id
+                    && c.from.pin_name == "image_out"
+                    && c.to.node_id == transform_id
+                    && c.to.pin_name == "image_in"
+            })
+            .map(|c| c.id);
+        drop(proj);
+        if let Some(conn_id) = old_conn_id {
+            GraphHandler::remove_connection(&project, conn_id).unwrap();
+        }
+    }
+
+    // チェーンを構築: clip → blur → glow → transform
+    use library::project::connection::PinId;
+    GraphHandler::add_connection(
+        &project,
+        PinId::new(clip_id, "image_out"),
+        PinId::new(blur_id, "image_in"),
+    )
+    .unwrap();
+    GraphHandler::add_connection(
+        &project,
+        PinId::new(blur_id, "image_out"),
+        PinId::new(glow_id, "image_in"),
+    )
+    .unwrap();
+    GraphHandler::add_connection(
+        &project,
+        PinId::new(glow_id, "image_out"),
+        PinId::new(transform_id, "image_in"),
+    )
+    .unwrap();
+
+    // 検証: 現在のチェーン = [blur, glow]
+    {
+        let proj = project.read().unwrap();
+        let chain = library::project::graph_analysis::get_effect_chain(&proj, clip_id);
+        assert_eq!(chain, vec![blur_id, glow_id]);
+    }
+
+    // チェーンを逆順に: [glow, blur]
+    GraphHandler::reorder_effect_chain(&project, clip_id, &[glow_id, blur_id]).unwrap();
+
+    // 検証: チェーンが[glow, blur]に変更された
+    {
+        let proj = project.read().unwrap();
+        let chain = library::project::graph_analysis::get_effect_chain(&proj, clip_id);
+        assert_eq!(chain, vec![glow_id, blur_id]);
+
+        // 接続の詳細を検証
+        // clip.image_out → glow.image_in
+        assert!(proj.connections.iter().any(|c| c.from.node_id == clip_id
+            && c.from.pin_name == "image_out"
+            && c.to.node_id == glow_id
+            && c.to.pin_name == "image_in"));
+
+        // glow.image_out → blur.image_in
+        assert!(proj.connections.iter().any(|c| c.from.node_id == glow_id
+            && c.from.pin_name == "image_out"
+            && c.to.node_id == blur_id
+            && c.to.pin_name == "image_in"));
+
+        // blur.image_out → transform.image_in
+        assert!(proj.connections.iter().any(|c| c.from.node_id == blur_id
+            && c.from.pin_name == "image_out"
+            && c.to.node_id == transform_id
+            && c.to.pin_name == "image_in"));
+    }
+}
+
+#[test]
+fn test_remove_middle_effect_reconnects_chain() {
+    // 中間エフェクト削除時にチェーンが再接続される
+    // clip → blur → glow → transform → (blur削除) → clip → glow → transform
+    let (project, comp_id, _) = setup_project();
+    let plugin_manager = make_plugin_manager();
+
+    let track_id = TrackHandler::add_track(&project, comp_id, "Track").unwrap();
+    let image_clip = ClipFactory::create_image_clip(None, "/path/to/img.png", 0, 90, 30.0);
+    let clip_kind = image_clip.kind.clone();
+    let clip_id =
+        ClipHandler::add_clip_to_track(&project, comp_id, track_id, image_clip, 0, 90, None)
+            .unwrap();
+    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
+        .unwrap();
+
+    let (layer_id, transform_id) = {
+        let proj = project.read().unwrap();
+        let track = proj.get_track(track_id).unwrap();
+        let layer_id = track.child_ids[0];
+        let layer = proj.get_track(layer_id).unwrap();
+        let transform_id = *layer
+            .child_ids
+            .iter()
+            .find(|id| {
+                proj.get_graph_node(**id)
+                    .map_or(false, |n| n.type_id.contains("transform"))
+            })
+            .unwrap();
+        (layer_id, transform_id)
+    };
+
+    // 2つのエフェクトを追加
+    let blur_id =
+        GraphHandler::add_graph_node(&project, &plugin_manager, layer_id, "effect.blur").unwrap();
+    let glow_id =
+        GraphHandler::add_graph_node(&project, &plugin_manager, layer_id, "effect.glow").unwrap();
+
+    // 既存のclip→transform接続を削除
+    {
+        let proj = project.read().unwrap();
+        let old_conn_id = proj
+            .connections
+            .iter()
+            .find(|c| {
+                c.from.node_id == clip_id
+                    && c.from.pin_name == "image_out"
+                    && c.to.node_id == transform_id
+            })
+            .map(|c| c.id);
+        drop(proj);
+        if let Some(conn_id) = old_conn_id {
+            GraphHandler::remove_connection(&project, conn_id).unwrap();
+        }
+    }
+
+    // チェーンを構築: clip → blur → glow → transform
+    use library::project::connection::PinId;
+    GraphHandler::add_connection(
+        &project,
+        PinId::new(clip_id, "image_out"),
+        PinId::new(blur_id, "image_in"),
+    )
+    .unwrap();
+    GraphHandler::add_connection(
+        &project,
+        PinId::new(blur_id, "image_out"),
+        PinId::new(glow_id, "image_in"),
+    )
+    .unwrap();
+    GraphHandler::add_connection(
+        &project,
+        PinId::new(glow_id, "image_out"),
+        PinId::new(transform_id, "image_in"),
+    )
+    .unwrap();
+
+    // blurを削除 → clip → glow → transform に再接続されるはず
+    GraphHandler::remove_graph_node(&project, blur_id).unwrap();
+
+    let proj = project.read().unwrap();
+    let chain = library::project::graph_analysis::get_effect_chain(&proj, clip_id);
+    assert_eq!(
+        chain,
+        vec![glow_id],
+        "Effect chain should be [glow] after removing blur"
+    );
+
+    // clip.image_out → glow.image_in (bridged)
+    assert!(
+        proj.connections.iter().any(|c| c.from.node_id == clip_id
+            && c.from.pin_name == "image_out"
+            && c.to.node_id == glow_id
+            && c.to.pin_name == "image_in"),
+        "clip → glow bridge connection should exist"
+    );
+
+    // glow.image_out → transform.image_in (preserved)
+    assert!(
+        proj.connections.iter().any(|c| c.from.node_id == glow_id
+            && c.from.pin_name == "image_out"
+            && c.to.node_id == transform_id
+            && c.to.pin_name == "image_in"),
+        "glow → transform connection should exist"
+    );
+}
+
+#[test]
+fn test_remove_track_cleans_all_descendants() {
+    // トラック削除時に全子孫ノードと接続が削除される
+    let (project, comp_id, _root_track_id) = setup_project();
+    let plugin_manager = make_plugin_manager();
+
+    let track_id = TrackHandler::add_track(&project, comp_id, "Track").unwrap();
+    let text_clip = ClipFactory::create_text_clip("Test", 0, 30, 30.0);
+    let clip_kind = text_clip.kind.clone();
+    let clip_id =
+        ClipHandler::add_clip_to_track(&project, comp_id, track_id, text_clip, 0, 30, None)
+            .unwrap();
+    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
+        .unwrap();
+
+    // 削除前にクリップが存在することを確認
+    {
+        let proj = project.read().unwrap();
+        assert!(proj.get_clip(clip_id).is_some());
+        assert!(!proj.connections.is_empty());
+    }
+
+    // トラックごと削除
+    TrackHandler::remove_track(&project, comp_id, track_id).unwrap();
+
+    // トラックとその全子孫が削除されている
+    let proj = project.read().unwrap();
+    assert!(
+        proj.get_track(track_id).is_none(),
+        "Track should be removed"
+    );
+    assert!(proj.get_clip(clip_id).is_none(), "Clip should be removed");
+    assert!(
+        proj.connections.is_empty(),
+        "All connections should be removed after track deletion"
     );
 }

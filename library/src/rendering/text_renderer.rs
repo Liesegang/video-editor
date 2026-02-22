@@ -1,6 +1,5 @@
 use super::paint_utils::build_transform_matrix;
-use crate::pipeline::ensemble::EnsembleData;
-use crate::pipeline::ensemble::config::{DecoratorConfig, EffectorConfig};
+use crate::pipeline::ensemble::config::{DecoratorConfig, EffectorConfig, EnsembleData};
 use crate::pipeline::ensemble::decorators::{BackplateShape, BackplateTarget};
 use crate::pipeline::ensemble::types::TransformData;
 use crate::runtime::draw_type::DrawStyle;

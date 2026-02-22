@@ -59,6 +59,26 @@ impl<'a> EvalContext<'a> {
         }
     }
 
+    /// Convenience: resolve a property as Vec2 (returns (x, y) as f64 tuple).
+    pub fn resolve_vec2(
+        &self,
+        properties: &PropertyMap,
+        key: &str,
+        default_x: f64,
+        default_y: f64,
+    ) -> (f64, f64) {
+        use crate::project::property::Vec2 as PropVec2;
+        use ordered_float::OrderedFloat;
+        let default_val = PropertyValue::Vec2(PropVec2 {
+            x: OrderedFloat(default_x),
+            y: OrderedFloat(default_y),
+        });
+        match self.resolve_property_value(properties, key, default_val) {
+            PropertyValue::Vec2(v) => (v.x.into_inner(), v.y.into_inner()),
+            _ => (default_x, default_y),
+        }
+    }
+
     /// Convenience: resolve a property as bool.
     pub fn resolve_bool(&self, properties: &PropertyMap, key: &str, default: bool) -> bool {
         match self.resolve_property_value(properties, key, PropertyValue::Boolean(default)) {

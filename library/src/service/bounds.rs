@@ -5,7 +5,7 @@
 
 use crate::plugin::{EvaluationContext, PropertyEvaluatorRegistry};
 use crate::project::clip::{TrackClip, TrackClipKind};
-use crate::project::property::{PropertyMap, PropertyValue};
+use crate::project::property::PropertyMap;
 use crate::rendering::text_renderer::measure_text_size;
 
 /// Calculate the content bounds (x, y, w, h) for a clip at the given frame.

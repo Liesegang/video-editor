@@ -1,5 +1,6 @@
 /// A single item in a context menu.
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // All variants used in rendering; some constructed only from tests for now
 pub enum MenuItem<A: Clone> {
     /// A clickable action button.
     Action {

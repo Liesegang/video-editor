@@ -102,14 +102,22 @@ pub(in crate::panels::timeline) fn flatten_tracks_to_rows<'a>(
                         *current_row_index += 1;
                     }
                     Some(Node::Track(sub_track)) => {
+                        // Layer sub-tracks (created by setup_clip_graph_nodes)
+                        // are internal containers — skip their header and show
+                        // their clips at the parent track level.
+                        let hide_layer_header = sub_track.is_layer;
                         process_track(
                             project,
                             sub_track.id,
                             expanded_tracks,
-                            if hide_header { depth } else { depth + 1 },
+                            if hide_header || hide_layer_header {
+                                depth
+                            } else {
+                                depth + 1
+                            },
                             rows,
                             current_row_index,
-                            false,
+                            hide_layer_header,
                         );
                     }
                     _ => {}

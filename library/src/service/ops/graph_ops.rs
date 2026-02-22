@@ -25,6 +25,15 @@ impl EditorService {
         self.project_manager.remove_graph_connection(connection_id)
     }
 
+    pub fn reorder_effect_chain(
+        &self,
+        clip_id: Uuid,
+        new_order: &[Uuid],
+    ) -> Result<(), LibraryError> {
+        self.project_manager
+            .reorder_effect_chain(clip_id, new_order)
+    }
+
     pub fn update_graph_node_property(
         &self,
         node_id: Uuid,

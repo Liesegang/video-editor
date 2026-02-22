@@ -331,8 +331,8 @@ impl<'a> PreviewInteractions<'a> {
             (0.0, 0.0)
         };
 
-        let sx = gc.transform.scale.x as f32 / 100.0;
-        let sy = gc.transform.scale.y as f32 / 100.0;
+        let sx = gc.transform.scale.x as f32;
+        let sy = gc.transform.scale.y as f32;
         let center = egui::pos2(
             gc.transform.position.x as f32,
             gc.transform.position.y as f32,
@@ -719,7 +719,7 @@ impl<'a> PreviewInteractions<'a> {
 
                 let zoom = self.editor_context.view.zoom;
                 // Assuming uniform scale or using scale_y for height
-                let scale_factor = (gc.transform.scale.y as f32 / 100.0) * zoom;
+                let scale_factor = gc.transform.scale.y as f32 * zoom;
                 let effective_size = font_size * scale_factor;
 
                 let mut text = self

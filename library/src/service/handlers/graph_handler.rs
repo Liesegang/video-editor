@@ -49,7 +49,10 @@ impl GraphHandler {
         Ok(node_id)
     }
 
-    /// Remove a graph node and all its connections.
+    /// Remove a graph node, reconnecting chains where possible.
+    ///
+    /// For each pin type (image, shape), if the node has both an input and output connection,
+    /// the upstream and downstream nodes are bridged together to preserve chain continuity.
     pub fn remove_graph_node(
         project: &Arc<RwLock<Project>>,
         node_id: Uuid,
@@ -61,6 +64,30 @@ impl GraphHandler {
                 "Graph node {} not found",
                 node_id
             )));
+        }
+
+        // Before removing connections, bridge chains that pass through this node.
+        // For each pin type pair (e.g., image_in/image_out, shape_in/shape_out),
+        // if this node has an incoming and outgoing connection, reconnect them.
+        let pin_pairs = [("image_in", "image_out"), ("shape_in", "shape_out")];
+        let mut bridge_connections = Vec::new();
+
+        for (in_pin, out_pin) in &pin_pairs {
+            let incoming = proj
+                .connections
+                .iter()
+                .find(|c| c.to.node_id == node_id && c.to.pin_name == *in_pin)
+                .map(|c| c.from.clone());
+
+            let outgoing = proj
+                .connections
+                .iter()
+                .find(|c| c.from.node_id == node_id && c.from.pin_name == *out_pin)
+                .map(|c| c.to.clone());
+
+            if let (Some(upstream_pin), Some(downstream_pin)) = (incoming, outgoing) {
+                bridge_connections.push((upstream_pin, downstream_pin));
+            }
         }
 
         // Remove from parent track's child_ids
@@ -84,6 +111,11 @@ impl GraphHandler {
 
         // Remove the node itself
         proj.remove_node(node_id);
+
+        // Create bridge connections
+        for (from_pin, to_pin) in bridge_connections {
+            proj.add_connection(Connection::new(from_pin, to_pin));
+        }
 
         Ok(())
     }
@@ -119,6 +151,107 @@ impl GraphHandler {
                 "Connection {} not found",
                 connection_id
             )));
+        }
+
+        Ok(())
+    }
+
+    /// Reorder the effect chain for a clip.
+    ///
+    /// Rewires the image chain connections to match the new order.
+    /// Chain: source.image_out → effect[0].image_in → … → effect[N].image_out → terminal.image_in
+    pub fn reorder_effect_chain(
+        project: &Arc<RwLock<Project>>,
+        clip_id: Uuid,
+        new_order: &[Uuid],
+    ) -> Result<(), LibraryError> {
+        let mut proj = super::write_project(project)?;
+
+        // Resolve clip context to find the current chain, source and terminal
+        let ctx = crate::project::graph_analysis::resolve_clip_context(&proj, clip_id);
+        let old_chain = &ctx.effect_chain;
+
+        // Validate new_order contains exactly the same effect IDs
+        if new_order.len() != old_chain.len() {
+            return Err(LibraryError::project(
+                "New effect order has different length than current chain".to_string(),
+            ));
+        }
+        for id in new_order {
+            if !old_chain.contains(id) {
+                return Err(LibraryError::project(format!(
+                    "Effect {} not in current chain",
+                    id
+                )));
+            }
+        }
+
+        // Find source node (what feeds into the first effect)
+        // It's either the clip itself, or the last style node
+        let source_id = if !ctx.style_chain.is_empty() {
+            *ctx.style_chain.last().unwrap()
+        } else {
+            clip_id
+        };
+
+        // Find terminal: what the last effect connects to (usually transform)
+        let terminal_pin = if let Some(last_effect) = old_chain.last() {
+            proj.connections
+                .iter()
+                .find(|c| {
+                    c.from == PinId::new(*last_effect, "image_out") && c.to.pin_name == "image_in"
+                })
+                .map(|c| c.to.clone())
+        } else {
+            None
+        };
+
+        // Remove all connections in the effect chain (source→effects→terminal)
+        let chain_node_ids: std::collections::HashSet<Uuid> = old_chain.iter().copied().collect();
+        let connections_to_remove: Vec<Uuid> = proj
+            .connections
+            .iter()
+            .filter(|c| {
+                // source → first effect
+                (c.from.node_id == source_id && c.from.pin_name == "image_out"
+                    && chain_node_ids.contains(&c.to.node_id) && c.to.pin_name == "image_in")
+                // effect → effect
+                || (chain_node_ids.contains(&c.from.node_id) && c.from.pin_name == "image_out"
+                    && chain_node_ids.contains(&c.to.node_id) && c.to.pin_name == "image_in")
+                // last effect → terminal
+                || (chain_node_ids.contains(&c.from.node_id) && c.from.pin_name == "image_out"
+                    && terminal_pin.as_ref().map_or(false, |tp| c.to == *tp))
+            })
+            .map(|c| c.id)
+            .collect();
+
+        for conn_id in connections_to_remove {
+            proj.remove_connection(conn_id);
+        }
+
+        // Re-create connections in new order
+        if !new_order.is_empty() {
+            // source → first effect
+            proj.add_connection(Connection::new(
+                PinId::new(source_id, "image_out"),
+                PinId::new(new_order[0], "image_in"),
+            ));
+
+            // effect[i] → effect[i+1]
+            for i in 0..new_order.len() - 1 {
+                proj.add_connection(Connection::new(
+                    PinId::new(new_order[i], "image_out"),
+                    PinId::new(new_order[i + 1], "image_in"),
+                ));
+            }
+
+            // last effect → terminal
+            if let Some(tp) = terminal_pin {
+                proj.add_connection(Connection::new(
+                    PinId::new(*new_order.last().unwrap(), "image_out"),
+                    tp,
+                ));
+            }
         }
 
         Ok(())

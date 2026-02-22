@@ -1,10 +1,11 @@
+use egui::collapsing_header::CollapsingState;
 use egui::Ui;
 
 use library::project::clip::TrackClipKind;
 
 use crate::context::context::PanelContext;
 
-use library::project::property::PropertyUiType;
+use library::project::property::{PropertyMap, PropertyUiType};
 
 mod action_handler;
 mod effects;
@@ -18,6 +19,9 @@ use effects::render_effects_section;
 use ensemble::render_ensemble_section;
 use properties::{render_property_rows, PropertyRenderContext};
 use styles::render_styles_section;
+
+/// Transform property names that live on the graph node, not on the clip.
+const TRANSFORM_PROPERTY_NAMES: &[&str] = &["position", "scale", "rotation", "anchor", "opacity"];
 
 pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
     let PanelContext {
@@ -34,10 +38,20 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
         editor_context.selection.composition_id,
         editor_context.selection.last_selected_track_id,
     ) {
-        // Fetch entity data directly from project using flat O(1) lookup
+        // Fetch entity data + transform node properties from project
         let entity_data = if let Ok(proj_read) = project.read() {
-            // Use direct project.get_clip() instead of nested traversal
             proj_read.get_clip(selected_entity_id).map(|e| {
+                // Resolve the transform graph node for this clip
+                let clip_ctx = library::project::graph_analysis::resolve_clip_context(
+                    &proj_read,
+                    selected_entity_id,
+                );
+                let transform_node_id = clip_ctx.transform_node;
+                let transform_props = transform_node_id
+                    .and_then(|tid| proj_read.get_graph_node(tid))
+                    .map(|n| n.properties.clone())
+                    .unwrap_or_default();
+
                 (
                     e.kind.clone(),
                     e.properties.clone(),
@@ -45,14 +59,24 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                     e.out_frame,
                     e.source_begin_frame,
                     e.duration_frame,
+                    transform_node_id,
+                    transform_props,
                 )
             })
         } else {
             None
         };
 
-        if let Some((kind, properties, in_frame, out_frame, source_begin_frame, duration_frame)) =
-            entity_data
+        if let Some((
+            kind,
+            properties,
+            in_frame,
+            out_frame,
+            source_begin_frame,
+            duration_frame,
+            transform_node_id,
+            transform_props,
+        )) = entity_data
         {
             if editor_context.selection.selected_entities.len() > 1 {
                 ui.heading(format!(
@@ -66,14 +90,13 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                 );
                 ui.separator();
             }
-            ui.heading("Clip Properties");
-            ui.separator();
 
             let current_kind = kind.clone();
             ui.horizontal(|ui| {
                 ui.label("Type:");
-                ui.label(current_kind.to_string());
+                ui.strong(current_kind.to_string());
             });
+            ui.separator();
 
             let current_time = editor_context.timeline.current_time as f64;
 
@@ -85,169 +108,51 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                 .map(|c| c.fps)
                 .unwrap_or(60.0);
 
-            // Group by category
-            let mut grouped: std::collections::HashMap<
-                String,
-                Vec<library::project::property::PropertyDefinition>,
-            > = std::collections::HashMap::new();
+            // Split definitions into clip properties and transform properties
+            let mut clip_defs = Vec::new();
+            let mut transform_defs = Vec::new();
             for def in definitions {
-                grouped.entry("General".to_string()).or_default().push(def);
-            }
-
-            // Sort categories
-            let mut categories: Vec<_> = grouped.keys().cloned().collect();
-            categories.sort_by(|a, b| {
-                if a == "Transform" {
-                    std::cmp::Ordering::Less
-                } else if b == "Transform" {
-                    std::cmp::Ordering::Greater
+                if TRANSFORM_PROPERTY_NAMES.contains(&def.name()) {
+                    transform_defs.push(def);
                 } else {
-                    a.cmp(b)
-                }
-            });
-
-            for category in categories {
-                ui.add_space(5.0);
-                ui.heading(&category);
-
-                if let Some(defs) = grouped.remove(&category) {
-                    struct Chunk {
-                        is_grid: bool,
-                        defs: Vec<library::project::property::PropertyDefinition>,
-                    }
-
-                    let mut chunks: Vec<Chunk> = Vec::new();
-                    let mut current_grid_defs = Vec::new();
-
-                    for def in defs {
-                        let is_multiline = matches!(def.ui_type(), PropertyUiType::MultilineText);
-                        if is_multiline {
-                            // Push existing grid chunk if any
-                            if !current_grid_defs.is_empty() {
-                                chunks.push(Chunk {
-                                    is_grid: true,
-                                    defs: current_grid_defs,
-                                });
-                                current_grid_defs = Vec::new(); // Re-init
-                            }
-                            // Push this as full width chunk
-                            chunks.push(Chunk {
-                                is_grid: false,
-                                defs: vec![def],
-                            });
-                        } else {
-                            current_grid_defs.push(def);
-                        }
-                    }
-                    if !current_grid_defs.is_empty() {
-                        chunks.push(Chunk {
-                            is_grid: true,
-                            defs: current_grid_defs,
-                        });
-                    }
-
-                    for (chunk_idx, chunk) in chunks.iter().enumerate() {
-                        if chunk.is_grid {
-                            let mut pending_actions = Vec::new();
-                            egui::Grid::new(format!("cat_{}_{}", category, chunk_idx))
-                                .striped(true)
-                                .show(ui, |ui| {
-                                    let actions = render_property_rows(
-                                        ui,
-                                        &chunk.defs,
-                                        |name| {
-                                            properties.get(name).and_then(|p| {
-                                                Some(project_service.evaluate_property_value(
-                                                    p,
-                                                    &properties,
-                                                    current_time,
-                                                    fps,
-                                                ))
-                                            })
-                                        },
-                                        |name| properties.get(name).cloned(),
-                                        &PropertyRenderContext {
-                                            available_fonts: &editor_context.available_fonts,
-                                            in_grid: true,
-                                            current_time,
-                                        },
-                                    );
-                                    pending_actions = actions;
-                                });
-                            // Process actions outside the Grid closure to avoid borrow conflicts
-                            let mut ctx = ActionContext::new(
-                                project_service,
-                                history_manager,
-                                selected_entity_id,
-                                current_time,
-                            );
-                            if ctx.handle_actions(pending_actions, PropertyTarget::Clip, |n| {
-                                properties.get(n).cloned()
-                            }) {
-                                needs_refresh = true;
-                            }
-                        } else {
-                            // Full Width Render
-                            for def in &chunk.defs {
-                                ui.add_space(5.0);
-                                let actions = render_property_rows(
-                                    ui,
-                                    std::slice::from_ref(def),
-                                    |name| {
-                                        properties.get(name).and_then(|p| {
-                                            Some(project_service.evaluate_property_value(
-                                                p,
-                                                &properties,
-                                                current_time,
-                                                fps,
-                                            ))
-                                        })
-                                    },
-                                    |name| properties.get(name).cloned(),
-                                    &PropertyRenderContext {
-                                        available_fonts: &editor_context.available_fonts,
-                                        in_grid: false,
-                                        current_time,
-                                    },
-                                );
-                                // Process actions using unified handler
-                                let mut ctx = ActionContext::new(
-                                    project_service,
-                                    history_manager,
-                                    selected_entity_id,
-                                    current_time,
-                                );
-                                if ctx.handle_actions(actions, PropertyTarget::Clip, |n| {
-                                    properties.get(n).cloned()
-                                }) {
-                                    needs_refresh = true;
-                                }
-                            }
-                        }
-                    }
+                    clip_defs.push(def);
                 }
             }
 
-            // --- Styles Section (Text and Shape only) ---
-            if matches!(kind, TrackClipKind::Text | TrackClipKind::Shape) {
-                render_styles_section(
-                    ui,
-                    project_service,
-                    history_manager,
-                    editor_context,
-                    selected_entity_id,
-                    track_id,
-                    current_time,
-                    fps,
-                    &Vec::new(), // Embedded styles removed; graph-based styles used via node editor
-                    project,
-                    &mut needs_refresh,
-                );
+            let context = PropertyRenderContext {
+                available_fonts: &editor_context.available_fonts,
+                in_grid: true,
+                current_time,
+            };
+
+            // ===== Section 1: Clip Properties (source node in data-flow) =====
+            if !clip_defs.is_empty() {
+                let clip_section_id = ui.make_persistent_id("inspector_clip_props");
+                let clip_state =
+                    CollapsingState::load_with_default_open(ui.ctx(), clip_section_id, true);
+                let clip_header = clip_state.show_header(ui, |ui| {
+                    ui.label(egui::RichText::new(format!("Clip ({})", kind)).strong());
+                });
+                clip_header.body(|ui| {
+                    render_property_section(
+                        ui,
+                        &clip_defs,
+                        &properties,
+                        PropertyTarget::Clip,
+                        "clip_props",
+                        project_service,
+                        history_manager,
+                        selected_entity_id,
+                        current_time,
+                        fps,
+                        &context,
+                        &mut needs_refresh,
+                    );
+                });
             }
 
-            //--- Ensemble Section (Text only) ---
+            // ===== Section 2: Ensemble — Effectors (Text only, shape chain) =====
             if matches!(kind, TrackClipKind::Text) {
-                ui.add_space(5.0);
                 render_ensemble_section(
                     ui,
                     project_service,
@@ -257,8 +162,8 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                     track_id,
                     current_time,
                     fps,
-                    &Vec::new(), // Embedded effectors removed; graph-based used via node editor
-                    &Vec::new(), // Embedded decorators removed; graph-based used via node editor
+                    &Vec::new(),
+                    &Vec::new(),
                     &mut needs_refresh,
                     &properties,
                     &PropertyRenderContext {
@@ -270,7 +175,24 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                 );
             }
 
-            // --- Effects Section ---
+            // ===== Section 3: Styles (Text/Shape only, shape → image conversion) =====
+            if matches!(kind, TrackClipKind::Text | TrackClipKind::Shape) {
+                render_styles_section(
+                    ui,
+                    project_service,
+                    history_manager,
+                    editor_context,
+                    selected_entity_id,
+                    track_id,
+                    current_time,
+                    fps,
+                    &Vec::new(),
+                    project,
+                    &mut needs_refresh,
+                );
+            }
+
+            // ===== Section 4: Effects (image chain, between style/clip and transform) =====
             render_effects_section(
                 ui,
                 project_service,
@@ -284,6 +206,38 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                 &mut needs_refresh,
             );
 
+            // ===== Section 5: Transform (final output, closest to render) =====
+            if !transform_defs.is_empty() && transform_node_id.is_some() {
+                ui.add_space(5.0);
+                let transform_section_id = ui.make_persistent_id("inspector_transform_props");
+                let transform_state =
+                    CollapsingState::load_with_default_open(ui.ctx(), transform_section_id, true);
+                let transform_header = transform_state.show_header(ui, |ui| {
+                    ui.label(egui::RichText::new("Transform").strong());
+                });
+                transform_header.body(|ui| {
+                    render_property_section(
+                        ui,
+                        &transform_defs,
+                        &transform_props,
+                        PropertyTarget::GraphNode(transform_node_id.unwrap()),
+                        "transform_props",
+                        project_service,
+                        history_manager,
+                        selected_entity_id,
+                        current_time,
+                        fps,
+                        &PropertyRenderContext {
+                            available_fonts: &editor_context.available_fonts,
+                            in_grid: true,
+                            current_time,
+                        },
+                        &mut needs_refresh,
+                    );
+                });
+            }
+
+            // ===== Timing Section =====
             ui.add_space(10.0);
             ui.heading("Timing");
             ui.separator();
@@ -396,5 +350,128 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
 
     if needs_refresh {
         ui.ctx().request_repaint();
+    }
+}
+
+/// Render a section of property definitions with proper grid/full-width handling.
+#[allow(clippy::too_many_arguments)]
+fn render_property_section(
+    ui: &mut Ui,
+    defs: &[library::project::property::PropertyDefinition],
+    prop_source: &PropertyMap,
+    target: PropertyTarget,
+    id_prefix: &str,
+    project_service: &mut library::EditorService,
+    history_manager: &mut crate::command::history::HistoryManager,
+    entity_id: uuid::Uuid,
+    current_time: f64,
+    fps: f64,
+    context: &PropertyRenderContext,
+    needs_refresh: &mut bool,
+) {
+    struct Chunk {
+        is_grid: bool,
+        defs: Vec<library::project::property::PropertyDefinition>,
+    }
+
+    let mut chunks: Vec<Chunk> = Vec::new();
+    let mut current_grid_defs = Vec::new();
+
+    for def in defs {
+        let is_multiline = matches!(def.ui_type(), PropertyUiType::MultilineText);
+        if is_multiline {
+            if !current_grid_defs.is_empty() {
+                chunks.push(Chunk {
+                    is_grid: true,
+                    defs: current_grid_defs,
+                });
+                current_grid_defs = Vec::new();
+            }
+            chunks.push(Chunk {
+                is_grid: false,
+                defs: vec![def.clone()],
+            });
+        } else {
+            current_grid_defs.push(def.clone());
+        }
+    }
+    if !current_grid_defs.is_empty() {
+        chunks.push(Chunk {
+            is_grid: true,
+            defs: current_grid_defs,
+        });
+    }
+
+    for (chunk_idx, chunk) in chunks.iter().enumerate() {
+        if chunk.is_grid {
+            let mut pending_actions = Vec::new();
+            egui::Grid::new(format!("{}_{}", id_prefix, chunk_idx))
+                .striped(true)
+                .show(ui, |ui| {
+                    let actions = render_property_rows(
+                        ui,
+                        &chunk.defs,
+                        |name| {
+                            prop_source.get(name).map(|p| {
+                                project_service.evaluate_property_value(
+                                    p,
+                                    prop_source,
+                                    current_time,
+                                    fps,
+                                )
+                            })
+                        },
+                        |name| prop_source.get(name).cloned(),
+                        context,
+                    );
+                    pending_actions = actions;
+                });
+            for action in pending_actions {
+                let mut ctx =
+                    ActionContext::new(project_service, history_manager, entity_id, current_time);
+                if ctx.handle_actions(vec![action], target.clone(), |n| {
+                    prop_source.get(n).cloned()
+                }) {
+                    *needs_refresh = true;
+                }
+            }
+        } else {
+            for def in &chunk.defs {
+                ui.add_space(5.0);
+                let actions = render_property_rows(
+                    ui,
+                    std::slice::from_ref(def),
+                    |name| {
+                        prop_source.get(name).map(|p| {
+                            project_service.evaluate_property_value(
+                                p,
+                                prop_source,
+                                current_time,
+                                fps,
+                            )
+                        })
+                    },
+                    |name| prop_source.get(name).cloned(),
+                    &PropertyRenderContext {
+                        available_fonts: context.available_fonts,
+                        in_grid: false,
+                        current_time: context.current_time,
+                    },
+                );
+                for action in actions {
+                    let mut ctx = ActionContext::new(
+                        project_service,
+                        history_manager,
+                        entity_id,
+                        current_time,
+                    );
+                    if ctx.handle_actions(vec![action], target.clone(), |n| {
+                        prop_source.get(n).cloned()
+                    }) {
+                        *needs_refresh = true;
+                    }
+                }
+            }
+        }
     }
 }

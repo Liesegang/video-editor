@@ -1,7 +1,5 @@
 use super::action_handler::{ActionContext, PropertyTarget};
-use super::graph_items::{
-    collect_graph_nodes, render_chain_add_button, render_graph_node_item, ChainConfig,
-};
+use super::graph_items::{add_style_to_clip, collect_graph_nodes, render_graph_node_item};
 use super::properties::{render_inspector_properties_grid, PropertyRenderContext};
 use crate::command::history::HistoryManager;
 use crate::context::context::EditorContext;
@@ -42,22 +40,28 @@ pub(super) fn render_styles_section(
 
     // Add button
     ui.horizontal(|ui| {
-        render_chain_add_button(
-            ui,
-            project_service,
-            history_manager,
-            project,
-            track_id,
-            selected_entity_id,
-            &ChainConfig::STYLE,
-            |pm| pm.get_available_styles(),
-            |pm, name| {
-                pm.get_style_plugin(name)
+        use super::properties::render_add_button;
+        render_add_button(ui, |ui| {
+            let plugin_manager = project_service.get_plugin_manager();
+            for type_name in plugin_manager.get_available_styles() {
+                let label = plugin_manager
+                    .get_style_plugin(&type_name)
                     .map(|p| p.name())
-                    .unwrap_or_else(|| name.to_string())
-            },
-            needs_refresh,
-        );
+                    .unwrap_or_else(|| type_name.clone());
+                if ui.button(label).clicked() {
+                    add_style_to_clip(
+                        project_service,
+                        history_manager,
+                        project,
+                        track_id,
+                        selected_entity_id,
+                        &type_name,
+                        needs_refresh,
+                    );
+                    ui.close();
+                }
+            }
+        });
     });
 
     let context = PropertyRenderContext {

@@ -40,19 +40,19 @@ impl NodeEvaluator for TransformEvaluator {
             _ => return Ok(PinValue::Image(input_image)),
         };
 
-        let px = ctx.resolve_number(&graph_node.properties, "position_x", 0.0);
-        let py = ctx.resolve_number(&graph_node.properties, "position_y", 0.0);
-        let ax = ctx.resolve_number(&graph_node.properties, "anchor_x", 0.0);
-        let ay = ctx.resolve_number(&graph_node.properties, "anchor_y", 0.0);
-        let sx = ctx.resolve_number(&graph_node.properties, "scale_x", 100.0);
-        let sy = ctx.resolve_number(&graph_node.properties, "scale_y", 100.0);
+        let (px, py) = ctx.resolve_vec2(&graph_node.properties, "position", 0.0, 0.0);
+        let (ax, ay) = ctx.resolve_vec2(&graph_node.properties, "anchor", 0.0, 0.0);
+        let (sx, sy) = ctx.resolve_vec2(&graph_node.properties, "scale", 100.0, 100.0);
         let rotation = ctx.resolve_number(&graph_node.properties, "rotation", 0.0);
         let opacity = ctx.resolve_number(&graph_node.properties, "opacity", 100.0);
 
         let transform = Transform {
             position: Position { x: px, y: py },
             anchor: Position { x: ax, y: ay },
-            scale: Scale { x: sx, y: sy },
+            scale: Scale {
+                x: sx / 100.0,
+                y: sy / 100.0,
+            },
             rotation,
             opacity: opacity / 100.0,
         };

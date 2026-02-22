@@ -83,12 +83,7 @@ pub(crate) struct HistoryGuard<'a> {
     active: bool,
 }
 
-impl HistoryGuard<'_> {
-    /// Cancel the auto-push (e.g., if the mutation failed).
-    pub(crate) fn cancel(&mut self) {
-        self.active = false;
-    }
-}
+impl HistoryGuard<'_> {}
 
 impl Drop for HistoryGuard<'_> {
     fn drop(&mut self) {

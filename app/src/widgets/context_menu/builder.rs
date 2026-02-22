@@ -57,6 +57,7 @@ impl<A: Clone> ContextMenuBuilder<A> {
     }
 
     /// Add a disabled action (grayed out, not clickable).
+    #[allow(dead_code)] // Part of builder API; used in tests
     pub fn disabled(mut self, label: impl Into<String>) -> Self {
         self.items.push(MenuItem::Action {
             label: label.into(),
@@ -75,12 +76,14 @@ impl<A: Clone> ContextMenuBuilder<A> {
     }
 
     /// Add a non-interactive label/header.
+    #[allow(dead_code)] // Part of builder API; used in tests
     pub fn label(mut self, text: impl Into<String>) -> Self {
         self.items.push(MenuItem::Label(text.into()));
         self
     }
 
     /// Add a sub-menu.
+    #[allow(dead_code)] // Part of builder API; used in tests
     pub fn submenu(
         mut self,
         label: impl Into<String>,

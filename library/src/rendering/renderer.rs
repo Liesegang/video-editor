@@ -19,6 +19,15 @@ pub struct TextureInfo {
     pub height: u32,
 }
 
+/// Blend mode for compositing two images.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlendMode {
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+}
+
 pub trait Renderer {
     fn draw_layer(
         &mut self,
@@ -32,7 +41,7 @@ pub trait Renderer {
         size: f64,
         font_name: &String,
         styles: &[StyleConfig],
-        ensemble: Option<&crate::pipeline::ensemble::EnsembleData>,
+        ensemble: Option<&crate::pipeline::ensemble::config::EnsembleData>,
         transform: &Transform,
     ) -> Result<RenderOutput, LibraryError>;
 
@@ -77,5 +86,14 @@ pub trait Renderer {
         &mut self,
         layer: &RenderOutput,
         transform: &Transform,
+    ) -> Result<RenderOutput, LibraryError>;
+
+    /// Blend two images together using the specified blend mode and opacity.
+    fn blend_images(
+        &mut self,
+        background: &RenderOutput,
+        foreground: &RenderOutput,
+        blend_mode: BlendMode,
+        opacity: f64,
     ) -> Result<RenderOutput, LibraryError>;
 }

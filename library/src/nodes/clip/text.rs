@@ -5,8 +5,8 @@
 //! the glyph outline. Effector/decorator nodes can then modify each
 //! group's transform before rasterization.
 
+use crate::pipeline::ensemble::types::TransformData;
 use crate::pipeline::output::{FontInfo, LineInfo, ShapeData, ShapeGroup};
-use crate::pipeline::processing::ensemble::types::TransformData;
 
 /// Convert a `skia_safe::Path` to an SVG path data string.
 ///

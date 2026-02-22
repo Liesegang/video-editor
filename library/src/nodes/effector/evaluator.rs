@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 use crate::error::LibraryError;
 use crate::pipeline::context::EvalContext;
+use crate::pipeline::ensemble::effectors::OpacityMode;
 use crate::pipeline::evaluator::NodeEvaluator;
 use crate::pipeline::output::{PinValue, ShapeData};
-use crate::pipeline::processing::ensemble::effectors::OpacityMode;
 use crate::project::node::Node;
 
 pub struct EffectorEvaluator;

@@ -32,8 +32,8 @@ impl<'a> VectorEditorInteraction<'a> {
             let rx = wx * cos + wy * sin;
             let ry = -wx * sin + wy * cos;
 
-            let sx = self.transform.scale.x as f32 / 100.0;
-            let sy = self.transform.scale.y as f32 / 100.0;
+            let sx = self.transform.scale.x as f32;
+            let sy = self.transform.scale.y as f32;
 
             let lx = rx / sx;
             let ly = ry / sy;
@@ -48,8 +48,8 @@ impl<'a> VectorEditorInteraction<'a> {
             let lx = x - self.transform.anchor.x as f32;
             let ly = y - self.transform.anchor.y as f32;
 
-            let sx = self.transform.scale.x as f32 / 100.0;
-            let sy = self.transform.scale.y as f32 / 100.0;
+            let sx = self.transform.scale.x as f32;
+            let sy = self.transform.scale.y as f32;
 
             let angle_rad = (self.transform.rotation as f32).to_radians();
             let cos = angle_rad.cos();

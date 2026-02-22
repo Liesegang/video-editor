@@ -6,7 +6,6 @@ pub(super) fn particle_nodes() -> Vec<NodeTypeDefinition> {
     use PinDataType::*;
     let nc = NodeCategory::Particles;
     vec![
-        // Emitter (unique structure — not a simple modifier)
         node("particles.particle_emitter", "Particle Emitter", nc)
             .with_description("Base emitter context (GPU Compute)")
             .with_inputs(vec![
@@ -18,7 +17,6 @@ pub(super) fn particle_nodes() -> Vec<NodeTypeDefinition> {
                 inp("duration", "Duration", Scalar),
             ])
             .with_outputs(vec![out("particles", "Particles", ParticleSystem)]),
-        // Modifiers (all share particles-in → particles-out)
         particle_modifier(
             "particles.spawn_burst",
             "Spawn Burst",
@@ -133,7 +131,6 @@ pub(super) fn particle_nodes() -> Vec<NodeTypeDefinition> {
             ],
         )
         .with_description("Screen-space depth collision (GPU)"),
-        // Renderers (particles → image)
         node("particles.sprite_renderer", "Sprite Renderer", nc)
             .with_inputs(vec![
                 inp("particles", "Particles", ParticleSystem),

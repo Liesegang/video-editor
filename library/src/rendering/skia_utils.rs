@@ -369,25 +369,6 @@ pub(crate) fn create_raster_surface(width: u32, height: u32) -> Result<Surface, 
         .ok_or_else(|| LibraryError::render("Cannot create Skia surface".to_string()))
 }
 
-pub(crate) fn create_texture_surface(
-    width: u32,
-    height: u32,
-    context: &mut DirectContext,
-) -> Result<Surface, LibraryError> {
-    let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
-    gpu::surfaces::render_target(
-        context,
-        gpu::Budgeted::Yes,
-        &info,
-        None,
-        SurfaceOrigin::TopLeft,
-        None,
-        false,
-        false,
-    )
-    .ok_or_else(|| LibraryError::render("Cannot create buffer Skia surface".to_string()))
-}
-
 pub(crate) fn image_to_skia(image: &Image) -> Result<SkImage, LibraryError> {
     let info = ImageInfo::new(
         ISize::new(image.width as i32, image.height as i32),

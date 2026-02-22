@@ -138,8 +138,8 @@ pub(super) fn handle_gizmo_interaction(
                             let dx = delta_world.x * c + delta_world.y * s;
                             let dy = -delta_world.x * s + delta_world.y * c;
 
-                            let current_w = base_w * orig_sx / 100.0;
-                            let current_h = base_h * orig_sy / 100.0;
+                            let current_w = base_w * orig_sx;
+                            let current_h = base_h * orig_sy;
 
                             let (sign_x, sign_y) = match active_handle {
                                 GizmoHandle::TopLeft => (-1.0, -1.0),
@@ -377,8 +377,8 @@ fn draw_clip_box(
 ) -> ([Pos2; 4], Pos2, f32, Pos2) {
     let base_w = gc.content_bounds.map(|b| b.2).unwrap_or(1920.0);
     let base_h = gc.content_bounds.map(|b| b.3).unwrap_or(1080.0);
-    let sx = gc.transform.scale.x as f32 / 100.0;
-    let sy = gc.transform.scale.y as f32 / 100.0;
+    let sx = gc.transform.scale.x as f32;
+    let sy = gc.transform.scale.y as f32;
 
     let center = egui::pos2(
         gc.transform.position.x as f32,

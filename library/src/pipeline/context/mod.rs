@@ -97,11 +97,25 @@ impl<'a> EvalContext<'a> {
 
         let result = match &node {
             Node::Clip(_clip) => {
+                log::debug!("[EvalCtx] evaluate_pin clip {}.{}", node_id, pin_name);
                 let evaluator = find_evaluator(evaluators, "clip.")
                     .ok_or_else(|| LibraryError::render("No clip evaluator registered"))?;
-                evaluator.evaluate(node_id, pin_name, self)?
+                let val = evaluator.evaluate(node_id, pin_name, self)?;
+                log::debug!(
+                    "[EvalCtx] clip {}.{} => {:?}",
+                    node_id,
+                    pin_name,
+                    std::mem::discriminant(&val)
+                );
+                val
             }
             Node::Graph(graph_node) => {
+                log::debug!(
+                    "[EvalCtx] evaluate_pin graph {}.{} type={}",
+                    node_id,
+                    pin_name,
+                    graph_node.type_id
+                );
                 let evaluator =
                     find_evaluator(evaluators, &graph_node.type_id).ok_or_else(|| {
                         LibraryError::render(format!(
@@ -109,18 +123,37 @@ impl<'a> EvalContext<'a> {
                             graph_node.type_id
                         ))
                     })?;
-                evaluator.evaluate(node_id, pin_name, self)?
+                let val = evaluator.evaluate(node_id, pin_name, self)?;
+                log::debug!(
+                    "[EvalCtx] graph {}.{} => {:?}",
+                    node_id,
+                    pin_name,
+                    std::mem::discriminant(&val)
+                );
+                val
             }
-            Node::Track(_) => {
-                // Track nodes are normally evaluated via EvalEngine::evaluate_track,
-                // but when reached through a connection (e.g. a graph node's image_out
-                // connects to a layer track's image_out), follow the upstream source.
+            Node::Track(track) => {
+                log::debug!(
+                    "[EvalCtx] evaluate_pin track {}.{} name='{}'",
+                    node_id,
+                    pin_name,
+                    track.name
+                );
                 if pin_name == "image_out" {
                     match self.find_upstream(node_id, pin_name) {
                         Some((source_id, source_pin)) => {
+                            log::debug!(
+                                "[EvalCtx] track {} following upstream {}.{}",
+                                node_id,
+                                source_id,
+                                source_pin
+                            );
                             self.evaluate_pin(source_id, &source_pin)?
                         }
-                        None => PinValue::None,
+                        None => {
+                            log::debug!("[EvalCtx] track {} no upstream for image_out", node_id);
+                            PinValue::None
+                        }
                     }
                 } else {
                     PinValue::None

@@ -88,52 +88,13 @@ pub(super) fn process_action(
             };
 
             if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                // Effect property - use flat lookup
-                let mut current_pv = None;
-                if let Ok(proj) = project.read() {
-                    if let Some(clip) = proj.get_clip(entity_id) {
-                        if let Some(effect) =
-                            None::<&library::project::effect::EffectConfig>.as_ref()
-                        {
-                            if let Some(prop) = effect.properties.get(&prop_key) {
-                                let keyframes = prop.keyframes();
-                                let mut sorted_kf = keyframes.clone();
-                                sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-                                if let Some(kf) = sorted_kf.get(idx) {
-                                    current_pv = Some(kf.value.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-
-                let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
-                    match component {
-                        Some(PropertyComponent::X) => {
-                            PropertyValue::Vec2(library::project::property::Vec2 {
-                                x: OrderedFloat(new_val),
-                                y: old_vec.y,
-                            })
-                        }
-                        Some(PropertyComponent::Y) => {
-                            PropertyValue::Vec2(library::project::property::Vec2 {
-                                x: old_vec.x,
-                                y: OrderedFloat(new_val),
-                            })
-                        }
-                        _ => PropertyValue::Number(OrderedFloat(new_val)),
-                    }
-                } else {
-                    PropertyValue::Number(OrderedFloat(new_val))
-                };
-
-                // Convert time using helper
+                // TODO: Look up current Vec2 value from graph node properties for effect
+                let new_pv = PropertyValue::Number(OrderedFloat(new_val));
                 let source_time = if let Ok(proj) = project.read() {
                     global_to_source_time(&proj, comp_id, entity_id, new_time)
                 } else {
                     new_time
                 };
-
                 let _ = project_service.update_target_keyframe_by_index(
                     entity_id,
                     library::project::property::PropertyTarget::Effect(eff_idx),
@@ -144,51 +105,13 @@ pub(super) fn process_action(
                     None,
                 );
             } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                // Style property - use flat lookup
-                let mut current_pv = None;
-                if let Ok(proj) = project.read() {
-                    if let Some(clip) = proj.get_clip(entity_id) {
-                        if let Some(style) =
-                            None::<&library::project::style::StyleInstance>.as_ref()
-                        {
-                            if let Some(prop) = style.properties.get(&prop_key) {
-                                let keyframes = prop.keyframes();
-                                let mut sorted_kf = keyframes.clone();
-                                sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-                                if let Some(kf) = sorted_kf.get(idx) {
-                                    current_pv = Some(kf.value.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-
-                let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
-                    match component {
-                        Some(PropertyComponent::X) => {
-                            PropertyValue::Vec2(library::project::property::Vec2 {
-                                x: OrderedFloat(new_val),
-                                y: old_vec.y,
-                            })
-                        }
-                        Some(PropertyComponent::Y) => {
-                            PropertyValue::Vec2(library::project::property::Vec2 {
-                                x: old_vec.x,
-                                y: OrderedFloat(new_val),
-                            })
-                        }
-                        _ => PropertyValue::Number(OrderedFloat(new_val)),
-                    }
-                } else {
-                    PropertyValue::Number(OrderedFloat(new_val))
-                };
-
+                // TODO: Look up current Vec2 value from graph node properties for style
+                let new_pv = PropertyValue::Number(OrderedFloat(new_val));
                 let source_time = if let Ok(proj) = project.read() {
                     global_to_source_time(&proj, comp_id, entity_id, new_time)
                 } else {
                     new_time
                 };
-
                 let _ = project_service.update_target_keyframe_by_index(
                     entity_id,
                     library::project::property::PropertyTarget::Style(style_idx),
@@ -274,34 +197,10 @@ pub(super) fn process_action(
                         // Calculate source time from global time
                         eval_time = global_to_source_time(&proj, comp_id, entity_id, time);
 
-                        if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                            if let Some(effect) =
-                                None::<&library::project::effect::EffectConfig>.as_ref()
-                            {
-                                if let Some(prop) = effect.properties.get(&prop_key) {
-                                    current_val_at_t =
-                                        Some(project_service.evaluate_property_value(
-                                            prop,
-                                            &effect.properties,
-                                            eval_time,
-                                            comp.fps,
-                                        ));
-                                }
-                            }
-                        } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                            if let Some(style) =
-                                None::<&library::project::style::StyleInstance>.as_ref()
-                            {
-                                if let Some(prop) = style.properties.get(&prop_key) {
-                                    current_val_at_t =
-                                        Some(project_service.evaluate_property_value(
-                                            prop,
-                                            &style.properties,
-                                            eval_time,
-                                            comp.fps,
-                                        ));
-                                }
-                            }
+                        if parse_key(base_name).is_some() {
+                            // TODO: Look up effect property value from graph nodes
+                        } else if parse_style_key(base_name).is_some() {
+                            // TODO: Look up style property value from graph nodes
                         } else {
                             if let Some(prop) = entity.properties.get(base_name) {
                                 current_val_at_t = Some(project_service.evaluate_property_value(
@@ -459,77 +358,10 @@ pub(super) fn process_action(
             if let Ok(proj) = project.read() {
                 // Use flat O(1) lookup
                 if let Some(clip) = proj.get_clip(entity_id) {
-                    // Effect Property
-                    if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                        if let Some(effect) =
-                            None::<&library::project::effect::EffectConfig>.as_ref()
-                        {
-                            if let Some(prop) = effect.properties.get(&prop_key) {
-                                if prop.evaluator == "keyframe" {
-                                    let keyframes = prop.keyframes();
-                                    let mut sorted_kf = keyframes.clone();
-                                    sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-
-                                    if let Some(kf) = sorted_kf.get(idx) {
-                                        editor_context.keyframe_dialog.is_open = true;
-                                        editor_context.keyframe_dialog.track_id = Some(track_id);
-                                        editor_context.keyframe_dialog.entity_id = Some(entity_id);
-                                        editor_context.keyframe_dialog.property_name = name.clone();
-                                        editor_context.keyframe_dialog.keyframe_index = idx;
-                                        editor_context.keyframe_dialog.time = kf.time.into_inner();
-                                        editor_context.keyframe_dialog.value =
-                                            match (name.ends_with(".x"), name.ends_with(".y")) {
-                                                (true, _) => kf
-                                                    .value
-                                                    .get_as::<library::project::property::Vec2>()
-                                                    .map_or(0.0, |v| v.x.into_inner()),
-                                                (_, true) => kf
-                                                    .value
-                                                    .get_as::<library::project::property::Vec2>()
-                                                    .map_or(0.0, |v| v.y.into_inner()),
-                                                _ => kf.value.get_as::<f64>().unwrap_or(0.0),
-                                            };
-                                        editor_context.keyframe_dialog.easing = kf.easing.clone();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Style Property
-                    else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                        if let Some(style) =
-                            None::<&library::project::style::StyleInstance>.as_ref()
-                        {
-                            if let Some(prop) = style.properties.get(&prop_key) {
-                                if prop.evaluator == "keyframe" {
-                                    let keyframes = prop.keyframes();
-                                    let mut sorted_kf = keyframes.clone();
-                                    sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-
-                                    if let Some(kf) = sorted_kf.get(idx) {
-                                        editor_context.keyframe_dialog.is_open = true;
-                                        editor_context.keyframe_dialog.track_id = Some(track_id);
-                                        editor_context.keyframe_dialog.entity_id = Some(entity_id);
-                                        editor_context.keyframe_dialog.property_name = name.clone();
-                                        editor_context.keyframe_dialog.keyframe_index = idx;
-                                        editor_context.keyframe_dialog.time = kf.time.into_inner();
-                                        editor_context.keyframe_dialog.value =
-                                            match (name.ends_with(".x"), name.ends_with(".y")) {
-                                                (true, _) => kf
-                                                    .value
-                                                    .get_as::<library::project::property::Vec2>()
-                                                    .map_or(0.0, |v| v.x.into_inner()),
-                                                (_, true) => kf
-                                                    .value
-                                                    .get_as::<library::project::property::Vec2>()
-                                                    .map_or(0.0, |v| v.y.into_inner()),
-                                                _ => kf.value.get_as::<f64>().unwrap_or(0.0),
-                                            };
-                                        editor_context.keyframe_dialog.easing = kf.easing.clone();
-                                    }
-                                }
-                            }
-                        }
+                    if parse_key(base_name).is_some() {
+                        // TODO: Look up effect property keyframes from graph nodes
+                    } else if parse_style_key(base_name).is_some() {
+                        // TODO: Look up style property keyframes from graph nodes
                     }
                     // Clip Property
                     else if let Some(prop) = clip.properties.get(base_name) {

@@ -1,14 +1,17 @@
 //! Interaction handling for the node editor, split from the monolithic handle_interactions().
 
 use egui::{self, Pos2, Rect, Vec2};
+use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::drawing::bezier_distance_to_point;
 use crate::state::{
-    BoxSelectState, ConnectingState, ContextMenuState, DragState, NodeContextMenuState,
-    NodeEditorState, ResizeState,
+    BoxSelectState, ConnectingState, ContextMenuState, DragState, EdgeContextMenuState,
+    NodeContextMenuState, NodeEditorState, ResizeState,
 };
 use crate::theme::NodeEditorTheme;
 use crate::traits::NodeEditorMutator;
+use crate::types::{ConnectionView, PinDataType, are_types_compatible};
 use crate::widget::{NodeInteraction, PendingActions, PinScreen};
 
 /// Context passed to interaction handlers (avoids threading many parameters).
@@ -17,6 +20,8 @@ pub(crate) struct InteractionContext<'a> {
     pub canvas_response: &'a egui::Response,
     pub nodes: &'a [NodeInteraction],
     pub pin_screens: &'a [PinScreen],
+    pub connections: &'a [ConnectionView],
+    pub pin_pos_map: &'a HashMap<(Uuid, &'a str, bool), Pos2>,
     pub mutator: &'a dyn NodeEditorMutator,
     pub theme: &'a NodeEditorTheme,
     pub zoom: f32,
@@ -30,16 +35,20 @@ pub(crate) fn handle_interactions(
 ) -> PendingActions {
     let mut pending = PendingActions::default();
     let pointer_pos = ctx.ui.input(|i| i.pointer.hover_pos());
+    // Use press_origin for drag start — hover_pos may have drifted from the thin
+    // resize edge by the time egui fires drag_started (after the click-threshold).
+    let press_origin = ctx.ui.input(|i| i.pointer.press_origin());
 
     handle_active_drag(state, ctx, &mut pending);
     handle_drag_stop(state, ctx, pointer_pos, &mut pending);
-    handle_drag_start(state, ctx, pointer_pos, &mut pending);
+    handle_drag_start(state, ctx, press_origin.or(pointer_pos), &mut pending);
     handle_connecting_update(state, pointer_pos);
     handle_double_click(state, ctx, pointer_pos);
     handle_single_click(state, ctx, pointer_pos, &mut pending);
     handle_right_click(state, ctx, pointer_pos);
     render_context_menu(state, ctx, &mut pending);
     render_node_context_menu(state, ctx, &mut pending);
+    render_edge_context_menu(state, ctx, &mut pending);
     handle_delete_key(state, ctx, &mut pending);
 
     pending
@@ -77,6 +86,79 @@ pub(crate) fn find_nearest_pin<'a>(
         }
     }
     best.map(|(_, ps)| ps)
+}
+
+/// Find a connection (edge) near the given point. Returns the connection ID if hit.
+fn find_edge_at_point(ctx: &InteractionContext, pos: Pos2) -> Option<Uuid> {
+    let edge_hit_threshold = 5.0;
+    let mut best: Option<(f32, Uuid)> = None;
+
+    for conn in ctx.connections {
+        let from_pos = ctx
+            .pin_pos_map
+            .get(&(conn.from_node, conn.from_pin.as_str(), true))
+            .or_else(|| {
+                ctx.pin_pos_map
+                    .get(&(conn.from_node, conn.from_pin.as_str(), false))
+            });
+        let to_pos = ctx
+            .pin_pos_map
+            .get(&(conn.to_node, conn.to_pin.as_str(), false))
+            .or_else(|| {
+                ctx.pin_pos_map
+                    .get(&(conn.to_node, conn.to_pin.as_str(), true))
+            });
+
+        if let (Some(&from_p), Some(&to_p)) = (from_pos, to_pos) {
+            let dist = bezier_distance_to_point(from_p, to_p, pos);
+            if dist < edge_hit_threshold {
+                if best.is_none() || dist < best.unwrap().0 {
+                    best = Some((dist, conn.id));
+                }
+            }
+        }
+    }
+
+    best.map(|(_, id)| id)
+}
+
+/// Find existing connection to a specific input pin.
+fn find_existing_connection_to_input(
+    connections: &[ConnectionView],
+    to_node: Uuid,
+    to_pin: &str,
+) -> Option<Uuid> {
+    connections
+        .iter()
+        .find(|c| c.to_node == to_node && c.to_pin == to_pin)
+        .map(|c| c.id)
+}
+
+/// Get pin data type from pin_screens.
+fn get_pin_data_type(
+    pin_screens: &[PinScreen],
+    node_id: Uuid,
+    pin_name: &str,
+    is_output: bool,
+) -> PinDataType {
+    pin_screens
+        .iter()
+        .find(|ps| ps.node_id == node_id && ps.name == pin_name && ps.is_output == is_output)
+        .map(|ps| ps.data_type.clone())
+        .unwrap_or(PinDataType::Any)
+}
+
+/// Get the container_id for a pin from pin_screens.
+fn get_pin_container_id(
+    pin_screens: &[PinScreen],
+    node_id: Uuid,
+    pin_name: &str,
+    is_output: bool,
+) -> Option<Uuid> {
+    pin_screens
+        .iter()
+        .find(|ps| ps.node_id == node_id && ps.name == pin_name && ps.is_output == is_output)
+        .and_then(|ps| ps.container_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -153,19 +235,50 @@ fn handle_drag_stop(
                 Some(!connecting.is_output),
             );
             if let Some(target) = target {
-                if connecting.is_output {
-                    pending.connections_to_add.push((
+                // Determine which is output and which is input
+                let (from_node, from_pin, to_node, to_pin) = if connecting.is_output {
+                    (
                         connecting.from_node,
-                        connecting.from_pin.clone(),
+                        connecting.from_pin.as_str(),
                         target.node_id,
-                        target.name.clone(),
-                    ));
+                        target.name.as_str(),
+                    )
                 } else {
-                    pending.connections_to_add.push((
+                    (
                         target.node_id,
-                        target.name.clone(),
+                        target.name.as_str(),
                         connecting.from_node,
-                        connecting.from_pin.clone(),
+                        connecting.from_pin.as_str(),
+                    )
+                };
+
+                // Type validation
+                let from_type = get_pin_data_type(ctx.pin_screens, from_node, from_pin, true);
+                let to_type = get_pin_data_type(ctx.pin_screens, to_node, to_pin, false);
+
+                if are_types_compatible(&from_type, &to_type) {
+                    // Container validation: pins must be in the same container scope
+                    let from_container =
+                        get_pin_container_id(ctx.pin_screens, from_node, from_pin, true);
+                    let to_container =
+                        get_pin_container_id(ctx.pin_screens, to_node, to_pin, false);
+                    if from_container != to_container {
+                        // Pins are in different container scopes — reject
+                        return;
+                    }
+
+                    // Edge overwrite: remove existing connection to the input pin
+                    if let Some(existing_id) =
+                        find_existing_connection_to_input(ctx.connections, to_node, to_pin)
+                    {
+                        pending.connections_to_remove.push(existing_id);
+                    }
+
+                    pending.connections_to_add.push((
+                        from_node,
+                        from_pin.to_string(),
+                        to_node,
+                        to_pin.to_string(),
                     ));
                 }
             }
@@ -243,15 +356,28 @@ fn handle_drag_start(
         return;
     }
 
-    // 2. Check resize handle (container bottom-right)
-    let handle_size = 8.0 * ctx.zoom;
+    // 2. Check resize handle (container edges + corner)
+    let edge_width = 6.0 * ctx.zoom;
+    let handle_size = 16.0 * ctx.zoom;
+    let header_h = ctx.theme.header_height * ctx.zoom;
     for node in ctx.nodes.iter().rev() {
         if node.is_container {
+            // Corner handle (bottom-right)
             let handle_rect = Rect::from_min_size(
                 Pos2::new(node.rect.max.x - handle_size, node.rect.max.y - handle_size),
                 Vec2::new(handle_size, handle_size),
             );
-            if handle_rect.contains(pos) {
+            // Right edge (below header)
+            let right_edge = Rect::from_min_max(
+                Pos2::new(node.rect.max.x - edge_width, node.rect.min.y + header_h),
+                node.rect.max,
+            );
+            // Bottom edge
+            let bottom_edge = Rect::from_min_max(
+                Pos2::new(node.rect.min.x, node.rect.max.y - edge_width),
+                node.rect.max,
+            );
+            if handle_rect.contains(pos) || right_edge.contains(pos) || bottom_edge.contains(pos) {
                 let current_size = state
                     .container_sizes
                     .get(&node.id)
@@ -268,7 +394,6 @@ fn handle_drag_start(
     }
 
     // 3. Check node header for dragging
-    let header_h = ctx.theme.header_height * ctx.zoom;
     for node in ctx.nodes.iter().rev() {
         let header_rect =
             Rect::from_min_size(node.rect.min, Vec2::new(node.rect.width(), header_h));
@@ -318,19 +443,18 @@ fn handle_double_click(
     }
     let Some(pos) = pointer_pos else { return };
 
-    // Find the smallest container at this position
-    let mut best: Option<(Uuid, f32)> = None;
-    for node in ctx.nodes {
-        if node.is_container && node.rect.contains(pos) {
-            let area = node.rect.area();
-            if best.is_none() || area < best.unwrap().1 {
-                best = Some((node.id, area));
+    // Find container whose header was double-clicked (not just anywhere in the body)
+    let header_h = ctx.theme.header_height * ctx.zoom;
+    for node in ctx.nodes.iter().rev() {
+        if node.is_container {
+            let header_rect =
+                Rect::from_min_size(node.rect.min, Vec2::new(node.rect.width(), header_h));
+            if header_rect.contains(pos) {
+                if !state.expanded_containers.remove(&node.id) {
+                    state.expanded_containers.insert(node.id);
+                }
+                return;
             }
-        }
-    }
-    if let Some((id, _)) = best {
-        if !state.expanded_containers.remove(&id) {
-            state.expanded_containers.insert(id);
         }
     }
 }
@@ -346,7 +470,8 @@ fn handle_single_click(
     }
     let Some(pos) = pointer_pos else { return };
 
-    let mut hit = false;
+    // Check node hit first
+    let mut hit_node = false;
     for node in ctx.nodes.iter().rev() {
         if node.rect.contains(pos) {
             if !ctx.ui.input(|i| i.modifiers.shift) {
@@ -354,16 +479,31 @@ fn handle_single_click(
             }
             state.selected_nodes.insert(node.id);
             pending.selected_node = Some(node.id);
-            hit = true;
+            hit_node = true;
             break;
         }
     }
-    if !hit {
-        state.selected_nodes.clear();
+
+    if !hit_node {
+        // Check edge hit
+        if let Some(edge_id) = find_edge_at_point(ctx, pos) {
+            if !ctx.ui.input(|i| i.modifiers.shift) {
+                state.selected_connections.clear();
+            }
+            state.selected_connections.insert(edge_id);
+            state.selected_nodes.clear();
+        } else {
+            // Empty space click — clear all selections
+            state.selected_nodes.clear();
+            state.selected_connections.clear();
+        }
+    } else {
         state.selected_connections.clear();
     }
+
     state.context_menu = None;
     state.node_context_menu = None;
+    state.edge_context_menu = None;
 }
 
 fn handle_right_click(
@@ -376,6 +516,7 @@ fn handle_right_click(
     }
     let Some(pos) = pointer_pos else { return };
 
+    // Check node hit
     for node in ctx.nodes.iter().rev() {
         if node.rect.contains(pos) {
             state.node_context_menu = Some(NodeContextMenuState {
@@ -383,10 +524,23 @@ fn handle_right_click(
                 node_id: node.id,
             });
             state.context_menu = None;
+            state.edge_context_menu = None;
             return;
         }
     }
 
+    // Check edge hit
+    if let Some(edge_id) = find_edge_at_point(ctx, pos) {
+        state.edge_context_menu = Some(EdgeContextMenuState {
+            screen_pos: pos,
+            connection_id: edge_id,
+        });
+        state.context_menu = None;
+        state.node_context_menu = None;
+        return;
+    }
+
+    // Empty space — show add-node menu
     if let Some(cid) = state.current_container {
         state.context_menu = Some(ContextMenuState {
             screen_pos: pos,
@@ -395,6 +549,7 @@ fn handle_right_click(
         state.context_search.clear();
     }
     state.node_context_menu = None;
+    state.edge_context_menu = None;
 }
 
 fn render_context_menu(
@@ -517,6 +672,35 @@ fn render_node_context_menu(
     }
 }
 
+fn render_edge_context_menu(
+    state: &mut NodeEditorState,
+    ctx: &InteractionContext,
+    pending: &mut PendingActions,
+) {
+    let Some(menu) = state.edge_context_menu.clone() else {
+        return;
+    };
+
+    let mut close = false;
+    let popup_id = ctx.ui.make_persistent_id("edge_context_menu");
+    egui::Area::new(popup_id)
+        .order(egui::Order::Foreground)
+        .fixed_pos(menu.screen_pos)
+        .show(ctx.ui.ctx(), |ui| {
+            egui::Frame::menu(ui.style()).show(ui, |ui| {
+                ui.set_max_width(180.0);
+                if ui.button("Delete Connection").clicked() {
+                    pending.connections_to_remove.push(menu.connection_id);
+                    state.selected_connections.remove(&menu.connection_id);
+                    close = true;
+                }
+            });
+        });
+    if close || ctx.ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        state.edge_context_menu = None;
+    }
+}
+
 fn handle_delete_key(
     state: &mut NodeEditorState,
     ctx: &InteractionContext,
@@ -532,5 +716,114 @@ fn handle_delete_key(
         let conns: Vec<Uuid> = state.selected_connections.iter().copied().collect();
         pending.connections_to_remove.extend(conns);
         state.selected_connections.clear();
+    }
+}
+
+/// Clip a node interaction rect to a visible area.
+/// Returns None if the node is fully outside the clip bounds.
+pub(crate) fn clip_interaction_rect(node_rect: Rect, clip_rect: Rect) -> Option<Rect> {
+    let clipped = node_rect.intersect(clip_rect);
+    if clipped.width() <= 0.0 || clipped.height() <= 0.0 {
+        None
+    } else {
+        Some(clipped)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clip_interaction_rect_fully_visible() {
+        let node_rect = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(100.0, 50.0));
+        let clip_rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(500.0, 500.0));
+        let result = clip_interaction_rect(node_rect, clip_rect);
+        assert_eq!(result, Some(node_rect));
+    }
+
+    #[test]
+    fn test_clip_interaction_rect_partially_visible() {
+        let node_rect = Rect::from_min_size(Pos2::new(-20.0, 10.0), Vec2::new(100.0, 50.0));
+        let clip_rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(500.0, 500.0));
+        let result = clip_interaction_rect(node_rect, clip_rect);
+        assert!(result.is_some());
+        let r = result.unwrap();
+        assert!(r.min.x >= 0.0);
+    }
+
+    #[test]
+    fn test_clip_interaction_rect_fully_hidden() {
+        let node_rect = Rect::from_min_size(Pos2::new(-200.0, -200.0), Vec2::new(100.0, 50.0));
+        let clip_rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(500.0, 500.0));
+        assert!(clip_interaction_rect(node_rect, clip_rect).is_none());
+    }
+
+    #[test]
+    fn test_find_existing_connection_to_input() {
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let conn_id = Uuid::new_v4();
+        let connections = vec![ConnectionView {
+            id: conn_id,
+            from_node: id1,
+            from_pin: "image_out".to_string(),
+            to_node: id2,
+            to_pin: "image_in".to_string(),
+        }];
+
+        assert_eq!(
+            find_existing_connection_to_input(&connections, id2, "image_in"),
+            Some(conn_id)
+        );
+        assert_eq!(
+            find_existing_connection_to_input(&connections, id2, "other_in"),
+            None
+        );
+        assert_eq!(
+            find_existing_connection_to_input(&connections, id1, "image_in"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_get_pin_data_type_found() {
+        let node_id = Uuid::new_v4();
+        let pin_screens = vec![
+            PinScreen {
+                pos: Pos2::ZERO,
+                node_id,
+                name: "image_out".to_string(),
+                is_output: true,
+                data_type: PinDataType::Image,
+                container_id: None,
+            },
+            PinScreen {
+                pos: Pos2::ZERO,
+                node_id,
+                name: "value_in".to_string(),
+                is_output: false,
+                data_type: PinDataType::Scalar,
+                container_id: None,
+            },
+        ];
+
+        assert_eq!(
+            get_pin_data_type(&pin_screens, node_id, "image_out", true),
+            PinDataType::Image
+        );
+        assert_eq!(
+            get_pin_data_type(&pin_screens, node_id, "value_in", false),
+            PinDataType::Scalar
+        );
+    }
+
+    #[test]
+    fn test_get_pin_data_type_not_found_returns_any() {
+        let pin_screens: Vec<PinScreen> = vec![];
+        assert_eq!(
+            get_pin_data_type(&pin_screens, Uuid::new_v4(), "missing", true),
+            PinDataType::Any
+        );
     }
 }

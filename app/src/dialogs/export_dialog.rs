@@ -11,9 +11,8 @@ use library::plugin::{ExportSettings, PluginManager};
 use library::project::project::Project;
 use library::project::property::PropertyUiType;
 use library::project::property::PropertyValue;
-use library::rendering::renderer::Renderer;
 use library::rendering::skia_renderer::SkiaRenderer;
-use library::{EditorService, ExportService, ProjectModel};
+use library::{EditorService, ExportService};
 
 pub struct ExportDialog {
     pub is_open: bool,

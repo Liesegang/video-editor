@@ -1,6 +1,6 @@
 //! SVG path string builders for geometric shapes.
 
-use crate::pipeline::processing::ensemble::decorators::BackplateShape;
+use crate::pipeline::ensemble::decorators::BackplateShape;
 
 /// Build an SVG rectangle (or rounded-rect/circle) path string.
 pub fn build_rect_svg(
@@ -64,7 +64,6 @@ pub fn build_rect_svg(
             let cx = x + w / 2.0;
             let cy = y + h / 2.0;
             let r = (w.min(h) / 2.0).max(0.0);
-            // Approximate circle with 4 cubic Bezier curves
             let k = 0.5522847498; // (4/3)*tan(pi/8)
             let kr = k * r;
             format!(

@@ -6,15 +6,6 @@
 
 pub mod context;
 pub mod engine;
+pub mod ensemble;
 pub mod evaluator;
 pub mod output;
-
-// Pipeline stage submodules
-pub mod compositing;
-pub mod effects;
-pub mod processing;
-pub mod sources;
-
-// Backward compatibility: old `evaluators` and `ensemble` paths re-export from new locations.
-pub mod ensemble;
-pub mod evaluators;

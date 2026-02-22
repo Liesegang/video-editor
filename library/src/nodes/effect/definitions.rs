@@ -1,4 +1,4 @@
-use super::{image_filter, inp};
+use crate::nodes::{image_filter, inp};
 use crate::plugin::node_types::{NodeCategory, NodeTypeDefinition};
 use crate::project::connection::PinDataType;
 

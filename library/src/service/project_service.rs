@@ -441,7 +441,17 @@ impl ProjectManager {
             clip_id,
             &clip_kind,
         ) {
-            log::warn!("Failed to setup graph nodes for clip {}: {}", clip_id, e);
+            log::error!(
+                "Failed to setup graph nodes for clip {}. Rolling back clip addition: {}",
+                clip_id,
+                e
+            );
+            let _ = handlers::clip_handler::ClipHandler::remove_clip_from_track(
+                &self.project,
+                track_id,
+                clip_id,
+            );
+            return Err(e);
         }
 
         Ok(clip_id)
@@ -685,6 +695,18 @@ impl ProjectManager {
 
     pub fn remove_graph_connection(&self, connection_id: Uuid) -> Result<(), LibraryError> {
         handlers::graph_handler::GraphHandler::remove_connection(&self.project, connection_id)
+    }
+
+    pub fn reorder_effect_chain(
+        &self,
+        clip_id: Uuid,
+        new_order: &[Uuid],
+    ) -> Result<(), LibraryError> {
+        handlers::graph_handler::GraphHandler::reorder_effect_chain(
+            &self.project,
+            clip_id,
+            new_order,
+        )
     }
 
     pub fn update_graph_node_property(

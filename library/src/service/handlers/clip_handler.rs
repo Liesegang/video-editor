@@ -90,11 +90,19 @@ impl ClipHandler {
             return Ok(());
         }
 
+        log::info!(
+            "[SetupGraph] clip={} kind={:?} track={}",
+            clip_id,
+            clip_kind,
+            track_id
+        );
+
         // 1. Create a layer sub-track and move the clip into it
         let layer_id = {
             let mut proj = super::write_project(project)?;
 
             let mut layer = TrackData::new("Layer");
+            layer.is_layer = true;
             let layer_id = layer.id;
 
             // Move clip from parent track to layer
@@ -105,6 +113,7 @@ impl ClipHandler {
             layer.add_child(clip_id);
             proj.add_node(Node::Track(layer));
 
+            log::debug!("[SetupGraph] Created layer {}", layer_id);
             layer_id
         };
 
@@ -115,6 +124,7 @@ impl ClipHandler {
             layer_id,
             "compositing.transform",
         )?;
+        log::debug!("[SetupGraph] Created transform {}", transform_id);
 
         // 3. Create connections based on clip kind
         if *clip_kind == TrackClipKind::Text || *clip_kind == TrackClipKind::Shape {
@@ -125,17 +135,21 @@ impl ClipHandler {
                 layer_id,
                 "style.fill",
             )?;
+            log::debug!("[SetupGraph] Created fill {}", fill_id);
 
             super::graph_handler::GraphHandler::add_connection(
                 project,
                 PinId::new(clip_id, "shape_out"),
                 PinId::new(fill_id, "shape_in"),
             )?;
+            log::debug!("[SetupGraph] Connected clip.shape_out -> fill.shape_in");
+
             super::graph_handler::GraphHandler::add_connection(
                 project,
                 PinId::new(fill_id, "image_out"),
                 PinId::new(transform_id, "image_in"),
             )?;
+            log::debug!("[SetupGraph] Connected fill.image_out -> transform.image_in");
         } else {
             // Video/Image/SkSL: clip.image_out → transform.image_in
             super::graph_handler::GraphHandler::add_connection(
@@ -143,6 +157,7 @@ impl ClipHandler {
                 PinId::new(clip_id, "image_out"),
                 PinId::new(transform_id, "image_in"),
             )?;
+            log::debug!("[SetupGraph] Connected clip.image_out -> transform.image_in");
         }
 
         // 4. Container output: transform.image_out → layer.image_out
@@ -151,6 +166,8 @@ impl ClipHandler {
             PinId::new(transform_id, "image_out"),
             PinId::new(layer_id, "image_out"),
         )?;
+        log::debug!("[SetupGraph] Connected transform.image_out -> layer.image_out");
+        log::debug!("[SetupGraph] Setup complete for clip {}", clip_id);
 
         Ok(())
     }

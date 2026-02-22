@@ -5,6 +5,26 @@ use crate::project::track::TrackData;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+/// Recursively collect all descendant node IDs of a track (sub-tracks, clips, graph nodes).
+fn collect_descendants(proj: &Project, track_id: Uuid) -> Vec<Uuid> {
+    let mut result = Vec::new();
+    let mut stack = vec![track_id];
+
+    while let Some(current) = stack.pop() {
+        if let Some(track) = proj.get_track(current) {
+            for &child_id in &track.child_ids {
+                result.push(child_id);
+                // If child is also a track, recurse into it
+                if proj.get_track(child_id).is_some() {
+                    stack.push(child_id);
+                }
+            }
+        }
+    }
+
+    result
+}
+
 pub struct TrackHandler;
 
 impl TrackHandler {
@@ -104,6 +124,21 @@ impl TrackHandler {
             if let Some(parent) = proj.get_track_mut(pid) {
                 parent.remove_child(track_id);
             }
+        }
+
+        // Recursively collect all descendant node IDs (clips, graph nodes, sub-tracks)
+        let descendants = collect_descendants(&proj, track_id);
+
+        // Remove all connections for all descendant nodes
+        for &node_id in &descendants {
+            proj.remove_connections_for_node(node_id);
+        }
+        // Also remove connections for the track itself
+        proj.remove_connections_for_node(track_id);
+
+        // Remove all descendant nodes
+        for &node_id in &descendants {
+            proj.remove_node(node_id);
         }
 
         // Remove the track node itself

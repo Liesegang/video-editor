@@ -53,9 +53,11 @@ pub(super) fn collect_graph_nodes(
     }
 }
 
-/// Configuration for adding a node into a chain (effector, decorator, or style).
+/// Configuration for adding a node into a forward shape chain (effector or decorator).
+///
+/// The chain flows forward: `clip.shape_out → [node1.shape_in → node1.shape_out →] ... → terminal.shape_in`
 pub(super) struct ChainConfig {
-    category_prefix: &'static str,
+    pub(super) category_prefix: &'static str,
     input_pin_name: &'static str,
     output_pin_name: &'static str,
 }
@@ -71,14 +73,12 @@ impl ChainConfig {
         input_pin_name: "shape_in",
         output_pin_name: "shape_out",
     };
-    pub(super) const STYLE: Self = Self {
-        category_prefix: "style",
-        input_pin_name: "style_in",
-        output_pin_name: "style_out",
-    };
 }
 
-/// Add a graph node to a chain, handling existing connections.
+/// Add a graph node into a forward shape chain (effector or decorator).
+///
+/// Inserts after the last node of the same category, preserving downstream connections.
+/// Chain: `clip.shape_out → [effectors] → [decorators] → style.shape_in`
 fn add_node_to_chain(
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
@@ -92,32 +92,153 @@ fn add_node_to_chain(
     let graph_type_id = format!("{}.{}", config.category_prefix, type_name);
     match project_service.add_graph_node(track_id, &graph_type_id) {
         Ok(new_node_id) => {
-            let clip_pin = PinId::new(clip_id, config.input_pin_name);
+            // Find the insertion point: after the last node of this category,
+            // or after the clip if none exist.
+            let (insert_after_id, downstream_conn) = {
+                if let Ok(proj) = project.read() {
+                    let insert_after = match config.category_prefix {
+                        "effector" => graph_analysis::get_associated_effectors(&proj, clip_id)
+                            .last()
+                            .copied()
+                            .unwrap_or(clip_id),
+                        "decorator" => graph_analysis::get_associated_decorators(&proj, clip_id)
+                            .last()
+                            .copied()
+                            .or_else(|| {
+                                graph_analysis::get_associated_effectors(&proj, clip_id)
+                                    .last()
+                                    .copied()
+                            })
+                            .unwrap_or(clip_id),
+                        _ => clip_id,
+                    };
 
-            // Check if clip's input already has a connection
-            let existing_conn = project.read().ok().and_then(|proj| {
-                graph_analysis::get_input_connection(&proj, &clip_pin)
-                    .map(|c| (c.id, c.from.clone()))
-            });
+                    // Find the downstream connection from insert_after.shape_out → ?.shape_in
+                    let downstream = proj
+                        .connections
+                        .iter()
+                        .find(|c| {
+                            c.from == PinId::new(insert_after, config.output_pin_name)
+                                && c.to.pin_name == config.input_pin_name
+                        })
+                        .map(|c| (c.id, c.to.clone()));
 
-            if let Some((conn_id, prev_from)) = existing_conn {
-                // Chain: disconnect old, connect old→new input, new→clip
-                let _ = project_service.remove_graph_connection(conn_id);
+                    (insert_after, downstream)
+                } else {
+                    (clip_id, None)
+                }
+            };
+
+            // Remove old downstream connection and reconnect through new node
+            if let Some((old_conn_id, old_downstream_pin)) = downstream_conn {
+                let _ = project_service.remove_graph_connection(old_conn_id);
+                // Connect new node's output → old downstream
                 let _ = project_service.add_graph_connection(
-                    prev_from,
-                    PinId::new(new_node_id, config.input_pin_name),
+                    PinId::new(new_node_id, config.output_pin_name),
+                    old_downstream_pin,
                 );
             }
 
-            let from = PinId::new(new_node_id, config.output_pin_name);
-            if let Err(e) = project_service.add_graph_connection(from, clip_pin) {
+            // Connect insert_after → new node's input
+            if let Err(e) = project_service.add_graph_connection(
+                PinId::new(insert_after_id, config.output_pin_name),
+                PinId::new(new_node_id, config.input_pin_name),
+            ) {
                 log::error!("Failed to connect {}: {}", config.category_prefix, e);
             }
+
             drop(history_manager.begin_mutation(project));
             *needs_refresh = true;
         }
         Err(e) => {
             log::error!("Failed to add {} graph node: {}", config.category_prefix, e);
+        }
+    }
+}
+
+/// Add a style node to a clip's shape chain.
+///
+/// Styles are terminal nodes (shape_in → image_out) that convert shape data to images.
+/// Connects: `end_of_chain.shape_out → style.shape_in`, `style.image_out → transform.image_in`
+pub(super) fn add_style_to_clip(
+    project_service: &mut ProjectService,
+    history_manager: &mut HistoryManager,
+    project: &Arc<RwLock<library::project::project::Project>>,
+    track_id: Uuid,
+    clip_id: Uuid,
+    type_name: &str,
+    needs_refresh: &mut bool,
+) {
+    let graph_type_id = format!("style.{}", type_name);
+    match project_service.add_graph_node(track_id, &graph_type_id) {
+        Ok(new_node_id) => {
+            let (insert_after_id, old_shape_conn, transform_id, old_transform_conn) = {
+                if let Ok(proj) = project.read() {
+                    let ctx = graph_analysis::resolve_clip_context(&proj, clip_id);
+
+                    // Insert after last decorator, or last effector, or clip
+                    let insert_after = ctx
+                        .decorator_chain
+                        .last()
+                        .copied()
+                        .or_else(|| ctx.effector_chain.last().copied())
+                        .unwrap_or(clip_id);
+
+                    // Find existing connection from insert_after.shape_out → ?.shape_in
+                    let old_shape = proj
+                        .connections
+                        .iter()
+                        .find(|c| {
+                            c.from == PinId::new(insert_after, "shape_out")
+                                && c.to.pin_name == "shape_in"
+                        })
+                        .map(|c| c.id);
+
+                    // Find existing connection to transform.image_in
+                    let old_transform = ctx.transform_node.and_then(|t| {
+                        proj.connections
+                            .iter()
+                            .find(|c| c.to == PinId::new(t, "image_in"))
+                            .map(|c| c.id)
+                    });
+
+                    (insert_after, old_shape, ctx.transform_node, old_transform)
+                } else {
+                    (clip_id, None, None, None)
+                }
+            };
+
+            // Remove old connections
+            if let Some(conn_id) = old_shape_conn {
+                let _ = project_service.remove_graph_connection(conn_id);
+            }
+            if let Some(conn_id) = old_transform_conn {
+                let _ = project_service.remove_graph_connection(conn_id);
+            }
+
+            // Connect insert_after.shape_out → new_style.shape_in
+            if let Err(e) = project_service.add_graph_connection(
+                PinId::new(insert_after_id, "shape_out"),
+                PinId::new(new_node_id, "shape_in"),
+            ) {
+                log::error!("Failed to connect style shape_in: {}", e);
+            }
+
+            // Connect new_style.image_out → transform.image_in
+            if let Some(t_id) = transform_id {
+                if let Err(e) = project_service.add_graph_connection(
+                    PinId::new(new_node_id, "image_out"),
+                    PinId::new(t_id, "image_in"),
+                ) {
+                    log::error!("Failed to connect style to transform: {}", e);
+                }
+            }
+
+            drop(history_manager.begin_mutation(project));
+            *needs_refresh = true;
+        }
+        Err(e) => {
+            log::error!("Failed to add style graph node: {}", e);
         }
     }
 }

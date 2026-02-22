@@ -2,10 +2,14 @@
 
 use egui::Color32;
 
+use crate::types::PinDataType;
+
 /// Theme configuration for the node editor.
 pub struct NodeEditorTheme {
-    /// Pin color based on type_id string.
+    /// Pin color based on node type_id string (legacy, used for connections).
     pub pin_color: Box<dyn Fn(&str) -> Color32>,
+    /// Pin color based on pin data type.
+    pub pin_type_color: Box<dyn Fn(&PinDataType) -> Color32>,
     /// Header color based on type_id string.
     pub header_color: Box<dyn Fn(&str) -> Color32>,
     /// Node width in pixels.
@@ -44,6 +48,7 @@ impl Default for NodeEditorTheme {
     fn default() -> Self {
         Self {
             pin_color: Box::new(default_pin_color),
+            pin_type_color: Box::new(default_pin_type_color),
             header_color: Box::new(default_header_color),
             node_width: 180.0,
             header_height: 24.0,
@@ -61,6 +66,25 @@ impl Default for NodeEditorTheme {
             connection_color: Color32::from_rgb(180, 180, 180),
             connection_selected_color: Color32::WHITE,
         }
+    }
+}
+
+fn default_pin_type_color(data_type: &PinDataType) -> Color32 {
+    match data_type {
+        PinDataType::Image => Color32::from_rgb(238, 180, 109), // Orange
+        PinDataType::Scalar => Color32::from_rgb(109, 200, 238), // Cyan
+        PinDataType::Integer => Color32::from_rgb(109, 170, 238), // Blue-cyan
+        PinDataType::Boolean => Color32::from_rgb(238, 109, 130), // Red-pink
+        PinDataType::Vec2 => Color32::from_rgb(109, 238, 150),  // Green
+        PinDataType::Vec3 => Color32::from_rgb(120, 238, 180),  // Teal-green
+        PinDataType::Color => Color32::from_rgb(238, 238, 109), // Yellow
+        PinDataType::String => Color32::from_rgb(200, 200, 200), // White
+        PinDataType::Style => Color32::from_rgb(109, 238, 150), // Green
+        PinDataType::Shape => Color32::from_rgb(180, 109, 238), // Purple
+        PinDataType::Path => Color32::from_rgb(238, 170, 109),  // Orange
+        PinDataType::Enum => Color32::from_rgb(200, 160, 120),  // Tan
+        PinDataType::List => Color32::from_rgb(160, 200, 160),  // Pale green
+        PinDataType::Any => Color32::from_rgb(150, 150, 150),   // Grey
     }
 }
 

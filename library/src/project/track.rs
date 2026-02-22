@@ -15,6 +15,11 @@ pub struct TrackData {
     pub opacity: f64,
     #[serde(default = "default_visible")]
     pub visible: bool,
+    /// True for layer sub-tracks created by setup_clip_graph_nodes.
+    /// Layer tracks are internal containers (clip + graph nodes) and should
+    /// not be displayed as separate rows in the timeline.
+    #[serde(default)]
+    pub is_layer: bool,
 }
 
 fn default_opacity() -> f64 {
@@ -34,6 +39,7 @@ impl TrackData {
             blend_mode: BlendMode::default(),
             opacity: 1.0,
             visible: true,
+            is_layer: false,
         }
     }
 

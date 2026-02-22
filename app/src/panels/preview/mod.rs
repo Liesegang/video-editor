@@ -567,15 +567,15 @@ pub(crate) fn preview_panel(
                         y: position[1] as f64,
                     },
                     scale: library::runtime::transform::Scale {
-                        x: scale[0] as f64,
-                        y: scale[1] as f64,
+                        x: scale[0] as f64 / 100.0,
+                        y: scale[1] as f64 / 100.0,
                     },
                     rotation: rotation as f64,
                     anchor: library::runtime::transform::Position {
                         x: anchor[0] as f64,
                         y: anchor[1] as f64,
                     },
-                    opacity: opacity as f64,
+                    opacity: opacity as f64 / 100.0,
                 };
 
                 let content_bounds = if let (Some(w), Some(h)) = (width, height) {

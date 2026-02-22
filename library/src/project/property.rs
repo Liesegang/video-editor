@@ -123,6 +123,57 @@ impl PropertyValue {
     }
 }
 
+impl std::fmt::Display for PropertyValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PropertyValue::Number(n) => write!(f, "{:.2}", n.into_inner()),
+            PropertyValue::Integer(i) => write!(f, "{}", i),
+            PropertyValue::String(s) => write!(f, "{}", s),
+            PropertyValue::Boolean(b) => write!(f, "{}", b),
+            PropertyValue::Vec2(v) => {
+                write!(f, "({:.1}, {:.1})", v.x.into_inner(), v.y.into_inner())
+            }
+            PropertyValue::Vec3(v) => write!(
+                f,
+                "({:.1}, {:.1}, {:.1})",
+                v.x.into_inner(),
+                v.y.into_inner(),
+                v.z.into_inner()
+            ),
+            PropertyValue::Vec4(v) => write!(
+                f,
+                "({:.1}, {:.1}, {:.1}, {:.1})",
+                v.x.into_inner(),
+                v.y.into_inner(),
+                v.z.into_inner(),
+                v.w.into_inner()
+            ),
+            PropertyValue::Color(c) => write!(f, "#{:02x}{:02x}{:02x}{:02x}", c.r, c.g, c.b, c.a),
+            PropertyValue::Array(a) => write!(f, "[{}]", a.len()),
+            PropertyValue::Map(m) => write!(f, "{{{}}}", m.len()),
+        }
+    }
+}
+
+impl PropertyValue {
+    /// Parse a string into a PropertyValue, trying number first, then bool, then string.
+    pub fn from_display_str(s: &str) -> Self {
+        let trimmed = s.trim();
+        if let Ok(n) = trimmed.parse::<f64>() {
+            return PropertyValue::Number(OrderedFloat(n));
+        }
+        if let Ok(i) = trimmed.parse::<i64>() {
+            return PropertyValue::Integer(i);
+        }
+        match trimmed {
+            "true" => return PropertyValue::Boolean(true),
+            "false" => return PropertyValue::Boolean(false),
+            _ => {}
+        }
+        PropertyValue::String(trimmed.to_string())
+    }
+}
+
 impl From<f32> for PropertyValue {
     fn from(value: f32) -> Self {
         PropertyValue::Number(OrderedFloat(value as f64))
@@ -449,6 +500,15 @@ pub struct Keyframe {
 }
 
 impl Property {
+    /// Get a display-friendly string of this property's current value.
+    pub fn display_value(&self) -> String {
+        if let Some(val) = self.value() {
+            val.to_string()
+        } else {
+            "...".to_string()
+        }
+    }
+
     pub fn constant(value: PropertyValue) -> Self {
         Self {
             evaluator: "constant".to_string(),
@@ -830,6 +890,24 @@ pub enum PropertyUiType {
     Font,
 }
 
+impl PropertyUiType {
+    /// Returns the corresponding PinDataType for this UI type.
+    pub fn pin_data_type(&self) -> crate::project::connection::PinDataType {
+        use crate::project::connection::PinDataType;
+        match self {
+            Self::Float { .. } => PinDataType::Scalar,
+            Self::Integer { .. } => PinDataType::Integer,
+            Self::Color => PinDataType::Color,
+            Self::Text | Self::MultilineText | Self::Font => PinDataType::String,
+            Self::Bool => PinDataType::Boolean,
+            Self::Vec2 { .. } => PinDataType::Vec2,
+            Self::Vec3 { .. } => PinDataType::Vec3,
+            Self::Vec4 { .. } => PinDataType::Scalar,
+            Self::Dropdown { .. } => PinDataType::Enum,
+        }
+    }
+}
+
 /// Defines a property with its metadata for UI rendering
 #[derive(Debug, Clone)]
 pub struct PropertyDefinition {
@@ -890,5 +968,50 @@ impl PropertyDefinition {
             );
         }
         self.default_value = value;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::connection::PinDataType;
+
+    #[test]
+    fn test_property_ui_type_pin_data_type() {
+        assert_eq!(
+            PropertyUiType::Float {
+                min: 0.0,
+                max: 1.0,
+                step: 0.1,
+                suffix: "".into(),
+                min_hard_limit: false,
+                max_hard_limit: false,
+            }
+            .pin_data_type(),
+            PinDataType::Scalar
+        );
+        assert_eq!(PropertyUiType::Color.pin_data_type(), PinDataType::Color);
+        assert_eq!(PropertyUiType::Bool.pin_data_type(), PinDataType::Boolean);
+        assert_eq!(
+            PropertyUiType::Vec2 { suffix: "".into() }.pin_data_type(),
+            PinDataType::Vec2
+        );
+        assert_eq!(PropertyUiType::Font.pin_data_type(), PinDataType::String);
+        assert_eq!(PropertyUiType::Text.pin_data_type(), PinDataType::String);
+        assert_eq!(
+            PropertyUiType::Dropdown { options: vec![] }.pin_data_type(),
+            PinDataType::Enum
+        );
+        assert_eq!(
+            PropertyUiType::Integer {
+                min: 0,
+                max: 100,
+                suffix: "".into(),
+                min_hard_limit: false,
+                max_hard_limit: false,
+            }
+            .pin_data_type(),
+            PinDataType::Integer
+        );
     }
 }

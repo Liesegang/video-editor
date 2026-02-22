@@ -35,7 +35,6 @@ enum RenderRequest {
 }
 
 pub struct RenderResult {
-    pub(crate) frame_hash: u64,
     pub output: RenderOutput,
     pub region: Option<Region>,
 }
@@ -133,6 +132,15 @@ impl RenderServer {
 
                         renderer.clear().ok();
 
+                        log::debug!(
+                            "[RenderServer] Rendering comp={} frame={} nodes={} connections={} scale={}",
+                            params.composition_id,
+                            params.frame_number,
+                            params.project.nodes.len(),
+                            params.project.connections.len(),
+                            params.render_scale,
+                        );
+
                         let property_evaluators = plugin_manager.get_property_evaluators();
 
                         match eval_engine.evaluate_composition(
@@ -148,7 +156,6 @@ impl RenderServer {
                         ) {
                             Ok(output) => {
                                 let _ = tx_result.send(RenderResult {
-                                    frame_hash: 0,
                                     output,
                                     region: params.region,
                                 });

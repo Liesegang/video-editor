@@ -15,6 +15,6 @@ pub mod widget;
 
 pub use state::NodeEditorState;
 pub use theme::NodeEditorTheme;
-pub use traits::{NodeEditorDataSource, NodeEditorMutator};
+pub use traits::{NodeEditorDataSource, NodeEditorMutator, PinEditValue, PinPropertyInfo};
 pub use types::*;
 pub use widget::NodeEditorWidget;

@@ -48,10 +48,3 @@ where
 {
     measure(label, Level::Info, f)
 }
-
-pub fn measure_debug<T, F>(label: impl Into<Cow<'static, str>>, f: F) -> T
-where
-    F: FnOnce() -> T,
-{
-    measure(label, Level::Debug, f)
-}

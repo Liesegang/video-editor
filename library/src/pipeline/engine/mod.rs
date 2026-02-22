@@ -34,20 +34,10 @@ impl EvalEngine {
 
     /// Create an engine with all built-in evaluators registered.
     pub fn with_default_evaluators() -> Self {
-        use super::compositing::TransformEvaluator;
-        use super::effects::EffectEvaluator;
-        use super::processing::DecoratorEvaluator;
-        use super::processing::EffectorEvaluator;
-        use super::processing::StyleEvaluator;
-        use super::sources::ClipEvaluator;
-
         let mut engine = Self::new();
-        engine.register(Box::new(ClipEvaluator));
-        engine.register(Box::new(EffectEvaluator));
-        engine.register(Box::new(StyleEvaluator));
-        engine.register(Box::new(EffectorEvaluator));
-        engine.register(Box::new(DecoratorEvaluator));
-        engine.register(Box::new(TransformEvaluator));
+        for evaluator in crate::nodes::all_evaluators() {
+            engine.register(evaluator);
+        }
         engine
     }
 
@@ -107,57 +97,96 @@ impl EvalEngine {
             .clone();
 
         if !track.visible {
+            log::debug!(
+                "[EvalEngine] Track {} '{}' hidden, skip",
+                track_id,
+                track.name
+            );
             return ctx.renderer.finalize();
         }
 
         // Layer container output: if there's a connection TO this track's image_out
         // (e.g. transform.image_out → layer.image_out), pull from the connected source.
         if let Some((source_id, source_pin)) = ctx.find_upstream(track_id, "image_out") {
+            log::debug!(
+                "[EvalEngine] Track {} '{}' pulling from {}.{}",
+                track_id,
+                track.name,
+                source_id,
+                source_pin
+            );
             let value = ctx.evaluate_pin(source_id, &source_pin)?;
             return match value.into_image() {
                 Some(img) => {
+                    log::debug!("[EvalEngine] Track {} got image from upstream", track_id);
                     let identity = crate::runtime::transform::Transform::default();
                     ctx.renderer.draw_layer(&img, &identity)?;
                     ctx.renderer.finalize()
                 }
-                None => ctx.renderer.finalize(),
+                None => {
+                    log::warn!("[EvalEngine] Track {} upstream returned None", track_id);
+                    ctx.renderer.finalize()
+                }
             };
         }
 
         // No connection → composite children (root track behavior)
         let child_ids = track.child_ids.clone();
+        log::debug!(
+            "[EvalEngine] Track {} '{}' compositing {} children (frame={})",
+            track_id,
+            track.name,
+            child_ids.len(),
+            ctx.frame_number
+        );
 
         for child_id in &child_ids {
             match ctx.project.get_node(*child_id).cloned() {
                 Some(Node::Clip(clip)) => {
-                    // Skip audio clips and clips outside the current frame range
                     if clip.kind == TrackClipKind::Audio {
                         continue;
                     }
                     if ctx.frame_number < clip.in_frame || ctx.frame_number > clip.out_frame {
+                        log::debug!(
+                            "[EvalEngine] Clip {} ({:?}) out of range: frame={} clip=[{}..{}]",
+                            child_id,
+                            clip.kind,
+                            ctx.frame_number,
+                            clip.in_frame,
+                            clip.out_frame
+                        );
                         continue;
                     }
 
-                    // Evaluate the clip's primary output, then follow the image chain
-                    // (clip → fill → transform → effects) via downstream connections.
+                    log::debug!(
+                        "[EvalEngine] Evaluating clip {} ({:?}) [{}..{}]",
+                        child_id,
+                        clip.kind,
+                        clip.in_frame,
+                        clip.out_frame
+                    );
+
                     let output = self.resolve_image_chain(*child_id, &clip.kind, ctx)?;
                     if let Some(image) = output {
+                        log::debug!("[EvalEngine] Clip {} produced image", child_id);
                         let identity = crate::runtime::transform::Transform::default();
                         ctx.renderer.draw_layer(&image, &identity)?;
+                    } else {
+                        log::warn!("[EvalEngine] Clip {} produced no image", child_id);
                     }
                 }
                 Some(Node::Track(_)) => {
-                    // Recursive track evaluation
+                    log::debug!("[EvalEngine] Evaluating sub-track {}", child_id);
                     let sub_output = self.evaluate_track(*child_id, ctx)?;
-                    // TODO: Apply track.blend_mode and track.opacity when compositing
                     let identity = crate::runtime::transform::Transform::default();
                     ctx.renderer.draw_layer(&sub_output, &identity)?;
                 }
-                Some(Node::Graph(_)) => {
-                    // Graph nodes in a track's child_ids are pulled by their connected clips,
-                    // not evaluated independently during track traversal.
+                Some(Node::Graph(g)) => {
+                    log::trace!("[EvalEngine] Skip graph node {} ({})", child_id, g.type_id);
                 }
-                None => {}
+                None => {
+                    log::warn!("[EvalEngine] Child {} not found in nodes", child_id);
+                }
             }
         }
 

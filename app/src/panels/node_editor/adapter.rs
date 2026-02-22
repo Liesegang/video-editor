@@ -1,12 +1,36 @@
 //! Adapter connecting library types to egui_node_editor traits.
 
 use egui_node_editor::{
-    ConnectionView, NodeDisplay, NodeEditorDataSource, NodeEditorMutator, NodeTypeInfo, PinInfo,
+    ConnectionView, NodeDisplay, NodeEditorDataSource, NodeEditorMutator, NodeTypeInfo,
+    PinDataType, PinEditValue, PinInfo, PinPropertyInfo,
 };
 use library::plugin::PluginManager;
+use library::project::connection::PinDataType as LibPinDataType;
 use library::project::node::Node;
 use library::project::project::Project;
 use uuid::Uuid;
+
+/// Convert library PinDataType to editor PinDataType.
+fn convert_pin_data_type(lib_type: &LibPinDataType) -> PinDataType {
+    match lib_type {
+        LibPinDataType::Image => PinDataType::Image,
+        LibPinDataType::Scalar => PinDataType::Scalar,
+        LibPinDataType::Integer => PinDataType::Integer,
+        LibPinDataType::Boolean => PinDataType::Boolean,
+        LibPinDataType::Vec2 => PinDataType::Vec2,
+        LibPinDataType::Vec3 => PinDataType::Vec3,
+        LibPinDataType::Color => PinDataType::Color,
+        LibPinDataType::String => PinDataType::String,
+        LibPinDataType::Path => PinDataType::Path,
+        LibPinDataType::Enum => PinDataType::Enum,
+        LibPinDataType::Style => PinDataType::Style,
+        LibPinDataType::Shape => PinDataType::Shape,
+        LibPinDataType::List => PinDataType::List,
+        LibPinDataType::Any => PinDataType::Any,
+        // Map remaining library types to closest match
+        _ => PinDataType::Any,
+    }
+}
 
 /// Read-only data source backed by a Project + PluginManager.
 pub(super) struct VideoEditorDataSource<'a> {
@@ -73,12 +97,20 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
                 {
                     def.inputs
                         .iter()
-                        .map(|p| PinInfo::input(&p.name, &p.display_name))
-                        .chain(
-                            def.outputs
-                                .iter()
-                                .map(|p| PinInfo::output(&p.name, &p.display_name)),
-                        )
+                        .map(|p| {
+                            PinInfo::input(
+                                &p.name,
+                                &p.display_name,
+                                convert_pin_data_type(&p.data_type),
+                            )
+                        })
+                        .chain(def.outputs.iter().map(|p| {
+                            PinInfo::output(
+                                &p.name,
+                                &p.display_name,
+                                convert_pin_data_type(&p.data_type),
+                            )
+                        }))
                         .collect()
                 } else {
                     vec![]
@@ -98,11 +130,11 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
                 // Output pin depends on clip kind
                 match clip.kind {
                     TrackClipKind::Text | TrackClipKind::Shape => {
-                        pins.push(PinInfo::output("shape_out", "Shape"));
+                        pins.push(PinInfo::output("shape_out", "Shape", PinDataType::Shape));
                     }
                     TrackClipKind::Audio => {}
                     _ => {
-                        pins.push(PinInfo::output("image_out", "Image"));
+                        pins.push(PinInfo::output("image_out", "Image", PinDataType::Image));
                     }
                 }
 
@@ -113,18 +145,17 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
                     if def.name() == "file_path" {
                         continue;
                     }
-                    pins.push(PinInfo::input(def.name(), def.label()));
-                }
-
-                // Shape output pin (for text/shape ensemble chain)
-                if clip.kind == TrackClipKind::Text || clip.kind == TrackClipKind::Shape {
-                    pins.push(PinInfo::output("shape_out", "Shape"));
+                    pins.push(PinInfo::input(
+                        def.name(),
+                        def.label(),
+                        convert_pin_data_type(&def.ui_type().pin_data_type()),
+                    ));
                 }
 
                 Some(NodeDisplay::Leaf { kind_label, pins })
             }
             Node::Track(track) => {
-                let pins = vec![PinInfo::output("image_out", "Image")];
+                let pins = vec![PinInfo::output("image_out", "Image", PinDataType::Image)];
                 Some(NodeDisplay::Container {
                     name: track.name.clone(),
                     child_ids: track.child_ids.clone(),
@@ -158,11 +189,110 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
 
     fn is_node_active(&self, id: Uuid) -> bool {
         match self.project.get_node(id) {
-            Some(Node::Clip(clip)) => {
-                self.current_frame >= clip.in_frame && self.current_frame <= clip.out_frame
+            Some(Node::Track(track)) if track.is_layer => {
+                // Layer timing is derived from its child clips
+                track.child_ids.iter().any(|child_id| {
+                    if let Some(Node::Clip(clip)) = self.project.get_node(*child_id) {
+                        self.current_frame >= clip.in_frame && self.current_frame <= clip.out_frame
+                    } else {
+                        false
+                    }
+                })
             }
+            // Clips are always active — the layer container handles grayout
             _ => true,
         }
+    }
+
+    fn is_pin_connected(&self, node_id: Uuid, pin_name: &str) -> bool {
+        self.project
+            .connections
+            .iter()
+            .any(|c| c.to.node_id == node_id && c.to.pin_name == pin_name)
+    }
+
+    fn get_pin_value_display(&self, node_id: Uuid, pin_name: &str) -> Option<String> {
+        // For graph nodes, show property value
+        if let Some(graph_node) = self.project.get_graph_node(node_id) {
+            if let Some(prop) = graph_node.properties.get(pin_name) {
+                return Some(prop.display_value());
+            }
+        }
+        // For clips, show clip property value
+        if let Some(clip) = self.project.get_clip(node_id) {
+            if let Some(prop) = clip.properties.get(pin_name) {
+                return Some(prop.display_value());
+            }
+        }
+        None
+    }
+
+    fn get_pin_property(&self, node_id: Uuid, pin_name: &str) -> Option<PinPropertyInfo> {
+        use library::project::property::PropertyValue;
+
+        // Try graph node first, then clip
+        let prop_value = self
+            .project
+            .get_graph_node(node_id)
+            .and_then(|g| g.properties.get(pin_name))
+            .and_then(|p| p.value())
+            .or_else(|| {
+                self.project
+                    .get_clip(node_id)
+                    .and_then(|c| c.properties.get(pin_name))
+                    .and_then(|p| p.value())
+            })?;
+
+        let edit_value = match prop_value {
+            PropertyValue::Number(n) => PinEditValue::Scalar(n.into_inner()),
+            PropertyValue::Integer(n) => PinEditValue::Integer(*n),
+            PropertyValue::Boolean(b) => PinEditValue::Boolean(*b),
+            PropertyValue::String(s) => PinEditValue::String(s.clone()),
+            PropertyValue::Color(c) => PinEditValue::Color([
+                c.r as f32 / 255.0,
+                c.g as f32 / 255.0,
+                c.b as f32 / 255.0,
+                c.a as f32 / 255.0,
+            ]),
+            PropertyValue::Vec2(v) => PinEditValue::Vec2(v.x.into_inner(), v.y.into_inner()),
+            PropertyValue::Vec3(v) => {
+                PinEditValue::Vec3(v.x.into_inner(), v.y.into_inner(), v.z.into_inner())
+            }
+            _ => PinEditValue::None,
+        };
+
+        // Determine data type from pin definition or node definition
+        let data_type = self.get_pin_data_type(node_id, pin_name);
+
+        Some(PinPropertyInfo {
+            value: edit_value,
+            data_type,
+        })
+    }
+}
+
+impl VideoEditorDataSource<'_> {
+    fn get_pin_data_type(&self, node_id: Uuid, pin_name: &str) -> PinDataType {
+        // Try graph node definition
+        if let Some(graph_node) = self.project.get_graph_node(node_id) {
+            if let Some(def) = self.plugin_manager.get_node_type(&graph_node.type_id) {
+                for p in &def.inputs {
+                    if p.name == pin_name {
+                        return convert_pin_data_type(&p.data_type);
+                    }
+                }
+            }
+        }
+        // Try clip property definitions
+        if let Some(clip) = self.project.get_clip(node_id) {
+            let defs = library::project::clip::TrackClip::get_definitions_for_kind(&clip.kind);
+            for def in &defs {
+                if def.name() == pin_name {
+                    return convert_pin_data_type(&def.ui_type().pin_data_type());
+                }
+            }
+        }
+        PinDataType::Any
     }
 }
 
@@ -203,6 +333,20 @@ pub(super) struct VideoEditorMutator<'a> {
 }
 
 impl NodeEditorMutator for VideoEditorMutator<'_> {
+    fn set_pin_value(
+        &mut self,
+        node_id: Uuid,
+        pin_name: &str,
+        value_str: &str,
+    ) -> Result<(), String> {
+        use library::project::property::PropertyValue;
+        // Try to parse the string as a property value and update
+        let value = PropertyValue::from_display_str(value_str);
+        self.project_service
+            .update_graph_node_property(node_id, pin_name, 0.0, value, None)
+            .map_err(|e| e.to_string())
+    }
+
     fn add_node(&mut self, container_id: Uuid, type_id: &str) -> Result<Uuid, String> {
         // Resolve composition ID to root_track_id if needed
         let actual_container = self

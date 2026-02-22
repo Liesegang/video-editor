@@ -8,9 +8,9 @@ use uuid::Uuid;
 use super::svg_builder::build_rect_svg;
 use crate::error::LibraryError;
 use crate::pipeline::context::EvalContext;
+use crate::pipeline::ensemble::decorators::{BackplateShape, BackplateTarget};
 use crate::pipeline::evaluator::NodeEvaluator;
 use crate::pipeline::output::{DecorationShape, PinValue, ShapeData};
-use crate::pipeline::processing::ensemble::decorators::{BackplateShape, BackplateTarget};
 use crate::project::node::Node;
 use crate::runtime::color::Color;
 
@@ -92,7 +92,6 @@ impl NodeEvaluator for DecoratorEvaluator {
 
                         match target {
                             BackplateTarget::Char => {
-                                // Add backplate behind each character
                                 for group in &mut groups {
                                     let rect_path = build_rect_svg(
                                         group.base_position.0 - padding,
@@ -110,7 +109,6 @@ impl NodeEvaluator for DecoratorEvaluator {
                                 }
                             }
                             BackplateTarget::Line => {
-                                // Add backplate behind each line
                                 for line_info in &lines {
                                     let rect_path = build_rect_svg(
                                         line_info.bounds.0 - padding,
@@ -120,7 +118,6 @@ impl NodeEvaluator for DecoratorEvaluator {
                                         &backplate_shape,
                                         radius,
                                     );
-                                    // Add to first group of the line
                                     if let Some(first_idx) = line_info.group_range.clone().next() {
                                         if let Some(group) = groups.get_mut(first_idx) {
                                             group.decorations.push(DecorationShape {
@@ -133,7 +130,6 @@ impl NodeEvaluator for DecoratorEvaluator {
                                 }
                             }
                             BackplateTarget::Block | BackplateTarget::Parts => {
-                                // Add backplate behind entire text block
                                 let rect_path = build_rect_svg(
                                     bounds.0 - padding,
                                     bounds.1 - padding,
