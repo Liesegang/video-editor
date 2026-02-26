@@ -27,7 +27,7 @@ impl ProjectModel {
     }
 
     pub fn new(project: Arc<Project>, composition_index: usize) -> Result<Self, LibraryError> {
-        if project.compositions.get(composition_index).is_none() {
+        if project.all_compositions().nth(composition_index).is_none() {
             return Err(LibraryError::project(format!(
                 "Invalid composition index {}",
                 composition_index
@@ -49,6 +49,9 @@ impl ProjectModel {
     }
 
     pub fn composition(&self) -> &Composition {
-        &self.project.compositions[self.composition_index]
+        self.project
+            .all_compositions()
+            .nth(self.composition_index)
+            .unwrap()
     }
 }

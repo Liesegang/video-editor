@@ -1,6 +1,6 @@
-use library::project::clip::TrackClip;
 use library::project::node::Node;
 use library::project::project::Project;
+use library::project::source::SourceData;
 use library::project::track::TrackData;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -15,9 +15,9 @@ pub(in crate::panels::timeline) enum DisplayRow<'a> {
         is_expanded: bool,
         visible_row_index: usize,
     },
-    /// A clip row (shown when parent track is expanded)
-    ClipRow {
-        clip: &'a TrackClip,
+    /// A source row (shown when parent track is expanded)
+    SourceRow {
+        source: &'a SourceData,
         parent_track: &'a TrackData,
         depth: usize,
         visible_row_index: usize,
@@ -31,7 +31,7 @@ impl<'a> DisplayRow<'a> {
             DisplayRow::TrackHeader {
                 visible_row_index, ..
             } => *visible_row_index,
-            DisplayRow::ClipRow {
+            DisplayRow::SourceRow {
                 visible_row_index, ..
             } => *visible_row_index,
         }
@@ -40,15 +40,15 @@ impl<'a> DisplayRow<'a> {
     pub(in crate::panels::timeline) fn track_id(&self) -> Uuid {
         match self {
             DisplayRow::TrackHeader { track, .. } => track.id,
-            DisplayRow::ClipRow { parent_track, .. } => parent_track.id,
+            DisplayRow::SourceRow { parent_track, .. } => parent_track.id,
         }
     }
 }
 
-/// Flatten tracks into display rows using the new Node-based structure
+/// Flatten tracks into display rows using the Node-based structure
 /// - Track header always shown
-/// - When collapsed: clips are drawn on the track header row (handled by clips.rs)
-/// - When expanded: each clip gets its own row below the header
+/// - When collapsed: sources are drawn on the track header row (handled by layers.rs)
+/// - When expanded: each source gets its own row below the header
 pub(in crate::panels::timeline) fn flatten_tracks_to_rows<'a>(
     project: &'a Project,
     root_track_ids: &[Uuid],
@@ -91,9 +91,9 @@ pub(in crate::panels::timeline) fn flatten_tracks_to_rows<'a>(
             // Iterate in reverse: later children render on top, so show them first
             for (child_index, child_id) in track.child_ids.iter().enumerate().rev() {
                 match project.get_node(*child_id) {
-                    Some(Node::Clip(clip)) => {
-                        rows.push(DisplayRow::ClipRow {
-                            clip,
+                    Some(Node::Source(source)) => {
+                        rows.push(DisplayRow::SourceRow {
+                            source,
                             parent_track: track,
                             depth: if hide_header { depth } else { depth + 1 },
                             visible_row_index: *current_row_index,
@@ -102,26 +102,64 @@ pub(in crate::panels::timeline) fn flatten_tracks_to_rows<'a>(
                         *current_row_index += 1;
                     }
                     Some(Node::Track(sub_track)) => {
-                        // Layer sub-tracks (created by setup_clip_graph_nodes)
-                        // are internal containers — skip their header and show
-                        // their clips at the parent track level.
-                        let hide_layer_header = sub_track.is_layer;
                         process_track(
                             project,
                             sub_track.id,
                             expanded_tracks,
-                            if hide_header || hide_layer_header {
-                                depth
-                            } else {
-                                depth + 1
-                            },
+                            if hide_header { depth } else { depth + 1 },
                             rows,
                             current_row_index,
-                            hide_layer_header,
+                            false,
+                        );
+                    }
+                    Some(Node::Layer(_layer)) => {
+                        // Layer containers are internal — skip their header and show
+                        // their sources at the parent track level.
+                        process_layer(
+                            project,
+                            *child_id,
+                            track,
+                            depth,
+                            hide_header,
+                            child_index,
+                            rows,
+                            current_row_index,
                         );
                     }
                     _ => {}
                 }
+            }
+        }
+    }
+
+    fn process_layer<'a>(
+        project: &'a Project,
+        layer_id: Uuid,
+        parent_track: &'a TrackData,
+        depth: usize,
+        parent_hides_header: bool,
+        child_index: usize,
+        rows: &mut Vec<DisplayRow<'a>>,
+        current_row_index: &mut usize,
+    ) {
+        let Some(layer) = project.get_layer(layer_id) else {
+            return;
+        };
+        // Show the layer's sources at the parent track level
+        for child_id in &layer.child_ids {
+            if let Some(Node::Source(source)) = project.get_node(*child_id) {
+                rows.push(DisplayRow::SourceRow {
+                    source,
+                    parent_track,
+                    depth: if parent_hides_header {
+                        depth
+                    } else {
+                        depth + 1
+                    },
+                    visible_row_index: *current_row_index,
+                    child_index,
+                });
+                *current_row_index += 1;
             }
         }
     }

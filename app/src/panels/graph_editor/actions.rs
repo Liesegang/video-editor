@@ -52,7 +52,7 @@ fn global_to_source_time(
     global_time: f64,
 ) -> f64 {
     if let Some(comp) = project.get_composition(comp_id) {
-        if let Some(clip) = project.get_clip(entity_id) {
+        if let Some(clip) = project.get_source(entity_id) {
             let in_time = clip.in_frame as f64 / comp.fps;
             let source_start = clip.source_begin_frame as f64 / clip.fps;
             return source_start + (global_time - in_time);
@@ -125,7 +125,7 @@ pub(super) fn process_action(
                 // Clip property - use flat lookup
                 let mut current_pv = None;
                 if let Ok(proj) = project.read() {
-                    if let Some(clip) = proj.get_clip(entity_id) {
+                    if let Some(clip) = proj.get_source(entity_id) {
                         if let Some(prop) = clip.properties.get(base_name) {
                             let keyframes = prop.keyframes();
                             let mut sorted_kf = keyframes.clone();
@@ -193,7 +193,7 @@ pub(super) fn process_action(
 
             if let Ok(proj) = project.read() {
                 if let Some(comp) = proj.get_composition(comp_id) {
-                    if let Some(entity) = proj.get_clip(entity_id) {
+                    if let Some(entity) = proj.get_source(entity_id) {
                         // Calculate source time from global time
                         eval_time = global_to_source_time(&proj, comp_id, entity_id, time);
 
@@ -357,7 +357,7 @@ pub(super) fn process_action(
 
             if let Ok(proj) = project.read() {
                 // Use flat O(1) lookup
-                if let Some(clip) = proj.get_clip(entity_id) {
+                if let Some(clip) = proj.get_source(entity_id) {
                     if parse_key(base_name).is_some() {
                         // TODO: Look up effect property keyframes from graph nodes
                     } else if parse_style_key(base_name).is_some() {

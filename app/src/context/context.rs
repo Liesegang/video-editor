@@ -85,10 +85,10 @@ impl EditorContext {
     ) -> Option<&'a Composition> {
         self.selection
             .composition_id
-            .and_then(|id| project.compositions.iter().find(|&c| c.id == id))
+            .and_then(|id| project.get_composition(id))
     }
 
-    pub(crate) fn select_clip(&mut self, entity_id: Uuid, track_id: Uuid) {
+    pub(crate) fn select_source(&mut self, entity_id: Uuid, track_id: Uuid) {
         self.selection.selected_entities.clear();
         self.selection.selected_entities.insert(entity_id);
         self.selection.last_selected_entity_id = Some(entity_id);
@@ -130,14 +130,14 @@ mod tests {
     // ── Domain: Single Selection (replace semantics) ──
 
     #[test]
-    fn select_clip_replaces_entire_selection() {
+    fn select_source_replaces_entire_selection() {
         let mut ctx = EditorContext::new(Uuid::new_v4());
         let entity_a = Uuid::new_v4();
         let entity_b = Uuid::new_v4();
         let track = Uuid::new_v4();
 
-        ctx.select_clip(entity_a, track);
-        ctx.select_clip(entity_b, track);
+        ctx.select_source(entity_a, track);
+        ctx.select_source(entity_b, track);
 
         assert!(
             !ctx.is_selected(entity_a),
@@ -148,12 +148,12 @@ mod tests {
     }
 
     #[test]
-    fn select_clip_updates_last_selected() {
+    fn select_source_updates_last_selected() {
         let mut ctx = EditorContext::new(Uuid::new_v4());
         let entity = Uuid::new_v4();
         let track = Uuid::new_v4();
 
-        ctx.select_clip(entity, track);
+        ctx.select_source(entity, track);
 
         assert_eq!(ctx.selection.last_selected_entity_id, Some(entity));
         assert_eq!(ctx.selection.last_selected_track_id, Some(track));
@@ -168,7 +168,7 @@ mod tests {
         let entity_b = Uuid::new_v4();
         let track = Uuid::new_v4();
 
-        ctx.select_clip(entity_a, track);
+        ctx.select_source(entity_a, track);
         ctx.add_selection(entity_b, track);
 
         assert!(ctx.is_selected(entity_a));
@@ -197,7 +197,7 @@ mod tests {
         let entity = Uuid::new_v4();
         let track = Uuid::new_v4();
 
-        ctx.select_clip(entity, track);
+        ctx.select_source(entity, track);
         ctx.toggle_selection(entity, track);
 
         assert!(!ctx.is_selected(entity));
@@ -209,7 +209,7 @@ mod tests {
         let entity = Uuid::new_v4();
         let track = Uuid::new_v4();
 
-        ctx.select_clip(entity, track);
+        ctx.select_source(entity, track);
         ctx.toggle_selection(entity, track);
 
         assert_eq!(ctx.selection.last_selected_entity_id, None);
@@ -223,7 +223,7 @@ mod tests {
         let entity_b = Uuid::new_v4();
         let track = Uuid::new_v4();
 
-        ctx.select_clip(entity_a, track);
+        ctx.select_source(entity_a, track);
         ctx.add_selection(entity_b, track);
         // entity_b is now the primary (last selected)
         ctx.toggle_selection(entity_b, track);
@@ -266,7 +266,7 @@ mod tests {
         let track = Uuid::new_v4();
 
         // Start with entity_a selected, simulate preview drag
-        ctx.select_clip(entity_a, track);
+        ctx.select_source(entity_a, track);
         let mut positions = std::collections::HashMap::new();
         positions.insert(entity_a, [100.0_f32, 200.0]);
         ctx.interaction.preview.body_drag_state = Some(BodyDragState {
@@ -275,7 +275,7 @@ mod tests {
         });
 
         // Timeline changes selection to entity_b
-        ctx.select_clip(entity_b, track);
+        ctx.select_source(entity_b, track);
 
         // body_drag_state still references entity_a, which is no longer selected
         let drag_state = ctx.interaction.preview.body_drag_state.as_ref().unwrap();
@@ -298,7 +298,7 @@ mod tests {
         let entity_a = Uuid::new_v4();
         let track = Uuid::new_v4();
 
-        ctx.select_clip(entity_a, track);
+        ctx.select_source(entity_a, track);
         let mut positions = std::collections::HashMap::new();
         positions.insert(entity_a, [100.0_f32, 200.0]);
         ctx.interaction.preview.body_drag_state = Some(BodyDragState {

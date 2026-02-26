@@ -295,7 +295,7 @@ pub fn show_keyframe_dialog(
                     let mut current_pv = None;
                     if let Ok(proj) = project.read() {
                         // Use flat O(1) lookup
-                        if let Some(clip) = proj.get_clip(entity_id) {
+                        if let Some(clip) = proj.get_source(entity_id) {
                             if let Some((_eff_idx, _prop_key)) = parse_key(base_name) {
                                 // Embedded effects removed; graph node properties handled separately
                             } else if let Some((_style_idx, _prop_key)) = parse_style_key(base_name)

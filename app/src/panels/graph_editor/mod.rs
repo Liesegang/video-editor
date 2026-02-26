@@ -64,7 +64,7 @@ pub(crate) fn graph_editor_panel(ui: &mut Ui, ctx: &mut PanelContext, registry: 
             return;
         };
 
-        let composition = if let Some(c) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
+        let composition = if let Some(c) = proj_read.get_composition(comp_id) {
             c
         } else {
             return;
@@ -73,7 +73,7 @@ pub(crate) fn graph_editor_panel(ui: &mut Ui, ctx: &mut PanelContext, registry: 
         let track = proj_read.get_track(track_id);
         let _ = track; // Not needed directly anymore, using entity from project
 
-        let entity = if let Some(e) = proj_read.get_clip(entity_id) {
+        let entity = if let Some(e) = proj_read.get_source(entity_id) {
             e
         } else {
             return;

@@ -10,7 +10,7 @@ use crate::node_rendering::{self, NodeLayout};
 use crate::state::NodeEditorState;
 use crate::theme::NodeEditorTheme;
 use crate::traits::{NodeEditorDataSource, NodeEditorMutator};
-use crate::types::{ConnectionView, NodeDisplay, PinDataType, PinInfo};
+use crate::types::{ConnectionView, ContainerKind, NodeDisplay, PinDataType, PinInfo};
 
 // ---------------------------------------------------------------------------
 // PendingActions
@@ -417,6 +417,11 @@ impl<'a> NodeEditorWidget<'a> {
         let font = egui::FontId::proportional(9.0 * zoom);
         let editor_offset_x = self.theme.pin_radius * zoom + 4.0 * zoom + 50.0 * zoom;
 
+        // Scale widget fonts and spacing with zoom so DragValue/ComboBox/TextEdit match node text
+        ui.style_mut().override_font_id = Some(egui::FontId::proportional(10.0 * zoom));
+        ui.spacing_mut().interact_size = Vec2::new(40.0 * zoom, 18.0 * zoom);
+        ui.spacing_mut().button_padding = Vec2::new(4.0 * zoom, 1.0 * zoom);
+
         for ps in pin_screens {
             if ps.is_output {
                 continue;
@@ -563,7 +568,12 @@ impl<'a> NodeEditorWidget<'a> {
                 PinEditValue::String(mut val) => {
                     let w = 80.0 * zoom;
                     let rect = Rect::from_min_size(widget_pos, Vec2::new(w, 14.0 * zoom));
-                    let resp = ui.put(rect, egui::TextEdit::singleline(&mut val).desired_width(w));
+                    let resp = ui.put(
+                        rect,
+                        egui::TextEdit::singleline(&mut val)
+                            .font(font.clone())
+                            .desired_width(w),
+                    );
                     if resp.changed() {
                         pending.pin_value_changes.push((node_id, pin_name, val));
                     }
@@ -647,14 +657,23 @@ impl<'a> NodeEditorWidget<'a> {
                 display_name,
                 pins,
             } => (type_id.clone(), display_name.clone(), pins.clone()),
-            NodeDisplay::Container { name, pins, .. } => (
-                "track".to_string(),
-                format!("Track: {}", name),
-                pins.clone(),
-            ),
+            NodeDisplay::Container {
+                kind, name, pins, ..
+            } => {
+                let (type_id, prefix) = match kind {
+                    ContainerKind::Composition => ("composition", "Composition"),
+                    ContainerKind::Track => ("track", "Track"),
+                    ContainerKind::Layer => ("layer", "Layer"),
+                };
+                (
+                    type_id.to_string(),
+                    format!("{}: {}", prefix, name),
+                    pins.clone(),
+                )
+            }
             NodeDisplay::Leaf { kind_label, pins } => {
-                let type_id = format!("clip.{}", kind_label);
-                (type_id, format!("Clip ({})", kind_label), pins.clone())
+                let type_id = format!("source.{}", kind_label);
+                (type_id, format!("Source ({})", kind_label), pins.clone())
             }
         };
 
@@ -668,7 +687,13 @@ impl<'a> NodeEditorWidget<'a> {
 
         let input_pins: Vec<&PinInfo> = pins.iter().filter(|p| !p.is_output).collect();
         let output_pins: Vec<&PinInfo> = pins.iter().filter(|p| p.is_output).collect();
-        let pin_count = input_pins.len().max(output_pins.len());
+        let is_container = matches!(display, NodeDisplay::Container { .. });
+        // For containers, paired pins share rows — count only output pins.
+        let pin_count = if is_container {
+            output_pins.len()
+        } else {
+            input_pins.len().max(output_pins.len())
+        };
 
         // Initialize child positions early (needed for expanded height calculation)
         // Place new children below existing ones to avoid overlap.
@@ -730,7 +755,6 @@ impl<'a> NodeEditorWidget<'a> {
 
         let node_rect = Rect::from_min_size(screen_pos, Vec2::new(node_w, node_h));
         let pin_start_y = screen_pos.y + header_h + 4.0 * zoom;
-        let is_container = matches!(display, NodeDisplay::Container { .. });
         let is_selected = self.state.selected_nodes.contains(&node_id);
 
         // Push interaction BEFORE drawing children so .rev() finds children first.
@@ -781,6 +805,7 @@ impl<'a> NodeEditorWidget<'a> {
             node_id,
             &input_pins,
             &output_pins,
+            is_container,
             is_active,
             zoom,
             pin_screens,
@@ -880,9 +905,11 @@ impl<'a> NodeEditorWidget<'a> {
                 .unwrap_or(Pos2::ZERO);
             let node_h = if let Some(d) = source.get_node_display(cid) {
                 let pin_count = match &d {
-                    NodeDisplay::Graph { pins, .. }
-                    | NodeDisplay::Container { pins, .. }
-                    | NodeDisplay::Leaf { pins, .. } => {
+                    NodeDisplay::Container { pins, .. } => {
+                        // Containers: paired pins share rows
+                        pins.iter().filter(|p| p.is_output).count()
+                    }
+                    NodeDisplay::Graph { pins, .. } | NodeDisplay::Leaf { pins, .. } => {
                         let ic = pins.iter().filter(|p| !p.is_output).count();
                         let oc = pins.iter().filter(|p| p.is_output).count();
                         ic.max(oc)

@@ -10,11 +10,11 @@ use crate::command::{CommandId, CommandRegistry};
 use crate::widgets::viewport::{ViewportConfig, ViewportController, ViewportState};
 
 mod background;
-mod clip_interaction;
-pub(super) mod clips;
 mod context_menu;
 mod drag_and_drop;
 mod interactions;
+mod layer_interaction;
+pub(super) mod layers;
 
 struct TimelineViewportState<'a> {
     scroll_offset: &'a mut egui::Vec2,
@@ -46,7 +46,7 @@ impl<'a> ViewportState for TimelineViewportState<'a> {
     }
 }
 
-pub(super) fn show_clip_area(
+pub(super) fn show_layer_area(
     ui_content: &mut Ui,
     editor_context: &mut EditorContext,
     history_manager: &mut HistoryManager,
@@ -58,7 +58,7 @@ pub(super) fn show_clip_area(
     let row_height = geo.row_height;
     let track_spacing = geo.track_spacing;
     let composition_fps = geo.composition_fps;
-    let (content_rect_for_clip_area, response) =
+    let (content_rect, response) =
         ui_content.allocate_at_least(ui_content.available_size(), egui::Sense::hover());
 
     let is_dragging_item = editor_context.interaction.timeline.dragged_item.is_some();
@@ -68,15 +68,15 @@ pub(super) fn show_clip_area(
     let (root_track_ids, num_visible_tracks, current_comp_duration) = {
         let proj_read = match project.read() {
             Ok(p) => p,
-            Err(_) => return (content_rect_for_clip_area, response),
+            Err(_) => return (content_rect, response),
         };
 
         let mut root_ids: Vec<uuid::Uuid> = Vec::new();
         let mut comp_duration = 300.0;
 
         if let Some(comp_id) = selected_composition_id {
-            if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-                root_ids.push(comp.root_track_id);
+            if let Some(comp) = proj_read.get_composition(comp_id) {
+                root_ids.extend(comp.child_ids.iter().copied());
                 comp_duration = comp.duration;
             }
         }
@@ -93,11 +93,11 @@ pub(super) fn show_clip_area(
     }; // proj_read dropped here
 
     // ===== PHASE 2: Drawing and UI (no project lock held) =====
-    let painter = ui_content.painter_at(content_rect_for_clip_area);
+    let painter = ui_content.painter_at(content_rect);
 
     background::draw_track_backgrounds(
         &painter,
-        content_rect_for_clip_area,
+        content_rect,
         num_visible_tracks,
         geo,
         editor_context.timeline.scroll_offset,
@@ -108,7 +108,7 @@ pub(super) fn show_clip_area(
     const MAX_PIXELS_PER_FRAME_DESIRED: f32 = 20.0;
     let max_h_zoom = (MAX_PIXELS_PER_FRAME_DESIRED * composition_fps as f32)
         / editor_context.timeline.pixels_per_second;
-    let min_possible_zoom = content_rect_for_clip_area.width()
+    let min_possible_zoom = content_rect.width()
         / (current_comp_duration as f32 * editor_context.timeline.pixels_per_second);
     let min_h_zoom = min_possible_zoom.min(0.01);
 
@@ -128,7 +128,7 @@ pub(super) fn show_clip_area(
         min_v_zoom: 0.1,
         max_v_zoom: 10.0,
         max_scroll_y: (num_visible_tracks as f32 * (row_height + track_spacing)
-            - content_rect_for_clip_area.height())
+            - content_rect.height())
         .max(0.0),
     };
 
@@ -149,7 +149,7 @@ pub(super) fn show_clip_area(
     });
 
     let (_changed, vp_response) = controller.interact_with_rect(
-        content_rect_for_clip_area,
+        content_rect,
         &mut state,
         &mut editor_context.interaction.preview.handled_hand_tool_drag,
     );
@@ -172,7 +172,7 @@ pub(super) fn show_clip_area(
     interactions::handle_drag_drop_and_context_menu(
         ui_content,
         &vp_response,
-        content_rect_for_clip_area,
+        content_rect,
         editor_context,
         project,
         project_service,
@@ -181,10 +181,10 @@ pub(super) fn show_clip_area(
         num_visible_tracks,
     );
 
-    // ===== PHASE 4: Draw clips (separate read lock scope) =====
-    let clicked_on_entity = clips::draw_clips(
+    // ===== PHASE 4: Draw layers (separate read lock scope) =====
+    let clicked_on_entity = layers::draw_layers(
         ui_content,
-        content_rect_for_clip_area,
+        content_rect,
         editor_context,
         project_service,
         history_manager,
@@ -203,7 +203,7 @@ pub(super) fn show_clip_area(
             if let Some(current_pos) = ui_content.input(|i| i.pointer.interact_pos()) {
                 let selection_rect = egui::Rect::from_two_pos(start_pos, current_pos);
 
-                let painter = ui_content.painter_at(content_rect_for_clip_area);
+                let painter = ui_content.painter_at(content_rect);
                 painter.rect_stroke(
                     selection_rect,
                     0.0,
@@ -221,15 +221,15 @@ pub(super) fn show_clip_area(
             if let Some(current_pos) = ui_content.input(|i| i.pointer.interact_pos()) {
                 let selection_rect = egui::Rect::from_two_pos(start_pos, current_pos);
 
-                let found_clips = {
+                let found_layers = {
                     if let Ok(proj_read) = project.read() {
-                        clips::get_clips_in_box(
+                        layers::get_layers_in_box(
                             selection_rect,
                             editor_context,
                             &proj_read,
                             &root_track_ids,
                             geo,
-                            content_rect_for_clip_area.min.to_vec2(),
+                            content_rect.min.to_vec2(),
                         )
                     } else {
                         Vec::new()
@@ -238,7 +238,7 @@ pub(super) fn show_clip_area(
 
                 let action = crate::widgets::selection::get_box_action(
                     &ui_content.input(|i| i.modifiers),
-                    found_clips,
+                    found_layers,
                 );
 
                 match action {
@@ -297,5 +297,5 @@ pub(super) fn show_clip_area(
         editor_context.selection.last_selected_track_id = None;
     }
 
-    (content_rect_for_clip_area, response)
+    (content_rect, response)
 }

@@ -21,7 +21,7 @@ pub(super) fn show_timeline_ruler(
     let mut current_comp_duration = 300.0; // Default fallback
     if let Some(comp_id) = editor_context.selection.composition_id {
         if let Ok(proj_read) = project.read() {
-            if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
+            if let Some(comp) = proj_read.get_composition(comp_id) {
                 current_comp_duration = comp.duration;
             }
         }

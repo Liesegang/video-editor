@@ -1,15 +1,14 @@
 use crate::error::LibraryError;
 use crate::plugin::PluginManager;
 use crate::project::asset::Asset;
-use crate::project::clip::TrackClip;
-use crate::project::node::Node;
 use crate::project::project::{Composition, Project};
 use crate::project::property::PropertyValue;
 use crate::project::property::{PropertyDefinition, PropertyUiType};
+use crate::project::source::SourceData;
 use crate::project::track::TrackData;
 use crate::rendering::color::ColorSpaceManager;
 use crate::service::handlers;
-use crate::service::handlers::clip_factory::ClipFactory;
+use crate::service::handlers::layer_factory::LayerFactory;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -53,10 +52,8 @@ impl ProjectManager {
 
     pub fn create_new_project(&self) -> Result<(Uuid, Project), LibraryError> {
         let mut new_project = Project::new("New Project");
-        let (default_comp, root_track) =
-            Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
+        let default_comp = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
         let new_comp_id = default_comp.id;
-        new_project.add_node(Node::Track(root_track));
         new_project.add_composition(default_comp);
 
         let mut project_write = self.project.write().map_err(|e| {
@@ -67,9 +64,9 @@ impl ProjectManager {
         Ok((new_comp_id, new_project))
     }
 
-    // --- Clip Factory Methods (delegated to ClipFactory) ---
+    // --- Source builders (delegated to LayerFactory) ---
 
-    pub fn create_audio_clip(
+    pub fn build_audio_source(
         &self,
         reference_id: Option<Uuid>,
         file_path: &str,
@@ -78,8 +75,8 @@ impl ProjectManager {
         source_begin_frame: i64,
         duration_frame: u64,
         fps: f64,
-    ) -> TrackClip {
-        ClipFactory::create_audio_clip(
+    ) -> SourceData {
+        LayerFactory::build_audio_source(
             reference_id,
             file_path,
             in_frame,
@@ -90,7 +87,7 @@ impl ProjectManager {
         )
     }
 
-    pub fn create_video_clip(
+    pub fn build_video_source(
         &self,
         reference_id: Option<Uuid>,
         file_path: &str,
@@ -101,8 +98,8 @@ impl ProjectManager {
         fps: f64,
         _canvas_width: u32,
         _canvas_height: u32,
-    ) -> Result<TrackClip, LibraryError> {
-        Ok(ClipFactory::create_video_clip(
+    ) -> Result<SourceData, LibraryError> {
+        Ok(LayerFactory::build_video_source(
             reference_id,
             file_path,
             in_frame,
@@ -113,7 +110,7 @@ impl ProjectManager {
         ))
     }
 
-    pub fn create_image_clip(
+    pub fn build_image_source(
         &self,
         reference_id: Option<Uuid>,
         file_path: &str,
@@ -122,8 +119,8 @@ impl ProjectManager {
         _canvas_width: u32,
         _canvas_height: u32,
         fps: f64,
-    ) -> Result<TrackClip, LibraryError> {
-        Ok(ClipFactory::create_image_clip(
+    ) -> Result<SourceData, LibraryError> {
+        Ok(LayerFactory::build_image_source(
             reference_id,
             file_path,
             in_frame,
@@ -132,7 +129,7 @@ impl ProjectManager {
         ))
     }
 
-    pub fn create_text_clip(
+    pub fn build_text_source(
         &self,
         text: &str,
         in_frame: u64,
@@ -140,32 +137,32 @@ impl ProjectManager {
         _canvas_width: u32,
         _canvas_height: u32,
         fps: f64,
-    ) -> Result<TrackClip, LibraryError> {
-        Ok(ClipFactory::create_text_clip(
+    ) -> Result<SourceData, LibraryError> {
+        Ok(LayerFactory::build_text_source(
             text, in_frame, out_frame, fps,
         ))
     }
 
-    pub fn create_shape_clip(
+    pub fn build_shape_source(
         &self,
         in_frame: u64,
         out_frame: u64,
         _canvas_width: u32,
         _canvas_height: u32,
         fps: f64,
-    ) -> Result<TrackClip, LibraryError> {
-        Ok(ClipFactory::create_shape_clip(in_frame, out_frame, fps))
+    ) -> Result<SourceData, LibraryError> {
+        Ok(LayerFactory::build_shape_source(in_frame, out_frame, fps))
     }
 
-    pub fn create_sksl_clip(
+    pub fn build_sksl_source(
         &self,
         in_frame: u64,
         out_frame: u64,
         _canvas_width: u32,
         _canvas_height: u32,
         fps: f64,
-    ) -> Result<TrackClip, LibraryError> {
-        Ok(ClipFactory::create_sksl_clip(in_frame, out_frame, fps))
+    ) -> Result<SourceData, LibraryError> {
+        Ok(LayerFactory::build_sksl_source(in_frame, out_frame, fps))
     }
 
     pub fn save_project(&self) -> Result<String, LibraryError> {
@@ -189,34 +186,34 @@ impl ProjectManager {
         handlers::asset_handler::AssetHandler::remove_asset(&self.project, asset_id)
     }
 
-    /// Remove all clips that reference the given entity from all tracks and nodes.
-    fn remove_referencing_clips(project: &mut Project, entity_id: Uuid) {
-        let clip_ids_to_remove: Vec<Uuid> = project
-            .all_clips()
-            .filter(|c| c.reference_id == Some(entity_id))
-            .map(|c| c.id)
+    /// Remove all sources that reference the given entity from all tracks and nodes.
+    fn remove_referencing_sources(project: &mut Project, entity_id: Uuid) {
+        let source_ids_to_remove: Vec<Uuid> = project
+            .all_sources()
+            .filter(|s| s.reference_id == Some(entity_id))
+            .map(|s| s.id)
             .collect();
 
-        for clip_id in &clip_ids_to_remove {
+        for source_id in &source_ids_to_remove {
             for track in project.all_tracks().map(|t| t.id).collect::<Vec<_>>() {
                 if let Some(t) = project.get_track_mut(track) {
-                    t.remove_child(*clip_id);
+                    t.remove_child(*source_id);
                 }
             }
-            project.remove_node(*clip_id);
+            project.remove_node(*source_id);
         }
     }
 
     pub fn remove_asset_fully(&self, asset_id: Uuid) -> Result<(), LibraryError> {
         let mut project_write = handlers::write_project(&self.project)?;
-        Self::remove_referencing_clips(&mut project_write, asset_id);
+        Self::remove_referencing_sources(&mut project_write, asset_id);
         project_write.assets.retain(|a| a.id != asset_id);
         Ok(())
     }
 
     pub fn remove_composition_fully(&self, comp_id: Uuid) -> Result<(), LibraryError> {
         let mut project_write = handlers::write_project(&self.project)?;
-        Self::remove_referencing_clips(&mut project_write, comp_id);
+        Self::remove_referencing_sources(&mut project_write, comp_id);
         project_write.compositions.retain(|c| c.id != comp_id);
         Ok(())
     }
@@ -379,10 +376,6 @@ impl ProjectManager {
         )
     }
 
-    // Add closure-based accessors (omitted for brevity, can restore if needed)
-    // Actually, ProjectService had `mutate_track` etc. which are useful helpers.
-    // I will include get_track and remove_track first.
-
     pub fn get_track(
         &self,
         composition_id: Uuid,
@@ -413,71 +406,48 @@ impl ProjectManager {
         handlers::track_handler::TrackHandler::rename_track(&self.project, track_id, new_name)
     }
 
-    pub fn add_clip_to_track(
+    pub fn add_layer_to_track(
         &self,
         composition_id: Uuid,
         track_id: Uuid,
-        clip: TrackClip,
+        source: SourceData,
         in_frame: u64,
         out_frame: u64,
         insert_index: Option<usize>,
     ) -> Result<Uuid, LibraryError> {
-        let clip_kind = clip.kind.clone();
-        let clip_id = handlers::clip_handler::ClipHandler::add_clip_to_track(
+        LayerFactory::create_layer(
             &self.project,
+            &self.plugin_manager,
             composition_id,
             track_id,
-            clip,
+            source,
             in_frame,
             out_frame,
             insert_index,
-        )?;
-
-        // Auto-create default graph nodes (transform, style.fill) for the new clip
-        if let Err(e) = handlers::clip_handler::ClipHandler::setup_clip_graph_nodes(
-            &self.project,
-            &self.plugin_manager,
-            track_id,
-            clip_id,
-            &clip_kind,
-        ) {
-            log::error!(
-                "Failed to setup graph nodes for clip {}. Rolling back clip addition: {}",
-                clip_id,
-                e
-            );
-            let _ = handlers::clip_handler::ClipHandler::remove_clip_from_track(
-                &self.project,
-                track_id,
-                clip_id,
-            );
-            return Err(e);
-        }
-
-        Ok(clip_id)
-    }
-
-    pub fn remove_clip_from_track(
-        &self,
-        track_id: Uuid,
-        clip_id: Uuid,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::remove_clip_from_track(
-            &self.project,
-            track_id,
-            clip_id,
         )
     }
 
-    pub fn update_track_clip_property(
+    pub fn remove_layer_from_track(
         &self,
-        clip_id: Uuid,
+        track_id: Uuid,
+        source_id: Uuid,
+    ) -> Result<(), LibraryError> {
+        handlers::source_handler::SourceHandler::remove_source_from_track(
+            &self.project,
+            track_id,
+            source_id,
+        )
+    }
+
+    pub fn update_source_property(
+        &self,
+        source_id: Uuid,
         property_key: &str,
         value: PropertyValue,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
+        handlers::source_handler::SourceHandler::update_target_property_or_keyframe(
             &self.project,
-            clip_id,
+            source_id,
             crate::project::property::PropertyTarget::Clip,
             property_key,
             0.0,
@@ -488,15 +458,15 @@ impl ProjectManager {
 
     pub fn update_property_or_keyframe(
         &self,
-        clip_id: Uuid,
+        source_id: Uuid,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
+        handlers::source_handler::SourceHandler::update_target_property_or_keyframe(
             &self.project,
-            clip_id,
+            source_id,
             crate::project::property::PropertyTarget::Clip,
             property_key,
             time,
@@ -507,7 +477,7 @@ impl ProjectManager {
 
     pub fn add_target_keyframe(
         &self,
-        clip_id: Uuid,
+        source_id: Uuid,
         target: crate::project::property::PropertyTarget,
         property_key: &str,
         time: f64,
@@ -516,7 +486,7 @@ impl ProjectManager {
     ) -> Result<(), LibraryError> {
         handlers::keyframe_handler::KeyframeHandler::add_keyframe(
             &self.project,
-            clip_id,
+            source_id,
             target,
             property_key,
             time,
@@ -527,7 +497,7 @@ impl ProjectManager {
 
     pub fn update_target_keyframe_by_index(
         &self,
-        clip_id: Uuid,
+        source_id: Uuid,
         target: crate::project::property::PropertyTarget,
         property_key: &str,
         keyframe_index: usize,
@@ -537,7 +507,7 @@ impl ProjectManager {
     ) -> Result<(), LibraryError> {
         handlers::keyframe_handler::KeyframeHandler::update_keyframe_by_index(
             &self.project,
-            clip_id,
+            source_id,
             target,
             property_key,
             keyframe_index,
@@ -549,14 +519,14 @@ impl ProjectManager {
 
     pub fn remove_target_keyframe_by_index(
         &self,
-        clip_id: Uuid,
+        source_id: Uuid,
         target: crate::project::property::PropertyTarget,
         property_key: &str,
         keyframe_index: usize,
     ) -> Result<(), LibraryError> {
         handlers::keyframe_handler::KeyframeHandler::remove_keyframe_by_index(
             &self.project,
-            clip_id,
+            source_id,
             target,
             property_key,
             keyframe_index,
@@ -565,16 +535,16 @@ impl ProjectManager {
 
     pub fn update_target_property_or_keyframe(
         &self,
-        clip_id: Uuid,
+        source_id: Uuid,
         target: crate::project::property::PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
+        handlers::source_handler::SourceHandler::update_target_property_or_keyframe(
             &self.project,
-            clip_id,
+            source_id,
             target,
             property_key,
             time,
@@ -597,7 +567,6 @@ impl ProjectManager {
         }
     }
 
-    // Copied metadata logic from ProjectService
     pub fn evaluate_property_value(
         &self,
         property: &crate::project::property::Property,
@@ -614,55 +583,67 @@ impl ProjectManager {
             .evaluate(property, time, &eval_ctx)
     }
 
-    pub fn move_clip_to_track(
+    pub fn move_layer_to_track(
         &self,
         composition_id: Uuid,
         source_track_id: Uuid,
-        clip_id: Uuid,
+        source_id: Uuid,
         target_track_id: Uuid,
         new_in_frame: u64,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::move_clip_to_track(
+        handlers::source_handler::SourceHandler::move_source_to_track(
             &self.project,
             composition_id,
             source_track_id,
-            clip_id,
+            source_id,
             target_track_id,
             new_in_frame,
         )
     }
 
-    pub fn move_clip_to_track_at_index(
+    pub fn move_layer_to_track_at_index(
         &self,
         composition_id: Uuid,
         source_track_id: Uuid,
-        clip_id: Uuid,
+        source_id: Uuid,
         target_track_id: Uuid,
         new_in_frame: u64,
         target_index: Option<usize>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::move_clip_to_track_at_index(
+        handlers::source_handler::SourceHandler::move_source_to_track_at_index(
             &self.project,
             composition_id,
             source_track_id,
-            clip_id,
+            source_id,
             target_track_id,
             new_in_frame,
             target_index,
         )
     }
 
+    /// Sync the parent Layer's in/out timing with its source's timing.
+    pub fn sync_layer_timing(&self, source_id: Uuid, in_frame: u64, out_frame: u64) {
+        if let Ok(mut proj) = self.project.write() {
+            if let Some(layer_id) = proj.find_parent_track(source_id) {
+                if let Some(layer) = proj.get_layer_mut(layer_id) {
+                    layer.in_frame = in_frame;
+                    layer.out_frame = out_frame;
+                }
+            }
+        }
+    }
+
     pub fn set_property_attribute(
         &self,
-        clip_id: Uuid,
+        source_id: Uuid,
         target: crate::project::property::PropertyTarget,
         property_key: &str,
         attribute_key: &str,
         attribute_value: PropertyValue,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::set_property_attribute(
+        handlers::source_handler::SourceHandler::set_property_attribute(
             &self.project,
-            clip_id,
+            source_id,
             target,
             property_key,
             attribute_key,
@@ -699,12 +680,12 @@ impl ProjectManager {
 
     pub fn reorder_effect_chain(
         &self,
-        clip_id: Uuid,
+        source_id: Uuid,
         new_order: &[Uuid],
     ) -> Result<(), LibraryError> {
         handlers::graph_handler::GraphHandler::reorder_effect_chain(
             &self.project,
-            clip_id,
+            source_id,
             new_order,
         )
     }
@@ -731,19 +712,19 @@ impl ProjectManager {
         &self,
         _comp_id: uuid::Uuid,
         _track_id: uuid::Uuid,
-        clip_id: uuid::Uuid,
+        source_id: uuid::Uuid,
     ) -> Vec<PropertyDefinition> {
         let project = self.project.read().unwrap();
 
-        let clip = if let Some(c) = project.get_clip(clip_id) {
-            c.clone()
+        let source = if let Some(s) = project.get_source(source_id) {
+            s.clone()
         } else {
             return Vec::new();
         };
 
-        let mut definitions = TrackClip::get_definitions_for_kind(&clip.kind);
+        let mut definitions = SourceData::get_definitions_for_kind(&source.kind);
 
-        if matches!(clip.kind, crate::project::clip::TrackClipKind::Video) {
+        if matches!(source.kind, crate::project::source::SourceKind::Video) {
             let colorspaces = ColorSpaceManager::get_available_colorspaces();
             if !colorspaces.is_empty() {
                 definitions.push(PropertyDefinition::new(

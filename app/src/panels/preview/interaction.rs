@@ -98,7 +98,7 @@ impl<'a> PreviewInteractions<'a> {
                     // Check if it is a shape and get path
                     // use gui_clips to get track_id
                     if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == *id) {
-                        if matches!(gc.clip.kind, library::project::clip::TrackClipKind::Shape) {
+                        if matches!(gc.clip.kind, library::project::source::SourceKind::Shape) {
                             if let Some(path_str) = gc.clip.properties.get_string("path") {
                                 let state = crate::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
                                 self.editor_context.interaction.preview.vector_editor_state =
@@ -241,7 +241,7 @@ impl<'a> PreviewInteractions<'a> {
                         }
                         crate::widgets::selection::SelectionAction::Replace => {
                             if !self.editor_context.is_selected(hovered) {
-                                self.editor_context.select_clip(hovered, track_id);
+                                self.editor_context.select_source(hovered, track_id);
                             }
                         }
                     }
@@ -310,7 +310,7 @@ impl<'a> PreviewInteractions<'a> {
     }
 
     fn is_clip_visible(&self, gc: &PreviewClip, current_frame: i64) -> bool {
-        if gc.clip.kind == library::project::clip::TrackClipKind::Audio {
+        if gc.clip.kind == library::project::source::SourceKind::Audio {
             return false;
         }
 
@@ -439,7 +439,7 @@ impl<'a> PreviewInteractions<'a> {
             if let Some(id) = hovered_id {
                 let is_text = self.gui_clips.iter().any(|c| {
                     c.id() == id
-                        && matches!(c.clip.kind, library::project::clip::TrackClipKind::Text)
+                        && matches!(c.clip.kind, library::project::source::SourceKind::Text)
                 });
                 if is_text {
                     self.editor_context
@@ -472,7 +472,7 @@ impl<'a> PreviewInteractions<'a> {
         match action {
             crate::widgets::selection::ClickAction::Select(id) => {
                 let track_id = self.get_track_id(id).unwrap_or_default();
-                self.editor_context.select_clip(id, track_id);
+                self.editor_context.select_source(id, track_id);
             }
             crate::widgets::selection::ClickAction::Add(id) => {
                 let track_id = self.get_track_id(id).unwrap_or_default();
@@ -525,7 +525,7 @@ impl<'a> PreviewInteractions<'a> {
 
                         // Check for transform node
                         let transform_node = if let Ok(proj) = self.project.read() {
-                            library::project::graph_analysis::resolve_clip_context(
+                            library::project::graph_analysis::resolve_source_context(
                                 &proj, *entity_id,
                             )
                             .transform_node

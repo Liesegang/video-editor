@@ -6,7 +6,7 @@ use uuid::Uuid;
 use super::EvalEngine;
 use crate::error::LibraryError;
 use crate::pipeline::context::EvalContext;
-use crate::project::clip::TrackClipKind;
+use crate::project::source::SourceKind;
 use crate::rendering::renderer::RenderOutput;
 
 impl EvalEngine {
@@ -18,12 +18,12 @@ impl EvalEngine {
     pub(crate) fn resolve_image_chain(
         &self,
         clip_id: Uuid,
-        clip_kind: &TrackClipKind,
+        clip_kind: &SourceKind,
         ctx: &mut EvalContext,
     ) -> Result<Option<RenderOutput>, LibraryError> {
         // Determine the clip's primary output pin
         let primary_pin = match clip_kind {
-            TrackClipKind::Text | TrackClipKind::Shape => "shape_out",
+            SourceKind::Text | SourceKind::Shape => "shape_out",
             _ => "image_out",
         };
 

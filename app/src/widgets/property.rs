@@ -12,7 +12,7 @@ fn get_local_time(
     service.with_project(|project| {
         if let Some(comp) = project.get_composition(comp_id) {
             // Use flat lookup from project.get_clip() instead of nested track traversal
-            if let Some(clip) = project.get_clip(entity_id) {
+            if let Some(clip) = project.get_source(entity_id) {
                 let fps = comp.fps;
                 let current_frame = (global_time * fps).round() as i64;
                 let delta_frames = current_frame - clip.in_frame as i64;

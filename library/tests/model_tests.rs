@@ -1,8 +1,8 @@
 use library::project::asset::{Asset, AssetKind};
-use library::project::clip::TrackClip;
 use library::project::node::Node;
 use library::project::project::{Composition, Project};
 use library::project::property::PropertyMap;
+use library::project::source::SourceData;
 use library::project::track::TrackData;
 
 use ordered_float::OrderedFloat;
@@ -23,15 +23,23 @@ fn test_project_serialization_roundtrip() {
     project.assets.push(asset);
 
     // Add Composition with root track
-    let (comp, root_track) = Composition::new("My Comp", 1920, 1080, 30.0, 10.0);
-    let root_id = comp.root_track_id;
+    let comp = Composition::new("My Comp", 1920, 1080, 30.0, 10.0);
+    let comp_id = comp.id;
+    project.add_composition(comp);
+    let root_track = TrackData::new("Root");
+    let root_id = root_track.id;
     project.add_node(Node::Track(root_track));
+    project
+        .get_composition_mut(comp_id)
+        .unwrap()
+        .child_ids
+        .push(root_id);
 
     // Create a clip and add to root track
-    let mut clip = TrackClip::new(
+    let mut clip = SourceData::new(
         Uuid::new_v4(),
         Some(asset_id),
-        library::project::clip::TrackClipKind::Video,
+        library::project::source::SourceKind::Video,
         0,
         100,
         100,
@@ -41,10 +49,8 @@ fn test_project_serialization_roundtrip() {
     );
     clip.source_begin_frame = 0;
     let clip_id = clip.id;
-    project.add_node(Node::Clip(clip));
+    project.add_node(Node::Source(clip));
     project.get_track_mut(root_id).unwrap().add_child(clip_id);
-
-    project.add_composition(comp);
 
     // Serialize
     let json = project.save().expect("Failed to serialize project");
@@ -60,11 +66,11 @@ fn test_project_serialization_roundtrip() {
     );
     assert_eq!(loaded_project.assets.len(), 1);
     assert_eq!(loaded_project.assets[0].fps, Some(60.0));
-    assert_eq!(loaded_project.compositions.len(), 1);
+    assert_eq!(loaded_project.composition_ids.len(), 1);
 
     // Check nodes registry has the clip
     assert!(
-        loaded_project.get_clip(clip_id).is_some(),
+        loaded_project.get_source(clip_id).is_some(),
         "Clip should be in nodes registry"
     );
 }
@@ -96,10 +102,17 @@ fn test_node_based_structure() {
     let mut project = Project::new("Node Test");
 
     // Create composition with root track
-    let (comp, root_track) = Composition::new("Test Comp", 1920, 1080, 30.0, 10.0);
-    let root_id = comp.root_track_id;
-    project.add_node(Node::Track(root_track));
+    let comp = Composition::new("Test Comp", 1920, 1080, 30.0, 10.0);
+    let comp_id = comp.id;
     project.add_composition(comp);
+    let root_track = TrackData::new("Root");
+    let root_id = root_track.id;
+    project.add_node(Node::Track(root_track));
+    project
+        .get_composition_mut(comp_id)
+        .unwrap()
+        .child_ids
+        .push(root_id);
 
     // Add a child track
     let child_track = TrackData::new("Child Track");
@@ -108,10 +121,10 @@ fn test_node_based_structure() {
     project.get_track_mut(root_id).unwrap().add_child(child_id);
 
     // Add clips to child track
-    let mut clip1 = TrackClip::new(
+    let mut clip1 = SourceData::new(
         Uuid::new_v4(),
         None,
-        library::project::clip::TrackClipKind::Image,
+        library::project::source::SourceKind::Image,
         0,
         50,
         100,
@@ -124,10 +137,10 @@ fn test_node_based_structure() {
         library::project::property::PropertyValue::String("/path/to/image.png".to_string()),
     );
     clip1.source_begin_frame = 0;
-    let mut clip2 = TrackClip::new(
+    let mut clip2 = SourceData::new(
         Uuid::new_v4(),
         None,
-        library::project::clip::TrackClipKind::Image,
+        library::project::source::SourceKind::Image,
         51,
         100,
         100,
@@ -142,14 +155,14 @@ fn test_node_based_structure() {
     clip2.source_begin_frame = 0;
     let clip1_id = clip1.id;
     let clip2_id = clip2.id;
-    project.add_node(Node::Clip(clip1));
-    project.add_node(Node::Clip(clip2));
+    project.add_node(Node::Source(clip1));
+    project.add_node(Node::Source(clip2));
     project.get_track_mut(child_id).unwrap().add_child(clip1_id);
     project.get_track_mut(child_id).unwrap().add_child(clip2_id);
 
     // Verify structure
     assert_eq!(project.all_tracks().count(), 2, "Should have 2 tracks");
-    assert_eq!(project.all_clips().count(), 2, "Should have 2 clips");
+    assert_eq!(project.all_sources().count(), 2, "Should have 2 clips");
 
     // Verify hierarchy
     let root_track = project.get_track(root_id).unwrap();
@@ -167,6 +180,6 @@ fn test_node_based_structure() {
     );
 
     // Test O(1) clip lookup
-    assert!(project.get_clip(clip1_id).is_some());
-    assert!(project.get_clip(clip2_id).is_some());
+    assert!(project.get_source(clip1_id).is_some());
+    assert!(project.get_source(clip2_id).is_some());
 }

@@ -1,5 +1,5 @@
 use super::action_handler::{ActionContext, PropertyTarget};
-use super::graph_items::{add_style_to_clip, collect_graph_nodes, render_graph_node_item};
+use super::graph_items::{add_style_to_source, collect_graph_nodes, render_graph_node_item};
 use super::properties::{render_inspector_properties_grid, PropertyRenderContext};
 use crate::command::history::HistoryManager;
 use crate::context::context::EditorContext;
@@ -49,7 +49,7 @@ pub(super) fn render_styles_section(
                     .map(|p| p.name())
                     .unwrap_or_else(|| type_name.clone());
                 if ui.button(label).clicked() {
-                    add_style_to_clip(
+                    add_style_to_source(
                         project_service,
                         history_manager,
                         project,

@@ -1,9 +1,9 @@
 use egui::Ui;
 use library::project::asset::AssetKind;
-use library::project::clip::TrackClip;
-use library::project::clip::TrackClipKind;
 use library::project::project::Project;
 use library::project::property::PropertyValue;
+use library::project::source::SourceData;
+use library::project::source::SourceKind;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -48,7 +48,7 @@ pub(super) fn handle_drag_and_drop(
                     let mut comp_width = 1920u64;
                     let mut comp_height = 1080u64;
                     let mut target_track_id_opt: Option<Uuid> = None;
-                    let mut new_clip_opt: Option<TrackClip> = None;
+                    let mut new_source_opt: Option<SourceData> = None;
                     let mut drop_out_frame_opt: Option<u64> = None;
                     let mut calculated_insert_index: Option<usize> = None;
 
@@ -60,9 +60,8 @@ pub(super) fn handle_drag_and_drop(
                         };
 
                         // Get composition info
-                        if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id)
-                        {
-                            root_track_ids.push(comp.root_track_id);
+                        if let Some(comp) = proj_read.get_composition(comp_id) {
+                            root_track_ids.extend(comp.child_ids.iter().copied());
                             comp_width = comp.width;
                             comp_height = comp.height;
                         }
@@ -83,7 +82,7 @@ pub(super) fn handle_drag_and_drop(
                                 } => {
                                     target_track_id_opt = Some(track.id);
                                 }
-                                super::super::utils::flatten::DisplayRow::ClipRow {
+                                super::super::utils::flatten::DisplayRow::SourceRow {
                                     parent_track,
                                     ..
                                 } => {
@@ -92,7 +91,7 @@ pub(super) fn handle_drag_and_drop(
                             }
                         }
 
-                        // Build the clip based on dragged item
+                        // Build the source based on dragged item
                         match dragged_item {
                             DraggedItem::Asset(asset_id) => {
                                 if let Some(asset) =
@@ -107,7 +106,7 @@ pub(super) fn handle_drag_and_drop(
                                             } => {
                                                 target_track_id_opt = Some(track.id);
                                             }
-                                            super::super::utils::flatten::DisplayRow::ClipRow {
+                                            super::super::utils::flatten::DisplayRow::SourceRow {
                                                 parent_track,
                                                 ..
                                             } => {
@@ -120,8 +119,8 @@ pub(super) fn handle_drag_and_drop(
                                             if let Some(header_idx) = display_rows.iter().position(|r| r.track_id() == tid && matches!(r, super::super::utils::flatten::DisplayRow::TrackHeader{..})) {
                                                  let raw_index = visible_row_index as isize - header_idx as isize - 1;
                                                  if let Some(track) = proj_read.get_track(tid) {
-                                                     let clip_count = track.child_ids.iter().filter(|id| matches!(proj_read.get_node(**id), Some(library::project::node::Node::Clip(_)))).count();
-                                                     let max_index = clip_count as isize;
+                                                     let source_count = track.child_ids.iter().filter(|id| matches!(proj_read.get_node(**id), Some(library::project::node::Node::Source(_)))).count();
+                                                     let max_index = source_count as isize;
                                                      let inverted = max_index - raw_index;
                                                      calculated_insert_index = Some(inverted.clamp(0, max_index) as usize);
                                                  }
@@ -134,23 +133,24 @@ pub(super) fn handle_drag_and_drop(
                                     let drop_out = drop_in_frame + duration_frames;
                                     drop_out_frame_opt = Some(drop_out);
 
-                                    new_clip_opt = match asset.kind {
+                                    new_source_opt = match asset.kind {
                                         AssetKind::Video => {
-                                            let video_clip_res = project_service.create_video_clip(
-                                                Some(asset.id),
-                                                &asset.path,
-                                                drop_in_frame,
-                                                drop_out,
-                                                0,
-                                                duration_frames,
-                                                asset.fps.unwrap_or(30.0),
-                                                comp_width as u32,
-                                                comp_height as u32,
-                                            );
-                                            video_clip_res.ok().map(|mut video_clip| {
+                                            let video_source_res = project_service
+                                                .build_video_source(
+                                                    Some(asset.id),
+                                                    &asset.path,
+                                                    drop_in_frame,
+                                                    drop_out,
+                                                    0,
+                                                    duration_frames,
+                                                    asset.fps.unwrap_or(30.0),
+                                                    comp_width as u32,
+                                                    comp_height as u32,
+                                                );
+                                            video_source_res.ok().map(|mut video_source| {
                                                 if let (Some(w), Some(h)) = (asset.width, asset.height)
                                                 {
-                                                    video_clip.properties.set(
+                                                    video_source.properties.set(
                                                         "anchor".to_string(),
                                                         library::project::property::Property::constant(
                                                             library::project::property::PropertyValue::Vec2(
@@ -162,24 +162,25 @@ pub(super) fn handle_drag_and_drop(
                                                         ),
                                                     );
                                                 }
-                                                video_clip
+                                                video_source
                                             })
                                         }
                                         AssetKind::Image => {
-                                            let image_clip_res = project_service.create_image_clip(
-                                                Some(asset.id),
-                                                &asset.path,
-                                                drop_in_frame,
-                                                drop_out,
-                                                comp_width as u32,
-                                                comp_height as u32,
-                                                composition_fps,
-                                            );
-                                            image_clip_res.ok().map(|mut image_clip| {
-                                                image_clip.source_begin_frame = 0;
+                                            let image_source_res = project_service
+                                                .build_image_source(
+                                                    Some(asset.id),
+                                                    &asset.path,
+                                                    drop_in_frame,
+                                                    drop_out,
+                                                    comp_width as u32,
+                                                    comp_height as u32,
+                                                    composition_fps,
+                                                );
+                                            image_source_res.ok().map(|mut image_source| {
+                                                image_source.source_begin_frame = 0;
                                                 if let (Some(w), Some(h)) = (asset.width, asset.height)
                                                 {
-                                                    image_clip.properties.set(
+                                                    image_source.properties.set(
                                                         "anchor".to_string(),
                                                         library::project::property::Property::constant(
                                                             library::project::property::PropertyValue::Vec2(
@@ -191,11 +192,11 @@ pub(super) fn handle_drag_and_drop(
                                                         ),
                                                     );
                                                 }
-                                                image_clip
+                                                image_source
                                             })
                                         }
                                         AssetKind::Audio => {
-                                            Some(project_service.create_audio_clip(
+                                            Some(project_service.build_audio_source(
                                                 Some(asset.id),
                                                 &asset.path,
                                                 drop_in_frame,
@@ -212,11 +213,7 @@ pub(super) fn handle_drag_and_drop(
                             DraggedItem::Composition(target_comp_id) => {
                                 let mut duration_sec = 10.0;
                                 let mut target_fps = 30.0;
-                                if let Some(c) = proj_read
-                                    .compositions
-                                    .iter()
-                                    .find(|c| c.id == *target_comp_id)
-                                {
+                                if let Some(c) = proj_read.get_composition(*target_comp_id) {
                                     duration_sec = c.duration;
                                     target_fps = c.fps;
                                 }
@@ -226,10 +223,10 @@ pub(super) fn handle_drag_and_drop(
                                 let drop_out = drop_in_frame + duration_frames;
                                 drop_out_frame_opt = Some(drop_out);
 
-                                let mut comp_entity = TrackClip::new(
+                                let mut comp_entity = SourceData::new(
                                     Uuid::new_v4(),
                                     Some(*target_comp_id),
-                                    TrackClipKind::Composition,
+                                    SourceKind::Composition,
                                     0,
                                     0,
                                     0,
@@ -244,25 +241,27 @@ pub(super) fn handle_drag_and_drop(
                                     "composition_id",
                                     PropertyValue::String(target_comp_id.to_string()),
                                 );
-                                new_clip_opt = Some(comp_entity);
+                                new_source_opt = Some(comp_entity);
                             }
                         }
                     } // proj_read is now dropped
 
                     // ===== PHASE 2: Call service methods (needs write lock) =====
-                    if let (Some(new_clip), Some(_drop_out)) = (new_clip_opt, drop_out_frame_opt) {
+                    if let (Some(new_source), Some(_drop_out)) =
+                        (new_source_opt, drop_out_frame_opt)
+                    {
                         let mut success = false;
 
                         if let Some(parent_track_id) = target_track_id_opt {
-                            if let Err(e) = project_service.add_clip_to_track(
+                            if let Err(e) = project_service.add_layer_to_track(
                                 comp_id,
                                 parent_track_id,
-                                new_clip,
+                                new_source,
                                 drop_in_frame,
                                 drop_in_frame + (drop_out_frame_opt.unwrap() - drop_in_frame),
                                 calculated_insert_index,
                             ) {
-                                log::error!("Failed to add clip: {:?}", e);
+                                log::error!("Failed to add layer: {:?}", e);
                                 editor_context.interaction.general.active_modal_error =
                                     Some(e.to_string());
                             } else {
@@ -276,15 +275,15 @@ pub(super) fn handle_drag_and_drop(
                             if let Ok(new_track_id) =
                                 project_service.add_track(comp_id, "New Track")
                             {
-                                if let Err(e) = project_service.add_clip_to_track(
+                                if let Err(e) = project_service.add_layer_to_track(
                                     comp_id,
                                     new_track_id,
-                                    new_clip,
+                                    new_source,
                                     drop_in_frame,
                                     drop_in_frame + (drop_out_frame_opt.unwrap() - drop_in_frame),
                                     calculated_insert_index,
                                 ) {
-                                    log::error!("Failed to add clip to new track: {:?}", e);
+                                    log::error!("Failed to add layer to new track: {:?}", e);
                                     project_service.remove_track(comp_id, new_track_id).ok();
                                 } else {
                                     editor_context.timeline.expanded_tracks.insert(new_track_id);

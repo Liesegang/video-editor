@@ -84,6 +84,7 @@ fn default_pin_type_color(data_type: &PinDataType) -> Color32 {
         PinDataType::Path => Color32::from_rgb(238, 170, 109),  // Orange
         PinDataType::Enum => Color32::from_rgb(200, 160, 120),  // Tan
         PinDataType::List => Color32::from_rgb(160, 200, 160),  // Pale green
+        PinDataType::Audio => Color32::from_rgb(109, 238, 238), // Cyan-teal
         PinDataType::Any => Color32::from_rgb(150, 150, 150),   // Grey
     }
 }
@@ -159,9 +160,13 @@ fn default_header_color(type_id: &str) -> Color32 {
         Color32::from_rgb(120, 90, 60)
     } else if type_id.starts_with("time.") || type_id.starts_with("scripting.") {
         Color32::from_rgb(100, 100, 60)
+    } else if type_id.starts_with("composition") {
+        Color32::from_rgb(90, 60, 120) // Purple — composition
     } else if type_id.starts_with("track") {
-        Color32::from_rgb(60, 80, 60)
-    } else if type_id.starts_with("clip.") {
+        Color32::from_rgb(60, 90, 60) // Green — track
+    } else if type_id.starts_with("layer") {
+        Color32::from_rgb(50, 70, 120) // Blue — layer
+    } else if type_id.starts_with("source.") || type_id.starts_with("clip.") {
         Color32::from_rgb(80, 70, 90)
     } else {
         Color32::from_rgb(80, 80, 80)

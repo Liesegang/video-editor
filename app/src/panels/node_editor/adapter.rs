@@ -1,8 +1,8 @@
 //! Adapter connecting library types to egui_node_editor traits.
 
 use egui_node_editor::{
-    ConnectionView, NodeDisplay, NodeEditorDataSource, NodeEditorMutator, NodeTypeInfo,
-    PinDataType, PinEditValue, PinInfo, PinPropertyInfo,
+    ConnectionView, ContainerKind, NodeDisplay, NodeEditorDataSource, NodeEditorMutator,
+    NodeTypeInfo, PinDataType, PinEditValue, PinInfo, PinPropertyInfo,
 };
 use library::plugin::PluginManager;
 use library::project::connection::PinDataType as LibPinDataType;
@@ -26,6 +26,7 @@ fn convert_pin_data_type(lib_type: &LibPinDataType) -> PinDataType {
         LibPinDataType::Style => PinDataType::Style,
         LibPinDataType::Shape => PinDataType::Shape,
         LibPinDataType::List => PinDataType::List,
+        LibPinDataType::Audio => PinDataType::Audio,
         LibPinDataType::Any => PinDataType::Any,
         // Map remaining library types to closest match
         _ => PinDataType::Any,
@@ -41,47 +42,26 @@ pub(super) struct VideoEditorDataSource<'a> {
 
 impl NodeEditorDataSource for VideoEditorDataSource<'_> {
     fn get_container_children(&self, container_id: Uuid) -> Vec<Uuid> {
-        // Check if this is a composition ID
-        if let Some(comp) = self
-            .project
-            .compositions
-            .iter()
-            .find(|c| c.id == container_id)
-        {
-            return vec![comp.root_track_id];
-        }
-        match self.project.get_node(container_id) {
-            Some(Node::Track(track)) => track.child_ids.clone(),
-            _ => vec![],
-        }
+        self.project
+            .get_container_child_ids(container_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn get_container_name(&self, id: Uuid) -> Option<String> {
         // Check compositions first
-        if let Some(comp) = self.project.compositions.iter().find(|c| c.id == id) {
+        if let Some(comp) = self.project.all_compositions().find(|c| c.id == id) {
             return Some(comp.name.clone());
         }
         match self.project.get_node(id) {
             Some(Node::Track(track)) => Some(track.name.clone()),
+            Some(Node::Layer(layer)) => Some(layer.name.clone()),
             _ => None,
         }
     }
 
     fn find_parent_container(&self, node_id: Uuid) -> Option<Uuid> {
-        // Check if node is a root track of a composition
-        for comp in &self.project.compositions {
-            if comp.root_track_id == node_id {
-                return Some(comp.id);
-            }
-        }
-        for (id, node) in self.project.nodes.iter() {
-            if let Node::Track(track) = node {
-                if track.child_ids.contains(&node_id) {
-                    return Some(*id);
-                }
-            }
-        }
-        None
+        self.project.find_parent_container(node_id)
     }
 
     fn get_node_display(&self, id: Uuid) -> Option<NodeDisplay> {
@@ -122,24 +102,25 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
                     pins,
                 })
             }
-            Node::Clip(clip) => {
-                use library::project::clip::TrackClipKind;
+            Node::Source(clip) => {
+                use library::project::source::SourceKind;
                 let kind_label = format!("{}", clip.kind);
                 let mut pins = Vec::new();
 
                 // Output pin depends on clip kind
                 match clip.kind {
-                    TrackClipKind::Text | TrackClipKind::Shape => {
+                    SourceKind::Text | SourceKind::Shape => {
                         pins.push(PinInfo::output("shape_out", "Shape", PinDataType::Shape));
                     }
-                    TrackClipKind::Audio => {}
+                    SourceKind::Audio => {}
                     _ => {
                         pins.push(PinInfo::output("image_out", "Image", PinDataType::Image));
                     }
                 }
 
                 // Input: property definitions for this clip kind
-                let defs = library::project::clip::TrackClip::get_definitions_for_kind(&clip.kind);
+                let defs =
+                    library::project::source::SourceData::get_definitions_for_kind(&clip.kind);
                 for def in &defs {
                     // Skip file_path — not editable via node connections
                     if def.name() == "file_path" {
@@ -155,13 +136,34 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
                 Some(NodeDisplay::Leaf { kind_label, pins })
             }
             Node::Track(track) => {
-                let pins = vec![PinInfo::output("image_out", "Image", PinDataType::Image)];
+                let pins = vec![
+                    PinInfo::input("image_in", "Image", PinDataType::Image),
+                    PinInfo::output("image_out", "Image", PinDataType::Image),
+                    PinInfo::input("audio_in", "Audio", PinDataType::Audio),
+                    PinInfo::output("audio_out", "Audio", PinDataType::Audio),
+                ];
                 Some(NodeDisplay::Container {
+                    kind: ContainerKind::Track,
                     name: track.name.clone(),
                     child_ids: track.child_ids.clone(),
                     pins,
                 })
             }
+            Node::Layer(layer) => {
+                let pins = vec![
+                    PinInfo::input("image_in", "Image", PinDataType::Image),
+                    PinInfo::output("image_out", "Image", PinDataType::Image),
+                    PinInfo::input("audio_in", "Audio", PinDataType::Audio),
+                    PinInfo::output("audio_out", "Audio", PinDataType::Audio),
+                ];
+                Some(NodeDisplay::Container {
+                    kind: ContainerKind::Layer,
+                    name: layer.name.clone(),
+                    child_ids: layer.child_ids.clone(),
+                    pins,
+                })
+            }
+            _ => None,
         }
     }
 
@@ -182,17 +184,19 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
     fn get_node_type_id(&self, id: Uuid) -> Option<String> {
         match self.project.get_node(id)? {
             Node::Graph(g) => Some(g.type_id.clone()),
-            Node::Clip(c) => Some(format!("clip.{}", c.kind)),
+            Node::Source(c) => Some(format!("source.{}", c.kind)),
             Node::Track(_) => Some("track".to_string()),
+            Node::Layer(_) => Some("layer".to_string()),
+            _ => None,
         }
     }
 
     fn is_node_active(&self, id: Uuid) -> bool {
         match self.project.get_node(id) {
-            Some(Node::Track(track)) if track.is_layer => {
+            Some(Node::Layer(layer)) => {
                 // Layer timing is derived from its child clips
-                track.child_ids.iter().any(|child_id| {
-                    if let Some(Node::Clip(clip)) = self.project.get_node(*child_id) {
+                layer.child_ids.iter().any(|child_id| {
+                    if let Some(Node::Source(clip)) = self.project.get_node(*child_id) {
                         self.current_frame >= clip.in_frame && self.current_frame <= clip.out_frame
                     } else {
                         false
@@ -219,7 +223,7 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
             }
         }
         // For clips, show clip property value
-        if let Some(clip) = self.project.get_clip(node_id) {
+        if let Some(clip) = self.project.get_source(node_id) {
             if let Some(prop) = clip.properties.get(pin_name) {
                 return Some(prop.display_value());
             }
@@ -238,7 +242,7 @@ impl NodeEditorDataSource for VideoEditorDataSource<'_> {
             .and_then(|p| p.value())
             .or_else(|| {
                 self.project
-                    .get_clip(node_id)
+                    .get_source(node_id)
                     .and_then(|c| c.properties.get(pin_name))
                     .and_then(|p| p.value())
             })?;
@@ -284,8 +288,8 @@ impl VideoEditorDataSource<'_> {
             }
         }
         // Try clip property definitions
-        if let Some(clip) = self.project.get_clip(node_id) {
-            let defs = library::project::clip::TrackClip::get_definitions_for_kind(&clip.kind);
+        if let Some(clip) = self.project.get_source(node_id) {
+            let defs = library::project::source::SourceData::get_definitions_for_kind(&clip.kind);
             for def in &defs {
                 if def.name() == pin_name {
                     return convert_pin_data_type(&def.ui_type().pin_data_type());
@@ -348,14 +352,8 @@ impl NodeEditorMutator for VideoEditorMutator<'_> {
     }
 
     fn add_node(&mut self, container_id: Uuid, type_id: &str) -> Result<Uuid, String> {
-        // Resolve composition ID to root_track_id if needed
-        let actual_container = self
-            .project_service
-            .get_composition(container_id)
-            .map(|c| c.root_track_id)
-            .unwrap_or(container_id);
         self.project_service
-            .add_graph_node(actual_container, type_id)
+            .add_graph_node(container_id, type_id)
             .map_err(|e| e.to_string())
     }
 

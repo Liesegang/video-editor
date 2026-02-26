@@ -32,7 +32,7 @@ pub(super) fn render_effects_section(
         project,
         project_service,
         selected_entity_id,
-        |proj, clip_id| graph_analysis::get_effect_chain(proj, clip_id),
+        |proj, source_id| graph_analysis::get_effect_chain(proj, source_id),
     );
 
     let has_graph_effects = !graph_effects.is_empty();
@@ -66,7 +66,7 @@ pub(super) fn render_effects_section(
                     let (connect_from_id, old_transform_conn, transform_id) = {
                         if let Ok(proj) = project.read() {
                             let ctx =
-                                graph_analysis::resolve_clip_context(&proj, selected_entity_id);
+                                graph_analysis::resolve_source_context(&proj, selected_entity_id);
 
                             // Insert after last effect, or after style (for text/shape),
                             // or after clip itself
@@ -165,7 +165,7 @@ fn render_reorderable_graph_effects(
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
     project: &Arc<RwLock<library::project::project::Project>>,
-    clip_id: Uuid,
+    source_id: Uuid,
     graph_effects: Vec<super::graph_items::GraphNodeInfo>,
     current_time: f64,
     fps: f64,
@@ -231,8 +231,12 @@ fn render_reorderable_graph_effects(
                     );
 
                     let item_props = effect.properties.clone();
-                    let mut ctx =
-                        ActionContext::new(project_service, history_manager, clip_id, current_time);
+                    let mut ctx = ActionContext::new(
+                        project_service,
+                        history_manager,
+                        source_id,
+                        current_time,
+                    );
                     if ctx.handle_actions(
                         item_actions,
                         PropertyTarget::GraphNode(effect.node_id),
@@ -250,7 +254,7 @@ fn render_reorderable_graph_effects(
         let new_order: Vec<Uuid> = dnd_items.iter().map(|(_, id)| *id).collect();
 
         if new_order != old_order {
-            if let Err(e) = project_service.reorder_effect_chain(clip_id, &new_order) {
+            if let Err(e) = project_service.reorder_effect_chain(source_id, &new_order) {
                 log::error!("Failed to reorder effect chain: {}", e);
             } else {
                 let current_state = project_service.with_project(|p| p.clone());

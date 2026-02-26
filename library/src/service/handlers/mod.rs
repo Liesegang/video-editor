@@ -1,9 +1,9 @@
 pub mod asset_handler;
-pub mod clip_factory;
-pub mod clip_handler;
 pub mod composition_handler;
 pub mod graph_handler;
 pub mod keyframe_handler;
+pub mod layer_factory;
+pub mod source_handler;
 pub mod track_handler;
 
 use crate::error::LibraryError;

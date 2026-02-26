@@ -22,7 +22,7 @@ impl KeyframeHandler {
         }
 
         let clip = proj
-            .get_clip_mut(clip_id)
+            .get_source_mut(clip_id)
             .ok_or_else(|| LibraryError::project(format!("Clip {} not found", clip_id)))?;
 
         clip.get_property_map_mut(target.clone()).ok_or_else(|| {

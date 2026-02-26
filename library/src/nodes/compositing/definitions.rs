@@ -101,5 +101,9 @@ pub(super) fn compositing_nodes() -> Vec<NodeTypeDefinition> {
                 inp("mode", "Mode", Enum),
             ])
             .with_outputs(vec![out("image", "Image", Image)]),
+        // Preview output — terminal sink node for the composition
+        node("compositing.preview_output", "Preview Output", nc)
+            .with_description("Defines what image is displayed in the preview")
+            .with_inputs(vec![inp("image_in", "Image", Image)]),
     ]
 }

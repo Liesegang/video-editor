@@ -557,7 +557,7 @@ impl PluginManager {
 
     pub fn get_inspector_definitions(
         &self,
-        _kind: &crate::project::clip::TrackClipKind,
+        _kind: &crate::project::source::SourceKind,
     ) -> Vec<PropertyDefinition> {
         // Inspector plugins removed. Return empty or implement static logic if needed.
         Vec::new()

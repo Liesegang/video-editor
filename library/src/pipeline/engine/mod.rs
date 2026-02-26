@@ -6,14 +6,14 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use super::context::EvalContext;
+use super::context::{EvalContext, TrackEvaluator};
 use super::evaluator::NodeEvaluator;
 use crate::error::LibraryError;
 use crate::plugin::PluginManager;
 use crate::plugin::PropertyEvaluatorRegistry;
-use crate::project::clip::TrackClipKind;
 use crate::project::node::Node;
 use crate::project::project::{Composition, Project};
+use crate::project::source::SourceKind;
 use crate::rendering::cache::CacheManager;
 use crate::rendering::renderer::{RenderOutput, Renderer};
 use crate::rendering::skia_renderer::SkiaRenderer;
@@ -23,6 +23,16 @@ use crate::runtime::frame::Region;
 /// the pull-based rendering pipeline.
 pub struct EvalEngine {
     evaluators: Vec<Box<dyn NodeEvaluator>>,
+}
+
+impl TrackEvaluator for EvalEngine {
+    fn evaluate_track(
+        &self,
+        track_id: Uuid,
+        ctx: &mut EvalContext,
+    ) -> Result<RenderOutput, LibraryError> {
+        EvalEngine::evaluate_track(self, track_id, ctx)
+    }
 }
 
 impl EvalEngine {
@@ -49,6 +59,9 @@ impl EvalEngine {
     /// Evaluate a composition, producing the final rendered output.
     ///
     /// This is the entry point for rendering a single frame.
+    /// If a `compositing.preview_output` node exists in the project graph with a
+    /// connected `image_in`, the engine pulls from it. Otherwise falls back to
+    /// root track compositing.
     pub fn evaluate_composition(
         &self,
         project: &Project,
@@ -69,12 +82,63 @@ impl EvalEngine {
             cache_manager,
             property_evaluators,
             &self.evaluators,
+            self,
             frame_number,
             render_scale,
             region,
         );
 
-        self.evaluate_track(composition.root_track_id, &mut ctx)
+        // Look for a preview output node in the project graph.
+        if let Some(output_node_id) = Self::find_preview_output_node(project) {
+            if let Some((source_id, source_pin)) = ctx.find_upstream(output_node_id, "image_in") {
+                log::debug!(
+                    "[EvalEngine] Pulling from preview output node {} via {}.{}",
+                    output_node_id,
+                    source_id,
+                    source_pin
+                );
+                let value = ctx.evaluate_pin(source_id, &source_pin)?;
+                return match value.into_image() {
+                    Some(img) => {
+                        let identity = crate::runtime::transform::Transform::default();
+                        ctx.renderer.draw_layer(&img, &identity)?;
+                        ctx.renderer.finalize()
+                    }
+                    None => {
+                        log::warn!(
+                            "[EvalEngine] Preview output node {} upstream returned None",
+                            output_node_id
+                        );
+                        ctx.renderer.finalize()
+                    }
+                };
+            }
+            log::debug!(
+                "[EvalEngine] Preview output node {} has no connected input, falling back to root track",
+                output_node_id
+            );
+        }
+
+        // Fallback: composite all direct children of the composition
+        for child_id in &composition.child_ids {
+            match ctx.project.get_node(*child_id).cloned() {
+                Some(Node::Track(_)) | Some(Node::Layer(_)) => {
+                    let sub_output = self.evaluate_track(*child_id, &mut ctx)?;
+                    let identity = crate::runtime::transform::Transform::default();
+                    ctx.renderer.draw_layer(&sub_output, &identity)?;
+                }
+                _ => {}
+            }
+        }
+        ctx.renderer.finalize()
+    }
+
+    /// Find the first `compositing.preview_output` node in the project graph.
+    fn find_preview_output_node(project: &Project) -> Option<Uuid> {
+        project
+            .all_graph_nodes()
+            .find(|g| g.type_id == "compositing.preview_output")
+            .map(|g| g.id)
     }
 
     /// Evaluate a track node, compositing its children onto an offscreen surface.
@@ -90,18 +154,20 @@ impl EvalEngine {
         track_id: Uuid,
         ctx: &mut EvalContext,
     ) -> Result<RenderOutput, LibraryError> {
-        let track = ctx
-            .project
-            .get_track(track_id)
-            .ok_or_else(|| LibraryError::render(format!("Track not found: {}", track_id)))?
-            .clone();
+        // Resolve child_ids, visible, name from either Track or Layer
+        let (child_ids, visible, name) = if let Some(track) = ctx.project.get_track(track_id) {
+            (track.child_ids.clone(), track.visible, track.name.clone())
+        } else if let Some(layer) = ctx.project.get_layer(track_id) {
+            (layer.child_ids.clone(), layer.visible, layer.name.clone())
+        } else {
+            return Err(LibraryError::render(format!(
+                "Track/Layer not found: {}",
+                track_id
+            )));
+        };
 
-        if !track.visible {
-            log::debug!(
-                "[EvalEngine] Track {} '{}' hidden, skip",
-                track_id,
-                track.name
-            );
+        if !visible {
+            log::debug!("[EvalEngine] Track {} '{}' hidden, skip", track_id, name);
             return ctx.renderer.finalize();
         }
 
@@ -111,7 +177,7 @@ impl EvalEngine {
             log::debug!(
                 "[EvalEngine] Track {} '{}' pulling from {}.{}",
                 track_id,
-                track.name,
+                name,
                 source_id,
                 source_pin
             );
@@ -131,19 +197,18 @@ impl EvalEngine {
         }
 
         // No connection → composite children (root track behavior)
-        let child_ids = track.child_ids.clone();
         log::debug!(
             "[EvalEngine] Track {} '{}' compositing {} children (frame={})",
             track_id,
-            track.name,
+            name,
             child_ids.len(),
             ctx.frame_number
         );
 
         for child_id in &child_ids {
             match ctx.project.get_node(*child_id).cloned() {
-                Some(Node::Clip(clip)) => {
-                    if clip.kind == TrackClipKind::Audio {
+                Some(Node::Source(clip)) => {
+                    if clip.kind == SourceKind::Audio {
                         continue;
                     }
                     if ctx.frame_number < clip.in_frame || ctx.frame_number > clip.out_frame {
@@ -181,8 +246,33 @@ impl EvalEngine {
                     let identity = crate::runtime::transform::Transform::default();
                     ctx.renderer.draw_layer(&sub_output, &identity)?;
                 }
+                Some(Node::Layer(layer)) => {
+                    // Check Layer timing before evaluating
+                    if ctx.frame_number < layer.in_frame || ctx.frame_number > layer.out_frame {
+                        log::debug!(
+                            "[EvalEngine] Layer {} out of range: frame={} layer=[{}..{}]",
+                            child_id,
+                            ctx.frame_number,
+                            layer.in_frame,
+                            layer.out_frame
+                        );
+                        continue;
+                    }
+                    log::debug!(
+                        "[EvalEngine] Evaluating layer {} [{}..{}]",
+                        child_id,
+                        layer.in_frame,
+                        layer.out_frame
+                    );
+                    let sub_output = self.evaluate_track(*child_id, ctx)?;
+                    let identity = crate::runtime::transform::Transform::default();
+                    ctx.renderer.draw_layer(&sub_output, &identity)?;
+                }
                 Some(Node::Graph(g)) => {
                     log::trace!("[EvalEngine] Skip graph node {} ({})", child_id, g.type_id);
+                }
+                Some(Node::Composition(_)) => {
+                    log::trace!("[EvalEngine] Skip composition node {}", child_id);
                 }
                 None => {
                     log::warn!("[EvalEngine] Child {} not found in nodes", child_id);

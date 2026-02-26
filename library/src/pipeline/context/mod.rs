@@ -19,6 +19,18 @@ use crate::rendering::cache::CacheManager;
 use crate::rendering::skia_renderer::SkiaRenderer;
 use crate::runtime::frame::Region;
 
+/// Trait for delegating track evaluation back to the engine from within EvalContext.
+///
+/// This allows evaluate_pin() to composite Track/Layer children when there's
+/// no upstream connection (root track behavior), without directly depending on EvalEngine.
+pub trait TrackEvaluator {
+    fn evaluate_track(
+        &self,
+        track_id: Uuid,
+        ctx: &mut EvalContext,
+    ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError>;
+}
+
 /// Context for a single frame evaluation pass.
 ///
 /// Created fresh for each frame. Provides pull-based input resolution,
@@ -38,6 +50,9 @@ pub struct EvalContext<'a> {
     /// Reference to the registered evaluators for recursive dispatch.
     evaluators: &'a [Box<dyn NodeEvaluator>],
 
+    /// Delegate for Track/Layer compositing (implemented by EvalEngine).
+    track_evaluator: &'a dyn TrackEvaluator,
+
     /// Per-frame memoization cache: (node_id, pin_name) → evaluated value.
     node_cache: HashMap<(Uuid, String), PinValue>,
 }
@@ -51,6 +66,7 @@ impl<'a> EvalContext<'a> {
         cache_manager: &'a CacheManager,
         property_evaluators: Arc<PropertyEvaluatorRegistry>,
         evaluators: &'a [Box<dyn NodeEvaluator>],
+        track_evaluator: &'a dyn TrackEvaluator,
         frame_number: u64,
         render_scale: f64,
         region: Option<Region>,
@@ -64,6 +80,7 @@ impl<'a> EvalContext<'a> {
             cache_manager,
             property_evaluators,
             evaluators,
+            track_evaluator,
             time,
             frame_number,
             render_scale,
@@ -96,13 +113,13 @@ impl<'a> EvalContext<'a> {
         let evaluators = self.evaluators;
 
         let result = match &node {
-            Node::Clip(_clip) => {
-                log::debug!("[EvalCtx] evaluate_pin clip {}.{}", node_id, pin_name);
+            Node::Source(_source) => {
+                log::debug!("[EvalCtx] evaluate_pin source {}.{}", node_id, pin_name);
                 let evaluator = find_evaluator(evaluators, "clip.")
                     .ok_or_else(|| LibraryError::render("No clip evaluator registered"))?;
                 let val = evaluator.evaluate(node_id, pin_name, self)?;
                 log::debug!(
-                    "[EvalCtx] clip {}.{} => {:?}",
+                    "[EvalCtx] source {}.{} => {:?}",
                     node_id,
                     pin_name,
                     std::mem::discriminant(&val)
@@ -132,12 +149,11 @@ impl<'a> EvalContext<'a> {
                 );
                 val
             }
-            Node::Track(track) => {
+            Node::Track(_) | Node::Layer(_) => {
                 log::debug!(
-                    "[EvalCtx] evaluate_pin track {}.{} name='{}'",
+                    "[EvalCtx] evaluate_pin track/layer {}.{}",
                     node_id,
                     pin_name,
-                    track.name
                 );
                 if pin_name == "image_out" {
                     match self.find_upstream(node_id, pin_name) {
@@ -151,13 +167,27 @@ impl<'a> EvalContext<'a> {
                             self.evaluate_pin(source_id, &source_pin)?
                         }
                         None => {
-                            log::debug!("[EvalCtx] track {} no upstream for image_out", node_id);
-                            PinValue::None
+                            // No upstream connection — composite children (root track behavior).
+                            log::debug!(
+                                "[EvalCtx] track {} no upstream for image_out, compositing children",
+                                node_id
+                            );
+                            let track_eval = self.track_evaluator;
+                            let output = track_eval.evaluate_track(node_id, self)?;
+                            PinValue::Image(output)
                         }
                     }
                 } else {
                     PinValue::None
                 }
+            }
+            Node::Composition(_) => {
+                log::debug!(
+                    "[EvalCtx] evaluate_pin composition {}.{}",
+                    node_id,
+                    pin_name
+                );
+                PinValue::None
             }
         };
 

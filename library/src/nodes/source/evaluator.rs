@@ -1,4 +1,4 @@
-//! Evaluator for Clip nodes (Video, Image, Text, Shape, SkSL).
+//! Evaluator for Source nodes (Video, Image, Text, Shape, SkSL).
 
 use uuid::Uuid;
 
@@ -8,14 +8,14 @@ use crate::error::LibraryError;
 use crate::pipeline::context::EvalContext;
 use crate::pipeline::evaluator::NodeEvaluator;
 use crate::pipeline::output::{PinValue, ShapeData};
-use crate::project::clip::TrackClipKind;
 use crate::project::node::Node;
+use crate::project::source::SourceKind;
 use crate::rendering::renderer::{RenderOutput, Renderer};
 use crate::runtime::transform::Transform;
 
-pub struct ClipEvaluator;
+pub struct SourceEvaluator;
 
-impl NodeEvaluator for ClipEvaluator {
+impl NodeEvaluator for SourceEvaluator {
     fn handles(&self) -> &[&str] {
         &["clip."]
     }
@@ -26,59 +26,59 @@ impl NodeEvaluator for ClipEvaluator {
         pin_name: &str,
         ctx: &mut EvalContext,
     ) -> Result<PinValue, LibraryError> {
-        let clip = match ctx.project.get_node(node_id) {
-            Some(Node::Clip(clip)) => clip.clone(),
+        let source = match ctx.project.get_node(node_id) {
+            Some(Node::Source(s)) => s.clone(),
             _ => return Ok(PinValue::None),
         };
 
-        // Timing check: in pull-based mode the engine may not pre-filter clips
-        if ctx.frame_number < clip.in_frame || ctx.frame_number > clip.out_frame {
+        // Timing check: in pull-based mode the engine may not pre-filter sources
+        if ctx.frame_number < source.in_frame || ctx.frame_number > source.out_frame {
             return Ok(PinValue::None);
         }
 
-        let eval_time = ctx.clip_eval_time(&clip);
+        let eval_time = ctx.clip_eval_time(&source);
         let identity = Transform::default();
 
-        match (&clip.kind, pin_name) {
-            // Text/Shape clips produce shape data (deferred rasterization)
-            (TrackClipKind::Text, "shape_out") => self.text_shape(&clip, ctx),
-            (TrackClipKind::Shape, "shape_out") => self.path_shape(&clip, ctx),
-            // Video/Image/SkSL clips produce images directly
-            (TrackClipKind::Image, "image_out") => self.evaluate_image(&clip.properties, ctx),
-            (TrackClipKind::Video, "image_out") => self.evaluate_video(&clip, ctx),
-            (TrackClipKind::SkSL, "image_out") => {
-                self.evaluate_sksl(&clip.properties, eval_time, &identity, ctx)
+        match (&source.kind, pin_name) {
+            // Text/Shape sources produce shape data (deferred rasterization)
+            (SourceKind::Text, "shape_out") => self.text_shape(&source, ctx),
+            (SourceKind::Shape, "shape_out") => self.path_shape(&source, ctx),
+            // Video/Image/SkSL sources produce images directly
+            (SourceKind::Image, "image_out") => self.evaluate_image(&source.properties, ctx),
+            (SourceKind::Video, "image_out") => self.evaluate_video(&source, ctx),
+            (SourceKind::SkSL, "image_out") => {
+                self.evaluate_sksl(&source.properties, eval_time, &identity, ctx)
             }
             _ => Ok(PinValue::None),
         }
     }
 }
 
-impl ClipEvaluator {
-    /// Text clip: decompose text into per-character glyph outlines as ShapeData::Grouped.
+impl SourceEvaluator {
+    /// Text source: decompose text into per-character glyph outlines as ShapeData::Grouped.
     fn text_shape(
         &self,
-        clip: &crate::project::clip::TrackClip,
+        source: &crate::project::source::SourceData,
         ctx: &mut EvalContext,
     ) -> Result<PinValue, LibraryError> {
-        let text = ctx.resolve_string(&clip.properties, "text", "");
+        let text = ctx.resolve_string(&source.properties, "text", "");
         if text.is_empty() {
             return Ok(PinValue::None);
         }
-        let font = ctx.resolve_string(&clip.properties, "font_family", "Arial");
-        let size = ctx.resolve_number(&clip.properties, "size", 12.0);
+        let font = ctx.resolve_string(&source.properties, "font_family", "Arial");
+        let size = ctx.resolve_number(&source.properties, "size", 12.0);
 
         let shape_data = text_decompose::decompose_text_to_shapes(&text, &font, size);
         Ok(PinValue::Shape(shape_data))
     }
 
-    /// Shape clip: produce ShapeData::Path for deferred rasterization.
+    /// Shape source: produce ShapeData::Path for deferred rasterization.
     fn path_shape(
         &self,
-        clip: &crate::project::clip::TrackClip,
+        source: &crate::project::source::SourceData,
         ctx: &mut EvalContext,
     ) -> Result<PinValue, LibraryError> {
-        let path = ctx.resolve_string(&clip.properties, "path", "");
+        let path = ctx.resolve_string(&source.properties, "path", "");
         if path.is_empty() {
             return Ok(PinValue::None);
         }
@@ -107,26 +107,26 @@ impl ClipEvaluator {
 
     fn evaluate_video(
         &self,
-        clip: &crate::project::clip::TrackClip,
+        source: &crate::project::source::SourceData,
         ctx: &mut EvalContext,
     ) -> Result<PinValue, LibraryError> {
-        let file_path = ctx.resolve_string(&clip.properties, "file_path", "");
+        let file_path = ctx.resolve_string(&source.properties, "file_path", "");
         if file_path.is_empty() {
             return Ok(PinValue::None);
         }
 
         let time_offset = {
-            let delta_frames = ctx.frame_number as f64 - clip.in_frame as f64;
+            let delta_frames = ctx.frame_number as f64 - source.in_frame as f64;
             delta_frames / ctx.composition.fps
         };
-        let source_delta_frames = time_offset * clip.fps;
-        let source_frame_number = clip.source_begin_frame + source_delta_frames.round() as i64;
+        let source_delta_frames = time_offset * source.fps;
+        let source_frame_number = source.source_begin_frame + source_delta_frames.round() as i64;
         if source_frame_number < 0 {
             return Ok(PinValue::None);
         }
 
-        let input_color_space = ctx.resolve_string(&clip.properties, "input_color_space", "");
-        let output_color_space = ctx.resolve_string(&clip.properties, "output_color_space", "");
+        let input_color_space = ctx.resolve_string(&source.properties, "input_color_space", "");
+        let output_color_space = ctx.resolve_string(&source.properties, "output_color_space", "");
 
         let request = LoadRequest::VideoFrame {
             path: file_path,

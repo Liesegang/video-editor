@@ -5,16 +5,17 @@
 use std::sync::{Arc, RwLock};
 
 use library::plugin::PluginManager;
-use library::project::clip::TrackClipKind;
 use library::project::node::Node;
 use library::project::project::{Composition, Project};
+use library::project::source::SourceKind;
+use library::project::track::TrackData;
 
-use library::service::handlers::clip_factory::ClipFactory;
-use library::service::handlers::clip_handler::ClipHandler;
 use library::service::handlers::graph_handler::GraphHandler;
+use library::service::handlers::layer_factory::LayerFactory;
+use library::service::handlers::source_handler::SourceHandler;
 use library::service::handlers::track_handler::TrackHandler;
 
-/// Helper: create a PluginManager (still needed for setup_clip_graph_nodes).
+/// Helper: create a PluginManager (still needed for setup_source_graph_nodes).
 fn make_plugin_manager() -> PluginManager {
     PluginManager::default()
 }
@@ -22,18 +23,24 @@ fn make_plugin_manager() -> PluginManager {
 /// Helper: create a Project with one composition and its root track.
 fn setup_project() -> (Arc<RwLock<Project>>, uuid::Uuid, uuid::Uuid) {
     let mut project = Project::new("Test Project");
-    let (comp, root_track) = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
+    let comp = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
     let comp_id = comp.id;
-    let root_track_id = comp.root_track_id;
-    project.add_node(Node::Track(root_track));
     project.add_composition(comp);
+    let root_track = TrackData::new("Root");
+    let root_track_id = root_track.id;
+    project.add_node(Node::Track(root_track));
+    project
+        .get_composition_mut(comp_id)
+        .unwrap()
+        .child_ids
+        .push(root_track_id);
     (Arc::new(RwLock::new(project)), comp_id, root_track_id)
 }
 
 #[test]
 fn test_add_track_to_composition() {
     // トラックをコンポジションに追加できることを確認
-    let (project, comp_id, root_track_id) = setup_project();
+    let (project, comp_id, _root_track_id) = setup_project();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "New Track").unwrap();
 
@@ -43,9 +50,9 @@ fn test_add_track_to_composition() {
         .get_track(track_id)
         .expect("Track should exist in nodes");
     assert_eq!(track.name, "New Track");
-    // ルートトラックの子として追加されている
-    let root_track = proj.get_track(root_track_id).unwrap();
-    assert!(root_track.child_ids.contains(&track_id));
+    // コンポジションの子として追加されている
+    let comp = proj.get_composition(comp_id).unwrap();
+    assert!(comp.child_ids.contains(&track_id));
 }
 
 #[test]
@@ -58,22 +65,28 @@ fn test_add_text_clip_creates_full_graph() {
     let track_id = TrackHandler::add_track(&project, comp_id, "Video Track").unwrap();
 
     // 2. テキストクリップを作成
-    let text_clip = ClipFactory::create_text_clip("Hello", 0, 90, 30.0);
+    let text_clip = LayerFactory::build_text_source("Hello", 0, 90, 30.0);
     let clip_kind = text_clip.kind.clone();
 
     // 3. クリップをトラックに追加
     let clip_id =
-        ClipHandler::add_clip_to_track(&project, comp_id, track_id, text_clip, 0, 90, None)
+        SourceHandler::add_source_to_track(&project, comp_id, track_id, text_clip, 0, 90, None)
             .unwrap();
 
     // 4. グラフノードをセットアップ (レイヤー + fill + transform + 接続)
-    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
-        .unwrap();
+    SourceHandler::setup_source_graph_nodes(
+        &project,
+        &plugin_manager,
+        track_id,
+        clip_id,
+        &clip_kind,
+    )
+    .unwrap();
 
     let proj = project.read().unwrap();
 
     // クリップが存在する
-    assert!(proj.get_clip(clip_id).is_some(), "Clip should exist");
+    assert!(proj.get_source(clip_id).is_some(), "Clip should exist");
 
     // トラックの子にレイヤーが追加されている (クリップは直接トラックの子ではない)
     let track = proj.get_track(track_id).unwrap();
@@ -84,10 +97,8 @@ fn test_add_text_clip_creates_full_graph() {
     );
     let layer_id = track.child_ids[0];
 
-    // レイヤーはトラック (サブトラック) として存在
-    let layer = proj
-        .get_track(layer_id)
-        .expect("Layer sub-track should exist");
+    // レイヤーは Node::Layer として存在
+    let layer = proj.get_layer(layer_id).expect("Layer should exist");
     assert_eq!(layer.name, "Layer");
 
     // レイヤーの子にクリップがある
@@ -171,15 +182,21 @@ fn test_add_shape_clip_creates_fill_chain() {
     let plugin_manager = make_plugin_manager();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "Shape Track").unwrap();
-    let shape_clip = ClipFactory::create_shape_clip(0, 60, 30.0);
+    let shape_clip = LayerFactory::build_shape_source(0, 60, 30.0);
     let clip_kind = shape_clip.kind.clone();
-    assert_eq!(clip_kind, TrackClipKind::Shape);
+    assert_eq!(clip_kind, SourceKind::Shape);
 
     let clip_id =
-        ClipHandler::add_clip_to_track(&project, comp_id, track_id, shape_clip, 0, 60, None)
+        SourceHandler::add_source_to_track(&project, comp_id, track_id, shape_clip, 0, 60, None)
             .unwrap();
-    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
-        .unwrap();
+    SourceHandler::setup_source_graph_nodes(
+        &project,
+        &plugin_manager,
+        track_id,
+        clip_id,
+        &clip_kind,
+    )
+    .unwrap();
 
     let proj = project.read().unwrap();
     let track = proj.get_track(track_id).unwrap();
@@ -210,19 +227,25 @@ fn test_add_image_clip_creates_direct_image_chain() {
     let plugin_manager = make_plugin_manager();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "Image Track").unwrap();
-    let image_clip = ClipFactory::create_image_clip(None, "/path/to/image.png", 0, 90, 30.0);
+    let image_clip = LayerFactory::build_image_source(None, "/path/to/image.png", 0, 90, 30.0);
     let clip_kind = image_clip.kind.clone();
 
     let clip_id =
-        ClipHandler::add_clip_to_track(&project, comp_id, track_id, image_clip, 0, 90, None)
+        SourceHandler::add_source_to_track(&project, comp_id, track_id, image_clip, 0, 90, None)
             .unwrap();
-    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
-        .unwrap();
+    SourceHandler::setup_source_graph_nodes(
+        &project,
+        &plugin_manager,
+        track_id,
+        clip_id,
+        &clip_kind,
+    )
+    .unwrap();
 
     let proj = project.read().unwrap();
     let track = proj.get_track(track_id).unwrap();
     let layer_id = track.child_ids[0];
-    let layer = proj.get_track(layer_id).unwrap();
+    let layer = proj.get_layer(layer_id).unwrap();
 
     // Image クリップは fill ノードを持たない (transform のみ)
     let graph_nodes: Vec<_> = layer
@@ -261,34 +284,33 @@ fn test_remove_clip_cleans_up_graph() {
     let plugin_manager = make_plugin_manager();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "Track").unwrap();
-    let text_clip = ClipFactory::create_text_clip("Test", 0, 30, 30.0);
+    let text_clip = LayerFactory::build_text_source("Test", 0, 30, 30.0);
     let clip_kind = text_clip.kind.clone();
     let clip_id =
-        ClipHandler::add_clip_to_track(&project, comp_id, track_id, text_clip, 0, 30, None)
+        SourceHandler::add_source_to_track(&project, comp_id, track_id, text_clip, 0, 30, None)
             .unwrap();
-    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
-        .unwrap();
+    SourceHandler::setup_source_graph_nodes(
+        &project,
+        &plugin_manager,
+        track_id,
+        clip_id,
+        &clip_kind,
+    )
+    .unwrap();
 
     // 削除前: ノードと接続が存在する
     {
         let proj = project.read().unwrap();
-        assert!(proj.get_clip(clip_id).is_some());
+        assert!(proj.get_source(clip_id).is_some());
         assert!(!proj.connections.is_empty());
     }
 
-    // レイヤー ID を取得 (クリップの親)
-    let layer_id = {
-        let proj = project.read().unwrap();
-        let track = proj.get_track(track_id).unwrap();
-        track.child_ids[0]
-    };
-
-    // クリップをレイヤーから削除
-    ClipHandler::remove_clip_from_track(&project, layer_id, clip_id).unwrap();
+    // クリップを親トラックから削除 (内部でレイヤーコンテナも除去)
+    SourceHandler::remove_source_from_track(&project, track_id, clip_id).unwrap();
 
     // 削除後: クリップとその接続が消えている
     let proj = project.read().unwrap();
-    assert!(proj.get_clip(clip_id).is_none(), "Clip should be removed");
+    assert!(proj.get_source(clip_id).is_none(), "Clip should be removed");
 
     // clip_id に関連する接続は全て消えている
     let clip_connections = proj
@@ -313,12 +335,12 @@ fn test_add_clip_rejects_nonexistent_composition() {
     let track_id = TrackHandler::add_track(&project, _comp_id, "Track").unwrap();
 
     // テキストクリップを作成
-    let clip = ClipFactory::create_text_clip("Hello", 0, 90, 30.0);
+    let clip = LayerFactory::build_text_source("Hello", 0, 90, 30.0);
 
     // 存在しないコンポジションIDで追加を試みる
     let fake_comp_id = uuid::Uuid::new_v4();
     let result =
-        ClipHandler::add_clip_to_track(&project, fake_comp_id, track_id, clip, 0, 90, None);
+        SourceHandler::add_source_to_track(&project, fake_comp_id, track_id, clip, 0, 90, None);
 
     assert!(
         result.is_err(),
@@ -332,22 +354,29 @@ fn test_add_clip_rejects_track_not_in_composition() {
     let (project, comp_a_id, _root_a) = setup_project();
 
     // 2つ目のコンポジションを作成
-    let (comp_b, root_track_b) = Composition::new("Comp B", 1920, 1080, 30.0, 60.0);
+    let comp_b = Composition::new("Comp B", 1920, 1080, 30.0, 60.0);
     let comp_b_id = comp_b.id;
     {
         let mut proj = project.write().unwrap();
-        proj.add_node(Node::Track(root_track_b));
         proj.add_composition(comp_b);
+        let root_track_b = TrackData::new("Root B");
+        let root_track_b_id = root_track_b.id;
+        proj.add_node(Node::Track(root_track_b));
+        proj.get_composition_mut(comp_b_id)
+            .unwrap()
+            .child_ids
+            .push(root_track_b_id);
     }
 
     // コンポジションBにトラックを追加
     let track_in_b = TrackHandler::add_track(&project, comp_b_id, "Track in B").unwrap();
 
     // テキストクリップを作成
-    let clip = ClipFactory::create_text_clip("Hello", 0, 90, 30.0);
+    let clip = LayerFactory::build_text_source("Hello", 0, 90, 30.0);
 
     // コンポジションAのIDだが、コンポジションBのトラックを指定 → 失敗すべき
-    let result = ClipHandler::add_clip_to_track(&project, comp_a_id, track_in_b, clip, 0, 90, None);
+    let result =
+        SourceHandler::add_source_to_track(&project, comp_a_id, track_in_b, clip, 0, 90, None);
 
     assert!(
         result.is_err(),
@@ -357,7 +386,7 @@ fn test_add_clip_rejects_track_not_in_composition() {
     // クリップがノードレジストリに追加されていないことを確認
     let proj = project.read().unwrap();
     assert_eq!(
-        proj.all_clips().count(),
+        proj.all_sources().count(),
         0,
         "No clips should exist after failed add"
     );
@@ -377,11 +406,11 @@ fn test_add_clip_rejects_orphan_track() {
     }
 
     // テキストクリップを作成
-    let clip = ClipFactory::create_text_clip("Hello", 0, 90, 30.0);
+    let clip = LayerFactory::build_text_source("Hello", 0, 90, 30.0);
 
     // 孤立トラックに追加を試みる → 失敗すべき
     let result =
-        ClipHandler::add_clip_to_track(&project, comp_id, orphan_track_id, clip, 0, 90, None);
+        SourceHandler::add_source_to_track(&project, comp_id, orphan_track_id, clip, 0, 90, None);
 
     assert!(
         result.is_err(),
@@ -399,20 +428,20 @@ fn test_add_clip_rejects_orphan_track() {
 ///   5. レンダリングに必要なグラフ接続を検証 (テキストが描画される前提条件)
 #[test]
 fn test_ui_flow_add_track_subtrack_text_clip() {
-    let (project, comp_id, root_track_id) = setup_project();
+    let (project, comp_id, _root_track_id) = setup_project();
     let plugin_manager = make_plugin_manager();
 
     // ──── Step 1: 「Add Track」ボタン押下 ────
     // UI: track_list.rs → DeferredTrackAction::AddTrack → project_service.add_track()
     let track_id = TrackHandler::add_track(&project, comp_id, "New Track").unwrap();
 
-    // 検証: トラックがルートトラックの子として追加されている
+    // 検証: トラックがコンポジションの子として追加されている
     {
         let proj = project.read().unwrap();
-        let root = proj.get_track(root_track_id).unwrap();
+        let comp = proj.get_composition(comp_id).unwrap();
         assert!(
-            root.child_ids.contains(&track_id),
-            "New Track should be a child of root track"
+            comp.child_ids.contains(&track_id),
+            "New Track should be a child of composition"
         );
         let track = proj.get_track(track_id).unwrap();
         assert_eq!(track.name, "New Track");
@@ -443,12 +472,12 @@ fn test_ui_flow_add_track_subtrack_text_clip() {
     let duration_frames = (5.0_f64 * fps).round() as u64; // 5秒 = 150フレーム
     let out_frame = in_frame + duration_frames;
 
-    let text_clip = ClipFactory::create_text_clip(sample_text, in_frame, out_frame, fps);
+    let text_clip = LayerFactory::build_text_source(sample_text, in_frame, out_frame, fps);
     let clip_kind = text_clip.kind.clone();
-    assert_eq!(clip_kind, TrackClipKind::Text);
+    assert_eq!(clip_kind, SourceKind::Text);
 
     // サブトラックにクリップを追加 (UI: add_clip_to_best_track がフラッタンから対象トラックを決定)
-    let clip_id = ClipHandler::add_clip_to_track(
+    let clip_id = SourceHandler::add_source_to_track(
         &project,
         comp_id,
         sub_track_id,
@@ -459,8 +488,8 @@ fn test_ui_flow_add_track_subtrack_text_clip() {
     )
     .unwrap();
 
-    // グラフノードをセットアップ (UI: project_service.add_clip_to_track 内部で自動呼出)
-    ClipHandler::setup_clip_graph_nodes(
+    // グラフノードをセットアップ (UI: project_service.add_source_to_track 内部で自動呼出)
+    SourceHandler::setup_source_graph_nodes(
         &project,
         &plugin_manager,
         sub_track_id,
@@ -473,8 +502,10 @@ fn test_ui_flow_add_track_subtrack_text_clip() {
     let proj = project.read().unwrap();
 
     // 4a. クリップがノードレジストリに存在する
-    let clip = proj.get_clip(clip_id).expect("Clip should exist in nodes");
-    assert_eq!(clip.kind, TrackClipKind::Text);
+    let clip = proj
+        .get_source(clip_id)
+        .expect("Clip should exist in nodes");
+    assert_eq!(clip.kind, SourceKind::Text);
     assert_eq!(clip.in_frame, in_frame);
     assert_eq!(clip.out_frame, out_frame);
 
@@ -496,9 +527,7 @@ fn test_ui_flow_add_track_subtrack_text_clip() {
         "Sub-track should have 1 child (the layer)"
     );
     let layer_id = sub_track.child_ids[0];
-    let layer = proj
-        .get_track(layer_id)
-        .expect("Layer sub-track should exist");
+    let layer = proj.get_layer(layer_id).expect("Layer should exist");
     assert_eq!(layer.name, "Layer");
 
     // 4d. レイヤーの子にクリップがある
@@ -580,9 +609,9 @@ fn test_ui_flow_add_track_subtrack_text_clip() {
     );
 
     // 5e. 全体のツリー構造を確認
-    //   root_track → track ("New Track") → sub_track ("New Sub-Track") → layer ("Layer") → clip + graph_nodes
-    let root = proj.get_track(root_track_id).unwrap();
-    assert!(root.child_ids.contains(&track_id));
+    //   composition → track ("New Track") → sub_track ("New Sub-Track") → layer ("Layer") → clip + graph_nodes
+    let comp = proj.get_composition(comp_id).unwrap();
+    assert!(comp.child_ids.contains(&track_id));
     let track = proj.get_track(track_id).unwrap();
     assert!(track.child_ids.contains(&sub_track_id));
 
@@ -605,20 +634,26 @@ fn test_reorder_effect_chain_swaps_two_effects() {
     let plugin_manager = make_plugin_manager();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "Track").unwrap();
-    let image_clip = ClipFactory::create_image_clip(None, "/path/to/image.png", 0, 90, 30.0);
+    let image_clip = LayerFactory::build_image_source(None, "/path/to/image.png", 0, 90, 30.0);
     let clip_kind = image_clip.kind.clone();
     let clip_id =
-        ClipHandler::add_clip_to_track(&project, comp_id, track_id, image_clip, 0, 90, None)
+        SourceHandler::add_source_to_track(&project, comp_id, track_id, image_clip, 0, 90, None)
             .unwrap();
-    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
-        .unwrap();
+    SourceHandler::setup_source_graph_nodes(
+        &project,
+        &plugin_manager,
+        track_id,
+        clip_id,
+        &clip_kind,
+    )
+    .unwrap();
 
     // レイヤーIDとtransform IDを取得
     let (layer_id, transform_id) = {
         let proj = project.read().unwrap();
         let track = proj.get_track(track_id).unwrap();
         let layer_id = track.child_ids[0];
-        let layer = proj.get_track(layer_id).unwrap();
+        let layer = proj.get_layer(layer_id).unwrap();
         let transform_id = *layer
             .child_ids
             .iter()
@@ -721,19 +756,25 @@ fn test_remove_middle_effect_reconnects_chain() {
     let plugin_manager = make_plugin_manager();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "Track").unwrap();
-    let image_clip = ClipFactory::create_image_clip(None, "/path/to/img.png", 0, 90, 30.0);
+    let image_clip = LayerFactory::build_image_source(None, "/path/to/img.png", 0, 90, 30.0);
     let clip_kind = image_clip.kind.clone();
     let clip_id =
-        ClipHandler::add_clip_to_track(&project, comp_id, track_id, image_clip, 0, 90, None)
+        SourceHandler::add_source_to_track(&project, comp_id, track_id, image_clip, 0, 90, None)
             .unwrap();
-    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
-        .unwrap();
+    SourceHandler::setup_source_graph_nodes(
+        &project,
+        &plugin_manager,
+        track_id,
+        clip_id,
+        &clip_kind,
+    )
+    .unwrap();
 
     let (layer_id, transform_id) = {
         let proj = project.read().unwrap();
         let track = proj.get_track(track_id).unwrap();
         let layer_id = track.child_ids[0];
-        let layer = proj.get_track(layer_id).unwrap();
+        let layer = proj.get_layer(layer_id).unwrap();
         let transform_id = *layer
             .child_ids
             .iter()
@@ -827,18 +868,24 @@ fn test_remove_track_cleans_all_descendants() {
     let plugin_manager = make_plugin_manager();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "Track").unwrap();
-    let text_clip = ClipFactory::create_text_clip("Test", 0, 30, 30.0);
+    let text_clip = LayerFactory::build_text_source("Test", 0, 30, 30.0);
     let clip_kind = text_clip.kind.clone();
     let clip_id =
-        ClipHandler::add_clip_to_track(&project, comp_id, track_id, text_clip, 0, 30, None)
+        SourceHandler::add_source_to_track(&project, comp_id, track_id, text_clip, 0, 30, None)
             .unwrap();
-    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
-        .unwrap();
+    SourceHandler::setup_source_graph_nodes(
+        &project,
+        &plugin_manager,
+        track_id,
+        clip_id,
+        &clip_kind,
+    )
+    .unwrap();
 
     // 削除前にクリップが存在することを確認
     {
         let proj = project.read().unwrap();
-        assert!(proj.get_clip(clip_id).is_some());
+        assert!(proj.get_source(clip_id).is_some());
         assert!(!proj.connections.is_empty());
     }
 
@@ -851,7 +898,7 @@ fn test_remove_track_cleans_all_descendants() {
         proj.get_track(track_id).is_none(),
         "Track should be removed"
     );
-    assert!(proj.get_clip(clip_id).is_none(), "Clip should be removed");
+    assert!(proj.get_source(clip_id).is_none(), "Clip should be removed");
     assert!(
         proj.connections.is_empty(),
         "All connections should be removed after track deletion"

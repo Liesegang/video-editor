@@ -1,18 +1,18 @@
-use crate::project::clip::TrackClip;
-use crate::project::clip::TrackClipKind;
+use crate::project::source::SourceData;
+use crate::project::source::SourceKind;
 
-impl TrackClip {
+impl SourceData {
     // --- UI / Display Helpers ---
 
-    /// Returns the display color of the clip based on its kind.
+    /// Returns the display color of the source based on its kind.
     pub fn display_color(&self) -> (u8, u8, u8) {
         match self.kind {
-            TrackClipKind::Video => (100, 150, 255),       // Blue
-            TrackClipKind::Audio => (100, 255, 150),       // Green
-            TrackClipKind::Image => (255, 100, 150),       // Pink
-            TrackClipKind::Composition => (255, 150, 255), // Magenta
-            TrackClipKind::Text => (255, 200, 100),        // Orange/Yellow
-            _ => (128, 128, 128),                          // Gray
+            SourceKind::Video => (100, 150, 255),       // Blue
+            SourceKind::Audio => (100, 255, 150),       // Green
+            SourceKind::Image => (255, 100, 150),       // Pink
+            SourceKind::Composition => (255, 150, 255), // Magenta
+            SourceKind::Text => (255, 200, 100),        // Orange/Yellow
+            _ => (128, 128, 128),                       // Gray
         }
     }
 
@@ -22,9 +22,6 @@ impl TrackClip {
     }
 
     /// Helper to get a float property (usually current static value if constant, or generic fallback).
-    /// Note: This does NOT evaluate keyframes. It just grabs a 'base' value if available.
-    /// For accurate values at a specific time, use the Evaluator.
-    /// This is strictly for simple UI display where exact animation state might not be needed or available cheaply.
     pub fn get_property_float_or(&self, key: &str, default: f32) -> f32 {
         self.properties.get_f32(key).unwrap_or(default)
     }

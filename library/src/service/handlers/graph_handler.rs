@@ -11,7 +11,7 @@ use uuid::Uuid;
 pub struct GraphHandler;
 
 impl GraphHandler {
-    /// Add a graph node to a container (track).
+    /// Add a graph node to a container (Track or Layer).
     ///
     /// Looks up the `NodeTypeDefinition` from PluginManager to populate default properties.
     /// Returns the new node's ID.
@@ -32,18 +32,18 @@ impl GraphHandler {
 
         let mut proj = super::write_project(project)?;
 
-        // Ensure container exists
-        if proj.get_track(container_id).is_none() {
+        // Ensure container exists (Track or Layer)
+        if proj.get_container_child_ids(container_id).is_none() {
             return Err(LibraryError::project(format!(
-                "Container track {} not found",
+                "Container {} not found (not a Track or Layer)",
                 container_id
             )));
         }
 
         proj.add_node(Node::Graph(node));
 
-        if let Some(track) = proj.get_track_mut(container_id) {
-            track.add_child(node_id);
+        if let Some(children) = proj.get_container_child_ids_mut(container_id) {
+            children.push(node_id);
         }
 
         Ok(node_id)
@@ -90,19 +90,20 @@ impl GraphHandler {
             }
         }
 
-        // Remove from parent track's child_ids
-        let parent_track_ids: Vec<Uuid> = proj
+        // Remove from parent container's child_ids (Track or Layer)
+        let parent_ids: Vec<Uuid> = proj
             .nodes
             .iter()
-            .filter_map(|(tid, n)| match n {
-                Node::Track(t) if t.child_ids.contains(&node_id) => Some(*tid),
+            .filter_map(|(id, n)| match n {
+                Node::Track(t) if t.child_ids.contains(&node_id) => Some(*id),
+                Node::Layer(l) if l.child_ids.contains(&node_id) => Some(*id),
                 _ => None,
             })
             .collect();
 
-        for track_id in parent_track_ids {
-            if let Some(track) = proj.get_track_mut(track_id) {
-                track.remove_child(node_id);
+        for pid in parent_ids {
+            if let Some(children) = proj.get_container_child_ids_mut(pid) {
+                children.retain(|id| *id != node_id);
             }
         }
 
@@ -156,19 +157,19 @@ impl GraphHandler {
         Ok(())
     }
 
-    /// Reorder the effect chain for a clip.
+    /// Reorder the effect chain for a source.
     ///
     /// Rewires the image chain connections to match the new order.
     /// Chain: source.image_out → effect[0].image_in → … → effect[N].image_out → terminal.image_in
     pub fn reorder_effect_chain(
         project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
+        source_id: Uuid,
         new_order: &[Uuid],
     ) -> Result<(), LibraryError> {
         let mut proj = super::write_project(project)?;
 
-        // Resolve clip context to find the current chain, source and terminal
-        let ctx = crate::project::graph_analysis::resolve_clip_context(&proj, clip_id);
+        // Resolve source context to find the current chain, source and terminal
+        let ctx = crate::project::graph_analysis::resolve_source_context(&proj, source_id);
         let old_chain = &ctx.effect_chain;
 
         // Validate new_order contains exactly the same effect IDs
@@ -186,12 +187,12 @@ impl GraphHandler {
             }
         }
 
-        // Find source node (what feeds into the first effect)
-        // It's either the clip itself, or the last style node
-        let source_id = if !ctx.style_chain.is_empty() {
+        // Find feed node (what feeds into the first effect)
+        // It's either the source itself, or the last style node
+        let feed_id = if !ctx.style_chain.is_empty() {
             *ctx.style_chain.last().unwrap()
         } else {
-            clip_id
+            source_id
         };
 
         // Find terminal: what the last effect connects to (usually transform)
@@ -212,8 +213,8 @@ impl GraphHandler {
             .connections
             .iter()
             .filter(|c| {
-                // source → first effect
-                (c.from.node_id == source_id && c.from.pin_name == "image_out"
+                // feed → first effect
+                (c.from.node_id == feed_id && c.from.pin_name == "image_out"
                     && chain_node_ids.contains(&c.to.node_id) && c.to.pin_name == "image_in")
                 // effect → effect
                 || (chain_node_ids.contains(&c.from.node_id) && c.from.pin_name == "image_out"
@@ -231,9 +232,9 @@ impl GraphHandler {
 
         // Re-create connections in new order
         if !new_order.is_empty() {
-            // source → first effect
+            // feed → first effect
             proj.add_connection(Connection::new(
-                PinId::new(source_id, "image_out"),
+                PinId::new(feed_id, "image_out"),
                 PinId::new(new_order[0], "image_in"),
             ));
 

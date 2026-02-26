@@ -1,9 +1,9 @@
-use library::project::clip::TrackClip;
+use library::project::source::SourceData;
 use library::runtime::transform::Transform;
 use uuid::Uuid;
 
 pub(super) struct PreviewClip<'a> {
-    pub(super) clip: &'a TrackClip,
+    pub(super) clip: &'a SourceData,
     pub(super) track_id: Uuid,
     pub(super) transform: Transform,
     /// The compositing.transform graph node ID (if any).

@@ -1,7 +1,7 @@
 use egui::Ui;
-use library::project::clip::TrackClip;
 use library::project::node::Node;
 use library::project::project::Project;
+use library::project::source::SourceData;
 use library::project::track::TrackData;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
@@ -11,9 +11,9 @@ use crate::{command::history::HistoryManager, context::context::EditorContext};
 
 use super::super::geometry::TimelineGeometry;
 use super::super::utils::flatten::{flatten_tracks_to_rows, DisplayRow};
-use super::clip_interaction::{draw_single_clip, DeferredClipAction};
+use super::layer_interaction::{draw_single_layer, DeferredLayerAction};
 
-pub(super) fn calculate_clip_rect(
+pub(super) fn calculate_layer_rect(
     in_frame: u64,
     out_frame: u64,
     track_index: usize,
@@ -94,16 +94,24 @@ pub(super) fn draw_waveform(
     }
 }
 
-// Helper to collect all clips from a track and its descendants using Project node lookup
-pub(super) fn collect_descendant_clips<'a>(
+// Helper to collect all sources from a track and its descendants using Project node lookup
+pub(super) fn collect_descendant_sources<'a>(
     project: &'a Project,
     track: &'a TrackData,
-    clips: &mut Vec<&'a TrackClip>,
+    sources: &mut Vec<&'a SourceData>,
 ) {
     for child_id in &track.child_ids {
         match project.get_node(*child_id) {
-            Some(Node::Clip(clip)) => clips.push(clip),
-            Some(Node::Track(sub_track)) => collect_descendant_clips(project, sub_track, clips),
+            Some(Node::Source(source)) => sources.push(source),
+            Some(Node::Track(sub_track)) => collect_descendant_sources(project, sub_track, sources),
+            Some(Node::Layer(layer)) => {
+                // Layer containers hold sources (and graph nodes)
+                for layer_child_id in &layer.child_ids {
+                    if let Some(Node::Source(source)) = project.get_node(*layer_child_id) {
+                        sources.push(source);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -125,25 +133,25 @@ pub(in crate::panels::timeline) fn calculate_insert_index(
     if let Some((header_idx, _)) = display_rows.iter().enumerate().find(|(_, r)| {
         r.track_id() == hovered_track_id && matches!(r, DisplayRow::TrackHeader { .. })
     }) {
-        let current_y_in_clip_area = mouse_y - content_rect_min_y + scroll_offset_y;
+        let current_y_in_layer_area = mouse_y - content_rect_min_y + scroll_offset_y;
 
         let hovered_row_index =
-            (current_y_in_clip_area / (geo.row_height + geo.track_spacing)).floor() as isize;
+            (current_y_in_layer_area / (geo.row_height + geo.track_spacing)).floor() as isize;
         let header_row_index = header_idx as isize;
 
         let raw_target_index = hovered_row_index - header_row_index - 1;
 
         // Clamp to valid range
         if let Some(track) = project.get_track(hovered_track_id) {
-            // Count clips in this track
-            let clip_count = track
+            // Count sources in this track
+            let source_count = track
                 .child_ids
                 .iter()
-                .filter(|id| matches!(project.get_node(**id), Some(Node::Clip(_))))
+                .filter(|id| matches!(project.get_node(**id), Some(Node::Source(_))))
                 .count();
 
             // Invert index because display order is reversed (Top of UI = End of List)
-            let max_index = clip_count as isize;
+            let max_index = source_count as isize;
             let inverted_target = max_index - raw_target_index;
             let target_index = inverted_target.clamp(0, max_index) as usize;
 
@@ -153,9 +161,9 @@ pub(in crate::panels::timeline) fn calculate_insert_index(
     None
 }
 
-pub(super) fn draw_clips(
+pub(super) fn draw_layers(
     ui_content: &mut Ui,
-    content_rect_for_clip_area: egui::Rect,
+    content_rect: egui::Rect,
     editor_context: &mut EditorContext,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
@@ -166,7 +174,7 @@ pub(super) fn draw_clips(
     let row_height = geo.row_height;
     let track_spacing = geo.track_spacing;
     let mut clicked_on_entity = false;
-    let mut deferred_actions: Vec<DeferredClipAction> = Vec::new();
+    let mut deferred_actions: Vec<DeferredLayerAction> = Vec::new();
 
     // ===== PHASE 1: Read lock scope - UI rendering and action collection =====
     {
@@ -194,7 +202,7 @@ pub(super) fn draw_clips(
             if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
                 if let Some((target_index, header_idx)) = calculate_insert_index(
                     mouse_pos.y,
-                    content_rect_for_clip_area.min.y,
+                    content_rect.min.y,
                     editor_context.timeline.scroll_offset.y,
                     geo,
                     &display_rows,
@@ -202,7 +210,7 @@ pub(super) fn draw_clips(
                     root_track_ids,
                     hovered_tid,
                 ) {
-                    // Find dragged clip original info
+                    // Find dragged source original info
                     let mut dragged_original_index = 0;
                     if let Some(track) = proj_read.get_track(hovered_tid) {
                         if let Some(pos) = track.child_ids.iter().position(|id| *id == dragged_id) {
@@ -228,35 +236,35 @@ pub(super) fn draw_clips(
                     is_expanded,
                     ..
                 } => {
-                    // If collapsed, draw all clips on this row
+                    // If collapsed, draw all sources on this row
                     if !is_expanded {
-                        let mut clips_to_draw: Vec<&TrackClip> = Vec::new();
-                        collect_descendant_clips(&proj_read, track, &mut clips_to_draw);
+                        let mut sources_to_draw: Vec<&SourceData> = Vec::new();
+                        collect_descendant_sources(&proj_read, track, &mut sources_to_draw);
 
-                        // Check if clip is a direct child of this track
-                        let direct_clip_ids: std::collections::HashSet<Uuid> = track
+                        // Check if source is a direct child of this track
+                        let direct_source_ids: std::collections::HashSet<Uuid> = track
                             .child_ids
                             .iter()
-                            .filter(|id| matches!(proj_read.get_node(**id), Some(Node::Clip(_))))
+                            .filter(|id| matches!(proj_read.get_node(**id), Some(Node::Source(_))))
                             .copied()
                             .collect();
 
-                        for clip in clips_to_draw {
-                            let is_summary_clip = !direct_clip_ids.contains(&clip.id);
+                        for source in sources_to_draw {
+                            let is_summary_layer = !direct_source_ids.contains(&source.id);
 
-                            draw_single_clip(
+                            draw_single_layer(
                                 ui_content,
-                                content_rect_for_clip_area,
+                                content_rect,
                                 editor_context,
                                 &mut deferred_actions,
                                 project_service,
                                 &proj_read,
                                 root_track_ids,
-                                clip,
+                                source,
                                 track,
                                 *visible_row_index,
                                 geo,
-                                is_summary_clip,
+                                is_summary_layer,
                                 &mut clicked_on_entity,
                                 &display_rows,
                                 &reorder_state,
@@ -264,22 +272,22 @@ pub(super) fn draw_clips(
                         }
                     }
                 }
-                DisplayRow::ClipRow {
-                    clip,
+                DisplayRow::SourceRow {
+                    source,
                     parent_track,
                     visible_row_index,
                     ..
                 } => {
-                    // Draw single clip on its own row
-                    draw_single_clip(
+                    // Draw single layer on its own row
+                    draw_single_layer(
                         ui_content,
-                        content_rect_for_clip_area,
+                        content_rect,
                         editor_context,
                         &mut deferred_actions,
                         project_service,
                         &proj_read,
                         root_track_ids,
-                        clip,
+                        source,
                         parent_track,
                         *visible_row_index,
                         geo,
@@ -295,10 +303,10 @@ pub(super) fn draw_clips(
         // Draw asset drag preview indicator
         if let Some(ref _dragged_item) = editor_context.interaction.timeline.dragged_item {
             if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
-                if content_rect_for_clip_area.contains(mouse_pos) {
+                if content_rect.contains(mouse_pos) {
                     // Calculate insert position
-                    let relative_y = mouse_pos.y - content_rect_for_clip_area.min.y
-                        + editor_context.timeline.scroll_offset.y;
+                    let relative_y =
+                        mouse_pos.y - content_rect.min.y + editor_context.timeline.scroll_offset.y;
                     let row_with_spacing = row_height + track_spacing;
                     let row_index = (relative_y / row_with_spacing).floor() as usize;
 
@@ -312,14 +320,14 @@ pub(super) fn draw_clips(
                     } else {
                         row_index + 1
                     };
-                    let indicator_y = content_rect_for_clip_area.min.y
+                    let indicator_y = content_rect.min.y
                         + (indicator_row as f32 * row_with_spacing)
                         - editor_context.timeline.scroll_offset.y;
 
                     // Draw a horizontal line indicator
                     let painter = ui_content.painter();
-                    let line_start = egui::pos2(content_rect_for_clip_area.min.x, indicator_y);
-                    let line_end = egui::pos2(content_rect_for_clip_area.max.x, indicator_y);
+                    let line_start = egui::pos2(content_rect.min.x, indicator_y);
+                    let line_end = egui::pos2(content_rect.max.x, indicator_y);
                     painter.line_segment(
                         [line_start, line_end],
                         egui::Stroke::new(3.0, egui::Color32::from_rgb(100, 200, 255)),
@@ -352,69 +360,72 @@ pub(super) fn draw_clips(
 
     // ===== PHASE 2: Execute deferred actions (no lock held) =====
     let mut needs_history_push = false;
-    let mut removed_clip_ids: Vec<Uuid> = Vec::new();
+    let mut removed_source_ids: Vec<Uuid> = Vec::new();
     for action in deferred_actions {
         match action {
-            DeferredClipAction::UpdateClipTime {
-                clip_id,
+            DeferredLayerAction::UpdateLayerTime {
+                source_id,
                 new_in_frame,
                 new_out_frame,
             } => {
                 if let Err(e) =
-                    project_service.update_clip_time(clip_id, new_in_frame, new_out_frame)
+                    project_service.update_source_time(source_id, new_in_frame, new_out_frame)
                 {
-                    log::error!("Failed to update clip time: {:?}", e);
+                    log::error!("Failed to update source time: {:?}", e);
                 }
             }
-            DeferredClipAction::MoveClipToTrack {
+            DeferredLayerAction::MoveLayerToTrack {
                 comp_id,
                 original_track_id,
-                clip_id,
+                source_id,
                 target_track_id,
                 in_frame,
                 target_index,
             } => {
-                // Read the clip's CURRENT in_frame, which may have been updated
-                // by a preceding UpdateClipTime action in the same frame.
+                // Read the source's CURRENT in_frame, which may have been updated
+                // by a preceding UpdateLayerTime action in the same frame.
                 // Using the stale `in_frame` from the READ phase would overwrite
-                // the horizontal drag applied by UpdateClipTime.
+                // the horizontal drag applied by UpdateLayerTime.
                 let current_in_frame = project_service
-                    .with_project(|p| p.get_clip(clip_id).map(|c| c.in_frame))
+                    .with_project(|p| p.get_source(source_id).map(|c| c.in_frame))
                     .unwrap_or(in_frame);
 
-                if let Err(e) = project_service.move_clip_to_track_at_index(
+                if let Err(e) = project_service.move_layer_to_track_at_index(
                     comp_id,
                     original_track_id,
-                    clip_id,
+                    source_id,
                     target_track_id,
                     current_in_frame,
                     target_index,
                 ) {
                     log::error!("Failed to move entity: {:?}", e);
-                    // Rollback selection state: clip is still on the original track
+                    // Rollback selection state: source is still on the original track
                     if editor_context.selection.last_selected_track_id == Some(target_track_id) {
                         editor_context.selection.last_selected_track_id = Some(original_track_id);
                     }
                 }
             }
-            DeferredClipAction::RemoveClip { track_id, clip_id } => {
-                if let Err(e) = project_service.remove_clip_from_track(track_id, clip_id) {
-                    log::error!("Failed to remove clip: {:?}", e);
+            DeferredLayerAction::RemoveLayer {
+                track_id,
+                source_id,
+            } => {
+                if let Err(e) = project_service.remove_layer_from_track(track_id, source_id) {
+                    log::error!("Failed to remove layer: {:?}", e);
                 } else {
-                    removed_clip_ids.push(clip_id);
+                    removed_source_ids.push(source_id);
                     needs_history_push = true;
                 }
             }
-            DeferredClipAction::PushHistory => {
+            DeferredLayerAction::PushHistory => {
                 needs_history_push = true;
             }
         }
     }
 
-    // Update selection for removed clips
-    for clip_id in &removed_clip_ids {
-        editor_context.selection.selected_entities.remove(clip_id);
-        if editor_context.selection.last_selected_entity_id == Some(*clip_id) {
+    // Update selection for removed sources
+    for source_id in &removed_source_ids {
+        editor_context.selection.selected_entities.remove(source_id);
+        if editor_context.selection.last_selected_entity_id == Some(*source_id) {
             editor_context.selection.last_selected_entity_id = None;
             editor_context.selection.last_selected_track_id = None;
         }
@@ -429,7 +440,7 @@ pub(super) fn draw_clips(
     clicked_on_entity
 }
 
-pub(super) fn get_clips_in_box(
+pub(super) fn get_layers_in_box(
     rect: egui::Rect,
     editor_context: &EditorContext,
     project: &Project,
@@ -437,7 +448,7 @@ pub(super) fn get_clips_in_box(
     geo: &TimelineGeometry,
     rect_offset: egui::Vec2,
 ) -> Vec<(Uuid, Uuid)> {
-    let mut found_clips = Vec::new();
+    let mut found_layers = Vec::new();
     let display_rows = flatten_tracks_to_rows(
         project,
         root_track_ids,
@@ -445,7 +456,7 @@ pub(super) fn get_clips_in_box(
     );
 
     for row in display_rows {
-        let mut clips_to_check: Vec<(&TrackClip, &TrackData, usize)> = Vec::new();
+        let mut sources_to_check: Vec<(&SourceData, &TrackData, usize)> = Vec::new();
 
         match row {
             DisplayRow::TrackHeader {
@@ -455,39 +466,39 @@ pub(super) fn get_clips_in_box(
                 ..
             } => {
                 if !is_expanded {
-                    let mut clips = Vec::new();
-                    collect_descendant_clips(project, track, &mut clips);
-                    for clip in clips {
-                        clips_to_check.push((clip, track, visible_row_index));
+                    let mut sources = Vec::new();
+                    collect_descendant_sources(project, track, &mut sources);
+                    for source in sources {
+                        sources_to_check.push((source, track, visible_row_index));
                     }
                 }
             }
-            DisplayRow::ClipRow {
-                clip,
+            DisplayRow::SourceRow {
+                source,
                 parent_track,
                 visible_row_index,
                 ..
             } => {
-                clips_to_check.push((clip, parent_track, visible_row_index));
+                sources_to_check.push((source, parent_track, visible_row_index));
             }
         }
 
-        for (clip, track, row_idx) in clips_to_check {
-            let clip_rect = calculate_clip_rect(
-                clip.in_frame,
-                clip.out_frame,
+        for (source, track, row_idx) in sources_to_check {
+            let layer_rect = calculate_layer_rect(
+                source.in_frame,
+                source.out_frame,
                 row_idx,
                 editor_context.timeline.scroll_offset,
                 geo,
                 rect_offset,
             );
 
-            if rect.intersects(clip_rect) {
-                found_clips.push((clip.id, track.id));
+            if rect.intersects(layer_rect) {
+                found_layers.push((source.id, track.id));
             }
         }
     }
-    found_clips
+    found_layers
 }
 
 #[cfg(test)]
@@ -504,12 +515,12 @@ mod tests {
         }
     }
 
-    // ── Domain: calculate_clip_rect ──
+    // ── Domain: calculate_layer_rect ──
 
     #[test]
-    fn clip_rect_basic_position() {
+    fn layer_rect_basic_position() {
         let geo = default_geo();
-        let rect = calculate_clip_rect(
+        let rect = calculate_layer_rect(
             0,                // in_frame
             30,               // out_frame (1 second at 30fps)
             0,                // track_index (first row)
@@ -527,9 +538,9 @@ mod tests {
     }
 
     #[test]
-    fn clip_rect_with_offset_frames() {
+    fn layer_rect_with_offset_frames() {
         let geo = default_geo();
-        let rect = calculate_clip_rect(
+        let rect = calculate_layer_rect(
             30, // in_frame (1 sec)
             60, // out_frame (2 sec)
             0,
@@ -544,9 +555,9 @@ mod tests {
     }
 
     #[test]
-    fn clip_rect_on_second_row() {
+    fn layer_rect_on_second_row() {
         let geo = default_geo();
-        let rect = calculate_clip_rect(
+        let rect = calculate_layer_rect(
             0,
             30,
             1, // second row
@@ -559,9 +570,9 @@ mod tests {
     }
 
     #[test]
-    fn clip_rect_with_scroll() {
+    fn layer_rect_with_scroll() {
         let geo = default_geo();
-        let rect = calculate_clip_rect(
+        let rect = calculate_layer_rect(
             0,
             30,
             0,
@@ -576,9 +587,9 @@ mod tests {
     }
 
     #[test]
-    fn clip_rect_with_base_offset() {
+    fn layer_rect_with_base_offset() {
         let geo = default_geo();
-        let rect = calculate_clip_rect(
+        let rect = calculate_layer_rect(
             0,
             30,
             0,
@@ -593,9 +604,9 @@ mod tests {
     }
 
     #[test]
-    fn clip_rect_zero_duration_has_min_width() {
+    fn layer_rect_zero_duration_has_min_width() {
         let geo = default_geo();
-        let rect = calculate_clip_rect(
+        let rect = calculate_layer_rect(
             10,
             10, // zero duration!
             0,
@@ -629,7 +640,7 @@ mod tests {
         }];
 
         let geo = default_geo();
-        // Mouse at y = header row area → row index 0
+        // Mouse at y = header row area -> row index 0
         let result = calculate_insert_index(
             5.0, // mouse_y (within first row)
             0.0, // content_rect_min_y
@@ -640,7 +651,7 @@ mod tests {
             &[track_id],
             track_id,
         );
-        // Empty track: clip_count=0, raw_target_index = 0-0-1 = -1
+        // Empty track: source_count=0, raw_target_index = 0-0-1 = -1
         // inverted = 0 - (-1) = 1, clamped to [0, 0] = 0
         assert!(result.is_some());
         let (index, header_idx) = result.unwrap();

@@ -94,19 +94,21 @@ app/src/
 
 ```
 Project
-├── compositions: HashMap<Uuid, Composition>  … タイムライン/シーケンス
-├── assets: HashMap<Uuid, Asset>              … メディアファイル
-├── nodes: HashMap<Uuid, Node>                … 統合ノードレジストリ
+├── composition_ids: Vec<Uuid>               … コンポジション順序
+├── assets: Vec<Asset>                       … メディアファイル
+├── nodes: HashMap<Uuid, Node>               … 統合ノードレジストリ (全ノード)
+├── connections: Vec<Connection>             … ノード間接続
 └── export: ExportConfig
 
-Node (enum)
-├── Track(TrackData)   … トラック (child_ids で子ノード参照)
-└── Clip(TrackClip)    … クリップ
-    ├── kind: TrackClipKind (Video, Audio, Text, Shape, SkSL, Image, Composition)
-    ├── properties: HashMap<String, Property>
-    ├── effects: Vec<EffectConfig>
-    ├── styles, effectors, decorators
-    └── start_frame, end_frame, offset_frame
+Node (enum, #[serde(tag = "node_type")])
+├── Track(TrackData)        … トラック (child_ids で子ノード参照)
+├── Layer(LayerData)        … レイヤーコンテナ (旧 is_layer トラック)
+├── Composition(Composition)… コンポジション (root_track_id, fps, size, duration)
+├── Source(SourceData)      … メディアソース (#[serde(alias = "Clip")])
+│   ├── kind: SourceKind (Video, Audio, Text, Shape, SkSL, Image, Composition)
+│   ├── properties: PropertyMap
+│   └── in_frame, out_frame, source_begin_frame, fps
+└── Graph(GraphNode)        … グラフノード (エフェクト, トランスフォーム, スタイル等)
 ```
 
 ### 主要デザインパターン
@@ -216,6 +218,7 @@ GitHub Actions で 3 プラットフォーム対応 (手動トリガー):
 - `OrderedFloat` で浮動小数点の Hash/Eq を実現
 - `formatOnSave: false` (手動フォーマット)
 - リリースビルドにデバッグシンボル含む (`debug = true`)
+- **1ファイル1struct 原則**: データモデル (`library/src/project/`) では各 struct を独自ファイルに配置。密接に関連する型 (SourceData + SourceKind) のみ同居可。
 
 ## 注意事項
 

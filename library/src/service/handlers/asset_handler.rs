@@ -17,7 +17,7 @@ impl AssetHandler {
     pub fn is_asset_used(project: &Arc<RwLock<Project>>, asset_id: Uuid) -> bool {
         if let Ok(proj) = super::read_project(project) {
             // Check all clips in the nodes registry
-            for clip in proj.all_clips() {
+            for clip in proj.all_sources() {
                 if let Some(ref r) = clip.reference_id {
                     if *r == asset_id {
                         return true;

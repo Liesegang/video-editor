@@ -18,6 +18,7 @@ pub enum PinDataType {
     Path,
     Enum,
     List,
+    Audio,
     #[default]
     Any,
 }
@@ -69,6 +70,14 @@ pub struct ConnectionView {
     pub to_pin: String,
 }
 
+/// Kind of container node for distinct rendering.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ContainerKind {
+    Composition,
+    Track,
+    Layer,
+}
+
 /// How a node should be displayed.
 #[derive(Clone, Debug)]
 pub enum NodeDisplay {
@@ -78,13 +87,14 @@ pub enum NodeDisplay {
         display_name: String,
         pins: Vec<PinInfo>,
     },
-    /// A container (track/composition) that holds child nodes.
+    /// A container (composition/track/layer) that holds child nodes.
     Container {
+        kind: ContainerKind,
         name: String,
         child_ids: Vec<Uuid>,
         pins: Vec<PinInfo>,
     },
-    /// A leaf node (clip) with fixed pins.
+    /// A leaf node (source) with fixed pins.
     Leaf {
         kind_label: String,
         pins: Vec<PinInfo>,

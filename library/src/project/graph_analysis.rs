@@ -1,22 +1,21 @@
 //! Graph analysis utilities for the data-flow graph.
 //!
-//! These functions allow the timeline/inspector to derive clip-centric views
+//! These functions allow the timeline/inspector to derive source-centric views
 //! from the graph structure, and the rendering pipeline to determine processing order.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
 use super::connection::{Connection, PinId};
-use super::node::Node;
 use super::project::Project;
 
-/// Get the chain of effect nodes connected to a clip's image_out pin.
+/// Get the chain of effect nodes connected to a source's image_out pin.
 ///
-/// Follows the image flow: clip.image_out → effect1.image_in, effect1.image_out → effect2.image_in, etc.
+/// Follows the image flow: source.image_out → effect1.image_in, effect1.image_out → effect2.image_in, etc.
 /// Returns the list of effect GraphNode IDs in order.
-pub fn get_effect_chain(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
+pub fn get_effect_chain(project: &Project, source_id: Uuid) -> Vec<Uuid> {
     let mut chain = Vec::new();
-    let mut current_pin = PinId::new(clip_id, "image_out");
+    let mut current_pin = PinId::new(source_id, "image_out");
 
     loop {
         // Find a connection from current_pin to some effect's image_in
@@ -43,37 +42,37 @@ pub fn get_effect_chain(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
     chain
 }
 
-/// Get style nodes associated with a clip via the shape chain.
+/// Get style nodes associated with a source via the shape chain.
 ///
-/// Follows the shape_out → shape_in chain from clip to find style.* nodes.
-pub fn get_associated_styles(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
-    get_shape_chain_nodes_by_prefix(project, clip_id, "style.")
+/// Follows the shape_out → shape_in chain from source to find style.* nodes.
+pub fn get_associated_styles(project: &Project, source_id: Uuid) -> Vec<Uuid> {
+    get_shape_chain_nodes_by_prefix(project, source_id, "style.")
 }
 
-/// Get effector nodes in the shape chain between clip and style node.
+/// Get effector nodes in the shape chain between source and style node.
 ///
-/// Follows the shape_out → shape_in chain from clip to style node,
+/// Follows the shape_out → shape_in chain from source to style node,
 /// collecting all effector.* nodes encountered.
-pub fn get_associated_effectors(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
-    get_shape_chain_nodes_by_prefix(project, clip_id, "effector.")
+pub fn get_associated_effectors(project: &Project, source_id: Uuid) -> Vec<Uuid> {
+    get_shape_chain_nodes_by_prefix(project, source_id, "effector.")
 }
 
-/// Get decorator nodes in the shape chain between clip and style node.
+/// Get decorator nodes in the shape chain between source and style node.
 ///
-/// Follows the shape_out → shape_in chain from clip to style node,
+/// Follows the shape_out → shape_in chain from source to style node,
 /// collecting all decorator.* nodes encountered.
-pub fn get_associated_decorators(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
-    get_shape_chain_nodes_by_prefix(project, clip_id, "decorator.")
+pub fn get_associated_decorators(project: &Project, source_id: Uuid) -> Vec<Uuid> {
+    get_shape_chain_nodes_by_prefix(project, source_id, "decorator.")
 }
 
-/// Follow the shape chain from clip.shape_out and collect nodes matching a type prefix.
+/// Follow the shape chain from source.shape_out and collect nodes matching a type prefix.
 fn get_shape_chain_nodes_by_prefix(
     project: &Project,
-    clip_id: Uuid,
+    source_id: Uuid,
     type_prefix: &str,
 ) -> Vec<Uuid> {
     let mut result = Vec::new();
-    let mut current_pin = PinId::new(clip_id, "shape_out");
+    let mut current_pin = PinId::new(source_id, "shape_out");
 
     loop {
         // Find connection from current shape_out
@@ -171,21 +170,16 @@ fn would_create_cycle(project: &Project, from_node: Uuid, to_node: Uuid) -> bool
     false
 }
 
-/// Topological sort of nodes within a container (track).
+/// Topological sort of nodes within a container (Track or Layer).
 ///
 /// Returns nodes in dependency order (sources first, sinks last).
 /// Returns Err if there's a cycle.
 pub fn topological_sort(project: &Project, container_id: Uuid) -> Result<Vec<Uuid>, String> {
-    // Collect all child node IDs of the container
-    let child_ids: Vec<Uuid> = match project.get_node(container_id) {
-        Some(Node::Track(track)) => track.child_ids.clone(),
-        _ => {
-            return Err(format!(
-                "Container {} not found or not a track",
-                container_id
-            ));
-        }
-    };
+    // Collect all child node IDs of the container (Track or Layer)
+    let child_ids: Vec<Uuid> = project
+        .get_container_child_ids(container_id)
+        .cloned()
+        .ok_or_else(|| format!("Container {} not found or not a Track/Layer", container_id))?;
 
     let child_set: HashSet<Uuid> = child_ids.iter().copied().collect();
 
@@ -250,14 +244,14 @@ fn is_effect_node(project: &Project, node_id: Uuid) -> bool {
         .unwrap_or(false)
 }
 
-/// Resolved context for a clip: all associated graph nodes discovered via connections.
+/// Resolved context for a source: all associated graph nodes discovered via connections.
 #[derive(Debug, Clone)]
-pub struct ClipNodeContext {
+pub struct SourceNodeContext {
     /// The `compositing.transform` node (position/rotation/scale/anchor/opacity).
     pub transform_node: Option<Uuid>,
-    /// Effect chain in processing order (clip → effect1 → effect2 …).
+    /// Effect chain in processing order (source → effect1 → effect2 …).
     pub effect_chain: Vec<Uuid>,
-    /// Style chain (fill/stroke nodes, furthest-from-clip first).
+    /// Style chain (fill/stroke nodes, furthest-from-source first).
     pub style_chain: Vec<Uuid>,
     /// Effector chain.
     pub effector_chain: Vec<Uuid>,
@@ -265,39 +259,40 @@ pub struct ClipNodeContext {
     pub decorator_chain: Vec<Uuid>,
 }
 
-/// Resolve all graph nodes associated with a clip.
+/// Resolve all graph nodes associated with a source.
 ///
 /// This is the single source of truth for determining which graph nodes
-/// belong to a clip, used by inspector, preview gizmo, and cascade cleanup.
+/// belong to a source, used by inspector, preview gizmo, and cascade cleanup.
 ///
 /// Handles both data flows:
-/// - Text/Shape: `clip.shape_out → fill.shape_in → fill.image_out → transform.image_in`
-/// - Video/Image: `clip.image_out → transform.image_in`
-pub fn resolve_clip_context(project: &Project, clip_id: Uuid) -> ClipNodeContext {
-    // First, try the shape_out path (text/shape clips)
-    let (style_chain, transform_from_shape) = get_shape_chain(project, clip_id);
-    // If no shape chain, try the direct image_out path (video/image clips)
-    let transform_node = transform_from_shape.or_else(|| get_connected_transform(project, clip_id));
+/// - Text/Shape: `source.shape_out → fill.shape_in → fill.image_out → transform.image_in`
+/// - Video/Image: `source.image_out → transform.image_in`
+pub fn resolve_source_context(project: &Project, source_id: Uuid) -> SourceNodeContext {
+    // First, try the shape_out path (text/shape sources)
+    let (style_chain, transform_from_shape) = get_shape_chain(project, source_id);
+    // If no shape chain, try the direct image_out path (video/image sources)
+    let transform_node =
+        transform_from_shape.or_else(|| get_connected_transform(project, source_id));
 
-    ClipNodeContext {
+    SourceNodeContext {
         transform_node,
-        effect_chain: get_effect_chain(project, clip_id),
+        effect_chain: get_effect_chain(project, source_id),
         style_chain,
-        effector_chain: get_associated_effectors(project, clip_id),
-        decorator_chain: get_associated_decorators(project, clip_id),
+        effector_chain: get_associated_effectors(project, source_id),
+        decorator_chain: get_associated_decorators(project, source_id),
     }
 }
 
-/// Follow the shape chain: clip.shape_out → [effector/decorator]* → style → transform.
+/// Follow the shape chain: source.shape_out → [effector/decorator]* → style → transform.
 ///
 /// Now traverses through effector/decorator nodes in the shape chain
 /// before reaching the style node. Returns (style_nodes, transform_node_id).
-fn get_shape_chain(project: &Project, clip_id: Uuid) -> (Vec<Uuid>, Option<Uuid>) {
+fn get_shape_chain(project: &Project, source_id: Uuid) -> (Vec<Uuid>, Option<Uuid>) {
     let mut style_nodes = Vec::new();
     let mut transform_node = None;
 
-    // Follow the shape chain from clip.shape_out until we find a style node
-    let mut current_pin = PinId::new(clip_id, "shape_out");
+    // Follow the shape chain from source.shape_out until we find a style node
+    let mut current_pin = PinId::new(source_id, "shape_out");
     let mut visited = HashSet::new();
 
     let style_node_id = loop {
@@ -335,7 +330,7 @@ fn get_shape_chain(project: &Project, clip_id: Uuid) -> (Vec<Uuid>, Option<Uuid>
 
 /// Follow the image_out → image_in chain from a starting node to find the compositing.transform.
 ///
-/// Handles effects between the starting node (clip or style) and the transform.
+/// Handles effects between the starting node (source or style) and the transform.
 fn find_transform_in_image_chain(project: &Project, start_node: Uuid) -> Option<Uuid> {
     let mut current_pin = PinId::new(start_node, "image_out");
     let mut visited = HashSet::new();
@@ -369,18 +364,81 @@ fn find_transform_in_image_chain(project: &Project, start_node: Uuid) -> Option<
     }
 }
 
-/// Find the compositing.transform node connected to clip.image_out.
+/// Find the compositing.transform node connected to source.image_out.
 ///
-/// For video/image clips: follows `clip.image_out → [effects] → transform.image_in`
-fn get_connected_transform(project: &Project, clip_id: Uuid) -> Option<Uuid> {
-    find_transform_in_image_chain(project, clip_id)
+/// For video/image sources: follows `source.image_out → [effects] → transform.image_in`
+fn get_connected_transform(project: &Project, source_id: Uuid) -> Option<Uuid> {
+    find_transform_in_image_chain(project, source_id)
 }
 
-/// Collect all graph node IDs associated with a clip (for cascade cleanup).
+/// Walk upstream from a layer container's output to collect all pipeline nodes.
+///
+/// Starts from the node feeding into `layer.image_out` and recursively follows
+/// all input connections backward. Returns nodes in dependency order: sources first,
+/// downstream nodes last. For merge nodes (multiple inputs), secondary input chains
+/// (shape_in) are traversed before primary chains (image_in), so shape chain nodes
+/// appear before image chain nodes in the result.
+pub fn collect_layer_pipeline(project: &Project, layer_id: Uuid) -> Vec<Uuid> {
+    // Find the entry node connected to layer.image_out
+    let entry = project
+        .connections
+        .iter()
+        .find(|c| c.to == PinId::new(layer_id, "image_out"))
+        .map(|c| c.from.node_id);
+
+    match entry {
+        Some(entry_id) => {
+            let mut result = Vec::new();
+            let mut visited = HashSet::new();
+            collect_upstream_dfs(project, entry_id, &mut result, &mut visited);
+            result
+        }
+        None => Vec::new(),
+    }
+}
+
+/// DFS upstream walk: visit all upstream dependencies before adding the current node.
+///
+/// For nodes with multiple inputs, shape_in is traversed before image_in,
+/// so shape chain contents appear before image chain contents in the result.
+fn collect_upstream_dfs(
+    project: &Project,
+    node_id: Uuid,
+    result: &mut Vec<Uuid>,
+    visited: &mut HashSet<Uuid>,
+) {
+    if !visited.insert(node_id) {
+        return;
+    }
+
+    // Find all connections going INTO this node
+    let mut input_connections: Vec<&Connection> = project
+        .connections
+        .iter()
+        .filter(|c| c.to.node_id == node_id)
+        .collect();
+
+    // Sort: shape_in first, then image_in, so shape chain appears before image chain
+    input_connections.sort_by_key(|c| match c.to.pin_name.as_str() {
+        "shape_in" => 0,
+        "image_in" => 1,
+        _ => 2,
+    });
+
+    // Recursively visit upstream nodes first
+    for conn in &input_connections {
+        collect_upstream_dfs(project, conn.from.node_id, result, visited);
+    }
+
+    // Add this node after all its dependencies
+    result.push(node_id);
+}
+
+/// Collect all graph node IDs associated with a source (for cascade cleanup).
 ///
 /// Returns the union of transform, effect, style, effector, and decorator nodes.
-pub fn collect_all_associated_nodes(project: &Project, clip_id: Uuid) -> Vec<Uuid> {
-    let ctx = resolve_clip_context(project, clip_id);
+pub fn collect_all_associated_nodes(project: &Project, source_id: Uuid) -> Vec<Uuid> {
+    let ctx = resolve_source_context(project, source_id);
     let mut nodes = Vec::new();
     if let Some(t) = ctx.transform_node {
         nodes.push(t);
@@ -408,7 +466,8 @@ mod tests {
         let root_id = root_track.id;
         project.add_node(Node::Track(root_track));
 
-        let comp = Composition::new_with_root("comp", 1920, 1080, 30.0, 10.0, root_id);
+        let mut comp = Composition::new("comp", 1920, 1080, 30.0, 10.0);
+        comp.child_ids.push(root_id);
         let comp_id = comp.id;
         project.add_composition(comp);
 
@@ -428,10 +487,10 @@ mod tests {
         let (mut project, root_id, _) = setup_project();
 
         // Create a clip and an effect node
-        let clip = crate::project::clip::TrackClip {
+        let clip = crate::project::source::SourceData {
             id: Uuid::new_v4(),
             reference_id: None,
-            kind: crate::project::clip::TrackClipKind::Image,
+            kind: crate::project::source::SourceKind::Image,
             in_frame: 0,
             out_frame: 100,
             source_begin_frame: 0,
@@ -444,7 +503,7 @@ mod tests {
         let effect = GraphNode::new("effect.blur", PropertyMap::new());
         let effect_id = effect.id;
 
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
         project.add_node(Node::Graph(effect));
         project.get_track_mut(root_id).unwrap().add_child(clip_id);
         project.get_track_mut(root_id).unwrap().add_child(effect_id);
@@ -463,10 +522,10 @@ mod tests {
     fn test_get_effect_chain_multiple() {
         let (mut project, root_id, _) = setup_project();
 
-        let clip = crate::project::clip::TrackClip {
+        let clip = crate::project::source::SourceData {
             id: Uuid::new_v4(),
             reference_id: None,
-            kind: crate::project::clip::TrackClipKind::Image,
+            kind: crate::project::source::SourceKind::Image,
             in_frame: 0,
             out_frame: 100,
             source_begin_frame: 0,
@@ -481,7 +540,7 @@ mod tests {
         let effect2 = GraphNode::new("effect.dilate", PropertyMap::new());
         let effect2_id = effect2.id;
 
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
         project.add_node(Node::Graph(effect1));
         project.add_node(Node::Graph(effect2));
         project.get_track_mut(root_id).unwrap().add_child(clip_id);
@@ -526,10 +585,10 @@ mod tests {
     fn test_topological_sort_linear() {
         let (mut project, root_id, _) = setup_project();
 
-        let clip = crate::project::clip::TrackClip {
+        let clip = crate::project::source::SourceData {
             id: Uuid::new_v4(),
             reference_id: None,
-            kind: crate::project::clip::TrackClipKind::Image,
+            kind: crate::project::source::SourceKind::Image,
             in_frame: 0,
             out_frame: 100,
             source_begin_frame: 0,
@@ -542,7 +601,7 @@ mod tests {
         let effect = GraphNode::new("effect.blur", PropertyMap::new());
         let effect_id = effect.id;
 
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
         project.add_node(Node::Graph(effect));
         project.get_track_mut(root_id).unwrap().add_child(clip_id);
         project.get_track_mut(root_id).unwrap().add_child(effect_id);

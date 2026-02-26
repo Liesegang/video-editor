@@ -145,7 +145,7 @@ fn handle_edit_command(action: CommandId, context: ActionContext) {
                     {
                         if let Err(e) = context
                             .project_service
-                            .remove_clip_from_track(track_id, entity_id)
+                            .remove_layer_from_track(track_id, entity_id)
                         {
                             error!("Failed to remove entity: {:?}", e);
                         } else {

@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::runtime::draw_type::BlendMode;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub struct TrackData {
+pub struct LayerData {
     pub id: Uuid,
     pub name: String,
     #[serde(default)]
@@ -15,10 +15,12 @@ pub struct TrackData {
     pub opacity: f64,
     #[serde(default = "default_visible")]
     pub visible: bool,
-    /// Deprecated: kept only for backward-compatible deserialization of old project files.
-    /// New code should use `Node::Layer(LayerData)` instead.
-    #[serde(default, skip_serializing)]
-    pub is_layer: bool,
+    /// When this layer starts on the timeline (frame number).
+    #[serde(default)]
+    pub in_frame: u64,
+    /// When this layer ends on the timeline (frame number).
+    #[serde(default)]
+    pub out_frame: u64,
 }
 
 fn default_opacity() -> f64 {
@@ -29,8 +31,8 @@ fn default_visible() -> bool {
     true
 }
 
-impl TrackData {
-    pub fn new(name: &str) -> Self {
+impl LayerData {
+    pub fn new(name: &str, in_frame: u64, out_frame: u64) -> Self {
         Self {
             id: Uuid::new_v4(),
             name: name.to_string(),
@@ -38,16 +40,15 @@ impl TrackData {
             blend_mode: BlendMode::default(),
             opacity: 1.0,
             visible: true,
-            is_layer: false,
+            in_frame,
+            out_frame,
         }
     }
 
-    /// Add a child node ID
     pub fn add_child(&mut self, child_id: Uuid) {
         self.child_ids.push(child_id);
     }
 
-    /// Insert a child node ID at a specific index
     pub fn insert_child(&mut self, index: usize, child_id: Uuid) {
         if index <= self.child_ids.len() {
             self.child_ids.insert(index, child_id);
@@ -56,7 +57,6 @@ impl TrackData {
         }
     }
 
-    /// Remove a child node ID
     pub fn remove_child(&mut self, child_id: Uuid) -> bool {
         if let Some(pos) = self.child_ids.iter().position(|id| *id == child_id) {
             self.child_ids.remove(pos);

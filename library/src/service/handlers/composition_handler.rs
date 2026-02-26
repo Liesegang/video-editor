@@ -1,5 +1,4 @@
 use crate::error::LibraryError;
-use crate::project::node::Node;
 use crate::project::project::{Composition, Project};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -17,14 +16,12 @@ impl CompositionHandler {
         duration: f64,
     ) -> Result<(), LibraryError> {
         let mut proj = super::write_project(project)?;
-        let comp =
-            proj.compositions
-                .iter_mut()
-                .find(|c| c.id == id)
-                .ok_or(LibraryError::project(format!(
-                    "Composition not found: {}",
-                    id
-                )))?;
+        let comp = proj
+            .get_composition_mut(id)
+            .ok_or(LibraryError::project(format!(
+                "Composition not found: {}",
+                id
+            )))?;
 
         comp.name = name.to_string();
         comp.width = width as u64;
@@ -45,12 +42,9 @@ impl CompositionHandler {
     ) -> Result<Uuid, LibraryError> {
         let mut proj = super::write_project(project)?;
 
-        // Composition::new returns (Composition, TrackData)
-        let (composition, root_track) = Composition::new(name, width, height, fps, duration);
+        let composition = Composition::new(name, width, height, fps, duration);
         let id = composition.id;
 
-        // Add root track to nodes registry
-        proj.add_node(Node::Track(root_track));
         proj.add_composition(composition);
 
         Ok(id)
@@ -70,9 +64,7 @@ impl CompositionHandler {
         id: Uuid,
     ) -> Result<Composition, LibraryError> {
         let proj = super::read_project(project)?;
-        proj.compositions
-            .iter()
-            .find(|c| c.id == id)
+        proj.get_composition(id)
             .cloned()
             .ok_or(LibraryError::project(format!(
                 "Composition not found: {}",
@@ -83,7 +75,7 @@ impl CompositionHandler {
     pub fn is_composition_used(project: &Arc<RwLock<Project>>, comp_id: Uuid) -> bool {
         if let Ok(proj) = super::read_project(project) {
             // Check all clips in the nodes registry
-            for clip in proj.all_clips() {
+            for clip in proj.all_sources() {
                 if clip.reference_id == Some(comp_id) {
                     return true;
                 }

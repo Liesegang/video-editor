@@ -263,7 +263,7 @@ pub(crate) fn assets_panel(
                             });
                         })
                         .body(|mut body| {
-                            for comp in &proj_read.compositions {
+                            for comp in proj_read.all_compositions() {
                                 body.row(20.0, |mut row| {
                                     // Name Column
                                     row.col(|ui| {

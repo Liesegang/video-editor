@@ -1,8 +1,6 @@
 use egui::collapsing_header::CollapsingState;
 use egui::Ui;
 
-use library::project::clip::TrackClipKind;
-
 use crate::context::context::PanelContext;
 
 use library::project::property::{PropertyMap, PropertyUiType};
@@ -38,29 +36,47 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
         editor_context.selection.composition_id,
         editor_context.selection.last_selected_track_id,
     ) {
-        // Fetch entity data + transform node properties from project
+        // Fetch entity data by walking the pipeline from the layer output upstream
         let entity_data = if let Ok(proj_read) = project.read() {
-            proj_read.get_clip(selected_entity_id).map(|e| {
-                // Resolve the transform graph node for this clip
-                let clip_ctx = library::project::graph_analysis::resolve_clip_context(
-                    &proj_read,
-                    selected_entity_id,
-                );
-                let transform_node_id = clip_ctx.transform_node;
+            proj_read.get_source(selected_entity_id).map(|source| {
+                // Find the layer container for this source
+                let layer_id = proj_read.find_parent_track(selected_entity_id);
+
+                // Walk upstream from the layer output to collect pipeline nodes
+                let pipeline = layer_id
+                    .map(|lid| {
+                        library::project::graph_analysis::collect_layer_pipeline(&proj_read, lid)
+                    })
+                    .unwrap_or_default();
+
+                // Extract transform node from the pipeline
+                let transform_node_id = pipeline
+                    .iter()
+                    .find(|&&nid| {
+                        proj_read
+                            .get_graph_node(nid)
+                            .map(|g| g.type_id == "compositing.transform")
+                            .unwrap_or(false)
+                    })
+                    .copied();
+
                 let transform_props = transform_node_id
                     .and_then(|tid| proj_read.get_graph_node(tid))
                     .map(|n| n.properties.clone())
                     .unwrap_or_default();
 
+                let has_shape_output = source.has_shape_output();
+
                 (
-                    e.kind.clone(),
-                    e.properties.clone(),
-                    e.in_frame,
-                    e.out_frame,
-                    e.source_begin_frame,
-                    e.duration_frame,
+                    source.kind.to_string(),
+                    source.properties.clone(),
+                    source.in_frame,
+                    source.out_frame,
+                    source.source_begin_frame,
+                    source.duration_frame,
                     transform_node_id,
                     transform_props,
+                    has_shape_output,
                 )
             })
         } else {
@@ -68,7 +84,7 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
         };
 
         if let Some((
-            kind,
+            kind_label,
             properties,
             in_frame,
             out_frame,
@@ -76,6 +92,7 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
             duration_frame,
             transform_node_id,
             transform_props,
+            has_shape_output,
         )) = entity_data
         {
             if editor_context.selection.selected_entities.len() > 1 {
@@ -91,10 +108,9 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                 ui.separator();
             }
 
-            let current_kind = kind.clone();
             ui.horizontal(|ui| {
                 ui.label("Type:");
-                ui.strong(current_kind.to_string());
+                ui.strong(&kind_label);
             });
             ui.separator();
 
@@ -125,13 +141,15 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                 current_time,
             };
 
-            // ===== Section 1: Clip Properties (source node in data-flow) =====
+            // ===== Pipeline sections (ordered by graph topology, source → output) =====
+
+            // --- Source Properties (always shown) ---
             if !clip_defs.is_empty() {
                 let clip_section_id = ui.make_persistent_id("inspector_clip_props");
                 let clip_state =
                     CollapsingState::load_with_default_open(ui.ctx(), clip_section_id, true);
                 let clip_header = clip_state.show_header(ui, |ui| {
-                    ui.label(egui::RichText::new(format!("Clip ({})", kind)).strong());
+                    ui.label(egui::RichText::new(format!("Source ({})", kind_label)).strong());
                 });
                 clip_header.body(|ui| {
                     render_property_section(
@@ -151,8 +169,8 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                 });
             }
 
-            // ===== Section 2: Ensemble — Effectors (Text only, shape chain) =====
-            if matches!(kind, TrackClipKind::Text) {
+            // --- Ensemble (effectors + decorators) — shown when source has shape output ---
+            if has_shape_output {
                 render_ensemble_section(
                     ui,
                     project_service,
@@ -175,8 +193,8 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                 );
             }
 
-            // ===== Section 3: Styles (Text/Shape only, shape → image conversion) =====
-            if matches!(kind, TrackClipKind::Text | TrackClipKind::Shape) {
+            // --- Styles — shown when source has shape output ---
+            if has_shape_output {
                 render_styles_section(
                     ui,
                     project_service,
@@ -192,7 +210,7 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                 );
             }
 
-            // ===== Section 4: Effects (image chain, between style/clip and transform) =====
+            // --- Effects (image chain) ---
             render_effects_section(
                 ui,
                 project_service,
@@ -206,7 +224,7 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                 &mut needs_refresh,
             );
 
-            // ===== Section 5: Transform (final output, closest to render) =====
+            // --- Transform (final output, closest to render) ---
             if !transform_defs.is_empty() && transform_node_id.is_some() {
                 ui.add_space(5.0);
                 let transform_section_id = ui.make_persistent_id("inspector_transform_props");
@@ -255,7 +273,7 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                     );
                     if response.changed() {
                         project_service
-                            .update_clip_time(
+                            .update_source_time(
                                 selected_entity_id,
                                 current_in_frame_f32 as u64,
                                 out_frame,
@@ -279,7 +297,7 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                     );
                     if response.changed() {
                         project_service
-                            .update_clip_time(
+                            .update_source_time(
                                 selected_entity_id,
                                 in_frame,
                                 current_out_frame_f32 as u64,
@@ -303,7 +321,7 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                     );
                     if response.changed() {
                         project_service
-                            .update_clip_source_frames(
+                            .update_source_begin_frame(
                                 selected_entity_id,
                                 current_source_begin_frame_f32 as i64,
                             )
@@ -330,7 +348,7 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
                     ui.end_row();
                 });
         } else {
-            ui.label("Clip not found (it may have been deleted).");
+            ui.label("Source not found (it may have been deleted).");
             // Deselect if not found
             editor_context.selection.last_selected_entity_id = None;
             editor_context
@@ -344,7 +362,7 @@ pub(crate) fn inspector_panel(ui: &mut Ui, ctx: &mut PanelContext) {
         } else if editor_context.selection.last_selected_track_id.is_none() {
             ui.label("No track selected.");
         } else {
-            ui.label("Select a clip to edit");
+            ui.label("Select a source to edit");
         }
     }
 

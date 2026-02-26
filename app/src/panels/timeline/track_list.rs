@@ -65,8 +65,8 @@ pub(super) fn show_track_list(
 
     if let Some(comp_id) = selected_composition_id {
         if let Some(ref proj) = proj_read {
-            if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                root_track_ids.push(comp.root_track_id);
+            if let Some(comp) = proj.get_composition(comp_id) {
+                root_track_ids.extend(comp.child_ids.iter().copied());
             }
             // Cache asset names for quick lookup
             for asset in &proj.assets {
@@ -106,7 +106,7 @@ pub(super) fn show_track_list(
                     composition_fps: 0.0,
                 };
                 if let Some((target_index, header_idx)) =
-                    super::clip_area::clips::calculate_insert_index(
+                    super::layer_area::layers::calculate_insert_index(
                         mouse_pos.y,
                         track_list_rect.min.y,
                         editor_context.timeline.scroll_offset.y,
@@ -143,13 +143,13 @@ pub(super) fn show_track_list(
             reorder_state
         {
             match row {
-                super::utils::flatten::DisplayRow::ClipRow {
-                    clip,
+                super::utils::flatten::DisplayRow::SourceRow {
+                    source,
                     parent_track,
                     child_index,
                     ..
                 } => {
-                    if clip.id == dragged_id {
+                    if source.id == dragged_id {
                         visible_row_index = (header_idx + 1 + target_idx) as isize;
                     } else if parent_track.id == hovered_track_id {
                         let idx = *child_index;
@@ -378,14 +378,14 @@ pub(super) fn show_track_list(
                     );
                 }
             }
-            super::utils::flatten::DisplayRow::ClipRow {
-                clip,
+            super::utils::flatten::DisplayRow::SourceRow {
+                source,
                 parent_track: _,
                 depth,
                 visible_row_index: _,
                 child_index: _,
             } => {
-                // Render Clip Name
+                // Render source name
                 track_list_painter.rect_filled(
                     row_rect,
                     0.0,
@@ -397,21 +397,21 @@ pub(super) fn show_track_list(
                 );
 
                 let indent = *depth as f32 * 10.0;
-                let text_offset_x = 5.0 + indent + 16.0; // Extra indent for clip (no folder icon)
+                let text_offset_x = 5.0 + indent + 16.0; // Extra indent for source (no folder icon)
 
-                let clip_name = if let Some(asset_id) = clip.reference_id {
+                let source_name = if let Some(asset_id) = source.reference_id {
                     asset_names
                         .get(&asset_id)
                         .cloned()
                         .unwrap_or_else(|| "Unknown Asset".to_string())
                 } else {
-                    format!("{}", clip.kind)
+                    format!("{}", source.kind)
                 };
 
                 track_list_painter.text(
                     row_rect.left_center() + egui::vec2(text_offset_x, 0.0),
                     egui::Align2::LEFT_CENTER,
-                    clip_name,
+                    source_name,
                     egui::FontId::proportional(12.0),
                     egui::Color32::LIGHT_GRAY,
                 );

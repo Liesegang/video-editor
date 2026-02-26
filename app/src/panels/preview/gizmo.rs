@@ -68,7 +68,7 @@ pub(super) fn handle_gizmo_interaction(
                 let (comp_id, track_id, current_props) = if let Ok(proj_read) = project.read() {
                     if let Some(comp) = editor_context.get_current_composition(&proj_read) {
                         // Use flat O(1) lookup instead of nested traversal
-                        if let Some(clip) = proj_read.get_clip(selected_id) {
+                        if let Some(clip) = proj_read.get_source(selected_id) {
                             let parent_track_id =
                                 proj_read.find_parent_track(selected_id).unwrap_or_default();
                             (
@@ -280,7 +280,7 @@ pub(super) fn draw_gizmo(
         }
 
         if let Some(gc) = gui_clips.iter().find(|gc| gc.id() == *selected_id) {
-            if gc.clip.kind == library::project::clip::TrackClipKind::Audio {
+            if gc.clip.kind == library::project::source::SourceKind::Audio {
                 continue;
             }
 
@@ -291,7 +291,7 @@ pub(super) fn draw_gizmo(
 
     if let Some(selected_id) = editor_context.selection.last_selected_entity_id {
         if let Some(gc) = gui_clips.iter().find(|gc| gc.id() == selected_id) {
-            if gc.clip.kind == library::project::clip::TrackClipKind::Audio {
+            if gc.clip.kind == library::project::source::SourceKind::Audio {
                 return;
             }
 

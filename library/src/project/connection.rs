@@ -49,6 +49,8 @@ pub enum PinDataType {
     Object3D,
     /// 3D material
     Material,
+    /// Audio data flow
+    Audio,
     /// Shape data (text glyphs, SVG path, etc.)
     Shape,
     /// Generic vector (N-dimensional)

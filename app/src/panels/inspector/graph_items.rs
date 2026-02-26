@@ -22,15 +22,15 @@ pub(super) struct GraphNodeInfo {
     pub(super) properties: PropertyMap,
 }
 
-/// Collect graph-based nodes associated with a clip, using the given ID retrieval function.
+/// Collect graph-based nodes associated with a source, using the given ID retrieval function.
 pub(super) fn collect_graph_nodes(
     project: &Arc<RwLock<library::project::project::Project>>,
     project_service: &mut ProjectService,
-    clip_id: Uuid,
+    source_id: Uuid,
     get_ids: impl Fn(&library::project::project::Project, Uuid) -> Vec<Uuid>,
 ) -> Vec<GraphNodeInfo> {
     if let Ok(proj) = project.read() {
-        let ids = get_ids(&proj, clip_id);
+        let ids = get_ids(&proj, source_id);
         ids.into_iter()
             .filter_map(|node_id| {
                 let node = proj.get_graph_node(node_id)?;
@@ -84,7 +84,7 @@ fn add_node_to_chain(
     history_manager: &mut HistoryManager,
     project: &Arc<RwLock<library::project::project::Project>>,
     track_id: Uuid,
-    clip_id: Uuid,
+    source_id: Uuid,
     type_name: &str,
     config: &ChainConfig,
     needs_refresh: &mut bool,
@@ -97,20 +97,20 @@ fn add_node_to_chain(
             let (insert_after_id, downstream_conn) = {
                 if let Ok(proj) = project.read() {
                     let insert_after = match config.category_prefix {
-                        "effector" => graph_analysis::get_associated_effectors(&proj, clip_id)
+                        "effector" => graph_analysis::get_associated_effectors(&proj, source_id)
                             .last()
                             .copied()
-                            .unwrap_or(clip_id),
-                        "decorator" => graph_analysis::get_associated_decorators(&proj, clip_id)
+                            .unwrap_or(source_id),
+                        "decorator" => graph_analysis::get_associated_decorators(&proj, source_id)
                             .last()
                             .copied()
                             .or_else(|| {
-                                graph_analysis::get_associated_effectors(&proj, clip_id)
+                                graph_analysis::get_associated_effectors(&proj, source_id)
                                     .last()
                                     .copied()
                             })
-                            .unwrap_or(clip_id),
-                        _ => clip_id,
+                            .unwrap_or(source_id),
+                        _ => source_id,
                     };
 
                     // Find the downstream connection from insert_after.shape_out → ?.shape_in
@@ -125,7 +125,7 @@ fn add_node_to_chain(
 
                     (insert_after, downstream)
                 } else {
-                    (clip_id, None)
+                    (source_id, None)
                 }
             };
 
@@ -156,16 +156,16 @@ fn add_node_to_chain(
     }
 }
 
-/// Add a style node to a clip's shape chain.
+/// Add a style node to a source's shape chain.
 ///
 /// Styles are terminal nodes (shape_in → image_out) that convert shape data to images.
 /// Connects: `end_of_chain.shape_out → style.shape_in`, `style.image_out → transform.image_in`
-pub(super) fn add_style_to_clip(
+pub(super) fn add_style_to_source(
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
     project: &Arc<RwLock<library::project::project::Project>>,
     track_id: Uuid,
-    clip_id: Uuid,
+    source_id: Uuid,
     type_name: &str,
     needs_refresh: &mut bool,
 ) {
@@ -174,7 +174,7 @@ pub(super) fn add_style_to_clip(
         Ok(new_node_id) => {
             let (insert_after_id, old_shape_conn, transform_id, old_transform_conn) = {
                 if let Ok(proj) = project.read() {
-                    let ctx = graph_analysis::resolve_clip_context(&proj, clip_id);
+                    let ctx = graph_analysis::resolve_source_context(&proj, source_id);
 
                     // Insert after last decorator, or last effector, or clip
                     let insert_after = ctx
@@ -182,7 +182,7 @@ pub(super) fn add_style_to_clip(
                         .last()
                         .copied()
                         .or_else(|| ctx.effector_chain.last().copied())
-                        .unwrap_or(clip_id);
+                        .unwrap_or(source_id);
 
                     // Find existing connection from insert_after.shape_out → ?.shape_in
                     let old_shape = proj
@@ -204,7 +204,7 @@ pub(super) fn add_style_to_clip(
 
                     (insert_after, old_shape, ctx.transform_node, old_transform)
                 } else {
-                    (clip_id, None, None, None)
+                    (source_id, None, None, None)
                 }
             };
 
@@ -250,7 +250,7 @@ pub(super) fn render_chain_add_button(
     history_manager: &mut HistoryManager,
     project: &Arc<RwLock<library::project::project::Project>>,
     track_id: Uuid,
-    clip_id: Uuid,
+    source_id: Uuid,
     config: &ChainConfig,
     get_available: fn(&library::plugin::PluginManager) -> Vec<String>,
     get_label: fn(&library::plugin::PluginManager, &str) -> String,
@@ -267,7 +267,7 @@ pub(super) fn render_chain_add_button(
                     history_manager,
                     project,
                     track_id,
-                    clip_id,
+                    source_id,
                     &type_name,
                     config,
                     needs_refresh,
@@ -285,7 +285,7 @@ pub(super) fn render_graph_node_item(
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
     project: &Arc<RwLock<library::project::project::Project>>,
-    clip_id: Uuid,
+    source_id: Uuid,
     item: &GraphNodeInfo,
     current_time: f64,
     fps: f64,
@@ -336,7 +336,7 @@ pub(super) fn render_graph_node_item(
         );
 
         let item_props = item.properties.clone();
-        let mut ctx = ActionContext::new(project_service, history_manager, clip_id, current_time);
+        let mut ctx = ActionContext::new(project_service, history_manager, source_id, current_time);
         if ctx.handle_actions(item_actions, PropertyTarget::GraphNode(item.node_id), |n| {
             item_props.get(n).cloned()
         }) {

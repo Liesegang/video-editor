@@ -5,17 +5,17 @@ use crate::project::track::TrackData;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-/// Recursively collect all descendant node IDs of a track (sub-tracks, clips, graph nodes).
-fn collect_descendants(proj: &Project, track_id: Uuid) -> Vec<Uuid> {
+/// Recursively collect all descendant node IDs of a container (Track or Layer).
+fn collect_descendants(proj: &Project, container_id: Uuid) -> Vec<Uuid> {
     let mut result = Vec::new();
-    let mut stack = vec![track_id];
+    let mut stack = vec![container_id];
 
     while let Some(current) = stack.pop() {
-        if let Some(track) = proj.get_track(current) {
-            for &child_id in &track.child_ids {
+        if let Some(children) = proj.get_container_child_ids(current) {
+            for &child_id in children {
                 result.push(child_id);
-                // If child is also a track, recurse into it
-                if proj.get_track(child_id).is_some() {
+                // If child is also a container (Track or Layer), recurse into it
+                if proj.get_container_child_ids(child_id).is_some() {
                     stack.push(child_id);
                 }
             }
@@ -28,19 +28,13 @@ fn collect_descendants(proj: &Project, track_id: Uuid) -> Vec<Uuid> {
 pub struct TrackHandler;
 
 impl TrackHandler {
-    /// Add a new track as a child of the composition's root track
+    /// Add a new track as a child of the composition
     pub fn add_track(
         project: &Arc<RwLock<Project>>,
         composition_id: Uuid,
         track_name: &str,
     ) -> Result<Uuid, LibraryError> {
         let mut proj = super::write_project(project)?;
-
-        let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
-            LibraryError::project(format!("Composition with ID {} not found", composition_id))
-        })?;
-
-        let root_track_id = composition.root_track_id;
 
         // Create new track
         let new_track = TrackData::new(track_name);
@@ -49,15 +43,11 @@ impl TrackHandler {
         // Add to nodes registry
         proj.add_node(Node::Track(new_track));
 
-        // Add as child of root track
-        if let Some(root_track) = proj.get_track_mut(root_track_id) {
-            root_track.add_child(new_track_id);
-        } else {
-            return Err(LibraryError::project(format!(
-                "Root track {} not found",
-                root_track_id
-            )));
-        }
+        // Add as child of composition
+        let comp = proj.get_composition_mut(composition_id).ok_or_else(|| {
+            LibraryError::project(format!("Composition with ID {} not found", composition_id))
+        })?;
+        comp.child_ids.push(new_track_id);
 
         Ok(new_track_id)
     }
@@ -70,25 +60,16 @@ impl TrackHandler {
     ) -> Result<Uuid, LibraryError> {
         let mut proj = super::write_project(project)?;
 
-        let composition = proj.get_composition_mut(composition_id).ok_or_else(|| {
-            LibraryError::project(format!("Composition with ID {} not found", composition_id))
-        })?;
-
-        let root_track_id = composition.root_track_id;
         let track_id = track.id;
 
         // Add to nodes registry
         proj.add_node(Node::Track(track));
 
-        // Add as child of root track
-        if let Some(root_track) = proj.get_track_mut(root_track_id) {
-            root_track.add_child(track_id);
-        } else {
-            return Err(LibraryError::project(format!(
-                "Root track {} not found",
-                root_track_id
-            )));
-        }
+        // Add as child of composition
+        let comp = proj.get_composition_mut(composition_id).ok_or_else(|| {
+            LibraryError::project(format!("Composition with ID {} not found", composition_id))
+        })?;
+        comp.child_ids.push(track_id);
 
         Ok(track_id)
     }
@@ -114,15 +95,10 @@ impl TrackHandler {
     ) -> Result<(), LibraryError> {
         let mut proj = super::write_project(project)?;
 
-        // Remove from parent's child_ids (need to find parent first)
-        let parent_id = proj
-            .all_tracks()
-            .find(|t| t.child_ids.contains(&track_id))
-            .map(|t| t.id);
-
-        if let Some(pid) = parent_id {
-            if let Some(parent) = proj.get_track_mut(pid) {
-                parent.remove_child(track_id);
+        // Remove from parent's child_ids (composition, track, or layer)
+        if let Some(pid) = proj.find_parent_container(track_id) {
+            if let Some(children) = proj.get_container_child_ids_mut(pid) {
+                children.retain(|id| *id != track_id);
             }
         }
 

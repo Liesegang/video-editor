@@ -39,7 +39,7 @@ impl AudioService {
         let preview_duration = 0.05;
         let frames = (preview_duration * sample_rate as f64) as usize;
         let scrub_samples = if let Ok(project) = self.project.read() {
-            if let Some(comp) = project.compositions.first() {
+            if let Some(comp) = project.all_compositions().next() {
                 crate::audio::mixer::mix_samples(
                     &project.assets,
                     &project,
@@ -90,7 +90,7 @@ impl AudioService {
 
         // Use shared mixing logic
         let mix_buffer = if let Ok(project) = self.project.read() {
-            if let Some(comp) = project.compositions.first() {
+            if let Some(comp) = project.all_compositions().next() {
                 crate::audio::mixer::mix_samples(
                     &project.assets,
                     &project,
@@ -143,7 +143,7 @@ impl AudioService {
         let frames = (duration * sample_rate as f64).round() as usize;
 
         if let Ok(project) = self.project.read() {
-            if let Some(comp) = project.compositions.first() {
+            if let Some(comp) = project.all_compositions().next() {
                 crate::audio::mixer::mix_samples(
                     &project.assets,
                     &project,

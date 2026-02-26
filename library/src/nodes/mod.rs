@@ -3,11 +3,11 @@
 //! Each node category lives in its own submodule containing both the
 //! `NodeTypeDefinition` declarations and the `NodeEvaluator` implementation.
 
-pub mod clip;
 pub mod compositing;
 pub mod decorator;
 pub mod effect;
 pub mod effector;
+pub mod source;
 pub mod style;
 
 // Definition-only modules (no evaluator yet)
@@ -120,9 +120,10 @@ pub fn all_definitions() -> Vec<NodeTypeDefinition> {
 /// All built-in node evaluators.
 pub fn all_evaluators() -> Vec<Box<dyn NodeEvaluator>> {
     vec![
-        Box::new(clip::ClipEvaluator),
+        Box::new(source::SourceEvaluator),
         Box::new(compositing::TransformEvaluator),
         Box::new(compositing::BlendEvaluator),
+        Box::new(compositing::PreviewOutputEvaluator),
         Box::new(effect::EffectEvaluator),
         Box::new(style::StyleEvaluator),
         Box::new(effector::EffectorEvaluator),
@@ -186,8 +187,24 @@ mod tests {
     }
 
     #[test]
+    fn test_preview_output_definition_exists() {
+        let defs = all_definitions();
+        let preview = defs
+            .iter()
+            .find(|d| d.type_id == "compositing.preview_output");
+        assert!(
+            preview.is_some(),
+            "compositing.preview_output definition missing"
+        );
+        let preview = preview.unwrap();
+        assert_eq!(preview.inputs.len(), 1);
+        assert_eq!(preview.inputs[0].name, "image_in");
+        assert!(preview.outputs.is_empty());
+    }
+
+    #[test]
     fn test_all_evaluators_registered() {
         let evaluators = all_evaluators();
-        assert_eq!(evaluators.len(), 7);
+        assert_eq!(evaluators.len(), 8);
     }
 }

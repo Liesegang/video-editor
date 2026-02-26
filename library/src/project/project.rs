@@ -2,71 +2,42 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use super::clip::TrackClip;
+pub use super::composition::Composition;
 use super::connection::{Connection, PinId};
+pub use super::export_config::ExportConfig;
 use super::graph_node::GraphNode;
+use super::layer::LayerData;
 use super::node::Node;
+use super::source::SourceData;
 use super::track::TrackData;
-use crate::runtime::color::Color;
 
 use crate::project::asset::Asset;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Project {
     pub name: String,
+    #[serde(default)]
+    pub composition_ids: Vec<Uuid>,
+    /// Deprecated: kept for backward-compatible deserialization.
+    /// On load, compositions are migrated into the node registry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub compositions: Vec<Composition>,
     #[serde(default)]
     pub assets: Vec<Asset>,
     #[serde(default)]
     pub export: ExportConfig,
-    /// 統一ノードレジストリ - 全Track/Clip/GraphNodeを格納
     #[serde(default)]
     pub nodes: HashMap<Uuid, Node>,
-    /// Data-flow graph connections between node pins
     #[serde(default)]
     pub connections: Vec<Connection>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)]
-pub struct ExportConfig {
-    #[serde(default)]
-    pub container: Option<String>,
-    #[serde(default)]
-    pub codec: Option<String>,
-    #[serde(default)]
-    pub pixel_format: Option<String>,
-    #[serde(default)]
-    pub width: Option<u64>,
-    #[serde(default)]
-    pub height: Option<u64>,
-    #[serde(default)]
-    pub fps: Option<f64>,
-    #[serde(default)]
-    pub video_bitrate: Option<u64>,
-    #[serde(default)]
-    pub audio_codec: Option<String>,
-    #[serde(default)]
-    pub audio_bitrate: Option<u64>,
-    #[serde(default)]
-    pub audio_channels: Option<u16>,
-    #[serde(default)]
-    pub audio_sample_rate: Option<u32>,
-    #[serde(default)]
-    pub crf: Option<u8>,
-    #[serde(default)]
-    pub preset: Option<String>,
-    #[serde(default)]
-    pub ffmpeg_path: Option<String>,
-    #[serde(default)]
-    pub parameters: HashMap<String, Value>,
 }
 
 impl Project {
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
+            composition_ids: Vec::new(),
             compositions: Vec::new(),
             assets: Vec::new(),
             export: ExportConfig::default(),
@@ -76,7 +47,8 @@ impl Project {
     }
 
     pub fn load(json_str: &str) -> Result<Self, serde_json::Error> {
-        let project: Project = serde_json::from_str(json_str)?;
+        let mut project: Project = serde_json::from_str(json_str)?;
+        project.migrate();
         Ok(project)
     }
 
@@ -84,64 +56,198 @@ impl Project {
         serde_json::to_string(self)
     }
 
-    pub fn add_composition(&mut self, composition: Composition) {
-        self.compositions.push(composition);
+    /// Migrate legacy data into the unified node registry.
+    fn migrate(&mut self) {
+        // Migrate compositions from the legacy Vec into Node::Composition
+        for comp in std::mem::take(&mut self.compositions) {
+            let id = comp.id;
+            self.composition_ids.push(id);
+            self.nodes.insert(id, Node::Composition(comp));
+        }
+
+        // Migrate root_track_id → child_ids for compositions
+        let comp_ids: Vec<Uuid> = self.composition_ids.clone();
+        for comp_id in comp_ids {
+            let root_id = match self.nodes.get(&comp_id) {
+                Some(Node::Composition(c)) => c.root_track_id,
+                _ => continue,
+            };
+            let Some(root_track_id) = root_id else {
+                continue;
+            };
+            // Already migrated if child_ids is non-empty
+            if let Some(Node::Composition(c)) = self.nodes.get(&comp_id) {
+                if !c.child_ids.is_empty() {
+                    continue;
+                }
+            }
+            // Promote root track's children into composition's child_ids,
+            // then remove the root track node.
+            let promoted_children = self
+                .nodes
+                .get(&root_track_id)
+                .and_then(|n| match n {
+                    Node::Track(t) => Some(t.child_ids.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            if let Some(Node::Composition(c)) = self.nodes.get_mut(&comp_id) {
+                c.child_ids = promoted_children;
+                c.root_track_id = None;
+            }
+            // Remove the old root track node
+            self.nodes.remove(&root_track_id);
+        }
+
+        // Migrate is_layer tracks into Node::Layer
+        let layer_ids: Vec<Uuid> = self
+            .nodes
+            .iter()
+            .filter_map(|(id, n)| match n {
+                Node::Track(t) if t.is_layer => Some(*id),
+                _ => None,
+            })
+            .collect();
+        for id in layer_ids {
+            if let Some(Node::Track(t)) = self.nodes.remove(&id) {
+                // Extract in_frame/out_frame from child Source
+                let (in_frame, out_frame) = t
+                    .child_ids
+                    .iter()
+                    .find_map(|child_id| match self.nodes.get(child_id) {
+                        Some(Node::Source(s)) => Some((s.in_frame, s.out_frame)),
+                        _ => None,
+                    })
+                    .unwrap_or((0, 0));
+
+                self.nodes.insert(
+                    id,
+                    Node::Layer(LayerData {
+                        id: t.id,
+                        name: t.name,
+                        child_ids: t.child_ids,
+                        blend_mode: t.blend_mode,
+                        opacity: t.opacity,
+                        visible: t.visible,
+                        in_frame,
+                        out_frame,
+                    }),
+                );
+            }
+        }
+
+        // For existing Layer nodes with in_frame=0, out_frame=0,
+        // propagate timing from child Source if available
+        let layers_to_fix: Vec<Uuid> = self
+            .nodes
+            .iter()
+            .filter_map(|(id, n)| match n {
+                Node::Layer(l) if l.in_frame == 0 && l.out_frame == 0 => Some(*id),
+                _ => None,
+            })
+            .collect();
+        for layer_id in layers_to_fix {
+            let timing = {
+                let layer = match self.nodes.get(&layer_id) {
+                    Some(Node::Layer(l)) => l,
+                    _ => continue,
+                };
+                layer.child_ids.iter().find_map(|cid| {
+                    if let Some(Node::Source(s)) = self.nodes.get(cid) {
+                        if s.in_frame > 0 || s.out_frame > 0 {
+                            Some((s.in_frame, s.out_frame))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+            };
+            if let Some((inf, outf)) = timing {
+                if let Some(Node::Layer(l)) = self.nodes.get_mut(&layer_id) {
+                    l.in_frame = inf;
+                    l.out_frame = outf;
+                }
+            }
+        }
     }
 
-    pub fn get_composition_mut(&mut self, id: Uuid) -> Option<&mut Composition> {
-        self.compositions.iter_mut().find(|c| c.id == id)
+    // ==================== Composition Methods ====================
+
+    pub fn add_composition(&mut self, composition: Composition) {
+        let id = composition.id;
+        self.composition_ids.push(id);
+        self.nodes.insert(id, Node::Composition(composition));
     }
 
     pub fn get_composition(&self, id: Uuid) -> Option<&Composition> {
-        self.compositions.iter().find(|c| c.id == id)
+        match self.nodes.get(&id)? {
+            Node::Composition(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    pub fn get_composition_mut(&mut self, id: Uuid) -> Option<&mut Composition> {
+        match self.nodes.get_mut(&id)? {
+            Node::Composition(c) => Some(c),
+            _ => None,
+        }
     }
 
     pub fn remove_composition(&mut self, id: Uuid) -> Option<Composition> {
-        let index = self.compositions.iter().position(|c| c.id == id)?;
-        Some(self.compositions.remove(index))
+        self.composition_ids.retain(|cid| *cid != id);
+        match self.nodes.remove(&id)? {
+            Node::Composition(c) => Some(c),
+            other => {
+                // Put it back if it wasn't a composition
+                self.nodes.insert(id, other);
+                None
+            }
+        }
+    }
+
+    pub fn all_compositions(&self) -> impl Iterator<Item = &Composition> {
+        self.composition_ids
+            .iter()
+            .filter_map(|id| self.get_composition(*id))
     }
 
     // ==================== Node Registry Methods ====================
 
-    /// Add a node to the registry
     pub fn add_node(&mut self, node: Node) {
         self.nodes.insert(node.id(), node);
     }
 
-    /// Get a node by ID
     pub fn get_node(&self, id: Uuid) -> Option<&Node> {
         self.nodes.get(&id)
     }
 
-    /// Get a mutable node by ID
     pub fn get_node_mut(&mut self, id: Uuid) -> Option<&mut Node> {
         self.nodes.get_mut(&id)
     }
 
-    /// Remove a node from the registry
     pub fn remove_node(&mut self, id: Uuid) -> Option<Node> {
         self.nodes.remove(&id)
     }
 
     // ==================== Convenience Accessors ====================
 
-    /// Get a clip by ID (convenience method)
-    pub fn get_clip(&self, id: Uuid) -> Option<&TrackClip> {
+    pub fn get_source(&self, id: Uuid) -> Option<&SourceData> {
         match self.nodes.get(&id)? {
-            Node::Clip(c) => Some(c),
+            Node::Source(s) => Some(s),
             _ => None,
         }
     }
 
-    /// Get a mutable clip by ID (convenience method)
-    pub fn get_clip_mut(&mut self, id: Uuid) -> Option<&mut TrackClip> {
+    pub fn get_source_mut(&mut self, id: Uuid) -> Option<&mut SourceData> {
         match self.nodes.get_mut(&id)? {
-            Node::Clip(c) => Some(c),
+            Node::Source(s) => Some(s),
             _ => None,
         }
     }
 
-    /// Get a track by ID (convenience method)
     pub fn get_track(&self, id: Uuid) -> Option<&TrackData> {
         match self.nodes.get(&id)? {
             Node::Track(t) => Some(t),
@@ -149,7 +255,6 @@ impl Project {
         }
     }
 
-    /// Get a mutable track by ID (convenience method)
     pub fn get_track_mut(&mut self, id: Uuid) -> Option<&mut TrackData> {
         match self.nodes.get_mut(&id)? {
             Node::Track(t) => Some(t),
@@ -157,31 +262,47 @@ impl Project {
         }
     }
 
-    // ==================== Traversal Helpers ====================
-
-    /// Collect all clips under a given node (recursively)
-    pub fn collect_clips(&self, node_id: Uuid) -> Vec<&TrackClip> {
-        let mut clips = Vec::new();
-        self.collect_clips_recursive(node_id, &mut clips);
-        clips
+    pub fn get_layer(&self, id: Uuid) -> Option<&LayerData> {
+        match self.nodes.get(&id)? {
+            Node::Layer(l) => Some(l),
+            _ => None,
+        }
     }
 
-    fn collect_clips_recursive<'a>(&'a self, node_id: Uuid, clips: &mut Vec<&'a TrackClip>) {
+    pub fn get_layer_mut(&mut self, id: Uuid) -> Option<&mut LayerData> {
+        match self.nodes.get_mut(&id)? {
+            Node::Layer(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    // ==================== Traversal Helpers ====================
+
+    /// Collect all sources under a given node (recursively through tracks and layers)
+    pub fn collect_sources(&self, node_id: Uuid) -> Vec<&SourceData> {
+        let mut sources = Vec::new();
+        self.collect_sources_recursive(node_id, &mut sources);
+        sources
+    }
+
+    fn collect_sources_recursive<'a>(&'a self, node_id: Uuid, sources: &mut Vec<&'a SourceData>) {
         match self.nodes.get(&node_id) {
-            Some(Node::Clip(c)) => clips.push(c),
-            Some(Node::Track(t)) => {
-                for child_id in &t.child_ids {
-                    self.collect_clips_recursive(*child_id, clips);
+            Some(Node::Source(s)) => sources.push(s),
+            Some(Node::Composition(_)) | Some(Node::Track(_)) | Some(Node::Layer(_)) => {
+                if let Some(children) = self.get_container_child_ids(node_id) {
+                    for child_id in children.clone() {
+                        self.collect_sources_recursive(child_id, sources);
+                    }
                 }
             }
             _ => {}
         }
     }
 
-    /// Iterate over all clips in the registry
-    pub fn all_clips(&self) -> impl Iterator<Item = &TrackClip> {
+    /// Iterate over all sources in the registry
+    pub fn all_sources(&self) -> impl Iterator<Item = &SourceData> {
         self.nodes.values().filter_map(|node| match node {
-            Node::Clip(c) => Some(c),
+            Node::Source(s) => Some(s),
             _ => None,
         })
     }
@@ -194,26 +315,52 @@ impl Project {
         })
     }
 
-    /// Find the parent track containing a given clip ID
-    pub fn find_parent_track(&self, clip_id: Uuid) -> Option<Uuid> {
+    /// Find the parent container (composition, track, or layer) of a given child node
+    pub fn find_parent_container(&self, child_id: Uuid) -> Option<Uuid> {
         for (id, node) in &self.nodes {
-            if let Node::Track(track) = node {
-                if track.child_ids.contains(&clip_id) {
-                    return Some(*id);
-                }
+            match node {
+                Node::Composition(c) if c.child_ids.contains(&child_id) => return Some(*id),
+                Node::Track(track) if track.child_ids.contains(&child_id) => return Some(*id),
+                Node::Layer(layer) if layer.child_ids.contains(&child_id) => return Some(*id),
+                _ => {}
             }
         }
         None
     }
 
-    /// Check whether `node_id` is reachable from `root_id` in the track tree.
+    /// Alias for backward compatibility
+    pub fn find_parent_track(&self, child_id: Uuid) -> Option<Uuid> {
+        self.find_parent_container(child_id)
+    }
+
+    /// Get child_ids from any container node (Composition, Track, or Layer).
+    pub fn get_container_child_ids(&self, id: Uuid) -> Option<&Vec<Uuid>> {
+        match self.nodes.get(&id)? {
+            Node::Composition(c) => Some(&c.child_ids),
+            Node::Track(t) => Some(&t.child_ids),
+            Node::Layer(l) => Some(&l.child_ids),
+            _ => None,
+        }
+    }
+
+    /// Get mutable child_ids from any container node (Composition, Track, or Layer).
+    pub fn get_container_child_ids_mut(&mut self, id: Uuid) -> Option<&mut Vec<Uuid>> {
+        match self.nodes.get_mut(&id)? {
+            Node::Composition(c) => Some(&mut c.child_ids),
+            Node::Track(t) => Some(&mut t.child_ids),
+            Node::Layer(l) => Some(&mut l.child_ids),
+            _ => None,
+        }
+    }
+
+    /// Check whether `node_id` is reachable from `root_id` in the node tree.
     pub fn is_node_in_tree(&self, root_id: Uuid, node_id: Uuid) -> bool {
         if root_id == node_id {
             return true;
         }
-        if let Some(Node::Track(track)) = self.nodes.get(&root_id) {
-            for child_id in &track.child_ids {
-                if self.is_node_in_tree(*child_id, node_id) {
+        if let Some(children) = self.get_container_child_ids(root_id) {
+            for child_id in children.clone() {
+                if self.is_node_in_tree(child_id, node_id) {
                     return true;
                 }
             }
@@ -223,7 +370,6 @@ impl Project {
 
     // ==================== GraphNode Accessors ====================
 
-    /// Get a graph node by ID
     pub fn get_graph_node(&self, id: Uuid) -> Option<&GraphNode> {
         match self.nodes.get(&id)? {
             Node::Graph(g) => Some(g),
@@ -231,7 +377,6 @@ impl Project {
         }
     }
 
-    /// Get a mutable graph node by ID
     pub fn get_graph_node_mut(&mut self, id: Uuid) -> Option<&mut GraphNode> {
         match self.nodes.get_mut(&id)? {
             Node::Graph(g) => Some(g),
@@ -239,7 +384,6 @@ impl Project {
         }
     }
 
-    /// Iterate over all graph nodes
     pub fn all_graph_nodes(&self) -> impl Iterator<Item = &GraphNode> {
         self.nodes.values().filter_map(|node| match node {
             Node::Graph(g) => Some(g),
@@ -249,12 +393,10 @@ impl Project {
 
     // ==================== Connection Methods ====================
 
-    /// Add a connection
     pub fn add_connection(&mut self, connection: Connection) {
         self.connections.push(connection);
     }
 
-    /// Remove a connection by ID
     pub fn remove_connection(&mut self, connection_id: Uuid) -> Option<Connection> {
         let pos = self
             .connections
@@ -263,7 +405,6 @@ impl Project {
         Some(self.connections.remove(pos))
     }
 
-    /// Get all connections involving a specific node
     pub fn get_connections_for_node(&self, node_id: Uuid) -> Vec<&Connection> {
         self.connections
             .iter()
@@ -271,90 +412,14 @@ impl Project {
             .collect()
     }
 
-    /// Get the connection feeding into a specific input pin
     pub fn get_input_connection(&self, pin: &PinId) -> Option<&Connection> {
         self.connections
             .iter()
             .find(|c| c.to.node_id == pin.node_id && c.to.pin_name == pin.pin_name)
     }
 
-    /// Remove all connections involving a specific node
     pub fn remove_connections_for_node(&mut self, node_id: Uuid) {
         self.connections
             .retain(|c| c.from.node_id != node_id && c.to.node_id != node_id);
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub struct Composition {
-    pub id: Uuid,
-    pub name: String,
-    pub width: u64,
-    pub height: u64,
-    pub fps: f64,
-    pub duration: f64,
-    pub background_color: Color,
-    pub color_profile: String,
-    #[serde(default)]
-    pub work_area_in: u64,
-    #[serde(default)]
-    pub work_area_out: u64,
-
-    /// 単一のルートトラックUUID
-    pub root_track_id: Uuid,
-}
-
-impl Composition {
-    /// Create a new composition with an auto-generated root track
-    pub fn new(name: &str, width: u64, height: u64, fps: f64, duration: f64) -> (Self, TrackData) {
-        let root_track = TrackData::new(&format!("{} - Root", name));
-        let comp = Self {
-            id: Uuid::new_v4(),
-            name: name.to_string(),
-            width,
-            height,
-            fps,
-            duration,
-            background_color: Color {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-            color_profile: "sRGB".to_string(),
-            work_area_in: 0,
-            work_area_out: (duration * fps).ceil() as u64,
-            root_track_id: root_track.id,
-        };
-        (comp, root_track)
-    }
-
-    /// Create a composition with an existing root track ID
-    pub fn new_with_root(
-        name: &str,
-        width: u64,
-        height: u64,
-        fps: f64,
-        duration: f64,
-        root_track_id: Uuid,
-    ) -> Self {
-        Self {
-            id: Uuid::new_v4(),
-            name: name.to_string(),
-            width,
-            height,
-            fps,
-            duration,
-            background_color: Color {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-            color_profile: "sRGB".to_string(),
-            work_area_in: 0,
-            work_area_out: (duration * fps).ceil() as u64,
-            root_track_id,
-        }
     }
 }

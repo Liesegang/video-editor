@@ -46,9 +46,23 @@ impl NodeEvaluator for TransformEvaluator {
         let rotation = ctx.resolve_number(&graph_node.properties, "rotation", 0.0);
         let opacity = ctx.resolve_number(&graph_node.properties, "opacity", 100.0);
 
+        // Apply region offset and render_scale to map composition-space
+        // coordinates to the (potentially smaller/offset) renderer surface.
+        let (region_offset_x, region_offset_y) = match &ctx.region {
+            Some(r) => (-r.x, -r.y),
+            None => (0.0, 0.0),
+        };
+        let scale_factor = ctx.render_scale;
+
         let transform = Transform {
-            position: Position { x: px, y: py },
-            anchor: Position { x: ax, y: ay },
+            position: Position {
+                x: (px + region_offset_x) * scale_factor,
+                y: (py + region_offset_y) * scale_factor,
+            },
+            anchor: Position {
+                x: ax * scale_factor,
+                y: ay * scale_factor,
+            },
             scale: Scale {
                 x: sx / 100.0,
                 y: sy / 100.0,

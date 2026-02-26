@@ -9,12 +9,13 @@ use library::pipeline::engine::EvalEngine;
 use library::plugin::PluginManager;
 use library::project::node::Node;
 use library::project::project::{Composition, Project};
+use library::project::track::TrackData;
 use library::rendering::cache::CacheManager;
 use library::rendering::renderer::RenderOutput;
 use library::rendering::skia_renderer::SkiaRenderer;
 use library::runtime::color::Color;
-use library::service::handlers::clip_factory::ClipFactory;
-use library::service::handlers::clip_handler::ClipHandler;
+use library::service::handlers::layer_factory::LayerFactory;
+use library::service::handlers::source_handler::SourceHandler;
 use library::service::handlers::track_handler::TrackHandler;
 
 fn make_plugin_manager() -> PluginManager {
@@ -23,11 +24,17 @@ fn make_plugin_manager() -> PluginManager {
 
 fn setup_project() -> (Arc<RwLock<Project>>, uuid::Uuid, uuid::Uuid) {
     let mut project = Project::new("Test Project");
-    let (comp, root_track) = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
+    let comp = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
     let comp_id = comp.id;
-    let root_track_id = comp.root_track_id;
-    project.add_node(Node::Track(root_track));
     project.add_composition(comp);
+    let root_track = TrackData::new("Root");
+    let root_track_id = root_track.id;
+    project.add_node(Node::Track(root_track));
+    project
+        .get_composition_mut(comp_id)
+        .unwrap()
+        .child_ids
+        .push(root_track_id);
     (Arc::new(RwLock::new(project)), comp_id, root_track_id)
 }
 
@@ -50,13 +57,19 @@ fn test_text_clip_renders_through_pipeline() {
 
     // Add track + text clip with graph nodes
     let track_id = TrackHandler::add_track(&project, comp_id, "Track 1").unwrap();
-    let text_clip = ClipFactory::create_text_clip("Hello World", 0, 90, 30.0);
+    let text_clip = LayerFactory::build_text_source("Hello World", 0, 90, 30.0);
     let clip_kind = text_clip.kind.clone();
     let clip_id =
-        ClipHandler::add_clip_to_track(&project, comp_id, track_id, text_clip, 0, 90, None)
+        SourceHandler::add_source_to_track(&project, comp_id, track_id, text_clip, 0, 90, None)
             .unwrap();
-    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
-        .unwrap();
+    SourceHandler::setup_source_graph_nodes(
+        &project,
+        &plugin_manager,
+        track_id,
+        clip_id,
+        &clip_kind,
+    )
+    .unwrap();
 
     // Verify the project state
     let proj = project.read().unwrap();
@@ -78,19 +91,15 @@ fn test_text_clip_renders_through_pipeline() {
         "Track should have 1 child (layer)"
     );
     let layer_id = track.child_ids[0];
-    let layer = proj.get_track(layer_id).expect("Layer should be a Track");
+    let layer = proj.get_layer(layer_id).expect("Layer should exist");
     println!("Layer {} children: {:?}", layer_id, layer.child_ids);
 
-    // Check that the root track has the child track
+    // Check that the composition has the child track
     let comp = proj.get_composition(comp_id).unwrap();
-    let root = proj.get_track(comp.root_track_id).unwrap();
-    println!(
-        "Root track {} children: {:?}",
-        comp.root_track_id, root.child_ids
-    );
+    println!("Composition {} children: {:?}", comp_id, comp.child_ids);
     assert!(
-        root.child_ids.contains(&track_id),
-        "Root track should contain the child track"
+        comp.child_ids.contains(&track_id),
+        "Composition should contain the child track"
     );
 
     // Now run the evaluation engine
@@ -142,13 +151,19 @@ fn test_shape_clip_renders_through_pipeline() {
     let plugin_manager = make_plugin_manager();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "Track 1").unwrap();
-    let shape_clip = ClipFactory::create_shape_clip(0, 90, 30.0);
+    let shape_clip = LayerFactory::build_shape_source(0, 90, 30.0);
     let clip_kind = shape_clip.kind.clone();
     let clip_id =
-        ClipHandler::add_clip_to_track(&project, comp_id, track_id, shape_clip, 0, 90, None)
+        SourceHandler::add_source_to_track(&project, comp_id, track_id, shape_clip, 0, 90, None)
             .unwrap();
-    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
-        .unwrap();
+    SourceHandler::setup_source_graph_nodes(
+        &project,
+        &plugin_manager,
+        track_id,
+        clip_id,
+        &clip_kind,
+    )
+    .unwrap();
 
     let proj = project.read().unwrap();
     let comp = proj.get_composition(comp_id).unwrap();
@@ -188,13 +203,19 @@ fn test_sksl_clip_renders_through_pipeline() {
     let plugin_manager = make_plugin_manager();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "Track 1").unwrap();
-    let sksl_clip = ClipFactory::create_sksl_clip(0, 90, 30.0);
+    let sksl_clip = LayerFactory::build_sksl_source(0, 90, 30.0);
     let clip_kind = sksl_clip.kind.clone();
     let clip_id =
-        ClipHandler::add_clip_to_track(&project, comp_id, track_id, sksl_clip, 0, 90, None)
+        SourceHandler::add_source_to_track(&project, comp_id, track_id, sksl_clip, 0, 90, None)
             .unwrap();
-    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
-        .unwrap();
+    SourceHandler::setup_source_graph_nodes(
+        &project,
+        &plugin_manager,
+        track_id,
+        clip_id,
+        &clip_kind,
+    )
+    .unwrap();
 
     let proj = project.read().unwrap();
     let comp = proj.get_composition(comp_id).unwrap();
@@ -370,13 +391,19 @@ fn test_project_structure_for_render_server() {
     let plugin_manager = make_plugin_manager();
 
     let track_id = TrackHandler::add_track(&project, comp_id, "Track 1").unwrap();
-    let text_clip = ClipFactory::create_text_clip("Test", 0, 30, 30.0);
+    let text_clip = LayerFactory::build_text_source("Test", 0, 30, 30.0);
     let clip_kind = text_clip.kind.clone();
     let clip_id =
-        ClipHandler::add_clip_to_track(&project, comp_id, track_id, text_clip, 0, 30, None)
+        SourceHandler::add_source_to_track(&project, comp_id, track_id, text_clip, 0, 30, None)
             .unwrap();
-    ClipHandler::setup_clip_graph_nodes(&project, &plugin_manager, track_id, clip_id, &clip_kind)
-        .unwrap();
+    SourceHandler::setup_source_graph_nodes(
+        &project,
+        &plugin_manager,
+        track_id,
+        clip_id,
+        &clip_kind,
+    )
+    .unwrap();
 
     // Clone the project (simulating what the render server receives)
     let proj_clone = project.read().unwrap().clone();
@@ -393,12 +420,11 @@ fn test_project_structure_for_render_server() {
         proj_clone.connections.len()
     );
 
-    // Verify the composition exists in the clone
+    // Verify the composition exists in the clone and has children
     let comp = proj_clone.get_composition(comp_id).unwrap();
-    let root = proj_clone.get_track(comp.root_track_id).unwrap();
     assert!(
-        !root.child_ids.is_empty(),
-        "Root track should have children in cloned project"
+        comp.child_ids.len() >= 2,
+        "Composition should have at least 2 children (root track + added track) in cloned project"
     );
 
     // Walk the tree: root -> track -> layer -> (clip + graph nodes)
@@ -409,7 +435,7 @@ fn test_project_structure_for_render_server() {
         "Track should have 1 child (layer)"
     );
     let layer_id = track.child_ids[0];
-    let layer = proj_clone.get_track(layer_id).unwrap();
+    let layer = proj_clone.get_layer(layer_id).unwrap();
     println!(
         "Cloned layer {} has {} children",
         layer_id,

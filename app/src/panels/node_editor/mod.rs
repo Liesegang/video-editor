@@ -23,7 +23,7 @@ pub(crate) fn node_editor_panel(ui: &mut egui::Ui, ctx: &mut PanelContext) {
             .editor_context
             .selection
             .composition_id
-            .and_then(|id| proj_read.compositions.iter().find(|c| c.id == id))
+            .and_then(|id| proj_read.get_composition(id))
         {
             state.current_container = Some(comp.id);
         }
@@ -31,8 +31,8 @@ pub(crate) fn node_editor_panel(ui: &mut egui::Ui, ctx: &mut PanelContext) {
 
     // Convert current_time (f32 seconds) to frame number
     let fps = proj_read
-        .compositions
-        .first()
+        .all_compositions()
+        .next()
         .map(|c| c.fps)
         .unwrap_or(30.0);
     let current_frame = (ctx.editor_context.timeline.current_time * fps as f32) as u64;
@@ -84,10 +84,10 @@ fn find_parent_track(
     node_id: uuid::Uuid,
 ) -> Option<uuid::Uuid> {
     for (id, node) in project.nodes.iter() {
-        if let Node::Track(track) = node {
-            if track.child_ids.contains(&node_id) {
-                return Some(*id);
-            }
+        match node {
+            Node::Track(track) if track.child_ids.contains(&node_id) => return Some(*id),
+            Node::Layer(layer) if layer.child_ids.contains(&node_id) => return Some(*id),
+            _ => {}
         }
     }
     None

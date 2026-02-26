@@ -834,7 +834,7 @@ mod tests {
     #[test]
     fn open_for_edit_populates_from_composition() {
         let mut dialog = CompositionDialog::default();
-        let (comp, _) = Composition::new("My Comp", 3840, 2160, 60.0, 30.0);
+        let comp = Composition::new("My Comp", 3840, 2160, 60.0, 30.0);
 
         dialog.open_for_edit(&comp);
 
@@ -926,7 +926,7 @@ mod tests {
     #[test]
     fn edit_mode_shows_edit_composition_title() {
         let mut dialog = CompositionDialog::default();
-        let (comp, _) = Composition::new("Test", 1920, 1080, 30.0, 10.0);
+        let comp = Composition::new("Test", 1920, 1080, 30.0, 10.0);
         dialog.open_for_edit(&comp);
 
         let harness = Harness::builder()

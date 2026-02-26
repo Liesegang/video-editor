@@ -1,23 +1,28 @@
 use crate::cache::CacheManager;
 use crate::project::asset::Asset;
-use crate::project::clip::TrackClip;
 use crate::project::node::Node;
 use crate::project::project::{Composition, Project};
+use crate::project::source::SourceData;
 use uuid::Uuid;
 
-/// Recursively collect all clips from the project starting at a given node
-fn collect_clips_recursive<'a>(project: &'a Project, node_id: Uuid) -> Vec<&'a TrackClip> {
-    let mut clips = Vec::new();
+/// Recursively collect all sources from the project starting at a given node
+fn collect_sources_recursive<'a>(project: &'a Project, node_id: Uuid) -> Vec<&'a SourceData> {
+    let mut sources = Vec::new();
     match project.get_node(node_id) {
-        Some(Node::Clip(c)) => clips.push(c),
+        Some(Node::Source(s)) => sources.push(s),
         Some(Node::Track(t)) => {
             for child_id in &t.child_ids {
-                clips.extend(collect_clips_recursive(project, *child_id));
+                sources.extend(collect_sources_recursive(project, *child_id));
+            }
+        }
+        Some(Node::Layer(l)) => {
+            for child_id in &l.child_ids {
+                sources.extend(collect_sources_recursive(project, *child_id));
             }
         }
         _ => {}
     }
-    clips
+    sources
 }
 
 pub fn mix_samples(
@@ -33,30 +38,34 @@ pub fn mix_samples(
     let mut mix_buffer = vec![0.0; frames_to_mix * channels as usize];
     let fps = composition.fps;
 
-    // Collect all clips from the root track
-    let all_clips: Vec<&TrackClip> = collect_clips_recursive(project, composition.root_track_id);
+    // Collect all sources from the composition's children
+    let all_sources: Vec<&SourceData> = composition
+        .child_ids
+        .iter()
+        .flat_map(|child_id| collect_sources_recursive(project, *child_id))
+        .collect();
 
-    for clip in all_clips {
-        if let Some(asset_id) = clip.reference_id {
+    for source in all_sources {
+        if let Some(asset_id) = source.reference_id {
             if let Some(asset) = assets.iter().find(|a| a.id == asset_id) {
                 if asset.kind != crate::project::asset::AssetKind::Audio {
                     continue;
                 }
 
                 if let Some(audio_data) = cache_manager.get_audio(asset_id) {
-                    let clip_in_time = clip.in_frame as f64 / fps;
-                    let clip_out_time = clip.out_frame as f64 / fps;
+                    let source_in_time = source.in_frame as f64 / fps;
+                    let source_out_time = source.out_frame as f64 / fps;
 
                     // Ensure sane FPS
-                    let clip_fps = if clip.fps > 0.0 { clip.fps } else { fps };
-                    let clip_source_offset = clip.source_begin_frame as f64 / clip_fps;
+                    let source_fps = if source.fps > 0.0 { source.fps } else { fps };
+                    let source_offset = source.source_begin_frame as f64 / source_fps;
 
                     let start_time_s = start_sample as f64 / sample_rate as f64;
                     let end_time_s =
                         (start_sample + frames_to_mix as u64) as f64 / sample_rate as f64;
 
-                    let overlap_start = start_time_s.max(clip_in_time);
-                    let overlap_end = end_time_s.min(clip_out_time);
+                    let overlap_start = start_time_s.max(source_in_time);
+                    let overlap_end = end_time_s.min(source_out_time);
 
                     if overlap_start < overlap_end {
                         let render_offset_samples =
@@ -64,7 +73,7 @@ pub fn mix_samples(
                         let render_len_samples =
                             ((overlap_end - overlap_start) * sample_rate as f64).round() as usize;
 
-                        let source_start_time = (overlap_start - clip_in_time) + clip_source_offset;
+                        let source_start_time = (overlap_start - source_in_time) + source_offset;
 
                         // Handle negative source start (Silence before media start)
                         let mut skip_samples = 0;

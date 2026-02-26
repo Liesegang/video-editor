@@ -422,7 +422,7 @@ pub(crate) fn preview_panel(
 
         if let Some(comp) = editor_context.get_current_composition(&proj_read) {
             // Use flat all_clips() iterator instead of nested track traversal
-            for entity in proj_read.all_clips() {
+            for entity in proj_read.all_sources() {
                 // Find the parent track for this clip
                 let track_id = proj_read.find_parent_track(entity.id).unwrap_or_default();
 
@@ -473,7 +473,7 @@ pub(crate) fn preview_panel(
                             (editor_context.timeline.current_time as f64 * comp.fps).round() as u64;
 
                         if let Some((x, y, w, h)) =
-                            library::service::bounds::get_clip_content_bounds(
+                            library::service::bounds::get_source_content_bounds(
                                 entity,
                                 comp.fps,
                                 current_frame,
@@ -512,9 +512,9 @@ pub(crate) fn preview_panel(
                 }
 
                 // Look up transform node for this clip
-                let clip_ctx =
-                    library::project::graph_analysis::resolve_clip_context(&proj_read, entity.id);
-                let transform_node_id = clip_ctx.transform_node;
+                let source_ctx =
+                    library::project::graph_analysis::resolve_source_context(&proj_read, entity.id);
+                let transform_node_id = source_ctx.transform_node;
 
                 // Choose property source: transform graph node if available, else clip properties
                 let transform_props = transform_node_id

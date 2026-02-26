@@ -1,11 +1,11 @@
 //! Comprehensive unit-level tests for library modules.
 //!
-//! Tests: ClipFactory, TrackClip, bounds, builtin plugins,
+//! Tests: LayerFactory, SourceData, bounds, builtin plugins,
 //! node definitions, draw_type, property, shape_data.
 
-use library::project::clip::{TrackClip, TrackClipKind};
 use library::project::property::{Property, PropertyMap, PropertyValue};
-use library::service::handlers::clip_factory::ClipFactory;
+use library::project::source::{SourceData, SourceKind};
+use library::service::handlers::layer_factory::LayerFactory;
 
 /// Helper: get the "value" from a constant Property.
 fn constant_value(prop: &Property) -> &PropertyValue {
@@ -21,13 +21,13 @@ mod clip_factory {
 
     #[test]
     fn create_text_clip_has_text_kind() {
-        let clip = ClipFactory::create_text_clip("Hello", 0, 90, 30.0);
-        assert_eq!(clip.kind, TrackClipKind::Text);
+        let clip = LayerFactory::build_text_source("Hello", 0, 90, 30.0);
+        assert_eq!(clip.kind, SourceKind::Text);
     }
 
     #[test]
     fn create_text_clip_stores_text_property() {
-        let clip = ClipFactory::create_text_clip("Hello World", 10, 100, 30.0);
+        let clip = LayerFactory::build_text_source("Hello World", 10, 100, 30.0);
         let text = clip.properties.get("text").unwrap();
         let val = constant_value(text);
         assert_eq!(*val, PropertyValue::String("Hello World".to_string()));
@@ -35,7 +35,7 @@ mod clip_factory {
 
     #[test]
     fn create_text_clip_frame_range() {
-        let clip = ClipFactory::create_text_clip("T", 10, 50, 24.0);
+        let clip = LayerFactory::build_text_source("T", 10, 50, 24.0);
         assert_eq!(clip.in_frame, 10);
         assert_eq!(clip.out_frame, 50);
         assert_eq!(clip.fps, 24.0);
@@ -43,19 +43,19 @@ mod clip_factory {
 
     #[test]
     fn create_text_clip_no_duration() {
-        let clip = ClipFactory::create_text_clip("T", 0, 30, 30.0);
+        let clip = LayerFactory::build_text_source("T", 0, 30, 30.0);
         assert!(clip.duration_frame.is_none());
     }
 
     #[test]
     fn create_shape_clip_has_shape_kind() {
-        let clip = ClipFactory::create_shape_clip(0, 60, 30.0);
-        assert_eq!(clip.kind, TrackClipKind::Shape);
+        let clip = LayerFactory::build_shape_source(0, 60, 30.0);
+        assert_eq!(clip.kind, SourceKind::Shape);
     }
 
     #[test]
     fn create_shape_clip_has_path_property() {
-        let clip = ClipFactory::create_shape_clip(0, 60, 30.0);
+        let clip = LayerFactory::build_shape_source(0, 60, 30.0);
         let path = clip.properties.get("path").unwrap();
         let val = constant_value(path);
         // Should contain a heart SVG path
@@ -68,13 +68,13 @@ mod clip_factory {
 
     #[test]
     fn create_image_clip_has_image_kind() {
-        let clip = ClipFactory::create_image_clip(None, "/path/to/img.png", 0, 90, 30.0);
-        assert_eq!(clip.kind, TrackClipKind::Image);
+        let clip = LayerFactory::build_image_source(None, "/path/to/img.png", 0, 90, 30.0);
+        assert_eq!(clip.kind, SourceKind::Image);
     }
 
     #[test]
     fn create_image_clip_stores_file_path() {
-        let clip = ClipFactory::create_image_clip(None, "/my/image.jpg", 5, 95, 24.0);
+        let clip = LayerFactory::build_image_source(None, "/my/image.jpg", 5, 95, 24.0);
         let fp = clip.properties.get("file_path").unwrap();
         assert_eq!(
             *constant_value(fp),
@@ -84,33 +84,33 @@ mod clip_factory {
 
     #[test]
     fn create_image_clip_no_duration_no_source_begin() {
-        let clip = ClipFactory::create_image_clip(None, "/img.png", 0, 60, 30.0);
+        let clip = LayerFactory::build_image_source(None, "/img.png", 0, 60, 30.0);
         assert!(clip.duration_frame.is_none());
         assert_eq!(clip.source_begin_frame, 0);
     }
 
     #[test]
     fn create_video_clip_has_video_kind() {
-        let clip = ClipFactory::create_video_clip(None, "/vid.mp4", 0, 100, 0, 100, 30.0);
-        assert_eq!(clip.kind, TrackClipKind::Video);
+        let clip = LayerFactory::build_video_source(None, "/vid.mp4", 0, 100, 0, 100, 30.0);
+        assert_eq!(clip.kind, SourceKind::Video);
     }
 
     #[test]
     fn create_video_clip_stores_duration() {
-        let clip = ClipFactory::create_video_clip(None, "/vid.mp4", 0, 100, 10, 200, 24.0);
+        let clip = LayerFactory::build_video_source(None, "/vid.mp4", 0, 100, 10, 200, 24.0);
         assert_eq!(clip.duration_frame, Some(200));
         assert_eq!(clip.source_begin_frame, 10);
     }
 
     #[test]
     fn create_audio_clip_has_audio_kind() {
-        let clip = ClipFactory::create_audio_clip(None, "/audio.wav", 0, 60, 0, 60, 44100.0);
-        assert_eq!(clip.kind, TrackClipKind::Audio);
+        let clip = LayerFactory::build_audio_source(None, "/audio.wav", 0, 60, 0, 60, 44100.0);
+        assert_eq!(clip.kind, SourceKind::Audio);
     }
 
     #[test]
     fn create_audio_clip_stores_file_path() {
-        let clip = ClipFactory::create_audio_clip(None, "/music.mp3", 0, 300, 0, 300, 48000.0);
+        let clip = LayerFactory::build_audio_source(None, "/music.mp3", 0, 300, 0, 300, 48000.0);
         let fp = clip.properties.get("file_path").unwrap();
         assert_eq!(
             *constant_value(fp),
@@ -120,13 +120,13 @@ mod clip_factory {
 
     #[test]
     fn create_sksl_clip_has_sksl_kind() {
-        let clip = ClipFactory::create_sksl_clip(0, 120, 30.0);
-        assert_eq!(clip.kind, TrackClipKind::SkSL);
+        let clip = LayerFactory::build_sksl_source(0, 120, 30.0);
+        assert_eq!(clip.kind, SourceKind::SkSL);
     }
 
     #[test]
     fn create_sksl_clip_has_shader_property() {
-        let clip = ClipFactory::create_sksl_clip(0, 120, 30.0);
+        let clip = LayerFactory::build_sksl_source(0, 120, 30.0);
         let shader = clip.properties.get("shader").unwrap();
         if let PropertyValue::String(s) = constant_value(shader) {
             assert!(s.contains("main"));
@@ -138,9 +138,9 @@ mod clip_factory {
 
     #[test]
     fn all_clips_have_unique_ids() {
-        let c1 = ClipFactory::create_text_clip("A", 0, 30, 30.0);
-        let c2 = ClipFactory::create_text_clip("B", 0, 30, 30.0);
-        let c3 = ClipFactory::create_shape_clip(0, 30, 30.0);
+        let c1 = LayerFactory::build_text_source("A", 0, 30, 30.0);
+        let c2 = LayerFactory::build_text_source("B", 0, 30, 30.0);
+        let c3 = LayerFactory::build_shape_source(0, 30, 30.0);
         assert_ne!(c1.id, c2.id);
         assert_ne!(c2.id, c3.id);
     }
@@ -148,42 +148,41 @@ mod clip_factory {
     #[test]
     fn create_image_clip_with_reference_id() {
         let ref_id = uuid::Uuid::new_v4();
-        let clip = ClipFactory::create_image_clip(Some(ref_id), "/img.png", 0, 90, 30.0);
+        let clip = LayerFactory::build_image_source(Some(ref_id), "/img.png", 0, 90, 30.0);
         assert_eq!(clip.reference_id, Some(ref_id));
     }
 
     #[test]
     fn create_video_clip_with_reference_id() {
         let ref_id = uuid::Uuid::new_v4();
-        let clip = ClipFactory::create_video_clip(Some(ref_id), "/v.mp4", 0, 100, 0, 100, 30.0);
+        let clip = LayerFactory::build_video_source(Some(ref_id), "/v.mp4", 0, 100, 0, 100, 30.0);
         assert_eq!(clip.reference_id, Some(ref_id));
     }
 }
 
-// ===== TrackClip =====
+// ===== SourceData =====
 
 mod track_clip {
     use super::*;
-    use ordered_float::OrderedFloat;
 
     #[test]
     fn get_definitions_for_text() {
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Text);
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Text);
         let keys: Vec<&str> = defs.iter().map(|d| d.name()).collect();
         assert!(keys.contains(&"text"));
         assert!(keys.contains(&"font_family"));
         assert!(keys.contains(&"size"));
-        // Should include transform defs
-        assert!(keys.contains(&"position"));
-        assert!(keys.contains(&"scale"));
-        assert!(keys.contains(&"rotation"));
-        assert!(keys.contains(&"anchor"));
-        assert!(keys.contains(&"opacity"));
+        // Transform defs now live on graph nodes, not on the source
+        assert!(!keys.contains(&"position"));
+        assert!(!keys.contains(&"scale"));
+        assert!(!keys.contains(&"rotation"));
+        assert!(!keys.contains(&"anchor"));
+        assert!(!keys.contains(&"opacity"));
     }
 
     #[test]
     fn get_definitions_for_audio_no_transform() {
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Audio);
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Audio);
         let keys: Vec<&str> = defs.iter().map(|d| d.name()).collect();
         assert!(keys.contains(&"file_path"));
         // Audio clips should NOT have transform properties
@@ -192,47 +191,51 @@ mod track_clip {
     }
 
     #[test]
-    fn get_definitions_for_video_has_transform() {
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Video);
+    fn get_definitions_for_video_no_transform() {
+        // Transform properties now live on graph nodes
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Video);
         let keys: Vec<&str> = defs.iter().map(|d| d.name()).collect();
         assert!(keys.contains(&"file_path"));
-        assert!(keys.contains(&"position"));
+        assert!(!keys.contains(&"position"));
     }
 
     #[test]
-    fn get_definitions_for_image_has_transform() {
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Image);
+    fn get_definitions_for_image_no_transform() {
+        // Transform properties now live on graph nodes
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Image);
         let keys: Vec<&str> = defs.iter().map(|d| d.name()).collect();
         assert!(keys.contains(&"file_path"));
-        assert!(keys.contains(&"position"));
+        assert!(!keys.contains(&"position"));
     }
 
     #[test]
     fn get_definitions_for_shape() {
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Shape);
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Shape);
         let keys: Vec<&str> = defs.iter().map(|d| d.name()).collect();
         assert!(keys.contains(&"path"));
         assert!(keys.contains(&"width"));
         assert!(keys.contains(&"height"));
-        assert!(keys.contains(&"position"));
+        // Transform properties now live on graph nodes
+        assert!(!keys.contains(&"position"));
     }
 
     #[test]
     fn get_definitions_for_sksl() {
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::SkSL);
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::SkSL);
         let keys: Vec<&str> = defs.iter().map(|d| d.name()).collect();
         assert!(keys.contains(&"shader"));
-        assert!(keys.contains(&"position"));
+        // Transform properties now live on graph nodes
+        assert!(!keys.contains(&"position"));
     }
 
     #[test]
     fn set_constant_property() {
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Text);
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Text);
         let props = PropertyMap::from_definitions(&defs);
-        let mut clip = TrackClip::new(
+        let mut clip = SourceData::new(
             uuid::Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             90,
             0,
@@ -246,29 +249,21 @@ mod track_clip {
     }
 
     #[test]
-    fn transform_definitions_have_correct_defaults() {
-        // Use get_definitions_for_kind (public) — Video includes transform defs
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Video);
-        let pos = defs.iter().find(|d| d.name() == "position").unwrap();
-        if let PropertyValue::Vec2(v) = pos.default_value() {
-            assert_eq!(v.x, OrderedFloat(0.0));
-            assert_eq!(v.y, OrderedFloat(0.0));
-        } else {
-            panic!("position should be Vec2");
-        }
-
-        let scale = defs.iter().find(|d| d.name() == "scale").unwrap();
-        if let PropertyValue::Vec2(v) = scale.default_value() {
-            assert_eq!(v.x, OrderedFloat(100.0));
-            assert_eq!(v.y, OrderedFloat(100.0));
-        } else {
-            panic!("scale should be Vec2");
-        }
-
-        let opacity = defs.iter().find(|d| d.name() == "opacity").unwrap();
-        assert_eq!(
-            *opacity.default_value(),
-            PropertyValue::Number(OrderedFloat(100.0))
+    fn transform_definitions_live_on_graph_node() {
+        // Transform definitions now live on the compositing.transform graph node,
+        // not on the source data. Verify that source definitions don't include them.
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Video);
+        assert!(
+            defs.iter().find(|d| d.name() == "position").is_none(),
+            "position should not be in source definitions"
+        );
+        assert!(
+            defs.iter().find(|d| d.name() == "scale").is_none(),
+            "scale should not be in source definitions"
+        );
+        assert!(
+            defs.iter().find(|d| d.name() == "opacity").is_none(),
+            "opacity should not be in source definitions"
         );
     }
 }
@@ -998,9 +993,9 @@ mod shape_data_tests {
 
 mod bounds_tests {
     use library::plugin::PluginManager;
-    use library::project::clip::{TrackClip, TrackClipKind};
     use library::project::property::{Property, PropertyMap, PropertyValue};
-    use library::service::bounds::get_clip_content_bounds;
+    use library::project::source::{SourceData, SourceKind};
+    use library::service::bounds::get_source_content_bounds;
 
     fn make_evaluators() -> std::sync::Arc<library::plugin::PropertyEvaluatorRegistry> {
         let pm = PluginManager::default();
@@ -1010,7 +1005,7 @@ mod bounds_tests {
     #[test]
     fn text_clip_bounds_returns_some() {
         let evaluators = make_evaluators();
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Text);
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Text);
         let mut props = PropertyMap::from_definitions(&defs);
         props.set(
             "text".to_string(),
@@ -1021,10 +1016,10 @@ mod bounds_tests {
             Property::constant(PropertyValue::from(48.0)),
         );
 
-        let clip = TrackClip::new(
+        let clip = SourceData::new(
             uuid::Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             90,
             0,
@@ -1033,7 +1028,7 @@ mod bounds_tests {
             props,
         );
 
-        let bounds = get_clip_content_bounds(&clip, 30.0, 0, &evaluators);
+        let bounds = get_source_content_bounds(&clip, 30.0, 0, &evaluators);
         assert!(bounds.is_some());
         let (x, y, w, h) = bounds.unwrap();
         assert_eq!(x, 0.0);
@@ -1045,7 +1040,7 @@ mod bounds_tests {
     #[test]
     fn shape_clip_bounds_returns_some() {
         let evaluators = make_evaluators();
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Shape);
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Shape);
         let mut props = PropertyMap::from_definitions(&defs);
         props.set(
             "path".to_string(),
@@ -1054,10 +1049,10 @@ mod bounds_tests {
             )),
         );
 
-        let clip = TrackClip::new(
+        let clip = SourceData::new(
             uuid::Uuid::new_v4(),
             None,
-            TrackClipKind::Shape,
+            SourceKind::Shape,
             0,
             60,
             0,
@@ -1066,7 +1061,7 @@ mod bounds_tests {
             props,
         );
 
-        let bounds = get_clip_content_bounds(&clip, 30.0, 0, &evaluators);
+        let bounds = get_source_content_bounds(&clip, 30.0, 0, &evaluators);
         assert!(bounds.is_some());
         let (_, _, w, h) = bounds.unwrap();
         assert!(w > 0.0);
@@ -1076,7 +1071,7 @@ mod bounds_tests {
     #[test]
     fn sksl_clip_bounds_uses_width_height() {
         let evaluators = make_evaluators();
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::SkSL);
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::SkSL);
         let mut props = PropertyMap::from_definitions(&defs);
         props.set(
             "width".to_string(),
@@ -1087,10 +1082,10 @@ mod bounds_tests {
             Property::constant(PropertyValue::from(480.0)),
         );
 
-        let clip = TrackClip::new(
+        let clip = SourceData::new(
             uuid::Uuid::new_v4(),
             None,
-            TrackClipKind::SkSL,
+            SourceKind::SkSL,
             0,
             90,
             0,
@@ -1099,7 +1094,7 @@ mod bounds_tests {
             props,
         );
 
-        let bounds = get_clip_content_bounds(&clip, 30.0, 0, &evaluators);
+        let bounds = get_source_content_bounds(&clip, 30.0, 0, &evaluators);
         assert!(bounds.is_some());
         let (x, y, w, h) = bounds.unwrap();
         assert_eq!(x, 0.0);
@@ -1111,13 +1106,13 @@ mod bounds_tests {
     #[test]
     fn video_clip_bounds_returns_none() {
         let evaluators = make_evaluators();
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Video);
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Video);
         let props = PropertyMap::from_definitions(&defs);
 
-        let clip = TrackClip::new(
+        let clip = SourceData::new(
             uuid::Uuid::new_v4(),
             None,
-            TrackClipKind::Video,
+            SourceKind::Video,
             0,
             90,
             0,
@@ -1126,19 +1121,19 @@ mod bounds_tests {
             props,
         );
 
-        assert!(get_clip_content_bounds(&clip, 30.0, 0, &evaluators).is_none());
+        assert!(get_source_content_bounds(&clip, 30.0, 0, &evaluators).is_none());
     }
 
     #[test]
     fn audio_clip_bounds_returns_none() {
         let evaluators = make_evaluators();
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Audio);
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Audio);
         let props = PropertyMap::from_definitions(&defs);
 
-        let clip = TrackClip::new(
+        let clip = SourceData::new(
             uuid::Uuid::new_v4(),
             None,
-            TrackClipKind::Audio,
+            SourceKind::Audio,
             0,
             90,
             0,
@@ -1147,13 +1142,13 @@ mod bounds_tests {
             props,
         );
 
-        assert!(get_clip_content_bounds(&clip, 30.0, 0, &evaluators).is_none());
+        assert!(get_source_content_bounds(&clip, 30.0, 0, &evaluators).is_none());
     }
 
     #[test]
     fn text_clip_with_empty_text_returns_none() {
         let evaluators = make_evaluators();
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Text);
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Text);
         let mut props = PropertyMap::from_definitions(&defs);
         // text defaults to empty string — measure_text_size returns (0, h) for empty
         // but eval_string should still return Some for non-empty default
@@ -1162,10 +1157,10 @@ mod bounds_tests {
             Property::constant(PropertyValue::String("".to_string())),
         );
 
-        let clip = TrackClip::new(
+        let clip = SourceData::new(
             uuid::Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             90,
             0,
@@ -1175,7 +1170,7 @@ mod bounds_tests {
         );
 
         // Empty text still produces bounds (0 width but non-zero height)
-        let bounds = get_clip_content_bounds(&clip, 30.0, 0, &evaluators);
+        let bounds = get_source_content_bounds(&clip, 30.0, 0, &evaluators);
         assert!(bounds.is_some());
     }
 }
@@ -1183,12 +1178,12 @@ mod bounds_tests {
 // ===== Project Model =====
 
 mod project_model {
-    use library::project::clip::{TrackClip, TrackClipKind};
     use library::project::connection::{Connection, PinId};
     use library::project::graph_node::GraphNode;
     use library::project::node::Node;
     use library::project::project::{Composition, Project};
     use library::project::property::PropertyMap;
+    use library::project::source::{SourceData, SourceKind};
     use library::project::track::TrackData;
     use uuid::Uuid;
 
@@ -1207,8 +1202,9 @@ mod project_model {
     #[test]
     fn add_and_get_composition() {
         let mut project = Project::new("test");
-        let (comp, root_track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
+        let comp = Composition::new("main", 1920, 1080, 30.0, 10.0);
         let comp_id = comp.id;
+        let root_track = TrackData::new("Root");
         project.add_node(Node::Track(root_track));
         project.add_composition(comp);
 
@@ -1221,10 +1217,9 @@ mod project_model {
     }
 
     #[test]
-    fn composition_new_creates_root_track() {
-        let (comp, root_track) = Composition::new("test", 1920, 1080, 30.0, 5.0);
-        assert_eq!(comp.root_track_id, root_track.id);
-        assert!(root_track.child_ids.is_empty());
+    fn composition_new_returns_empty_composition() {
+        let comp = Composition::new("test", 1920, 1080, 30.0, 5.0);
+        assert!(comp.child_ids.is_empty());
     }
 
     // --- Node management ---
@@ -1232,10 +1227,10 @@ mod project_model {
     #[test]
     fn add_and_get_clip_node() {
         let mut project = Project::new("test");
-        let clip = TrackClip::new(
+        let clip = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             90,
             0,
@@ -1244,11 +1239,11 @@ mod project_model {
             PropertyMap::new(),
         );
         let clip_id = clip.id;
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
 
         assert!(project.get_node(clip_id).is_some());
-        assert!(project.get_clip(clip_id).is_some());
-        assert_eq!(project.get_clip(clip_id).unwrap().kind, TrackClipKind::Text);
+        assert!(project.get_source(clip_id).is_some());
+        assert_eq!(project.get_source(clip_id).unwrap().kind, SourceKind::Text);
     }
 
     #[test]
@@ -1293,7 +1288,7 @@ mod project_model {
     fn get_nonexistent_node_returns_none() {
         let project = Project::new("test");
         assert!(project.get_node(Uuid::new_v4()).is_none());
-        assert!(project.get_clip(Uuid::new_v4()).is_none());
+        assert!(project.get_source(Uuid::new_v4()).is_none());
         assert!(project.get_track(Uuid::new_v4()).is_none());
         assert!(project.get_graph_node(Uuid::new_v4()).is_none());
     }
@@ -1407,10 +1402,10 @@ mod project_model {
         let mut track = TrackData::new("T1");
         let track_id = track.id;
 
-        let clip1 = TrackClip::new(
+        let clip1 = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             30,
             0,
@@ -1418,10 +1413,10 @@ mod project_model {
             30.0,
             PropertyMap::new(),
         );
-        let clip2 = TrackClip::new(
+        let clip2 = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Shape,
+            SourceKind::Shape,
             30,
             60,
             0,
@@ -1436,20 +1431,20 @@ mod project_model {
         track.add_child(c2_id);
 
         project.add_node(Node::Track(track));
-        project.add_node(Node::Clip(clip1));
-        project.add_node(Node::Clip(clip2));
+        project.add_node(Node::Source(clip1));
+        project.add_node(Node::Source(clip2));
 
-        let clips = project.collect_clips(track_id);
+        let clips = project.collect_sources(track_id);
         assert_eq!(clips.len(), 2);
     }
 
     #[test]
     fn all_clips_iterator() {
         let mut project = Project::new("test");
-        project.add_node(Node::Clip(TrackClip::new(
+        project.add_node(Node::Source(SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             30,
             0,
@@ -1458,10 +1453,10 @@ mod project_model {
             PropertyMap::new(),
         )));
         project.add_node(Node::Track(TrackData::new("T")));
-        project.add_node(Node::Clip(TrackClip::new(
+        project.add_node(Node::Source(SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Shape,
+            SourceKind::Shape,
             0,
             30,
             0,
@@ -1470,7 +1465,7 @@ mod project_model {
             PropertyMap::new(),
         )));
 
-        let clips: Vec<_> = project.all_clips().collect();
+        let clips: Vec<_> = project.all_sources().collect();
         assert_eq!(clips.len(), 2);
     }
 
@@ -1480,10 +1475,10 @@ mod project_model {
         let mut track = TrackData::new("Parent");
         let track_id = track.id;
 
-        let clip = TrackClip::new(
+        let clip = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             30,
             0,
@@ -1495,7 +1490,7 @@ mod project_model {
         track.add_child(clip_id);
 
         project.add_node(Node::Track(track));
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
 
         assert_eq!(project.find_parent_track(clip_id), Some(track_id));
         assert_eq!(project.find_parent_track(Uuid::new_v4()), None);
@@ -1506,15 +1501,22 @@ mod project_model {
     #[test]
     fn project_save_load_roundtrip() {
         let mut project = Project::new("roundtrip test");
-        let (comp, root_track) = Composition::new("comp1", 1280, 720, 24.0, 8.0);
+        let comp = Composition::new("comp1", 1280, 720, 24.0, 8.0);
+        let comp_id = comp.id;
+        let root_track = TrackData::new("Root");
         let track_id = root_track.id;
         project.add_node(Node::Track(root_track));
         project.add_composition(comp);
+        project
+            .get_composition_mut(comp_id)
+            .unwrap()
+            .child_ids
+            .push(track_id);
 
-        let clip = TrackClip::new(
+        let clip = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             72,
             0,
@@ -1523,24 +1525,24 @@ mod project_model {
             PropertyMap::new(),
         );
         let clip_id = clip.id;
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
         project.get_track_mut(track_id).unwrap().add_child(clip_id);
 
         let json = project.save().expect("save failed");
         let loaded = Project::load(&json).expect("load failed");
 
         assert_eq!(loaded.name, "roundtrip test");
-        assert_eq!(loaded.compositions.len(), 1);
-        assert!(loaded.get_clip(clip_id).is_some());
+        assert_eq!(loaded.composition_ids.len(), 1);
+        assert!(loaded.get_source(clip_id).is_some());
         assert!(loaded.get_track(track_id).is_some());
     }
 
     #[test]
     fn node_id_accessor() {
-        let clip = Node::Clip(TrackClip::new(
+        let clip = Node::Source(SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             30,
             0,
@@ -1553,7 +1555,7 @@ mod project_model {
 
         // Node::id() returns the inner ID
         match &clip {
-            Node::Clip(c) => assert_eq!(clip.id(), c.id),
+            Node::Source(c) => assert_eq!(clip.id(), c.id),
             _ => panic!(),
         }
         match &track {
@@ -1570,13 +1572,13 @@ mod project_model {
 // ===== PropertyMap =====
 
 mod property_map_tests {
-    use library::project::clip::{TrackClip, TrackClipKind};
     use library::project::property::{Property, PropertyMap, PropertyValue};
+    use library::project::source::{SourceData, SourceKind};
     use ordered_float::OrderedFloat;
 
     #[test]
     fn from_definitions_populates_all_keys() {
-        let defs = TrackClip::get_definitions_for_kind(&TrackClipKind::Text);
+        let defs = SourceData::get_definitions_for_kind(&SourceKind::Text);
         let map = PropertyMap::from_definitions(&defs);
         for d in &defs {
             assert!(map.get(d.name()).is_some(), "Missing key: {}", d.name());
@@ -1857,26 +1859,30 @@ mod graph_node_tests {
 // ===== Graph Analysis =====
 
 mod graph_analysis_tests {
-    use library::project::clip::{TrackClip, TrackClipKind};
     use library::project::connection::{Connection, PinId};
     use library::project::graph_analysis;
     use library::project::graph_node::GraphNode;
     use library::project::node::Node;
     use library::project::project::{Composition, Project};
     use library::project::property::{Property, PropertyMap, PropertyValue};
+    use library::project::source::{SourceData, SourceKind};
     use library::project::track::TrackData;
     use uuid::Uuid;
 
     /// Build a minimal project: root_track → clip → transform graph node (connected)
     fn build_project_with_clip_and_transform() -> (Project, Uuid, Uuid, Uuid) {
         let mut project = Project::new("test");
-        let (comp, mut root_track) = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp_id = comp.id;
+        project.add_composition(comp);
+
+        let mut root_track = TrackData::new("Root");
         let root_track_id = root_track.id;
 
-        let clip = TrackClip::new(
+        let clip = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             90,
             0,
@@ -1898,10 +1904,14 @@ mod graph_analysis_tests {
         );
 
         project.add_node(Node::Track(root_track));
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
         project.add_node(Node::Graph(transform));
         project.add_connection(conn);
-        project.add_composition(comp);
+        project
+            .get_composition_mut(comp_id)
+            .unwrap()
+            .child_ids
+            .push(root_track_id);
 
         (project, root_track_id, clip_id, transform_id)
     }
@@ -1909,14 +1919,14 @@ mod graph_analysis_tests {
     #[test]
     fn resolve_clip_context_finds_transform() {
         let (project, _, clip_id, transform_id) = build_project_with_clip_and_transform();
-        let ctx = graph_analysis::resolve_clip_context(&project, clip_id);
+        let ctx = graph_analysis::resolve_source_context(&project, clip_id);
         assert_eq!(ctx.transform_node, Some(transform_id));
     }
 
     #[test]
     fn resolve_clip_context_no_effects() {
         let (project, _, clip_id, _) = build_project_with_clip_and_transform();
-        let ctx = graph_analysis::resolve_clip_context(&project, clip_id);
+        let ctx = graph_analysis::resolve_source_context(&project, clip_id);
         assert!(ctx.effect_chain.is_empty());
     }
 
@@ -1937,12 +1947,17 @@ mod graph_analysis_tests {
     #[test]
     fn resolve_clip_context_with_style() {
         let mut project = Project::new("test");
-        let (comp, mut root_track) = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp_id = comp.id;
+        project.add_composition(comp);
 
-        let clip = TrackClip::new(
+        let mut root_track = TrackData::new("Root");
+        let root_track_id = root_track.id;
+
+        let clip = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             90,
             0,
@@ -1969,10 +1984,14 @@ mod graph_analysis_tests {
         );
 
         project.add_node(Node::Track(root_track));
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
         project.add_node(Node::Graph(style));
         project.add_connection(conn);
-        project.add_composition(comp);
+        project
+            .get_composition_mut(comp_id)
+            .unwrap()
+            .child_ids
+            .push(root_track_id);
 
         let styles = graph_analysis::get_associated_styles(&project, clip_id);
         assert!(!styles.is_empty());
@@ -1983,12 +2002,17 @@ mod graph_analysis_tests {
     /// Build a text clip with full shape chain: clip → effector → decorator → style → transform
     fn build_text_clip_full_chain() -> (Project, Uuid, Uuid, Uuid, Uuid, Uuid) {
         let mut project = Project::new("test");
-        let (comp, mut root_track) = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp_id = comp.id;
+        project.add_composition(comp);
 
-        let clip = TrackClip::new(
+        let mut root_track = TrackData::new("Root");
+        let root_track_id = root_track.id;
+
+        let clip = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             90,
             0,
@@ -2018,7 +2042,7 @@ mod graph_analysis_tests {
         root_track.add_child(transform_id);
 
         project.add_node(Node::Track(root_track));
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
         project.add_node(Node::Graph(effector));
         project.add_node(Node::Graph(decorator));
         project.add_node(Node::Graph(fill));
@@ -2045,7 +2069,11 @@ mod graph_analysis_tests {
             PinId::new(transform_id, "image_in"),
         ));
 
-        project.add_composition(comp);
+        project
+            .get_composition_mut(comp_id)
+            .unwrap()
+            .child_ids
+            .push(root_track_id);
 
         (
             project,
@@ -2100,7 +2128,7 @@ mod graph_analysis_tests {
         // Regression: full text chain must be resolved correctly
         let (project, clip_id, effector_id, decorator_id, fill_id, transform_id) =
             build_text_clip_full_chain();
-        let ctx = graph_analysis::resolve_clip_context(&project, clip_id);
+        let ctx = graph_analysis::resolve_source_context(&project, clip_id);
 
         assert_eq!(ctx.transform_node, Some(transform_id));
         assert_eq!(ctx.style_chain, vec![fill_id]);
@@ -2125,12 +2153,17 @@ mod graph_analysis_tests {
     /// Build a video clip with effect chain: clip → effect → transform
     fn build_video_clip_with_effect() -> (Project, Uuid, Uuid, Uuid) {
         let mut project = Project::new("test");
-        let (comp, mut root_track) = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp_id = comp.id;
+        project.add_composition(comp);
 
-        let clip = TrackClip::new(
+        let mut root_track = TrackData::new("Root");
+        let root_track_id = root_track.id;
+
+        let clip = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Video,
+            SourceKind::Video,
             0,
             90,
             0,
@@ -2151,7 +2184,7 @@ mod graph_analysis_tests {
         root_track.add_child(transform_id);
 
         project.add_node(Node::Track(root_track));
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
         project.add_node(Node::Graph(effect));
         project.add_node(Node::Graph(transform));
 
@@ -2165,7 +2198,11 @@ mod graph_analysis_tests {
             PinId::new(transform_id, "image_in"),
         ));
 
-        project.add_composition(comp);
+        project
+            .get_composition_mut(comp_id)
+            .unwrap()
+            .child_ids
+            .push(root_track_id);
 
         (project, clip_id, effect_id, transform_id)
     }
@@ -2178,7 +2215,7 @@ mod graph_analysis_tests {
         let chain = graph_analysis::get_effect_chain(&project, clip_id);
         assert_eq!(chain, vec![effect_id]);
 
-        let ctx = graph_analysis::resolve_clip_context(&project, clip_id);
+        let ctx = graph_analysis::resolve_source_context(&project, clip_id);
         assert_eq!(ctx.effect_chain, vec![effect_id]);
         assert_eq!(ctx.transform_node, Some(transform_id));
     }
@@ -2191,7 +2228,9 @@ mod graph_analysis_tests {
             let root_track = TrackData::new("Root");
             let root_id = root_track.id;
             project.add_node(Node::Track(root_track));
-            let comp = Composition::new_with_root("comp", 1920, 1080, 30.0, 10.0, root_id);
+            let mut comp = Composition::new("comp", 1920, 1080, 30.0, 10.0);
+            comp.child_ids.push(root_id);
+            let comp = comp;
             let comp_id = comp.id;
             project.add_composition(comp);
             (project, root_id, comp_id)
@@ -2230,7 +2269,9 @@ mod graph_analysis_tests {
             let root_track = TrackData::new("Root");
             let root_id = root_track.id;
             project.add_node(Node::Track(root_track));
-            let comp = Composition::new_with_root("comp", 1920, 1080, 30.0, 10.0, root_id);
+            let mut comp = Composition::new("comp", 1920, 1080, 30.0, 10.0);
+            comp.child_ids.push(root_id);
+            let comp = comp;
             let comp_id = comp.id;
             project.add_composition(comp);
             (project, root_id, comp_id)
@@ -2270,12 +2311,17 @@ mod graph_analysis_tests {
         // Starting state: clip.image_out → transform.image_in
         // After insertion: clip.image_out → effect.image_in → effect.image_out → transform.image_in
         let mut project = Project::new("test");
-        let (comp, mut root_track) = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp_id = comp.id;
+        project.add_composition(comp);
 
-        let clip = TrackClip::new(
+        let mut root_track = TrackData::new("Root");
+        let root_track_id = root_track.id;
+
+        let clip = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Video,
+            SourceKind::Video,
             0,
             90,
             0,
@@ -2296,7 +2342,7 @@ mod graph_analysis_tests {
         root_track.add_child(effect_id);
 
         project.add_node(Node::Track(root_track));
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
         project.add_node(Node::Graph(transform));
         project.add_node(Node::Graph(effect));
 
@@ -2307,7 +2353,11 @@ mod graph_analysis_tests {
         );
         let old_conn_id = old_conn.id;
         project.add_connection(old_conn);
-        project.add_composition(comp);
+        project
+            .get_composition_mut(comp_id)
+            .unwrap()
+            .child_ids
+            .push(root_track_id);
 
         // Simulate inspector effect insertion:
         // 1. Remove old connection to transform.image_in
@@ -2324,7 +2374,7 @@ mod graph_analysis_tests {
         ));
 
         // Verify the chain
-        let ctx = graph_analysis::resolve_clip_context(&project, clip_id);
+        let ctx = graph_analysis::resolve_source_context(&project, clip_id);
         assert_eq!(ctx.effect_chain, vec![effect_id]);
         assert_eq!(ctx.transform_node, Some(transform_id));
     }
@@ -2336,12 +2386,17 @@ mod graph_analysis_tests {
         // After: clip.shape_out → effector.shape_in → effector.shape_out → style.shape_in
         //        style.image_out → transform.image_in
         let mut project = Project::new("test");
-        let (comp, mut root_track) = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp_id = comp.id;
+        project.add_composition(comp);
 
-        let clip = TrackClip::new(
+        let mut root_track = TrackData::new("Root");
+        let root_track_id = root_track.id;
+
+        let clip = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             90,
             0,
@@ -2366,7 +2421,7 @@ mod graph_analysis_tests {
         root_track.add_child(fill_id);
 
         project.add_node(Node::Track(root_track));
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
         project.add_node(Node::Graph(effector));
         project.add_node(Node::Graph(transform));
         project.add_node(Node::Graph(fill));
@@ -2388,10 +2443,14 @@ mod graph_analysis_tests {
             PinId::new(transform_id, "image_in"),
         ));
 
-        project.add_composition(comp);
+        project
+            .get_composition_mut(comp_id)
+            .unwrap()
+            .child_ids
+            .push(root_track_id);
 
         // Verify
-        let ctx = graph_analysis::resolve_clip_context(&project, clip_id);
+        let ctx = graph_analysis::resolve_source_context(&project, clip_id);
         assert_eq!(ctx.effector_chain, vec![effector_id]);
         assert_eq!(ctx.style_chain, vec![fill_id]);
         assert_eq!(ctx.transform_node, Some(transform_id));
@@ -2403,12 +2462,17 @@ mod graph_analysis_tests {
         // clip.image_out → effect1.image_in → effect1.image_out → effect2.image_in
         //                → effect2.image_out → transform.image_in
         let mut project = Project::new("test");
-        let (comp, mut root_track) = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp_id = comp.id;
+        project.add_composition(comp);
 
-        let clip = TrackClip::new(
+        let mut root_track = TrackData::new("Root");
+        let root_track_id = root_track.id;
+
+        let clip = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Video,
+            SourceKind::Video,
             0,
             90,
             0,
@@ -2432,7 +2496,7 @@ mod graph_analysis_tests {
         root_track.add_child(transform_id);
 
         project.add_node(Node::Track(root_track));
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
         project.add_node(Node::Graph(effect1));
         project.add_node(Node::Graph(effect2));
         project.add_node(Node::Graph(transform));
@@ -2450,9 +2514,13 @@ mod graph_analysis_tests {
             PinId::new(transform_id, "image_in"),
         ));
 
-        project.add_composition(comp);
+        project
+            .get_composition_mut(comp_id)
+            .unwrap()
+            .child_ids
+            .push(root_track_id);
 
-        let ctx = graph_analysis::resolve_clip_context(&project, clip_id);
+        let ctx = graph_analysis::resolve_source_context(&project, clip_id);
         assert_eq!(ctx.effect_chain, vec![effect1_id, effect2_id]);
         assert_eq!(ctx.transform_node, Some(transform_id));
     }
@@ -2463,12 +2531,17 @@ mod graph_analysis_tests {
         // clip.shape_out → fill.shape_in → fill.image_out → effect.image_in
         //                → effect.image_out → transform.image_in
         let mut project = Project::new("test");
-        let (comp, mut root_track) = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp = Composition::new("comp", 1920, 1080, 30.0, 5.0);
+        let comp_id = comp.id;
+        project.add_composition(comp);
 
-        let clip = TrackClip::new(
+        let mut root_track = TrackData::new("Root");
+        let root_track_id = root_track.id;
+
+        let clip = SourceData::new(
             Uuid::new_v4(),
             None,
-            TrackClipKind::Text,
+            SourceKind::Text,
             0,
             90,
             0,
@@ -2493,7 +2566,7 @@ mod graph_analysis_tests {
         root_track.add_child(transform_id);
 
         project.add_node(Node::Track(root_track));
-        project.add_node(Node::Clip(clip));
+        project.add_node(Node::Source(clip));
         project.add_node(Node::Graph(fill));
         project.add_node(Node::Graph(effect));
         project.add_node(Node::Graph(transform));
@@ -2513,9 +2586,13 @@ mod graph_analysis_tests {
             PinId::new(transform_id, "image_in"),
         ));
 
-        project.add_composition(comp);
+        project
+            .get_composition_mut(comp_id)
+            .unwrap()
+            .child_ids
+            .push(root_track_id);
 
-        let ctx = graph_analysis::resolve_clip_context(&project, clip_id);
+        let ctx = graph_analysis::resolve_source_context(&project, clip_id);
         assert_eq!(ctx.style_chain, vec![fill_id]);
         // Note: effect chain from clip.image_out is empty for text clips
         // (effects are in the image chain after style, discovered via shape chain resolution)

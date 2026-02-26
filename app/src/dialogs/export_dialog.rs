@@ -182,14 +182,14 @@ impl ExportDialog {
             let project_read = project.read().unwrap();
             let current_comp_name = self
                 .active_composition_id
-                .and_then(|id| project_read.compositions.iter().find(|c| c.id == id))
+                .and_then(|id| project_read.get_composition(id))
                 .map(|c| c.name.clone())
                 .unwrap_or_else(|| "Select...".to_string());
 
             egui::ComboBox::from_id_salt("comp_select")
                 .selected_text(current_comp_name)
                 .show_ui(ui, |ui| {
-                    for comp in &project_read.compositions {
+                    for comp in project_read.all_compositions() {
                         if ui
                             .selectable_label(
                                 self.active_composition_id == Some(comp.id),
@@ -268,7 +268,7 @@ impl ExportDialog {
             // Show info about selected range
             let project_read = project.read().unwrap();
             if let Some(comp_id) = self.active_composition_id {
-                if let Some(comp) = project_read.compositions.iter().find(|c| c.id == comp_id) {
+                if let Some(comp) = project_read.get_composition(comp_id) {
                     let (start, end) = match self.export_range {
                         ExportRange::EntireComposition => {
                             (0, (comp.duration * comp.fps).ceil() as u64)
@@ -298,9 +298,7 @@ impl ExportDialog {
                     // Initialize with current composition limits if available, or valid defaults
                     if let Some(comp_id) = self.active_composition_id {
                         let project_read = project.read().unwrap();
-                        if let Some(comp) =
-                            project_read.compositions.iter().find(|c| c.id == comp_id)
-                        {
+                        if let Some(comp) = project_read.get_composition(comp_id) {
                             self.override_width = Some(comp.width as u32);
                             self.override_height = Some(comp.height as u32);
                         } else {
@@ -331,9 +329,7 @@ impl ExportDialog {
                 if override_fps {
                     if let Some(comp_id) = self.active_composition_id {
                         let project_read = project.read().unwrap();
-                        if let Some(comp) =
-                            project_read.compositions.iter().find(|c| c.id == comp_id)
-                        {
+                        if let Some(comp) = project_read.get_composition(comp_id) {
                             self.override_fps = Some(comp.fps);
                         } else {
                             self.override_fps = Some(30.0);
@@ -542,12 +538,8 @@ impl ExportDialog {
         let engine_sample_rate = project_service.get_audio_engine().get_sample_rate();
 
         // Find composition index
-        let comp_index = match project_snapshot
-            .compositions
-            .iter()
-            .position(|c| c.id == target_comp_id)
-        {
-            Some(idx) => idx,
+        let composition_for_export = match project_snapshot.get_composition(target_comp_id) {
+            Some(c) => c.clone(),
             None => {
                 self.status_message = "Composition not found.".to_string();
                 self.is_exporting = false;
@@ -563,7 +555,7 @@ impl ExportDialog {
 
         thread::spawn(move || {
             // Initialize Renderer inside thread (requires context)
-            let composition = &project_snapshot.compositions[comp_index];
+            let composition = &composition_for_export;
             let mut renderer = SkiaRenderer::new(
                 composition.width as u32,
                 composition.height as u32,

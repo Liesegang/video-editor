@@ -118,6 +118,9 @@ pub(crate) fn draw_node_chrome(
 }
 
 /// Draw input and output pins, pushing PinScreen entries.
+///
+/// For containers (`is_container = true`), paired input/output pins (e.g. `image_in`/`image_out`)
+/// are rendered at the same position on the right edge, acting as a single bidirectional port.
 pub(crate) fn draw_pins(
     painter: &egui::Painter,
     layout: &NodeLayout,
@@ -126,6 +129,7 @@ pub(crate) fn draw_pins(
     node_id: Uuid,
     input_pins: &[&PinInfo],
     output_pins: &[&PinInfo],
+    is_container: bool,
     is_active: bool,
     zoom: f32,
     pin_screens: &mut Vec<PinScreen>,
@@ -134,50 +138,94 @@ pub(crate) fn draw_pins(
     let dim = if is_active { 1.0 } else { 0.4 };
     let label_color = dim_color(theme.pin_label_color, dim);
 
-    for (i, pin) in input_pins.iter().enumerate() {
-        let cy = layout.pin_start_y + i as f32 * layout.pin_row_h + layout.pin_row_h / 2.0;
-        let cx = layout.screen_pos.x + layout.pin_margin;
-        let p = Pos2::new(cx, cy);
-        let pin_color = dim_color((theme.pin_type_color)(&pin.data_type), dim);
-        painter.circle_filled(p, layout.pin_r, pin_color);
-        painter.text(
-            p + Vec2::new(layout.pin_r + 4.0 * zoom, 0.0),
-            egui::Align2::LEFT_CENTER,
-            &pin.display_name,
-            egui::FontId::proportional(10.0 * zoom),
-            label_color,
-        );
-        pin_screens.push(PinScreen {
-            pos: p,
-            node_id,
-            name: pin.name.clone(),
-            is_output: false,
-            data_type: pin.data_type.clone(),
-            container_id,
-        });
-    }
+    if is_container {
+        // Container mode: pair input/output pins by base name and draw at same position.
+        // Output pins define the rows; matching input pins share the position.
+        for (i, out_pin) in output_pins.iter().enumerate() {
+            let cy = layout.pin_start_y + i as f32 * layout.pin_row_h + layout.pin_row_h / 2.0;
+            let cx = layout.screen_pos.x + layout.node_w - layout.pin_margin;
+            let p = Pos2::new(cx, cy);
+            let pin_color = dim_color((theme.pin_type_color)(&out_pin.data_type), dim);
+            painter.circle_filled(p, layout.pin_r, pin_color);
+            painter.text(
+                p + Vec2::new(-layout.pin_r - 4.0 * zoom, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                &out_pin.display_name,
+                egui::FontId::proportional(10.0 * zoom),
+                label_color,
+            );
 
-    for (i, pin) in output_pins.iter().enumerate() {
-        let cy = layout.pin_start_y + i as f32 * layout.pin_row_h + layout.pin_row_h / 2.0;
-        let cx = layout.screen_pos.x + layout.node_w - layout.pin_margin;
-        let p = Pos2::new(cx, cy);
-        let pin_color = dim_color((theme.pin_type_color)(&pin.data_type), dim);
-        painter.circle_filled(p, layout.pin_r, pin_color);
-        painter.text(
-            p + Vec2::new(-layout.pin_r - 4.0 * zoom, 0.0),
-            egui::Align2::RIGHT_CENTER,
-            &pin.display_name,
-            egui::FontId::proportional(10.0 * zoom),
-            label_color,
-        );
-        pin_screens.push(PinScreen {
-            pos: p,
-            node_id,
-            name: pin.name.clone(),
-            is_output: true,
-            data_type: pin.data_type.clone(),
-            container_id,
-        });
+            // Register output PinScreen
+            pin_screens.push(PinScreen {
+                pos: p,
+                node_id,
+                name: out_pin.name.clone(),
+                is_output: true,
+                data_type: out_pin.data_type.clone(),
+                container_id,
+            });
+
+            // Find matching input pin (e.g. "image_out" -> "image_in")
+            let base = out_pin.name.trim_end_matches("_out");
+            let in_name = format!("{}_in", base);
+            if let Some(in_pin) = input_pins.iter().find(|p| p.name == in_name) {
+                pin_screens.push(PinScreen {
+                    pos: p,
+                    node_id,
+                    name: in_pin.name.clone(),
+                    is_output: false,
+                    data_type: in_pin.data_type.clone(),
+                    container_id,
+                });
+            }
+        }
+    } else {
+        // Regular node mode: inputs on left, outputs on right.
+        for (i, pin) in input_pins.iter().enumerate() {
+            let cy = layout.pin_start_y + i as f32 * layout.pin_row_h + layout.pin_row_h / 2.0;
+            let cx = layout.screen_pos.x + layout.pin_margin;
+            let p = Pos2::new(cx, cy);
+            let pin_color = dim_color((theme.pin_type_color)(&pin.data_type), dim);
+            painter.circle_filled(p, layout.pin_r, pin_color);
+            painter.text(
+                p + Vec2::new(layout.pin_r + 4.0 * zoom, 0.0),
+                egui::Align2::LEFT_CENTER,
+                &pin.display_name,
+                egui::FontId::proportional(10.0 * zoom),
+                label_color,
+            );
+            pin_screens.push(PinScreen {
+                pos: p,
+                node_id,
+                name: pin.name.clone(),
+                is_output: false,
+                data_type: pin.data_type.clone(),
+                container_id,
+            });
+        }
+
+        for (i, pin) in output_pins.iter().enumerate() {
+            let cy = layout.pin_start_y + i as f32 * layout.pin_row_h + layout.pin_row_h / 2.0;
+            let cx = layout.screen_pos.x + layout.node_w - layout.pin_margin;
+            let p = Pos2::new(cx, cy);
+            let pin_color = dim_color((theme.pin_type_color)(&pin.data_type), dim);
+            painter.circle_filled(p, layout.pin_r, pin_color);
+            painter.text(
+                p + Vec2::new(-layout.pin_r - 4.0 * zoom, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                &pin.display_name,
+                egui::FontId::proportional(10.0 * zoom),
+                label_color,
+            );
+            pin_screens.push(PinScreen {
+                pos: p,
+                node_id,
+                name: pin.name.clone(),
+                is_output: true,
+                data_type: pin.data_type.clone(),
+                container_id,
+            });
+        }
     }
 }
 
@@ -238,13 +286,6 @@ pub(crate) fn draw_port_pins(
             Stroke::NONE,
         ));
 
-        painter.text(
-            p + Vec2::new(-port_r - 3.0 * zoom, 0.0),
-            egui::Align2::RIGHT_CENTER,
-            &format!("{} \u{2192}", pin.display_name),
-            egui::FontId::proportional(9.0 * zoom),
-            port_col,
-        );
         pin_screens.push(PinScreen {
             pos: p,
             node_id,

@@ -378,11 +378,10 @@ fn setup_fonts(ctx: &egui::Context) {
 fn create_default_project() -> (Arc<RwLock<Project>>, Uuid) {
     let default_project = Arc::new(RwLock::new(Project::new("Default Project")));
     // Add a default composition when the app starts
-    let (default_comp, root_track) = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
+    let default_comp = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
     let default_comp_id = default_comp.id;
     {
         let mut proj = default_project.write().unwrap();
-        proj.add_node(library::project::node::Node::Track(root_track));
         proj.add_composition(default_comp);
     }
     (default_project, default_comp_id)

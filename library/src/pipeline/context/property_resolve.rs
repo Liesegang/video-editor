@@ -100,7 +100,7 @@ impl<'a> EvalContext<'a> {
     /// Compute the clip-local evaluation time (seconds).
     ///
     /// Accounts for clip's `in_frame`, `source_begin_frame`, and `fps`.
-    pub fn clip_eval_time(&self, clip: &crate::project::clip::TrackClip) -> f64 {
+    pub fn clip_eval_time(&self, clip: &crate::project::source::SourceData) -> f64 {
         let delta_frames = self.frame_number as f64 - clip.in_frame as f64;
         let time_offset = delta_frames / self.composition.fps;
         let source_start_time = clip.source_begin_frame as f64 / clip.fps;
