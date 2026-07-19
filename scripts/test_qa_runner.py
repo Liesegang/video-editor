@@ -155,6 +155,10 @@ class QaRunnerTests(unittest.TestCase):
             'tx_control = "inspector.property.node:{}:tx".format(TRANSFORM_EFFECTOR)',
             source,
         )
+        self.assertIn('tx_property = "node:tx"', source)
+        self.assertIn('curve_id = "graph.curve_hit." + tx_property', source)
+        self.assertIn('"graph.keyframe_menu.delete:" + added_key["id"]', source)
+        self.assertNotIn('tx_property = "direct:tx"', source)
         project = {
             "nodes": {
                 E2E.TRANSFORM_EFFECTOR: {
@@ -165,6 +169,18 @@ class QaRunnerTests(unittest.TestCase):
         self.assertEqual(
             KEYFRAME.target_property(project, E2E.TRANSFORM_EFFECTOR, "tx"),
             {"type": "constant"},
+        )
+
+    def test_keyframe_e2e_models_linear_and_cubic_inspector_values(self):
+        self.assertAlmostEqual(
+            KEYFRAME.numeric_easing_value(10.0, 30.0, 0.3, "Linear"),
+            16.0,
+        )
+        self.assertAlmostEqual(
+            KEYFRAME.numeric_easing_value(
+                10.0, 30.0, 0.3, "EaseInOutCubic"
+            ),
+            12.16,
         )
 
     def test_capture_clients_send_an_explicit_empty_body_post(self):
