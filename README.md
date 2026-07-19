@@ -26,23 +26,29 @@ cargo run
 
 ### プラグインのビルドと読み込み
 
-プロパティ用プラグインを DLL/so として後からロードできます。サンプルとしてランダムに値を揺らす `random_noise` プロパティプラグインを用意しています。
+RuViE本体のビルド後でも、ABI v1に従うネイティブプラグインを追加できます。
+サンプルとして、値を決定的に揺らす `random_property` evaluatorを用意しています。
+これは本体のworkspaceには含まれず、`library` にリンクしません。
 
 1. プラグインをビルドする
 
 ```bash
-cargo build -p random_property_plugin
+cargo build --manifest-path plugins/random_property/Cargo.toml --locked
 ```
 
-Windows の場合は `target\debug\random_property_plugin.dll`、Linux の場合は `target/debug/librandom_property_plugin.so` が生成されます。
+2. 生成されたDLL/so/dylibを
+   `plugins/random_property/ruvie-plugin.toml` と同じbundleディレクトリに置き、
+   RuViEのruntime plugin pathへ配置する
 
-2. `library` バイナリ起動時に DLL を渡してロードする
+本体を先にビルドし、pluginを別targetで後からビルド・配置して、変更前の
+host binaryからdescriptor/default/evaluateまで確認するテストは次で実行できます。
 
 ```bash
-cargo run -p library -- test_data/project.json target/debug/random_property_plugin.dll
+./scripts/test-runtime-plugin.sh
 ```
 
-`test_data/project.json` では `random_noise` プロパティを使用しており、プラグインを読み込むと回転に揺らぎが加わります。
+ABI、bundle構成、対応categoryの詳細は
+[Runtime native plugins](docs/runtime-plugins.md)を参照してください。
 
 ### FFmpeg エクスポーター
 

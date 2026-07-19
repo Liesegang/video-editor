@@ -59,6 +59,7 @@ fn descriptor() -> PluginDescriptorV1 {
                     default: serde_json::json!("Char"),
                 },
             ],
+            output_default: None,
         }],
     }
 }

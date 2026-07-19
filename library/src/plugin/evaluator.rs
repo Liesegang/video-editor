@@ -23,6 +23,10 @@ impl PropertyEvaluatorRegistry {
         self.evaluators.insert(key.to_string(), evaluator);
     }
 
+    pub fn contains(&self, key: &str) -> bool {
+        self.evaluators.contains_key(key)
+    }
+
     pub fn evaluate(
         &self,
         property: &Property,

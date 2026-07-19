@@ -4,7 +4,6 @@ members = [
     "plugin-api",
     "library",
     "app",
-    "plugins/random_property",
 ]
 
 [workspace.lints.rust]

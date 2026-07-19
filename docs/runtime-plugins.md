@@ -7,8 +7,8 @@ does not link into `app` or `library`.
 ## Author workflow
 
 1. Create a standalone `cdylib` crate. Depend on `ruvie-plugin-api`, not on the
-   editor's `library` crate. The example is in
-   `examples/third-party-opacity-effector`.
+   editor's `library` crate. Examples are in
+   `examples/third-party-opacity-effector` and `plugins/random_property`.
 2. Export `ruvie_plugin_entry_v1`, returning a static
    `RuviePluginApiV1` table. Return descriptor and invocation payloads as JSON
    in plugin-owned `RuvieBuffer` values. Catch every panic before returning
@@ -47,6 +47,15 @@ If the plugin later becomes unavailable, the Project's plugin ID and property
 map remain ordinary serialized data and are preserved; the renderer simply
 cannot invoke that implementation until it is installed again.
 
+Runtime property evaluators follow the same rule. Their descriptor defines
+the evaluator's configuration properties and an explicitly typed
+`output_default`. `PluginManager::create_property_instance` materializes every
+configuration default, while sparse loaded data is completed only in-memory
+during evaluation. Invocation failures are logged with component ID and cause;
+the adapter then returns the descriptor-declared fail-safe instead of silently
+inventing a value. ABI v1 sends only time, fps, and evaluator-local properties;
+it does not expose the Project's sibling `PropertyMap` or internal Rust types.
+
 Run the actual post-build proof with:
 
 ```sh
@@ -54,7 +63,8 @@ Run the actual post-build proof with:
 ```
 
 The script builds the app and exact probe into an isolated host target first,
-independently builds the example plugin into a different target directory,
+independently builds the standalone random-property plugin into a different
+target directory,
 checks the locked dependency tree contains neither `app` nor `library`,
 installs it into a temporary runtime bundle, runs the unchanged prebuilt
 probe, and runs the explicitly ignored external integration test with the
@@ -70,15 +80,15 @@ directory.
 
 Plugin ABI version 1 is independent of Project serialization. No Project
 schema version or migration is involved. The JSON invocation envelope is a
-low-bandwidth control plane, and only Effector output is integrated into
-rendering in this version. It is deliberately **not** a frame-transport API.
+low-bandwidth control plane. ABI v1 integrates Effector output and property
+evaluation; it is deliberately **not** a frame-transport API.
 Effects, loaders, and entity converters need versioned typed extension tables
 obtained through `query_extension`, using host-owned opaque frame/resource
 handles (or an explicitly specified pixel-buffer contract) and host service
 callbacks. Serializing every frame through JSON would be incorrect.
 
-Runtime Style, Decorator, Effect, loader, exporter, property evaluator, and
-entity-converter adapters still need implementations. ABI v1 rejects a bundle
+Runtime Style, Decorator, Effect, loader, exporter, and entity-converter
+adapters still need implementations. ABI v1 rejects a bundle
 containing any of those categories as a whole; it does not retain a
 descriptor-only component or expose generic invocation for something the
 editor cannot execute. A category becomes legal only together with its real
@@ -96,6 +106,6 @@ memory, or crash the host; the C ABI is a compatibility boundary, not a
 sandbox. RuViE validates manifest containment, ABI version/table size,
 descriptor structure, declared operations, payload size, returned buffer
 invariants, exact default-value types/ranges, property metadata, duplicate
-IDs, supported categories, and non-finite Effector output.
+IDs, supported categories, and non-finite Effector/property output.
 Those checks cannot make hostile native code safe. Production distribution
 should add signatures/trust policy before offering automatic downloads.

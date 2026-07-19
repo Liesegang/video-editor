@@ -24,6 +24,12 @@ cargo test --workspace --all-targets --all-features --locked
 ./scripts/dependency-audit.sh
 ```
 
+The runtime `random_property` example is intentionally a standalone workspace,
+so the gate separately runs rustfmt, check, the same Clippy policy, and tests
+against `plugins/random_property/Cargo.toml` with its tracked lockfile. Removing
+it from the host workspace therefore does not let maintained plugin code evade
+the repository quality policy.
+
 The Clippy commands also receive the opt-in lints listed in
 `scripts/clippy-policy.sh`. CI installs the Linux development packages required
 by FFmpeg, Skia, CPAL, PyO3, glutin, and winit before invoking the same script.
