@@ -18,16 +18,9 @@ pub fn get_nice_time_intervals(
         major_interval *= 2.0;
     }
 
-    let minor_interval = if major_interval >= 10.0 {
-        major_interval / 5.0
-    } else if major_interval >= 5.0 {
-        major_interval / 5.0
-    } else if major_interval >= 2.0 {
-        major_interval / 5.0
-    } else {
-        // major_interval is 1.0 or smaller
-        major_interval / 5.0 // This will give 0.5s or 0.5 frames
-    };
+    // Five subdivisions provide a stable visual density across every major
+    // interval selected above, including sub-second and frame scales.
+    let minor_interval = major_interval / 5.0;
 
     (major_interval, minor_interval)
 }

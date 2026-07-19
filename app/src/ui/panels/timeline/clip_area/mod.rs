@@ -1,6 +1,6 @@
 use egui::Ui;
-use library::EditorService as ProjectService;
 use library::model::project::Project;
+use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
@@ -42,6 +42,17 @@ impl<'a> ViewportState for TimelineViewportState<'a> {
         *self.h_zoom = zoom.x.clamp(self.min_h_zoom, self.max_h_zoom);
         *self.v_zoom = zoom.y.clamp(self.min_v_zoom, self.max_v_zoom);
     }
+}
+
+fn box_selection_start_position(
+    hand_tool_owns_drag: bool,
+    primary_drag_started: bool,
+    alt_pressed: bool,
+    pointer_position: Option<egui::Pos2>,
+) -> Option<egui::Pos2> {
+    (!hand_tool_owns_drag && primary_drag_started && !alt_pressed)
+        .then_some(pointer_position)
+        .flatten()
 }
 
 pub(super) struct ClipAreaContext<'a> {
@@ -110,14 +121,15 @@ pub(super) fn show_clip_area(
 
     background::draw_track_backgrounds(
         &painter,
-        content_rect_for_clip_area,
-        num_visible_tracks,
-        row_height,
-        track_spacing,
-        editor_context.timeline.scroll_offset.y,
-        editor_context.timeline.scroll_offset.x,
-        pixels_per_unit,
-        current_comp_duration,
+        background::TrackBackgroundLayout {
+            content_rect: content_rect_for_clip_area,
+            num_rows: num_visible_tracks,
+            row_height,
+            row_spacing: track_spacing,
+            scroll_offset: editor_context.timeline.scroll_offset,
+            pixels_per_unit,
+            duration_seconds: current_comp_duration,
+        },
     );
 
     // --- Viewport Controller for Zoom/Pan ---
@@ -161,7 +173,6 @@ pub(super) fn show_clip_area(
         allow_pan_y: true,
         min_zoom: 0.0001,
         max_zoom: 10000.0,
-        ..Default::default()
     });
 
     let (_changed, vp_response) = controller.interact_with_rect(
@@ -171,14 +182,14 @@ pub(super) fn show_clip_area(
     );
 
     // Handle Box Selection State Update
-    if !editor_context.interaction.handled_hand_tool_drag {
-        if vp_response.drag_started_by(egui::PointerButton::Primary) {
-            if !ui_content.input(|i| i.modifiers.alt) {
-                if let Some(pos) = vp_response.interact_pointer_pos() {
-                    editor_context.interaction.timeline_selection_drag_start = Some(pos);
-                }
-            }
-        }
+    let selection_drag_start = box_selection_start_position(
+        editor_context.interaction.handled_hand_tool_drag,
+        vp_response.drag_started_by(egui::PointerButton::Primary),
+        ui_content.input(|input| input.modifiers.alt),
+        vp_response.interact_pointer_pos(),
+    );
+    if let Some(pos) = selection_drag_start {
+        editor_context.interaction.timeline_selection_drag_start = Some(pos);
     }
 
     // ===== PHASE 3: Drag/drop and context menu (may need write lock) =====
@@ -199,18 +210,23 @@ pub(super) fn show_clip_area(
     );
 
     // ===== PHASE 4: Draw clips (separate read lock scope) =====
-    let clicked_on_entity = clips::draw_clips(
-        ui_content,
-        content_rect_for_clip_area,
-        editor_context,
-        project_service,
-        history_manager,
-        project,
-        &track_ids,
+    let clip_geometry = clips::ClipAreaGeometry {
+        content_rect: content_rect_for_clip_area,
+        scroll_offset: editor_context.timeline.scroll_offset,
         pixels_per_unit,
         row_height,
-        track_spacing,
-        composition_fps,
+        row_spacing: track_spacing,
+    };
+    let clicked_on_entity = clips::draw_clips(
+        ui_content,
+        clips::DrawClipsContext {
+            editor_context,
+            project_service,
+            history_manager,
+            project,
+            track_ids: &track_ids,
+            geometry: clip_geometry,
+        },
     );
 
     // ===== PHASE 5: Box Selection Logic (separate read lock scope) =====
@@ -241,14 +257,12 @@ pub(super) fn show_clip_area(
                     if let Ok(proj_read) = project.read() {
                         clips::get_clips_in_box(
                             selection_rect,
-                            editor_context,
-                            &proj_read,
-                            &track_ids,
-                            pixels_per_unit,
-                            row_height,
-                            track_spacing,
-                            composition_fps,
-                            content_rect_for_clip_area.min.to_vec2(),
+                            clips::BoxSelectionContext {
+                                project: &proj_read,
+                                track_ids: &track_ids,
+                                expanded_tracks: &editor_context.timeline.expanded_tracks,
+                                geometry: clip_geometry,
+                            },
                         )
                     } else {
                         Vec::new()

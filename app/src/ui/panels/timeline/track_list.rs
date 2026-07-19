@@ -11,18 +11,18 @@ use crate::{action::HistoryManager, state::context::EditorContext};
 /// Deferred actions to execute after read lock is released
 #[derive(Debug)]
 enum DeferredTrackAction {
-    AddTrack {
+    Add {
         comp_id: Uuid,
     },
-    RemoveTrack {
+    Remove {
         comp_id: Uuid,
         track_id: Uuid,
     },
-    RenameTrack {
+    Rename {
         track_id: Uuid,
         new_name: String,
     },
-    MoveTrack {
+    Move {
         comp_id: Uuid,
         track_id: Uuid,
         destination_index: usize,
@@ -186,14 +186,15 @@ pub fn show_track_list(
                 if let Some((target_index, header_idx)) =
                     super::clip_area::clips::calculate_insert_index(
                         mouse_pos.y,
-                        track_list_rect.min.y,
-                        editor_context.timeline.scroll_offset.y,
-                        row_height,
-                        track_spacing,
                         &display_rows,
                         proj,
-                        &track_ids,
                         hovered_tid,
+                        super::clip_area::clips::ClipRowLayout {
+                            content_min_y: track_list_rect.min.y,
+                            scroll_y: editor_context.timeline.scroll_offset.y,
+                            row_height,
+                            row_spacing: track_spacing,
+                        },
                     )
                 {
                     let source_track_id = editor_context
@@ -228,46 +229,42 @@ pub fn show_track_list(
         if let Some((dragged_id, hovered_track_id, original_idx, target_idx, header_idx)) =
             reorder_state
         {
-            match row {
-                super::utils::flatten::DisplayRow::ClipRow {
-                    clip,
-                    parent_track,
-                    child_index,
-                    ..
-                } => {
-                    if clip.id == dragged_id {
-                        visible_row_index = (header_idx + 1 + target_idx) as isize;
-                    } else if parent_track.id == hovered_track_id {
-                        let idx = *child_index;
-                        // Check if same track reordering
-                        if let Some(original_track_id) =
-                            editor_context.interaction.dragged_entity_original_track_id
-                        {
-                            if original_track_id == hovered_track_id {
-                                // Same track sort
-                                let src = original_idx;
-                                let dst = target_idx;
-                                if src < dst {
-                                    // Moving down: Items between src and dst shift up
-                                    if idx > src && idx <= dst {
-                                        visible_row_index -= 1;
-                                    }
-                                } else {
-                                    // Moving up: Items between dst and src shift down
-                                    if idx < src && idx >= dst {
-                                        visible_row_index += 1;
-                                    }
+            if let super::utils::flatten::DisplayRow::ClipRow {
+                clip,
+                parent_track,
+                child_index,
+                ..
+            } = row
+            {
+                if clip.id == dragged_id {
+                    visible_row_index = (header_idx + 1 + target_idx) as isize;
+                } else if parent_track.id == hovered_track_id {
+                    let idx = *child_index;
+                    // Check if same track reordering
+                    if let Some(original_track_id) =
+                        editor_context.interaction.dragged_entity_original_track_id
+                    {
+                        if original_track_id == hovered_track_id {
+                            // Same track sort
+                            let src = original_idx;
+                            let dst = target_idx;
+                            if src < dst {
+                                // Moving down: Items between src and dst shift up
+                                if idx > src && idx <= dst {
+                                    visible_row_index -= 1;
                                 }
                             } else {
-                                // Cross track insert
-                                if idx >= target_idx {
+                                // Moving up: Items between dst and src shift down
+                                if idx < src && idx >= dst {
                                     visible_row_index += 1;
                                 }
                             }
+                        } else if idx >= target_idx {
+                            // Cross track insert
+                            visible_row_index += 1;
                         }
                     }
                 }
-                _ => {}
             }
         }
 
@@ -344,7 +341,7 @@ pub fn show_track_list(
                             remove.rect,
                         );
                         if remove.clicked() {
-                            deferred_actions.push(DeferredTrackAction::RemoveTrack {
+                            deferred_actions.push(DeferredTrackAction::Remove {
                                 comp_id,
                                 track_id: track.id,
                             });
@@ -385,7 +382,7 @@ pub fn show_track_list(
                     0.0,
                     if editor_context.selection.last_selected_track_id == Some(track.id) {
                         egui::Color32::from_rgb(50, 80, 120)
-                    } else if visible_row_index % 2 == 0 {
+                    } else if visible_row_index.is_multiple_of(2) {
                         egui::Color32::from_gray(50)
                     } else {
                         egui::Color32::from_gray(60)
@@ -482,7 +479,7 @@ pub fn show_track_list(
                         let new_name = editor_context.interaction.rename_buffer.clone();
                         // Only update if name changed and is not empty
                         if !new_name.is_empty() && new_name != track.name {
-                            deferred_actions.push(DeferredTrackAction::RenameTrack {
+                            deferred_actions.push(DeferredTrackAction::Rename {
                                 track_id: track.id,
                                 new_name,
                             });
@@ -514,7 +511,7 @@ pub fn show_track_list(
                 track_list_painter.rect_filled(
                     row_rect,
                     0.0,
-                    if visible_row_index % 2 == 0 {
+                    if visible_row_index.is_multiple_of(2) {
                         egui::Color32::from_gray(45)
                     } else {
                         egui::Color32::from_gray(55)
@@ -623,7 +620,7 @@ pub fn show_track_list(
                     destination_index_for_slot(reorder.source_index, slot, track_ids.len())
                 }) {
                     if destination_index != reorder.source_index {
-                        deferred_actions.push(DeferredTrackAction::MoveTrack {
+                        deferred_actions.push(DeferredTrackAction::Move {
                             comp_id: reorder.composition_id,
                             track_id: reorder.track_id,
                             destination_index,
@@ -647,7 +644,7 @@ pub fn show_track_list(
                 ))))
                 .clicked()
             {
-                deferred_actions.push(DeferredTrackAction::AddTrack { comp_id });
+                deferred_actions.push(DeferredTrackAction::Add { comp_id });
                 ui_content.close();
             }
         } else {
@@ -662,28 +659,28 @@ pub fn show_track_list(
     let mut needs_history_push = false;
     for action in deferred_actions {
         match action {
-            DeferredTrackAction::AddTrack { comp_id } => {
+            DeferredTrackAction::Add { comp_id } => {
                 if let Err(e) = project_service.add_track(comp_id, "New Track") {
                     error!("Failed to add track: {:?}", e);
                 } else {
                     needs_history_push = true;
                 }
             }
-            DeferredTrackAction::RemoveTrack { comp_id, track_id } => {
+            DeferredTrackAction::Remove { comp_id, track_id } => {
                 if let Err(e) = project_service.remove_track(comp_id, track_id) {
                     error!("Failed to remove track: {:?}", e);
                 } else {
                     needs_history_push = true;
                 }
             }
-            DeferredTrackAction::RenameTrack { track_id, new_name } => {
+            DeferredTrackAction::Rename { track_id, new_name } => {
                 if let Err(e) = project_service.rename_track(track_id, &new_name) {
                     error!("Failed to rename track: {:?}", e);
                 } else {
                     needs_history_push = true;
                 }
             }
-            DeferredTrackAction::MoveTrack {
+            DeferredTrackAction::Move {
                 comp_id,
                 track_id,
                 destination_index,
