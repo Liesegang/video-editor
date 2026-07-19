@@ -8,7 +8,7 @@ use library::model::project::{
     Composition, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
     PortAddress, PortOwner, Project, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
-use library::model::property::{Property, PropertyValue, Vec2};
+use library::model::property::{Property, PropertyMap, PropertyValue, Vec2};
 use library::model::{Clip, Node, NodeContent};
 use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
@@ -134,6 +134,42 @@ fn set_and_load_reject_invalid_structure_without_replacing_the_current_project()
         Err(library::LibraryError::Validation(_))
     ));
     assert_eq!(*shared.read().unwrap(), current);
+}
+
+#[test]
+fn adoption_preserves_sparse_pre_v1_generator_without_repair_or_rejection() -> Result<(), String> {
+    let (mut candidate, _, node_id) = project_with_solid();
+    candidate
+        .get_node_mut(node_id)
+        .ok_or_else(|| "solid fixture Node is missing".to_string())?
+        .properties = PropertyMap::new();
+
+    let shared = Arc::new(RwLock::new(Project::new("current")));
+    let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
+
+    manager
+        .set_project(candidate.clone())
+        .map_err(|error| error.to_string())?;
+    assert_eq!(
+        *shared.read().map_err(|error| error.to_string())?,
+        candidate
+    );
+
+    let serialized = candidate.save().map_err(|error| error.to_string())?;
+    manager
+        .load_project(&serialized)
+        .map_err(|error| error.to_string())?;
+    let project = shared.read().map_err(|error| error.to_string())?;
+    assert_eq!(*project, candidate);
+    let properties = &project
+        .get_node(node_id)
+        .ok_or_else(|| "loaded sparse Generator is missing".to_string())?
+        .properties;
+    assert!(
+        properties.iter().next().is_none(),
+        "loading an incomplete pre-v1 Project must not synthesize properties"
+    );
+    Ok(())
 }
 
 #[test]
