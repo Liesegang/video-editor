@@ -3,9 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use library::animation::EasingFunction;
 use library::cache::CacheManager;
-use library::core::ensemble::effectors::{
-    EffectorElementContext, OpacityMode, evaluate_configured_transform,
-};
+use library::core::ensemble::effectors::OpacityMode;
 use library::core::ensemble::target::EffectorTarget;
 use library::core::ensemble::types::EffectorConfig;
 use library::editor::project_service::ProjectManager;
@@ -14,15 +12,18 @@ use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameItem};
 use library::model::frame::frame::FrameInfo;
+use library::model::frame::runtime_shape::{
+    RuntimeShapeGeometry, evaluate_text_element_transforms,
+};
 use library::model::project::{
-    Composition, EvalOutput, NodeContainer, NodeGraphBundle, PortAddress, PortDataType,
-    PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner, PortSide, Project,
-    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    Composition, EvalOutput, MERGE_IMAGES_PORT, NodeContainer, NodeGraphBundle, PortAddress,
+    PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner,
+    PortSide, Project, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{
     Keyframe, Property, PropertyDefinition, PropertyMap, PropertyValue, Vec2,
 };
-use library::model::{Clip, Node, NodeContent, PluginOperationContent};
+use library::model::{BlendMode, Clip, Node, NodeContent, PluginOperationContent};
 use library::plugin::{
     EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin, FrameEvaluationContext,
     OperationDescriptor, OperationDescriptorError, Plugin, PluginManager, ResolvedNodeInputs,
@@ -31,7 +32,6 @@ use library::plugin::{
 use library::rendering::renderer::{Affine2D, RenderOutput};
 use library::{RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
-use skia_safe::Point;
 use uuid::Uuid;
 
 const WIDTH: u64 = 128;
@@ -261,6 +261,30 @@ fn assert_alpha_inside_preview_bounds(frame: &FrameInfo, image: &Image) {
     assert!(
         preview.2 - preview.0 < frame.width as f64 && preview.3 - preview.1 < frame.height as f64,
         "regression must not pass through a full-composition fallback: {preview:?}"
+    );
+}
+
+fn assert_clean_straight_rgba(image: &Image) {
+    let mut visible = 0_usize;
+    let mut straight_partial = false;
+    for pixel in image.data.chunks_exact(4) {
+        if pixel[3] == 0 {
+            assert_eq!(pixel, &[0, 0, 0, 0], "transparent RGB carried color");
+            continue;
+        }
+        visible += 1;
+        if pixel[3] < 240
+            && pixel[..3]
+                .iter()
+                .any(|channel| u16::from(*channel) > u16::from(pixel[3]) + 24)
+        {
+            straight_partial = true;
+        }
+    }
+    assert!(visible > 0, "the explicit graph rendered no visible pixels");
+    assert!(
+        straight_partial,
+        "partially transparent colors appear premultiplied instead of straight RGBA"
     );
 }
 
@@ -692,8 +716,19 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
         plugins.clone(),
     );
     let mut graph = manager
-        .create_text_graph("ABCDE", "Arial", WIDTH, HEIGHT)
+        .create_text_graph("AA\nAA", "Arial", WIDTH, HEIGHT)
         .unwrap();
+    let text_id = graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.content,
+                NodeContent::Generator(library::model::GeneratorContent::Text)
+            )
+        })
+        .unwrap()
+        .id;
     let mut random = plugins.create_effector_operation_node("randomize").unwrap();
     set_constant(&mut random, "seed", 7.0.into());
     set_constant(&mut random, "translate_range", 8.0.into());
@@ -717,42 +752,44 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
     else {
         panic!()
     };
-    let first = evaluate_configured_transform(
-        &ensemble.effector_configs,
-        0.0,
-        EffectorElementContext {
-            global_index: 0,
-            stable_id: 0x1000,
-            block_group_id: 0x10,
-            line_group_id: 0x11,
-            line_index: 0,
-            line_char_index: 0,
-            total_chars: 5,
-            line_char_count: 5,
-            char_center: Point::new(0.0, 0.0),
-        },
-    )
-    .unwrap();
-    let second = evaluate_configured_transform(
-        &ensemble.effector_configs,
-        0.0,
-        EffectorElementContext {
-            global_index: 1,
-            stable_id: 0x1001,
-            block_group_id: 0x10,
-            line_group_id: 0x11,
-            line_index: 0,
-            line_char_index: 1,
-            total_chars: 5,
-            line_char_count: 5,
-            char_center: Point::new(0.0, 0.0),
-        },
-    )
-    .unwrap();
+
+    let evaluators = plugins.get_property_evaluators();
+    let context = FrameEvaluationContext {
+        project: &project,
+        composition: &project.compositions[0],
+        property_evaluators: &evaluators,
+        plugin_manager: &plugins,
+        resolved_inputs: None,
+    };
+    let RuntimeShapeGeometry::Text(runtime_text) = plugins
+        .get_entity_converter("text")
+        .unwrap()
+        .convert_shape(&context, project.get_node(text_id).unwrap(), 0.0)
+        .unwrap()
+        .geometry
+    else {
+        panic!("Text converter did not produce runtime text geometry")
+    };
+    assert_eq!(runtime_text.elements.len(), 4);
     assert_ne!(
-        first, second,
-        "Char randomization must mix element identity"
+        runtime_text.elements[0].line_group_id, runtime_text.elements[2].line_group_id,
+        "repeated characters on separate lines need distinct line identities"
     );
+    let transforms = evaluate_text_element_transforms(&runtime_text, ensemble, 0.0).unwrap();
+    assert_eq!(
+        transforms,
+        evaluate_text_element_transforms(&runtime_text, ensemble, 0.0).unwrap(),
+        "the same seed and element identities must reproduce exactly"
+    );
+    assert!(
+        transforms
+            .iter()
+            .skip(1)
+            .any(|transform| transform != &transforms[0]),
+        "all character identities reused one seeded transform"
+    );
+    let loaded = Project::load(&project.save().unwrap()).unwrap();
+    assert_eq!(image_a.data, preview(&loaded, &plugins, 0).data);
 
     let mut changed_seed = project;
     set_constant(
@@ -761,6 +798,136 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
         8.0.into(),
     );
     assert_ne!(image_a.data, preview(&changed_seed, &plugins, 0).data);
+}
+
+#[test]
+fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds() {
+    let plugins = Arc::new(PluginManager::default());
+    let manager = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("factory"))),
+        plugins.clone(),
+    );
+    let mut graph = manager
+        .create_shape_graph("M 0 0 H 30 V 20 H 0 Z", WIDTH, HEIGHT, 30, 20)
+        .unwrap();
+    let source_id = graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.content,
+                NodeContent::Generator(library::model::GeneratorContent::Shape)
+            )
+        })
+        .unwrap()
+        .id;
+    let source = graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == source_id)
+        .unwrap();
+    set_constant(
+        source,
+        "position",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(62.0),
+            y: OrderedFloat(39.0),
+        }),
+    );
+    set_constant(
+        source,
+        "anchor",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(15.0),
+            y: OrderedFloat(10.0),
+        }),
+    );
+    set_constant(
+        source,
+        "scale",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(125.0),
+            y: OrderedFloat(80.0),
+        }),
+    );
+    set_constant(source, "rotation", 21.0.into());
+
+    for node in &mut graph.nodes {
+        let NodeContent::PluginOperation(operation) = &node.content else {
+            continue;
+        };
+        match operation.component_id.as_str() {
+            "fill" => {
+                set_constant(
+                    node,
+                    "color",
+                    PropertyValue::Color(Color {
+                        r: 240,
+                        g: 70,
+                        b: 20,
+                        a: 160,
+                    }),
+                );
+                set_constant(node, "opacity", 0.75.into());
+            }
+            "stroke" => {
+                set_constant(
+                    node,
+                    "color",
+                    PropertyValue::Color(Color {
+                        r: 20,
+                        g: 80,
+                        b: 245,
+                        a: 176,
+                    }),
+                );
+                set_constant(node, "opacity", 0.8.into());
+            }
+            _ => {}
+        }
+    }
+
+    let mut opacity = plugins.create_effector_operation_node("opacity").unwrap();
+    set_constant(&mut opacity, "opacity", 65.0.into());
+    set_constant(&mut opacity, "mode", PropertyValue::String("Set".into()));
+    let mut backplate = plugins
+        .create_decorator_operation_node("backplate")
+        .unwrap();
+    set_constant(&mut backplate, "padding", 4.0.into());
+    set_constant(
+        &mut backplate,
+        "color",
+        PropertyValue::Color(Color {
+            r: 35,
+            g: 210,
+            b: 85,
+            a: 96,
+        }),
+    );
+    let chain = [opacity.id, backplate.id];
+    graph.nodes.extend([opacity, backplate]);
+    insert_effector_chain(&mut graph, &chain);
+    let merge_wire = graph
+        .connections
+        .iter_mut()
+        .find(|connection| connection.to.port == MERGE_IMAGES_PORT && connection.order == 1)
+        .expect("Shape factory must merge its Fill and Stroke branches");
+    merge_wire.blend_mode = BlendMode::Screen;
+
+    let (mut project, _) = project_with_graph(graph, 0.0, 2.0);
+    project.compositions[0].background_color = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    let frame = evaluate(&project, &plugins, 0);
+    let rendered = render_frame(&frame, &plugins);
+    assert_clean_straight_rgba(&rendered);
+    assert_alpha_inside_preview_bounds(&frame, &rendered);
+
+    let loaded = Project::load(&project.save().unwrap()).unwrap();
+    assert_eq!(rendered.data, preview(&loaded, &plugins, 0).data);
 }
 
 #[test]
