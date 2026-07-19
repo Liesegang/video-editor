@@ -102,6 +102,31 @@ fn fit_canvas_to_viewport(
     Some(FittedPreviewView { pan, zoom })
 }
 
+fn preview_content_rect(
+    viewport_rect: egui::Rect,
+    pan: egui::Vec2,
+    zoom: f32,
+    canvas_size: egui::Vec2,
+) -> Option<egui::Rect> {
+    let screen_size = canvas_size * zoom;
+    if !pan.x.is_finite()
+        || !pan.y.is_finite()
+        || !zoom.is_finite()
+        || zoom <= 0.0
+        || !screen_size.x.is_finite()
+        || !screen_size.y.is_finite()
+        || screen_size.x <= 0.0
+        || screen_size.y <= 0.0
+    {
+        return None;
+    }
+
+    Some(egui::Rect::from_min_size(
+        viewport_rect.min + pan,
+        screen_size,
+    ))
+}
+
 /// Keep the derived Preview camera fitted without putting presentation state
 /// into the authoritative Project.
 ///
@@ -368,18 +393,6 @@ pub fn preview_panel(
             (available_rect.height() - bottom_bar_height - top_bar_height).max(0.0),
         ),
     );
-    crate::qa::register_component_with_metadata(
-        "preview.canvas",
-        "preview_canvas",
-        preview_rect,
-        true,
-        Some(serde_json::json!({
-            "pan": {"x": editor_context.view.pan.x, "y": editor_context.view.pan.y},
-            "zoom": editor_context.view.zoom,
-            "texture_width": editor_context.preview_texture_width,
-            "texture_height": editor_context.preview_texture_height,
-        })),
-    );
     let bottom_bar_rect = egui::Rect::from_min_max(
         egui::pos2(available_rect.min.x, preview_rect.max.y),
         available_rect.max,
@@ -518,6 +531,53 @@ pub fn preview_panel(
 
     if viewport_changed {
         editor_context.interaction.preview_viewport.auto_fit = false;
+    }
+
+    let preview_content =
+        current_composition_view
+            .as_ref()
+            .and_then(|(composition_id, width, height)| {
+                preview_content_rect(
+                    preview_rect,
+                    editor_context.view.pan,
+                    editor_context.view.zoom,
+                    egui::vec2(*width as f32, *height as f32),
+                )
+                .map(|rect| (*composition_id, *width, *height, rect))
+            });
+    crate::qa::register_component_with_metadata(
+        "preview.canvas",
+        "preview_canvas",
+        preview_rect,
+        true,
+        Some(serde_json::json!({
+            "pan": {"x": editor_context.view.pan.x, "y": editor_context.view.pan.y},
+            "zoom": editor_context.view.zoom,
+            "auto_fit": editor_context.interaction.preview_viewport.auto_fit,
+            "primary_gesture": format!(
+                "{:?}",
+                editor_context.interaction.preview_viewport.primary_gesture
+            ),
+            "composition_id": preview_content.map(|content| content.0),
+            "texture_width": editor_context.preview_texture_width,
+            "texture_height": editor_context.preview_texture_height,
+        })),
+    );
+    if let Some((composition_id, width, height, content_rect)) = preview_content {
+        crate::qa::register_component_with_metadata(
+            "preview.content",
+            "preview_composition_content",
+            content_rect,
+            true,
+            Some(serde_json::json!({
+                "composition_id": composition_id,
+                "canvas_width": width,
+                "canvas_height": height,
+                "pan": {"x": editor_context.view.pan.x, "y": editor_context.view.pan.y},
+                "zoom": editor_context.view.zoom,
+                "auto_fit": editor_context.interaction.preview_viewport.auto_fit,
+            })),
+        );
     }
 
     // Legacy logic (removed lines 36-64)
@@ -1030,7 +1090,7 @@ mod tests {
         let canvas_size = egui::vec2(1920.0, 1080.0);
         let fitted = fit_canvas_to_viewport(viewport, canvas_size).unwrap();
         let screen_canvas =
-            egui::Rect::from_min_size(viewport.min + fitted.pan, canvas_size * fitted.zoom);
+            preview_content_rect(viewport, fitted.pan, fitted.zoom, canvas_size).unwrap();
 
         assert_near(screen_canvas.center().x, viewport.center().x);
         assert_near(screen_canvas.center().y, viewport.center().y);
@@ -1038,6 +1098,17 @@ mod tests {
         assert!(screen_canvas.right() <= viewport.right());
         assert!(screen_canvas.top() >= viewport.top());
         assert!(screen_canvas.bottom() <= viewport.bottom());
+    }
+
+    #[test]
+    fn preview_content_rect_rejects_invalid_camera_geometry() {
+        let viewport = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(800.0, 600.0));
+        let canvas = egui::vec2(640.0, 360.0);
+
+        assert!(preview_content_rect(viewport, egui::Vec2::ZERO, 1.0, canvas).is_some());
+        assert!(preview_content_rect(viewport, egui::Vec2::ZERO, 0.0, canvas).is_none());
+        assert!(preview_content_rect(viewport, egui::Vec2::NAN, 1.0, canvas).is_none());
+        assert!(preview_content_rect(viewport, egui::Vec2::ZERO, 1.0, egui::Vec2::ZERO).is_none());
     }
 
     #[test]
@@ -1073,7 +1144,7 @@ mod tests {
             composition,
             viewport,
         ));
-        let initially_fitted = egui::Rect::from_min_size(viewport.min + pan, canvas_size * zoom);
+        let initially_fitted = preview_content_rect(viewport, pan, zoom, canvas_size).unwrap();
         assert_near(initially_fitted.center().x, viewport.center().x);
         assert_near(initially_fitted.center().y, viewport.center().y);
 
@@ -1101,7 +1172,7 @@ mod tests {
             composition,
             resized,
         ));
-        let reset_fit = egui::Rect::from_min_size(resized.min + pan, canvas_size * zoom);
+        let reset_fit = preview_content_rect(resized, pan, zoom, canvas_size).unwrap();
         assert_near(reset_fit.center().x, resized.center().x);
         assert_near(reset_fit.center().y, resized.center().y);
     }
@@ -1157,11 +1228,14 @@ mod tests {
                         None,
                     )
                     .with_pan_tool_active(decision.pan_owned);
-                    let (_, response) = controller.interact_with_rect(
+                    let (viewport_changed, response) = controller.interact_with_rect(
                         viewport,
                         &mut viewport_state,
                         &mut editor_context.interaction.handled_hand_tool_drag,
                     );
+                    if viewport_changed {
+                        editor_context.interaction.preview_viewport.auto_fit = false;
+                    }
 
                     let mut interactions = interaction::PreviewInteractions::new(
                         ui,
@@ -1356,6 +1430,7 @@ mod tests {
         });
 
         let pan_before = editor_context.view.pan;
+        let zoom_before = editor_context.view.zoom;
         let start = egui::pos2(180.0, 160.0);
         let end = egui::pos2(330.0, 245.0);
         let key_event = |pressed| egui::Event::Key {
@@ -1394,7 +1469,10 @@ mod tests {
             vec![egui::Event::PointerMoved(end)],
         );
         assert!(dragged.pan_owned);
-        assert_ne!(editor_context.view.pan, pan_before);
+        assert_near(editor_context.view.pan.x, pan_before.x + end.x - start.x);
+        assert_near(editor_context.view.pan.y, pan_before.y + end.y - start.y);
+        assert_eq!(editor_context.view.zoom, zoom_before);
+        assert!(!editor_context.interaction.preview_viewport.auto_fit);
 
         let released = run_preview_interaction_frame(
             &context,
@@ -1445,6 +1523,8 @@ mod tests {
         );
         assert!(pending_actions.is_empty());
         assert_eq!(*project.read().unwrap(), project_before);
+        assert_eq!(editor_context.view.zoom, zoom_before);
+        assert!(!editor_context.interaction.preview_viewport.auto_fit);
     }
 
     #[test]
