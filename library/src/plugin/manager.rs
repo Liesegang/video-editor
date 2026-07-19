@@ -1472,7 +1472,8 @@ mod tests {
     }
 
     #[test]
-    fn replacing_effect_drops_old_plugin_after_manager_write_lock_is_released() {
+    fn replacing_effect_drops_old_plugin_after_manager_write_lock_is_released()
+    -> Result<(), Box<dyn std::error::Error>> {
         let manager = Arc::new(PluginManager::new());
         let callback_completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         manager.register_effect(Arc::new(ReentrantDropEffect {
@@ -1484,18 +1485,20 @@ mod tests {
         let worker_manager = Arc::clone(&manager);
         let worker = std::thread::spawn(move || {
             worker_manager.register_effect(Arc::new(ReplacementEffect));
-            completed_tx
-                .send(())
-                .expect("replacement completion receiver must remain alive");
+            completed_tx.send(()).map_err(|error| error.to_string())
         });
 
         completed_rx
             .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("plugin Drop re-entry must not deadlock on the manager write lock");
-        worker.join().expect("replacement worker must not panic");
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let worker_result = worker
+            .join()
+            .map_err(|_| std::io::Error::other("replacement worker panicked"))?;
+        worker_result.map_err(std::io::Error::other)?;
         assert!(
             callback_completed.load(Ordering::SeqCst),
             "the old plugin destructor must be able to read the committed replacement"
         );
+        Ok(())
     }
 }

@@ -65,7 +65,7 @@ fn copy_abi_table<T: Copy>(
         )));
     }
     let required_alignment = align_of::<T>();
-    if (pointer as usize) % required_alignment != 0 {
+    if !(pointer as usize).is_multiple_of(required_alignment) {
         return Err(LibraryError::Plugin(format!(
             "{label} returned a misaligned ABI table; host requires {required_alignment}-byte alignment"
         )));
@@ -4084,7 +4084,8 @@ mod tests {
     }
 
     #[test]
-    fn misaligned_base_and_extension_tables_are_rejected_before_table_use() {
+    fn misaligned_base_and_extension_tables_are_rejected_before_table_use()
+    -> Result<(), Box<dyn std::error::Error>> {
         let base = RuviePluginApiV1 {
             abi_version: RUVIE_PLUGIN_ABI_V1,
             struct_size: size_of::<RuviePluginApiV1>(),
@@ -4097,7 +4098,8 @@ mod tests {
         let mut base_storage =
             vec![0_u8; size_of::<RuviePluginApiV1>() + align_of::<RuviePluginApiV1>()];
         // A one-byte offset from Vec's allocation is deliberately unsuitable
-        // for every ABI table whose alignment is greater than one.
+        // for every ABI table whose alignment is greater than one. SAFETY: the
+        // allocation includes the offset byte and a complete table.
         let base_pointer = unsafe { base_storage.as_mut_ptr().add(1) };
         // SAFETY: The backing allocation has enough space and this write is
         // explicitly unaligned; no reference is formed.
@@ -4106,10 +4108,13 @@ mod tests {
                 .cast::<RuviePluginApiV1>()
                 .write_unaligned(base)
         };
-        let error = match copy_abi_table::<RuviePluginApiV1>(base_pointer.cast(), "base fixture") {
-            Ok(_) => panic!("a misaligned entry table must not be copied"),
-            Err(error) => error.to_string(),
+        let Err(error) = copy_abi_table::<RuviePluginApiV1>(base_pointer.cast(), "base fixture")
+        else {
+            return Err(
+                std::io::Error::other("a misaligned entry table must not be copied").into(),
+            );
         };
+        let error = error.to_string();
         assert!(error.contains("misaligned ABI table"));
 
         let extension = RuvieEffectCpuRgba8ApiV1 {
@@ -4126,6 +4131,8 @@ mod tests {
             size_of::<RuvieEffectCpuRgba8ApiV1>()
                 + align_of::<RuvieEffectCpuRgba8ApiV1>()
         ];
+        // SAFETY: The allocation includes the offset byte and a complete
+        // extension table.
         let extension_pointer = unsafe { extension_storage.as_mut_ptr().add(1) };
         // SAFETY: Same bounded unaligned fixture construction as the base table.
         unsafe {
@@ -4149,12 +4156,15 @@ mod tests {
             },
             _library: current_process_library(),
         };
-        let error = match library.effect_cpu_rgba8_extension() {
-            Ok(_) => panic!("a misaligned extension must fail before callback validation"),
-            Err(error) => error.to_string(),
+        let Err(error) = library.effect_cpu_rgba8_extension() else {
+            return Err(std::io::Error::other(
+                "a misaligned extension must fail before callback validation",
+            )
+            .into());
         };
         MISALIGNED_EXTENSION_POINTER.store(0, std::sync::atomic::Ordering::SeqCst);
-        assert!(error.contains("misaligned ABI table"));
+        assert!(error.to_string().contains("misaligned ABI table"));
+        Ok(())
     }
 
     unsafe extern "C" fn free_test_frame(
