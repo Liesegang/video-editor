@@ -640,6 +640,111 @@ impl Project {
         old_len != self.connections.len()
     }
 
+    /// Move either end of one canonical connection without changing its
+    /// persistent identity. The mutation is transactional and retains the
+    /// original variadic order whenever the target is unchanged.
+    pub fn reconnect_connection(
+        &mut self,
+        id: Uuid,
+        from: PortAddress,
+        to: PortAddress,
+    ) -> Result<(), ProjectGraphError> {
+        let original_index = self
+            .connections
+            .iter()
+            .position(|connection| connection.id == id)
+            .ok_or(ProjectGraphError::ConnectionNotFound(id))?;
+        let original = self.connections[original_index].clone();
+        if original.from == from && original.to == to {
+            return Ok(());
+        }
+
+        let target = self
+            .port_definition(&to, PortDirection::Input)
+            .ok_or_else(|| ProjectGraphError::PortNotFound(to.clone()))?;
+        let baseline = self.validate_connections();
+        let mut candidate = self.clone();
+        let mut moved = candidate.connections.remove(original_index);
+        moved.from = from;
+        moved.to = to.clone();
+
+        if original.to != to {
+            candidate.normalize_connection_orders();
+            moved.order = match target.multiplicity {
+                PortMultiplicity::Single => {
+                    candidate
+                        .connections
+                        .retain(|connection| connection.to != to);
+                    0
+                }
+                PortMultiplicity::Variadic => {
+                    let count = candidate
+                        .connections
+                        .iter()
+                        .filter(|connection| connection.to == to)
+                        .count() as i64;
+                    let insertion_order = original.order.clamp(0, count);
+                    for connection in candidate
+                        .connections
+                        .iter_mut()
+                        .filter(|connection| connection.to == to)
+                    {
+                        if connection.order >= insertion_order {
+                            connection.order += 1;
+                        }
+                    }
+                    insertion_order
+                }
+            };
+        }
+
+        candidate
+            .connections
+            .insert(original_index.min(candidate.connections.len()), moved);
+        if let Some(error) =
+            super::first_new_project_validation_error(&baseline, candidate.validate_connections())
+        {
+            return Err(error);
+        }
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Insert an already-contained Node (or another compatible owner) into an
+    /// existing connection. The original connection becomes the downstream
+    /// edge and therefore keeps its UUID, target and variadic order; only one
+    /// new upstream connection is allocated.
+    pub fn splice_connection(
+        &mut self,
+        connection_id: Uuid,
+        via_input: PortAddress,
+        via_output: PortAddress,
+    ) -> Result<Uuid, ProjectGraphError> {
+        let original = self
+            .connections
+            .iter()
+            .find(|connection| connection.id == connection_id)
+            .cloned()
+            .ok_or(ProjectGraphError::ConnectionNotFound(connection_id))?;
+        let baseline = self.validate_connections();
+        let mut candidate = self.clone();
+        let upstream_id = candidate.connect_ports(original.from.clone(), via_input)?;
+        let downstream = candidate
+            .connections
+            .iter_mut()
+            .find(|connection| connection.id == connection_id)
+            .ok_or(ProjectGraphError::ConnectionNotFound(connection_id))?;
+        downstream.from = via_output;
+
+        if let Some(error) =
+            super::first_new_project_validation_error(&baseline, candidate.validate_connections())
+        {
+            return Err(error);
+        }
+        *self = candidate;
+        Ok(upstream_id)
+    }
+
     pub fn disconnect_ports(&mut self, from: &PortAddress, to: &PortAddress) -> bool {
         let old_len = self.connections.len();
         self.connections
@@ -1135,5 +1240,79 @@ mod tests {
                 .container_image_sources(PortOwner::Track(Uuid::new_v4()))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn reconnect_and_splice_keep_the_downstream_connection_identity_order_and_target() {
+        let mut project = Project::new("connection editing");
+        let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
+        let composition_id = composition.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let container = NodeContainer::Composition(composition_id);
+        let source = add_node(&mut project, container, "source");
+        let alternate_source = add_node(&mut project, container, "alternate source");
+        let sibling = add_node(&mut project, container, "sibling");
+        let via = add_node(&mut project, container, "via");
+        let target = add_node(&mut project, container, "target");
+
+        let target_address = PortAddress::new(PortOwner::Node(target), MERGE_IMAGES_PORT);
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(sibling), IMAGE_OUTPUT_PORT),
+                target_address.clone(),
+            )
+            .unwrap();
+        let connection_id = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(source), IMAGE_OUTPUT_PORT),
+                target_address.clone(),
+            )
+            .unwrap();
+        let original_order = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == connection_id)
+            .unwrap()
+            .order;
+
+        project
+            .reconnect_connection(
+                connection_id,
+                PortAddress::new(PortOwner::Node(alternate_source), IMAGE_OUTPUT_PORT),
+                target_address.clone(),
+            )
+            .unwrap();
+        let reconnected = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == connection_id)
+            .unwrap();
+        assert_eq!(reconnected.to, target_address);
+        assert_eq!(reconnected.order, original_order);
+
+        let upstream_id = project
+            .splice_connection(
+                connection_id,
+                PortAddress::new(PortOwner::Node(via), MERGE_IMAGES_PORT),
+                PortAddress::new(PortOwner::Node(via), IMAGE_OUTPUT_PORT),
+            )
+            .unwrap();
+        let downstream = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == connection_id)
+            .unwrap();
+        assert_eq!(downstream.from.owner, PortOwner::Node(via));
+        assert_eq!(downstream.to, target_address);
+        assert_eq!(downstream.order, original_order);
+        let upstream = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == upstream_id)
+            .unwrap();
+        assert_eq!(upstream.from.owner, PortOwner::Node(alternate_source));
+        assert_eq!(upstream.to.owner, PortOwner::Node(via));
+        assert!(project.validate_connections().is_empty());
     }
 }
