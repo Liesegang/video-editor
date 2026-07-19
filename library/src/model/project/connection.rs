@@ -642,11 +642,17 @@ impl Project {
     /// multi-wire knife gesture.
     pub fn disconnect_connections(&mut self, ids: impl IntoIterator<Item = Uuid>) -> usize {
         let ids = ids.into_iter().collect::<HashSet<_>>();
+        let affected_targets = self
+            .connections
+            .iter()
+            .filter(|item| ids.contains(&item.id))
+            .map(|item| item.to.clone())
+            .collect::<HashSet<_>>();
         let old_len = self.connections.len();
         self.connections.retain(|item| !ids.contains(&item.id));
         let removed = old_len - self.connections.len();
         if removed != 0 {
-            self.normalize_connection_orders();
+            self.normalize_connection_orders_for_targets(&affected_targets);
         }
         removed
     }
@@ -781,11 +787,15 @@ impl Project {
             .iter()
             .map(|item| item.to.clone())
             .collect::<HashSet<_>>();
+        self.normalize_connection_orders_for_targets(&targets);
+    }
+
+    fn normalize_connection_orders_for_targets(&mut self, targets: &HashSet<PortAddress>) {
         for target in targets {
             let mut ids = self
                 .connections
                 .iter()
-                .filter(|item| item.to == target)
+                .filter(|item| item.to == *target)
                 .map(|item| (item.order, item.id))
                 .collect::<Vec<_>>();
             ids.sort_by_key(|item| item.0);
@@ -1457,19 +1467,48 @@ mod tests {
         ));
         assert_eq!(project, before_invalid, "failed reconnect must roll back");
 
-        let remove = [&target_a_input, &target_b_input]
-            .into_iter()
-            .map(|target| {
-                project
-                    .connections
-                    .iter()
-                    .find(|connection| &connection.to == target && connection.order == 0)
-                    .unwrap()
-                    .id
-            })
+        for (order, connection) in project
+            .connections
+            .iter_mut()
+            .filter(|connection| connection.to == target_b_input)
+            .enumerate()
+        {
+            connection.order = 4 + order as i64 * 5;
+        }
+        let unaffected_before = project
+            .connections
+            .iter()
+            .filter(|connection| connection.to == target_b_input)
+            .map(|connection| (connection.id, connection.order))
             .collect::<Vec<_>>();
-        assert_eq!(project.disconnect_connections(remove), 2);
+        let first_target_a = project
+            .connections
+            .iter()
+            .find(|connection| connection.to == target_a_input && connection.order == 0)
+            .unwrap()
+            .id;
+        assert_eq!(project.disconnect_connections([first_target_a]), 1);
         assert_eq!(orders(&project, &target_a_input), vec![0]);
+        assert_eq!(
+            project
+                .connections
+                .iter()
+                .filter(|connection| connection.to == target_b_input)
+                .map(|connection| (connection.id, connection.order))
+                .collect::<Vec<_>>(),
+            unaffected_before,
+            "unaffected target UUID/order pairs must be byte-for-byte stable",
+        );
+
+        let remaining_a = project
+            .connections
+            .iter()
+            .find(|connection| connection.to == target_a_input)
+            .unwrap()
+            .id;
+        let first_b = unaffected_before[0].0;
+        assert_eq!(project.disconnect_connections([remaining_a, first_b]), 2);
+        assert!(orders(&project, &target_a_input).is_empty());
         assert_eq!(orders(&project, &target_b_input), vec![0]);
     }
 
