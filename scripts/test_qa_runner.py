@@ -119,11 +119,11 @@ class TimelineGeometryQaClient(E2E.QaClient):
         clip_rect = {
             "min_x": 100.0,
             "min_y": 40.0,
-            "max_x": 300.0,
+            "max_x": 101.0,
             "max_y": 70.0,
-            "width": 200.0,
+            "width": 1.0,
             "height": 30.0,
-            "center_x": 200.0,
+            "center_x": 100.5,
             "center_y": 55.0,
         }
         edge_rect = {
@@ -142,7 +142,7 @@ class TimelineGeometryQaClient(E2E.QaClient):
                 component(
                     "timeline.clip:" + E2E.CLIP_A1,
                     clip_rect,
-                    {"duration": 4.0},
+                    {"duration": 4.0, "pixels_per_second": 50.0},
                 ),
                 component("timeline.clip_edge.left:" + E2E.CLIP_A1, edge_rect),
             ],
@@ -356,6 +356,10 @@ class QaRunnerTests(unittest.TestCase):
         self.assertEqual(payload["to"], {"x": 165.0, "y": 55.0})
         self.assertEqual(evidence["component_frame"], 42)
         self.assertEqual(evidence["expected_delta_seconds"], 1.25)
+        self.assertEqual(
+            evidence["coordinate_reason"],
+            "authoritative Timeline pixels_per_second",
+        )
 
     def test_modes_expand_to_the_expected_independent_suites(self):
         self.assertEqual([item.name for item in RUNNER.suite_specs("smoke")], ["smoke"])

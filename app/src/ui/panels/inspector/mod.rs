@@ -1656,6 +1656,10 @@ fn register_clip_timing_control(
     fps: f64,
     display_semantics: &str,
 ) {
+    if !crate::qa::is_enabled() {
+        return;
+    }
+
     crate::qa::register_component_with_metadata(
         format!("inspector.property.clip:{clip_id}:{}", definition.name()),
         "inspector_property_control",

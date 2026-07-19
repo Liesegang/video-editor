@@ -923,6 +923,7 @@ fn draw_single_clip(
                 "canonical_index": canonical_index,
                 "start_time": clip.start_time.into_inner(),
                 "duration": clip.duration.into_inner(),
+                "pixels_per_second": geometry.pixels_per_unit,
                 "output_node_id": graph_nodes.output.map(|node| node.id),
                 "semantic_source_node_id": graph_nodes.semantic_source.map(|node| node.id),
                 "semantic_source_kind": graph_nodes.semantic_source.map(semantic_source_kind),

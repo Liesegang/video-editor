@@ -10,6 +10,7 @@ used.
 import argparse
 import hashlib
 import json
+import math
 import os
 import signal
 import socket
@@ -483,11 +484,9 @@ class QaClient:
                     )
                 )
         clip_metadata = clip_component.get("metadata") or {}
-        duration = float(clip_metadata.get("duration", 0.0))
-        clip_width = float(clip_component["rect_points"]["width"])
-        if duration <= 0.0 or clip_width <= 1.0:
+        pixels_per_second = float(clip_metadata.get("pixels_per_second", 0.0))
+        if not math.isfinite(pixels_per_second) or pixels_per_second <= 0.0:
             raise QaFailure("Timeline Clip omitted usable time geometry")
-        pixels_per_second = clip_width / duration
         dx = float(seconds) * pixels_per_second
         start = self.point(target["rect_points"])
         end = {"x": start["x"] + dx, "y": start["y"]}
@@ -508,7 +507,7 @@ class QaClient:
                 "geometry_rect_points": clip_component["rect_points"],
                 "expected_delta_seconds": float(seconds),
                 "pixels_per_second": pixels_per_second,
-                "coordinate_reason": "Clip width / authoritative duration",
+                "coordinate_reason": "authoritative Timeline pixels_per_second",
             },
         )
         return {
