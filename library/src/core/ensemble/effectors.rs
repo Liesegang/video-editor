@@ -579,6 +579,69 @@ mod tests {
     }
 
     #[test]
+    fn randomize_uses_block_line_and_character_index_scopes() {
+        let config = |target| EffectorConfig::Randomize {
+            translate_range: (20.0, 30.0),
+            rotate_range: 45.0,
+            scale_range: (0.5, 0.25),
+            seed: 42,
+            target,
+        };
+        let scoped_element =
+            |global_index, line_index, line_char_index, stable_id| EffectorElementContext {
+                global_index,
+                stable_id,
+                block_group_id: 0x10,
+                line_group_id: 0x11 + line_index as u64,
+                line_index,
+                line_char_index,
+                total_chars: 4,
+                line_char_count: 2,
+                char_center: Point::new(5.0, 5.0),
+            };
+        let elements = [
+            scoped_element(0, 0, 0, 0x1000),
+            scoped_element(1, 0, 1, 0x1001),
+            scoped_element(2, 1, 0, 0x2000),
+            scoped_element(3, 1, 1, 0x2001),
+        ];
+        let transforms = |target| {
+            elements
+                .iter()
+                .map(|element| {
+                    evaluate_configured_transform(&[config(target)], 0.0, *element).unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let block = transforms(EffectorTarget::Block);
+        for (index, transform) in block.iter().enumerate() {
+            assert!(block.iter().skip(index + 1).all(|other| other != transform));
+        }
+
+        let line = transforms(EffectorTarget::Line);
+        assert_eq!(line[0], line[2]);
+        assert_eq!(line[1], line[3]);
+        assert_ne!(line[0], line[1]);
+
+        let character = transforms(EffectorTarget::Char);
+        for (index, transform) in character.iter().enumerate() {
+            assert!(
+                character
+                    .iter()
+                    .skip(index + 1)
+                    .all(|other| other != transform),
+                "character {index} reused another character's random transform"
+            );
+        }
+        assert_eq!(character, transforms(EffectorTarget::Char));
+
+        assert_ne!(block[2], line[2]);
+        assert_ne!(line[0], character[0]);
+        assert_ne!(block[0], character[0]);
+    }
+
+    #[test]
     fn parts_target_is_an_explicit_error() {
         let result = evaluate_configured_transform(
             &[EffectorConfig::Opacity {
