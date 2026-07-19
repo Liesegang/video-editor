@@ -808,54 +808,63 @@ impl PluginManager {
     }
 
     /// Get metadata for the first stream (for backward compatibility).
-    pub fn get_metadata(&self, path: &str) -> Option<AssetMetadata> {
-        self.get_available_streams(path)
-            .and_then(|streams| streams.into_iter().next())
+    pub fn get_metadata(&self, path: &str) -> Result<Option<AssetMetadata>, LibraryError> {
+        Ok(self
+            .get_available_streams(path)?
+            .and_then(|streams| streams.into_iter().next()))
     }
 
-    /// Get all available streams/resources from a file.
-    pub fn get_available_streams(&self, path: &str) -> Option<Vec<AssetMetadata>> {
+    /// Get all available streams/resources from a file. `Ok(None)` means every
+    /// loader declined the path; a loader that claims the path but cannot open
+    /// it returns its exact failure instead of being disguised as unsupported.
+    pub fn get_available_streams(
+        &self,
+        path: &str,
+    ) -> Result<Option<Vec<AssetMetadata>>, LibraryError> {
         let plugins = {
             let inner = self.read_registry();
             inner.load_plugins.values().cloned().collect::<Vec<_>>()
         };
         for plugin in plugins {
             match plugin.open(path) {
-                Ok(streams) => return Some(streams),
+                Ok(streams) => return Ok(Some(streams)),
                 Err(LoadPluginError::Unsupported) => {}
                 Err(LoadPluginError::Failed(error)) => {
-                    log::warn!(
+                    log::error!(
                         "Load plugin '{}' failed to inspect path {:?}: {}",
                         plugin.id(),
                         path,
                         error
                     );
+                    return Err(error);
                 }
             }
         }
-        None
+        Ok(None)
     }
 
-    pub fn probe_asset_kind(&self, path: &str) -> AssetKind {
-        self.get_metadata(path)
+    pub fn probe_asset_kind(&self, path: &str) -> Result<AssetKind, LibraryError> {
+        Ok(self
+            .get_metadata(path)?
             .map(|m| m.kind)
-            .unwrap_or(AssetKind::Other)
+            .unwrap_or(AssetKind::Other))
     }
 
-    pub fn get_duration(&self, path: &str) -> Option<f64> {
-        self.get_metadata(path).and_then(|m| m.duration)
+    pub fn get_duration(&self, path: &str) -> Result<Option<f64>, LibraryError> {
+        Ok(self.get_metadata(path)?.and_then(|m| m.duration))
     }
 
-    pub fn get_fps(&self, path: &str) -> Option<f64> {
-        self.get_metadata(path).and_then(|m| m.fps)
+    pub fn get_fps(&self, path: &str) -> Result<Option<f64>, LibraryError> {
+        Ok(self.get_metadata(path)?.and_then(|m| m.fps))
     }
 
-    pub fn get_dimensions(&self, path: &str) -> Option<(u32, u32)> {
-        self.get_metadata(path)
+    pub fn get_dimensions(&self, path: &str) -> Result<Option<(u32, u32)>, LibraryError> {
+        Ok(self
+            .get_metadata(path)?
             .and_then(|m| match (m.width, m.height) {
                 (Some(w), Some(h)) => Some((w, h)),
                 _ => None,
-            })
+            }))
     }
 
     pub fn export_image(
@@ -1317,6 +1326,48 @@ mod tests {
 
     struct ReplacementEffect;
 
+    struct MetadataProbeLoader {
+        id: &'static str,
+        failure: Option<&'static str>,
+    }
+
+    impl Plugin for MetadataProbeLoader {
+        fn id(&self) -> &str {
+            self.id
+        }
+
+        fn name(&self) -> String {
+            "Metadata Probe Loader".to_string()
+        }
+
+        fn category(&self) -> String {
+            "Tests".to_string()
+        }
+
+        fn version(&self) -> (u32, u32, u32) {
+            (0, 1, 0)
+        }
+    }
+
+    impl LoadPlugin for MetadataProbeLoader {
+        fn open(&self, path: &str) -> crate::plugin::loaders::LoadPluginResult<Vec<AssetMetadata>> {
+            match self.failure {
+                Some(cause) => Err(LoadPluginError::Failed(LibraryError::Plugin(format!(
+                    "{cause}: {path}"
+                )))),
+                None => Err(LoadPluginError::Unsupported),
+            }
+        }
+
+        fn load(
+            &self,
+            _request: &LoadRequest,
+            _cache: &CacheManager,
+        ) -> crate::plugin::loaders::LoadPluginResult<LoadResponse> {
+            Err(LoadPluginError::Unsupported)
+        }
+    }
+
     macro_rules! impl_reentrant_test_effect {
         ($effect:ty) => {
             impl Plugin for $effect {
@@ -1499,6 +1550,37 @@ mod tests {
             callback_completed.load(Ordering::SeqCst),
             "the old plugin destructor must be able to read the committed replacement"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_probe_preserves_claimed_loader_failure() -> Result<(), Box<dyn std::error::Error>> {
+        let manager = PluginManager::new();
+        manager.register_load_plugin(Arc::new(MetadataProbeLoader {
+            id: "declining-metadata-loader",
+            failure: None,
+        }));
+        assert!(
+            manager
+                .get_available_streams("/fixtures/custom.asset")?
+                .is_none(),
+            "all Unsupported responses must remain an unclaimed path"
+        );
+
+        manager.register_load_plugin(Arc::new(MetadataProbeLoader {
+            id: "claiming-metadata-loader",
+            failure: Some("fixture header is truncated"),
+        }));
+        let Err(error) = manager.get_available_streams("/fixtures/custom.asset") else {
+            return Err(std::io::Error::other(
+                "a claimed metadata failure must not become Ok(None)",
+            )
+            .into());
+        };
+        let message = error.to_string();
+        assert!(message.contains("fixture header is truncated"));
+        assert!(message.contains("/fixtures/custom.asset"));
+        assert!(!message.contains("No compatible load plugin"));
         Ok(())
     }
 }

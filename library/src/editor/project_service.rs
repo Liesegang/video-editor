@@ -682,7 +682,7 @@ impl ProjectManager {
         let mut assets_to_add = Vec::new();
 
         // 1. Try to get all streams
-        if let Some(streams) = self.plugin_manager.get_available_streams(path) {
+        if let Some(streams) = self.plugin_manager.get_available_streams(path)? {
             for stream in streams {
                 let suffix = if let Some(idx) = stream.stream_index {
                     format!(" [Stream {}: {:?}]", idx, stream.kind)
@@ -709,7 +709,7 @@ impl ProjectManager {
         if assets_to_add.is_empty() {
             // 1. Get Metadata (Single call)
             let (mut kind, duration, fps, width, height, frame_count) =
-                if let Some(meta) = self.plugin_manager.get_metadata(path) {
+                if let Some(meta) = self.plugin_manager.get_metadata(path)? {
                     (
                         meta.kind,
                         meta.duration,
