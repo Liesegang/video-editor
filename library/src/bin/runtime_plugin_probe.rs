@@ -319,7 +319,7 @@ fn verify_runtime_loader(manager: &PluginManager) -> anyhow::Result<()> {
     let path_text = path.to_string_lossy().into_owned();
     let result = (|| -> anyhow::Result<()> {
         let streams = manager
-            .get_available_streams(&path_text)
+            .get_available_streams(&path_text)?
             .context("runtime Loader did not inspect its fixture path")?;
         let stream = streams
             .first()
