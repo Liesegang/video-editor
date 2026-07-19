@@ -115,6 +115,7 @@ class PreviewQaTests(unittest.TestCase):
             PREVIEW_QA.assert_space_pan(before, after),
             PREVIEW_QA.PAN_DELTA,
         )
+        self.assertTrue(PREVIEW_QA.pan_matches(before, after, PREVIEW_QA.PAN_DELTA))
 
         changed_zoom = PREVIEW_QA.preview_geometry(
             snapshot(pan_x=152.0, pan_y=164.0, zoom=1.1, auto_fit=False, frame=53)
