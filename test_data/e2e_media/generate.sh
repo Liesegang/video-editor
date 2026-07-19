@@ -106,7 +106,7 @@ ffmpeg_run \
     -f lavfi -i "sine=frequency=880:sample_rate=8000:duration=3" \
     -filter_complex "[1:a]pan=stereo|c0=c0|c1=0*c0[left];[2:a]pan=stereo|c0=0*c0|c1=c0[right]" \
     -map 0:v:0 -map "[left]" -map "[right]" \
-    -c:v ffv1 -level 3 -c:a pcm_s16le "$fixture_dir/multi_audio.mkv"
+    -c:v ffv1 -level 3 -c:a aac -b:a 48k "$fixture_dir/multi_audio.mkv"
 
 # Embedded audio plus deliberately mismatched stream durations: the video has
 # exactly 12 frames/1 second while the audio and container continue for 2
