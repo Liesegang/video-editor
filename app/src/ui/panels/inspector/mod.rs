@@ -1799,6 +1799,9 @@ fn is_clip_timing_property(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::generator_node;
+    use library::editor::project_service::GeneratorNodeRequest;
+    use library::model::frame::color::Color;
     use library::model::project::NodeContainer;
     use library::model::property::Property;
     use library::plugin::{EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY};
@@ -1811,8 +1814,8 @@ mod tests {
         let track_id = track.id;
         project.add_track(track);
         project.add_composition(composition);
-        let first = Node::new("first", NodeContent::Merge);
-        let second = Node::new("second", NodeContent::Merge);
+        let first = Node::new_merge("first");
+        let second = Node::new_merge("second");
         let mut clip = Clip::new("clip", 2.0, 4.0);
         let clip_id = clip.id;
         let first_id = first.id;
@@ -1843,7 +1846,7 @@ mod tests {
         let track_id = track.id;
         project.add_track(track);
         project.add_composition(composition);
-        let node = Node::new("leaf", NodeContent::Merge);
+        let node = Node::new_merge("leaf");
         let node_id = node.id;
         let clip = Clip::new("clip", 3.0, 5.0);
         let clip_id = clip.id;
@@ -1902,7 +1905,7 @@ mod tests {
         let other_track_id = other_track.id;
         let mut other_clip = Clip::new("other clip", 0.0, 1.0);
         let other_clip_id = other_clip.id;
-        let other_node = Node::new("other node", NodeContent::Merge);
+        let other_node = Node::new_merge("other node");
         let other_node_id = other_node.id;
         other_clip.node_ids.push(other_node_id);
         project.add_track(other_track);
@@ -1926,14 +1929,20 @@ mod tests {
 
     #[test]
     fn structural_status_follows_content_wires_to_the_explicit_result() {
-        let source = Node::new("Title", NodeContent::Generator(GeneratorContent::Text));
+        let source = generator_node(
+            "Title",
+            GeneratorNodeRequest::Text {
+                text: "Title".to_string(),
+                font: "Arial".to_string(),
+            },
+        );
         let applied = PluginManager::default()
             .create_style_operation_node("fill")
             .unwrap();
         let disconnected = PluginManager::default()
             .create_effect_operation_node("blur")
             .unwrap();
-        let result = Node::new("Composite", NodeContent::Merge);
+        let result = Node::new_merge("Composite");
         let connections = vec![
             ProjectConnection::new(
                 library::model::project::PortAddress::new(
@@ -2043,7 +2052,7 @@ mod tests {
 
     #[test]
     fn facade_output_mode_distinguishes_explicit_children_and_no_output() {
-        let result = Node::new("Composite", NodeContent::Merge);
+        let result = Node::new_merge("Composite");
         let nodes = [result.clone()];
 
         for owner_kind in [
@@ -2213,14 +2222,16 @@ mod tests {
 
     #[test]
     fn value_nodes_are_timing_values_and_never_visual_sources() {
-        let source = Node::new(
+        let source = generator_node(
             "Solid",
-            NodeContent::Generator(GeneratorContent::Solid),
+            GeneratorNodeRequest::Solid {
+                color: Color::black(),
+            },
         );
         let source_id = source.id;
         let value = Node::new_time_modulo("Time Modulo");
         let value_id = value.id;
-        let merge = Node::new("Merge", NodeContent::Merge);
+        let merge = Node::new_merge("Merge");
         let nodes = vec![source, value, merge];
 
         assert_eq!(

@@ -1,15 +1,18 @@
+mod support;
+
 use std::sync::Arc;
 
 use library::core::framing::FrameEvaluator;
+use library::editor::project_service::GeneratorNodeRequest;
 use library::model::Track;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameGroupKind, FrameItem};
 use library::model::project::{Composition, NodeContainer, Project, ProjectGraphError};
-use library::model::property::{Property, PropertyValue};
-use library::model::{GeneratorContent, Node, NodeContent};
 use library::plugin::properties::ConstantEvaluator;
 use library::plugin::{PluginManager, PropertyEvaluatorRegistry};
 use uuid::Uuid;
+
+use support::generator_node;
 
 fn project_with_tracks(track_names: &[&str]) -> (Project, Uuid, Vec<Uuid>) {
     assert!(!track_names.is_empty());
@@ -32,13 +35,11 @@ fn project_with_tracks(track_names: &[&str]) -> (Project, Uuid, Vec<Uuid>) {
     // item per Track instead of collapsing empty aggregates into a single
     // Composition absence.
     for (index, track_id) in track_ids.iter().copied().enumerate() {
-        let mut node = Node::new(
+        let node = generator_node(
             &format!("solid {index}"),
-            NodeContent::Generator(GeneratorContent::Solid),
-        );
-        node.properties.set(
-            "color".to_string(),
-            Property::constant(PropertyValue::Color(Color::black())),
+            GeneratorNodeRequest::Solid {
+                color: Color::black(),
+            },
         );
         let node_id = node.id;
         project.add_node(node);

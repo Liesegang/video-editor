@@ -1381,8 +1381,11 @@ pub(super) fn get_clips_in_box(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::generator_node;
+    use library::editor::project_service::GeneratorNodeRequest;
+    use library::model::frame::color::Color;
     use library::model::project::{NodeContainer, PortAddress};
-    use library::model::{Asset, GeneratorContent, MediaContent};
+    use library::model::{Asset, MediaContent};
     use library::plugin::PluginManager;
 
     fn project_with_clip(name: &str) -> (Project, Uuid) {
@@ -1409,9 +1412,11 @@ mod tests {
         attach_node(
             &mut project,
             clip_id,
-            Node::new(
+            generator_node(
                 "Unreachable",
-                NodeContent::Generator(GeneratorContent::Shape),
+                GeneratorNodeRequest::Shape {
+                    path: "M 0 0 H 100 V 100 Z".to_string(),
+                },
             ),
         );
         let source_id = attach_node(&mut project, clip_id, source);
@@ -1434,11 +1439,7 @@ mod tests {
     #[test]
     fn value_output_is_never_projected_as_a_timeline_image_source() {
         let (mut project, clip_id) = project_with_clip("value output");
-        let value_id = attach_node(
-            &mut project,
-            clip_id,
-            Node::new_time_modulo("Time Modulo"),
-        );
+        let value_id = attach_node(&mut project, clip_id, Node::new_time_modulo("Time Modulo"));
         project.get_clip_mut(clip_id).unwrap().output_node_id = Some(value_id);
 
         let graph = clip_graph_nodes(project.get_clip(clip_id).unwrap(), &project);
@@ -1448,21 +1449,26 @@ mod tests {
 
     #[test]
     fn style_results_preserve_reachable_text_and_shape_semantics() {
-        for (generator, name, label, color) in [
+        for (request, name, label, color) in [
             (
-                GeneratorContent::Text,
+                GeneratorNodeRequest::Text {
+                    text: "Main title".to_string(),
+                    font: "Arial".to_string(),
+                },
                 "Main title",
                 "Text · Main title",
                 (200, 150, 100),
             ),
             (
-                GeneratorContent::Shape,
+                GeneratorNodeRequest::Shape {
+                    path: "M 0 0 H 100 V 100 Z".to_string(),
+                },
                 "Logo path",
                 "Shape · Logo path",
                 (200, 200, 100),
             ),
         ] {
-            let source = Node::new(name, NodeContent::Generator(generator));
+            let source = generator_node(name, request);
             let (mut project, clip_id, source_id, style_id) = style_result_project(source);
             let clip = project.get_clip(clip_id).unwrap();
             let graph = clip_graph_nodes(clip, &project);
@@ -1485,13 +1491,13 @@ mod tests {
         asset.stream_index = Some(2);
         let asset_id = asset.id;
         project.assets.push(asset);
-        let media = Node::new(
+        let media = Node::new_media(
             "Dialog",
-            NodeContent::Media(MediaContent {
+            MediaContent {
                 asset_id,
                 stream_index: Some(2),
                 audio_stream_index: Some(7),
-            }),
+            },
         );
         let media_id = attach_node(&mut project, clip_id, media);
         let effect = PluginManager::default()
@@ -1543,32 +1549,35 @@ mod tests {
         let unreachable_id = attach_node(
             &mut project,
             clip_id,
-            Node::new(
+            generator_node(
                 "Unreachable text",
-                NodeContent::Generator(GeneratorContent::Text),
+                GeneratorNodeRequest::Text {
+                    text: "Unreachable text".to_string(),
+                    font: "Arial".to_string(),
+                },
             ),
         );
         let first_id = attach_node(
             &mut project,
             clip_id,
-            Node::new(
+            generator_node(
                 "First solid",
-                NodeContent::Generator(GeneratorContent::Solid),
+                GeneratorNodeRequest::Solid {
+                    color: Color::black(),
+                },
             ),
         );
         let second_id = attach_node(
             &mut project,
             clip_id,
-            Node::new(
+            generator_node(
                 "Second solid",
-                NodeContent::Generator(GeneratorContent::Solid),
+                GeneratorNodeRequest::Solid {
+                    color: Color::black(),
+                },
             ),
         );
-        let merge_id = attach_node(
-            &mut project,
-            clip_id,
-            Node::new("Result", NodeContent::Merge),
-        );
+        let merge_id = attach_node(&mut project, clip_id, Node::new_merge("Result"));
         let first_connection = project
             .connect_ports(
                 PortAddress::new(PortOwner::Node(first_id), IMAGE_OUTPUT_PORT),

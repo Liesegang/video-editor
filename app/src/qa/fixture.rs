@@ -6,7 +6,9 @@ use library::model::project::{
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{Property, PropertyValue, Vec2};
-use library::model::{Clip, Composition, Node, NodeContent, Project, Track};
+#[cfg(test)]
+use library::model::NodeContent;
+use library::model::{Clip, Composition, Node, Project, Track};
 use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
@@ -149,7 +151,7 @@ fn install_named(
         "opacity".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
     );
-    let mut merge = Node::new("QA Merge", NodeContent::Merge);
+    let mut merge = Node::new_merge("QA Merge");
     merge.id = E2E_MERGE_ID;
     merge.ui_position = [2670.0, 300.0];
 
@@ -270,7 +272,7 @@ fn install_named(
         "width".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(4.0))),
     );
-    let mut shape_merge = Node::new("QA Shape Merge", NodeContent::Merge);
+    let mut shape_merge = Node::new_merge("QA Shape Merge");
     shape_merge.id = E2E_SHAPE_MERGE_ID;
     shape_merge.ui_position = [1050.0, 980.0];
 

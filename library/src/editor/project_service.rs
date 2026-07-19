@@ -33,6 +33,22 @@ half4 main(float2 fragCoord) {
 }
 "#;
 
+#[cfg(test)]
+pub(crate) fn test_generator_node(name: &str, request: GeneratorNodeRequest) -> Node {
+    let manager = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("generator test factory"))),
+        Arc::new(PluginManager::default()),
+    );
+    let result = manager.create_generator_node(request, 1920, 1080, 1920, 1080);
+    assert!(
+        result.is_ok(),
+        "built-in Generator converter must create a complete test Node: {result:?}"
+    );
+    let mut node = result.unwrap_or_else(|_| Node::new_merge("invalid Generator test fallback"));
+    node.name = name.to_string();
+    node
+}
+
 /// Creation-only values for a generator Node. Authored values are materialized
 /// into `Node::properties`; `GeneratorContent` stores only the generator kind.
 #[derive(Clone, Debug, PartialEq)]
@@ -184,9 +200,8 @@ impl ProjectManager {
             }
         };
 
-        let mut node = Node::new(name, NodeContent::Generator(content));
-        node.properties = properties;
-        Ok(node)
+        Node::new_generator(name, content, &definitions, properties)
+            .map_err(LibraryError::Validation)
     }
 
     /// Builds a detached Text -> Fill graph. Text produces only Shape; Fill is
@@ -247,7 +262,7 @@ impl ProjectManager {
         )?;
         let mut fill_node = self.plugin_manager.create_style_operation_node("fill")?;
         let mut stroke_node = self.plugin_manager.create_style_operation_node("stroke")?;
-        let mut merge_node = Node::new("Merge", NodeContent::Merge);
+        let mut merge_node = Node::new_merge("Merge");
         shape_node.ui_position = [0.0, 110.0];
         fill_node.ui_position = [360.0, 0.0];
         stroke_node.ui_position = [360.0, 220.0];
@@ -383,13 +398,13 @@ impl ProjectManager {
             PropertyValue::Number(OrderedFloat(speed)),
         )
         .map_err(LibraryError::Project)?;
-        let mut node = Node::new(
+        let mut node = Node::new_media(
             "Audio",
-            NodeContent::Media(MediaContent {
+            MediaContent {
                 asset_id: reference_id,
                 stream_index: None,
                 audio_stream_index: None,
-            }),
+            },
         );
 
         // Properties
@@ -470,13 +485,13 @@ impl ProjectManager {
             PropertyValue::Number(OrderedFloat(speed)),
         )
         .map_err(LibraryError::Project)?;
-        let mut node = Node::new(
+        let mut node = Node::new_media(
             "Video",
-            NodeContent::Media(MediaContent {
+            MediaContent {
                 asset_id: reference_id,
                 stream_index: None,
                 audio_stream_index: None,
-            }),
+            },
         );
         node.properties = props;
 
@@ -512,13 +527,13 @@ impl ProjectManager {
             )),
         );
 
-        let mut node = Node::new(
+        let mut node = Node::new_media(
             "Image",
-            NodeContent::Media(MediaContent {
+            MediaContent {
                 asset_id: reference_id,
                 stream_index: None,
                 audio_stream_index: None,
-            }),
+            },
         );
         node.properties = props;
 
@@ -595,12 +610,12 @@ impl ProjectManager {
         start_time: f64,
         duration: f64,
     ) -> Result<ClipBundle, LibraryError> {
-        let node = Node::new(
+        let node = Node::new_reference(
             "Reference",
-            NodeContent::Reference(ReferenceContent {
+            ReferenceContent {
                 target_id: target_node_id,
                 sync_global_time: false,
-            }),
+            },
         );
         Ok(ClipBundle::with_primary_node(
             Clip::new("Reference Clip", start_time, duration),
@@ -1365,7 +1380,12 @@ mod keyframe_tests {
     #[test]
     fn project_manager_exposes_identity_based_keyframe_edits() {
         let mut project = Project::new("keyframe service");
-        let node = Node::new("solid", NodeContent::Generator(GeneratorContent::Solid));
+        let node = test_generator_node(
+            "solid",
+            GeneratorNodeRequest::Solid {
+                color: Color::white(),
+            },
+        );
         let node_id = node.id;
         project.add_node(node);
         let shared = Arc::new(RwLock::new(project));

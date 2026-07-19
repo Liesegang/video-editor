@@ -1,6 +1,10 @@
+mod support;
+
 use std::sync::{Arc, RwLock};
 
 use library::editor::handlers::clip_handler::ClipHandler;
+use library::editor::project_service::GeneratorNodeRequest;
+use library::model::frame::color::Color;
 use library::model::project::{
     Composition, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer, PortAddress, PortOwner,
     Project, TIME_PORT,
@@ -11,6 +15,8 @@ use library::model::{
 };
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
+
+use support::generator_node;
 
 fn add_composition(project: &mut Project, name: &str) -> (Uuid, Uuid) {
     let (composition, track) = Composition::new(name, 1920, 1080, 30.0, 10.0);
@@ -30,12 +36,12 @@ fn add_clip(project: &mut Project, track_id: Uuid, name: &str, start: f64) -> Uu
 }
 
 fn solid(name: &str) -> Node {
-    let mut node = Node::new(name, NodeContent::Generator(GeneratorContent::Solid));
-    node.properties.set(
-        "color".to_string(),
-        Property::constant(PropertyValue::Color(Default::default())),
-    );
-    node
+    generator_node(
+        name,
+        GeneratorNodeRequest::Solid {
+            color: Color::default(),
+        },
+    )
 }
 
 fn add_node(project: &mut Project, clip_id: Uuid, node: Node) -> Uuid {
@@ -173,10 +179,12 @@ fn clip_timing_metadata_validates_freeze_and_never_duplicates_structural_values(
 
 #[test]
 fn node_properties_are_the_only_generator_value_authority() {
-    let mut node = Node::new("Text", NodeContent::Generator(GeneratorContent::Text));
-    node.properties.set(
-        "text".to_string(),
-        Property::constant(PropertyValue::String("before".to_string())),
+    let mut node = generator_node(
+        "Text",
+        GeneratorNodeRequest::Text {
+            text: "before".to_string(),
+            font: "Arial".to_string(),
+        },
     );
     node.properties.set(
         "font_family".to_string(),
@@ -340,12 +348,12 @@ fn removal_cleans_owned_registries_output_pointers_references_and_connections() 
     let reference_id = add_node(
         &mut project,
         second_clip_id,
-        Node::new(
+        Node::new_reference(
             "reference",
-            NodeContent::Reference(ReferenceContent {
+            ReferenceContent {
                 target_id: first_composition_id,
                 sync_global_time: false,
-            }),
+            },
         ),
     );
     project

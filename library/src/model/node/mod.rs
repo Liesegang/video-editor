@@ -274,6 +274,15 @@ impl Clip {
 
 /// A leaf graph node. It owns media/generator/reference behavior and render
 /// properties, but never timeline timing or containment.
+///
+/// Generic construction is intentionally unavailable: native Generators need
+/// converter- and canvas-backed property definitions, while the other variants
+/// have typed constructors.
+///
+/// ```compile_fail
+/// use library::model::{GeneratorContent, Node, NodeContent};
+/// let _ = Node::new("sparse", NodeContent::Generator(GeneratorContent::Text));
+/// ```
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
@@ -296,13 +305,96 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(name: &str, content: NodeContent) -> Self {
-        let properties = match &content {
-            NodeContent::Value(value) => {
-                PropertyMap::from_definitions(value.property_definitions())
+    /// Creates an ordered variadic image compositor.
+    pub fn new_merge(name: &str) -> Self {
+        Self::with_properties(name, NodeContent::Merge, PropertyMap::new())
+    }
+
+    /// Creates a media source. Converter-backed media properties are populated
+    /// by the editor factory that owns the relevant asset/canvas context.
+    pub fn new_media(name: &str, content: MediaContent) -> Self {
+        Self::with_properties(name, NodeContent::Media(content), PropertyMap::new())
+    }
+
+    /// Creates a composition/reference source.
+    pub fn new_reference(name: &str, content: ReferenceContent) -> Self {
+        Self::with_properties(name, NodeContent::Reference(content), PropertyMap::new())
+    }
+
+    /// Completion point for descriptor-backed Plugin operations. Downstream
+    /// callers cannot invoke this; `OperationDescriptor::create_node` owns the
+    /// public construction path and immediately materializes its definitions.
+    pub(crate) fn new_plugin_operation(name: &str, content: PluginOperationContent) -> Self {
+        Self::with_properties(
+            name,
+            NodeContent::PluginOperation(content),
+            PropertyMap::new(),
+        )
+    }
+
+    /// Validated completion point for converter-backed native Generators.
+    /// Public callers must use `ProjectManager::create_generator_node`, so a
+    /// Generator cannot be authored without the complete converter contract.
+    pub(crate) fn new_generator(
+        name: &str,
+        content: GeneratorContent,
+        definitions: &[PropertyDefinition],
+        properties: PropertyMap,
+    ) -> Result<Self, String> {
+        if definitions.is_empty() {
+            return Err("Generator converter declared no properties".to_string());
+        }
+
+        let mut definition_names = std::collections::HashSet::with_capacity(definitions.len());
+        for definition in definitions {
+            definition.validate_definition().map_err(|error| {
+                format!(
+                    "Generator converter property '{}' has invalid metadata: {error}",
+                    definition.name()
+                )
+            })?;
+            if !definition_names.insert(definition.name()) {
+                return Err(format!(
+                    "Generator converter declared duplicate property '{}'",
+                    definition.name()
+                ));
             }
-            _ => PropertyMap::new(),
-        };
+            let property = properties.get(definition.name()).ok_or_else(|| {
+                format!(
+                    "Generator factory omitted declared property '{}'",
+                    definition.name()
+                )
+            })?;
+            let value = property.get_static_value().ok_or_else(|| {
+                format!(
+                    "Generator factory property '{}' is not a constant value",
+                    definition.name()
+                )
+            })?;
+            definition.validate_value(value).map_err(|error| {
+                format!(
+                    "Generator factory property '{}' is invalid: {error}",
+                    definition.name()
+                )
+            })?;
+        }
+        if let Some((unknown, _)) = properties
+            .iter()
+            .find(|(name, _)| !definition_names.contains(name.as_str()))
+        {
+            return Err(format!(
+                "Generator factory produced undeclared property '{unknown}'"
+            ));
+        }
+
+        Ok(Self::with_properties(
+            name,
+            NodeContent::Generator(content),
+            properties,
+        ))
+    }
+
+    fn with_properties(name: &str, content: NodeContent, properties: PropertyMap) -> Self {
         Self {
             id: Uuid::new_v4(),
             name: name.to_string(),
@@ -321,9 +413,14 @@ impl Node {
     /// The dividend is deliberately not implicit: callers must wire a Number
     /// source (normally a container's internal Time output) to the `value`
     /// input. The authored period is initialized in the authoritative
-    /// [`PropertyMap`] by [`Node::new`].
+    /// [`PropertyMap`] by this constructor.
     pub fn new_time_modulo(name: &str) -> Self {
-        Self::new(name, NodeContent::Value(ValueContent::TimeModulo))
+        let content = ValueContent::TimeModulo;
+        Self::with_properties(
+            name,
+            NodeContent::Value(content),
+            PropertyMap::from_definitions(content.property_definitions()),
+        )
     }
 
     pub fn update_property_or_keyframe(
@@ -424,4 +521,97 @@ pub enum GeneratorContent {
 pub struct ReferenceContent {
     pub target_id: Uuid,
     pub sync_global_time: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::property::Property;
+
+    fn number_definition() -> PropertyDefinition {
+        PropertyDefinition::new(
+            "amount",
+            PropertyUiType::Float {
+                min: 0.0,
+                max: 100.0,
+                step: 1.0,
+                suffix: String::new(),
+                min_hard_limit: true,
+                max_hard_limit: true,
+            },
+            "Amount",
+            PropertyValue::Number(OrderedFloat(50.0)),
+        )
+    }
+
+    #[test]
+    fn generator_completion_requires_the_exact_constant_definition_contract() -> Result<(), String>
+    {
+        let definitions = vec![number_definition()];
+        let complete = PropertyMap::from_definitions(&definitions);
+        assert!(
+            Node::new_generator("complete", GeneratorContent::Solid, &definitions, complete,)
+                .is_ok()
+        );
+
+        let missing = match Node::new_generator(
+            "missing",
+            GeneratorContent::Solid,
+            &definitions,
+            PropertyMap::new(),
+        ) {
+            Ok(_) => return Err("missing Generator property was accepted".to_string()),
+            Err(error) => error,
+        };
+        assert!(missing.contains("omitted declared property 'amount'"));
+
+        let mut unknown = PropertyMap::from_definitions(&definitions);
+        unknown.set(
+            "typo".to_string(),
+            Property::constant(PropertyValue::Number(OrderedFloat(1.0))),
+        );
+        let unknown =
+            match Node::new_generator("unknown", GeneratorContent::Solid, &definitions, unknown) {
+                Ok(_) => return Err("undeclared Generator property was accepted".to_string()),
+                Err(error) => error,
+            };
+        assert!(unknown.contains("undeclared property 'typo'"));
+
+        let mut dynamic = PropertyMap::from_definitions(&definitions);
+        dynamic.set(
+            "amount".to_string(),
+            Property::expression("time".to_string()),
+        );
+        let dynamic =
+            match Node::new_generator("dynamic", GeneratorContent::Solid, &definitions, dynamic) {
+                Ok(_) => return Err("dynamic Generator initial value was accepted".to_string()),
+                Err(error) => error,
+            };
+        assert!(dynamic.contains("not a constant value"));
+
+        let mut invalid = PropertyMap::from_definitions(&definitions);
+        invalid.set(
+            "amount".to_string(),
+            Property::constant(PropertyValue::String("wrong".to_string())),
+        );
+        let invalid =
+            match Node::new_generator("invalid", GeneratorContent::Solid, &definitions, invalid) {
+                Ok(_) => return Err("invalid Generator property value was accepted".to_string()),
+                Err(error) => error,
+            };
+        assert!(invalid.contains("is invalid"));
+        Ok(())
+    }
+
+    #[test]
+    fn sparse_pre_v1_generator_still_deserializes_losslessly() -> Result<(), serde_json::Error> {
+        let mut sparse = Node::new_merge("persisted sparse generator");
+        sparse.content = NodeContent::Generator(GeneratorContent::Text);
+        let json = serde_json::to_string(&sparse)?;
+        let loaded: Node = serde_json::from_str(&json)?;
+
+        assert_eq!(loaded, sparse);
+        assert!(loaded.properties.iter().next().is_none());
+        Ok(())
+    }
 }

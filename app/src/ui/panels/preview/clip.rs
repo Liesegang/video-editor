@@ -123,13 +123,15 @@ fn collect_visuals(
 #[cfg(test)]
 mod tests {
     use super::{from_evaluated_frame, visual_for_selection};
+    use crate::test_support::generator_node;
+    use library::editor::project_service::GeneratorNodeRequest;
     use library::model::frame::color::Color;
     use library::model::frame::entity::{
         FrameBounds, FrameContent, FrameGroup, FrameGroupKind, FrameItem, FrameObject,
     };
     use library::model::frame::frame::FrameInfo;
     use library::model::frame::transform::{Position, Transform};
-    use library::model::{BlendMode, GeneratorContent, Node, NodeContent};
+    use library::model::BlendMode;
     use ordered_float::OrderedFloat;
     use uuid::Uuid;
 
@@ -178,10 +180,20 @@ mod tests {
         let first_id = Uuid::new_v4();
         let second_id = Uuid::new_v4();
         let mut project = library::model::project::Project::new("preview");
-        let mut first = Node::new("first", NodeContent::Generator(GeneratorContent::SkSL));
+        let mut first = generator_node(
+            "first",
+            GeneratorNodeRequest::SkSL {
+                shader: "half4 main(float2 p) { return half4(1); }".to_string(),
+            },
+        );
         first.id = first_id;
         project.add_node(first);
-        let mut second = Node::new("second", NodeContent::Generator(GeneratorContent::SkSL));
+        let mut second = generator_node(
+            "second",
+            GeneratorNodeRequest::SkSL {
+                shader: "half4 main(float2 p) { return half4(1); }".to_string(),
+            },
+        );
         second.id = second_id;
         project.add_node(second);
         let frame = FrameInfo {
@@ -228,7 +240,12 @@ mod tests {
         let bottom_connection_id = Uuid::new_v4();
         let top_connection_id = Uuid::new_v4();
         let mut project = library::model::project::Project::new("preview fan-out");
-        let mut source = Node::new("source", NodeContent::Generator(GeneratorContent::SkSL));
+        let mut source = generator_node(
+            "source",
+            GeneratorNodeRequest::SkSL {
+                shader: "half4 main(float2 p) { return half4(1); }".to_string(),
+            },
+        );
         source.id = source_id;
         project.add_node(source);
         let mut top_branch = group(
@@ -298,7 +315,12 @@ mod tests {
             (composition_node_id, "composition node"),
             (track_node_id, "track node"),
         ] {
-            let mut node = Node::new(name, NodeContent::Generator(GeneratorContent::SkSL));
+            let mut node = generator_node(
+                name,
+                GeneratorNodeRequest::SkSL {
+                    shader: "half4 main(float2 p) { return half4(1); }".to_string(),
+                },
+            );
             node.id = id;
             project.add_node(node);
         }
@@ -339,7 +361,12 @@ mod tests {
     fn downstream_effector_transform_does_not_replace_source_edit_baseline() {
         let source_id = Uuid::new_v4();
         let mut project = library::model::project::Project::new("effector baseline");
-        let mut source = Node::new("shape", NodeContent::Generator(GeneratorContent::Shape));
+        let mut source = generator_node(
+            "shape",
+            GeneratorNodeRequest::Shape {
+                path: "M 0 0 H 100 V 100 Z".to_string(),
+            },
+        );
         source.id = source_id;
         project.add_node(source);
         let mut item = object(source_id);

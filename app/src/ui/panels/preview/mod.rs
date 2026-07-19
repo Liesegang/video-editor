@@ -1081,6 +1081,8 @@ pub fn preview_panel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::generator_node;
+    use library::editor::project_service::GeneratorNodeRequest;
     use std::cell::Cell;
 
     fn empty_preview_frame(time: f64) -> library::model::frame::frame::FrameInfo {
@@ -1603,15 +1605,17 @@ mod tests {
         use library::cache::CacheManager;
         use library::model::frame::transform::{Position, Scale, Transform};
         use library::model::property::{Property, PropertyValue, Vec2 as PropertyVec2};
-        use library::model::{GeneratorContent, Node, NodeContent};
+        use library::model::Node;
         use library::plugin::PluginManager;
         use library::rendering::renderer::Affine2D;
         use ordered_float::OrderedFloat;
 
         fn source_node() -> Node {
-            let mut source = Node::new(
+            let mut source = generator_node(
                 "Transformed source",
-                NodeContent::Generator(GeneratorContent::SkSL),
+                GeneratorNodeRequest::SkSL {
+                    shader: "half4 main(float2 p) { return half4(1); }".to_string(),
+                },
             );
             source.properties.set(
                 "position".to_string(),
@@ -1941,13 +1945,15 @@ mod tests {
     fn preview_actions_edit_the_evaluated_source_not_the_output_sink_or_history_alone() {
         use library::cache::CacheManager;
         use library::model::property::{Property, PropertyValue, Vec2};
-        use library::model::{GeneratorContent, Node, NodeContent};
         use library::plugin::PluginManager;
         use ordered_float::OrderedFloat;
 
-        let mut source = Node::new(
+        let mut source = generator_node(
             "Text source",
-            NodeContent::Generator(GeneratorContent::Text),
+            GeneratorNodeRequest::Text {
+                text: "Text source".to_string(),
+                font: "Arial".to_string(),
+            },
         );
         let source_id = source.id;
         source.properties.set(

@@ -1,3 +1,5 @@
+mod support;
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -5,6 +7,7 @@ use std::sync::{Arc, RwLock};
 use library::cache::CacheManager;
 use library::core::ensemble::target::EffectorTarget;
 use library::core::ensemble::types::{DecoratorConfig, EffectorConfig, EnsembleData};
+use library::editor::project_service::GeneratorNodeRequest;
 use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
@@ -16,14 +19,14 @@ use library::model::project::{
     ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::property::{Property, PropertyMap, PropertyValue, Vec2};
-use library::model::{
-    Clip, Composition, GeneratorContent, Node, NodeContainer, NodeContent, Project,
-};
+use library::model::{Clip, Composition, Node, NodeContainer, NodeContent, Project};
 use library::plugin::{ExportSettings, LoadPlugin, LoadRequest, NativeImageLoader, PluginManager};
 use library::rendering::renderer::{Affine2D, RenderOutput, Renderer, TextRasterRequest};
 use library::{ExportService, ProjectModel, ProjectService, RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
+
+use support::generator_node_for_canvas;
 
 const WIDTH: u32 = 128;
 const HEIGHT: u32 = 80;
@@ -62,25 +65,27 @@ fn stroke(plugins: &PluginManager, color: Color, width: f64, dash_array: &str) -
     node
 }
 
-fn base_node(plugins: &PluginManager, kind: &str, content: NodeContent) -> Node {
-    let converter = plugins.get_entity_converter(kind).unwrap();
-    let mut node = Node::new(kind, content);
-    node.properties = PropertyMap::from_definitions(&converter.get_property_definitions(
+fn base_node(name: &str, request: GeneratorNodeRequest) -> Node {
+    let mut node = generator_node_for_canvas(
+        name,
+        request,
         u64::from(WIDTH),
         u64::from(HEIGHT),
         u64::from(WIDTH),
         u64::from(HEIGHT),
-    ));
+    );
     set(&mut node.properties, "position", vec2(8.0, 8.0));
     set(&mut node.properties, "anchor", vec2(0.0, 0.0));
     node
 }
 
-fn text_node(plugins: &PluginManager, text: &str) -> Node {
+fn text_node(text: &str) -> Node {
     let mut node = base_node(
-        plugins,
         "text",
-        NodeContent::Generator(GeneratorContent::Text),
+        GeneratorNodeRequest::Text {
+            text: text.to_string(),
+            font: "Arial".to_string(),
+        },
     );
     set(
         &mut node.properties,
@@ -170,7 +175,7 @@ fn project_with_shape_graph(
     let output_id = if image_outputs.len() == 1 {
         image_outputs[0]
     } else {
-        let merge = Node::new("Style Merge", NodeContent::Merge);
+        let merge = Node::new_merge("Style Merge");
         let merge_id = merge.id;
         for (order, style_id) in image_outputs.into_iter().enumerate() {
             connections.push(ProjectConnection::new(
@@ -393,7 +398,7 @@ fn decorator(plugins: &PluginManager, target: &str) -> Node {
 #[test]
 fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() {
     let plugins = Arc::new(PluginManager::default());
-    let mut node = text_node(&plugins, "TEXT");
+    let mut node = text_node("TEXT");
     set(&mut node.properties, "position", vec2(14.0, 11.0));
     set(&mut node.properties, "scale", vec2(90.0, 110.0));
     set(&mut node.properties, "rotation", 4.0.into());
@@ -469,9 +474,10 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
     let plugins = Arc::new(PluginManager::default());
     let path = "M 0 0 L 42 0 L 42 27 L 0 27 Z";
     let mut node = base_node(
-        &plugins,
         "shape",
-        NodeContent::Generator(GeneratorContent::Shape),
+        GeneratorNodeRequest::Shape {
+            path: path.to_string(),
+        },
     );
     set(
         &mut node.properties,
@@ -588,9 +594,10 @@ half4 main(float2 fragCoord) {
 }
 "#;
     let mut node = base_node(
-        &plugins,
         "sksl",
-        NodeContent::Generator(GeneratorContent::SkSL),
+        GeneratorNodeRequest::SkSL {
+            shader: shader.to_string(),
+        },
     );
     set(
         &mut node.properties,
@@ -632,7 +639,7 @@ half4 main(float2 fragCoord) {
 #[test]
 fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
     let plugins = Arc::new(PluginManager::default());
-    let source = text_node(&plugins, "ABCD");
+    let source = text_node("ABCD");
     let mut step = effector(&plugins, "step_delay");
     set(&mut step.properties, "delay", 0.2.into());
     set(&mut step.properties, "duration", 0.2.into());
@@ -786,7 +793,7 @@ fn multiline_backplates_cover_char_line_block_and_follow_transforms() {
     let plugins = Arc::new(PluginManager::default());
     let mut hashes = Vec::new();
     for target in ["Char", "Line", "Block"] {
-        let node = text_node(&plugins, "A\nBBB");
+        let node = text_node("A\nBBB");
         let (project, _) = project_with_shape_graph(
             node,
             vec![decorator(&plugins, target)],
@@ -806,7 +813,7 @@ fn multiline_backplates_cover_char_line_block_and_follow_transforms() {
     );
 
     for target in ["Line", "Block"] {
-        let base = text_node(&plugins, "A\nBBB");
+        let base = text_node("A\nBBB");
         let backplate = decorator(&plugins, target);
         let (base_project, _) = project_with_shape_graph(
             base.clone(),
@@ -839,7 +846,7 @@ fn multiline_backplates_cover_char_line_block_and_follow_transforms() {
 fn effector_block_line_and_char_targets_are_distinct_in_multiline_pixels() {
     let plugins = Arc::new(PluginManager::default());
     let render_target = |target: &str| {
-        let node = text_node(&plugins, "AB\nCD");
+        let node = text_node("AB\nCD");
         let mut step = effector(&plugins, "step_delay");
         set(&mut step.properties, "delay", 0.3.into());
         set(&mut step.properties, "duration", 0.1.into());
@@ -874,13 +881,13 @@ fn effector_block_line_and_char_targets_are_distinct_in_multiline_pixels() {
 #[test]
 fn empty_text_is_safe_missing_text_is_validation_and_parts_is_render_error() {
     let plugins = Arc::new(PluginManager::default());
-    let empty_node = text_node(&plugins, "");
+    let empty_node = text_node("");
     let (empty_project, _) =
         project_with_shape_graph(empty_node, Vec::new(), default_text_styles(&plugins));
     let empty = preview(&empty_project, 0, &plugins).unwrap();
     assert_eq!(light_sum(&empty), 0);
 
-    let mut missing_node = text_node(&plugins, "missing");
+    let mut missing_node = text_node("missing");
     missing_node.properties = PropertyMap::new();
     let (missing_project, _) =
         project_with_shape_graph(missing_node, Vec::new(), default_text_styles(&plugins));

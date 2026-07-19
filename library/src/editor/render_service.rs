@@ -445,6 +445,7 @@ mod tests {
     use super::*;
     use crate::cache::CacheManager;
     use crate::core::framing::FrameEvaluator;
+    use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
     use crate::model::frame::color::Color;
     use crate::model::frame::frame::Region;
     use crate::model::project::{
@@ -452,7 +453,7 @@ mod tests {
         PortAddress, PortOwner,
     };
     use crate::model::property::{Property, PropertyValue};
-    use crate::model::{BlendMode, Clip, GeneratorContent, Node, NodeContent, Project, Track};
+    use crate::model::{BlendMode, Clip, Node, Project, Track};
     use crate::plugin::{EffectPlugin, Plugin};
     use crate::rendering::skia_renderer::SkiaRenderer;
     use ordered_float::OrderedFloat;
@@ -591,11 +592,7 @@ mod tests {
         let clip_id = clip.id;
         project.add_clip(clip);
         project.attach_clip_to_track(track_id, clip_id).unwrap();
-        let mut node = Node::new("solid", NodeContent::Generator(GeneratorContent::Solid));
-        node.properties.set(
-            "color".to_string(),
-            Property::constant(PropertyValue::Color(color)),
-        );
+        let node = test_generator_node("solid", GeneratorNodeRequest::Solid { color });
         let node_id = node.id;
         project.add_node(node);
         project
@@ -751,12 +748,12 @@ mod tests {
         project
             .attach_clip_to_track(parent_track_id, clip_id)
             .unwrap();
-        let mut reference = Node::new(
+        let mut reference = Node::new_reference(
             "nested instance",
-            NodeContent::Reference(crate::model::ReferenceContent {
+            crate::model::ReferenceContent {
                 target_id: nested_id,
                 sync_global_time: false,
-            }),
+            },
         );
         reference.properties.set(
             "opacity".into(),
@@ -841,15 +838,16 @@ mod tests {
         project.add_clip(clip);
         project.attach_clip_to_track(track_id, clip_id).unwrap();
 
-        let mut red = Node::new("red", NodeContent::Generator(GeneratorContent::Solid));
-        red.properties.set(
-            "color".to_string(),
-            Property::constant(PropertyValue::Color(Color {
-                r: 255,
-                g: 0,
-                b: 0,
-                a: 255,
-            })),
+        let red = test_generator_node(
+            "red",
+            GeneratorNodeRequest::Solid {
+                color: Color {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
+            },
         );
         let red_id = red.id;
         project.add_node(red);
@@ -857,15 +855,16 @@ mod tests {
             .attach_node_to_container(NodeContainer::Clip(clip_id), red_id)
             .unwrap();
 
-        let mut green = Node::new("green", NodeContent::Generator(GeneratorContent::Solid));
-        green.properties.set(
-            "color".to_string(),
-            Property::constant(PropertyValue::Color(Color {
-                r: 0,
-                g: 255,
-                b: 0,
-                a: 255,
-            })),
+        let mut green = test_generator_node(
+            "green",
+            GeneratorNodeRequest::Solid {
+                color: Color {
+                    r: 0,
+                    g: 255,
+                    b: 0,
+                    a: 255,
+                },
+            },
         );
         green.blend_mode = BlendMode::Multiply;
         let green_id = green.id;
@@ -874,7 +873,7 @@ mod tests {
             .attach_node_to_container(NodeContainer::Clip(clip_id), green_id)
             .unwrap();
 
-        let merge = Node::new("merge", NodeContent::Merge);
+        let merge = Node::new_merge("merge");
         let merge_id = merge.id;
         project.add_node(merge);
         project

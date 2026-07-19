@@ -473,7 +473,7 @@ fn merge_is_composited_before_effect_and_effect_is_applied_exactly_once() {
         },
         WIDTH as f64 / 2.0,
     );
-    let merge = Node::new("Merge", NodeContent::Merge);
+    let merge = Node::new_merge("Merge");
     let effect = plugins
         .create_effect_operation_node("post_composite_probe")
         .unwrap();

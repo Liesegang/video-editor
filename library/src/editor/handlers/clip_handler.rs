@@ -369,6 +369,8 @@ impl ClipHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
+    use crate::model::frame::color::Color;
     use crate::model::{Composition, Track};
 
     fn project_with_composition(name: &str) -> (Project, Uuid, Uuid) {
@@ -385,9 +387,11 @@ mod tests {
     fn bundle_insertion_sets_clip_output_and_track_order_atomically() {
         let (project, composition_id, track_id) = project_with_composition("test");
         let clip = Clip::new("clip", 1.0, 2.0);
-        let node = Node::new(
+        let node = test_generator_node(
             "solid",
-            NodeContent::Generator(crate::model::GeneratorContent::Solid),
+            GeneratorNodeRequest::Solid {
+                color: Color::white(),
+            },
         );
         let clip_id = clip.id;
         let node_id = node.id;
@@ -420,9 +424,11 @@ mod tests {
         let (project, composition_id, track_id) = project_with_composition("missing output");
         let baseline = project.clone();
         let clip = Clip::new("clip", 0.0, 1.0);
-        let solid = Node::new(
+        let solid = test_generator_node(
             "solid",
-            NodeContent::Generator(crate::model::GeneratorContent::Solid),
+            GeneratorNodeRequest::Solid {
+                color: Color::white(),
+            },
         );
         let project = Arc::new(RwLock::new(project));
         let error = ClipHandler::add_clip_to_track(
@@ -445,9 +451,11 @@ mod tests {
         let (project, composition_id, track_id) = project_with_composition("shape output");
         let baseline = project.clone();
         let clip = Clip::new("clip", 0.0, 1.0);
-        let shape = Node::new(
+        let shape = test_generator_node(
             "shape",
-            NodeContent::Generator(crate::model::GeneratorContent::Shape),
+            GeneratorNodeRequest::Shape {
+                path: "M 0 0 H 100 V 100 Z".to_string(),
+            },
         );
         let project = Arc::new(RwLock::new(project));
         let error = ClipHandler::add_clip_to_track(
@@ -484,12 +492,12 @@ mod tests {
             .attach_track_to_composition(child_id, child_second_track_id)
             .unwrap();
 
-        let reference_node = Node::new(
+        let reference_node = Node::new_reference(
             "reference to parent",
-            NodeContent::Reference(ReferenceContent {
+            ReferenceContent {
                 target_id: parent_id,
                 sync_global_time: false,
-            }),
+            },
         );
         let reference_id = reference_node.id;
         let mut reference_clip = Clip::new("reference", 0.0, 10.0);

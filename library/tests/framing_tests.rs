@@ -2,7 +2,7 @@ use library::model::asset::{Asset, AssetKind};
 use library::model::frame::entity::FrameContent;
 use library::model::project::Composition;
 use library::model::property::{Property, PropertyValue};
-use library::model::{MediaContent, Node, NodeContent, Project};
+use library::model::{MediaContent, Node, Project};
 use library::plugin::entity_converter::{FrameEvaluationContext, VideoEntityConverterPlugin};
 use library::plugin::properties::ConstantEvaluator;
 use library::plugin::{EntityConverterPlugin, PropertyEvaluatorRegistry};
@@ -22,13 +22,13 @@ fn video_converter_preserves_clip_local_source_time_and_stream() {
     let asset_id = asset.id;
     project.assets.push(asset);
 
-    let mut node = Node::new(
+    let mut node = Node::new_media(
         "Test Layer",
-        NodeContent::Media(MediaContent {
+        MediaContent {
             asset_id,
             stream_index: None,
             audio_stream_index: None,
-        }),
+        },
     );
     node.properties.set(
         "file_path".to_string(),

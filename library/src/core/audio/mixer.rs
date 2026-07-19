@@ -702,13 +702,13 @@ mod tests {
                 .unwrap(),
             );
         }
-        let mut node = Node::new(
+        let mut node = Node::new_media(
             "audio",
-            NodeContent::Media(MediaContent {
+            MediaContent {
                 asset_id: asset.id,
                 stream_index: is_video.then_some(0),
                 audio_stream_index,
-            }),
+            },
         );
         node.enabled = enabled;
         let node_id = node.id;
@@ -1010,13 +1010,13 @@ mod tests {
         asset.stream_index = Some(0);
         let asset_id = asset.id;
         project.assets.push(asset);
-        let node = Node::new(
+        let node = Node::new_media(
             "audio stream two",
-            NodeContent::Media(MediaContent {
+            MediaContent {
                 asset_id,
                 stream_index: Some(0),
                 audio_stream_index: Some(2),
-            }),
+            },
         );
         let node_id = node.id;
         project.add_node(node);
