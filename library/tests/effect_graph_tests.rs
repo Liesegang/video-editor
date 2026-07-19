@@ -13,7 +13,7 @@ use library::model::frame::frame::FrameInfo;
 use library::model::project::{
     Composition, EvalOutput, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
     NodeGraphBundle, PortAddress, PortDataType, PortDefinition, PortExposure, PortOwner, PortSide,
-    Project, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    Project, ProjectConnection, TIME_PORT,
 };
 use library::model::property::{Keyframe, Property, PropertyValue, Vec2};
 use library::model::{Clip, Node, NodeContent};
@@ -57,14 +57,6 @@ fn image_wire(from: Uuid, to: Uuid) -> ProjectConnection {
     ProjectConnection::new(
         PortAddress::new(PortOwner::Node(from), IMAGE_OUTPUT_PORT),
         PortAddress::new(PortOwner::Node(to), IMAGE_INPUT_PORT),
-        0,
-    )
-}
-
-fn shape_wire(from: Uuid, to: Uuid) -> ProjectConnection {
-    ProjectConnection::new(
-        PortAddress::new(PortOwner::Node(from), SHAPE_OUTPUT_PORT),
-        PortAddress::new(PortOwner::Node(to), SHAPE_INPUT_PORT),
         0,
     )
 }
@@ -159,7 +151,6 @@ fn effect_descriptor_factory_materializes_defaults_and_distinct_image_ports() {
         assert_eq!(operation.category, EFFECT_CATEGORY);
         assert_eq!(operation.operation, EFFECT_APPLY_OPERATION);
         assert_eq!(operation.component_id, component_id);
-        assert!(node.effects.is_empty());
         for definition in descriptor.properties() {
             assert_eq!(
                 node.properties
@@ -525,72 +516,6 @@ fn merge_is_composited_before_effect_and_effect_is_applied_exactly_once() {
         .filter(|pixel| pixel[1] > 200 && pixel[0] < 30 && pixel[2] < 30)
         .count();
     assert!(green_pixels >= (WIDTH * HEIGHT) as usize - HEIGHT as usize);
-}
-
-#[test]
-fn descriptor_effect_pixels_match_legacy_embedded_effect_pixels() {
-    let plugins = Arc::new(PluginManager::default());
-    let manager = ProjectManager::new(
-        Arc::new(RwLock::new(Project::new("factory"))),
-        plugins.clone(),
-    );
-    let mut source = manager
-        .create_shape_node("M0 0 L4 0 L4 4 L0 4 Z", WIDTH, HEIGHT, 4, 4)
-        .unwrap();
-    let mut legacy_effect = plugins.get_default_effect_config("blur").unwrap();
-    legacy_effect.properties.set(
-        "sigma_x".into(),
-        Property::constant(PropertyValue::Number(OrderedFloat(1.5))),
-    );
-    legacy_effect.properties.set(
-        "sigma_y".into(),
-        Property::constant(PropertyValue::Number(OrderedFloat(1.5))),
-    );
-    source.effects.push(legacy_effect);
-    let legacy_fill = plugins.create_style_operation_node("fill").unwrap();
-    let source_id = source.id;
-    let legacy_fill_id = legacy_fill.id;
-    let (legacy_project, _) = project_with_graph(
-        NodeGraphBundle::new(
-            vec![source.clone(), legacy_fill],
-            vec![shape_wire(source_id, legacy_fill_id)],
-            Some(legacy_fill_id),
-        ),
-        0.0,
-        2.0,
-    );
-
-    source.effects.clear();
-    let fill = plugins.create_style_operation_node("fill").unwrap();
-    let mut effect = plugins.create_effect_operation_node("blur").unwrap();
-    set_constant(&mut effect, "sigma_x", 1.5.into());
-    set_constant(&mut effect, "sigma_y", 1.5.into());
-    let fill_id = fill.id;
-    let effect_id = effect.id;
-    let (graph_project, _) = project_with_graph(
-        NodeGraphBundle::new(
-            vec![source, fill, effect],
-            vec![
-                shape_wire(source_id, fill_id),
-                image_wire(fill_id, effect_id),
-            ],
-            Some(effect_id),
-        ),
-        0.0,
-        2.0,
-    );
-
-    assert_eq!(
-        object_source_ids(&evaluate(&graph_project, &plugins, 0).items),
-        vec![source_id],
-        "Style and Effect wrappers must not replace Shape source identity"
-    );
-
-    let legacy = preview(&legacy_project, &plugins, 0);
-    let graph = preview(&graph_project, &plugins, 0);
-    assert_eq!(graph.width, legacy.width);
-    assert_eq!(graph.height, legacy.height);
-    assert_eq!(graph.data, legacy.data);
 }
 
 #[test]

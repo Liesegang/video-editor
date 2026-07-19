@@ -10,7 +10,7 @@ use crate::model::asset::Asset;
 use crate::model::frame::color::Color;
 use crate::model::project::{Composition, NodeGraphBundle, Project};
 use crate::model::property::{KeyframeId, KeyframeUpdate, PropertyTarget, PropertyValue};
-use crate::model::{EffectConfig, Node, Track};
+use crate::model::{Node, Track};
 use crate::plugin::PluginManager;
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
@@ -496,23 +496,6 @@ impl EditorService {
         )
     }
 
-    pub fn add_effect_to_clip(&self, clip_id: Uuid, effect_id: &str) -> Result<(), LibraryError> {
-        self.project_manager
-            .add_effect(PropertyOwner::Clip(clip_id), effect_id)
-    }
-
-    pub fn add_effect(&self, owner: PropertyOwner, effect_id: &str) -> Result<(), LibraryError> {
-        self.project_manager.add_effect(owner, effect_id)
-    }
-
-    pub fn update_effects(
-        &self,
-        owner: PropertyOwner,
-        effects: Vec<EffectConfig>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_effects(owner, effects)
-    }
-
     pub fn evaluate_property_value(
         &self,
         property: &crate::model::property::Property,
@@ -548,25 +531,6 @@ impl EditorService {
     ) -> Result<KeyframeId, LibraryError> {
         self.project_manager
             .add_keyframe_with_id(owner, target, property_key, time, value, easing)
-    }
-
-    pub fn add_effect_keyframe(
-        &self,
-        clip_id: Uuid,
-        effect_id: Uuid,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.add_keyframe(
-            PropertyOwner::Clip(clip_id),
-            PropertyTarget::Effect(effect_id),
-            property_key,
-            time,
-            value,
-            easing,
-        )
     }
 
     // Aliases & Sequences
@@ -672,38 +636,12 @@ impl EditorService {
             .map_err(|e| LibraryError::Runtime(format!("Failed to read project file: {}", e)))?;
         self.load_project(&content)
     }
-    pub fn update_node_styles(
-        &self,
-        node_id: Uuid,
-        styles: Vec<crate::model::style::StyleInstance>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_node_styles(node_id, styles)
-    }
-
     pub fn add_effector(&self, node_id: Uuid, effector_type: &str) -> Result<(), LibraryError> {
         self.project_manager.add_effector(node_id, effector_type)
     }
 
-    pub fn update_node_effectors(
-        &self,
-        node_id: Uuid,
-        effectors: Vec<crate::model::ensemble::EffectorInstance>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager
-            .update_node_effectors(node_id, effectors)
-    }
-
     pub fn add_decorator(&self, node_id: Uuid, decorator_type: &str) -> Result<(), LibraryError> {
         self.project_manager.add_decorator(node_id, decorator_type)
-    }
-
-    pub fn update_node_decorators(
-        &self,
-        node_id: Uuid,
-        decorators: Vec<crate::model::ensemble::DecoratorInstance>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager
-            .update_node_decorators(node_id, decorators)
     }
 
     pub fn set_property_attribute(
@@ -717,80 +655,6 @@ impl EditorService {
         self.project_manager.set_property_attribute(
             owner,
             target,
-            property_key,
-            attribute_key,
-            attribute_value,
-        )
-    }
-
-    pub fn add_style_keyframe(
-        &self,
-        node_id: Uuid,
-        style_id: Uuid,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.add_keyframe(
-            PropertyOwner::Node(node_id),
-            PropertyTarget::Style(style_id),
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn update_effect_property_or_keyframe(
-        &self,
-        clip_id: Uuid,
-        effect_id: Uuid,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_property_or_keyframe(
-            PropertyOwner::Clip(clip_id),
-            PropertyTarget::Effect(effect_id),
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn update_style_property_or_keyframe(
-        &self,
-        node_id: Uuid,
-        style_id: Uuid,
-        property_key: &str,
-        time: f64,
-        value: PropertyValue,
-        easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_property_or_keyframe(
-            PropertyOwner::Node(node_id),
-            PropertyTarget::Style(style_id),
-            property_key,
-            time,
-            value,
-            easing,
-        )
-    }
-
-    pub fn set_style_property_attribute(
-        &self,
-        node_id: Uuid,
-        style_id: Uuid,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.set_property_attribute(
-            PropertyOwner::Node(node_id),
-            PropertyTarget::Style(style_id),
             property_key,
             attribute_key,
             attribute_value,
@@ -811,26 +675,5 @@ impl EditorService {
             attribute_key,
             attribute_value,
         )
-    }
-
-    pub fn set_effect_property_attribute(
-        &self,
-        clip_id: Uuid,
-        effect_id: Uuid,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.set_property_attribute(
-            PropertyOwner::Clip(clip_id),
-            PropertyTarget::Effect(effect_id),
-            property_key,
-            attribute_key,
-            attribute_value,
-        )
-    }
-
-    pub fn add_style(&self, node_id: Uuid, style_type: &str) -> Result<(), LibraryError> {
-        self.project_manager.add_style_to_node(node_id, style_type)
     }
 }

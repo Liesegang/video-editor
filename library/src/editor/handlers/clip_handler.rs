@@ -8,7 +8,7 @@ use super::property_ops::{PropertyOwner, property_map_mut};
 use crate::error::LibraryError;
 use crate::model::project::{NodeContainer, NodeGraphBundle, Project};
 use crate::model::property::{PropertyTarget, PropertyValue};
-use crate::model::{Clip, EffectConfig, Node, NodeContent, ReferenceContent};
+use crate::model::{Clip, Node, NodeContent, ReferenceContent};
 
 /// A detached Clip graph prepared by the factory methods on ProjectManager.
 /// It is inserted into Project atomically by `add_clip_to_track`.
@@ -348,131 +348,6 @@ impl ClipHandler {
         Ok(())
     }
 
-    pub fn add_effect(
-        project: &Arc<RwLock<Project>>,
-        owner: PropertyOwner,
-        effect: EffectConfig,
-    ) -> Result<(), LibraryError> {
-        let mut project = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        match owner {
-            PropertyOwner::Clip(id) => project
-                .get_clip_mut(id)
-                .ok_or_else(|| LibraryError::Project(format!("Clip {id} not found")))?
-                .effects
-                .push(effect),
-            PropertyOwner::Node(id) => project
-                .get_node_mut(id)
-                .ok_or_else(|| LibraryError::Project(format!("Node {id} not found")))?
-                .effects
-                .push(effect),
-        }
-        Ok(())
-    }
-
-    pub fn update_effects(
-        project: &Arc<RwLock<Project>>,
-        owner: PropertyOwner,
-        effects: Vec<EffectConfig>,
-    ) -> Result<(), LibraryError> {
-        let mut project = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        match owner {
-            PropertyOwner::Clip(id) => {
-                project
-                    .get_clip_mut(id)
-                    .ok_or_else(|| LibraryError::Project(format!("Clip {id} not found")))?
-                    .effects = effects;
-            }
-            PropertyOwner::Node(id) => {
-                project
-                    .get_node_mut(id)
-                    .ok_or_else(|| LibraryError::Project(format!("Node {id} not found")))?
-                    .effects = effects;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn update_node_styles(
-        project: &Arc<RwLock<Project>>,
-        node_id: Uuid,
-        styles: Vec<crate::model::style::StyleInstance>,
-    ) -> Result<(), LibraryError> {
-        let mut project = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        project
-            .get_node_mut(node_id)
-            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
-            .styles = styles;
-        Ok(())
-    }
-
-    pub fn add_effector(
-        project: &Arc<RwLock<Project>>,
-        node_id: Uuid,
-        effector: crate::model::ensemble::EffectorInstance,
-    ) -> Result<(), LibraryError> {
-        let mut project = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        project
-            .get_node_mut(node_id)
-            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
-            .effectors
-            .push(effector);
-        Ok(())
-    }
-
-    pub fn update_node_effectors(
-        project: &Arc<RwLock<Project>>,
-        node_id: Uuid,
-        effectors: Vec<crate::model::ensemble::EffectorInstance>,
-    ) -> Result<(), LibraryError> {
-        let mut project = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        project
-            .get_node_mut(node_id)
-            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
-            .effectors = effectors;
-        Ok(())
-    }
-
-    pub fn add_decorator(
-        project: &Arc<RwLock<Project>>,
-        node_id: Uuid,
-        decorator: crate::model::ensemble::DecoratorInstance,
-    ) -> Result<(), LibraryError> {
-        let mut project = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        project
-            .get_node_mut(node_id)
-            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
-            .decorators
-            .push(decorator);
-        Ok(())
-    }
-
-    pub fn update_node_decorators(
-        project: &Arc<RwLock<Project>>,
-        node_id: Uuid,
-        decorators: Vec<crate::model::ensemble::DecoratorInstance>,
-    ) -> Result<(), LibraryError> {
-        let mut project = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        project
-            .get_node_mut(node_id)
-            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
-            .decorators = decorators;
-        Ok(())
-    }
-
     pub fn set_property_attribute(
         project: &Arc<RwLock<Project>>,
         owner: PropertyOwner,
@@ -590,9 +465,11 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("does not declare an image output port"));
+        assert!(
+            error
+                .to_string()
+                .contains("does not declare an image output port")
+        );
         assert_eq!(*project.read().unwrap(), baseline);
     }
 

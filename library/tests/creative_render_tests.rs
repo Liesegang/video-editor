@@ -126,7 +126,10 @@ fn project_with_shape_graph(
     shape_operations: Vec<Node>,
     styles: Vec<Node>,
 ) -> (Project, Uuid) {
-    assert!(!styles.is_empty(), "Shape graphs need an explicit Style boundary");
+    assert!(
+        !styles.is_empty(),
+        "Shape graphs need an explicit Style boundary"
+    );
     let mut project = Project::new("creative render e2e");
     let (mut composition, track) =
         Composition::new("main", u64::from(WIDTH), u64::from(HEIGHT), FPS, 2.0);
@@ -711,10 +714,7 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
 
     let mut changed_seed = randomized.clone();
     set(
-        &mut changed_seed
-            .get_node_mut(random_id)
-            .unwrap()
-            .properties,
+        &mut changed_seed.get_node_mut(random_id).unwrap().properties,
         "seed",
         8.0.into(),
     );
@@ -743,11 +743,7 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
     service.add_effector(node_id, "opacity").unwrap();
     service.add_decorator(node_id, "backplate").unwrap();
     let locked = shared.read().unwrap();
-    let edited = locked.get_node(node_id).unwrap();
-    assert!(edited.effectors.is_empty());
-    assert!(edited.decorators.is_empty());
-    assert!(edited.styles.is_empty());
-    assert!(edited.effects.is_empty());
+    assert!(locked.get_node(node_id).is_some());
     let opacity_node = locked
         .nodes
         .values()
@@ -854,11 +850,8 @@ fn effector_block_line_and_char_targets_are_distinct_in_multiline_pixels() {
             "target",
             PropertyValue::String(target.to_string()),
         );
-        let (project, _) = project_with_shape_graph(
-            node,
-            vec![step],
-            default_text_styles(&plugins),
-        );
+        let (project, _) =
+            project_with_shape_graph(node, vec![step], default_text_styles(&plugins));
         preview(&project, 2, &plugins).unwrap()
     };
 
@@ -891,7 +884,12 @@ fn empty_text_is_safe_missing_text_is_validation_and_parts_is_render_error() {
     missing_node.properties = PropertyMap::new();
     let (missing_project, _) =
         project_with_shape_graph(missing_node, Vec::new(), default_text_styles(&plugins));
-    assert!(evaluate(&missing_project, 0, &plugins).unwrap().items.is_empty());
+    assert!(
+        evaluate(&missing_project, 0, &plugins)
+            .unwrap()
+            .items
+            .is_empty()
+    );
 
     let styles = vec![StyleConfig {
         id: Uuid::new_v4(),

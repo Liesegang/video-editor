@@ -1,4 +1,3 @@
-use crate::model::EffectConfig;
 use crate::model::Node;
 use crate::model::Project;
 use crate::model::frame::entity::FrameObject;
@@ -239,28 +238,6 @@ impl<'a> FrameEvaluationContext<'a> {
             rotation,
             opacity: opacity / 100.0,
         }
-    }
-
-    pub fn build_image_effects(
-        &self,
-        effects: &[EffectConfig],
-        time: f64,
-    ) -> Vec<crate::model::frame::effect::ImageEffect> {
-        use crate::model::frame::effect::ImageEffect;
-        effects
-            .iter()
-            .map(|e| {
-                let mut properties = std::collections::HashMap::new();
-                for (key, prop) in e.properties.iter() {
-                    let val = self.evaluate_property_value(prop, &e.properties, time);
-                    properties.insert(key.clone(), val);
-                }
-                ImageEffect {
-                    effect_type: e.effect_type.clone(),
-                    properties,
-                }
-            })
-            .collect()
     }
 
     /// Evaluates every property declared by an operation descriptor from its

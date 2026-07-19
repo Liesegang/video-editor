@@ -13,7 +13,7 @@ use crate::model::property::{
     PropertyValue,
 };
 use crate::model::{
-    Clip, EffectConfig, GeneratorContent, MediaContent, Node, NodeContent, ReferenceContent, Track,
+    Clip, GeneratorContent, MediaContent, Node, NodeContent, ReferenceContent, Track,
 };
 use crate::plugin::PluginManager;
 use crate::plugin::entity_converter::measure_text_size;
@@ -1083,36 +1083,6 @@ impl ProjectManager {
         )
     }
 
-    pub fn add_effect(&self, owner: PropertyOwner, effect_id: &str) -> Result<(), LibraryError> {
-        let effect_config = self
-            .plugin_manager
-            .get_default_effect_config(effect_id)
-            .ok_or_else(|| {
-                LibraryError::Project(format!(
-                    "Default config for effect '{}' not found",
-                    effect_id
-                ))
-            })?;
-
-        handlers::clip_handler::ClipHandler::add_effect(&self.project, owner, effect_config)
-    }
-
-    pub fn update_effects(
-        &self,
-        owner: PropertyOwner,
-        effects: Vec<EffectConfig>,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_effects(&self.project, owner, effects)
-    }
-
-    pub fn update_node_styles(
-        &self,
-        node_id: Uuid,
-        styles: Vec<crate::model::style::StyleInstance>,
-    ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_node_styles(&self.project, node_id, styles)
-    }
-
     fn insert_shape_operation_after(
         &self,
         node_id: Uuid,
@@ -1145,8 +1115,7 @@ impl ProjectManager {
                     "Shape chain from Node {node_id} contains a cycle"
                 )));
             }
-            let terminal_output =
-                PortAddress::new(PortOwner::Node(terminal_id), SHAPE_OUTPUT_PORT);
+            let terminal_output = PortAddress::new(PortOwner::Node(terminal_id), SHAPE_OUTPUT_PORT);
             let outgoing = project
                 .connections
                 .iter()
@@ -1202,8 +1171,7 @@ impl ProjectManager {
             0,
         )];
         connections.extend(outgoing.into_iter().map(|mut connection| {
-            connection.from =
-                PortAddress::new(PortOwner::Node(operation_id), SHAPE_OUTPUT_PORT);
+            connection.from = PortAddress::new(PortOwner::Node(operation_id), SHAPE_OUTPUT_PORT);
             connection
         }));
         updated
@@ -1223,41 +1191,11 @@ impl ProjectManager {
         self.insert_shape_operation_after(node_id, effector)
     }
 
-    pub fn update_node_effectors(
-        &self,
-        node_id: Uuid,
-        mut effectors: Vec<crate::model::ensemble::EffectorInstance>,
-    ) -> Result<(), LibraryError> {
-        for effector in &mut effectors {
-            let _known_plugin = self.plugin_manager.complete_effector_instance(effector);
-        }
-        handlers::clip_handler::ClipHandler::update_node_effectors(
-            &self.project,
-            node_id,
-            effectors,
-        )
-    }
-
     pub fn add_decorator(&self, node_id: Uuid, decorator_type: &str) -> Result<(), LibraryError> {
         let decorator = self
             .plugin_manager
             .create_decorator_operation_node(decorator_type)?;
         self.insert_shape_operation_after(node_id, decorator)
-    }
-
-    pub fn update_node_decorators(
-        &self,
-        node_id: Uuid,
-        mut decorators: Vec<crate::model::ensemble::DecoratorInstance>,
-    ) -> Result<(), LibraryError> {
-        for decorator in &mut decorators {
-            let _known_plugin = self.plugin_manager.complete_decorator_instance(decorator);
-        }
-        handlers::clip_handler::ClipHandler::update_node_decorators(
-            &self.project,
-            node_id,
-            decorators,
-        )
     }
 
     pub fn set_property_attribute(
@@ -1276,30 +1214,6 @@ impl ProjectManager {
             attribute_key,
             attribute_value,
         )
-    }
-
-    pub fn add_style_to_node(&self, node_id: Uuid, style_type: &str) -> Result<(), LibraryError> {
-        let plugin = self
-            .plugin_manager
-            .get_style_plugin(style_type)
-            .ok_or_else(|| {
-                LibraryError::Plugin(format!("Style plugin '{}' not found", style_type))
-            })?;
-
-        let properties =
-            crate::model::property::PropertyMap::from_definitions(&plugin.properties());
-
-        let instance = crate::model::style::StyleInstance::new(style_type, properties);
-        let mut project = self
-            .project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        project
-            .get_node_mut(node_id)
-            .ok_or_else(|| LibraryError::Validation(format!("Node {node_id} not found")))?
-            .styles
-            .push(instance);
-        Ok(())
     }
 
     pub fn get_inspector_definitions(
@@ -1419,26 +1333,7 @@ mod keyframe_tests {
     use super::*;
     use crate::editor::handlers::property_ops::PropertyOwner;
     use crate::model::project::NodeContainer;
-    use crate::model::property::{Property, PropertyMap, PropertyTarget, PropertyValue};
-    use crate::model::style::StyleInstance;
-    use crate::model::{DecoratorInstance, EffectorInstance};
-
-    fn labelled_properties(label: &str) -> PropertyMap {
-        let mut properties = PropertyMap::new();
-        properties.set(
-            "amount".to_string(),
-            Property::constant(PropertyValue::String(label.to_string())),
-        );
-        properties
-    }
-
-    fn effect(label: &str) -> EffectConfig {
-        EffectConfig {
-            id: Uuid::new_v4(),
-            effect_type: label.to_string(),
-            properties: labelled_properties(label),
-        }
-    }
+    use crate::model::property::{Property, PropertyTarget, PropertyValue};
 
     fn assert_converter_properties(
         manager: &ProjectManager,
@@ -1471,12 +1366,6 @@ mod keyframe_tests {
             Some(expected),
             "authoritative property {key} must match GeneratorContent"
         );
-    }
-
-    fn assert_bare_generator(node: &Node) {
-        assert!(node.styles.is_empty());
-        assert!(node.effectors.is_empty());
-        assert!(node.decorators.is_empty());
     }
 
     #[test]
@@ -1557,186 +1446,6 @@ mod keyframe_tests {
     }
 
     #[test]
-    fn reordered_nested_property_targets_keep_editing_the_same_instance_id() {
-        let mut project = Project::new("nested property identity");
-        let mut node = Node::new("solid", NodeContent::Generator(GeneratorContent::Solid));
-        let node_id = node.id;
-
-        let selected_effect = effect("selected effect");
-        let selected_effect_id = selected_effect.id;
-        node.effects = vec![selected_effect, effect("other effect")];
-
-        let selected_style =
-            StyleInstance::new("selected style", labelled_properties("selected style"));
-        let selected_style_id = selected_style.id;
-        node.styles = vec![
-            selected_style,
-            StyleInstance::new("other style", labelled_properties("other style")),
-        ];
-
-        let selected_effector = EffectorInstance::new(
-            "selected effector",
-            labelled_properties("selected effector"),
-        );
-        let selected_effector_id = selected_effector.id;
-        node.effectors = vec![
-            selected_effector,
-            EffectorInstance::new("other effector", labelled_properties("other effector")),
-        ];
-
-        let selected_decorator = DecoratorInstance::new(
-            "selected decorator",
-            labelled_properties("selected decorator"),
-        );
-        let selected_decorator_id = selected_decorator.id;
-        node.decorators = vec![
-            selected_decorator,
-            DecoratorInstance::new("other decorator", labelled_properties("other decorator")),
-        ];
-
-        node.effects.reverse();
-        node.styles.reverse();
-        node.effectors.reverse();
-        node.decorators.reverse();
-        project.add_node(node);
-
-        let mut clip = Clip::new("clip", 0.0, 1.0);
-        let clip_id = clip.id;
-        let selected_clip_effect = effect("selected clip effect");
-        let selected_clip_effect_id = selected_clip_effect.id;
-        clip.effects = vec![selected_clip_effect, effect("other clip effect")];
-        clip.effects.reverse();
-        project.add_clip(clip);
-
-        let shared = Arc::new(RwLock::new(project));
-        let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
-        let updates = [
-            (
-                PropertyOwner::Node(node_id),
-                PropertyTarget::Effect(selected_effect_id),
-                "updated effect",
-            ),
-            (
-                PropertyOwner::Node(node_id),
-                PropertyTarget::Style(selected_style_id),
-                "updated style",
-            ),
-            (
-                PropertyOwner::Node(node_id),
-                PropertyTarget::Effector(selected_effector_id),
-                "updated effector",
-            ),
-            (
-                PropertyOwner::Node(node_id),
-                PropertyTarget::Decorator(selected_decorator_id),
-                "updated decorator",
-            ),
-            (
-                PropertyOwner::Clip(clip_id),
-                PropertyTarget::Effect(selected_clip_effect_id),
-                "updated clip effect",
-            ),
-        ];
-
-        for (owner, target, value) in updates {
-            assert!(
-                manager
-                    .update_property_or_keyframe(
-                        owner,
-                        target,
-                        "amount",
-                        0.0,
-                        PropertyValue::String(value.to_string()),
-                        None,
-                    )
-                    .is_ok(),
-                "{target:?} should resolve by persistent id after reorder"
-            );
-        }
-
-        let read = shared
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let owner_targets = [
-            (
-                PropertyOwner::Node(node_id),
-                PropertyTarget::Effect(selected_effect_id),
-                "updated effect",
-            ),
-            (
-                PropertyOwner::Node(node_id),
-                PropertyTarget::Style(selected_style_id),
-                "updated style",
-            ),
-            (
-                PropertyOwner::Node(node_id),
-                PropertyTarget::Effector(selected_effector_id),
-                "updated effector",
-            ),
-            (
-                PropertyOwner::Node(node_id),
-                PropertyTarget::Decorator(selected_decorator_id),
-                "updated decorator",
-            ),
-            (
-                PropertyOwner::Clip(clip_id),
-                PropertyTarget::Effect(selected_clip_effect_id),
-                "updated clip effect",
-            ),
-        ];
-        for (owner, target, expected) in owner_targets {
-            let properties =
-                crate::editor::handlers::property_ops::property_map(&read, owner, target);
-            let Ok(properties) = properties else {
-                panic!("{target:?} should remain resolvable after reorder");
-            };
-            assert_eq!(
-                properties.get("amount").and_then(Property::value),
-                Some(&PropertyValue::String(expected.to_string()))
-            );
-        }
-    }
-
-    #[test]
-    fn missing_nested_instance_ids_are_explicit_errors() {
-        let mut project = Project::new("missing nested targets");
-        let node = Node::new("solid", NodeContent::Generator(GeneratorContent::Solid));
-        let node_id = node.id;
-        project.add_node(node);
-        let shared = Arc::new(RwLock::new(project));
-        let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
-
-        let missing_ids = [
-            (Uuid::new_v4(), "effect"),
-            (Uuid::new_v4(), "style"),
-            (Uuid::new_v4(), "effector"),
-            (Uuid::new_v4(), "decorator"),
-        ];
-        let targets = [
-            PropertyTarget::Effect(missing_ids[0].0),
-            PropertyTarget::Style(missing_ids[1].0),
-            PropertyTarget::Effector(missing_ids[2].0),
-            PropertyTarget::Decorator(missing_ids[3].0),
-        ];
-
-        for ((missing_id, kind), target) in missing_ids.into_iter().zip(targets) {
-            let result = manager.update_property_or_keyframe(
-                PropertyOwner::Node(node_id),
-                target,
-                "amount",
-                0.0,
-                PropertyValue::String("must not be written".to_string()),
-                None,
-            );
-            let Err(LibraryError::Project(message)) = result else {
-                panic!("missing {kind} id should return a project error");
-            };
-            assert!(message.contains(&missing_id.to_string()));
-            assert!(message.contains("not found"));
-        }
-    }
-
-    #[test]
     fn generator_factories_materialize_every_converter_default_and_content_value() {
         let shared = Arc::new(RwLock::new(Project::new("generator factories")));
         let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
@@ -1764,7 +1473,6 @@ mod keyframe_tests {
             "font_family",
             PropertyValue::String(font.to_string()),
         );
-        assert_bare_generator(&text_node);
 
         let path = "M 0 0 H 120 V 80 H 0 Z";
         let Ok(shape_node) = manager.create_shape_node(path, canvas.0, canvas.1, 120, 80) else {
@@ -1781,7 +1489,6 @@ mod keyframe_tests {
             (canvas.0, canvas.1, 120, 80),
         );
         assert_property_value(&shape_node, "path", PropertyValue::String(path.to_string()));
-        assert_bare_generator(&shape_node);
 
         let shader = "half4 main(float2 p) { return half4(1); }";
         let Ok(sksl_node) = manager.create_sksl_node(shader, canvas.0, canvas.1) else {
@@ -1802,7 +1509,6 @@ mod keyframe_tests {
             "shader",
             PropertyValue::String(shader.to_string()),
         );
-        assert_bare_generator(&sksl_node);
 
         let color = Color {
             r: 12,
@@ -1824,7 +1530,6 @@ mod keyframe_tests {
             (canvas.0, canvas.1, canvas.0, canvas.1),
         );
         assert_property_value(&solid_node, "color", PropertyValue::Color(color.clone()));
-        assert_bare_generator(&solid_node);
 
         for node in [&text_node, &shape_node, &sksl_node, &solid_node] {
             for required_transform in ["position", "scale", "rotation", "anchor", "opacity"] {
@@ -1895,8 +1600,6 @@ mod keyframe_tests {
             .find(|node| node.content == direct_text.content)
             .expect("text clip must retain the bare Shape source");
         assert_eq!(clip_text.properties, direct_text.properties);
-        assert_bare_generator(clip_text);
-        assert_bare_generator(&direct_text);
         assert!(matches!(
             text_bundle.primary_node().map(|node| &node.content),
             Some(NodeContent::PluginOperation(_))
@@ -1919,8 +1622,6 @@ mod keyframe_tests {
             .find(|node| node.content == direct_shape.content)
             .expect("shape clip must retain the bare Shape source");
         assert_eq!(clip_shape.properties, direct_shape.properties);
-        assert_bare_generator(clip_shape);
-        assert_bare_generator(&direct_shape);
         assert!(matches!(
             shape_bundle.primary_node().map(|node| &node.content),
             Some(NodeContent::Merge)
@@ -1960,8 +1661,7 @@ mod keyframe_tests {
         project.add_clip(clip);
         project.attach_clip_to_track(track_id, clip_id).unwrap();
         let shared = Arc::new(RwLock::new(project));
-        let manager =
-            ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
+        let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
         (shared, manager, track_id, clip_id)
     }
 
@@ -1994,7 +1694,10 @@ mod keyframe_tests {
                 )
             })
             .unwrap();
-        assert_eq!(project.find_node_container(operation.id), Some(NodeContainer::Clip(clip_id)));
+        assert_eq!(
+            project.find_node_container(operation.id),
+            Some(NodeContainer::Clip(clip_id))
+        );
         assert_eq!(project.connections.len(), 1);
         assert_eq!(
             project.connections[0].from,
@@ -2052,7 +1755,12 @@ mod keyframe_tests {
         let source_id = graph
             .nodes
             .iter()
-            .find(|node| matches!(node.content, NodeContent::Generator(GeneratorContent::Shape)))
+            .find(|node| {
+                matches!(
+                    node.content,
+                    NodeContent::Generator(GeneratorContent::Shape)
+                )
+            })
             .unwrap()
             .id;
         let originals = graph
@@ -2132,7 +1840,10 @@ mod keyframe_tests {
                 )
             })
             .unwrap();
-        assert_eq!(project.find_node_container(inserted.id), Some(NodeContainer::Clip(clip_id)));
+        assert_eq!(
+            project.find_node_container(inserted.id),
+            Some(NodeContainer::Clip(clip_id))
+        );
         let rewired = project
             .connections
             .iter()

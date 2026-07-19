@@ -159,8 +159,6 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
         let res_y = evaluator.evaluate_number(props, "height", eval_time, default_height as f64);
 
         let transform = evaluator.build_transform(props, eval_time);
-        let effects = evaluator.build_image_effects(&node.effects, eval_time);
-
         Some(FrameObject {
             source_node_id: node.id,
             source_transform: Box::new(transform.clone()),
@@ -168,7 +166,7 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
             content: FrameContent::SkSL {
                 shader,
                 resolution: (res_x as f32, res_y as f32),
-                effects,
+                effects: Vec::new(),
                 transform,
             },
         })

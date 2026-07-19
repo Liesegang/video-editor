@@ -1,7 +1,6 @@
 use crate::core::ensemble::effectors::OpacityMode;
 use crate::core::ensemble::target::EffectorTarget;
 use crate::core::ensemble::types::EffectorConfig;
-use crate::model::ensemble::EffectorInstance;
 use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
 use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::{OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory};
@@ -20,11 +19,11 @@ fn target_property() -> PropertyDefinition {
 
 fn evaluate_target(
     context: &FrameEvaluationContext,
-    instance: &EffectorInstance,
+    properties: &PropertyMap,
     eval_time: f64,
 ) -> EffectorTarget {
     match context
-        .optional_string(&instance.properties, "target", eval_time)
+        .optional_string(properties, "target", eval_time)
         .as_deref()
     {
         Some("Line") => EffectorTarget::Line,
@@ -44,26 +43,13 @@ pub trait EffectorPlugin: Plugin {
         OperationDescriptor::effector(self.id(), self.name(), self.properties())
     }
 
-    /// Evaluates a standalone Effector producer. The temporary adapter keeps
-    /// the existing plugin implementation boundary compatible; authored graph
-    /// state itself remains the operation Node's PropertyMap.
+    /// Evaluates one explicit Effector operation Node from its direct authored
+    /// properties. No embedded instance model exists.
     fn evaluate_source(
         &self,
         context: &FrameEvaluationContext,
         source_id: Uuid,
         properties: &PropertyMap,
-        eval_time: f64,
-    ) -> Option<EffectorConfig> {
-        let mut instance = EffectorInstance::new(self.id(), properties.clone());
-        instance.id = source_id;
-        self.convert(context, &instance, eval_time)
-    }
-
-    /// Temporary legacy adapter for embedded `Node::effectors` state.
-    fn convert(
-        &self,
-        context: &FrameEvaluationContext,
-        instance: &EffectorInstance,
         eval_time: f64,
     ) -> Option<EffectorConfig>;
 
@@ -160,23 +146,24 @@ impl EffectorPlugin for TransformEffectorPlugin {
         ]
     }
 
-    fn convert(
+    fn evaluate_source(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectorInstance,
+        _source_id: Uuid,
+        properties: &PropertyMap,
         eval_time: f64,
     ) -> Option<EffectorConfig> {
-        let tx = context.evaluate_number(&instance.properties, "tx", eval_time, 0.0) as f32;
-        let ty = context.evaluate_number(&instance.properties, "ty", eval_time, 0.0) as f32;
-        let r = context.evaluate_number(&instance.properties, "rotation", eval_time, 0.0) as f32;
-        let sx = context.evaluate_number(&instance.properties, "scale_x", eval_time, 1.0) as f32;
-        let sy = context.evaluate_number(&instance.properties, "scale_y", eval_time, 1.0) as f32;
+        let tx = context.evaluate_number(properties, "tx", eval_time, 0.0) as f32;
+        let ty = context.evaluate_number(properties, "ty", eval_time, 0.0) as f32;
+        let r = context.evaluate_number(properties, "rotation", eval_time, 0.0) as f32;
+        let sx = context.evaluate_number(properties, "scale_x", eval_time, 1.0) as f32;
+        let sy = context.evaluate_number(properties, "scale_y", eval_time, 1.0) as f32;
 
         Some(EffectorConfig::Transform {
             translate: (tx, ty),
             rotate: r,
             scale: (sx, sy),
-            target: evaluate_target(context, instance, eval_time),
+            target: evaluate_target(context, properties, eval_time),
         })
     }
 }
@@ -256,26 +243,25 @@ impl EffectorPlugin for StepDelayEffectorPlugin {
         ]
     }
 
-    fn convert(
+    fn evaluate_source(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectorInstance,
+        _source_id: Uuid,
+        properties: &PropertyMap,
         eval_time: f64,
     ) -> Option<EffectorConfig> {
-        let delay = context.evaluate_number(&instance.properties, "delay", eval_time, 0.05) as f32;
-        let duration =
-            context.evaluate_number(&instance.properties, "duration", eval_time, 0.2) as f32;
+        let delay = context.evaluate_number(properties, "delay", eval_time, 0.05) as f32;
+        let duration = context.evaluate_number(properties, "duration", eval_time, 0.2) as f32;
         let from_opacity =
-            context.evaluate_number(&instance.properties, "from_opacity", eval_time, 0.0) as f32;
-        let to_opacity =
-            context.evaluate_number(&instance.properties, "to_opacity", eval_time, 100.0) as f32;
+            context.evaluate_number(properties, "from_opacity", eval_time, 0.0) as f32;
+        let to_opacity = context.evaluate_number(properties, "to_opacity", eval_time, 100.0) as f32;
 
         Some(EffectorConfig::StepDelay {
             delay_per_element: delay,
             duration,
             from_opacity,
             to_opacity,
-            target: evaluate_target(context, instance, eval_time),
+            target: evaluate_target(context, properties, eval_time),
         })
     }
 }
@@ -368,28 +354,25 @@ impl EffectorPlugin for RandomizeEffectorPlugin {
         ]
     }
 
-    fn convert(
+    fn evaluate_source(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectorInstance,
+        _source_id: Uuid,
+        properties: &PropertyMap,
         eval_time: f64,
     ) -> Option<EffectorConfig> {
-        let seed = context.evaluate_number(&instance.properties, "seed", eval_time, 0.0) as u64;
-        let amount = context.evaluate_number(&instance.properties, "amount", eval_time, 1.0) as f32;
-        let tr_val =
-            context.evaluate_number(&instance.properties, "translate_range", eval_time, 50.0)
-                as f32;
-        let rr_val =
-            context.evaluate_number(&instance.properties, "rotate_range", eval_time, 15.0) as f32;
-        let sr_val =
-            context.evaluate_number(&instance.properties, "scale_range", eval_time, 0.5) as f32;
+        let seed = context.evaluate_number(properties, "seed", eval_time, 0.0) as u64;
+        let amount = context.evaluate_number(properties, "amount", eval_time, 1.0) as f32;
+        let tr_val = context.evaluate_number(properties, "translate_range", eval_time, 50.0) as f32;
+        let rr_val = context.evaluate_number(properties, "rotate_range", eval_time, 15.0) as f32;
+        let sr_val = context.evaluate_number(properties, "scale_range", eval_time, 0.5) as f32;
 
         Some(EffectorConfig::Randomize {
             translate_range: (tr_val * amount, tr_val * amount),
             rotate_range: rr_val * amount,
             scale_range: (sr_val * amount, sr_val * amount),
             seed,
-            target: evaluate_target(context, instance, eval_time),
+            target: evaluate_target(context, properties, eval_time),
         })
     }
 }
@@ -438,16 +421,17 @@ impl EffectorPlugin for OpacityEffectorPlugin {
         ]
     }
 
-    fn convert(
+    fn evaluate_source(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectorInstance,
+        _source_id: Uuid,
+        properties: &PropertyMap,
         eval_time: f64,
     ) -> Option<EffectorConfig> {
         let target_opacity =
-            context.evaluate_number(&instance.properties, "opacity", eval_time, 100.0) as f32;
+            context.evaluate_number(properties, "opacity", eval_time, 100.0) as f32;
         let mode_str = context
-            .require_string(&instance.properties, "mode", eval_time, "Set")
+            .require_string(properties, "mode", eval_time, "Set")
             .unwrap_or("Set".to_string());
 
         let mode = match mode_str.as_str() {
@@ -459,7 +443,7 @@ impl EffectorPlugin for OpacityEffectorPlugin {
         Some(EffectorConfig::Opacity {
             target_opacity,
             mode,
-            target: evaluate_target(context, instance, eval_time),
+            target: evaluate_target(context, properties, eval_time),
         })
     }
 }

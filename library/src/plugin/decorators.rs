@@ -1,6 +1,5 @@
 use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
 use crate::core::ensemble::types::DecoratorConfig;
-use crate::model::ensemble::DecoratorInstance;
 use crate::model::frame::color::Color;
 use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
 use crate::plugin::entity_converter::FrameEvaluationContext;
@@ -10,31 +9,18 @@ use uuid::Uuid;
 pub trait DecoratorPlugin: Plugin {
     fn properties(&self) -> Vec<PropertyDefinition>;
 
-    /// Authoritative graph operation contract. Existing plugin implementations
-    /// remain source-compatible while manager/factory paths consume this
-    /// validated descriptor.
+    /// Authoritative graph operation contract.
     fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
         OperationDescriptor::decorator(self.id(), self.name(), self.properties())
     }
 
-    /// Evaluates a standalone Decorator producer from Node-owned properties.
+    /// Evaluates one explicit Decorator operation Node from its direct authored
+    /// properties. No embedded instance model exists.
     fn evaluate_source(
         &self,
         context: &FrameEvaluationContext,
         source_id: Uuid,
         properties: &PropertyMap,
-        eval_time: f64,
-    ) -> Option<DecoratorConfig> {
-        let mut instance = DecoratorInstance::new(self.id(), properties.clone());
-        instance.id = source_id;
-        self.convert(context, &instance, eval_time)
-    }
-
-    /// Temporary legacy adapter for embedded `Node::decorators` state.
-    fn convert(
-        &self,
-        context: &FrameEvaluationContext,
-        instance: &DecoratorInstance,
         eval_time: f64,
     ) -> Option<DecoratorConfig>;
 
@@ -116,21 +102,20 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
         ]
     }
 
-    fn convert(
+    fn evaluate_source(
         &self,
         context: &FrameEvaluationContext,
-        instance: &DecoratorInstance,
+        _source_id: Uuid,
+        properties: &PropertyMap,
         eval_time: f64,
     ) -> Option<DecoratorConfig> {
-        let color =
-            context.evaluate_color(&instance.properties, "color", eval_time, Color::black());
+        let color = context.evaluate_color(properties, "color", eval_time, Color::black());
 
-        let padding_val =
-            context.evaluate_number(&instance.properties, "padding", eval_time, 0.0) as f32;
-        let radius = context.evaluate_number(&instance.properties, "radius", eval_time, 0.0) as f32;
+        let padding_val = context.evaluate_number(properties, "padding", eval_time, 0.0) as f32;
+        let radius = context.evaluate_number(properties, "radius", eval_time, 0.0) as f32;
 
         let target_str = context
-            .require_string(&instance.properties, "target", eval_time, "Block")
+            .require_string(properties, "target", eval_time, "Block")
             .unwrap_or("Block".to_string());
 
         let target = match target_str.as_str() {
@@ -140,7 +125,7 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
         };
 
         let shape_str = context
-            .require_string(&instance.properties, "shape", eval_time, "Rect")
+            .require_string(properties, "shape", eval_time, "Rect")
             .unwrap_or("Rect".to_string());
 
         let shape = match shape_str.as_str() {

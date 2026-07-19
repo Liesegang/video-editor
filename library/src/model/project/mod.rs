@@ -7,16 +7,12 @@ use uuid::Uuid;
 use super::{BlendMode, Clip, Node, NodeContent, Track};
 use crate::model::frame::color::Color;
 use crate::model::project::asset::Asset;
-use crate::model::project::effect::EffectConfig;
 use crate::model::project::property::PropertyMap;
 
 pub mod asset;
 pub mod clip_helpers;
 pub mod connection;
-pub mod effect;
-pub mod ensemble;
 pub mod property;
-pub mod style;
 
 pub use connection::{
     ContainerImageSource, ContainerImageSourceKind, DURATION_PORT, EvalOutput, EvalResult,
@@ -96,6 +92,7 @@ pub enum CompositionSettingsError {
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct Composition {
     pub id: Uuid,
     pub name: String,
@@ -114,8 +111,6 @@ pub struct Composition {
     pub blend_mode: BlendMode,
     #[serde(default)]
     pub properties: PropertyMap,
-    #[serde(default)]
-    pub effects: Vec<EffectConfig>,
     #[serde(default)]
     pub track_ids: Vec<Uuid>,
     #[serde(default)]
@@ -189,7 +184,6 @@ impl Composition {
                 work_area_out: Self::checked_frame_count(fps, duration).unwrap_or_default(),
                 blend_mode: BlendMode::Normal,
                 properties: PropertyMap::new(),
-                effects: Vec::new(),
                 track_ids: vec![first_track.id],
                 node_ids: Vec::new(),
                 output_node_id: None,

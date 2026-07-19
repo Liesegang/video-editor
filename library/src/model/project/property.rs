@@ -887,10 +887,6 @@ impl PropertyValue {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PropertyTarget {
     Direct,
-    Effect(Uuid),
-    Style(Uuid),
-    Effector(Uuid),
-    Decorator(Uuid),
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, PartialEq, Eq, Debug)] // Added Debug

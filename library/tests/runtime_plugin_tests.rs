@@ -1,91 +1,54 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Barrier, RwLock};
+use std::sync::{Arc, Barrier};
 
-use library::core::ensemble::effectors::OpacityMode;
-use library::core::ensemble::target::EffectorTarget;
-use library::core::ensemble::types::EffectorConfig;
-use library::editor::ProjectService;
 use library::model::property::{Property, PropertyMap, PropertyValue};
-use library::model::{Composition, EffectorInstance, Node, NodeContainer, NodeContent, Project};
+use library::model::{Composition, NodeContainer, NodeContent, Project};
 use library::plugin::native_plugin_api::{PROPERTY_CATEGORY, PropertyValueV1};
-use library::plugin::{EvaluationContext, FrameEvaluationContext, PluginManager};
+use library::plugin::{EvaluationContext, PluginManager};
 
 const COMPONENT_ID: &str = "random_property";
 const DESCRIPTOR_CALLS_OPERATION: &str = "random_property.descriptor_calls.v1";
 
 #[test]
-fn common_effector_factory_and_update_boundary_materialize_all_known_defaults() {
-    let manager = Arc::new(PluginManager::default());
+fn common_effector_operation_factory_materializes_all_known_defaults() {
+    let manager = PluginManager::default();
     let opacity = manager
-        .create_effector_instance("opacity")
-        .expect("built-in definitions use the common factory");
+        .create_effector_operation_node("opacity")
+        .expect("built-in descriptor creates an explicit operation Node");
     assert!(opacity.properties.get("opacity").is_some());
     assert!(opacity.properties.get("mode").is_some());
     assert!(opacity.properties.get("target").is_some());
-
-    let evaluation_project = Project::new("Sparse evaluation");
-    let (evaluation_composition, _evaluation_track) =
-        Composition::new("Sparse", 640, 360, 30.0, 1.0);
-    let evaluators = manager.get_property_evaluators();
-    let context = FrameEvaluationContext {
-        project: &evaluation_project,
-        composition: &evaluation_composition,
-        property_evaluators: &evaluators,
-        plugin_manager: &manager,
-        resolved_inputs: None,
-    };
-    let sparse_output = manager
-        .convert_effector_instance(
-            &context,
-            &EffectorInstance::new("opacity", PropertyMap::new()),
-            0.0,
-        )
-        .expect("known sparse instance resolves definitions in-memory");
-    assert!(matches!(
-        sparse_output,
-        EffectorConfig::Opacity {
-            target_opacity,
-            mode: OpacityMode::Set,
-            target: EffectorTarget::Block,
-        } if target_opacity.abs() < f32::EPSILON
-    ));
-
     let (composition, track) = Composition::new("Main", 640, 360, 30.0, 1.0);
     let composition_id = composition.id;
-    let mut node = Node::new("Text holder", NodeContent::Merge);
+    let mut node = opacity;
     let node_id = node.id;
-    let mut sparse_properties = PropertyMap::new();
-    sparse_properties.set(
-        "opacity".to_string(),
-        Property::constant(PropertyValue::from(25.0)),
-    );
-    let sparse = EffectorInstance::new("opacity", sparse_properties);
-    let mut unavailable_properties = PropertyMap::new();
-    unavailable_properties.set(
+    let NodeContent::PluginOperation(operation) = &mut node.content else {
+        panic!("factory must create PluginOperation content")
+    };
+    operation.component_id = "not.installed".to_string();
+    node.properties.set(
         "private".to_string(),
         Property::constant(PropertyValue::String("preserve".to_string())),
     );
-    let unavailable = EffectorInstance::new("not.installed", unavailable_properties);
-    node.effectors = vec![sparse, unavailable.clone()];
 
     let mut project = Project::new("Service boundary");
     project.add_track(track);
     project.add_composition(composition);
-    project.add_node(node.clone());
+    project.add_node(node);
     project
         .attach_node_to_container(NodeContainer::Composition(composition_id), node_id)
         .expect("test containment is valid");
-    let shared = Arc::new(RwLock::new(project));
-    let service = ProjectService::new(Arc::clone(&shared), manager);
-    service
-        .update_node_effectors(node_id, node.effectors)
-        .expect("service update accepts recoverable and unavailable configs");
-    let project = shared.read().expect("test project lock");
-    let updated = &project.get_node(node_id).expect("test node").effectors;
-    assert!(updated[0].properties.get("mode").is_some());
-    assert!(updated[0].properties.get("target").is_some());
-    assert_eq!(updated[1], unavailable);
+    let saved = project.save().unwrap();
+    let loaded = Project::load(&saved).unwrap();
+    assert_eq!(loaded, project);
+    assert_eq!(
+        loaded
+            .get_node(node_id)
+            .and_then(|node| node.properties.get("private"))
+            .and_then(Property::value),
+        Some(&PropertyValue::String("preserve".to_string()))
+    );
 }
 
 fn bundle_from_environment() -> PathBuf {

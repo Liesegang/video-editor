@@ -2,7 +2,6 @@ use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType};
 use crate::model::frame::entity::StyleConfig;
 use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
-use crate::model::style::StyleInstance;
 use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::{OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory};
 use uuid::Uuid;
@@ -22,8 +21,7 @@ pub trait StylePlugin: Plugin {
         }
     }
 
-    /// Core evaluation path shared by graph Nodes and legacy embedded Style
-    /// instances. It deliberately has no dependency on StyleInstance.
+    /// Evaluates one explicit Style operation Node from its direct properties.
     fn evaluate_source(
         &self,
         context: &FrameEvaluationContext,
@@ -31,17 +29,6 @@ pub trait StylePlugin: Plugin {
         properties: &PropertyMap,
         eval_time: f64,
     ) -> Option<StyleConfig>;
-
-    /// Temporary compatibility adapter for isolated legacy Nodes. Removing
-    /// Node::styles later will not change the graph evaluation contract.
-    fn convert_legacy(
-        &self,
-        context: &FrameEvaluationContext,
-        instance: &StyleInstance,
-        eval_time: f64,
-    ) -> Option<StyleConfig> {
-        self.evaluate_source(context, instance.id, &instance.properties, eval_time)
-    }
 
     fn plugin_type(&self) -> PluginCategory {
         PluginCategory::Style

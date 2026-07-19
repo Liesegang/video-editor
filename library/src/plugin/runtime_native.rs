@@ -18,7 +18,6 @@ use ruvie_plugin_api::{
 use serde::Deserialize;
 
 use crate::error::LibraryError;
-use crate::model::ensemble::EffectorInstance;
 use crate::model::property::{
     Property, PropertyDefinition, PropertyUiType, PropertyValue, Vec2, Vec3, Vec4,
 };
@@ -666,16 +665,14 @@ impl EffectorPlugin for RuntimeEffectorPlugin {
         self.definitions.clone()
     }
 
-    fn convert(
+    fn evaluate_source(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectorInstance,
+        _source_id: uuid::Uuid,
+        properties: &crate::model::property::PropertyMap,
         eval_time: f64,
     ) -> Option<crate::core::ensemble::types::EffectorConfig> {
-        // Keep authored/unknown fields, and recover any missing known fields
-        // in-memory from the descriptor. The authoritative Project is not
-        // mutated merely by rendering an older or manually edited document.
-        let mut resolved_properties = instance.properties.clone();
+        let mut resolved_properties = properties.clone();
         for definition in &self.definitions {
             if resolved_properties.get(definition.name()).is_none() {
                 resolved_properties.set(

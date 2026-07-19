@@ -205,10 +205,8 @@ impl KeyframeHandler {
 mod tests {
     use super::*;
     use crate::animation::EasingFunction;
-    use crate::model::ensemble::{DecoratorInstance, EffectorInstance};
-    use crate::model::property::{Keyframe, PropertyMap, PropertyValue};
-    use crate::model::style::StyleInstance;
-    use crate::model::{EffectConfig, GeneratorContent, Node, NodeContent};
+    use crate::model::property::{Keyframe, PropertyValue};
+    use crate::model::{GeneratorContent, Node, NodeContent, PluginOperationContent};
     use ordered_float::OrderedFloat;
 
     fn number(value: f64) -> PropertyValue {
@@ -299,71 +297,35 @@ mod tests {
     }
 
     #[test]
-    fn batch_updates_every_target_and_rejects_partial_mutation() {
-        let effect_id = uuid::Uuid::new_v4();
-        let style_id = uuid::Uuid::new_v4();
-        let effector_id = uuid::Uuid::new_v4();
-        let decorator_id = uuid::Uuid::new_v4();
-        let (direct, direct_keyframe_id) = keyframed(10.0);
-        let (effect, effect_keyframe_id) = keyframed(20.0);
-        let (style, style_keyframe_id) = keyframed(30.0);
-        let (effector, effector_keyframe_id) = keyframed(40.0);
-        let (decorator, decorator_keyframe_id) = keyframed(50.0);
-
-        let mut node = Node::new("batch", NodeContent::Generator(GeneratorContent::Solid));
-        let node_id = node.id;
-        node.properties.set("amount".to_string(), direct);
-
-        let mut properties = PropertyMap::new();
-        properties.set("amount".to_string(), effect);
-        node.effects.push(EffectConfig {
-            id: effect_id,
-            effect_type: "test".to_string(),
-            properties,
-        });
-
-        let mut properties = PropertyMap::new();
-        properties.set("amount".to_string(), style);
-        let mut style = StyleInstance::new("test", properties);
-        style.id = style_id;
-        node.styles.push(style);
-
-        let mut properties = PropertyMap::new();
-        properties.set("amount".to_string(), effector);
-        let mut effector = EffectorInstance::new("test", properties);
-        effector.id = effector_id;
-        node.effectors.push(effector);
-
-        let mut properties = PropertyMap::new();
-        properties.set("amount".to_string(), decorator);
-        let mut decorator = DecoratorInstance::new("test", properties);
-        decorator.id = decorator_id;
-        node.decorators.push(decorator);
-
+    fn batch_updates_direct_properties_on_operation_nodes_atomically() {
         let mut model = Project::new("atomic keyframe batch");
-        model.add_node(node);
+        let mut addresses = Vec::new();
+        for (category, initial, updated) in [
+            ("effect", 10.0, 11.0),
+            ("style", 20.0, 21.0),
+            ("effector", 30.0, 31.0),
+            ("decorator", 40.0, 41.0),
+        ] {
+            let (property, keyframe_id) = keyframed(initial);
+            let mut node = Node::new(
+                category,
+                NodeContent::PluginOperation(PluginOperationContent {
+                    category: category.to_string(),
+                    component_id: "test".to_string(),
+                    operation: "test.apply.v1".to_string(),
+                    declared_ports: Vec::new(),
+                }),
+            );
+            node.properties.set("amount".to_string(), property);
+            addresses.push((PropertyOwner::Node(node.id), keyframe_id, updated));
+            model.add_node(node);
+        }
         let project = Arc::new(RwLock::new(model));
-        let owner = PropertyOwner::Node(node_id);
-        let addresses = [
-            (PropertyTarget::Direct, direct_keyframe_id, 11.0),
-            (PropertyTarget::Effect(effect_id), effect_keyframe_id, 21.0),
-            (PropertyTarget::Style(style_id), style_keyframe_id, 31.0),
-            (
-                PropertyTarget::Effector(effector_id),
-                effector_keyframe_id,
-                41.0,
-            ),
-            (
-                PropertyTarget::Decorator(decorator_id),
-                decorator_keyframe_id,
-                51.0,
-            ),
-        ];
         let updates = addresses
             .iter()
-            .map(|(target, keyframe_id, value)| KeyframeBatchUpdate {
-                owner,
-                target: *target,
+            .map(|(owner, keyframe_id, value)| KeyframeBatchUpdate {
+                owner: *owner,
+                target: PropertyTarget::Direct,
                 property_key: "amount".to_string(),
                 keyframe_id: *keyframe_id,
                 update: KeyframeUpdate {
@@ -375,37 +337,40 @@ mod tests {
             .collect::<Vec<_>>();
 
         KeyframeHandler::update_keyframes_batch(&project, &updates)
-            .expect("all target types should update in one batch");
+            .expect("all operation Nodes should update in one batch");
         let read = project.read().unwrap();
-        let node = read.get_node(node_id).unwrap();
-        for (target, keyframe_id, value) in addresses {
-            let keyframe = node
-                .property_map(target)
+        for (owner, keyframe_id, value) in &addresses {
+            let keyframe = read
+                .get_node(owner.id())
+                .unwrap()
+                .property_map(PropertyTarget::Direct)
                 .unwrap()
                 .get("amount")
                 .unwrap()
-                .keyframe_by_id(keyframe_id)
+                .keyframe_by_id(*keyframe_id)
                 .unwrap();
             assert_eq!(keyframe.time.into_inner(), 2.0);
-            assert_eq!(keyframe.value, number(value));
+            assert_eq!(keyframe.value, number(*value));
         }
         drop(read);
 
         let before_rejected_batch = project.read().unwrap().clone();
+        let (first_owner, first_keyframe_id, _) = addresses[0];
+        let (second_owner, _, _) = addresses[1];
         let rejected = [
             KeyframeBatchUpdate {
-                owner,
+                owner: first_owner,
                 target: PropertyTarget::Direct,
                 property_key: "amount".to_string(),
-                keyframe_id: direct_keyframe_id,
+                keyframe_id: first_keyframe_id,
                 update: KeyframeUpdate {
                     value: Some(number(999.0)),
                     ..Default::default()
                 },
             },
             KeyframeBatchUpdate {
-                owner,
-                target: PropertyTarget::Effect(effect_id),
+                owner: second_owner,
+                target: PropertyTarget::Direct,
                 property_key: "amount".to_string(),
                 keyframe_id: KeyframeId::new(),
                 update: KeyframeUpdate {

@@ -2,11 +2,12 @@ use library::ProjectModel;
 use library::editor::project_service::ProjectManager;
 use library::framing::get_frame_from_project;
 use library::model::frame::entity::{FrameContent, FrameItem, FrameObject};
-use library::model::project::ensemble::{DecoratorInstance, EffectorInstance};
-use library::model::project::style::StyleInstance;
-use library::model::project::{Composition, NodeContainer, Project};
+use library::model::project::{
+    Composition, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
+    PortAddress, PortOwner, Project, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+};
 use library::model::property::{Property, PropertyTarget, PropertyValue, Vec2};
-use library::model::{Clip, EffectConfig, GeneratorContent, Node, NodeContent};
+use library::model::{Clip, GeneratorContent, Node, NodeContent};
 use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
@@ -127,30 +128,93 @@ fn set_and_load_reject_invalid_structure_without_replacing_the_current_project()
 }
 
 #[test]
-fn adoption_preserves_properties_and_plugin_instances_unknown_to_this_binary() {
+fn adoption_preserves_explicit_plugin_operation_nodes_unknown_to_this_binary() {
     let (mut candidate, _, node_id) = project_with_solid();
-    let node = candidate.get_node_mut(node_id).unwrap();
-    node.properties.set(
+    candidate.get_node_mut(node_id).unwrap().properties.set(
         "future_plugin_property".to_string(),
         Property::constant(PropertyValue::String("preserve me".to_string())),
     );
-    node.effects.push(EffectConfig {
-        id: uuid::Uuid::new_v4(),
-        effect_type: "third_party.effect.not_installed".to_string(),
-        properties: Default::default(),
-    });
-    node.styles.push(StyleInstance::new(
-        "third_party.style.not_installed",
-        Default::default(),
-    ));
-    node.effectors.push(EffectorInstance::new(
-        "third_party.effector.not_installed",
-        Default::default(),
-    ));
-    node.decorators.push(DecoratorInstance::new(
-        "third_party.decorator.not_installed",
-        Default::default(),
-    ));
+    let NodeContainer::Clip(clip_id) = candidate.find_node_container(node_id).unwrap() else {
+        panic!("solid fixture must live in a Clip")
+    };
+    let plugins = PluginManager::default();
+    let mut effect = plugins.create_effect_operation_node("blur").unwrap();
+    let mut effector = plugins.create_effector_operation_node("transform").unwrap();
+    let mut decorator = plugins
+        .create_decorator_operation_node("backplate")
+        .unwrap();
+    let mut style = plugins.create_style_operation_node("fill").unwrap();
+    for (node, unavailable_id) in [
+        (&mut effect, "third_party.effect.not_installed"),
+        (&mut effector, "third_party.effector.not_installed"),
+        (&mut decorator, "third_party.decorator.not_installed"),
+        (&mut style, "third_party.style.not_installed"),
+    ] {
+        let NodeContent::PluginOperation(operation) = &mut node.content else {
+            panic!("plugin factory must return an operation Node")
+        };
+        operation.component_id = unavailable_id.to_string();
+        node.properties.set(
+            "future_vendor_value".to_string(),
+            Property::constant(PropertyValue::String("preserve exactly".to_string())),
+        );
+    }
+    let shape = Node::new(
+        "shape source",
+        NodeContent::Generator(GeneratorContent::Shape),
+    );
+    let merge = Node::new("result", NodeContent::Merge);
+    let effect_id = effect.id;
+    let shape_id = shape.id;
+    let effector_id = effector.id;
+    let decorator_id = decorator.id;
+    let style_id = style.id;
+    let merge_id = merge.id;
+    for node in [effect, shape, effector, decorator, style, merge] {
+        let id = node.id;
+        candidate.add_node(node);
+        candidate
+            .attach_node_to_container(NodeContainer::Clip(clip_id), id)
+            .unwrap();
+    }
+    for (from, to, order) in [
+        (
+            PortAddress::new(PortOwner::Node(node_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(effect_id), IMAGE_INPUT_PORT),
+            0,
+        ),
+        (
+            PortAddress::new(PortOwner::Node(shape_id), SHAPE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(effector_id), SHAPE_INPUT_PORT),
+            0,
+        ),
+        (
+            PortAddress::new(PortOwner::Node(effector_id), SHAPE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(decorator_id), SHAPE_INPUT_PORT),
+            0,
+        ),
+        (
+            PortAddress::new(PortOwner::Node(decorator_id), SHAPE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(style_id), SHAPE_INPUT_PORT),
+            0,
+        ),
+        (
+            PortAddress::new(PortOwner::Node(effect_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+            0,
+        ),
+        (
+            PortAddress::new(PortOwner::Node(style_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+            1,
+        ),
+    ] {
+        let connection_id = candidate.connect_ports(from, to).unwrap();
+        candidate.reorder_connection(connection_id, order).unwrap();
+    }
+    candidate
+        .set_output_node(NodeContainer::Clip(clip_id), Some(merge_id))
+        .unwrap();
 
     let shared = Arc::new(RwLock::new(Project::new("current")));
     let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
@@ -159,6 +223,15 @@ fn adoption_preserves_properties_and_plugin_instances_unknown_to_this_binary() {
 
     manager.load_project(&candidate.save().unwrap()).unwrap();
     assert_eq!(*shared.read().unwrap(), candidate);
+}
+
+#[test]
+fn legacy_embedded_operation_fields_are_rejected_instead_of_migrated() {
+    let (project, _, node_id) = project_with_solid();
+    let mut json = serde_json::to_value(project).unwrap();
+    json["nodes"][node_id.to_string()]["effects"] = serde_json::json!([]);
+    let error = Project::load(&serde_json::to_string(&json).unwrap()).unwrap_err();
+    assert!(error.to_string().contains("unknown field `effects`"));
 }
 
 #[test]

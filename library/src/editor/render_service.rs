@@ -448,9 +448,10 @@ mod tests {
     use crate::model::frame::color::Color;
     use crate::model::frame::frame::Region;
     use crate::model::project::{
-        Composition, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, PortAddress, PortOwner,
+        Composition, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
+        PortAddress, PortOwner,
     };
-    use crate::model::property::{Property, PropertyMap, PropertyValue};
+    use crate::model::property::{Property, PropertyValue};
     use crate::model::{BlendMode, Clip, GeneratorContent, Node, NodeContent, Project, Track};
     use crate::plugin::{EffectPlugin, Plugin};
     use crate::rendering::skia_renderer::SkiaRenderer;
@@ -581,7 +582,11 @@ mod tests {
         }
     }
 
-    fn add_solid(project: &mut Project, track_id: uuid::Uuid, color: Color) -> uuid::Uuid {
+    fn add_solid(
+        project: &mut Project,
+        track_id: uuid::Uuid,
+        color: Color,
+    ) -> (uuid::Uuid, uuid::Uuid) {
         let clip = Clip::new("solid clip", 0.0, 1.0);
         let clip_id = clip.id;
         project.add_clip(clip);
@@ -599,11 +604,16 @@ mod tests {
         project
             .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
             .unwrap();
-        node_id
+        (clip_id, node_id)
     }
 
     #[test]
     fn real_render_path_composites_tracks_in_order_with_opacity_blend_and_effects() {
+        let effect_calls = Arc::new(AtomicUsize::new(0));
+        let plugin_manager = Arc::new(PluginManager::default());
+        plugin_manager.register_effect(Arc::new(CountingEffect {
+            calls: Arc::clone(&effect_calls),
+        }));
         let mut project = Project::new("track render test");
         let (mut composition, first_track) = Composition::new("main", 8, 8, 30.0, 1.0);
         composition.background_color = Color::black();
@@ -619,17 +629,12 @@ mod tests {
             "opacity".into(),
             Property::constant(PropertyValue::Number(OrderedFloat(50.0))),
         );
-        second_track.effects.push(crate::model::EffectConfig {
-            id: uuid::Uuid::new_v4(),
-            effect_type: "counting_track_effect".into(),
-            properties: PropertyMap::new(),
-        });
         project.add_track(second_track);
         project
             .attach_track_to_composition(composition_id, second_track_id)
             .unwrap();
 
-        add_solid(
+        let _ = add_solid(
             &mut project,
             first_track_id,
             Color {
@@ -639,7 +644,7 @@ mod tests {
                 a: 255,
             },
         );
-        add_solid(
+        let (second_clip_id, _) = add_solid(
             &mut project,
             second_track_id,
             Color {
@@ -649,12 +654,23 @@ mod tests {
                 a: 255,
             },
         );
-
-        let effect_calls = Arc::new(AtomicUsize::new(0));
-        let plugin_manager = Arc::new(PluginManager::default());
-        plugin_manager.register_effect(Arc::new(CountingEffect {
-            calls: Arc::clone(&effect_calls),
-        }));
+        let effect = plugin_manager
+            .create_effect_operation_node("counting_track_effect")
+            .unwrap();
+        let effect_id = effect.id;
+        project.add_node(effect);
+        project
+            .attach_node_to_container(NodeContainer::Track(second_track_id), effect_id)
+            .unwrap();
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Clip(second_clip_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(effect_id), IMAGE_INPUT_PORT),
+            )
+            .unwrap();
+        project
+            .set_output_node(NodeContainer::Track(second_track_id), Some(effect_id))
+            .unwrap();
         let frame = FrameEvaluator::new(
             &project,
             &project.compositions[0],
@@ -718,7 +734,7 @@ mod tests {
         let nested_track_id = nested_track.id;
         project.add_track(nested_track);
         project.add_composition(nested);
-        add_solid(
+        let _ = add_solid(
             &mut project,
             nested_track_id,
             Color {
@@ -786,7 +802,7 @@ mod tests {
         let track_id = track.id;
         project.add_track(track);
         project.add_composition(composition);
-        add_solid(&mut project, track_id, Color::white());
+        let _ = add_solid(&mut project, track_id, Color::white());
 
         let plugin_manager = Arc::new(PluginManager::default());
         let frame = FrameEvaluator::new(
