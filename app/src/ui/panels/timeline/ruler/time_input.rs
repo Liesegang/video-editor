@@ -2,6 +2,23 @@ use crate::model::ui_types::TimelineDisplayMode;
 use crate::state::context::EditorContext;
 use egui::Ui;
 
+fn parse_seconds_and_frames(input: &str, frames_per_second: f64) -> Option<f32> {
+    if !frames_per_second.is_finite() || frames_per_second <= 0.0 {
+        return None;
+    }
+
+    let (seconds, frame_suffix) = input.trim().split_once('s')?;
+    let frames = frame_suffix.trim().strip_suffix('f')?.trim();
+    if seconds.is_empty() || frames.is_empty() {
+        return None;
+    }
+
+    let seconds = seconds.trim().parse::<u64>().ok()?;
+    let frames = frames.parse::<u64>().ok()?;
+    let time = (seconds as f64 + frames as f64 / frames_per_second) as f32;
+    time.is_finite().then_some(time)
+}
+
 pub fn show_time_input(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
@@ -89,15 +106,7 @@ pub fn show_time_input(
                             .map(|f| f as f32 / composition_fps as f32)
                     }
                     TimelineDisplayMode::SecondsAndFrames => {
-                        // Parse "Xs Yf"
-                        let re = regex::Regex::new(r"(\d+)s\s*(\d+)f").unwrap();
-                        if let Some(captures) = re.captures(&input_str) {
-                            let seconds = captures[1].parse::<i32>().unwrap_or(0);
-                            let frames = captures[2].parse::<i32>().unwrap_or(0);
-                            Some((seconds as f32) + (frames as f32 / composition_fps as f32))
-                        } else {
-                            None
-                        }
+                        parse_seconds_and_frames(&input_str, composition_fps)
                     }
                 };
 
@@ -158,4 +167,20 @@ pub fn show_time_input(
     });
 
     text_edit_response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_seconds_and_frames;
+
+    #[test]
+    fn seconds_and_frames_parser_validates_the_complete_input() {
+        assert_eq!(parse_seconds_and_frames("12s 6f", 24.0), Some(12.25));
+        assert_eq!(parse_seconds_and_frames(" 12s6f ", 24.0), Some(12.25));
+        assert_eq!(parse_seconds_and_frames("prefix 12s 6f", 24.0), None);
+        assert_eq!(parse_seconds_and_frames("12s 6f suffix", 24.0), None);
+        assert_eq!(parse_seconds_and_frames("12s", 24.0), None);
+        assert_eq!(parse_seconds_and_frames("12s 6f", 0.0), None);
+        assert_eq!(parse_seconds_and_frames("12s 6f", f64::NAN), None);
+    }
 }

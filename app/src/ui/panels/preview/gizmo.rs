@@ -2,9 +2,9 @@ use crate::model::ui_types::GizmoHandle;
 use crate::state::context::EditorContext;
 use crate::ui::panels::preview::{action::PreviewAction, clip::PreviewClip};
 use egui::{CursorIcon, Pos2, Rect, Sense, Ui, Vec2};
+use library::model::NodeContent;
 use library::model::project::Project;
 use library::model::property::{PropertyValue, Vec2 as PropVec2};
-use library::model::NodeContent;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -20,22 +20,24 @@ pub fn handle_gizmo_interaction(
     let mut interacted_with_gizmo = false;
 
     // Extract Gizmo Information first to avoid double borrow of editor_context
-    let gizmo_drag_data = if let Some(state) = &editor_context.interaction.gizmo_state {
-        Some((
-            state.start_mouse_pos,
-            state.active_handle,
-            state.original_position,
-            state.original_scale_x,
-            state.original_scale_y,
-            state.original_rotation,
-            state.original_width,
-            state.original_height,
-            state.original_anchor_x,
-            state.original_anchor_y,
-        ))
-    } else {
-        None
-    };
+    let gizmo_drag_data = editor_context
+        .interaction
+        .gizmo_state
+        .as_ref()
+        .map(|state| {
+            (
+                state.start_mouse_pos,
+                state.active_handle,
+                state.original_position,
+                state.original_scale_x,
+                state.original_scale_y,
+                state.original_rotation,
+                state.original_width,
+                state.original_height,
+                state.original_anchor_x,
+                state.original_anchor_y,
+            )
+        });
 
     if let Some((
         start_mouse_pos,

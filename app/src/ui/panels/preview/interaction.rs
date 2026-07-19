@@ -93,65 +93,71 @@ impl<'a> PreviewInteractions<'a> {
                         if let Some(path_str) = gc.node.properties.get_string("path") {
                             // The path is always projected from Project. Only point
                             // selection/handle state survives between frames.
-                            let mut path = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
-                            // Build Transform
-                            let transform = library::model::frame::transform::Transform {
-                                position: library::model::frame::transform::Position {
-                                    x: gc.transform.position.x,
-                                    y: gc.transform.position.y,
-                                },
-                                scale: library::model::frame::transform::Scale {
-                                    x: gc.transform.scale.x,
-                                    y: gc.transform.scale.y,
-                                },
-                                rotation: gc.transform.rotation,
-                                anchor: library::model::frame::transform::Position {
-                                    x: gc.transform.anchor.x,
-                                    y: gc.transform.anchor.y,
-                                },
-                                opacity: gc.transform.opacity,
-                            };
+                            let parsed_path = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
+                            if let Err(error) = &parsed_path {
+                                log::warn!("Cannot edit invalid shape path: {error}");
+                            }
+                            if let Ok(mut path) = parsed_path {
+                                // Build Transform
+                                let transform = library::model::frame::transform::Transform {
+                                    position: library::model::frame::transform::Position {
+                                        x: gc.transform.position.x,
+                                        y: gc.transform.position.y,
+                                    },
+                                    scale: library::model::frame::transform::Scale {
+                                        x: gc.transform.scale.x,
+                                        y: gc.transform.scale.y,
+                                    },
+                                    rotation: gc.transform.rotation,
+                                    anchor: library::model::frame::transform::Position {
+                                        x: gc.transform.anchor.x,
+                                        y: gc.transform.anchor.y,
+                                    },
+                                    opacity: gc.transform.opacity,
+                                };
 
-                            let state = self
-                                .editor_context
-                                .interaction
-                                .vector_editor_state
-                                .get_or_insert_with(Default::default);
-                            let mut interaction = crate::ui::panels::preview::vector_editor::interaction::VectorEditorInteraction {
+                                let state = self
+                                    .editor_context
+                                    .interaction
+                                    .vector_editor_state
+                                    .get_or_insert_with(Default::default);
+                                let mut interaction = crate::ui::panels::preview::vector_editor::interaction::VectorEditorInteraction {
                                   state,
                                   path: &mut path,
                                   transform,
                                   to_screen: Box::new(|p| (self.to_screen)(p)),
                                   to_world: Box::new(|p| (self.to_world)(p)),
                                };
-                            let (changed, captured, commit_requested) =
-                                interaction.handle(self.ui, response);
-                            drop(interaction);
-                            if captured {
-                                interacted_with_gizmo = true;
-                            }
-
-                            if changed {
-                                let new_path = crate::ui::panels::preview::vector_editor::svg_writer::to_svg_path(&path);
-
-                                // Update property
-                                if let Some(comp_id) = self.editor_context.selection.composition_id
-                                {
-                                    let current_time =
-                                        self.editor_context.timeline.current_time as f64;
-                                    pending_actions.push(PreviewAction::UpdateProperty {
-                                        comp_id,
-                                        track_id: gc.track_id,
-                                        entity_id: id,
-                                        prop_name: "path".to_string(),
-                                        time: current_time,
-                                        value: PropertyValue::String(new_path),
-                                    });
+                                let (changed, captured, commit_requested) =
+                                    interaction.handle(self.ui, response);
+                                drop(interaction);
+                                if captured {
+                                    interacted_with_gizmo = true;
                                 }
-                                interacted_with_gizmo = true;
-                            }
-                            if commit_requested {
-                                pending_actions.push(PreviewAction::CommitHistory);
+
+                                if changed {
+                                    let new_path = crate::ui::panels::preview::vector_editor::svg_writer::to_svg_path(&path);
+
+                                    // Update property
+                                    if let Some(comp_id) =
+                                        self.editor_context.selection.composition_id
+                                    {
+                                        let current_time =
+                                            self.editor_context.timeline.current_time as f64;
+                                        pending_actions.push(PreviewAction::UpdateProperty {
+                                            comp_id,
+                                            track_id: gc.track_id,
+                                            entity_id: id,
+                                            prop_name: "path".to_string(),
+                                            time: current_time,
+                                            value: PropertyValue::String(new_path),
+                                        });
+                                    }
+                                    interacted_with_gizmo = true;
+                                }
+                                if commit_requested {
+                                    pending_actions.push(PreviewAction::CommitHistory);
+                                }
                             }
                         }
                     }
