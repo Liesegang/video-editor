@@ -72,16 +72,18 @@ strictly decoded and must match the selected UI type:
 - hard numeric bounds and dropdown membership apply to defaults. Dropdown
   options must be non-empty, non-empty strings, and unique.
 
-ABI v1 integrates the `effector`, `property`, `style`, and `decorator`
-categories. A property
+ABI v1 integrates the `effector`, `property`, `style`, `decorator`, `effect`,
+and `loader` categories. A property
 component must declare `property.evaluate.v1` and an `output_default` in its
 component descriptor. The default uses the same explicitly tagged value wire
 format as evaluation responses and is the host's safe result when invocation
 fails. Its tag also declares the component's output type; a successful response
 with another value variant is rejected and falls back to this declared value.
-Effector, Style, and Decorator components omit `output_default`: invocation or
-response failure produces `no_output` in the graph instead of inventing a
-render config.
+Effector, Style, Decorator, and Effect components omit `output_default`.
+Loader components also omit it and declare no graph properties because their
+inputs come from a typed load request. Low-bandwidth invocation/response
+failure produces `no_output` in the graph instead of inventing a render
+config. Effect and Loader execution uses the typed tables below.
 
 If any component in a bundle declares another category, RuViE rejects the
 entire bundle before registering its descriptor or exposing generic
@@ -233,11 +235,82 @@ Project types, or renderer/GPU state. Unknown output variants or fields,
 non-finite values, invalid enum strings, and fields that violate the rules
 above are rejected as `no_output`; they are never partially adapted.
 
-Do not transport video frames, decoded audio, GPU objects, Project objects, or
-other hot-path resources as JSON. Such categories use `query_extension` with a
-separately named/versioned C table and host-owned opaque resource handles or an
-explicit pixel/audio buffer contract. No high-bandwidth extension is
-standardized in v1 yet.
+## Typed CPU RGBA8 extensions
+
+Frames never cross `invoke_json`. ABI v1 standardizes these exact
+`query_extension` names:
+
+- `ruvie.effect.cpu-rgba8.v1` returns `RuvieEffectCpuRgba8ApiV1` and backs an
+  Effect component declaring `effect.process.cpu-rgba8.v1`.
+- `ruvie.loader.cpu-rgba8.v1` returns `RuvieLoaderCpuRgba8ApiV1` and backs a
+  Loader component declaring both `loader.open.v1` and
+  `loader.load.cpu-rgba8.v1`.
+
+Both returned tables start with ABI version and table size, remain
+plugin-owned/static while the library is loaded, and contain a thread-safe
+opaque context. A bundle that declares either category without its complete
+typed table is rejected before any component is registered.
+
+### Shared frame and result contract
+
+RGBA8 v1 is straight (unpremultiplied) alpha and sRGB only. Width and height
+must be in `1..=32768`; stride is at least `width * 4`; and buffer length is
+exactly `stride * height`, no greater than 512 MiB. Hosts check every
+multiplication, dimension, stride, length, alpha-mode, color-profile, table
+size, and pointer/capacity invariant before reading pixels. Fully transparent
+RGB is canonicalized by the host after copying.
+
+Plugin outputs are `RuvieOwnedRgba8FrameV1`. The host copies a valid frame and
+calls that same extension table's `free_frame` exactly once. It also calls
+`free_frame` for structurally reclaimable output that is rejected for bad
+metadata. An unreclaimable pointer/length/capacity tuple is reported but cannot
+be safely passed to plugin deallocation. Inputs are borrowed host-owned views
+valid only for the callback.
+
+Typed callbacks return `RuvieExtensionResultV1`. Its optional message is a
+plugin-owned `RuvieBuffer` reclaimed through the base table's `free_buffer`.
+`RUVIE_STATUS_UNSUPPORTED` means the implementation deliberately declines the
+request; `RUVIE_STATUS_PLUGIN_ERROR`, `RUVIE_STATUS_INVALID_REQUEST`, and
+`RUVIE_STATUS_PANIC` are real failures and retain the plugin message. No panic
+or exception may unwind through any extension callback.
+
+### Effect
+
+`create_instance` receives the component ID plus a borrowed array of resolved,
+explicitly tagged properties. The tags cover number, integer, string, boolean,
+vec2/3/4, and color. It returns a non-zero opaque handle. The host caches these
+immutable handles in a bounded LRU whose identity is the Effect component,
+operation, and exact resolved config; eviction/drop calls `release_instance`
+once. Concurrent cache misses may create a duplicate, but the unused handle is
+released rather than leaked.
+
+`process` receives only that handle, finite evaluation time, and a typed
+borrowed frame. There is no per-frame JSON and no Project/renderer/GPU object.
+The current host adapter accepts CPU `Image` input; a GPU texture must first be
+materialized by a future explicit contract rather than exposing an internal
+handle accidentally.
+
+### Loader
+
+`open` receives UTF-8 component/path views and writes at most 64
+`RuvieAssetMetadataV1` records into host-owned memory. Presence bits distinguish
+absent duration, FPS, dimensions, stream index, frame count, and time base.
+The host rejects unknown bits, non-finite/invalid values, oversized dimensions,
+and zero time-base terms.
+
+`load` receives a typed image or video-frame request containing path,
+source-local time, optional stream index, and optional color-space names. A
+successful callback returns the same owned RGBA8 frame contract. Loader cache
+identity includes plugin/component operation, source path/file identity,
+stream/color config, and exact source-time bits for video. The manager clones
+the selected plugin `Arc` and releases registry locks before `open`, `load`, or
+Effect callbacks. `Unsupported` permits trying the next loader; once a loader
+claims a request and returns a failure, its component ID, path, and original
+cause are returned instead of a misleading “no plugin registered” error.
+
+Do not transport decoded audio, GPU objects, Project objects, or other
+hot-path resources as JSON. They require another explicitly named/versioned
+typed table with equally explicit ownership.
 
 ## Bundle manifest
 
