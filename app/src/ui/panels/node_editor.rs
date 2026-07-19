@@ -23,7 +23,9 @@ use library::model::{
     Clip, GeneratorContent, Node, NodeContainer, NodeContent, NodeGraphBundle, Project,
 };
 use library::plugin::{
-    property_name_from_port, PluginManager, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY,
+    property_name_from_port, PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY,
+    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
+    STYLE_APPLY_OPERATION, STYLE_CATEGORY,
 };
 use library::EditorService;
 use ordered_float::OrderedFloat;
@@ -5787,8 +5789,10 @@ enum NodeCreateRequest {
     Text,
     Solid,
     Shape,
+    SkSL,
     Style(String),
     Effector(String),
+    Decorator(String),
     Effect(String),
     Merge,
     Clip,
@@ -5802,8 +5806,10 @@ impl NodeCreateRequest {
             Self::Text => "text",
             Self::Solid => "solid",
             Self::Shape => "shape",
+            Self::SkSL => "sksl",
             Self::Style(_) => "style",
             Self::Effector(_) => "effector",
+            Self::Decorator(_) => "decorator",
             Self::Effect(_) => "effect",
             Self::Merge => "merge",
             Self::Clip => "clip",
@@ -5829,6 +5835,57 @@ fn node_create_menu_item(
         "kind": item.value.qa_kind(),
     }));
     item
+}
+
+fn plugin_operation_menu_item(
+    plugin_manager: &PluginManager,
+    descriptor_category: &str,
+    operation: &str,
+    component_id: String,
+    menu_category: impl Into<String>,
+    display_kind: &str,
+    qa_id: String,
+    request: NodeCreateRequest,
+    extra_keywords: impl IntoIterator<Item = String>,
+) -> Option<SearchableItem<NodeCreateRequest>> {
+    let descriptor = match plugin_manager.operation_descriptor(
+        descriptor_category,
+        &component_id,
+        operation,
+    ) {
+        Ok(descriptor) => descriptor,
+        Err(error) => {
+            log::warn!(
+                "Cannot expose {descriptor_category} operation {component_id} in the Node Editor: {error}"
+            );
+            return None;
+        }
+    };
+    let label = descriptor.label().to_string();
+    let mut keywords = vec![
+        display_kind.to_lowercase(),
+        label.clone(),
+        component_id.clone(),
+        descriptor.category().to_string(),
+        descriptor.operation().to_string(),
+    ];
+    keywords.extend(extra_keywords);
+    let mut item = node_create_menu_item(
+        format!("{display_kind} · {label}"),
+        menu_category,
+        keywords,
+        qa_id,
+        request,
+    );
+    item.qa_metadata = Some(serde_json::json!({
+        "action": "create",
+        "kind": item.value.qa_kind(),
+        "component_id": component_id,
+        "operation_category": descriptor.category(),
+        "operation": descriptor.operation(),
+        "label": descriptor.label(),
+    }));
+    Some(item)
 }
 
 fn node_create_menu_items(
@@ -5857,18 +5914,11 @@ fn node_create_menu_items(
             NodeCreateRequest::Shape,
         ),
         node_create_menu_item(
-            "Fill",
-            "Shape Operations",
-            ["fill", "style", "shape", "image"],
-            "node_editor.menu.create.fill",
-            NodeCreateRequest::Style("fill".to_string()),
-        ),
-        node_create_menu_item(
-            "Stroke",
-            "Shape Operations",
-            ["stroke", "style", "outline", "shape", "image"],
-            "node_editor.menu.create.stroke",
-            NodeCreateRequest::Style("stroke".to_string()),
+            "SkSL Shader",
+            "Generators",
+            ["sksl", "shader", "procedural", "image"],
+            "node_editor.menu.create.sksl",
+            NodeCreateRequest::SkSL,
         ),
         node_create_menu_item(
             "Merge",
@@ -5900,37 +5950,74 @@ fn node_create_menu_items(
         ),
     ];
 
-    items.extend(
-        available_effector_menu_entries(plugin_manager)
-            .into_iter()
-            .map(|(component_id, label)| {
-                node_create_menu_item(
-                    format!("Effector · {label}"),
-                    "Shape Operations / Effectors",
-                    ["effector".to_string(), label, component_id.clone()],
-                    format!("node_editor.menu.create.effector:{component_id}"),
-                    NodeCreateRequest::Effector(component_id),
-                )
-            }),
-    );
+    let mut styles = plugin_manager.get_available_styles();
+    styles.sort();
+    items.extend(styles.into_iter().filter_map(|component_id| {
+        let qa_id = match component_id.as_str() {
+            "fill" | "stroke" => format!("node_editor.menu.create.{component_id}"),
+            _ => format!("node_editor.menu.create.style:{component_id}"),
+        };
+        plugin_operation_menu_item(
+            plugin_manager,
+            STYLE_CATEGORY,
+            STYLE_APPLY_OPERATION,
+            component_id.clone(),
+            "Shape Operations / Styles",
+            "Style",
+            qa_id,
+            NodeCreateRequest::Style(component_id),
+            ["shape".to_string(), "image".to_string()],
+        )
+    }));
+
+    let mut effectors = plugin_manager.get_available_effectors();
+    effectors.sort();
+    items.extend(effectors.into_iter().filter_map(|component_id| {
+        plugin_operation_menu_item(
+            plugin_manager,
+            EFFECTOR_CATEGORY,
+            EFFECTOR_APPLY_OPERATION,
+            component_id.clone(),
+            "Shape Operations / Effectors",
+            "Effector",
+            format!("node_editor.menu.create.effector:{component_id}"),
+            NodeCreateRequest::Effector(component_id),
+            ["shape".to_string()],
+        )
+    }));
+
+    let mut decorators = plugin_manager.get_available_decorators();
+    decorators.sort();
+    items.extend(decorators.into_iter().filter_map(|component_id| {
+        plugin_operation_menu_item(
+            plugin_manager,
+            DECORATOR_CATEGORY,
+            DECORATOR_APPLY_OPERATION,
+            component_id.clone(),
+            "Shape Operations / Decorators",
+            "Decorator",
+            format!("node_editor.menu.create.decorator:{component_id}"),
+            NodeCreateRequest::Decorator(component_id),
+            ["shape".to_string(), "ensemble".to_string()],
+        )
+    }));
 
     let mut effects = plugin_manager.get_available_effects();
     effects.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
     items.extend(
         effects
             .into_iter()
-            .map(|(effect_id, effect_name, effect_category)| {
-                node_create_menu_item(
-                    format!("Effect · {effect_name}"),
+            .filter_map(|(effect_id, effect_name, effect_category)| {
+                plugin_operation_menu_item(
+                    plugin_manager,
+                    EFFECT_CATEGORY,
+                    EFFECT_APPLY_OPERATION,
+                    effect_id.clone(),
                     format!("Image Effects / {effect_category}"),
-                    [
-                        "effect".to_string(),
-                        effect_name,
-                        effect_id.clone(),
-                        effect_category,
-                    ],
+                    "Effect",
                     format!("node_editor.menu.create.effect:{effect_id}"),
                     NodeCreateRequest::Effect(effect_id),
+                    [effect_name, effect_category, "image".to_string()],
                 )
             }),
     );
@@ -5948,6 +6035,9 @@ fn create_operation_node_for_request(
         NodeCreateRequest::Effector(component_id) => {
             plugin_manager.create_effector_operation_node(component_id)
         }
+        NodeCreateRequest::Decorator(component_id) => {
+            plugin_manager.create_decorator_operation_node(component_id)
+        }
         NodeCreateRequest::Effect(effect_id) => {
             plugin_manager.create_effect_operation_node(effect_id)
         }
@@ -5955,6 +6045,7 @@ fn create_operation_node_for_request(
         NodeCreateRequest::Text
         | NodeCreateRequest::Solid
         | NodeCreateRequest::Shape
+        | NodeCreateRequest::SkSL
         | NodeCreateRequest::Clip
         | NodeCreateRequest::Track
         | NodeCreateRequest::Composition => return None,
@@ -6176,6 +6267,19 @@ fn create_action_for_request(
                 None
             }
         },
+        NodeCreateRequest::SkSL => match project_service.create_sksl_node(
+            library::editor::project_service::DEFAULT_SKSL_SHADER,
+            canvas_size.0,
+            canvas_size.1,
+        ) {
+            Ok(node) => Some(Box::new(move |project| {
+                create_prebuilt_node(project, graph_position, node, comp_id)
+            })),
+            Err(error) => {
+                log::error!("Cannot create SkSL Node: {error}");
+                None
+            }
+        },
         NodeCreateRequest::Style(component_id) => {
             match plugin_manager.create_style_operation_node(&component_id) {
                 Ok(node) => Some(Box::new(move |project| {
@@ -6204,6 +6308,22 @@ fn create_action_for_request(
                 })),
                 Err(error) => {
                     log::error!("Cannot create Effector Node {component_id}: {error}");
+                    None
+                }
+            }
+        }
+        NodeCreateRequest::Decorator(component_id) => {
+            match plugin_manager.create_decorator_operation_node(&component_id) {
+                Ok(node) => Some(Box::new(move |project| {
+                    insert_prebuilt_graph(
+                        project,
+                        graph_position,
+                        NodeGraphBundle::new(vec![node], Vec::new(), None),
+                        comp_id,
+                    )
+                })),
+                Err(error) => {
+                    log::error!("Cannot create Decorator Node {component_id}: {error}");
                     None
                 }
             }
@@ -6373,6 +6493,7 @@ fn push_history_snapshot(
     }
 }
 
+#[cfg(test)]
 fn available_effector_menu_entries(plugin_manager: &PluginManager) -> Vec<(String, String)> {
     let mut entries = plugin_manager
         .get_available_effectors()
@@ -7005,11 +7126,61 @@ fn create_track_at_free_slot(
 mod tests {
     use super::*;
     use library::animation::EasingFunction;
+    use library::model::frame::color::Color;
+    use library::model::frame::draw_type::DrawStyle;
+    use library::model::frame::entity::StyleConfig;
     use library::model::project::{
         ProjectConnection, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
         SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
     };
-    use library::model::property::{Keyframe, Property};
+    use library::model::property::{Keyframe, Property, PropertyMap};
+    use library::plugin::{
+        FrameEvaluationContext, OperationDescriptor, OperationDescriptorError, Plugin, StylePlugin,
+    };
+
+    struct RuntimeCatalogStylePlugin {
+        id: String,
+    }
+
+    impl Plugin for RuntimeCatalogStylePlugin {
+        fn id(&self) -> &str {
+            &self.id
+        }
+
+        fn name(&self) -> String {
+            "Runtime Hatch".to_string()
+        }
+
+        fn category(&self) -> String {
+            "Runtime QA".to_string()
+        }
+
+        fn version(&self) -> (u32, u32, u32) {
+            (0, 1, 0)
+        }
+    }
+
+    impl StylePlugin for RuntimeCatalogStylePlugin {
+        fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
+            OperationDescriptor::style(self.id.clone(), self.name(), Vec::new())
+        }
+
+        fn evaluate_source(
+            &self,
+            _context: &FrameEvaluationContext,
+            source_id: Uuid,
+            _properties: &PropertyMap,
+            _eval_time: f64,
+        ) -> Option<StyleConfig> {
+            Some(StyleConfig {
+                id: source_id,
+                style: DrawStyle::Fill {
+                    color: Color::white(),
+                    offset: 0.0,
+                },
+            })
+        }
+    }
 
     #[test]
     fn time_modulo_has_explicit_value_node_presentation() {
@@ -7213,10 +7384,64 @@ mod tests {
     }
 
     #[test]
-    fn add_menu_uses_shared_search_categories_and_indexes_effect_metadata() {
-        let plugins = PluginManager::default();
-        let items = node_create_menu_items(&plugins);
+    fn add_menu_discovers_descriptor_operations_and_wire_menu_filters_them_by_type() {
+        let plugins = Arc::new(PluginManager::default());
+        let runtime_style_id = "runtime.qa.style.hatch";
+        plugins.register_style_plugin(Arc::new(RuntimeCatalogStylePlugin {
+            id: runtime_style_id.to_string(),
+        }));
+        let items = node_create_menu_items(plugins.as_ref());
         assert!(items.iter().all(|item| item.category.is_some()));
+        assert!(items
+            .iter()
+            .any(|item| matches!(item.value, NodeCreateRequest::SkSL)));
+
+        for component_id in ["fill", "stroke"] {
+            let style = items
+                .iter()
+                .find(|item| {
+                    matches!(&item.value, NodeCreateRequest::Style(id) if id == component_id)
+                })
+                .unwrap();
+            assert_eq!(
+                style.qa_metadata.as_ref().unwrap()["component_id"],
+                component_id
+            );
+            assert_eq!(
+                style.qa_metadata.as_ref().unwrap()["operation"],
+                STYLE_APPLY_OPERATION
+            );
+        }
+        let backplate = items
+            .iter()
+            .find(
+                |item| matches!(&item.value, NodeCreateRequest::Decorator(id) if id == "backplate"),
+            )
+            .unwrap();
+        assert_eq!(
+            backplate.qa_id.as_deref(),
+            Some("node_editor.menu.create.decorator:backplate")
+        );
+
+        let runtime_style = items
+            .iter()
+            .find(|item| {
+                matches!(&item.value, NodeCreateRequest::Style(id) if id == runtime_style_id)
+            })
+            .expect("a style registered after PluginManager construction must be discoverable");
+        assert_eq!(
+            runtime_style.qa_id.as_deref(),
+            Some("node_editor.menu.create.style:runtime.qa.style.hatch")
+        );
+        assert_eq!(
+            runtime_style.qa_metadata.as_ref().unwrap()["label"],
+            "Runtime Hatch"
+        );
+        assert!(runtime_style
+            .keywords
+            .iter()
+            .any(|keyword| keyword == runtime_style_id));
+
         let blur = items
             .iter()
             .find(|item| {
@@ -7234,9 +7459,36 @@ mod tests {
         assert!(blur.keywords.iter().any(|keyword| keyword == "blur"));
         let matches = crate::ui::widgets::searchable_context_menu::filter_searchable_items(
             &items,
-            "effect blur",
+            "runtime.qa hatch",
         );
-        assert!(matches.iter().any(|index| items[*index] == *blur));
+        assert!(matches.iter().any(|index| items[*index] == *runtime_style));
+
+        let (mut project, _, _, clip_id, _, _) = fixture();
+        let shape = Node::new("Shape", NodeContent::Generator(GeneratorContent::Shape));
+        let shape_id = shape.id;
+        let transform = plugins.create_effector_operation_node("transform").unwrap();
+        let transform_id = transform.id;
+        project.add_node(shape);
+        project.add_node(transform);
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), shape_id)
+            .unwrap();
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), transform_id)
+            .unwrap();
+        let shape_connection = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(shape_id), SHAPE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(transform_id), SHAPE_INPUT_PORT),
+            )
+            .unwrap();
+        let splice_items = wire_splice_menu_items(&project, shape_connection, plugins.as_ref());
+        assert!(splice_items.iter().any(|item| {
+            matches!(&item.value, NodeCreateRequest::Decorator(id) if id == "backplate")
+        }));
+        assert!(!splice_items.iter().any(|item| {
+            matches!(&item.value, NodeCreateRequest::Style(id) if id == runtime_style_id)
+        }));
     }
 
     #[test]
