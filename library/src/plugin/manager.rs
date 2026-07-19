@@ -629,10 +629,18 @@ impl PluginManager {
             let PluginRegistry {
                 runtime_plugins,
                 effector_plugins,
+                decorator_plugins,
+                style_plugins,
                 property_evaluators,
                 ..
             } = &mut *inner;
-            match runtime_plugins.register_bundle(pending, effector_plugins, property_evaluators) {
+            match runtime_plugins.register_bundle(
+                pending,
+                effector_plugins,
+                decorator_plugins,
+                style_plugins,
+                property_evaluators,
+            ) {
                 Ok(registered) => {
                     report.loaded_bundles.push(manifest_path);
                     report.registered_components.extend(registered);

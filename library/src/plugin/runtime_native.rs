@@ -8,12 +8,15 @@ use std::sync::Arc;
 use libloading::{Library, Symbol};
 use ordered_float::OrderedFloat;
 use ruvie_plugin_api::{
-    ComponentDescriptorV1, EFFECTOR_CATEGORY, EFFECTOR_EVALUATE_V1, EffectorEvaluateRequestV1,
-    EffectorOutputV1, EffectorTargetV1, InvokeRequestV1, MAX_PLUGIN_PAYLOAD_BYTES, OpacityModeV1,
-    PROPERTY_CATEGORY, PROPERTY_EVALUATE_V1, PluginDescriptorV1, PropertyEvaluateRequestV1,
+    BackplateShapeV1, ColorV1, ComponentDescriptorV1, DECORATOR_CATEGORY, DECORATOR_EVALUATE_V1,
+    DecoratorEvaluateRequestV1, DecoratorOutputV1, DecoratorTargetV1, EFFECTOR_CATEGORY,
+    EFFECTOR_EVALUATE_V1, EffectorEvaluateRequestV1, EffectorOutputV1, EffectorTargetV1, InsetsV1,
+    InvokeRequestV1, MAX_PLUGIN_PAYLOAD_BYTES, OpacityModeV1, PROPERTY_CATEGORY,
+    PROPERTY_EVALUATE_V1, PluginDescriptorV1, PropertyEvaluateRequestV1,
     PropertyEvaluateResponseV1, PropertyUiV1, PropertyValueV1, RUVIE_PLUGIN_ABI_V1,
     RUVIE_PLUGIN_ENTRY_V1, RuvieBuffer, RuvieBytesView, RuvieCallResult, RuviePluginApiV1,
-    STATUS_OK,
+    STATUS_OK, STYLE_CATEGORY, STYLE_EVALUATE_V1, StrokeCapV1, StrokeJoinV1,
+    StyleEvaluateRequestV1, StyleOutputV1,
 };
 use serde::Deserialize;
 
@@ -24,7 +27,7 @@ use crate::model::property::{
 use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
 use crate::plugin::repository::PluginRepository;
-use crate::plugin::{EffectorPlugin, Plugin, PluginCategory};
+use crate::plugin::{DecoratorPlugin, EffectorPlugin, Plugin, PluginCategory, StylePlugin};
 
 const BUNDLE_MANIFEST_NAME: &str = "ruvie-plugin.toml";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -203,6 +206,8 @@ impl RuntimePluginRegistry {
         &mut self,
         pending: PendingBundle,
         effector_plugins: &mut PluginRepository<dyn EffectorPlugin>,
+        decorator_plugins: &mut PluginRepository<dyn DecoratorPlugin>,
+        style_plugins: &mut PluginRepository<dyn StylePlugin>,
         property_evaluators: &mut PropertyEvaluatorRegistry,
     ) -> Result<Vec<(String, String)>, LibraryError> {
         // Prepare every fallible definition conversion and adapter before
@@ -240,7 +245,22 @@ impl RuntimePluginRegistry {
                         key.1
                     )));
                 }
-                RuntimeAdapter::Effector(_) | RuntimeAdapter::Property(_) => {}
+                RuntimeAdapter::Decorator(_) if decorator_plugins.get(&key.1).is_some() => {
+                    return Err(LibraryError::Plugin(format!(
+                        "Decorator plugin ID '{}' is already registered",
+                        key.1
+                    )));
+                }
+                RuntimeAdapter::Style(_) if style_plugins.get(&key.1).is_some() => {
+                    return Err(LibraryError::Plugin(format!(
+                        "Style plugin ID '{}' is already registered",
+                        key.1
+                    )));
+                }
+                RuntimeAdapter::Effector(_)
+                | RuntimeAdapter::Property(_)
+                | RuntimeAdapter::Decorator(_)
+                | RuntimeAdapter::Style(_) => {}
             }
         }
 
@@ -252,6 +272,8 @@ impl RuntimePluginRegistry {
                 RuntimeAdapter::Property(evaluator) => {
                     property_evaluators.register(&component.key.1, evaluator);
                 }
+                RuntimeAdapter::Decorator(plugin) => decorator_plugins.register(plugin),
+                RuntimeAdapter::Style(plugin) => style_plugins.register(plugin),
             }
             registered.push(component.key.clone());
             self.components.insert(component.key, component.component);
@@ -279,6 +301,8 @@ struct PreparedRuntimeComponent {
 enum RuntimeAdapter {
     Effector(Arc<dyn EffectorPlugin>),
     Property(Arc<dyn PropertyEvaluator>),
+    Decorator(Arc<dyn DecoratorPlugin>),
+    Style(Arc<dyn StylePlugin>),
 }
 
 fn prepare_runtime_components(
@@ -308,6 +332,14 @@ fn prepare_runtime_components(
                         output_default,
                     }))
                 }
+                DECORATOR_CATEGORY => RuntimeAdapter::Decorator(Arc::new(RuntimeDecoratorPlugin {
+                    component: component.clone(),
+                    definitions,
+                })),
+                STYLE_CATEGORY => RuntimeAdapter::Style(Arc::new(RuntimeStylePlugin {
+                    component: component.clone(),
+                    definitions,
+                })),
                 _ => {
                     return Err(LibraryError::Plugin(format!(
                         "Runtime plugin component '{}/{}' has no ABI-v1 host adapter",
@@ -772,6 +804,352 @@ impl EffectorPlugin for RuntimeEffectorPlugin {
     }
 }
 
+fn resolved_config_properties(
+    context: &FrameEvaluationContext,
+    definitions: &[PropertyDefinition],
+    properties: &crate::model::property::PropertyMap,
+    eval_time: f64,
+    operation_label: &str,
+) -> Option<BTreeMap<String, PropertyValueV1>> {
+    if !eval_time.is_finite() {
+        log::error!("{operation_label} received a non-finite evaluation time");
+        return None;
+    }
+    let evaluated = context.evaluate_operation_properties(
+        definitions,
+        properties,
+        eval_time,
+        operation_label,
+    )?;
+    let mut wire_properties = BTreeMap::new();
+    for definition in definitions {
+        let Some(value) = evaluated.get(definition.name()) else {
+            log::error!(
+                "{operation_label} did not resolve declared property '{}'",
+                definition.name()
+            );
+            return None;
+        };
+        let value = match property_value_to_wire(value) {
+            Ok(value) => value,
+            Err(error) => {
+                log::error!(
+                    "{operation_label} property '{}' cannot cross ABI v1: {error}",
+                    definition.name()
+                );
+                return None;
+            }
+        };
+        wire_properties.insert(definition.name().to_string(), value);
+    }
+    Some(wire_properties)
+}
+
+struct RuntimeStylePlugin {
+    component: RuntimeComponent,
+    definitions: Vec<PropertyDefinition>,
+}
+
+impl Plugin for RuntimeStylePlugin {
+    fn id(&self) -> &str {
+        &self.component.descriptor.id
+    }
+
+    fn name(&self) -> String {
+        self.component.descriptor.name.clone()
+    }
+
+    fn category(&self) -> String {
+        self.component.descriptor.group.clone()
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        parse_semver_triplet(&self.component.descriptor.version)
+    }
+
+    fn impl_type(&self) -> String {
+        "Native ABI v1".to_string()
+    }
+}
+
+impl StylePlugin for RuntimeStylePlugin {
+    fn descriptor(
+        &self,
+    ) -> Result<crate::plugin::OperationDescriptor, crate::plugin::OperationDescriptorError> {
+        crate::plugin::OperationDescriptor::style(self.id(), self.name(), self.definitions.clone())
+    }
+
+    fn evaluate_source(
+        &self,
+        context: &FrameEvaluationContext,
+        source_id: uuid::Uuid,
+        properties: &crate::model::property::PropertyMap,
+        eval_time: f64,
+    ) -> Option<crate::model::frame::entity::StyleConfig> {
+        let label = format!("Runtime Style '{}'", self.id());
+        let properties =
+            resolved_config_properties(context, &self.definitions, properties, eval_time, &label)?;
+        let payload = match serde_json::to_value(StyleEvaluateRequestV1 {
+            time: eval_time,
+            fps: context.evaluation_fps(),
+            properties,
+        }) {
+            Ok(payload) => payload,
+            Err(error) => {
+                log::error!("Failed to encode {label}: {error}");
+                return None;
+            }
+        };
+        let response = match self.component.invoke(STYLE_EVALUATE_V1, payload) {
+            Ok(response) => response,
+            Err(error) => {
+                log::error!("{label} failed: {error}");
+                return None;
+            }
+        };
+        safe_style_config_from_response(response, source_id, &label)
+    }
+}
+
+fn safe_style_config_from_response(
+    response: serde_json::Value,
+    source_id: uuid::Uuid,
+    operation_label: &str,
+) -> Option<crate::model::frame::entity::StyleConfig> {
+    match style_config_from_response(response, source_id) {
+        Ok(output) => output,
+        Err(error) => {
+            log::error!("{operation_label} returned an invalid config: {error}");
+            None
+        }
+    }
+}
+
+fn style_config_from_response(
+    response: serde_json::Value,
+    source_id: uuid::Uuid,
+) -> Result<Option<crate::model::frame::entity::StyleConfig>, LibraryError> {
+    let output = serde_json::from_value(response).map_err(|error| {
+        LibraryError::Plugin(format!("Runtime Style response is invalid: {error}"))
+    })?;
+    style_config_from_wire(output, source_id)
+}
+
+fn style_config_from_wire(
+    output: StyleOutputV1,
+    source_id: uuid::Uuid,
+) -> Result<Option<crate::model::frame::entity::StyleConfig>, LibraryError> {
+    use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType};
+
+    let invalid = |detail: &str| LibraryError::Plugin(format!("Runtime Style output {detail}"));
+    let style = match output {
+        StyleOutputV1::NoOutput => return Ok(None),
+        StyleOutputV1::Fill { color, offset } => {
+            if !offset.is_finite() {
+                return Err(invalid("has a non-finite Fill offset"));
+            }
+            DrawStyle::Fill {
+                color: color_from_wire(color),
+                offset,
+            }
+        }
+        StyleOutputV1::Stroke {
+            color,
+            width,
+            offset,
+            cap,
+            join,
+            miter,
+            dash_array,
+            dash_offset,
+        } => {
+            if !width.is_finite()
+                || !offset.is_finite()
+                || !miter.is_finite()
+                || !dash_offset.is_finite()
+                || width < 0.0
+                || miter < 0.0
+                || !valid_stroke_dash_array(&dash_array)
+            {
+                return Err(invalid("has invalid Stroke numeric fields"));
+            }
+            DrawStyle::Stroke {
+                color: color_from_wire(color),
+                width,
+                offset,
+                cap: match cap {
+                    StrokeCapV1::Round => CapType::Round,
+                    StrokeCapV1::Square => CapType::Square,
+                    StrokeCapV1::Butt => CapType::Butt,
+                },
+                join: match join {
+                    StrokeJoinV1::Round => JoinType::Round,
+                    StrokeJoinV1::Bevel => JoinType::Bevel,
+                    StrokeJoinV1::Miter => JoinType::Miter,
+                },
+                miter,
+                dash_array,
+                dash_offset,
+            }
+        }
+    };
+    Ok(Some(crate::model::frame::entity::StyleConfig {
+        id: source_id,
+        style,
+    }))
+}
+
+fn valid_stroke_dash_array(values: &[f64]) -> bool {
+    values.is_empty()
+        || (values.len().is_multiple_of(2)
+            && values.iter().all(|value| value.is_finite() && *value > 0.0))
+}
+
+struct RuntimeDecoratorPlugin {
+    component: RuntimeComponent,
+    definitions: Vec<PropertyDefinition>,
+}
+
+impl Plugin for RuntimeDecoratorPlugin {
+    fn id(&self) -> &str {
+        &self.component.descriptor.id
+    }
+
+    fn name(&self) -> String {
+        self.component.descriptor.name.clone()
+    }
+
+    fn category(&self) -> String {
+        self.component.descriptor.group.clone()
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        parse_semver_triplet(&self.component.descriptor.version)
+    }
+
+    fn impl_type(&self) -> String {
+        "Native ABI v1".to_string()
+    }
+}
+
+impl DecoratorPlugin for RuntimeDecoratorPlugin {
+    fn properties(&self) -> Vec<PropertyDefinition> {
+        self.definitions.clone()
+    }
+
+    fn evaluate_source(
+        &self,
+        context: &FrameEvaluationContext,
+        _source_id: uuid::Uuid,
+        properties: &crate::model::property::PropertyMap,
+        eval_time: f64,
+    ) -> Option<crate::core::ensemble::types::DecoratorConfig> {
+        let label = format!("Runtime Decorator '{}'", self.id());
+        let properties =
+            resolved_config_properties(context, &self.definitions, properties, eval_time, &label)?;
+        let payload = match serde_json::to_value(DecoratorEvaluateRequestV1 {
+            time: eval_time,
+            fps: context.evaluation_fps(),
+            properties,
+        }) {
+            Ok(payload) => payload,
+            Err(error) => {
+                log::error!("Failed to encode {label}: {error}");
+                return None;
+            }
+        };
+        let response = match self.component.invoke(DECORATOR_EVALUATE_V1, payload) {
+            Ok(response) => response,
+            Err(error) => {
+                log::error!("{label} failed: {error}");
+                return None;
+            }
+        };
+        safe_decorator_config_from_response(response, &label)
+    }
+}
+
+fn safe_decorator_config_from_response(
+    response: serde_json::Value,
+    operation_label: &str,
+) -> Option<crate::core::ensemble::types::DecoratorConfig> {
+    match decorator_config_from_response(response) {
+        Ok(output) => output,
+        Err(error) => {
+            log::error!("{operation_label} returned an invalid config: {error}");
+            None
+        }
+    }
+}
+
+fn decorator_config_from_response(
+    response: serde_json::Value,
+) -> Result<Option<crate::core::ensemble::types::DecoratorConfig>, LibraryError> {
+    let output = serde_json::from_value(response).map_err(|error| {
+        LibraryError::Plugin(format!("Runtime Decorator response is invalid: {error}"))
+    })?;
+    decorator_config_from_wire(output)
+}
+
+fn decorator_config_from_wire(
+    output: DecoratorOutputV1,
+) -> Result<Option<crate::core::ensemble::types::DecoratorConfig>, LibraryError> {
+    use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
+    use crate::core::ensemble::types::DecoratorConfig;
+
+    let DecoratorOutputV1::Backplate {
+        target,
+        shape,
+        color,
+        padding,
+        corner_radius,
+    } = output
+    else {
+        return Ok(None);
+    };
+    let InsetsV1 {
+        top,
+        right,
+        bottom,
+        left,
+    } = padding;
+    if !top.is_finite()
+        || !right.is_finite()
+        || !bottom.is_finite()
+        || !left.is_finite()
+        || !corner_radius.is_finite()
+        || corner_radius < 0.0
+    {
+        return Err(LibraryError::Plugin(
+            "Runtime Decorator output has invalid Backplate numeric fields".to_string(),
+        ));
+    }
+    Ok(Some(DecoratorConfig::Backplate {
+        target: match target {
+            DecoratorTargetV1::Block => BackplateTarget::Block,
+            DecoratorTargetV1::Line => BackplateTarget::Line,
+            DecoratorTargetV1::Char => BackplateTarget::Char,
+        },
+        shape: match shape {
+            BackplateShapeV1::Rect => BackplateShape::Rect,
+            BackplateShapeV1::RoundedRect => BackplateShape::RoundedRect,
+            BackplateShapeV1::Circle => BackplateShape::Circle,
+        },
+        color: color_from_wire(color),
+        padding: (top, right, bottom, left),
+        corner_radius,
+    }))
+}
+
+fn color_from_wire(color: ColorV1) -> crate::model::frame::color::Color {
+    crate::model::frame::color::Color {
+        r: color.r,
+        g: color.g,
+        b: color.b,
+        a: color.a,
+    }
+}
+
 struct RuntimePropertyEvaluator {
     component: RuntimeComponent,
     definitions: Vec<PropertyDefinition>,
@@ -1043,9 +1421,45 @@ fn validate_descriptor(descriptor: &PluginDescriptorV1) -> Result<(), LibraryErr
                 }
                 let _ = property_output_default(component)?;
             }
+            STYLE_CATEGORY => {
+                if !component
+                    .operations
+                    .iter()
+                    .any(|operation| operation == STYLE_EVALUATE_V1)
+                {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime Style '{}' does not declare {STYLE_EVALUATE_V1}",
+                        component.id
+                    )));
+                }
+                if component.output_default.is_some() {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime Style '{}' must not declare output_default",
+                        component.id
+                    )));
+                }
+            }
+            DECORATOR_CATEGORY => {
+                if !component
+                    .operations
+                    .iter()
+                    .any(|operation| operation == DECORATOR_EVALUATE_V1)
+                {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime Decorator '{}' does not declare {DECORATOR_EVALUATE_V1}",
+                        component.id
+                    )));
+                }
+                if component.output_default.is_some() {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime Decorator '{}' must not declare output_default",
+                        component.id
+                    )));
+                }
+            }
             unsupported => {
                 return Err(LibraryError::Plugin(format!(
-                    "Runtime plugin component '{}/{}' uses category '{unsupported}', but ABI v1 integrates only '{EFFECTOR_CATEGORY}' and '{PROPERTY_CATEGORY}'; the entire bundle was rejected",
+                    "Runtime plugin component '{}/{}' uses category '{unsupported}', but ABI v1 integrates only '{EFFECTOR_CATEGORY}', '{PROPERTY_CATEGORY}', '{STYLE_CATEGORY}', and '{DECORATOR_CATEGORY}'; the entire bundle was rejected",
                     descriptor.name, component.id
                 )));
             }
@@ -1396,6 +1810,78 @@ mod tests {
         }
     }
 
+    fn style_component() -> ComponentDescriptorV1 {
+        ComponentDescriptorV1 {
+            id: "example.runtime_fill".to_string(),
+            name: "Runtime Fill".to_string(),
+            category: STYLE_CATEGORY.to_string(),
+            group: "Tests".to_string(),
+            version: "1.2.3".to_string(),
+            operations: vec![STYLE_EVALUATE_V1.to_string()],
+            properties: vec![
+                PropertyDefinitionV1 {
+                    name: "color".to_string(),
+                    label: "Color".to_string(),
+                    ui: PropertyUiV1::Color,
+                    default: serde_json::json!({"r": 10, "g": 20, "b": 30, "a": 255}),
+                },
+                PropertyDefinitionV1 {
+                    name: "offset".to_string(),
+                    label: "Offset".to_string(),
+                    ui: PropertyUiV1::Float {
+                        min: -100.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: "px".to_string(),
+                        min_hard_limit: false,
+                        max_hard_limit: false,
+                    },
+                    default: serde_json::json!(2.0),
+                },
+            ],
+            output_default: None,
+        }
+    }
+
+    fn decorator_component() -> ComponentDescriptorV1 {
+        ComponentDescriptorV1 {
+            id: "example.runtime_backplate".to_string(),
+            name: "Runtime Backplate".to_string(),
+            category: DECORATOR_CATEGORY.to_string(),
+            group: "Tests".to_string(),
+            version: "2.3.4".to_string(),
+            operations: vec![DECORATOR_EVALUATE_V1.to_string()],
+            properties: vec![
+                PropertyDefinitionV1 {
+                    name: "target".to_string(),
+                    label: "Target".to_string(),
+                    ui: PropertyUiV1::Dropdown {
+                        options: vec!["Block".to_string(), "Line".to_string(), "Char".to_string()],
+                    },
+                    default: serde_json::json!("Block"),
+                },
+                PropertyDefinitionV1 {
+                    name: "padding".to_string(),
+                    label: "Padding".to_string(),
+                    ui: PropertyUiV1::Vec4 {
+                        suffix: "px".to_string(),
+                    },
+                    default: serde_json::json!({"x": 1.0, "y": 2.0, "z": 3.0, "w": 4.0}),
+                },
+            ],
+            output_default: None,
+        }
+    }
+
+    fn config_descriptor() -> PluginDescriptorV1 {
+        PluginDescriptorV1 {
+            name: "Runtime config test".to_string(),
+            vendor: "Tests".to_string(),
+            version: "1.0.0".to_string(),
+            components: vec![style_component(), decorator_component()],
+        }
+    }
+
     fn descriptor_with(component: ComponentDescriptorV1) -> PluginDescriptorV1 {
         PluginDescriptorV1 {
             name: "Runtime property test".to_string(),
@@ -1493,8 +1979,8 @@ mod tests {
     fn abi_v1_rejects_unintegrated_categories_instead_of_registering_descriptors() {
         let supported = component(PropertyUiV1::Bool, serde_json::json!(true));
         let mut unsupported = supported.clone();
-        unsupported.id = "example.unsupported_style".to_string();
-        unsupported.category = "style".to_string();
+        unsupported.id = "example.unsupported_loader".to_string();
+        unsupported.category = "loader".to_string();
         let descriptor = PluginDescriptorV1 {
             name: "Mixed".to_string(),
             vendor: "Tests".to_string(),
@@ -1504,8 +1990,416 @@ mod tests {
         let error = validate_descriptor(&descriptor)
             .expect_err("an unintegrated category must reject the bundle")
             .to_string();
-        assert!(error.contains("integrates only 'effector'"));
+        assert!(error.contains("uses category 'loader'"));
+        assert!(error.contains("'style'"));
+        assert!(error.contains("'decorator'"));
         assert!(error.contains("entire bundle was rejected"));
+    }
+
+    #[test]
+    fn config_categories_register_typed_descriptor_backed_nodes_atomically() {
+        use crate::model::NodeContent;
+        use crate::model::project::{
+            IMAGE_OUTPUT_PORT, PortDataType, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+        };
+
+        let mut registry = RuntimePluginRegistry::new();
+        let mut effectors: PluginRepository<dyn EffectorPlugin> = PluginRepository::new();
+        let mut decorators: PluginRepository<dyn DecoratorPlugin> = PluginRepository::new();
+        let mut styles: PluginRepository<dyn StylePlugin> = PluginRepository::new();
+        let mut property_evaluators = PropertyEvaluatorRegistry::new();
+        let registered = registry
+            .register_bundle(
+                pending_bundle(config_descriptor()),
+                &mut effectors,
+                &mut decorators,
+                &mut styles,
+                &mut property_evaluators,
+            )
+            .expect("the complete low-bandwidth config bundle registers");
+        assert_eq!(
+            registered,
+            vec![
+                (
+                    STYLE_CATEGORY.to_string(),
+                    "example.runtime_fill".to_string()
+                ),
+                (
+                    DECORATOR_CATEGORY.to_string(),
+                    "example.runtime_backplate".to_string()
+                ),
+            ]
+        );
+
+        let style_descriptor = styles
+            .get("example.runtime_fill")
+            .expect("runtime Style adapter is in the Style repository")
+            .descriptor()
+            .expect("runtime Style descriptor is valid");
+        let style_node = style_descriptor
+            .create_node()
+            .expect("runtime Style descriptor creates a Node");
+        assert_eq!(style_node.properties.iter().count(), 2);
+        let NodeContent::PluginOperation(style_operation) = style_node.content else {
+            panic!("Style descriptor must create PluginOperation content")
+        };
+        assert_eq!(style_operation.category, crate::plugin::STYLE_CATEGORY);
+        assert_eq!(
+            style_operation.operation,
+            crate::plugin::STYLE_APPLY_OPERATION
+        );
+        for (key, data_type) in [
+            (TIME_PORT, PortDataType::Number),
+            (SHAPE_INPUT_PORT, PortDataType::Shape),
+            (IMAGE_OUTPUT_PORT, PortDataType::Image),
+        ] {
+            assert!(
+                style_operation
+                    .declared_ports
+                    .iter()
+                    .any(|port| port.key == key && port.data_type == data_type),
+                "Style operation is missing typed port {key}"
+            );
+        }
+
+        let decorator_descriptor = decorators
+            .get("example.runtime_backplate")
+            .expect("runtime Decorator adapter is in the Decorator repository")
+            .descriptor()
+            .expect("runtime Decorator descriptor is valid");
+        let decorator_node = decorator_descriptor
+            .create_node()
+            .expect("runtime Decorator descriptor creates a Node");
+        assert_eq!(decorator_node.properties.iter().count(), 2);
+        let NodeContent::PluginOperation(decorator_operation) = decorator_node.content else {
+            panic!("Decorator descriptor must create PluginOperation content")
+        };
+        assert_eq!(
+            decorator_operation.category,
+            crate::plugin::DECORATOR_CATEGORY
+        );
+        assert_eq!(
+            decorator_operation.operation,
+            crate::plugin::DECORATOR_APPLY_OPERATION
+        );
+        for (key, data_type) in [
+            (TIME_PORT, PortDataType::Number),
+            (SHAPE_INPUT_PORT, PortDataType::Shape),
+            (SHAPE_OUTPUT_PORT, PortDataType::Shape),
+        ] {
+            assert!(
+                decorator_operation
+                    .declared_ports
+                    .iter()
+                    .any(|port| port.key == key && port.data_type == data_type),
+                "Decorator operation is missing typed port {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn style_wire_conversion_covers_fill_and_stroke_and_rejects_invalid_output() {
+        use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType};
+
+        let source_id = uuid::Uuid::new_v4();
+        let fill = style_config_from_wire(
+            StyleOutputV1::Fill {
+                color: ColorV1 {
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    a: 4,
+                },
+                offset: 2.5,
+            },
+            source_id,
+        )
+        .expect("finite Fill converts")
+        .expect("Fill produces a config");
+        assert_eq!(fill.id, source_id, "the host owns Style config identity");
+        assert_eq!(
+            fill.style,
+            DrawStyle::Fill {
+                color: crate::model::frame::color::Color {
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    a: 4,
+                },
+                offset: 2.5,
+            }
+        );
+
+        let stroke = style_config_from_wire(
+            StyleOutputV1::Stroke {
+                color: ColorV1 {
+                    r: 5,
+                    g: 6,
+                    b: 7,
+                    a: 8,
+                },
+                width: 3.0,
+                offset: -1.0,
+                cap: StrokeCapV1::Butt,
+                join: StrokeJoinV1::Bevel,
+                miter: 4.0,
+                dash_array: vec![2.0, 1.0],
+                dash_offset: 0.5,
+            },
+            source_id,
+        )
+        .expect("finite Stroke converts")
+        .expect("Stroke produces a config");
+        assert_eq!(
+            stroke.style,
+            DrawStyle::Stroke {
+                color: crate::model::frame::color::Color {
+                    r: 5,
+                    g: 6,
+                    b: 7,
+                    a: 8,
+                },
+                width: 3.0,
+                offset: -1.0,
+                cap: CapType::Butt,
+                join: JoinType::Bevel,
+                miter: 4.0,
+                dash_array: vec![2.0, 1.0],
+                dash_offset: 0.5,
+            }
+        );
+
+        assert!(
+            style_config_from_wire(
+                StyleOutputV1::Fill {
+                    color: ColorV1 {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 0,
+                    },
+                    offset: f64::INFINITY,
+                },
+                source_id,
+            )
+            .is_err(),
+            "non-finite output must not reach host StyleConfig"
+        );
+        for invalid_dash in [vec![1.0], vec![1.0, 0.0], vec![1.0, -1.0]] {
+            assert!(
+                style_config_from_wire(
+                    StyleOutputV1::Stroke {
+                        color: ColorV1 {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 255,
+                        },
+                        width: 1.0,
+                        offset: 0.0,
+                        cap: StrokeCapV1::Round,
+                        join: StrokeJoinV1::Round,
+                        miter: 4.0,
+                        dash_array: invalid_dash,
+                        dash_offset: 0.0,
+                    },
+                    source_id,
+                )
+                .is_err(),
+                "unsafe dash config must become NoOutput"
+            );
+        }
+        assert!(valid_stroke_dash_array(&[]));
+        assert!(valid_stroke_dash_array(&[2.0, 1.0]));
+        assert!(
+            skia_safe::PathEffect::dash(&[1.0], 0.0).is_none(),
+            "Skia rejects an odd number of dash intervals"
+        );
+        assert!(
+            skia_safe::PathEffect::dash(&[0.0, 0.0], 0.0).is_none(),
+            "Skia rejects an all-zero dash definition"
+        );
+        assert!(
+            skia_safe::PathEffect::dash(&[2.0, 1.0], 0.0).is_some(),
+            "the ABI's accepted dash shape is executable by Skia"
+        );
+        assert!(
+            style_config_from_response(
+                serde_json::json!({
+                    "type": "fill",
+                    "color": {"r": 0, "g": 0, "b": 0, "a": 255},
+                    "offset": 0.0,
+                    "undeclared": true
+                }),
+                source_id,
+            )
+            .is_err(),
+            "undeclared plugin output fields are rejected"
+        );
+        assert!(
+            style_config_from_response(serde_json::json!({"type": "future_style"}), source_id)
+                .is_err(),
+            "unknown output variants are rejected"
+        );
+        assert!(
+            safe_style_config_from_response(
+                serde_json::json!({
+                    "type": "stroke",
+                    "color": {"r": 0, "g": 0, "b": 0, "a": 255},
+                    "width": 1.0,
+                    "offset": 0.0,
+                    "cap": "round",
+                    "join": "round",
+                    "miter": 4.0,
+                    "dash_array": [1.0],
+                    "dash_offset": 0.0
+                }),
+                source_id,
+                "test runtime Style"
+            )
+            .is_none(),
+            "a decoded but unsafe dash response must fail safely as NoOutput"
+        );
+    }
+
+    #[test]
+    fn decorator_wire_conversion_covers_backplate_without_exposing_parts() {
+        use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
+        use crate::core::ensemble::types::DecoratorConfig;
+
+        let output = decorator_config_from_wire(DecoratorOutputV1::Backplate {
+            target: DecoratorTargetV1::Char,
+            shape: BackplateShapeV1::RoundedRect,
+            color: ColorV1 {
+                r: 10,
+                g: 20,
+                b: 30,
+                a: 40,
+            },
+            padding: InsetsV1 {
+                top: 1.0,
+                right: 2.0,
+                bottom: 3.0,
+                left: 4.0,
+            },
+            corner_radius: 5.0,
+        })
+        .expect("finite Backplate converts")
+        .expect("Backplate produces a config");
+        assert_eq!(
+            output,
+            DecoratorConfig::Backplate {
+                target: BackplateTarget::Char,
+                shape: BackplateShape::RoundedRect,
+                color: crate::model::frame::color::Color {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    a: 40,
+                },
+                padding: (1.0, 2.0, 3.0, 4.0),
+                corner_radius: 5.0,
+            }
+        );
+
+        assert!(
+            decorator_config_from_wire(DecoratorOutputV1::Backplate {
+                target: DecoratorTargetV1::Block,
+                shape: BackplateShapeV1::Rect,
+                color: ColorV1 {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
+                padding: InsetsV1 {
+                    top: f32::NAN,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                },
+                corner_radius: 0.0,
+            })
+            .is_err(),
+            "non-finite Backplate output must not reach the renderer"
+        );
+        assert!(
+            decorator_config_from_response(serde_json::json!({
+                "type": "backplate",
+                "target": "parts",
+                "shape": "rect",
+                "color": {"r": 0, "g": 0, "b": 0, "a": 255},
+                "padding": {"top": 0.0, "right": 0.0, "bottom": 0.0, "left": 0.0},
+                "corner_radius": 0.0
+            }))
+            .is_err(),
+            "the unsupported Parts target is not an ABI-v1 config"
+        );
+        assert!(
+            safe_decorator_config_from_response(
+                serde_json::json!({"type": "future_decorator"}),
+                "test runtime Decorator"
+            )
+            .is_none(),
+            "unknown Decorator output must fail safely as NoOutput"
+        );
+    }
+
+    #[test]
+    fn malformed_late_decorator_does_not_partially_register_an_earlier_style() {
+        let mut malformed_decorator = decorator_component();
+        malformed_decorator.properties[1].default =
+            serde_json::json!({"x": 1.0, "y": 2.0, "z": 3.0, "w": 4.0, "extra": 5.0});
+        let descriptor = PluginDescriptorV1 {
+            name: "Atomic mixed config".to_string(),
+            vendor: "Tests".to_string(),
+            version: "1.0.0".to_string(),
+            components: vec![style_component(), malformed_decorator],
+        };
+        let mut registry = RuntimePluginRegistry::new();
+        let mut effectors: PluginRepository<dyn EffectorPlugin> = PluginRepository::new();
+        let mut decorators: PluginRepository<dyn DecoratorPlugin> = PluginRepository::new();
+        let mut styles: PluginRepository<dyn StylePlugin> = PluginRepository::new();
+        let mut property_evaluators = PropertyEvaluatorRegistry::new();
+
+        let error = registry
+            .register_bundle(
+                pending_bundle(descriptor),
+                &mut effectors,
+                &mut decorators,
+                &mut styles,
+                &mut property_evaluators,
+            )
+            .expect_err("a malformed later Decorator must reject the whole bundle")
+            .to_string();
+        assert!(error.contains("expected exactly finite number fields"));
+        assert!(registry.components.is_empty());
+        assert!(registry.descriptors.is_empty());
+        assert!(registry.libraries.is_empty());
+        assert!(effectors.plugins.is_empty());
+        assert!(decorators.plugins.is_empty());
+        assert!(styles.plugins.is_empty());
+    }
+
+    #[test]
+    fn config_categories_require_their_versioned_operation_and_no_default_output() {
+        for (mut component, operation) in [
+            (style_component(), STYLE_EVALUATE_V1),
+            (decorator_component(), DECORATOR_EVALUATE_V1),
+        ] {
+            component.operations.clear();
+            let error = validate_descriptor(&descriptor_with(component.clone()))
+                .expect_err("config component without its versioned evaluator is invalid")
+                .to_string();
+            assert!(error.contains(operation));
+
+            component.operations.push(operation.to_string());
+            component.output_default = Some(PropertyValueV1::Boolean { value: false });
+            let error = validate_descriptor(&descriptor_with(component))
+                .expect_err("NoOutput categories cannot declare a fabricated default")
+                .to_string();
+            assert!(error.contains("must not declare output_default"));
+        }
     }
 
     #[test]
@@ -1612,6 +2506,8 @@ mod tests {
         };
         let mut registry = RuntimePluginRegistry::new();
         let mut effectors: PluginRepository<dyn EffectorPlugin> = PluginRepository::new();
+        let mut decorators: PluginRepository<dyn DecoratorPlugin> = PluginRepository::new();
+        let mut styles: PluginRepository<dyn StylePlugin> = PluginRepository::new();
         let mut property_evaluators = PropertyEvaluatorRegistry::new();
         assert_eq!(
             registry.claim_bundle(&resolved),
@@ -1622,6 +2518,8 @@ mod tests {
             .register_bundle(
                 pending_bundle(two_component_descriptor(serde_json::json!(101.0))),
                 &mut effectors,
+                &mut decorators,
+                &mut styles,
                 &mut property_evaluators,
             )
             .expect_err("the second component exceeds its hard maximum")
@@ -1634,6 +2532,8 @@ mod tests {
         assert!(registry.libraries.is_empty());
         assert!(registry.loaded_manifests.is_empty());
         assert!(effectors.plugins.is_empty());
+        assert!(decorators.plugins.is_empty());
+        assert!(styles.plugins.is_empty());
         assert!(!property_evaluators.contains("example.first"));
 
         assert_eq!(
@@ -1644,6 +2544,8 @@ mod tests {
             .register_bundle(
                 pending_bundle(two_component_descriptor(serde_json::json!(50.0))),
                 &mut effectors,
+                &mut decorators,
+                &mut styles,
                 &mut property_evaluators,
             )
             .expect("a corrected rescan must not hit a stale partial-ID collision");
