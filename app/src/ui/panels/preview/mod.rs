@@ -3,9 +3,9 @@ use egui_phosphor::regular as icons;
 use std::num::NonZeroU32;
 use std::sync::{Arc, RwLock};
 
+use library::model::project::Project;
 use library::EditorService;
 use library::RenderServer;
-use library::model::project::Project;
 
 use crate::command::{CommandId, CommandRegistry};
 use crate::state::context_types::{
@@ -1507,20 +1507,16 @@ mod tests {
         );
         assert!(!editor_context.interaction.is_moving_selected_entity);
         assert!(editor_context.interaction.body_drag_state.is_none());
-        assert!(
-            editor_context
-                .interaction
-                .preview_selection_drag_start
-                .is_none()
-        );
+        assert!(editor_context
+            .interaction
+            .preview_selection_drag_start
+            .is_none());
         assert!(editor_context.interaction.gizmo_state.is_none());
-        assert!(
-            editor_context
-                .interaction
-                .vector_editor_state
-                .as_ref()
-                .is_some_and(|state| state.selected_handle.is_none())
-        );
+        assert!(editor_context
+            .interaction
+            .vector_editor_state
+            .as_ref()
+            .is_some_and(|state| state.selected_handle.is_none()));
         assert!(pending_actions.is_empty());
         assert_eq!(*project.read().unwrap(), project_before);
         assert_eq!(editor_context.view.zoom, zoom_before);
@@ -1648,11 +1644,9 @@ mod tests {
             PreviewAction::UpdateProperty { node_id, prop_name, .. }
                 if *node_id == source.id && prop_name == "position"
         )));
-        assert!(
-            actions
-                .iter()
-                .any(|action| matches!(action, PreviewAction::CommitHistory))
-        );
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, PreviewAction::CommitHistory)));
         let body_positions = actions
             .iter()
             .filter_map(|action| match action {
@@ -1699,11 +1693,9 @@ mod tests {
             PreviewAction::UpdateProperty { node_id, prop_name, .. }
                 if *node_id == source.id && prop_name == "scale"
         )));
-        assert!(
-            actions
-                .iter()
-                .any(|action| matches!(action, PreviewAction::CommitHistory))
-        );
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, PreviewAction::CommitHistory)));
         let edited = apply_actions(source, actions);
         assert_eq!(vector_property(&edited, "position"), (14.0, 11.0));
         assert_eq!(vector_property(&edited, "scale"), (117.5, 100.0));
