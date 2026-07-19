@@ -10,8 +10,8 @@ use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use crate::action::{
+    handler::{handle_command, ActionContext},
     HistoryManager,
-    handler::{ActionContext, handle_command},
 };
 use crate::command::{CommandId, CommandRegistry};
 use crate::config;
@@ -22,7 +22,7 @@ use crate::ui::command_palette::CommandPalette;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::ui::dialogs::export_dialog::ExportDialog;
 use crate::ui::dialogs::settings_dialog::SettingsDialog;
-use crate::ui::tab_viewer::{AppTabViewer, create_initial_dock_state};
+use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
 use crate::utils::lock::read_or_recover;
 use library::RenderServer;
 
@@ -97,13 +97,13 @@ impl RuViEApp {
             command_registry: command_registry.clone(),
             app_config: app_config.clone(),
             settings_dialog: SettingsDialog::new(
-                command_registry.clone(),
-                app_config.clone(),
+                command_registry,
+                app_config,
                 plugin_manager.clone(),
             ),
             triggered_action: None,
             composition_dialog: CompositionDialog::new(),
-            export_dialog: ExportDialog::new(plugin_manager, cache_manager.clone()),
+            export_dialog: ExportDialog::new(plugin_manager, cache_manager),
             command_palette: CommandPalette::new(),
             render_server,
             qa_runtime,
