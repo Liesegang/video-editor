@@ -487,6 +487,10 @@ class QaClient:
 
     def replace_text(self, component_id, value):
         self.ensure_in_scroll_area(component_id)
+        self.replace_component_text(component_id, value)
+
+    def replace_component_text(self, component_id, value):
+        """Replace a real text control that is not inside the Inspector scroll area."""
         self.click_component(component_id)
         self.key("a", True, command=True)
         self.key("a", False, command=True)
@@ -825,70 +829,236 @@ def open_create_menu(client):
     return point
 
 
+def project_connection(project, connection_id):
+    return next(
+        (
+            connection
+            for connection in project.get("connections", ())
+            if connection.get("id") == connection_id
+        ),
+        None,
+    )
+
+
+def find_project_connection(
+    project,
+    from_owner_type,
+    from_owner_id,
+    from_port,
+    to_owner_type,
+    to_owner_id,
+    to_port,
+):
+    def address_matches(address, owner_type, owner_id, port):
+        owner = address.get("owner", {})
+        return (
+            owner.get("owner_type") == owner_type
+            and owner.get("owner_id") == owner_id
+            and address.get("port") == port
+        )
+
+    matches = [
+        connection
+        for connection in project.get("connections", ())
+        if address_matches(
+            connection.get("from", {}), from_owner_type, from_owner_id, from_port
+        )
+        and address_matches(
+            connection.get("to", {}), to_owner_type, to_owner_id, to_port
+        )
+    ]
+    if len(matches) != 1:
+        raise QaFailure(
+            "expected one {}:{} -> {}:{} connection, found {}".format(
+                from_owner_id, from_port, to_owner_id, to_port, len(matches)
+            )
+        )
+    return matches[0]
+
+
+def undo_project_edit(client, description, predicate):
+    client.key("z", True, command=True)
+    client.key("z", False, command=True)
+    return client.wait_project(description + " undo", predicate)
+
+
+def create_node_from_add_search(client, query, item_id):
+    before = client.state()
+    node_ids_before = set(before["project"]["nodes"])
+    open_create_menu(client)
+    client.wait_component("node_editor.menu.search")
+    client.replace_component_text("node_editor.menu.search", query)
+    _, item = client.wait_component_settled(item_id)
+    client.click_component(item_id)
+    created = client.wait_project(
+        "{} creation through searchable Add menu".format(query),
+        lambda project: len(project["nodes"]) == len(node_ids_before) + 1,
+    )
+    node_id = (set(created["project"]["nodes"]) - node_ids_before).pop()
+    return node_id, created, item.get("metadata") or {}
+
+
+def delete_node_through_context_menu(client, node_id):
+    header_id = "node_editor.node_header:" + node_id
+    reveal_node_editor_component(client, header_id)
+    client.click_component(header_id, button="secondary")
+    delete_id = "node_editor.menu.delete.node:" + node_id
+    client.wait_component(delete_id)
+    client.click_component(delete_id)
+    return client.wait_project(
+        "temporary Node {} deletion".format(node_id),
+        lambda project: node_id not in project["nodes"],
+    )
+
+
+def point_in_component_rect(point, rect, padding=0.0):
+    return (
+        rect["min_x"] - padding <= point["x"] <= rect["max_x"] + padding
+        and rect["min_y"] - padding <= point["y"] <= rect["max_y"] + padding
+    )
+
+
+def line_span_inside_rect(first, second, rect, margin=10.0):
+    """Return the two boundary points where an infinite line crosses a rect."""
+    dx = second["x"] - first["x"]
+    dy = second["y"] - first["y"]
+    if dx * dx + dy * dy < 16.0:
+        return None
+    bounds = {
+        "min_x": rect["min_x"] + margin,
+        "max_x": rect["max_x"] - margin,
+        "min_y": rect["min_y"] + margin,
+        "max_y": rect["max_y"] - margin,
+    }
+    candidates = []
+    if abs(dx) > 1.0e-6:
+        for x in (bounds["min_x"], bounds["max_x"]):
+            factor = (x - first["x"]) / dx
+            y = first["y"] + dy * factor
+            if bounds["min_y"] <= y <= bounds["max_y"]:
+                candidates.append((factor, {"x": x, "y": y}))
+    if abs(dy) > 1.0e-6:
+        for y in (bounds["min_y"], bounds["max_y"]):
+            factor = (y - first["y"]) / dy
+            x = first["x"] + dx * factor
+            if bounds["min_x"] <= x <= bounds["max_x"]:
+                candidates.append((factor, {"x": x, "y": y}))
+    candidates.sort(key=lambda item: item[0])
+    if len(candidates) < 2:
+        return None
+    return candidates[0][1], candidates[-1][1]
+
+
+def find_wire_knife_gesture(snapshot):
+    components = snapshot["components"]
+    canvas = next(
+        (item for item in components if item["id"] == "node_editor.canvas"), None
+    )
+    if canvas is None:
+        raise QaFailure("Node Editor canvas is absent while planning a knife gesture")
+    edges = [
+        item
+        for item in components
+        if item["id"].startswith("node_editor.edge:")
+        and item.get("visible", False)
+        and (item.get("metadata") or {}).get("kind") == "explicit"
+        and (item.get("metadata") or {}).get("hit_point") is not None
+    ]
+    obstacle_prefixes = (
+        "node_editor.node:",
+        "node_editor.node_header:",
+        "node_editor.port.",
+        "node_editor.container_header.",
+        "node_editor.container_port.",
+        "node_editor.resize_edge.",
+        "node_editor.edge:",
+    )
+    obstacles = [
+        item["rect_points"]
+        for item in components
+        if item.get("visible", False)
+        and item["id"].startswith(obstacle_prefixes)
+        and item["rect_points"]["width"] > 0.0
+        and item["rect_points"]["height"] > 0.0
+    ]
+    for left_index, left in enumerate(edges):
+        for right in edges[left_index + 1 :]:
+            left_point = left["metadata"]["hit_point"]
+            right_point = right["metadata"]["hit_point"]
+            span = line_span_inside_rect(
+                left_point, right_point, canvas["rect_points"], margin=14.0
+            )
+            if span is None:
+                continue
+            for start, end in (span, tuple(reversed(span))):
+                if all(
+                    not point_in_component_rect(start, obstacle, 5.0)
+                    for obstacle in obstacles
+                ):
+                    return start, end, [
+                        left["metadata"]["connection_id"],
+                        right["metadata"]["connection_id"],
+                    ]
+    raise QaFailure("no two visible explicit wires admit a blank-origin knife gesture")
+
+
+def explicit_wire_connection_ids(snapshot):
+    return {
+        item["metadata"]["connection_id"]
+        for item in snapshot["components"]
+        if item["id"].startswith("node_editor.edge:")
+        and (item.get("metadata") or {}).get("kind") == "explicit"
+        and (item.get("metadata") or {}).get("connection_id") is not None
+    }
+
+
+def wait_wire_snapshot_for_project(client, project_connection_ids):
+    """Wait until QA edge geometry no longer contains prior-Project wires."""
+    expected = set(project_connection_ids)
+
+    def fresh_snapshot():
+        # State reads schedule a UI pass. Require both a completed frame and
+        # the absence of transient edge UUIDs from the previous Project.
+        state_frame = client.state()["frame"]
+        snapshot = client.component_snapshot()
+        explicit_ids = explicit_wire_connection_ids(snapshot)
+        if snapshot["frame"] < state_frame or not explicit_ids.issubset(expected):
+            return None
+        return snapshot
+
+    return client.wait_until("Node Editor wire geometry for current Project", fresh_snapshot)
+
+
 def reveal_node_editor_component(client, component_id, max_drags=20):
     """Pan the real Snarl canvas until an offscreen component is clickable."""
-    for _ in range(max_drags):
-        snapshot = client.component_snapshot()
-        components = {item["id"]: item for item in snapshot["components"]}
-        component = components.get(component_id)
-        canvas = components.get("node_editor.canvas")
-        if component is None or canvas is None:
-            time.sleep(0.04)
-            continue
-        rect = component["rect_points"]
-        if (
-            component.get("visible", False)
-            and rect["width"] > 0.0
-            and rect["height"] > 0.0
-        ):
-            return snapshot, component
+    snapshot, components = reveal_node_editor_components(
+        client, [component_id], max_drags=max_drags
+    )
+    return snapshot, components[0]
 
-        unclipped = component.get("metadata", {}).get("unclipped_rect")
-        if unclipped is None:
-            time.sleep(0.04)
-            continue
-        canvas_rect = canvas["rect_points"]
-        margin = 12.0
-        max_vertical_step = max(canvas_rect["height"] - margin * 2.0, 1.0)
-        needed = canvas_rect["center_y"] - (
-            unclipped["min_y"] + unclipped["height"] * 0.5
-        )
-        vertical_step = max(-max_vertical_step, min(max_vertical_step, needed))
-        if abs(vertical_step) < 1.0:
-            raise QaFailure(
-                "component {!r} is horizontally outside the Node Editor canvas".format(
-                    component_id
-                )
-            )
-        x = canvas_rect["min_x"] + min(40.0, canvas_rect["width"] * 0.05)
-        start_y = (
-            canvas_rect["max_y"] - margin
-            if vertical_step < 0.0
-            else canvas_rect["min_y"] + margin
-        )
-        start = {"x": x, "y": start_y}
-        end = {"x": x, "y": start_y + vertical_step}
-        client.inject(
-            "drag",
-            {
-                "from": start,
-                "to": end,
-                "coordinate_space": "points",
-                "steps": 6,
-                "button": "middle",
-            },
-            {
-                "component_id": "node_editor.canvas",
-                "target_component_id": component_id,
-                "component_frame": snapshot["frame"],
-                "component_rect_points": canvas_rect,
-                "coordinate_reason": "pan to rendered offscreen component",
-            },
-        )
-    raise QaFailure(
-        "component {!r} did not become visible after {} canvas drags".format(
-            component_id, max_drags
-        )
+
+def node_editor_pan_delta(canvas_rect, unclipped_rects, margin=12.0):
+    """Return one bounded two-axis pan that centers the target union."""
+    if not unclipped_rects:
+        raise QaFailure("Node Editor reveal requires at least one target rectangle")
+    inner_width = canvas_rect["width"] - margin * 2.0
+    inner_height = canvas_rect["height"] - margin * 2.0
+    if inner_width <= 0.0 or inner_height <= 0.0:
+        raise QaFailure("Node Editor canvas is too small for the reveal margin")
+    union_min_x = min(rect["min_x"] for rect in unclipped_rects)
+    union_max_x = max(rect["max_x"] for rect in unclipped_rects)
+    union_min_y = min(rect["min_y"] for rect in unclipped_rects)
+    union_max_y = max(rect["max_y"] for rect in unclipped_rects)
+    if (
+        union_max_x - union_min_x > inner_width
+        or union_max_y - union_min_y > inner_height
+    ):
+        raise QaFailure("Node Editor target union cannot fit in the visible canvas")
+    needed_x = canvas_rect["center_x"] - (union_min_x + union_max_x) * 0.5
+    needed_y = canvas_rect["center_y"] - (union_min_y + union_max_y) * 0.5
+    return (
+        max(-inner_width, min(inner_width, needed_x)),
+        max(-inner_height, min(inner_height, needed_y)),
     )
 
 
@@ -903,12 +1073,16 @@ def reveal_node_editor_components(client, component_ids, max_drags=20, margin=12
             time.sleep(0.04)
             continue
         canvas_rect = canvas["rect_points"]
+        inner_min_x = canvas_rect["min_x"] + margin
+        inner_max_x = canvas_rect["max_x"] - margin
         inner_min_y = canvas_rect["min_y"] + margin
         inner_max_y = canvas_rect["max_y"] - margin
         if all(
             target.get("visible", False)
             and target["rect_points"]["width"] > 0.0
             and target["rect_points"]["height"] > 0.0
+            and target["rect_points"]["min_x"] >= inner_min_x
+            and target["rect_points"]["max_x"] <= inner_max_x
             and target["rect_points"]["min_y"] >= inner_min_y
             and target["rect_points"]["max_y"] <= inner_max_y
             for target in targets
@@ -921,24 +1095,27 @@ def reveal_node_editor_components(client, component_ids, max_drags=20, margin=12
         if any(rect is None for rect in unclipped):
             time.sleep(0.04)
             continue
-        union_min_y = min(rect["min_y"] for rect in unclipped)
-        union_max_y = max(rect["max_y"] for rect in unclipped)
-        if union_max_y - union_min_y > inner_max_y - inner_min_y:
-            raise QaFailure(
-                "Node Editor components cannot fit together in the visible canvas: {}".format(
-                    ", ".join(component_ids)
-                )
+        try:
+            horizontal_step, vertical_step = node_editor_pan_delta(
+                canvas_rect, unclipped, margin
             )
-        needed = canvas_rect["center_y"] - (union_min_y + union_max_y) * 0.5
-        max_step = max(canvas_rect["height"] - margin * 2.0, 1.0)
-        vertical_step = max(-max_step, min(max_step, needed))
-        if abs(vertical_step) < 1.0:
+        except QaFailure as error:
+            raise QaFailure(
+                "Node Editor components cannot fit together in the visible canvas: {} ({})".format(
+                    ", ".join(component_ids), error
+                )
+            ) from error
+        if abs(horizontal_step) < 1.0 and abs(vertical_step) < 1.0:
             raise QaFailure(
                 "Node Editor components did not become fully visible: {}".format(
                     ", ".join(component_ids)
                 )
             )
-        x = canvas_rect["min_x"] + min(40.0, canvas_rect["width"] * 0.05)
+        start_x = (
+            canvas_rect["max_x"] - margin
+            if horizontal_step < 0.0
+            else canvas_rect["min_x"] + margin
+        )
         start_y = (
             canvas_rect["max_y"] - margin
             if vertical_step < 0.0
@@ -947,8 +1124,11 @@ def reveal_node_editor_components(client, component_ids, max_drags=20, margin=12
         client.inject(
             "drag",
             {
-                "from": {"x": x, "y": start_y},
-                "to": {"x": x, "y": start_y + vertical_step},
+                "from": {"x": start_x, "y": start_y},
+                "to": {
+                    "x": start_x + horizontal_step,
+                    "y": start_y + vertical_step,
+                },
                 "coordinate_space": "points",
                 "steps": 6,
                 "button": "middle",
@@ -1480,6 +1660,299 @@ def run_smoke_suite(client, capture_path):
     }
 
 
+def run_node_wire_suite(client):
+    """Exercise Node Add/context/wire/knife paths only through screen coordinates."""
+    health = client.wait_health()
+    initial = wait_fresh_fixture(client)
+    client.wait_component_settled("dock.tab:node_editor")
+    client.click_component("dock.tab:node_editor")
+    client.wait_until(
+        "Node Editor dock activation",
+        lambda: client.state()
+        if "Node Editor" in client.state()["dock"]["active_tabs"]
+        else None,
+    )
+
+    # The shared Add catalog must be searchable by descriptor metadata, and
+    # clicking the result must create the selected runtime operation Node.
+    added_blur, blur_state, blur_metadata = create_node_from_add_search(
+        client, "effect blur", "node_editor.menu.create.effect:blur"
+    )
+    blur_content = blur_state["project"]["nodes"][added_blur]["content"]
+    if not (
+        blur_content.get("type") == "PluginOperation"
+        and blur_content.get("data", {}).get("category") == "effect"
+        and blur_content.get("data", {}).get("component_id") == "blur"
+    ):
+        raise QaFailure("searchable Add menu did not create a Blur operation Node")
+    if not (
+        blur_metadata.get("component_id") == "blur"
+        and str(blur_metadata.get("category", "")).startswith("Image Effects /")
+    ):
+        raise QaFailure("Blur Add item omitted descriptor/category QA metadata")
+    delete_node_through_context_menu(client, added_blur)
+
+    # Node right-click owns Node commands, not the blank-canvas Add menu.
+    text_header = "node_editor.node_header:" + TEXT
+    reveal_node_editor_component(client, text_header)
+    enabled_before = client.state()
+    client.click_component(text_header, button="secondary")
+    toggle_id = "node_editor.menu.toggle_enabled.node:" + TEXT
+    client.wait_component(toggle_id)
+    client.click_component(toggle_id)
+    disabled = client.wait_project(
+        "Node Disable command", lambda project: not project["nodes"][TEXT]["enabled"]
+    )
+    assert_history_delta(enabled_before, disabled, 1, "Node Disable command")
+    client.click_component(text_header, button="secondary")
+    client.wait_component(toggle_id)
+    client.click_component(toggle_id)
+    reenabled = client.wait_project(
+        "Node Enable command", lambda project: project["nodes"][TEXT]["enabled"]
+    )
+    assert_history_delta(disabled, reenabled, 1, "Node Enable command")
+
+    original = find_project_connection(
+        reenabled["project"], "Node", SOLID, "image", "Node", MERGE, "images"
+    )
+    connection_id = original["id"]
+    edge_id = "node_editor.edge:" + connection_id
+    reveal_node_editor_components(
+        client,
+        ["node_editor.node_header:" + SOLID, "node_editor.node_header:" + MERGE],
+    )
+    client.wait_component(edge_id)
+
+    client.click_component(edge_id)
+    client.wait_until(
+        "wire coordinate selection",
+        lambda: client.state()
+        if client.state()["editor"]["node_editor"]["selected_connection_id"]
+        == connection_id
+        else None,
+    )
+
+    # Secondary-click opens a wire command menu; Delete is one undoable
+    # canonical mutation and Undo restores the exact UUID/target/order tuple.
+    delete_before = client.state()
+    client.click_component(edge_id, button="secondary")
+    wire_delete_id = "node_editor.wire_menu.delete:" + connection_id
+    client.wait_component(wire_delete_id)
+    client.click_component(wire_delete_id)
+    deleted = client.wait_project(
+        "wire context Delete",
+        lambda project: project_connection(project, connection_id) is None,
+    )
+    assert_history_delta(delete_before, deleted, 1, "wire context Delete")
+    restored = undo_project_edit(
+        client,
+        "wire context Delete",
+        lambda project: project_connection(project, connection_id) == original,
+    )
+
+    # A normal primary drag from the actual curve midpoint is disconnect, not
+    # a test-only command. It uses the same canonical operation and undo path.
+    reveal_node_editor_components(
+        client,
+        ["node_editor.node_header:" + SOLID, "node_editor.node_header:" + MERGE],
+    )
+    client.wait_component(edge_id)
+    drag_delete_before = client.state()
+    client.drag_component_by(edge_id, 0.0, 44.0, steps=10)
+    drag_deleted = client.wait_project(
+        "wire body drag disconnect",
+        lambda project: project_connection(project, connection_id) is None,
+    )
+    assert_history_delta(
+        drag_delete_before, drag_deleted, 1, "wire body drag disconnect"
+    )
+    restored = undo_project_edit(
+        client,
+        "wire body drag disconnect",
+        lambda project: project_connection(project, connection_id) == original,
+    )
+
+    # Reconnect the persistent source endpoint to Track B's independent image
+    # output. This also exercises a legal cross-container wire without adding
+    # test-only graph state. UUID, target, and order must remain byte-for-byte.
+    alternate_output = (
+        "node_editor.container_port.track:{}.external_output:image".format(TRACK_B)
+    )
+    source_handle = edge_id + ".from_handle"
+    reveal_node_editor_components(client, [source_handle, alternate_output])
+    reconnect_before = client.state()
+    client.drag_components(source_handle, alternate_output, steps=14)
+    reconnected = client.wait_project(
+        "wire endpoint reconnect",
+        lambda project: (
+            project_connection(project, connection_id) is not None
+            and project_connection(project, connection_id)["from"]["owner"]["owner_id"]
+            == TRACK_B
+            and project_connection(project, connection_id)["from"]["owner"]["owner_type"]
+            == "Track"
+        ),
+    )
+    moved_connection = project_connection(reconnected["project"], connection_id)
+    if not (
+        moved_connection["id"] == original["id"]
+        and moved_connection["to"] == original["to"]
+        and moved_connection["order"] == original["order"]
+    ):
+        raise QaFailure("endpoint reconnect changed downstream wire identity/order/target")
+    assert_history_delta(reconnect_before, reconnected, 1, "wire endpoint reconnect")
+    restored = undo_project_edit(
+        client,
+        "wire endpoint reconnect",
+        lambda project: project_connection(project, connection_id) == original,
+    )
+
+    # Wire right-click insertion uses the same categorized searchable catalog.
+    reveal_node_editor_components(
+        client,
+        ["node_editor.node_header:" + SOLID, "node_editor.node_header:" + MERGE],
+    )
+    client.wait_component(edge_id)
+    insert_before = client.state()
+    nodes_before = set(insert_before["project"]["nodes"])
+    client.click_component(edge_id, button="secondary")
+    client.wait_component("node_editor.wire_menu.insert:" + connection_id)
+    client.click_component("node_editor.wire_menu.insert:" + connection_id)
+    client.wait_component("node_editor.wire_menu.search")
+    client.replace_component_text("node_editor.wire_menu.search", "blur")
+    splice_item = "node_editor.wire_menu.operation.effect:blur"
+    _, splice_component = client.wait_component_settled(splice_item)
+    if (splice_component.get("metadata") or {}).get("action") != "splice":
+        raise QaFailure("wire insertion item omitted splice QA action metadata")
+    client.click_component(splice_item)
+    inserted = client.wait_project(
+        "wire menu Blur insertion",
+        lambda project: len(project["nodes"]) == len(nodes_before) + 1
+        and project_connection(project, connection_id) is not None
+        and project_connection(project, connection_id)["from"]["owner"]["owner_id"]
+        not in nodes_before,
+    )
+    inserted_node = (set(inserted["project"]["nodes"]) - nodes_before).pop()
+    inserted_connection = project_connection(inserted["project"], connection_id)
+    if not (
+        inserted_connection["to"] == original["to"]
+        and inserted_connection["order"] == original["order"]
+        and inserted["project"]["nodes"][inserted_node]["content"]["data"]
+        ["component_id"]
+        == "blur"
+    ):
+        raise QaFailure("wire menu insertion did not preserve downstream identity")
+    assert_history_delta(insert_before, inserted, 1, "wire menu Blur insertion")
+    restored = undo_project_edit(
+        client,
+        "wire menu Blur insertion",
+        lambda project: project_connection(project, connection_id) == original
+        and inserted_node not in project["nodes"],
+    )
+
+    # Dropping an existing operation Node on the rendered curve splices it
+    # through the same canonical API and remains one undoable coordinate drag.
+    drop_blur, _, _ = create_node_from_add_search(
+        client, "effect blur", "node_editor.menu.create.effect:blur"
+    )
+    reveal_node_editor_components(
+        client, ["node_editor.node_header:" + drop_blur, edge_id]
+    )
+    drop_before = client.state()
+    client.drag_components("node_editor.node_header:" + drop_blur, edge_id, steps=16)
+    dropped = client.wait_project(
+        "existing operation drop splice",
+        lambda project: project_connection(project, connection_id) is not None
+        and project_connection(project, connection_id)["from"]["owner"]["owner_id"]
+        == drop_blur,
+    )
+    dropped_connection = project_connection(dropped["project"], connection_id)
+    if not (
+        dropped_connection["to"] == original["to"]
+        and dropped_connection["order"] == original["order"]
+        and any(
+            connection["to"]["owner"].get("owner_id") == drop_blur
+            and connection["from"] == original["from"]
+            for connection in dropped["project"]["connections"]
+        )
+    ):
+        raise QaFailure("existing Node drop splice changed downstream identity")
+    assert_history_delta(drop_before, dropped, 1, "existing operation drop splice")
+    restored = undo_project_edit(
+        client,
+        "existing operation drop splice",
+        lambda project: project_connection(project, connection_id) == original,
+    )
+    delete_node_through_context_menu(client, drop_blur)
+
+    # Finally, execute the Blender-like multi-wire knife as an Alt/Option
+    # primary drag beginning on a verified blank canvas coordinate.
+    reveal_node_editor_components(
+        client,
+        ["node_editor.node_header:" + TEXT, "node_editor.node_header:" + BLUR_EFFECT],
+    )
+    knife_before = client.state()
+    connections_before_knife = knife_before["project"]["connections"]
+    connection_ids_before = {
+        connection["id"] for connection in connections_before_knife
+    }
+    knife_snapshot = wait_wire_snapshot_for_project(client, connection_ids_before)
+    knife_start, knife_end, planned_ids = find_wire_knife_gesture(knife_snapshot)
+    client.inject(
+        "drag",
+        {
+            "from": knife_start,
+            "to": knife_end,
+            "coordinate_space": "points",
+            "steps": 18,
+            "button": "primary",
+            "modifiers": {"alt": True},
+        },
+        {
+            "component_id": "node_editor.knife_surface",
+            "component_frame": knife_snapshot["frame"],
+            "target_connection_ids": planned_ids,
+            "coordinate_reason": "blank-origin line through two canonical wire hit points",
+        },
+    )
+    knifed = client.wait_project(
+        "multi-wire knife",
+        lambda project: len(connection_ids_before)
+        - len({connection["id"] for connection in project["connections"]})
+        >= 2,
+    )
+    remaining_ids = {
+        connection["id"] for connection in knifed["project"]["connections"]
+    }
+    removed_ids = connection_ids_before - remaining_ids
+    if len(removed_ids) < 2 or not set(planned_ids).issubset(removed_ids):
+        raise QaFailure(
+            "Alt/Option wire knife removed {}, but planned curve hits were {}".format(
+                sorted(removed_ids), sorted(planned_ids)
+            )
+        )
+    assert_history_delta(knife_before, knifed, 1, "multi-wire knife")
+    undo_project_edit(
+        client,
+        "multi-wire knife",
+        lambda project: project["connections"] == connections_before_knife,
+    )
+
+    final = client.state()
+    validate_explicit_operation_fixture(final["project"])
+    validate_canonical_ownership(final["project"])
+    print("[qa-e2e] searchable Add/context/wire/reconnect/splice/knife passed")
+    return {
+        "ok": True,
+        "suite": "node-wire",
+        "health_frame": health["frame"],
+        "initial_frame": initial["frame"],
+        "final_frame": final["frame"],
+        "removed_by_knife": sorted(removed_ids),
+        "final_history": final["history"],
+        "actions": client.evidence,
+    }
+
+
 def run_suite(client):
     health = client.wait_health()
     initial = wait_fresh_fixture(client)
@@ -1682,9 +2155,9 @@ def parse_args():
     parser.add_argument("--base-url", default=None)
     parser.add_argument(
         "--suite",
-        choices=("all", "timeline", "smoke"),
+        choices=("all", "timeline", "smoke", "node-wire"),
         default="all",
-        help="run the complete suite or the focused Timeline/Node reflection suite",
+        help="run the complete suite or a focused Timeline, smoke, or Node wire suite",
     )
     parser.add_argument(
         "--spawn",
@@ -1726,6 +2199,8 @@ def main():
         elif args.suite == "smoke":
             capture_path = args.capture or "target/qa-smoke-evidence.png"
             result = run_smoke_suite(client, capture_path)
+        elif args.suite == "node-wire":
+            result = run_node_wire_suite(client)
         else:
             result = run_suite(client)
         result["run_id"] = os.environ.get("RUVIE_QA_RUN_ID")
