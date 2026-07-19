@@ -4,21 +4,6 @@ pub fn checked_increment(value: u8) -> Option<u8> {
     value.checked_add(1)
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn assertion_operations_are_allowed_in_tests() {
-        assert_eq!("1".parse::<u8>().unwrap(), 1);
-        assert_eq!("2".parse::<u8>().expect("fixture invariant"), 2);
-    }
-
-    #[test]
-    #[should_panic(expected = "intentional assertion panic")]
-    fn panic_is_allowed_in_tests() {
-        panic!("intentional assertion panic");
-    }
-}
-
 #[cfg(feature = "bad-allow-without-reason")]
 #[allow(unused_variables)]
 fn allow_without_reason(value: u8) {}
@@ -28,9 +13,38 @@ fn case_sensitive_extension(path: &str) -> bool {
     path.ends_with(".mp4")
 }
 
+#[cfg(feature = "bad-cast-ptr-alignment")]
+fn cast_ptr_alignment(pointer: *const u8) -> *const u32 {
+    pointer.cast::<u32>()
+}
+
+#[cfg(all(feature = "bad-cfg-not-test", not(test)))]
+fn excluded_from_tests() {}
+
 #[cfg(feature = "bad-dbg")]
 fn debug_macro() -> u8 {
     dbg!(1)
+}
+
+#[cfg(feature = "bad-exit")]
+fn exit_outside_main() -> ! {
+    std::process::exit(1)
+}
+
+#[cfg(feature = "bad-fallible-impl-from")]
+struct FallibleFrom;
+
+#[cfg(feature = "bad-fallible-impl-from")]
+impl From<&str> for FallibleFrom {
+    fn from(value: &str) -> Self {
+        let _parsed = value.parse::<u8>().unwrap();
+        Self
+    }
+}
+
+#[cfg(feature = "bad-fn-to-numeric-cast-any")]
+fn fn_to_numeric_cast_any() -> usize {
+    checked_increment as usize
 }
 
 #[cfg(feature = "bad-ignored-result")]
@@ -47,6 +61,13 @@ fn large_stack_array() -> u8 {
 #[cfg(feature = "bad-large-value")]
 fn consume_large_value(bytes: [u8; 1_024]) -> u8 {
     bytes[0]
+}
+
+#[cfg(feature = "bad-path-buf-push-overwrite")]
+fn path_buf_push_overwrite() -> std::path::PathBuf {
+    let mut path = std::path::PathBuf::from("relative");
+    path.push("/absolute");
+    path
 }
 
 #[cfg(feature = "bad-non-send-field")]
@@ -77,6 +98,21 @@ fn string_slice(value: &str) -> &str {
 fn unfinished() -> u8 {
     todo!()
 }
+
+#[cfg(feature = "bad-transmute-ptr-to-ptr")]
+fn transmute_ptr_to_ptr(pointer: *const u8) -> *const u16 {
+    // SAFETY: Deliberately uses the discouraged operation for this fixture.
+    unsafe { std::mem::transmute::<*const u8, *const u16>(pointer) }
+}
+
+#[cfg(feature = "bad-transmute-undefined-repr")]
+fn transmute_undefined_repr(value: UndefinedRepr<u32>) -> UndefinedRepr<i32> {
+    // SAFETY: Deliberately uses undefined representations for this fixture.
+    unsafe { std::mem::transmute::<UndefinedRepr<u32>, UndefinedRepr<i32>>(value) }
+}
+
+#[cfg(feature = "bad-transmute-undefined-repr")]
+struct UndefinedRepr<T>(u32, T);
 
 #[cfg(feature = "bad-undocumented-unsafe")]
 fn undocumented_unsafe(pointer: *const u8) -> u8 {
@@ -120,4 +156,19 @@ fn expect_value() -> u8 {
 #[cfg(feature = "bad-panic")]
 fn panic_value() -> u8 {
     panic!("fixture panic")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn assertion_operations_are_allowed_in_tests() {
+        assert_eq!("1".parse::<u8>().unwrap(), 1);
+        assert_eq!("2".parse::<u8>().expect("fixture invariant"), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "intentional assertion panic")]
+    fn panic_is_allowed_in_tests() {
+        panic!("intentional assertion panic");
+    }
 }
