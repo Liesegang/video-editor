@@ -1,11 +1,13 @@
 use crate::model::vector::VectorEditorState;
 use egui::{Color32, Painter, Pos2, Stroke};
 use library::model::vector::VectorPath;
+use library::rendering::renderer::Affine2D;
 
 pub struct VectorEditorRenderer<'a> {
     pub state: &'a VectorEditorState,
     pub path: &'a VectorPath,
-    pub transform: library::model::frame::transform::Transform,
+    /// The same evaluated local-to-composition transform used by rendering.
+    pub transform: Affine2D,
     pub to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
 }
 
@@ -14,23 +16,8 @@ impl<'a> VectorEditorRenderer<'a> {
         let to_screen = &self.to_screen;
 
         let local_to_screen = |x: f32, y: f32| -> Pos2 {
-            let lx = x - self.transform.anchor.x as f32;
-            let ly = y - self.transform.anchor.y as f32;
-
-            let sx = self.transform.scale.x as f32 / 100.0;
-            let sy = self.transform.scale.y as f32 / 100.0;
-
-            let angle_rad = (self.transform.rotation as f32).to_radians();
-            let cos = angle_rad.cos();
-            let sin = angle_rad.sin();
-
-            let rx = lx * sx * cos - ly * sy * sin;
-            let ry = lx * sx * sin + ly * sy * cos;
-
-            let wx = self.transform.position.x as f32 + rx;
-            let wy = self.transform.position.y as f32 + ry;
-
-            to_screen(Pos2::new(wx, wy))
+            let (world_x, world_y) = self.transform.map_point(f64::from(x), f64::from(y));
+            to_screen(Pos2::new(world_x as f32, world_y as f32))
         };
 
         if self.path.points.len() > 1 {

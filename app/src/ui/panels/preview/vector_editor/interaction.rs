@@ -1,14 +1,15 @@
 use crate::model::vector::VectorEditorState;
 use egui::{Pos2, Response, Ui};
-use library::model::frame::transform::Transform;
 use library::model::vector::{HandleType, PointType, VectorPath};
+use library::rendering::renderer::Affine2D;
 
 pub struct VectorEditorInteraction<'a> {
     pub state: &'a mut VectorEditorState,
     /// Ephemeral value derived from the authoritative Project property for
     /// this frame. It is written back through a PreviewAction when changed.
     pub path: &'a mut VectorPath,
-    pub transform: Transform,
+    /// The same evaluated local-to-composition transform used by rendering.
+    pub transform: Affine2D,
     pub to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
     pub to_world: Box<dyn Fn(Pos2) -> Pos2 + 'a>, // Screen -> World (still transformed by object)
 }
@@ -19,49 +20,20 @@ impl<'a> VectorEditorInteraction<'a> {
         let mut changed = false;
         let mut captured = false;
         let mut commit_requested = false;
+        let Some(world_to_local) = inverse(self.transform) else {
+            return (changed, captured, commit_requested);
+        };
 
         let screen_to_local = |screen_pos: Pos2| -> Pos2 {
             let world_pos = (self.to_world)(screen_pos);
-            let wx = world_pos.x - self.transform.position.x as f32;
-            let wy = world_pos.y - self.transform.position.y as f32;
-
-            let angle_rad = (self.transform.rotation as f32).to_radians();
-            let cos = angle_rad.cos();
-            let sin = angle_rad.sin();
-
-            let rx = wx * cos + wy * sin;
-            let ry = -wx * sin + wy * cos;
-
-            let sx = self.transform.scale.x as f32 / 100.0;
-            let sy = self.transform.scale.y as f32 / 100.0;
-
-            let lx = rx / sx;
-            let ly = ry / sy;
-
-            Pos2::new(
-                lx + self.transform.anchor.x as f32,
-                ly + self.transform.anchor.y as f32,
-            )
+            let (local_x, local_y) =
+                world_to_local.map_point(f64::from(world_pos.x), f64::from(world_pos.y));
+            Pos2::new(local_x as f32, local_y as f32)
         };
 
         let local_to_screen = |x: f32, y: f32| -> Pos2 {
-            let lx = x - self.transform.anchor.x as f32;
-            let ly = y - self.transform.anchor.y as f32;
-
-            let sx = self.transform.scale.x as f32 / 100.0;
-            let sy = self.transform.scale.y as f32 / 100.0;
-
-            let angle_rad = (self.transform.rotation as f32).to_radians();
-            let cos = angle_rad.cos();
-            let sin = angle_rad.sin();
-
-            let rx = lx * sx * cos - ly * sy * sin;
-            let ry = lx * sx * sin + ly * sy * cos;
-
-            let wx = self.transform.position.x as f32 + rx;
-            let wy = self.transform.position.y as f32 + ry;
-
-            (self.to_screen)(Pos2::new(wx, wy))
+            let (world_x, world_y) = self.transform.map_point(f64::from(x), f64::from(y));
+            (self.to_screen)(Pos2::new(world_x as f32, world_y as f32))
         };
 
         let hit_radius = 12.0;
@@ -264,4 +236,24 @@ impl<'a> VectorEditorInteraction<'a> {
 
         (changed, captured, commit_requested)
     }
+}
+
+fn inverse(transform: Affine2D) -> Option<Affine2D> {
+    let determinant = transform.scale_x * transform.scale_y - transform.skew_x * transform.skew_y;
+    if determinant.abs() <= f64::EPSILON {
+        return None;
+    }
+
+    let scale_x = transform.scale_y / determinant;
+    let skew_x = -transform.skew_x / determinant;
+    let skew_y = -transform.skew_y / determinant;
+    let scale_y = transform.scale_x / determinant;
+    Some(Affine2D {
+        scale_x,
+        skew_x,
+        translate_x: -scale_x * transform.translate_x - skew_x * transform.translate_y,
+        skew_y,
+        scale_y,
+        translate_y: -skew_y * transform.translate_x - scale_y * transform.translate_y,
+    })
 }

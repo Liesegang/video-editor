@@ -7,9 +7,9 @@ pub use utils::PropertyComponent;
 use utils::*;
 
 use egui::{Color32, Sense, Ui, Vec2};
+use library::EditorService;
 use library::model::project::Project;
 use library::model::property::{Property, PropertyMap, PropertyTarget, PropertyValue};
-use library::EditorService;
 use std::sync::{Arc, RwLock};
 
 use crate::action::HistoryManager;
@@ -100,14 +100,13 @@ pub fn graph_editor_panel(
         let Ok(project) = project.read() else {
             return;
         };
-        let Some(node_id) = crate::utils::property::visual_node_id(&project, selected_entity_id)
-        else {
-            ui.label("Selected entity has no leaf Node.");
+        if project.get_node(selected_entity_id).is_none() {
+            ui.label("Select a Node to edit its keyframes.");
             return;
-        };
+        }
+        let node_id = selected_entity_id;
         let track_id = project
-            .find_parent_track(selected_entity_id)
-            .or_else(|| project.find_parent_track(node_id))
+            .find_parent_track(node_id)
             .or(editor_context.selection.last_selected_track_id)
             .unwrap_or_else(uuid::Uuid::nil);
         (node_id, track_id)

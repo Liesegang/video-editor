@@ -4,10 +4,10 @@ use uuid::Uuid;
 use crate::model::ui_types::{GizmoHandle, TimelineDisplayMode, Vec2Def};
 use crate::model::vector::VectorEditorState;
 
+use library::PropertyOwner;
 use library::animation::EasingFunction; // Added import
 use library::model::project::PortOwner;
 use library::model::property::{KeyframeId, PropertyTarget};
-use library::PropertyOwner;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum KeyframeValueComponent {
@@ -297,6 +297,7 @@ pub struct InteractionState {
     // For now, let's assume we will move GizmoState here or import it.
     // Based on previous file read, GizmoState is in context.rs.
     // I will MOVE GizmoState to this file to avoid circular dependency.
+    #[serde(skip)]
     pub gizmo_state: Option<GizmoState>,
 
     // Vector Editor State
@@ -330,6 +331,12 @@ pub struct InteractionState {
     pub timeline_selection_drag_start: Option<egui::Pos2>,
     #[serde(skip)]
     pub preview_selection_drag_start: Option<egui::Pos2>,
+
+    /// Render-branch path for the primary Preview selection. The persistent
+    /// selection remains a Project Node ID; this transient path distinguishes
+    /// fan-out of that Node through multiple Merge/Reference branches.
+    #[serde(skip)]
+    pub preview_selected_instance_path: Option<Vec<Uuid>>,
 
     // Hand Tool Logic
     #[serde(skip)]
@@ -450,6 +457,13 @@ pub struct GizmoState {
     pub original_scale_x: f32,
     pub original_scale_y: f32,
     pub original_rotation: f32,
+    /// Final evaluated values at gesture start. These may differ from the
+    /// direct source values above when a downstream Shape Effector contributes
+    /// to the rendered transform.
+    pub original_visual_position: [f32; 2],
+    pub original_visual_scale_x: f32,
+    pub original_visual_scale_y: f32,
+    pub original_visual_rotation: f32,
     pub original_anchor_x: f32,
     pub original_anchor_y: f32,
     pub original_width: f32,

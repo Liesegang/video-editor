@@ -1,16 +1,24 @@
 use crate::state::context::EditorContext;
-use crate::ui::panels::preview::{action::PreviewAction, clip::PreviewClip, gizmo};
+use crate::ui::panels::preview::{
+    action::PreviewAction,
+    clip::{PreviewClip, visual_for_selection},
+    gizmo,
+};
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
-use library::model::project::Project;
 use library::model::property::{PropertyValue, Vec2};
-use std::sync::{Arc, RwLock};
+use std::collections::HashSet;
 use uuid::Uuid;
+
+#[derive(Clone)]
+struct PreviewHit {
+    node_id: Uuid,
+    instance_path: Vec<Uuid>,
+}
 
 pub struct PreviewInteractions<'a> {
     pub ui: &'a mut Ui,
     pub editor_context: &'a mut EditorContext,
-    pub project: &'a Arc<RwLock<Project>>,
-    pub gui_clips: &'a [PreviewClip<'a>],
+    pub gui_clips: &'a [PreviewClip],
     pub to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>, // Closure wrapper
     pub to_world: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
 }
@@ -19,15 +27,13 @@ impl<'a> PreviewInteractions<'a> {
     pub fn new(
         ui: &'a mut Ui,
         editor_context: &'a mut EditorContext,
-        project: &'a Arc<RwLock<Project>>,
-        gui_clips: &'a [PreviewClip<'a>],
+        gui_clips: &'a [PreviewClip],
         to_screen: impl Fn(Pos2) -> Pos2 + 'a,
         to_world: impl Fn(Pos2) -> Pos2 + 'a,
     ) -> Self {
         Self {
             ui,
             editor_context,
-            project,
             gui_clips,
             to_screen: Box::new(to_screen),
             to_world: Box::new(to_world),
@@ -69,7 +75,7 @@ impl<'a> PreviewInteractions<'a> {
             interacted_with_gizmo = gizmo::handle_gizmo_interaction(
                 self.ui,
                 self.editor_context,
-                self.project,
+                self.gui_clips,
                 pointer_pos,
                 &*self.to_world,
                 pending_actions,
@@ -83,7 +89,14 @@ impl<'a> PreviewInteractions<'a> {
                 .next()
                 .copied()
             {
-                if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == id) {
+                if let Some(gc) = visual_for_selection(
+                    self.gui_clips,
+                    id,
+                    self.editor_context
+                        .interaction
+                        .preview_selected_instance_path
+                        .as_deref(),
+                ) {
                     if matches!(
                         &gc.node.content,
                         library::model::NodeContent::Generator(
@@ -98,24 +111,6 @@ impl<'a> PreviewInteractions<'a> {
                                 log::warn!("Cannot edit invalid shape path: {error}");
                             }
                             if let Ok(mut path) = parsed_path {
-                                // Build Transform
-                                let transform = library::model::frame::transform::Transform {
-                                    position: library::model::frame::transform::Position {
-                                        x: gc.transform.position.x,
-                                        y: gc.transform.position.y,
-                                    },
-                                    scale: library::model::frame::transform::Scale {
-                                        x: gc.transform.scale.x,
-                                        y: gc.transform.scale.y,
-                                    },
-                                    rotation: gc.transform.rotation,
-                                    anchor: library::model::frame::transform::Position {
-                                        x: gc.transform.anchor.x,
-                                        y: gc.transform.anchor.y,
-                                    },
-                                    opacity: gc.transform.opacity,
-                                };
-
                                 let state = self
                                     .editor_context
                                     .interaction
@@ -124,7 +119,7 @@ impl<'a> PreviewInteractions<'a> {
                                 let mut interaction = crate::ui::panels::preview::vector_editor::interaction::VectorEditorInteraction {
                                   state,
                                   path: &mut path,
-                                  transform,
+                                  transform: gc.world_transform,
                                   to_screen: Box::new(|p| (self.to_screen)(p)),
                                   to_world: Box::new(|p| (self.to_world)(p)),
                                };
@@ -139,20 +134,12 @@ impl<'a> PreviewInteractions<'a> {
                                     let new_path = crate::ui::panels::preview::vector_editor::svg_writer::to_svg_path(&path);
 
                                     // Update property
-                                    if let Some(comp_id) =
-                                        self.editor_context.selection.composition_id
-                                    {
-                                        let current_time =
-                                            self.editor_context.timeline.current_time as f64;
-                                        pending_actions.push(PreviewAction::UpdateProperty {
-                                            comp_id,
-                                            track_id: gc.track_id,
-                                            entity_id: id,
-                                            prop_name: "path".to_string(),
-                                            time: current_time,
-                                            value: PropertyValue::String(new_path),
-                                        });
-                                    }
+                                    pending_actions.push(PreviewAction::UpdateProperty {
+                                        node_id: id,
+                                        prop_name: "path".to_string(),
+                                        time: self.editor_context.timeline.current_time as f64,
+                                        value: PropertyValue::String(new_path),
+                                    });
                                     interacted_with_gizmo = true;
                                 }
                                 if commit_requested {
@@ -166,7 +153,7 @@ impl<'a> PreviewInteractions<'a> {
         }
 
         // 2. Hit Testing (Hover)
-        let hovered_entity_id = if active_tool == crate::state::context_types::PreviewTool::Select
+        let hovered_hit = if active_tool == crate::state::context_types::PreviewTool::Select
             || active_tool == crate::state::context_types::PreviewTool::Text
             || active_tool == crate::state::context_types::PreviewTool::Shape
         {
@@ -185,7 +172,8 @@ impl<'a> PreviewInteractions<'a> {
         if !is_panning_input && !interacted_with_gizmo {
             // Drag Start Detection
             if response.drag_started_by(PointerButton::Primary) {
-                if let Some(hovered) = hovered_entity_id {
+                if let Some(hit) = hovered_hit.as_ref() {
+                    let hovered = hit.node_id;
                     // Started drag on an entity
                     // Ensure it is selected (if not modifier click)
                     // If Shift/Ctrl is held, we might be adding it to selection?
@@ -193,30 +181,37 @@ impl<'a> PreviewInteractions<'a> {
                     // If not selected, select it.
                     let modifiers = self.ui.input(|i| i.modifiers);
                     let action = crate::ui::selection::SelectionAction::from_modifiers(&modifiers);
-                    let track_id = self.get_track_id(hovered).unwrap_or_default();
+                    let track_id = self.get_track_id(hovered, Some(&hit.instance_path));
                     let mut should_drag = true;
 
                     match action {
                         crate::ui::selection::SelectionAction::Remove => {
                             if self.editor_context.is_selected(hovered) {
-                                self.editor_context.toggle_selection(hovered, track_id);
+                                self.editor_context
+                                    .toggle_entity_selection(hovered, track_id);
                             }
                             should_drag = false;
                         }
                         crate::ui::selection::SelectionAction::Add
                         | crate::ui::selection::SelectionAction::Toggle => {
                             if !self.editor_context.is_selected(hovered) {
-                                self.editor_context.toggle_selection(hovered, track_id);
+                                self.editor_context
+                                    .toggle_entity_selection(hovered, track_id);
                             }
                         }
                         crate::ui::selection::SelectionAction::Replace => {
                             if !self.editor_context.is_selected(hovered) {
-                                self.editor_context.select_clip(hovered, track_id);
+                                self.editor_context.select_entity(hovered, track_id);
                             }
                         }
                     }
 
                     if should_drag && self.editor_context.is_selected(hovered) {
+                        self.editor_context.selection.last_selected_entity_id = Some(hovered);
+                        self.editor_context.selection.last_selected_track_id = track_id;
+                        self.editor_context
+                            .interaction
+                            .preview_selected_instance_path = Some(hit.instance_path.clone());
                         self.editor_context.interaction.is_moving_selected_entity = true;
                         self.init_drag_state(pointer_pos);
                     }
@@ -239,7 +234,7 @@ impl<'a> PreviewInteractions<'a> {
 
             // Click Selection (Mouse Released without Drag)
             if response.clicked() {
-                self.handle_click_selection(hovered_entity_id);
+                self.handle_click_selection(hovered_hit.as_ref());
             }
 
             // Box Selection (Active or Committing)
@@ -261,86 +256,35 @@ impl<'a> PreviewInteractions<'a> {
         }
     }
 
-    fn is_clip_visible(&self, gc: &PreviewClip, current_time: f64) -> bool {
-        if let library::model::NodeContent::Media(media) = &gc.node.content {
-            if let Ok(proj) = self.project.read() {
-                if let Some(asset) = proj.get_asset(media.asset_id) {
-                    if matches!(asset.kind, library::model::asset::AssetKind::Audio) {
-                        return false;
-                    }
-                }
-            }
-        }
-
-        let start = gc.clip.start_time.into_inner();
-        // In Trinity Model, duration is f64 seconds
-        let end = start + gc.clip.duration.into_inner();
-
-        current_time >= start && current_time < end
-    }
-
-    fn get_clip_screen_corners(&self, gc: &PreviewClip) -> [Pos2; 4] {
-        let base_w = gc.content_bounds.map(|b| b.2).unwrap_or(1920.0);
-        let base_h = gc.content_bounds.map(|b| b.3).unwrap_or(1080.0);
-
-        // content_point is the top-left offset of the content in local space, relative to (0,0)
-        let (off_x, off_y) = if let Some(pt) = gc.content_bounds {
-            (pt.0, pt.1)
-        } else {
-            (0.0, 0.0)
+    fn get_clip_screen_corners(&self, gc: &PreviewClip) -> Option<[Pos2; 4]> {
+        let (x, y, width, height) = gc.content_bounds?;
+        let transform_point = |local_x: f32, local_y: f32| {
+            let (world_x, world_y) = gc
+                .world_transform
+                .map_point(f64::from(local_x), f64::from(local_y));
+            (self.to_screen)(egui::pos2(world_x as f32, world_y as f32))
         };
 
-        let sx = gc.transform.scale.x as f32 / 100.0;
-        let sy = gc.transform.scale.y as f32 / 100.0;
-        let center = egui::pos2(
-            gc.transform.position.x as f32,
-            gc.transform.position.y as f32,
-        );
-        let angle_rad = (gc.transform.rotation as f32).to_radians();
-        let cos = angle_rad.cos();
-        let sin = angle_rad.sin();
-
-        let transform_point = |local_x: f32, local_y: f32| -> egui::Pos2 {
-            // Apply Content Offset
-            let lx = local_x + off_x;
-            let ly = local_y + off_y;
-
-            let ox = lx - gc.transform.anchor.x as f32;
-            let oy = ly - gc.transform.anchor.y as f32;
-            let sx_ox = ox * sx;
-            let sy_oy = oy * sy;
-            let rx = sx_ox * cos - sy_oy * sin;
-            let ry = sx_ox * sin + sy_oy * cos;
-            (self.to_screen)(center + egui::vec2(rx, ry))
-        };
-
-        [
-            transform_point(0.0, 0.0),
-            transform_point(base_w, 0.0),
-            transform_point(base_w, base_h),
-            transform_point(0.0, base_h),
-        ]
+        Some([
+            transform_point(x, y),
+            transform_point(x + width, y),
+            transform_point(x + width, y + height),
+            transform_point(x, y + height),
+        ])
     }
 
-    fn check_hit_test(&self, pointer_pos: Option<Pos2>, content_rect: Rect) -> Option<Uuid> {
+    fn check_hit_test(&self, pointer_pos: Option<Pos2>, content_rect: Rect) -> Option<PreviewHit> {
         let pos = pointer_pos?;
         if !content_rect.contains(pos) {
             return None;
         }
 
-        // Get current time
-        let current_time = self.editor_context.timeline.current_time as f64;
-
-        // TODO: Z-sort properly. Here we rely on iteration order, which is track order usually.
-        // Track order is bottom-to-top rendering usually? Or top-to-bottom tracks?
-        // Usually lower track index = lower layer (rendered first).
-        // So rev() gives top-most layer.
+        // FrameItem order is renderer order, so reverse traversal is the
+        // actual top-most visual first (including ordered Merge inputs).
         for gc in self.gui_clips.iter().rev() {
-            if !self.is_clip_visible(gc, current_time) {
+            let Some(corners) = self.get_clip_screen_corners(gc) else {
                 continue;
-            }
-
-            let corners = self.get_clip_screen_corners(gc);
+            };
 
             // Point in Convex Polygon Check
             let check_edge = |p1: Pos2, p2: Pos2, p: Pos2| -> f32 {
@@ -356,7 +300,10 @@ impl<'a> PreviewInteractions<'a> {
             let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0 || d4 < 0.0;
 
             if !(has_pos && has_neg) {
-                return Some(gc.id());
+                return Some(PreviewHit {
+                    node_id: gc.id(),
+                    instance_path: gc.instance_path.clone(),
+                });
             }
         }
         None
@@ -366,12 +313,23 @@ impl<'a> PreviewInteractions<'a> {
         if let Some(pointer_pos) = pointer_pos {
             let mut original_positions = std::collections::HashMap::new();
             for selected_id in &self.editor_context.selection.selected_entities {
-                if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == *selected_id) {
+                let instance_path = if Some(*selected_id)
+                    == self.editor_context.selection.last_selected_entity_id
+                {
+                    self.editor_context
+                        .interaction
+                        .preview_selected_instance_path
+                        .as_deref()
+                } else {
+                    None
+                };
+                if let Some(gc) = visual_for_selection(self.gui_clips, *selected_id, instance_path)
+                {
                     original_positions.insert(
                         *selected_id,
                         [
-                            gc.transform.position.x as f32,
-                            gc.transform.position.y as f32,
+                            gc.source_transform.position.x as f32,
+                            gc.source_transform.position.y as f32,
                         ],
                     );
                 }
@@ -384,21 +342,24 @@ impl<'a> PreviewInteractions<'a> {
         }
     }
 
-    fn handle_click_selection(&mut self, hovered_id: Option<Uuid>) {
+    fn handle_click_selection(&mut self, hovered_hit: Option<&PreviewHit>) {
+        let hovered_id = hovered_hit.map(|hit| hit.node_id);
         if self.editor_context.view.active_tool == crate::state::context_types::PreviewTool::Text {
-            if let Some(id) = hovered_id {
-                let is_text = self.gui_clips.iter().any(|c| {
-                    c.id() == id
-                        && matches!(
-                            &c.node.content,
-                            library::model::NodeContent::Generator(
-                                library::model::GeneratorContent::Text
-                            )
+            if let Some(hit) = hovered_hit {
+                let id = hit.node_id;
+                let visual =
+                    visual_for_selection(self.gui_clips, id, Some(hit.instance_path.as_slice()));
+                let is_text = visual.is_some_and(|visual| {
+                    matches!(
+                        &visual.node.content,
+                        library::model::NodeContent::Generator(
+                            library::model::GeneratorContent::Text
                         )
+                    )
                 });
                 if is_text {
                     self.editor_context.interaction.editing_text_entity_id = Some(id);
-                    if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == id) {
+                    if let Some(gc) = visual {
                         if let Some(text) = gc.node.properties.get_string("text") {
                             self.editor_context.interaction.text_edit_buffer = text;
                         }
@@ -417,29 +378,60 @@ impl<'a> PreviewInteractions<'a> {
 
         match action {
             crate::ui::selection::ClickAction::Select(id) => {
-                let track_id = self.get_track_id(id).unwrap_or_default();
-                self.editor_context.select_clip(id, track_id);
+                let instance_path = hovered_hit
+                    .filter(|hit| hit.node_id == id)
+                    .map(|hit| hit.instance_path.clone());
+                let track_id = self.get_track_id(id, instance_path.as_deref());
+                self.editor_context.select_entity(id, track_id);
+                self.editor_context
+                    .interaction
+                    .preview_selected_instance_path = instance_path;
             }
             crate::ui::selection::ClickAction::Add(id) => {
-                let track_id = self.get_track_id(id).unwrap_or_default();
+                let instance_path = hovered_hit
+                    .filter(|hit| hit.node_id == id)
+                    .map(|hit| hit.instance_path.clone());
+                let track_id = self.get_track_id(id, instance_path.as_deref());
                 if !self.editor_context.is_selected(id) {
-                    self.editor_context.toggle_selection(id, track_id);
+                    self.editor_context.toggle_entity_selection(id, track_id);
+                    self.editor_context
+                        .interaction
+                        .preview_selected_instance_path = instance_path;
                 }
             }
             crate::ui::selection::ClickAction::Remove(id) => {
-                let track_id = self.get_track_id(id).unwrap_or_default();
+                let instance_path = hovered_hit
+                    .filter(|hit| hit.node_id == id)
+                    .map(|hit| hit.instance_path.clone());
+                let track_id = self.get_track_id(id, instance_path.as_deref());
                 if self.editor_context.is_selected(id) {
-                    self.editor_context.toggle_selection(id, track_id);
+                    self.editor_context.toggle_entity_selection(id, track_id);
                 }
+                self.editor_context
+                    .interaction
+                    .preview_selected_instance_path = None;
             }
             crate::ui::selection::ClickAction::Toggle(id) => {
-                let track_id = self.get_track_id(id).unwrap_or_default();
-                self.editor_context.toggle_selection(id, track_id);
+                let instance_path = hovered_hit
+                    .filter(|hit| hit.node_id == id)
+                    .map(|hit| hit.instance_path.clone());
+                let track_id = self.get_track_id(id, instance_path.as_deref());
+                self.editor_context.toggle_entity_selection(id, track_id);
+                self.editor_context
+                    .interaction
+                    .preview_selected_instance_path = self
+                    .editor_context
+                    .is_selected(id)
+                    .then_some(instance_path)
+                    .flatten();
             }
             crate::ui::selection::ClickAction::Clear => {
                 self.editor_context.selection.selected_entities.clear();
                 self.editor_context.selection.last_selected_entity_id = None;
                 self.editor_context.selection.last_selected_track_id = None;
+                self.editor_context
+                    .interaction
+                    .preview_selected_instance_path = None;
             }
             crate::ui::selection::ClickAction::DoNothing => {}
         }
@@ -451,32 +443,30 @@ impl<'a> PreviewInteractions<'a> {
         pending_actions: &mut Vec<PreviewAction>,
     ) {
         let current_zoom = self.editor_context.view.zoom;
-        if let Some(comp_id) = self.editor_context.selection.composition_id {
-            if let Some(drag_state) = &self.editor_context.interaction.body_drag_state {
-                if let Some(curr_mouse) = pointer_pos {
-                    let screen_delta = curr_mouse - drag_state.start_mouse_pos;
-                    let world_delta = screen_delta / current_zoom;
+        if let Some(drag_state) = &self.editor_context.interaction.body_drag_state {
+            if let Some(curr_mouse) = pointer_pos {
+                let screen_delta = curr_mouse - drag_state.start_mouse_pos;
+                let world_delta = screen_delta / current_zoom;
 
-                    let current_time = self.editor_context.timeline.current_time as f64;
+                let current_time = self.editor_context.timeline.current_time as f64;
 
-                    for (entity_id, orig_pos) in &drag_state.original_positions {
-                        let new_x = orig_pos[0] as f64 + world_delta.x as f64;
-                        let new_y = orig_pos[1] as f64 + world_delta.y as f64;
+                for (entity_id, orig_pos) in &drag_state.original_positions {
+                    let local_delta = self
+                        .selected_visual(*entity_id)
+                        .and_then(|visual| inverse_map_vector(visual.parent_transform, world_delta))
+                        .unwrap_or(world_delta);
+                    let new_x = orig_pos[0] as f64 + local_delta.x as f64;
+                    let new_y = orig_pos[1] as f64 + local_delta.y as f64;
 
-                        if let Some(tid) = self.get_track_id(*entity_id) {
-                            pending_actions.push(PreviewAction::UpdateProperty {
-                                comp_id,
-                                track_id: tid,
-                                entity_id: *entity_id,
-                                prop_name: "position".to_string(),
-                                time: current_time,
-                                value: PropertyValue::Vec2(Vec2 {
-                                    x: ordered_float::OrderedFloat(new_x),
-                                    y: ordered_float::OrderedFloat(new_y),
-                                }),
-                            });
-                        }
-                    }
+                    pending_actions.push(PreviewAction::UpdateProperty {
+                        node_id: *entity_id,
+                        prop_name: "position".to_string(),
+                        time: current_time,
+                        value: PropertyValue::Vec2(Vec2 {
+                            x: ordered_float::OrderedFloat(new_x),
+                            y: ordered_float::OrderedFloat(new_y),
+                        }),
+                    });
                 }
             }
         }
@@ -514,17 +504,23 @@ impl<'a> PreviewInteractions<'a> {
                             self.editor_context.selection.selected_entities.clear();
                             self.editor_context.selection.last_selected_entity_id = None;
                             self.editor_context.selection.last_selected_track_id = None;
+                            self.editor_context
+                                .interaction
+                                .preview_selected_instance_path = None;
 
                             let mut last_id = None;
                             let mut last_track = None;
                             for id in ids {
                                 self.editor_context.selection.selected_entities.insert(id);
                                 last_id = Some(id);
-                                last_track = self.get_track_id(id);
+                                last_track = self.get_track_id(id, None);
                             }
                             if let Some(lid) = last_id {
                                 self.editor_context.selection.last_selected_entity_id = Some(lid);
                                 self.editor_context.selection.last_selected_track_id = last_track;
+                                self.editor_context
+                                    .interaction
+                                    .preview_selected_instance_path = None;
                             }
                         }
                         crate::ui::selection::BoxAction::Add(ids) => {
@@ -533,17 +529,23 @@ impl<'a> PreviewInteractions<'a> {
                             for id in ids {
                                 self.editor_context.selection.selected_entities.insert(id);
                                 last_id = Some(id);
-                                last_track = self.get_track_id(id);
+                                last_track = self.get_track_id(id, None);
                             }
                             if let Some(lid) = last_id {
                                 self.editor_context.selection.last_selected_entity_id = Some(lid);
                                 self.editor_context.selection.last_selected_track_id = last_track;
+                                self.editor_context
+                                    .interaction
+                                    .preview_selected_instance_path = None;
                             }
                         }
                         crate::ui::selection::BoxAction::Remove(ids) => {
                             for id in ids {
                                 self.editor_context.selection.selected_entities.remove(&id);
                             }
+                            self.editor_context
+                                .interaction
+                                .preview_selected_instance_path = None;
                         }
                     }
                 }
@@ -554,16 +556,12 @@ impl<'a> PreviewInteractions<'a> {
 
     fn get_clips_in_box(&self, selection_rect: Rect) -> Vec<Uuid> {
         let mut found = Vec::new();
-
-        // Get current time
-        let current_time = self.editor_context.timeline.current_time as f64;
+        let mut seen = HashSet::new();
 
         for gc in self.gui_clips {
-            if !self.is_clip_visible(gc, current_time) {
+            let Some(corners) = self.get_clip_screen_corners(gc) else {
                 continue;
-            }
-
-            let corners = self.get_clip_screen_corners(gc);
+            };
 
             let min_x = corners[0]
                 .x
@@ -589,24 +587,37 @@ impl<'a> PreviewInteractions<'a> {
             let clip_screen_rect =
                 Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y));
 
-            if selection_rect.intersects(clip_screen_rect) {
+            if selection_rect.intersects(clip_screen_rect) && seen.insert(gc.id()) {
                 found.push(gc.id());
             }
         }
         found
     }
 
-    fn get_track_id(&self, entity_id: Uuid) -> Option<Uuid> {
-        self.gui_clips
-            .iter()
-            .find(|gc| gc.id() == entity_id)
-            .map(|gc| gc.track_id)
+    fn selected_visual(&self, entity_id: Uuid) -> Option<&PreviewClip> {
+        let instance_path =
+            if Some(entity_id) == self.editor_context.selection.last_selected_entity_id {
+                self.editor_context
+                    .interaction
+                    .preview_selected_instance_path
+                    .as_deref()
+            } else {
+                None
+            };
+        visual_for_selection(self.gui_clips, entity_id, instance_path)
+    }
+
+    fn get_track_id(&self, entity_id: Uuid, instance_path: Option<&[Uuid]>) -> Option<Uuid> {
+        visual_for_selection(self.gui_clips, entity_id, instance_path)
+            .and_then(|visual| visual.track_id)
     }
 
     pub fn draw_text_overlay(&mut self, pending_actions: &mut Vec<PreviewAction>) {
         if let Some(id) = self.editor_context.interaction.editing_text_entity_id {
-            if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == id) {
-                let corners = self.get_clip_screen_corners(gc);
+            if let Some(gc) = self.selected_visual(id) {
+                let Some(corners) = self.get_clip_screen_corners(gc) else {
+                    return;
+                };
                 let min_x = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
                 let min_y = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
                 let max_x = corners
@@ -625,7 +636,7 @@ impl<'a> PreviewInteractions<'a> {
 
                 let zoom = self.editor_context.view.zoom;
                 // Assuming uniform scale or using scale_y for height
-                let scale_factor = (gc.transform.scale.y as f32 / 100.0) * zoom;
+                let scale_factor = gc.transform.scale.y as f32 * zoom;
                 let effective_size = font_size * scale_factor;
 
                 let mut text = self.editor_context.interaction.text_edit_buffer.clone();
@@ -644,16 +655,12 @@ impl<'a> PreviewInteractions<'a> {
                 if response.changed() {
                     self.editor_context.interaction.text_edit_buffer = text.clone();
 
-                    if let Some(comp_id) = self.editor_context.selection.composition_id {
-                        pending_actions.push(PreviewAction::UpdateProperty {
-                            comp_id,
-                            track_id: gc.track_id,
-                            entity_id: id,
-                            prop_name: "text".to_string(),
-                            time: self.editor_context.timeline.current_time as f64,
-                            value: PropertyValue::String(text),
-                        });
-                    }
+                    pending_actions.push(PreviewAction::UpdateProperty {
+                        node_id: id,
+                        prop_name: "text".to_string(),
+                        time: self.editor_context.timeline.current_time as f64,
+                        value: PropertyValue::String(text),
+                    });
                 }
 
                 let finish_edit = response.lost_focus()
@@ -668,4 +675,20 @@ impl<'a> PreviewInteractions<'a> {
             }
         }
     }
+}
+
+fn inverse_map_vector(
+    transform: library::rendering::renderer::Affine2D,
+    vector: egui::Vec2,
+) -> Option<egui::Vec2> {
+    let determinant = transform.scale_x * transform.scale_y - transform.skew_x * transform.skew_y;
+    if determinant.abs() <= f64::EPSILON {
+        return None;
+    }
+    Some(egui::vec2(
+        ((transform.scale_y * f64::from(vector.x) - transform.skew_x * f64::from(vector.y))
+            / determinant) as f32,
+        ((-transform.skew_y * f64::from(vector.x) + transform.scale_x * f64::from(vector.y))
+            / determinant) as f32,
+    ))
 }
