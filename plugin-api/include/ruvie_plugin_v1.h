@@ -25,9 +25,21 @@ extern "C" {
 #define RUVIE_EFFECTOR_EVALUATE_V1 "effector.evaluate.v1"
 #define RUVIE_PROPERTY_CATEGORY "property"
 #define RUVIE_PROPERTY_EVALUATE_V1 "property.evaluate.v1"
+#define RUVIE_STYLE_CATEGORY "style"
+#define RUVIE_STYLE_EVALUATE_V1 "style.evaluate.v1"
+#define RUVIE_DECORATOR_CATEGORY "decorator"
+#define RUVIE_DECORATOR_EVALUATE_V1 "decorator.evaluate.v1"
 #define RUVIE_EFFECTOR_TARGET_BLOCK "block"
 #define RUVIE_EFFECTOR_TARGET_LINE "line"
 #define RUVIE_EFFECTOR_TARGET_CHAR "char"
+#define RUVIE_STYLE_OUTPUT_NO_OUTPUT "no_output"
+#define RUVIE_STYLE_OUTPUT_FILL "fill"
+#define RUVIE_STYLE_OUTPUT_STROKE "stroke"
+#define RUVIE_DECORATOR_OUTPUT_NO_OUTPUT "no_output"
+#define RUVIE_DECORATOR_OUTPUT_BACKPLATE "backplate"
+#define RUVIE_DECORATOR_TARGET_BLOCK "block"
+#define RUVIE_DECORATOR_TARGET_LINE "line"
+#define RUVIE_DECORATOR_TARGET_CHAR "char"
 
 typedef struct RuvieBytesView {
     const uint8_t *ptr;
