@@ -19,6 +19,48 @@ pub const STATUS_OK: u32 = 0;
 pub const STATUS_PLUGIN_ERROR: u32 = 1;
 pub const STATUS_INVALID_REQUEST: u32 = 2;
 pub const STATUS_PANIC: u32 = 3;
+/// The component deliberately declines a typed request. Hosts may try the
+/// next registered implementation without replacing the real failure cause.
+pub const STATUS_UNSUPPORTED: u32 = 4;
+
+/// Typed extension queried through [`RuviePluginApiV1::query_extension`].
+pub const EFFECT_CPU_RGBA8_EXTENSION_V1: &str = "ruvie.effect.cpu-rgba8.v1";
+/// Descriptor operation implemented by [`RuvieEffectCpuRgba8ApiV1`].
+pub const EFFECT_PROCESS_CPU_RGBA8_V1: &str = "effect.process.cpu-rgba8.v1";
+pub const EFFECT_CATEGORY: &str = "effect";
+/// Typed extension queried through [`RuviePluginApiV1::query_extension`].
+pub const LOADER_CPU_RGBA8_EXTENSION_V1: &str = "ruvie.loader.cpu-rgba8.v1";
+pub const LOADER_OPEN_V1: &str = "loader.open.v1";
+pub const LOADER_LOAD_CPU_RGBA8_V1: &str = "loader.load.cpu-rgba8.v1";
+pub const LOADER_CATEGORY: &str = "loader";
+
+/// Hard limits shared by ABI-v1 hosts and plugins before multiplying sizes.
+pub const MAX_CPU_RGBA8_DIMENSION_V1: u32 = 32_768;
+pub const MAX_CPU_RGBA8_FRAME_BYTES_V1: usize = 512 * 1024 * 1024;
+pub const MAX_LOADER_STREAMS_V1: usize = 64;
+
+pub const ALPHA_MODE_STRAIGHT_V1: u32 = 1;
+pub const COLOR_PROFILE_SRGB_V1: u32 = 1;
+
+pub const PROPERTY_VALUE_NUMBER_V1: u32 = 1;
+pub const PROPERTY_VALUE_INTEGER_V1: u32 = 2;
+pub const PROPERTY_VALUE_STRING_V1: u32 = 3;
+pub const PROPERTY_VALUE_BOOLEAN_V1: u32 = 4;
+pub const PROPERTY_VALUE_VEC2_V1: u32 = 5;
+pub const PROPERTY_VALUE_VEC3_V1: u32 = 6;
+pub const PROPERTY_VALUE_VEC4_V1: u32 = 7;
+pub const PROPERTY_VALUE_COLOR_V1: u32 = 8;
+
+pub const LOAD_REQUEST_IMAGE_V1: u32 = 1;
+pub const LOAD_REQUEST_VIDEO_FRAME_V1: u32 = 2;
+pub const ASSET_KIND_IMAGE_V1: u32 = 1;
+pub const ASSET_KIND_VIDEO_V1: u32 = 2;
+pub const ASSET_METADATA_DURATION_V1: u32 = 1 << 0;
+pub const ASSET_METADATA_FPS_V1: u32 = 1 << 1;
+pub const ASSET_METADATA_DIMENSIONS_V1: u32 = 1 << 2;
+pub const ASSET_METADATA_STREAM_INDEX_V1: u32 = 1 << 3;
+pub const ASSET_METADATA_FRAME_COUNT_V1: u32 = 1 << 4;
+pub const ASSET_METADATA_TIME_BASE_V1: u32 = 1 << 5;
 
 /// Borrowed bytes passed from the host to a plugin for one call.
 #[repr(C)]
@@ -74,6 +116,207 @@ pub struct RuvieCallResult {
     pub status: u32,
     pub buffer: RuvieBuffer,
 }
+
+/// Result for typed extension callbacks. `message` is plugin-owned and is
+/// returned exactly once through the base table's `free_buffer` callback.
+/// Successful and unsupported calls normally use an empty message.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RuvieExtensionResultV1 {
+    pub status: u32,
+    pub message: RuvieBuffer,
+}
+
+impl RuvieExtensionResultV1 {
+    pub const fn ok() -> Self {
+        Self {
+            status: STATUS_OK,
+            message: RuvieBuffer::empty(),
+        }
+    }
+
+    pub const fn unsupported() -> Self {
+        Self {
+            status: STATUS_UNSUPPORTED,
+            message: RuvieBuffer::empty(),
+        }
+    }
+
+    pub fn error(status: u32, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: RuvieBuffer::from_vec(message.into().into_bytes()),
+        }
+    }
+}
+
+/// One borrowed, explicitly tagged operation property. All pointed-to memory
+/// is host-owned and valid only until the callback returns. Unused scalar,
+/// vector, color, and byte fields are zero/empty.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RuviePropertyValueViewV1 {
+    pub name: RuvieBytesView,
+    pub value_type: u32,
+    pub number: f64,
+    pub integer: i64,
+    pub bytes: RuvieBytesView,
+    pub vector: [f64; 4],
+    pub color: [u8; 4],
+}
+
+/// Borrowed array of resolved operation properties.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RuviePropertyMapViewV1 {
+    pub ptr: *const RuviePropertyValueViewV1,
+    pub len: usize,
+}
+
+/// Host-owned, borrowed straight-alpha sRGB RGBA8 pixels.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RuvieRgba8FrameViewV1 {
+    pub struct_size: usize,
+    pub width: u32,
+    pub height: u32,
+    pub stride_bytes: usize,
+    pub alpha_mode: u32,
+    pub color_profile: u32,
+    pub pixels: RuvieBytesView,
+}
+
+/// Plugin-owned RGBA8 pixels. After any structurally reclaimable callback
+/// output, the host calls the extension table's `free_frame` exactly once,
+/// including when semantic validation rejects the frame.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RuvieOwnedRgba8FrameV1 {
+    pub struct_size: usize,
+    pub width: u32,
+    pub height: u32,
+    pub stride_bytes: usize,
+    pub alpha_mode: u32,
+    pub color_profile: u32,
+    pub pixels: RuvieBuffer,
+}
+
+impl RuvieOwnedRgba8FrameV1 {
+    pub const fn empty() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>(),
+            width: 0,
+            height: 0,
+            stride_bytes: 0,
+            alpha_mode: 0,
+            color_profile: 0,
+            pixels: RuvieBuffer::empty(),
+        }
+    }
+}
+
+/// Effect hot-path extension. Configuration is typed and borrowed during
+/// `create_instance`; no JSON or Project object crosses the per-frame ABI.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RuvieEffectCpuRgba8ApiV1 {
+    pub abi_version: u32,
+    pub struct_size: usize,
+    pub context: *mut c_void,
+    pub create_instance: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            component_id: RuvieBytesView,
+            properties: RuviePropertyMapViewV1,
+            out_instance: *mut u64,
+        ) -> RuvieExtensionResultV1,
+    >,
+    pub process: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            instance: u64,
+            time_seconds: f64,
+            input: *const RuvieRgba8FrameViewV1,
+            output: *mut RuvieOwnedRgba8FrameV1,
+        ) -> RuvieExtensionResultV1,
+    >,
+    pub release_instance: Option<unsafe extern "C" fn(context: *mut c_void, instance: u64)>,
+    pub free_frame:
+        Option<unsafe extern "C" fn(context: *mut c_void, frame: RuvieOwnedRgba8FrameV1)>,
+}
+
+// SAFETY: The extension contract requires its context and callbacks to be
+// thread-safe for as long as the owning base API/library remains loaded.
+unsafe impl Send for RuvieEffectCpuRgba8ApiV1 {}
+// SAFETY: See the `Send` implementation above.
+unsafe impl Sync for RuvieEffectCpuRgba8ApiV1 {}
+
+/// Fixed-size metadata record filled into host-owned memory by Loader `open`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RuvieAssetMetadataV1 {
+    pub kind: u32,
+    pub present_fields: u32,
+    pub duration_seconds: f64,
+    pub fps: f64,
+    pub width: u32,
+    pub height: u32,
+    pub stream_index: u32,
+    pub frame_count: u64,
+    pub time_base_numerator: i32,
+    pub time_base_denominator: i32,
+}
+
+/// One typed Loader request. Paths and color-space names are borrowed
+/// host-owned UTF-8 bytes valid only for the callback.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RuvieLoaderRequestV1 {
+    pub struct_size: usize,
+    pub request_kind: u32,
+    pub path: RuvieBytesView,
+    pub source_time: f64,
+    pub has_stream_index: u32,
+    pub stream_index: u32,
+    pub input_color_space: RuvieBytesView,
+    pub output_color_space: RuvieBytesView,
+}
+
+/// Loader hot-path extension. Metadata is written into a bounded host-owned
+/// array; decoded pixels are plugin-owned until `free_frame` is called.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RuvieLoaderCpuRgba8ApiV1 {
+    pub abi_version: u32,
+    pub struct_size: usize,
+    pub context: *mut c_void,
+    pub open: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            component_id: RuvieBytesView,
+            path: RuvieBytesView,
+            metadata: *mut RuvieAssetMetadataV1,
+            metadata_capacity: usize,
+            out_metadata_len: *mut usize,
+        ) -> RuvieExtensionResultV1,
+    >,
+    pub load: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            component_id: RuvieBytesView,
+            request: *const RuvieLoaderRequestV1,
+            output: *mut RuvieOwnedRgba8FrameV1,
+        ) -> RuvieExtensionResultV1,
+    >,
+    pub free_frame:
+        Option<unsafe extern "C" fn(context: *mut c_void, frame: RuvieOwnedRgba8FrameV1)>,
+}
+
+// SAFETY: The extension contract requires its context and callbacks to be
+// thread-safe for as long as the owning base API/library remains loaded.
+unsafe impl Send for RuvieLoaderCpuRgba8ApiV1 {}
+// SAFETY: See the `Send` implementation above.
+unsafe impl Sync for RuvieLoaderCpuRgba8ApiV1 {}
 
 impl RuvieCallResult {
     pub fn ok_json<T: Serialize>(value: &T) -> Self {
