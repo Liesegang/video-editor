@@ -348,15 +348,15 @@ fn verify_runtime_loader(manager: &PluginManager) -> anyhow::Result<()> {
         corrupt.extend_from_slice(&1_u32.to_le_bytes());
         corrupt.extend_from_slice(&[1, 2, 3, 255]);
         std::fs::write(&path, corrupt)?;
-        let error = manager
-            .load_resource(
-                &LoadRequest::Image {
-                    path: path_text.clone(),
-                },
-                &CacheManager::new(),
-            )
-            .expect_err("corrupt runtime fixture must retain its decoder failure")
-            .to_string();
+        let error = match manager.load_resource(
+            &LoadRequest::Image {
+                path: path_text.clone(),
+            },
+            &CacheManager::new(),
+        ) {
+            Ok(_) => bail!("corrupt runtime fixture unexpectedly decoded"),
+            Err(error) => error.to_string(),
+        };
         if !error.contains(&path_text)
             || !error.contains("fixture payload length")
             || error.contains("No compatible load plugin")
@@ -365,8 +365,12 @@ fn verify_runtime_loader(manager: &PluginManager) -> anyhow::Result<()> {
         }
         Ok(())
     })();
-    let _ = std::fs::remove_file(path);
-    result
+    let cleanup_result = std::fs::remove_file(&path)
+        .with_context(|| format!("failed to remove runtime fixture {path_text}"));
+    match result {
+        Err(error) => Err(error),
+        Ok(()) => cleanup_result,
+    }
 }
 
 fn verify_runtime_config_graph(manager: &Arc<PluginManager>) -> anyhow::Result<()> {
