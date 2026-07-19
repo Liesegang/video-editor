@@ -180,7 +180,6 @@ impl EditorContext {
         self.preview_texture_id = None;
         self.preview_texture_width = 0;
         self.preview_texture_height = 0;
-        self.preview_render_revision = 0;
         self.preview_nontransparent_pixels = None;
         self.preview_pixel_hash = None;
         self.preview_region = None;
@@ -269,6 +268,8 @@ mod tests {
         context.interaction.text_edit_buffer = "stale".to_string();
         context.interaction.preview_selected_instance_path =
             Some(vec![old_composition_id, old_track_id, old_clip_id]);
+        context.preview_render_revision = 37;
+        context.preview_pixel_hash = Some(99);
 
         let mut replacement = Project::new("replacement");
         let (new_composition, new_track) = Composition::new("new", 1920, 1080, 30.0, 2.0);
@@ -286,5 +287,7 @@ mod tests {
         assert_eq!(context.interaction.editing_text_entity_id, None);
         assert!(context.interaction.text_edit_buffer.is_empty());
         assert!(context.interaction.preview_selected_instance_path.is_none());
+        assert_eq!(context.preview_render_revision, 37);
+        assert_eq!(context.preview_pixel_hash, None);
     }
 }
