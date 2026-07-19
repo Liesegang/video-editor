@@ -24,6 +24,17 @@ impl NativeImageLoader {
     pub fn new() -> Self {
         Self
     }
+
+    fn supports_path(path: &str) -> bool {
+        let extension = std::path::Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase);
+        matches!(
+            extension.as_deref(),
+            Some("png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm")
+        )
+    }
 }
 
 impl Plugin for NativeImageLoader {
@@ -47,15 +58,7 @@ impl Plugin for NativeImageLoader {
 impl LoadPlugin for NativeImageLoader {
     fn open(&self, path: &str) -> LoadPluginResult<Vec<crate::plugin::AssetMetadata>> {
         // Check file extension
-        let ext = std::path::Path::new(path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase());
-        let is_supported = matches!(
-            ext.as_deref(),
-            Some("png" | "jpg" | "jpeg" | "bmp" | "webp" | "tiff" | "tga" | "gif" | "ico" | "pnm")
-        );
-        if !is_supported {
+        if !Self::supports_path(path) {
             return Err(LoadPluginError::Unsupported);
         }
 
@@ -76,6 +79,9 @@ impl LoadPlugin for NativeImageLoader {
 
     fn load(&self, request: &LoadRequest, cache: &CacheManager) -> LoadPluginResult<LoadResponse> {
         if let LoadRequest::Image { path } = request {
+            if !Self::supports_path(path) {
+                return Err(LoadPluginError::Unsupported);
+            }
             let image = if let Some(img) = cache.get_image(path) {
                 img
             } else {
@@ -94,7 +100,9 @@ impl LoadPlugin for NativeImageLoader {
 
 #[cfg(test)]
 mod tests {
-    use super::load_image;
+    use super::{NativeImageLoader, load_image};
+    use crate::cache::CacheManager;
+    use crate::plugin::{LoadPlugin, LoadPluginError, LoadRequest};
     use uuid::Uuid;
 
     #[test]
@@ -113,5 +121,16 @@ mod tests {
         assert_eq!(&loaded.data[0..4], &[240, 80, 20, 128]);
         assert_eq!(&loaded.data[4..8], &[0, 0, 0, 0]);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn image_request_with_an_unknown_extension_is_declined_before_decoding() {
+        let request = LoadRequest::Image {
+            path: "/does/not/exist/custom.runtime-fixture".to_string(),
+        };
+        assert!(matches!(
+            NativeImageLoader::new().load(&request, &CacheManager::new()),
+            Err(LoadPluginError::Unsupported)
+        ));
     }
 }
