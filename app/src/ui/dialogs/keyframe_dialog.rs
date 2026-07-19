@@ -28,12 +28,12 @@ fn prepare_keyframe_dialog_update(
     let keyframe_id = state.keyframe_id?;
     let entity_id = state.entity_id?;
     let current_value = match owner {
-        library::PropertyOwner::Node(node_id) => project
-            .get_node(node_id)
-            .map(|node| &node.properties),
-        library::PropertyOwner::Clip(clip_id) => project
-            .get_clip(clip_id)
-            .map(|clip| &clip.properties),
+        library::PropertyOwner::Node(node_id) => {
+            project.get_node(node_id).map(|node| &node.properties)
+        }
+        library::PropertyOwner::Clip(clip_id) => {
+            project.get_clip(clip_id).map(|clip| &clip.properties)
+        }
     }
     .and_then(|properties| properties.get(&state.property_key))
     .and_then(|property| property.keyframe_by_id(keyframe_id))
@@ -285,6 +285,7 @@ pub fn show_keyframe_dialog(
                             crate::ui::easing_menus::show_easing_menu(
                                 ui,
                                 Some(&current_easing),
+                                None,
                                 |easing| {
                                     state.easing = easing;
                                     changed_control = Some(KeyframeDialogEditControl::Easing);
