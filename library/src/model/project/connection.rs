@@ -238,7 +238,6 @@ fn metadata_catalog(direction: PortDirection, exposure: PortExposure) -> Vec<Por
     ports
         .iter()
         .cloned()
-        .into_iter()
         .map(|(key, label, data_type)| match direction {
             PortDirection::Input => PortDefinition {
                 exposure,
