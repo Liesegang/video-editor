@@ -38,6 +38,36 @@ use crate::plugin::{
     OperationDescriptor, STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin,
 };
 
+fn materialize_validated_operation_properties(
+    context: &crate::plugin::FrameEvaluationContext,
+    definitions: &[PropertyDefinition],
+    properties: &crate::model::property::PropertyMap,
+    eval_time: f64,
+    operation_label: &str,
+) -> Option<crate::model::property::PropertyMap> {
+    let evaluated = context.evaluate_operation_properties(
+        definitions,
+        properties,
+        eval_time,
+        operation_label,
+    )?;
+    let mut materialized = crate::model::property::PropertyMap::new();
+    for definition in definitions {
+        let Some(value) = evaluated.get(definition.name()) else {
+            log::error!(
+                "{operation_label} validated without materializing declared property {}",
+                definition.name()
+            );
+            return None;
+        };
+        materialized.set(
+            definition.name().to_string(),
+            crate::model::property::Property::constant(value.clone()),
+        );
+    }
+    Some(materialized)
+}
+
 use crate::plugin::effects::{
     BlurEffectPlugin, DilateEffectPlugin, DropShadowEffectPlugin, ErodeEffectPlugin,
     MagnifierEffectPlugin, PixelSorterPlugin, TileEffectPlugin,
@@ -341,19 +371,17 @@ impl PluginManager {
                 return crate::model::project::EvalOutput::NoOutput;
             }
         };
-        if context
-            .evaluate_operation_properties(
-                descriptor.properties(),
-                properties,
-                eval_time,
-                &format!("Style {component_id}"),
-            )
-            .is_none()
-        {
+        let Some(properties) = materialize_validated_operation_properties(
+            context,
+            descriptor.properties(),
+            properties,
+            eval_time,
+            &format!("Style {component_id}"),
+        ) else {
             return crate::model::project::EvalOutput::NoOutput;
-        }
+        };
         plugin
-            .evaluate_source(context, source_id, properties, eval_time)
+            .evaluate_source(context, source_id, &properties, eval_time)
             .map(crate::model::project::EvalOutput::Produced)
             .unwrap_or(crate::model::project::EvalOutput::NoOutput)
     }
@@ -385,19 +413,17 @@ impl PluginManager {
                 return crate::model::project::EvalOutput::NoOutput;
             }
         };
-        if context
-            .evaluate_operation_properties(
-                descriptor.properties(),
-                properties,
-                eval_time,
-                &format!("Effector {component_id}"),
-            )
-            .is_none()
-        {
+        let Some(properties) = materialize_validated_operation_properties(
+            context,
+            descriptor.properties(),
+            properties,
+            eval_time,
+            &format!("Effector {component_id}"),
+        ) else {
             return crate::model::project::EvalOutput::NoOutput;
-        }
+        };
         plugin
-            .evaluate_source(context, source_id, properties, eval_time)
+            .evaluate_source(context, source_id, &properties, eval_time)
             .map(crate::model::project::EvalOutput::Produced)
             .unwrap_or(crate::model::project::EvalOutput::NoOutput)
     }
@@ -429,19 +455,17 @@ impl PluginManager {
                 return crate::model::project::EvalOutput::NoOutput;
             }
         };
-        if context
-            .evaluate_operation_properties(
-                descriptor.properties(),
-                properties,
-                eval_time,
-                &format!("Decorator {component_id}"),
-            )
-            .is_none()
-        {
+        let Some(properties) = materialize_validated_operation_properties(
+            context,
+            descriptor.properties(),
+            properties,
+            eval_time,
+            &format!("Decorator {component_id}"),
+        ) else {
             return crate::model::project::EvalOutput::NoOutput;
-        }
+        };
         plugin
-            .evaluate_source(context, source_id, properties, eval_time)
+            .evaluate_source(context, source_id, &properties, eval_time)
             .map(crate::model::project::EvalOutput::Produced)
             .unwrap_or(crate::model::project::EvalOutput::NoOutput)
     }
@@ -509,9 +533,10 @@ impl PluginManager {
     }
 
     /// Invokes a descriptor-declared low-bandwidth operation through the
-    /// generic JSON control plane. Effectors and property evaluators have
-    /// ABI-v1 host adapters. Frame/resource-heavy categories require a
-    /// separately versioned typed extension table and host-owned handles.
+    /// generic JSON control plane. Effectors, property evaluators, and
+    /// config-only Style/Decorator evaluators have ABI-v1 host adapters.
+    /// Frame/resource-heavy categories require a separately versioned typed
+    /// extension table and host-owned handles.
     pub fn invoke_runtime_plugin(
         &self,
         category: &str,
@@ -1169,4 +1194,183 @@ pub struct PluginInfo {
     pub category: String,
     pub version: String,
     pub impl_type: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ordered_float::OrderedFloat;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::model::frame::color::Color;
+    use crate::model::frame::draw_type::DrawStyle;
+    use crate::model::frame::entity::StyleConfig;
+    use crate::model::project::{Composition, EvalOutput, Project};
+    use crate::model::property::{Property, PropertyMap, PropertyUiType, PropertyValue};
+    use crate::plugin::{
+        FrameEvaluationContext, OperationDescriptor, OperationDescriptorError, PropertyEvaluator,
+        PropertyPlugin,
+    };
+
+    struct StatefulEvaluator {
+        evaluations: Arc<AtomicUsize>,
+    }
+
+    impl PropertyEvaluator for StatefulEvaluator {
+        fn evaluate(
+            &self,
+            _property: &Property,
+            _time: f64,
+            _context: &crate::plugin::EvaluationContext,
+        ) -> PropertyValue {
+            let value = self.evaluations.fetch_add(1, Ordering::SeqCst) + 1;
+            PropertyValue::Number(OrderedFloat(value as f64))
+        }
+    }
+
+    struct StatefulPropertyPlugin {
+        evaluations: Arc<AtomicUsize>,
+    }
+
+    impl Plugin for StatefulPropertyPlugin {
+        fn id(&self) -> &str {
+            "stateful-test"
+        }
+
+        fn name(&self) -> String {
+            "Stateful Test".to_string()
+        }
+
+        fn category(&self) -> String {
+            "Tests".to_string()
+        }
+
+        fn version(&self) -> (u32, u32, u32) {
+            (0, 1, 0)
+        }
+    }
+
+    impl PropertyPlugin for StatefulPropertyPlugin {
+        fn get_evaluator_instance(&self) -> Arc<dyn PropertyEvaluator> {
+            Arc::new(StatefulEvaluator {
+                evaluations: Arc::clone(&self.evaluations),
+            })
+        }
+    }
+
+    struct EvaluatedValueStylePlugin;
+
+    impl Plugin for EvaluatedValueStylePlugin {
+        fn id(&self) -> &str {
+            "evaluated-value-style"
+        }
+
+        fn name(&self) -> String {
+            "Evaluated Value Style".to_string()
+        }
+
+        fn category(&self) -> String {
+            "Tests".to_string()
+        }
+
+        fn version(&self) -> (u32, u32, u32) {
+            (0, 1, 0)
+        }
+    }
+
+    impl StylePlugin for EvaluatedValueStylePlugin {
+        fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
+            OperationDescriptor::style(
+                self.id(),
+                self.name(),
+                vec![PropertyDefinition::new(
+                    "value",
+                    PropertyUiType::Float {
+                        min: 0.0,
+                        max: 100.0,
+                        step: 1.0,
+                        suffix: String::new(),
+                        min_hard_limit: true,
+                        max_hard_limit: true,
+                    },
+                    "Value",
+                    PropertyValue::from(0.0),
+                )],
+            )
+        }
+
+        fn evaluate_source(
+            &self,
+            context: &FrameEvaluationContext,
+            source_id: uuid::Uuid,
+            properties: &PropertyMap,
+            eval_time: f64,
+        ) -> Option<StyleConfig> {
+            Some(StyleConfig {
+                id: source_id,
+                style: DrawStyle::Fill {
+                    color: Color::white(),
+                    offset: context.evaluate_number(properties, "value", eval_time, -1.0),
+                },
+            })
+        }
+    }
+
+    #[test]
+    fn operation_validation_materializes_stateful_values_before_plugin_evaluation() {
+        let evaluations = Arc::new(AtomicUsize::new(0));
+        let manager = PluginManager::default();
+        manager.register_property_plugin(Arc::new(StatefulPropertyPlugin {
+            evaluations: Arc::clone(&evaluations),
+        }));
+        manager.register_style_plugin(Arc::new(EvaluatedValueStylePlugin));
+        let mut node = manager
+            .create_style_operation_node("evaluated-value-style")
+            .expect("test Style descriptor creates a Node");
+        node.properties.set(
+            "value".to_string(),
+            Property {
+                evaluator: "stateful-test".to_string(),
+                properties: std::collections::HashMap::new(),
+            },
+        );
+
+        let (composition, track) = Composition::new("Main", 640, 360, 30.0, 1.0);
+        let composition_id = composition.id;
+        let mut project = Project::new("stateful operation property");
+        project.add_track(track);
+        project.add_composition(composition);
+        let composition = project
+            .get_composition(composition_id)
+            .expect("test composition exists");
+        let property_evaluators = manager.get_property_evaluators();
+        let context = FrameEvaluationContext {
+            project: &project,
+            composition,
+            property_evaluators: &property_evaluators,
+            plugin_manager: &manager,
+            resolved_inputs: None,
+        };
+
+        let output = manager.evaluate_style_operation(
+            &context,
+            "evaluated-value-style",
+            node.id,
+            &node.properties,
+            0.0,
+        );
+        let EvalOutput::Produced(StyleConfig {
+            style: DrawStyle::Fill { offset, .. },
+            ..
+        }) = output
+        else {
+            panic!("valid stateful property should produce a Style config")
+        };
+        assert_eq!(offset, 1.0);
+        assert_eq!(
+            evaluations.load(Ordering::SeqCst),
+            1,
+            "validation must not invoke an authored evaluator again inside plugin code"
+        );
+    }
 }
