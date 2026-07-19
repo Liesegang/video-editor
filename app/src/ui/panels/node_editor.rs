@@ -987,7 +987,29 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         );
                     });
                 }
-                NodeContent::Media(_) | NodeContent::Reference(_) | NodeContent::Merge => {}
+                NodeContent::Value(value) => {
+                    ui.horizontal(|ui| {
+                        property_label(ui, "Category");
+                        bounded_non_selectable_label(
+                            ui,
+                            VALUE_NODE_CATEGORY_LABEL,
+                            INLINE_CONTROL_WIDTH,
+                            egui::Align::LEFT,
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        property_label(ui, "Operation");
+                        bounded_non_selectable_label(
+                            ui,
+                            value_operation_label(*value),
+                            INLINE_CONTROL_WIDTH,
+                            egui::Align::LEFT,
+                        );
+                    });
+                }
+                NodeContent::Media(_)
+                | NodeContent::Reference(_)
+                | NodeContent::Merge => {}
             }
         });
     }
@@ -1630,6 +1652,14 @@ struct NodePalette {
     accent: Color32,
 }
 
+const VALUE_NODE_CATEGORY_LABEL: &str = "Value";
+
+fn value_operation_label(value: library::model::ValueContent) -> &'static str {
+    match value {
+        library::model::ValueContent::TimeModulo => "Time Modulo",
+    }
+}
+
 fn node_palette(project: &Project, node_id: Uuid) -> NodePalette {
     match project.get_node(node_id).map(|node| &node.content) {
         Some(NodeContent::Generator(GeneratorContent::Text)) => NodePalette {
@@ -1667,6 +1697,11 @@ fn node_palette(project: &Project, node_id: Uuid) -> NodePalette {
             header: Color32::from_rgb(91, 54, 112),
             accent: Color32::from_rgb(205, 139, 232),
         },
+        Some(NodeContent::Value(_)) => NodePalette {
+            body: Color32::from_rgb(28, 41, 46),
+            header: Color32::from_rgb(39, 83, 95),
+            accent: Color32::from_rgb(91, 197, 218),
+        },
         Some(NodeContent::Merge) | None => NodePalette {
             body: Color32::from_rgb(38, 39, 43),
             header: Color32::from_rgb(68, 70, 79),
@@ -1690,6 +1725,7 @@ fn node_icon(project: &Project, node_id: Uuid) -> &'static str {
             "decorator" => "⌁",
             _ => "P",
         },
+        Some(NodeContent::Value(_)) => "%",
         Some(NodeContent::Merge) => "⋈",
         None => "?",
     }
@@ -4469,7 +4505,12 @@ fn estimated_node_size(project: &Project, node_id: Uuid) -> egui::Vec2 {
         | Some(NodeContent::Generator(GeneratorContent::SkSL)) => 300.0,
         Some(NodeContent::Generator(GeneratorContent::Solid)) => 240.0,
         Some(NodeContent::PluginOperation(_)) => 260.0,
-        Some(NodeContent::Media(_) | NodeContent::Reference(_) | NodeContent::Merge) => 220.0,
+        Some(
+            NodeContent::Media(_)
+            | NodeContent::Reference(_)
+            | NodeContent::Value(_)
+            | NodeContent::Merge,
+        ) => 220.0,
         None => 220.0,
     };
     egui::vec2(
@@ -5861,6 +5902,26 @@ mod tests {
         SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
     };
     use library::model::property::{Keyframe, Property};
+
+    #[test]
+    fn time_modulo_has_explicit_value_node_presentation() {
+        let mut project = Project::new("value node presentation");
+        let node = Node::new_time_modulo("Time Modulo");
+        let node_id = node.id;
+        project.add_node(node);
+
+        assert_eq!(VALUE_NODE_CATEGORY_LABEL, "Value");
+        assert_eq!(
+            value_operation_label(library::model::ValueContent::TimeModulo),
+            "Time Modulo"
+        );
+        assert_eq!(node_icon(&project, node_id), "%");
+        let palette = node_palette(&project, node_id);
+        assert_eq!(palette.body, Color32::from_rgb(28, 41, 46));
+        assert_eq!(palette.header, Color32::from_rgb(39, 83, 95));
+        assert_eq!(palette.accent, Color32::from_rgb(91, 197, 218));
+        assert_eq!(estimated_node_size(&project, node_id).y, 220.0);
+    }
 
     fn fixture() -> (Project, Uuid, Uuid, Uuid, Uuid, Uuid) {
         let mut project = Project::new("Node editor test");
