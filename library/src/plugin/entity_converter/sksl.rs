@@ -1,7 +1,7 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
 use crate::model::frame::entity::{FrameContent, FrameObject};
-// use crate::model::project::TrackClip;
 
+#[derive(Default)]
 pub struct SkSLEntityConverterPlugin;
 
 impl SkSLEntityConverterPlugin {
@@ -143,34 +143,23 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        layer: &crate::model::Layer,
+        node: &crate::model::Node,
         time: f64,
     ) -> Option<FrameObject> {
-        let props = &layer.properties;
+        let props = &node.properties;
         let _comp_fps = evaluator.composition.fps;
 
-        // Calculate evaluation time based on Layer timeframe
-        let time_since_start = time - layer.start_time.into_inner();
-        let eval_time =
-            time_since_start * layer.time_stretch.into_inner() + layer.trim_in.into_inner();
+        // Calculate evaluation time based on Node timeframe
+        let eval_time = time;
 
         let shader = evaluator.require_string(props, "shader", eval_time, "sksl")?;
 
-        let res_x = evaluator.evaluate_number(
-            props,
-            "width",
-            eval_time,
-            evaluator.composition.width as f64,
-        );
-        let res_y = evaluator.evaluate_number(
-            props,
-            "height",
-            eval_time,
-            evaluator.composition.height as f64,
-        );
+        let (default_width, default_height) = evaluator.evaluation_resolution();
+        let res_x = evaluator.evaluate_number(props, "width", eval_time, default_width as f64);
+        let res_y = evaluator.evaluate_number(props, "height", eval_time, default_height as f64);
 
         let transform = evaluator.build_transform(props, eval_time);
-        let effects = evaluator.build_image_effects(&layer.effects, eval_time);
+        let effects = evaluator.build_image_effects(&node.effects, eval_time);
 
         Some(FrameObject {
             content: FrameContent::SkSL {
@@ -186,29 +175,18 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
     fn get_bounds(
         &self,
         evaluator: &FrameEvaluationContext,
-        layer: &crate::model::Layer,
+        node: &crate::model::Node,
         time: f64,
     ) -> Option<(f32, f32, f32, f32)> {
-        let props = &layer.properties;
+        let props = &node.properties;
         let _comp_fps = evaluator.composition.fps;
 
-        // Calculate evaluation time based on Layer timeframe
-        let time_since_start = time - layer.start_time.into_inner();
-        let eval_time =
-            time_since_start * layer.time_stretch.into_inner() + layer.trim_in.into_inner();
+        // Calculate evaluation time based on Node timeframe
+        let eval_time = time;
 
-        let width = evaluator.evaluate_number(
-            props,
-            "width",
-            eval_time,
-            evaluator.composition.width as f64,
-        );
-        let height = evaluator.evaluate_number(
-            props,
-            "height",
-            eval_time,
-            evaluator.composition.height as f64,
-        );
+        let (default_width, default_height) = evaluator.evaluation_resolution();
+        let width = evaluator.evaluate_number(props, "width", eval_time, default_width as f64);
+        let height = evaluator.evaluate_number(props, "height", eval_time, default_height as f64);
 
         Some((0.0, 0.0, width as f32, height as f32))
     }

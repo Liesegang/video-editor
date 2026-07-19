@@ -1,0 +1,94 @@
+name: Rust quality gate
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential \
+            clang \
+            cmake \
+            libasound2-dev \
+            libavcodec-dev \
+            libavdevice-dev \
+            libavfilter-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libegl1-mesa-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libgl1-mesa-dev \
+            libpulse-dev \
+            libswresample-dev \
+            libswscale-dev \
+            libudev-dev \
+            libvulkan-dev \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb-icccm4-dev \
+            libxcb-image0-dev \
+            libxcb-keysyms1-dev \
+            libxcb-randr0-dev \
+            libxcb-render-util0-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-sync-dev \
+            libxcb-xfixes0-dev \
+            libxcb-xinerama0-dev \
+            libxcb-xkb-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxrandr-dev \
+            ninja-build \
+            pkg-config \
+            python3-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache pinned dependency-audit tools
+        uses: actions/cache@v4
+        with:
+          path: target/quality-tools
+          key: quality-tools-${{ runner.os }}-${{ hashFiles('scripts/dependency-audit.sh', 'rust-toolchain.toml') }}
+
+      - name: Run the repository quality gate
+        run: ./scripts/quality-gate.sh
+
+      - name: Cache runtime plugin proof builds
+        uses: actions/cache@v4
+        with:
+          path: target/runtime-plugin-e2e
+          key: runtime-plugin-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'examples/third-party-opacity-effector/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            runtime-plugin-${{ runner.os }}-
+
+      - name: Prove post-build runtime plugin installation
+        run: ./scripts/test-runtime-plugin.sh
+        env:
+          CARGO_TARGET_DIR: target

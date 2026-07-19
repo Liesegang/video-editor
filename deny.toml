@@ -1,0 +1,49 @@
+[graph]
+all-features = true
+
+[licenses]
+# Every entry is present in the locked all-target dependency graph. These are
+# permissive, font/data, or weak-copyleft licenses compatible with distribution
+# of this MIT application; strong copyleft licenses are intentionally absent.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+exceptions = [
+    # UEFI ABI definitions are target-only and distributed under weak copyleft.
+    { allow = ["LGPL-2.1-or-later"], crate = "r-efi@5.3.0" },
+    { allow = ["LGPL-2.1-or-later"], crate = "r-efi@6.0.0" },
+    # These two maintained FFmpeg binding crates declare WTFPL.
+    { allow = ["WTFPL"], crate = "ffmpeg-next@8.1.0" },
+    { allow = ["WTFPL"], crate = "ffmpeg-sys-next@8.1.0" },
+]
+
+[licenses.private]
+ignore = false
+
+[bans]
+# Duplicates are reported for visibility but are not actionable as a global
+# failure while native GUI stacks legitimately support multiple target APIs.
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

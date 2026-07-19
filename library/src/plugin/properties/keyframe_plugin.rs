@@ -6,6 +6,7 @@ use crate::plugin::{EvaluationContext, PropertyEvaluator};
 use ordered_float::OrderedFloat;
 use std::sync::Arc;
 
+#[derive(Default)]
 pub struct KeyframePropertyPlugin;
 
 impl KeyframePropertyPlugin {
@@ -60,21 +61,10 @@ fn evaluate_keyframes(property: &Property, time: f64) -> PropertyValue {
         return PropertyValue::Number(OrderedFloat(0.0));
     }
 
-    // Keyframes might not be strictly sorted if modified recently?
-    // Usually they should be, but let's be safe or just reference them.
-    // For performance, we assume property.keyframes() returns a reference to a Vec.
-    // If we can't assume sort, we must sort indices.
-    // But evaluating every frame with a sort is slow.
-    // Let's assume they are sorted for now, but handle the find safely.
-    // Actually, `GraphEditor` sorts them manually before use. `TrackClip` doesn't enforce sort on add?
-    // ProjectService::add_keyframe pushes and doesn't sort?
-    // Let's check ProjectService. If it doesn't sort, we are in trouble.
-    // But for now, let's just make this function safe.
-
-    // We'll collect and sort references to be robust against unsorted input.
-    // Note: This allocation is per-evaluation per-property. Ideally data is kept sorted.
+    // Keep evaluation robust when callers provide keyframes out of order. This
+    // allocation can go away once Property guarantees sorted insertion.
     let mut sorted_refs: Vec<_> = keyframes.iter().collect();
-    sorted_refs.sort_by(|a, b| a.time.cmp(&b.time));
+    sorted_refs.sort_by_key(|keyframe| keyframe.time);
 
     let first = sorted_refs[0];
     let last = sorted_refs[sorted_refs.len() - 1];
@@ -252,9 +242,9 @@ fn interpolate_color_hsv(start: &Color, end: &Color, t: f64) -> PropertyValue {
     let (r, g, b) = hsv_to_rgb(h, s, v);
 
     PropertyValue::Color(Color {
-        r: r as u8,
-        g: g as u8,
-        b: b as u8,
+        r,
+        g,
+        b,
         a: a.round() as u8,
     })
 }

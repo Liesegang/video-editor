@@ -7,9 +7,15 @@ use library::EditorService;
 use std::sync::{Arc, RwLock};
 
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
+use crate::utils::lock::read_or_recover;
 use crate::{
     action::HistoryManager, state::context::EditorContext, state::context_types::DragStateItem,
 };
+
+fn push_project_history(project_service: &EditorService, history_manager: &mut HistoryManager) {
+    let project = project_service.get_project();
+    history_manager.push_project_state(read_or_recover(project.as_ref()).clone());
+}
 
 pub fn assets_panel(
     ui: &mut Ui,
@@ -23,44 +29,54 @@ pub fn assets_panel(
 
     // Handle new composition dialog results
     if composition_dialog.confirmed && !composition_dialog.edit_mode {
-        let new_comp_id = project_service
-            .add_composition(
-                &composition_dialog.name,
-                composition_dialog.width as u32,
-                composition_dialog.height as u32,
-                composition_dialog.fps,
-                composition_dialog.duration,
-            )
-            .expect("Failed to add composition");
-        editor_context.selection.composition_id = Some(new_comp_id);
-
-        // No need to add to assets list anymore, as Compositions are separate
-
-        let current_state = project_service.get_project().read().unwrap().clone();
-        history_manager.push_project_state(current_state);
-        needs_refresh = true;
+        match project_service.add_composition(
+            &composition_dialog.name,
+            composition_dialog.width as u32,
+            composition_dialog.height as u32,
+            composition_dialog.fps,
+            composition_dialog.duration,
+        ) {
+            Ok(new_comp_id) => {
+                editor_context.selection.composition_id = Some(new_comp_id);
+                push_project_history(project_service, history_manager);
+                needs_refresh = true;
+            }
+            Err(error) => {
+                editor_context.interaction.active_modal_error =
+                    Some(format!("Failed to add composition: {error}"));
+            }
+        }
         composition_dialog.confirmed = false; // Reset confirmed state
         *composition_dialog = CompositionDialog::new(); // Reset dialog state
     }
 
     // Handle edit composition dialog results
     if composition_dialog.confirmed && composition_dialog.edit_mode {
-        project_service
-            .update_composition(
-                composition_dialog.comp_id.unwrap(),
-                &composition_dialog.name,
-                composition_dialog.width as u32,
-                composition_dialog.height as u32,
-                composition_dialog.fps,
-                composition_dialog.duration,
-            )
-            .expect("Failed to update composition");
-
-        // No need to update assets list manually
-
-        let current_state = project_service.get_project().read().unwrap().clone();
-        history_manager.push_project_state(current_state);
-        needs_refresh = true;
+        let update_result = composition_dialog.comp_id.map_or_else(
+            || Err("composition ID is missing".to_string()),
+            |composition_id| {
+                project_service
+                    .update_composition(
+                        composition_id,
+                        &composition_dialog.name,
+                        composition_dialog.width as u32,
+                        composition_dialog.height as u32,
+                        composition_dialog.fps,
+                        composition_dialog.duration,
+                    )
+                    .map_err(|error| error.to_string())
+            },
+        );
+        match update_result {
+            Ok(()) => {
+                push_project_history(project_service, history_manager);
+                needs_refresh = true;
+            }
+            Err(error) => {
+                editor_context.interaction.active_modal_error =
+                    Some(format!("Failed to update composition: {error}"));
+            }
+        }
         composition_dialog.confirmed = false; // Reset confirmed state
         *composition_dialog = CompositionDialog::new(); // Reset dialog state
     }
@@ -123,8 +139,7 @@ pub fn assets_panel(
                     }
 
                     if imported_any {
-                        let current_state = project_service.get_project().read().unwrap().clone();
-                        history_manager.push_project_state(current_state);
+                        push_project_history(project_service, history_manager);
                         needs_refresh = true;
                     }
 
@@ -165,7 +180,7 @@ pub fn assets_panel(
                         Ok(())
                     }
 
-                    let _ = visit_dirs(&folder_path, &mut |path| {
+                    let visit_result = visit_dirs(&folder_path, &mut |path| {
                         let path_str = path.to_string_lossy().to_string();
 
                         // 1. Check Duplicates
@@ -200,10 +215,15 @@ pub fn assets_panel(
                             }
                         }
                     });
+                    if let Err(error) = visit_result {
+                        report.errors.push((
+                            folder_path.to_string_lossy().into_owned(),
+                            error.to_string(),
+                        ));
+                    }
 
                     if imported_any {
-                        let current_state = project_service.get_project().read().unwrap().clone();
-                        history_manager.push_project_state(current_state);
+                        push_project_history(project_service, history_manager);
                         needs_refresh = true;
                     }
 
@@ -417,10 +437,14 @@ pub fn assets_panel(
                                             // We want it to be selectable? Maybe not strictly "selected" as current selection model is Comp/Track/Entity.
                                             // But we need context menu and drag.
 
-                                            let response =
-                                                ui.add(egui::Label::new(&asset.name).sense(
-                                                    egui::Sense::click().union(egui::Sense::drag()),
-                                                ));
+                                            let response = ui.add(
+                                                egui::Label::new(&asset.name)
+                                                    .selectable(false)
+                                                    .sense(
+                                                        egui::Sense::click()
+                                                            .union(egui::Sense::drag()),
+                                                    ),
+                                            );
 
                                             // Context Menu
                                             response.context_menu(|ui| {
@@ -497,23 +521,29 @@ pub fn assets_panel(
             }
         }
 
-        project_service
-            .remove_composition_fully(comp_id)
-            .expect("Failed to remove composition");
-
-        let current_state = project_service.get_project().read().unwrap().clone();
-        history_manager.push_project_state(current_state);
-        needs_refresh = true;
+        match project_service.remove_composition_fully(comp_id) {
+            Ok(()) => {
+                push_project_history(project_service, history_manager);
+                needs_refresh = true;
+            }
+            Err(error) => {
+                editor_context.interaction.active_modal_error =
+                    Some(format!("Failed to remove composition: {error}"));
+            }
+        }
     }
 
     if let Some(asset_id) = asset_to_remove {
-        project_service
-            .remove_asset_fully(asset_id)
-            .expect("Failed to remove asset");
-
-        let current_state = project_service.get_project().read().unwrap().clone();
-        history_manager.push_project_state(current_state);
-        needs_refresh = true;
+        match project_service.remove_asset_fully(asset_id) {
+            Ok(()) => {
+                push_project_history(project_service, history_manager);
+                needs_refresh = true;
+            }
+            Err(error) => {
+                editor_context.interaction.active_modal_error =
+                    Some(format!("Failed to remove asset: {error}"));
+            }
+        }
     }
 
     // Old modals removed.

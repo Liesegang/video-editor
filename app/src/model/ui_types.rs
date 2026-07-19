@@ -20,7 +20,7 @@ pub enum Tab {
     Inspector,
     Assets,
     GraphEditor,
-    NodeGraph,
+    NodeEditor,
     // Add other tabs as needed
 }
 
@@ -32,7 +32,7 @@ impl Tab {
             Tab::Inspector,
             Tab::Assets,
             Tab::GraphEditor,
-            Tab::NodeGraph,
+            Tab::NodeEditor,
         ]
     }
 
@@ -43,7 +43,7 @@ impl Tab {
             Tab::Inspector => "Inspector",
             Tab::Assets => "Assets",
             Tab::GraphEditor => "Graph Editor",
-            Tab::NodeGraph => "Node Editor",
+            Tab::NodeEditor => "Node Editor",
         }
     }
 }

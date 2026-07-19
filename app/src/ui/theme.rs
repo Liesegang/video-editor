@@ -1,6 +1,17 @@
 use crate::config::{AppConfig, ThemeType};
 use eframe::egui;
 
+/// Keep display-only labels from capturing pointer drags as text selections.
+///
+/// This only changes `Label` selection defaults. `TextEdit` owns its selection
+/// behavior independently, so editable text remains selectable.
+pub fn disable_display_text_selection(ctx: &egui::Context) {
+    ctx.all_styles_mut(|style| {
+        style.interaction.selectable_labels = false;
+        style.interaction.multi_widget_text_select = false;
+    });
+}
+
 pub fn apply_theme(ctx: &egui::Context, config: &AppConfig) {
     match config.theme.theme_type {
         ThemeType::Dark => ctx.set_visuals(egui::Visuals::dark()),
@@ -55,5 +66,21 @@ pub fn apply_theme(ctx: &egui::Context, config: &AppConfig) {
 
             ctx.set_visuals(visuals);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_labels_are_not_selectable() {
+        let ctx = egui::Context::default();
+
+        disable_display_text_selection(&ctx);
+
+        let style = ctx.style();
+        assert!(!style.interaction.selectable_labels);
+        assert!(!style.interaction.multi_widget_text_select);
     }
 }

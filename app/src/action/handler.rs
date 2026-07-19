@@ -1,9 +1,8 @@
-use std::fs;
-use std::io::Write;
-// use std::sync::{Arc, RwLock};
 use eframe::egui;
 use egui_dock::DockState;
 use log::{error, info, warn};
+use std::fs;
+use std::io::Write;
 
 use library::EditorService;
 
@@ -11,6 +10,7 @@ use crate::action::HistoryManager;
 use crate::command::CommandId;
 use crate::model::ui_types::Tab;
 use crate::state::context::EditorContext;
+use crate::utils::lock::read_or_recover;
 
 pub struct ActionContext<'a> {
     pub editor_context: &'a mut EditorContext,
@@ -72,11 +72,15 @@ fn handle_file_command(_ctx: &egui::Context, action: CommandId, context: ActionC
                 context.editor_context.timeline.current_time = 0.0;
 
                 context.history_manager.clear();
-                if let Ok(proj_read) = context.project_service.get_project().read() {
+                let project = context.project_service.get_project();
+                if let Ok(proj_read) = project.read() {
+                    context
+                        .editor_context
+                        .reconcile_project_replacement(&proj_read);
                     context
                         .history_manager
                         .push_project_state(proj_read.clone());
-                }
+                };
             }
             Err(e) => error!("Failed to create new project: {}", e),
         },
@@ -89,11 +93,20 @@ fn handle_file_command(_ctx: &egui::Context, action: CommandId, context: ActionC
                     error!("Failed to load project: {}", e);
                 } else {
                     context.history_manager.clear();
-                    if let Ok(proj_read) = context.project_service.get_project().read() {
+                    let project = context.project_service.get_project();
+                    if let Ok(proj_read) = project.read() {
+                        context
+                            .editor_context
+                            .reconcile_project_replacement(&proj_read);
+                        context
+                            .editor_context
+                            .interaction
+                            .preview_viewport
+                            .request_fit();
                         context
                             .history_manager
                             .push_project_state(proj_read.clone());
-                    }
+                    };
                     info!("Project loaded from {}", path.display());
                     context.editor_context.timeline.current_time = 0.0;
                 }
@@ -130,15 +143,47 @@ fn handle_file_command(_ctx: &egui::Context, action: CommandId, context: ActionC
 fn handle_edit_command(action: CommandId, context: ActionContext) {
     match action {
         CommandId::Undo => {
-            if let Some(prev_state) = context.history_manager.undo() {
-                context.project_service.set_project(prev_state);
+            let project = context.project_service.get_project();
+            let current_state = project.read().ok().map(|project| project.clone());
+            if let Some(prev_state) = current_state
+                .as_ref()
+                .and_then(|current| context.history_manager.undo(current))
+            {
+                if let Err(error) = context.project_service.set_project(prev_state) {
+                    error!("Failed to restore Undo state: {error}");
+                    return;
+                }
+                if let Ok(project) = project.read() {
+                    context
+                        .editor_context
+                        .reconcile_project_replacement(&project);
+                }
+                context
+                    .project_service
+                    .reset_audio_pump(context.editor_context.timeline.current_time as f64);
             } else {
                 warn!("Undo stack is empty (or at initial state).");
             }
         }
         CommandId::Redo => {
-            if let Some(next_state) = context.history_manager.redo() {
-                context.project_service.set_project(next_state);
+            let project = context.project_service.get_project();
+            let current_state = project.read().ok().map(|project| project.clone());
+            if let Some(next_state) = current_state
+                .as_ref()
+                .and_then(|current| context.history_manager.redo(current))
+            {
+                if let Err(error) = context.project_service.set_project(next_state) {
+                    error!("Failed to restore Redo state: {error}");
+                    return;
+                }
+                if let Ok(project) = project.read() {
+                    context
+                        .editor_context
+                        .reconcile_project_replacement(&project);
+                }
+                context
+                    .project_service
+                    .reset_audio_pump(context.editor_context.timeline.current_time as f64);
             } else {
                 warn!("Redo stack is empty.");
             }
@@ -161,12 +206,8 @@ fn handle_edit_command(action: CommandId, context: ActionContext) {
                                 .selected_entities
                                 .remove(&entity_id);
                             context.editor_context.selection.last_selected_entity_id = None;
-                            let current_state = context
-                                .project_service
-                                .get_project()
-                                .read()
-                                .unwrap()
-                                .clone();
+                            let project = context.project_service.get_project();
+                            let current_state = read_or_recover(project.as_ref()).clone();
                             context.history_manager.push_project_state(current_state);
                         }
                     }

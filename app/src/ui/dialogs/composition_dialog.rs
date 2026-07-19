@@ -1,5 +1,5 @@
 use egui::TextEdit;
-use library::model::project::Composite;
+use library::model::project::Composition;
 use once_cell::sync::Lazy;
 use uuid::Uuid;
 
@@ -486,7 +486,7 @@ impl CompositionDialog {
         self.confirmed = false;
     }
 
-    pub fn open_for_edit(&mut self, composition: &Composite) {
+    pub fn open_for_edit(&mut self, composition: &Composition) {
         self.is_open = true;
         self.comp_id = Some(composition.id);
         self.name = composition.name.clone();
@@ -687,6 +687,7 @@ impl CompositionDialog {
                                 .add(
                                     egui::DragValue::new(&mut self.width)
                                         .speed(1.0)
+                                        .range(1..=u64::from(u32::MAX))
                                         .suffix("px"),
                                 )
                                 .changed()
@@ -701,6 +702,7 @@ impl CompositionDialog {
                                 .add(
                                     egui::DragValue::new(&mut self.height)
                                         .speed(1.0)
+                                        .range(1..=u64::from(u32::MAX))
                                         .suffix("px"),
                                 )
                                 .changed()
@@ -712,7 +714,11 @@ impl CompositionDialog {
                             // FPS
                             ui.label("FPS:");
                             if ui
-                                .add(egui::DragValue::new(&mut self.fps).speed(0.1))
+                                .add(
+                                    egui::DragValue::new(&mut self.fps)
+                                        .speed(0.1)
+                                        .range(f64::MIN_POSITIVE..=f64::MAX),
+                                )
                                 .changed()
                             {
                                 self.update_active_preset();
@@ -724,6 +730,7 @@ impl CompositionDialog {
                             ui.add(
                                 egui::DragValue::new(&mut self.duration)
                                     .speed(0.1)
+                                    .range(0.0..=f64::MAX)
                                     .suffix("s"),
                             );
                             ui.end_row();

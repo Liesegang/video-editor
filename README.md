@@ -70,6 +70,15 @@ cargo run -p library -- test_data/project.json target/debug/random_property_plug
 
 Video Editorの開発に参加したい方は、IssueやPull Requestを歓迎しています。
 
+変更を送る前に、CIと同じRust品質ゲートを実行してください。
+
+```bash
+./scripts/quality-gate.sh
+```
+
+必要なネイティブ依存やlint方針、自己テストについては
+[Rust quality gate](docs/rust-quality-gate.md)を参照してください。
+
 - 改善や不具合報告は[Issueページ](https://github.com/Liesegang/video-editor/issues)へお願いします。
 - コードの改善や新機能追加は、ForkしてPull Requestを作成してください。
 

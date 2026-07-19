@@ -1,6 +1,6 @@
 use egui::Ui;
 use library::model::project::Project;
-use library::model::{Layer, Node};
+use library::ClipBundle;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 
@@ -127,7 +127,7 @@ fn add_clip_to_best_track(
     project: &Arc<RwLock<Project>>,
     editor_context: &EditorContext,
     drop_track_index_opt: Option<usize>,
-    layer: Layer,
+    bundle: ClipBundle,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
 ) {
@@ -135,15 +135,11 @@ fn add_clip_to_best_track(
     if let Ok(proj_read) = project.read() {
         if let Some(comp_id) = editor_context.selection.composition_id {
             if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-                // Get root track and find tracks by flattening
-                let root_track_id = comp.root_track_id;
-
                 // If we have a calculated track index, use flattened display to find the track
                 if let Some(idx) = drop_track_index_opt {
-                    let root_ids = vec![root_track_id];
                     let display_rows = super::super::utils::flatten::flatten_tracks_to_rows(
                         &proj_read,
-                        &root_ids,
+                        &comp.track_ids,
                         &editor_context.timeline.expanded_tracks,
                     );
                     if let Some(row) = display_rows.get(idx) {
@@ -151,22 +147,14 @@ fn add_clip_to_best_track(
                     }
                 }
 
-                // Fallback to root track if not found
+                // Fallback to the first valid top-level track. An empty
+                // composition deliberately has no target, so this is a no-op.
                 if track_id_opt.is_none() {
-                    // Use the root track itself or find first child track
-                    if let Some(Node::Track(root_track)) = proj_read.get_node(root_track_id) {
-                        // If root track has child tracks, use the first one; otherwise use root
-                        for child_id in &root_track.children {
-                            if let Some(Node::Track(_)) = proj_read.get_node(*child_id) {
-                                track_id_opt = Some(*child_id);
-                                break;
-                            }
-                        }
-                        // If no child tracks, use root track itself
-                        if track_id_opt.is_none() {
-                            track_id_opt = Some(root_track_id);
-                        }
-                    }
+                    track_id_opt = comp
+                        .track_ids
+                        .iter()
+                        .copied()
+                        .find(|track_id| proj_read.get_track(*track_id).is_some());
                 }
             }
         }
@@ -174,7 +162,7 @@ fn add_clip_to_best_track(
 
     if let Some(track_id) = track_id_opt {
         if let Some(comp_id) = editor_context.selection.composition_id {
-            if let Err(e) = project_service.add_clip_to_track(comp_id, track_id, layer, None) {
+            if let Err(e) = project_service.add_clip_to_track(comp_id, track_id, bundle, None) {
                 log::error!("Failed to add clip: {}", e);
             } else {
                 let current_state = project_service.get_project().read().unwrap().clone();

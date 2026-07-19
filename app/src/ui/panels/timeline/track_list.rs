@@ -14,10 +14,6 @@ enum DeferredTrackAction {
     AddTrack {
         comp_id: Uuid,
     },
-    AddSubTrack {
-        comp_id: Uuid,
-        parent_track_id: Uuid,
-    },
     RemoveTrack {
         comp_id: Uuid,
         track_id: Uuid,
@@ -26,6 +22,86 @@ enum DeferredTrackAction {
         track_id: Uuid,
         new_name: String,
     },
+    MoveTrack {
+        comp_id: Uuid,
+        track_id: Uuid,
+        destination_index: usize,
+    },
+}
+
+/// Returns insertion slots in Composition order and their screen-space Y
+/// coordinates. Expanded clip rows remain part of their Track's visual group,
+/// so a slot is placed only before a top-level Track or after the final group.
+fn track_insertion_markers(
+    display_rows: &[super::utils::flatten::DisplayRow<'_>],
+    list_top: f32,
+    scroll_y: f32,
+    row_height: f32,
+    track_spacing: f32,
+) -> Vec<(usize, f32)> {
+    let stride = row_height + track_spacing;
+    let mut markers: Vec<(usize, f32)> = display_rows
+        .iter()
+        .filter_map(|row| match row {
+            super::utils::flatten::DisplayRow::TrackHeader {
+                depth,
+                visible_row_index,
+                ..
+            } if *depth == 0 => Some(*visible_row_index),
+            _ => None,
+        })
+        .enumerate()
+        .map(|(slot, row_index)| {
+            (
+                slot,
+                list_top + row_index as f32 * stride - scroll_y - track_spacing * 0.5,
+            )
+        })
+        .collect();
+
+    if markers.is_empty() {
+        return markers;
+    }
+
+    let end_row = display_rows
+        .last()
+        .map(|row| row.visible_row_index() + 1)
+        .unwrap_or(0);
+    markers.push((
+        markers.len(),
+        list_top + end_row as f32 * stride - scroll_y - track_spacing * 0.5,
+    ));
+    markers
+}
+
+fn nearest_track_insertion_slot(pointer_y: f32, markers: &[(usize, f32)]) -> Option<(usize, f32)> {
+    markers
+        .iter()
+        .copied()
+        .min_by(|(_, first_y), (_, second_y)| {
+            (pointer_y - *first_y)
+                .abs()
+                .total_cmp(&(pointer_y - *second_y).abs())
+        })
+}
+
+/// Converts a slot in the original order into the Track's final index after
+/// removing the source Track. The two slots adjacent to the source are both a
+/// no-op, which makes dropping back in place stable.
+fn destination_index_for_slot(
+    source_index: usize,
+    insertion_slot: usize,
+    track_count: usize,
+) -> Option<usize> {
+    if track_count == 0 || source_index >= track_count || insertion_slot > track_count {
+        return None;
+    }
+
+    Some(if insertion_slot > source_index {
+        insertion_slot - 1
+    } else {
+        insertion_slot
+    })
 }
 
 pub fn show_track_list(
@@ -39,7 +115,6 @@ pub fn show_track_list(
     let row_height = 30.0;
     let track_spacing = 2.0;
     let mut deferred_actions: Vec<DeferredTrackAction> = Vec::new();
-    let mut tracks_to_expand: Vec<Uuid> = Vec::new();
     let mut tracks_to_deselect: Vec<Uuid> = Vec::new();
 
     let (track_list_rect, track_list_response) = ui_content.allocate_exact_size(
@@ -55,7 +130,7 @@ pub fn show_track_list(
 
     use std::collections::HashMap;
 
-    let mut root_track_ids: Vec<uuid::Uuid> = Vec::new();
+    let mut track_ids: Vec<uuid::Uuid> = Vec::new();
     let mut asset_names: HashMap<uuid::Uuid, String> = HashMap::new();
     let selected_composition_id = editor_context.selection.composition_id;
 
@@ -64,7 +139,7 @@ pub fn show_track_list(
     if let Some(comp_id) = selected_composition_id {
         if let Some(ref proj) = proj_read {
             if let Some(comp) = proj.compositions.iter().find(|c| c.id == comp_id) {
-                root_track_ids.push(comp.root_track_id);
+                track_ids = comp.track_ids.clone();
             }
             // Cache asset names for quick lookup
             for asset in &proj.assets {
@@ -77,13 +152,27 @@ pub fn show_track_list(
     let display_rows = if let Some(ref proj) = proj_read {
         super::utils::flatten::flatten_tracks_to_rows(
             proj,
-            &root_track_ids,
+            &track_ids,
             &editor_context.timeline.expanded_tracks,
         )
     } else {
         Vec::new()
     };
     let num_rows = display_rows.len();
+
+    // A composition switch or an externally removed Track cancels the
+    // runtime gesture without mutating Project state.
+    if editor_context
+        .interaction
+        .timeline_track_reorder
+        .as_ref()
+        .is_some_and(|reorder| {
+            Some(reorder.composition_id) != selected_composition_id
+                || !track_ids.contains(&reorder.track_id)
+        })
+    {
+        editor_context.interaction.timeline_track_reorder = None;
+    }
 
     // Iterate over visible rows
     // Calculate Reorder State for Preview
@@ -103,15 +192,22 @@ pub fn show_track_list(
                         track_spacing,
                         &display_rows,
                         proj,
-                        &root_track_ids,
+                        &track_ids,
                         hovered_tid,
                     )
                 {
-                    let mut dragged_original_index = 0;
-                    if let Some(track) = proj.get_track(hovered_tid) {
-                        if let Some(pos) = track.children.iter().position(|id| *id == dragged_id) {
-                            dragged_original_index = pos;
-                        }
+                    let source_track_id = editor_context
+                        .interaction
+                        .dragged_entity_original_track_id
+                        .unwrap_or(hovered_tid);
+                    if let Some(dragged_original_index) =
+                        proj.get_track(source_track_id).and_then(|track| {
+                            track
+                                .clip_ids
+                                .iter()
+                                .position(|clip_id| *clip_id == dragged_id)
+                        })
+                    {
                         reorder_state = Some((
                             dragged_id,
                             hovered_tid,
@@ -198,36 +294,42 @@ pub fn show_track_list(
                 visible_row_index: _, // Ignored here as we use row.visible_row_index() method
                 ..
             } => {
+                let canonical_index = track_ids
+                    .iter()
+                    .position(|candidate| *candidate == track.id);
+                crate::qa::register_component_with_metadata(
+                    format!("timeline.track:{}", track.id),
+                    "timeline_track",
+                    row_rect,
+                    true,
+                    Some(serde_json::json!({
+                        "track_id": track.id,
+                        "canonical_index": canonical_index,
+                        "expanded": is_expanded,
+                    })),
+                );
                 let track_interaction_response = ui_content
                     .interact(
                         row_rect,
                         egui::Id::new(track.id).with("track_label_interact"),
-                        egui::Sense::click(),
+                        if editor_context.interaction.renaming_track_id == Some(track.id) {
+                            egui::Sense::click()
+                        } else {
+                            egui::Sense::click_and_drag()
+                        },
                     )
                     .on_hover_text(format!("Track ID: {}", track.id));
 
                 track_interaction_response.context_menu(|ui| {
                     if let Some(comp_id) = editor_context.selection.composition_id {
-                        // Add Sub-Track option
-                        if ui
-                            .button(format!("{} Add Sub-Track", icons::FOLDER_PLUS))
-                            .clicked()
-                        {
-                            deferred_actions.push(DeferredTrackAction::AddSubTrack {
-                                comp_id,
-                                parent_track_id: track.id,
-                            });
-                            tracks_to_expand.push(track.id);
-                            ui.close();
-                        }
-
-                        ui.separator();
-
                         // Rename Track option
-                        if ui
-                            .button(format!("{} Rename", icons::PENCIL_SIMPLE))
-                            .clicked()
-                        {
+                        let rename = ui.button(format!("{} Rename", icons::PENCIL_SIMPLE));
+                        crate::qa::register_component(
+                            format!("timeline.menu.rename.track:{}", track.id),
+                            "timeline_menu_item",
+                            rename.rect,
+                        );
+                        if rename.clicked() {
                             editor_context.interaction.renaming_track_id = Some(track.id);
                             editor_context.interaction.rename_buffer = track.name.clone();
                             ui.close();
@@ -235,10 +337,13 @@ pub fn show_track_list(
 
                         ui.separator();
 
-                        if ui
-                            .button(format!("{} Remove Track", icons::TRASH))
-                            .clicked()
-                        {
+                        let remove = ui.button(format!("{} Remove Track", icons::TRASH));
+                        crate::qa::register_component(
+                            format!("timeline.menu.delete.track:{}", track.id),
+                            "timeline_menu_item",
+                            remove.rect,
+                        );
+                        if remove.clicked() {
                             deferred_actions.push(DeferredTrackAction::RemoveTrack {
                                 comp_id,
                                 track_id: track.id,
@@ -252,8 +357,25 @@ pub fn show_track_list(
                     }
                 });
 
-                if track_interaction_response.clicked() {
+                if track_interaction_response.clicked_by(egui::PointerButton::Primary) {
                     editor_context.selection.last_selected_track_id = Some(track.id);
+                }
+
+                if track_interaction_response.drag_started_by(egui::PointerButton::Primary) {
+                    if let (Some(comp_id), Some(source_index)) = (
+                        selected_composition_id,
+                        track_ids
+                            .iter()
+                            .position(|candidate| *candidate == track.id),
+                    ) {
+                        editor_context.interaction.timeline_track_reorder =
+                            Some(crate::state::context_types::TimelineTrackReorderState {
+                                composition_id: comp_id,
+                                track_id: track.id,
+                                source_index,
+                                hover_insertion_slot: None,
+                            });
+                    }
                 }
 
                 track_list_painter.rect_filled(
@@ -268,6 +390,20 @@ pub fn show_track_list(
                     },
                 );
 
+                if editor_context
+                    .interaction
+                    .timeline_track_reorder
+                    .as_ref()
+                    .is_some_and(|reorder| reorder.track_id == track.id)
+                {
+                    track_list_painter.rect_stroke(
+                        row_rect.shrink(1.0),
+                        0.0,
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(90, 190, 255)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+
                 // Indentation
                 let indent = *depth as f32 * 10.0;
                 let mut text_offset_x = 5.0 + indent;
@@ -281,6 +417,13 @@ pub fn show_track_list(
                     icon_rect,
                     egui::Id::new(track.id).with("expand_icon"),
                     egui::Sense::click(),
+                );
+                crate::qa::register_component_with_metadata(
+                    format!("timeline.track_expand:{}", track.id),
+                    "timeline_track_expand",
+                    icon_rect,
+                    true,
+                    Some(serde_json::json!({"expanded": is_expanded})),
                 );
 
                 if icon_response.clicked() {
@@ -379,14 +522,25 @@ pub fn show_track_list(
                 let indent = *depth as f32 * 10.0;
                 let text_offset_x = 5.0 + indent + 16.0; // Extra indent for clip (no folder icon)
 
-                let clip_name = match &clip.content {
-                    library::model::LayerContent::Media(m) => asset_names
-                        .get(&m.asset_id)
-                        .cloned()
-                        .unwrap_or_else(|| "Unknown Asset".to_string()),
-                    library::model::LayerContent::Generator(g) => format!("{:?}", g), // Simplified
-                    library::model::LayerContent::Reference(_) => "Reference".to_string(),
-                };
+                let clip_name = proj_read
+                    .as_ref()
+                    .and_then(|project| {
+                        clip.output_node_id
+                            .and_then(|node_id| project.get_node(node_id))
+                            .or_else(|| {
+                                clip.node_ids
+                                    .iter()
+                                    .find_map(|node_id| project.get_node(*node_id))
+                            })
+                    })
+                    .map(|node| match &node.content {
+                        library::model::NodeContent::Media(media) => asset_names
+                            .get(&media.asset_id)
+                            .cloned()
+                            .unwrap_or_else(|| node.name.clone()),
+                        _ => node.name.clone(),
+                    })
+                    .unwrap_or_else(|| clip.name.clone());
 
                 track_list_painter.text(
                     row_rect.left_center() + egui::vec2(text_offset_x, 0.0),
@@ -397,6 +551,89 @@ pub fn show_track_list(
                 );
             }
         }
+    }
+
+    let insertion_markers = track_insertion_markers(
+        &display_rows,
+        track_list_rect.min.y,
+        editor_context.timeline.scroll_offset.y,
+        row_height,
+        track_spacing,
+    );
+    let pointer_position = ui_content.ctx().pointer_latest_pos();
+
+    for (slot, marker_y) in &insertion_markers {
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(track_list_rect.left(), *marker_y - 4.0),
+            egui::pos2(track_list_rect.right(), *marker_y + 4.0),
+        );
+        crate::qa::register_component_with_metadata(
+            format!("timeline.track_insertion_slot:{slot}"),
+            "timeline_track_insertion_slot",
+            rect,
+            true,
+            Some(serde_json::json!({
+                "slot": slot,
+                "composition_id": selected_composition_id,
+            })),
+        );
+    }
+
+    if let Some(reorder) = editor_context.interaction.timeline_track_reorder.as_mut() {
+        reorder.hover_insertion_slot = pointer_position
+            .filter(|pointer| track_list_rect.contains(*pointer))
+            .and_then(|pointer| nearest_track_insertion_slot(pointer.y, &insertion_markers))
+            .map(|(slot, _)| slot);
+
+        ui_content.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        ui_content.ctx().request_repaint();
+    }
+
+    if let Some(reorder) = editor_context.interaction.timeline_track_reorder.as_ref() {
+        if let Some(marker_y) = reorder.hover_insertion_slot.and_then(|slot| {
+            insertion_markers
+                .iter()
+                .find_map(|(candidate, y)| (*candidate == slot).then_some(*y))
+        }) {
+            let marker_y =
+                marker_y.clamp(track_list_rect.top() + 1.0, track_list_rect.bottom() - 1.0);
+            track_list_painter.line_segment(
+                [
+                    egui::pos2(track_list_rect.left() + 4.0, marker_y),
+                    egui::pos2(track_list_rect.right() - 4.0, marker_y),
+                ],
+                egui::Stroke::new(3.0, egui::Color32::from_rgb(90, 190, 255)),
+            );
+        }
+    }
+
+    let cancel_track_reorder = ui_content.input(|input| input.key_pressed(egui::Key::Escape));
+    let primary_released =
+        ui_content.input(|input| input.pointer.button_released(egui::PointerButton::Primary));
+    let primary_down = ui_content.input(|input| input.pointer.primary_down());
+
+    if cancel_track_reorder {
+        editor_context.interaction.timeline_track_reorder = None;
+    } else if primary_released {
+        if let Some(reorder) = editor_context.interaction.timeline_track_reorder.take() {
+            if Some(reorder.composition_id) == selected_composition_id {
+                if let Some(destination_index) = reorder.hover_insertion_slot.and_then(|slot| {
+                    destination_index_for_slot(reorder.source_index, slot, track_ids.len())
+                }) {
+                    if destination_index != reorder.source_index {
+                        deferred_actions.push(DeferredTrackAction::MoveTrack {
+                            comp_id: reorder.composition_id,
+                            track_id: reorder.track_id,
+                            destination_index,
+                        });
+                    }
+                }
+            }
+        }
+    } else if editor_context.interaction.timeline_track_reorder.is_some() && !primary_down {
+        // Covers pointer cancellation/window focus loss where no release event
+        // reaches egui. Project remains untouched.
+        editor_context.interaction.timeline_track_reorder = None;
     }
 
     track_list_response.context_menu(|ui_content| {
@@ -430,18 +667,6 @@ pub fn show_track_list(
                     needs_history_push = true;
                 }
             }
-            DeferredTrackAction::AddSubTrack {
-                comp_id,
-                parent_track_id,
-            } => {
-                if let Err(e) =
-                    project_service.add_sub_track(comp_id, parent_track_id, "New Sub-Track")
-                {
-                    error!("Failed to add sub-track: {:?}", e);
-                } else {
-                    needs_history_push = true;
-                }
-            }
             DeferredTrackAction::RemoveTrack { comp_id, track_id } => {
                 if let Err(e) = project_service.remove_track(comp_id, track_id) {
                     error!("Failed to remove track: {:?}", e);
@@ -456,13 +681,22 @@ pub fn show_track_list(
                     needs_history_push = true;
                 }
             }
+            DeferredTrackAction::MoveTrack {
+                comp_id,
+                track_id,
+                destination_index,
+            } => match project_service.move_track_within_composition(
+                comp_id,
+                track_id,
+                destination_index,
+            ) {
+                Ok(changed) => needs_history_push |= changed,
+                Err(e) => error!("Failed to reorder track: {:?}", e),
+            },
         }
     }
 
     // Apply deferred state changes
-    for track_id in tracks_to_expand {
-        editor_context.timeline.expanded_tracks.insert(track_id);
-    }
     for track_id in tracks_to_deselect {
         if editor_context.selection.last_selected_track_id == Some(track_id) {
             editor_context.selection.last_selected_track_id = None;
@@ -478,4 +712,54 @@ pub fn show_track_list(
     }
 
     (num_rows, row_height, track_spacing)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use library::model::Track;
+
+    #[test]
+    fn insertion_slots_cover_first_last_and_follow_vertical_scroll() {
+        let tracks = [Track::new("A"), Track::new("B"), Track::new("C")];
+        let rows: Vec<_> = tracks
+            .iter()
+            .enumerate()
+            .map(|(visible_row_index, track)| {
+                super::super::utils::flatten::DisplayRow::TrackHeader {
+                    track,
+                    depth: 0,
+                    is_expanded: false,
+                    visible_row_index,
+                }
+            })
+            .collect();
+
+        let markers = track_insertion_markers(&rows, 100.0, 32.0, 30.0, 2.0);
+
+        assert_eq!(markers, vec![(0, 67.0), (1, 99.0), (2, 131.0), (3, 163.0)]);
+        assert_eq!(
+            nearest_track_insertion_slot(66.0, &markers),
+            Some((0, 67.0))
+        );
+        assert_eq!(
+            nearest_track_insertion_slot(164.0, &markers),
+            Some((3, 163.0))
+        );
+    }
+
+    #[test]
+    fn insertion_slot_conversion_supports_up_down_and_stable_no_op_drops() {
+        // Move C before A, then A after C in a four-Track list.
+        assert_eq!(destination_index_for_slot(2, 0, 4), Some(0));
+        assert_eq!(destination_index_for_slot(0, 3, 4), Some(2));
+
+        // The slots immediately before and after B both retain B at index 1.
+        assert_eq!(destination_index_for_slot(1, 1, 4), Some(1));
+        assert_eq!(destination_index_for_slot(1, 2, 4), Some(1));
+
+        assert_eq!(destination_index_for_slot(0, 0, 0), None);
+        assert_eq!(destination_index_for_slot(4, 0, 4), None);
+        assert_eq!(destination_index_for_slot(0, 5, 4), None);
+    }
 }

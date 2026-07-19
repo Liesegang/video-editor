@@ -6,7 +6,11 @@ use crate::plugin::{PluginCategory, PropertyEvaluator};
 
 /// Base trait for all plugins.
 pub trait Plugin: Send + Sync {
-    fn id(&self) -> &'static str;
+    /// Stable identifier supplied by the plugin descriptor.
+    ///
+    /// Unlike the former `&'static str` contract, this permits identifiers
+    /// discovered from a runtime-loaded native plugin without leaking memory.
+    fn id(&self) -> &str;
     fn name(&self) -> String;
     fn category(&self) -> String;
     fn version(&self) -> (u32, u32, u32);

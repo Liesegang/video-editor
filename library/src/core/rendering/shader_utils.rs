@@ -10,38 +10,19 @@ uniform float4 iDate;
 "#;
 
 pub fn preprocess_shader(code: &str) -> String {
-    let compiler = shaderc::Compiler::new().unwrap();
-    let options = shaderc::CompileOptions::new().unwrap();
+    let source = code
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            !line.starts_with("#version")
+                && !line.starts_with("#extension")
+                && !line.starts_with("#line")
+                && !line.starts_with("#pragma")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
-    let version_directive = "#version 310 es\n";
-    let full_source = if code.trim().starts_with("#version") {
-        format!("{}\n{}", STANDARD_UNIFORMS, code)
-    } else {
-        format!("{}{}\n{}", version_directive, STANDARD_UNIFORMS, code)
-    };
-
-    match compiler.preprocess(&full_source, "shader.glsl", "main", Some(&options)) {
-        Ok(artifact) => {
-            let output = artifact.as_text();
-            output
-                .lines()
-                .filter(|l| {
-                    let t = l.trim();
-                    !t.starts_with("#version")
-                        && !t.starts_with("#extension")
-                        && !t.starts_with("#line")
-                        && !t.starts_with("#pragma")
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-        Err(e) => {
-            format!(
-                "// Preprocessing failed: {}\n{}\n{}",
-                e, STANDARD_UNIFORMS, code
-            )
-        }
-    }
+    format!("{STANDARD_UNIFORMS}\n{source}")
 }
 
 pub struct ShaderContext {

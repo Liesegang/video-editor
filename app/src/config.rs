@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use toml;
+
+type ShortcutMap = HashMap<CommandId, Option<(Modifiers, Key)>>;
 
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "Modifiers")]
@@ -168,7 +169,7 @@ struct ShortcutDefWrapper {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AppConfig {
     #[serde(with = "tuple_vec_map")]
-    pub shortcuts: HashMap<CommandId, Option<(Modifiers, Key)>>,
+    pub shortcuts: ShortcutMap,
     pub plugins: PluginConfig,
     pub theme: ThemeConfig,
 }
@@ -198,10 +199,7 @@ mod tuple_vec_map {
     #[derive(Serialize, Deserialize)]
     struct SerializableTuple(CommandId, Option<ShortcutDefWrapper>);
 
-    pub fn serialize<S>(
-        map: &HashMap<CommandId, Option<(Modifiers, Key)>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(map: &ShortcutMap, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -218,9 +216,7 @@ mod tuple_vec_map {
         vec.serialize(serializer)
     }
 
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<HashMap<CommandId, Option<(Modifiers, Key)>>, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ShortcutMap, D::Error>
     where
         D: Deserializer<'de>,
     {

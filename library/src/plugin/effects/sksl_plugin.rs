@@ -43,9 +43,18 @@ pub enum ValueWrapper {
 }
 
 #[derive(Clone)]
-pub struct SendableRuntimeEffect(RuntimeEffect);
+struct SendableRuntimeEffect(RuntimeEffect);
 
+#[allow(
+    clippy::non_send_fields_in_send_ty,
+    reason = "skia-safe does not mark immutable SkRuntimeEffect Send even though Skia permits cross-thread shared use"
+)]
+// SAFETY: SkRuntimeEffect is immutable after construction and uses Skia's
+// thread-safe intrusive reference count. This wrapper exposes only shared
+// dereferencing; shader instances are created per apply call.
 unsafe impl Send for SendableRuntimeEffect {}
+// SAFETY: The wrapped runtime effect is immutable and all exposed operations
+// take &self. Mutable GPU state is supplied separately to each apply call.
 unsafe impl Sync for SendableRuntimeEffect {}
 
 impl std::ops::Deref for SendableRuntimeEffect {

@@ -93,19 +93,17 @@ impl CommandPalette {
                 }
 
                 // Keyboard Navigation
-                if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-                    if !self.filtered_commands.is_empty() {
-                        self.selected_index =
-                            (self.selected_index + 1) % self.filtered_commands.len();
-                    }
+                if ctx.input(|i| i.key_pressed(Key::ArrowDown))
+                    && !self.filtered_commands.is_empty()
+                {
+                    self.selected_index = (self.selected_index + 1) % self.filtered_commands.len();
                 }
-                if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
-                    if !self.filtered_commands.is_empty() {
-                        if self.selected_index == 0 {
-                            self.selected_index = self.filtered_commands.len() - 1;
-                        } else {
-                            self.selected_index -= 1;
-                        }
+                if ctx.input(|i| i.key_pressed(Key::ArrowUp)) && !self.filtered_commands.is_empty()
+                {
+                    if self.selected_index == 0 {
+                        self.selected_index = self.filtered_commands.len() - 1;
+                    } else {
+                        self.selected_index -= 1;
                     }
                 }
                 if ctx.input(|i| i.key_pressed(Key::Enter)) {

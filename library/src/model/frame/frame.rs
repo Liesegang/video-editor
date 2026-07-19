@@ -1,5 +1,5 @@
 use crate::model::frame::color::Color;
-use crate::model::frame::entity::FrameObject;
+use crate::model::frame::entity::FrameItem;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
@@ -19,8 +19,13 @@ pub struct FrameInfo {
     pub render_scale: ordered_float::OrderedFloat<f64>,
     pub now_time: ordered_float::OrderedFloat<f64>,
     pub region: Option<Region>,
-    pub node_graph: Option<crate::model::node_graph::NodeGraph>,
-    pub objects: Vec<FrameObject>,
+    pub items: Vec<FrameItem>,
+}
+
+impl FrameInfo {
+    pub fn object_count(&self) -> usize {
+        self.items.iter().map(FrameItem::object_count).sum()
+    }
 }
 
 // Implement Hash manually for Region since f64 doesn't implement Hash
@@ -43,8 +48,7 @@ impl std::hash::Hash for FrameInfo {
         self.render_scale.hash(state);
         self.now_time.hash(state);
         self.region.hash(state);
-        self.node_graph.hash(state);
-        self.objects.hash(state);
+        self.items.hash(state);
     }
 }
 

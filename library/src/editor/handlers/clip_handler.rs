@@ -1,287 +1,267 @@
-use crate::error::LibraryError;
-use crate::model::project::Project;
-use crate::model::property::{Keyframe, Property, PropertyValue};
-use crate::model::{EffectConfig, Layer, LayerContent, Node, ReferenceContent};
-use ordered_float::OrderedFloat;
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
+
+use ordered_float::OrderedFloat;
 use uuid::Uuid;
+
+use super::property_ops::{PropertyOwner, property_map_mut};
+use crate::error::LibraryError;
+use crate::model::project::{NodeContainer, NodeGraphBundle, Project};
+use crate::model::property::{PropertyTarget, PropertyValue};
+use crate::model::{Clip, EffectConfig, Node, NodeContent, ReferenceContent};
+
+/// A detached Clip graph prepared by the factory methods on ProjectManager.
+/// It is inserted into Project atomically by `add_clip_to_track`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClipBundle {
+    pub clip: Clip,
+    pub graph: NodeGraphBundle,
+}
+
+impl ClipBundle {
+    pub fn with_primary_node(mut clip: Clip, node: Node) -> Self {
+        clip.node_ids = vec![node.id];
+        clip.output_node_id = Some(node.id);
+        Self {
+            clip,
+            graph: NodeGraphBundle::with_output_node(node),
+        }
+    }
+
+    pub fn primary_node(&self) -> Option<&Node> {
+        self.graph.output_node()
+    }
+
+    pub fn primary_node_mut(&mut self) -> Option<&mut Node> {
+        self.graph.output_node_mut()
+    }
+}
 
 pub struct ClipHandler;
 
 impl ClipHandler {
-    /// Add a clip to a track at a specific index (or index 0 if not specified)
+    /// Atomically inserts a detached Clip graph and attaches it to a top-level
+    /// Track. No partially inserted Clip or Node remains on failure.
     pub fn add_clip_to_track(
         project: &Arc<RwLock<Project>>,
         composition_id: Uuid,
         track_id: Uuid,
-        layer: Layer,
+        mut bundle: ClipBundle,
         insert_index: Option<usize>,
     ) -> Result<Uuid, LibraryError> {
-        // Validation: Prevent circular references if adding a composition
-        if let LayerContent::Reference(ReferenceContent { target_id, .. }) = &layer.content {
-            if !Self::validate_recursion(project, *target_id, composition_id) {
+        let mut project = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+
+        let composition = project.get_composition(composition_id).ok_or_else(|| {
+            LibraryError::Project(format!("Composition {composition_id} not found"))
+        })?;
+        if !composition.track_ids.contains(&track_id) {
+            return Err(LibraryError::Project(format!(
+                "Track {track_id} is not in Composition {composition_id}"
+            )));
+        }
+        if project.get_track(track_id).is_none() {
+            return Err(LibraryError::Project(format!("Track {track_id} not found")));
+        }
+        if project.get_clip(bundle.clip.id).is_some() {
+            return Err(LibraryError::Project(format!(
+                "Clip {} already exists",
+                bundle.clip.id
+            )));
+        }
+
+        let mut node_ids = HashSet::new();
+        for node in &bundle.graph.nodes {
+            if !node_ids.insert(node.id) || project.get_node(node.id).is_some() {
+                return Err(LibraryError::Project(format!(
+                    "Node {} already exists in the Clip bundle or Project",
+                    node.id
+                )));
+            }
+            if let NodeContent::Reference(ReferenceContent { target_id, .. }) = &node.content
+                && !Self::validate_recursion(&project, *target_id, composition_id)
+            {
                 return Err(LibraryError::Project(
-                    "Cannot add composition: Circular reference detected".to_string(),
+                    "Cannot add composition: circular reference detected".to_string(),
                 ));
             }
         }
-
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        // Ensure track exists
-        if proj.get_track(track_id).is_none() {
-            return Err(LibraryError::Project(format!(
-                "Track with ID {} not found",
-                track_id
-            )));
+        if bundle.graph.nodes.is_empty() {
+            return Err(LibraryError::Project(
+                "A factory Clip must contain a primary leaf Node".to_string(),
+            ));
         }
 
-        let layer_id = layer.id;
+        let clip_id = bundle.clip.id;
+        let primary_node_id = bundle
+            .clip
+            .output_node_id
+            .filter(|output| node_ids.contains(output))
+            .or(bundle.graph.output_node_id)
+            .filter(|output| node_ids.contains(output))
+            .unwrap_or(bundle.graph.nodes[0].id);
+        bundle.clip.node_ids.clear();
+        bundle.clip.output_node_id = None;
+        bundle.graph.output_node_id = Some(primary_node_id);
+        project.add_clip(bundle.clip);
 
-        // Add clip to nodes registry
-        proj.add_node(Node::Layer(layer));
+        let result = (|| {
+            project
+                .insert_node_graph(NodeContainer::Clip(clip_id), bundle.graph)
+                .map_err(|error| LibraryError::Project(error.to_string()))?;
+            project
+                .attach_clip_to_track_at(track_id, clip_id, insert_index.or(Some(0)))
+                .map_err(|error| LibraryError::Project(error.to_string()))
+        })();
 
-        // Add clip ID to track's children at specified index (or 0 for top of layer list)
-        if let Some(track) = proj.get_track_mut(track_id) {
-            let idx = insert_index.unwrap_or(0);
-            if idx <= track.children.len() {
-                track.children.insert(idx, layer_id);
-            } else {
-                track.children.push(layer_id);
-            }
+        if let Err(error) = result {
+            project.remove_clip(clip_id);
+            return Err(error);
         }
 
-        Ok(layer_id)
+        Ok(clip_id)
     }
 
-    /// Remove a clip from a track
     pub fn remove_clip_from_track(
         project: &Arc<RwLock<Project>>,
         track_id: Uuid,
-        layer_id: Uuid,
+        clip_id: Uuid,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
+        let mut project = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        // Remove from parent track's child_ids
-        if let Some(track) = proj.get_track_mut(track_id) {
-            if track.children.contains(&layer_id) {
-                track.children.retain(|&id| id != layer_id);
-            } else {
-                return Err(LibraryError::Project(format!(
-                    "Layer {} not found in track {}",
-                    layer_id, track_id
-                )));
-            }
-        } else {
+        let track = project
+            .get_track(track_id)
+            .ok_or_else(|| LibraryError::Project(format!("Track {track_id} not found")))?;
+        if !track.clip_ids.contains(&clip_id) {
             return Err(LibraryError::Project(format!(
-                "Track {} not found",
-                track_id
+                "Clip {clip_id} is not in Track {track_id}"
             )));
         }
+        project
+            .remove_clip(clip_id)
+            .map(|_| ())
+            .ok_or_else(|| LibraryError::Project(format!("Clip {clip_id} not found")))
+    }
 
-        // Remove from nodes registry
-        proj.remove_node(layer_id);
+    /// Atomically replace all timeline-placement fields affected by a trim
+    /// gesture.  Keeping these values under one Project write lock prevents a
+    /// rendered frame from observing a new start with an old trim (or vice
+    /// versa).
+    pub fn update_clip_timing(
+        project: &Arc<RwLock<Project>>,
+        clip_id: Uuid,
+        start_time: f64,
+        duration: f64,
+        trim_in: f64,
+    ) -> Result<(), LibraryError> {
+        let validate = |key, value| {
+            Clip::validate_timing_property_value(key, &PropertyValue::Number(OrderedFloat(value)))
+                .map_err(LibraryError::Project)
+        };
+        let start_time = validate(crate::model::node::CLIP_START_TIME_PROPERTY, start_time)?;
+        let duration = validate(crate::model::node::CLIP_DURATION_PROPERTY, duration)?;
+        let trim_in = validate(crate::model::node::CLIP_TRIM_IN_PROPERTY, trim_in)?;
+
+        let mut project = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let clip = project
+            .get_clip_mut(clip_id)
+            .ok_or_else(|| LibraryError::Project(format!("Clip {clip_id} not found")))?;
+        clip.start_time = OrderedFloat(start_time);
+        clip.duration = OrderedFloat(duration);
+        clip.trim_in = OrderedFloat(trim_in);
         Ok(())
     }
 
-    /// Unified method to update property or keyframe for any target
     pub fn update_target_property_or_keyframe(
         project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        target: crate::model::property::PropertyTarget,
+        owner: PropertyOwner,
+        target: PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
+        let mut project = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
-        let clip = proj
-            .get_layer_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
-
-        // Special handling for Clip struct fields sync
-        if let crate::model::property::PropertyTarget::Clip = target {
-            match property_key {
-                "start_time" => {
-                    if let PropertyValue::Number(n) = &value {
-                        clip.start_time = OrderedFloat(n.into_inner());
+        let updated = match owner {
+            PropertyOwner::Clip(clip_id) => {
+                let clip = project
+                    .get_clip_mut(clip_id)
+                    .ok_or_else(|| LibraryError::Project(format!("Clip {clip_id} not found")))?;
+                if target == PropertyTarget::Direct
+                    && Clip::timing_property_definition(property_key).is_some()
+                {
+                    if easing.is_some() {
+                        return Err(LibraryError::Project(format!(
+                            "Structural Clip timing property '{property_key}' cannot be keyframed"
+                        )));
                     }
-                }
-                "duration" => {
-                    if let PropertyValue::Number(n) = &value {
-                        clip.duration = OrderedFloat(n.into_inner());
-                    }
-                }
-                "trim_in" => {
-                    if let PropertyValue::Number(n) = &value {
-                        clip.trim_in = OrderedFloat(n.into_inner());
-                    }
-                }
-                "time_stretch" => {
-                    if let PropertyValue::Number(n) = &value {
-                        clip.time_stretch = OrderedFloat(n.into_inner());
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let prop_map = clip
-            .get_property_map_mut(target.clone())
-            .ok_or_else(|| LibraryError::Project(format!("Target {:?} not found", target)))?;
-
-        prop_map.update_property_or_keyframe(property_key, time, value, easing);
-
-        Ok(())
-    }
-
-    pub fn update_keyframe(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        property_key: &str,
-        keyframe_index: usize,
-        new_time: Option<f64>,
-        new_value: Option<PropertyValue>,
-        new_easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_layer_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip {} not found", clip_id)))?;
-
-        let property = clip
-            .properties
-            .get_mut(property_key)
-            .ok_or_else(|| LibraryError::Project(format!("Property {} not found", property_key)))?;
-
-        if let Some(PropertyValue::Array(promoted_array)) = property.properties.get_mut("keyframes")
-        {
-            let mut keyframes: Vec<Keyframe> = promoted_array
-                .iter()
-                .filter_map(|v| serde_json::from_value(serde_json::Value::from(v)).ok())
-                .collect();
-
-            if let Some(kf) = keyframes.get_mut(keyframe_index) {
-                if let Some(t) = new_time {
-                    kf.time = OrderedFloat(t);
-                }
-                if let Some(val) = new_value {
-                    kf.value = val;
-                }
-                if let Some(easing) = new_easing {
-                    kf.easing = easing;
-                }
-            } else {
-                return Err(LibraryError::Project(
-                    "Keyframe index out of bounds".to_string(),
-                ));
-            }
-
-            keyframes.sort_by(|a, b| a.time.cmp(&b.time));
-
-            let new_array: Vec<PropertyValue> = keyframes
-                .into_iter()
-                .filter_map(|kf| serde_json::to_value(kf).ok())
-                .map(PropertyValue::from)
-                .collect();
-
-            promoted_array.clear();
-            promoted_array.extend(new_array);
-        }
-        Ok(())
-    }
-
-    pub fn remove_keyframe(
-        project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        property_key: &str,
-        index: usize,
-    ) -> Result<(), LibraryError> {
-        let mut proj = project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_layer_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip {} not found", clip_id)))?;
-
-        if let Some(prop) = clip.properties.get_mut(property_key) {
-            if prop.evaluator == "keyframe" {
-                let mut current_keyframes = prop.keyframes();
-                if index < current_keyframes.len() {
-                    current_keyframes.remove(index);
-                    *prop = Property::keyframe(current_keyframes);
+                    clip.update_timing_property(property_key, value)
+                        .map_err(LibraryError::Project)?;
+                    true
+                } else {
+                    clip.update_property_or_keyframe(target, property_key, time, value, easing)
                 }
             }
+            PropertyOwner::Node(node_id) => project
+                .get_node_mut(node_id)
+                .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
+                .update_property_or_keyframe(target, property_key, time, value, easing),
+        };
+
+        if updated {
             Ok(())
         } else {
             Err(LibraryError::Project(format!(
-                "Property {} not found",
-                property_key
+                "Target {target:?} not found on {owner:?}"
             )))
         }
     }
 
-    fn validate_recursion(project: &Arc<RwLock<Project>>, child_id: Uuid, parent_id: Uuid) -> bool {
+    fn validate_recursion(project: &Project, child_id: Uuid, parent_id: Uuid) -> bool {
         if child_id == parent_id {
             return false;
         }
-        let project_read = match project.read() {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
 
-        let mut stack = vec![child_id];
-        let mut visited = std::collections::HashSet::new();
-
-        while let Some(current_id) = stack.pop() {
-            if !visited.insert(current_id) {
+        let mut compositions = vec![child_id];
+        let mut visited = HashSet::new();
+        while let Some(composition_id) = compositions.pop() {
+            if !visited.insert(composition_id) {
                 continue;
             }
+            let Some(composition) = project.get_composition(composition_id) else {
+                continue;
+            };
 
-            if let Some(comp) = project_read
-                .compositions
-                .iter()
-                .find(|c| c.id == current_id)
-            {
-                // Traverse all nodes in the project (simplest for now, though expensive)
-                // Ideally we only traverse nodes belonging to this Composite/Scope.
-                // But since Registry is global, we need to know which nodes belong to root_track_id of Composite.
-                // For now, simpler check: find any Reference in the nodes that points to parent_id.
-                // Actually, wait. We need to find references INSIDE `current_id` (the composite we are inspecting).
-                // `collect_clips` is gone. We have to walk the graph starting from `comp.root_track_id`.
-
-                let mut node_stack = vec![comp.root_track_id];
-                while let Some(node_id) = node_stack.pop() {
-                    if let Some(node) = project_read.get_node(node_id) {
-                        match node {
-                            Node::Track(t) => {
-                                node_stack.extend(t.children.iter());
-                            }
-                            Node::Layer(l) => {
-                                if let LayerContent::Reference(ReferenceContent {
-                                    target_id, ..
-                                }) = &l.content
-                                {
-                                    if *target_id == parent_id {
-                                        return false;
-                                    }
-                                    stack.push(*target_id);
-                                }
-                            }
-                        }
+            let mut node_ids = composition.node_ids.clone();
+            for track_id in &composition.track_ids {
+                let Some(track) = project.get_track(*track_id) else {
+                    continue;
+                };
+                node_ids.extend(track.node_ids.iter().copied());
+                for clip_id in &track.clip_ids {
+                    if let Some(clip) = project.get_clip(*clip_id) {
+                        node_ids.extend(clip.node_ids.iter().copied());
                     }
                 }
+            }
+
+            for node_id in node_ids {
+                let Some(NodeContent::Reference(reference)) =
+                    project.get_node(node_id).map(|node| &node.content)
+                else {
+                    continue;
+                };
+                if reference.target_id == parent_id {
+                    return false;
+                }
+                compositions.push(reference.target_id);
             }
         }
         true
@@ -308,203 +288,317 @@ impl ClipHandler {
 
     pub fn move_clip_to_track_at_index(
         project: &Arc<RwLock<Project>>,
-        _composition_id: Uuid,
+        composition_id: Uuid,
         source_track_id: Uuid,
         clip_id: Uuid,
         target_track_id: Uuid,
         new_start_time: f64,
         target_index: Option<usize>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
+        let mut project = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        // 1. Remove from source track's child_ids
-        if let Some(source_track) = proj.get_track_mut(source_track_id) {
-            if source_track.children.contains(&clip_id) {
-                source_track.children.retain(|&id| id != clip_id);
-            } else {
-                return Err(LibraryError::Project(format!(
-                    "Clip {} not found in source track",
-                    clip_id
-                )));
-            }
-        } else {
+        let composition = project.get_composition(composition_id).ok_or_else(|| {
+            LibraryError::Project(format!("Composition {composition_id} not found"))
+        })?;
+        if !composition.track_ids.contains(&source_track_id)
+            || !composition.track_ids.contains(&target_track_id)
+        {
             return Err(LibraryError::Project(format!(
-                "Source track {} not found",
-                source_track_id
+                "Source and target Tracks must both belong to Composition {composition_id}"
             )));
         }
-
-        // 2. Update clip timing
-        if let Some(clip) = proj.get_layer_mut(clip_id) {
-            clip.start_time = OrderedFloat(new_start_time);
-        }
-
-        // 3. Add to target track's child_ids
-        if let Some(target_track) = proj.get_track_mut(target_track_id) {
-            if let Some(idx) = target_index {
-                if idx <= target_track.children.len() {
-                    target_track.children.insert(idx, clip_id);
-                } else {
-                    target_track.children.push(clip_id);
-                }
-            } else {
-                target_track.children.push(clip_id);
-            }
-        } else {
+        let source = project
+            .get_track(source_track_id)
+            .ok_or_else(|| LibraryError::Project(format!("Track {source_track_id} not found")))?;
+        if !source.clip_ids.contains(&clip_id) {
             return Err(LibraryError::Project(format!(
-                "Target track {} not found",
-                target_track_id
+                "Clip {clip_id} is not in source Track {source_track_id}"
             )));
         }
+        if project.get_track(target_track_id).is_none() {
+            return Err(LibraryError::Project(format!(
+                "Track {target_track_id} not found"
+            )));
+        }
+        if project.get_clip(clip_id).is_none() {
+            return Err(LibraryError::Project(format!("Clip {clip_id} not found")));
+        }
 
+        if source_track_id != target_track_id || target_index.is_some() {
+            project
+                .attach_clip_to_track_at(target_track_id, clip_id, target_index)
+                .map_err(|error| LibraryError::Project(error.to_string()))?;
+        }
+        let clip = project
+            .get_clip_mut(clip_id)
+            .ok_or_else(|| LibraryError::Project(format!("Clip {clip_id} disappeared")))?;
+        clip.start_time = OrderedFloat(new_start_time.max(0.0));
         Ok(())
     }
 
     pub fn add_effect(
         project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
+        owner: PropertyOwner,
         effect: EffectConfig,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
+        let mut project = project
             .write()
-            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
-
-        let clip = proj
-            .get_layer_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
-
-        clip.effects.push(effect);
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        match owner {
+            PropertyOwner::Clip(id) => project
+                .get_clip_mut(id)
+                .ok_or_else(|| LibraryError::Project(format!("Clip {id} not found")))?
+                .effects
+                .push(effect),
+            PropertyOwner::Node(id) => project
+                .get_node_mut(id)
+                .ok_or_else(|| LibraryError::Project(format!("Node {id} not found")))?
+                .effects
+                .push(effect),
+        }
         Ok(())
     }
 
     pub fn update_effects(
         project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
+        owner: PropertyOwner,
         effects: Vec<EffectConfig>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
+        let mut project = project
             .write()
-            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
-
-        let clip = proj
-            .get_layer_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
-
-        clip.effects = effects;
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        match owner {
+            PropertyOwner::Clip(id) => {
+                project
+                    .get_clip_mut(id)
+                    .ok_or_else(|| LibraryError::Project(format!("Clip {id} not found")))?
+                    .effects = effects;
+            }
+            PropertyOwner::Node(id) => {
+                project
+                    .get_node_mut(id)
+                    .ok_or_else(|| LibraryError::Project(format!("Node {id} not found")))?
+                    .effects = effects;
+            }
+        }
         Ok(())
     }
 
-    pub fn update_styles(
+    pub fn update_node_styles(
         project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
+        node_id: Uuid,
         styles: Vec<crate::model::style::StyleInstance>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
+        let mut project = project
             .write()
-            .map_err(|_| LibraryError::Runtime("Lock".to_string()))?;
-
-        let clip = proj
-            .get_layer_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project("Clip not found".to_string()))?;
-
-        clip.styles = styles;
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        project
+            .get_node_mut(node_id)
+            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
+            .styles = styles;
         Ok(())
     }
 
-    pub fn set_style_property_attribute(
+    pub fn add_effector(
         project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        style_index: usize,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
+        node_id: Uuid,
+        effector: crate::model::ensemble::EffectorInstance,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
+        let mut project = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_layer_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
-
-        if let Some(style) = clip.styles.get_mut(style_index) {
-            if let Some(prop) = style.properties.get_mut(property_key) {
-                prop.properties
-                    .insert(attribute_key.to_string(), attribute_value);
-                Ok(())
-            } else {
-                Err(LibraryError::Project(format!(
-                    "Property {} not found",
-                    property_key
-                )))
-            }
-        } else {
-            Err(LibraryError::Project(
-                "Style index out of range".to_string(),
-            ))
-        }
+        project
+            .get_node_mut(node_id)
+            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
+            .effectors
+            .push(effector);
+        Ok(())
     }
 
-    pub fn set_clip_property_attribute(
+    pub fn update_node_effectors(
         project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        property_key: &str,
-        attribute_key: &str,
-        attribute_value: PropertyValue,
+        node_id: Uuid,
+        effectors: Vec<crate::model::ensemble::EffectorInstance>,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
+        let mut project = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-
-        let clip = proj
-            .get_layer_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
-
-        if let Some(prop) = clip.properties.get_mut(property_key) {
-            prop.properties
-                .insert(attribute_key.to_string(), attribute_value);
-            Ok(())
-        } else {
-            Err(LibraryError::Project(format!(
-                "Property {} not found",
-                property_key
-            )))
-        }
+        project
+            .get_node_mut(node_id)
+            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
+            .effectors = effectors;
+        Ok(())
     }
 
-    pub fn set_effect_property_attribute(
+    pub fn add_decorator(
         project: &Arc<RwLock<Project>>,
-        clip_id: Uuid,
-        effect_index: usize,
+        node_id: Uuid,
+        decorator: crate::model::ensemble::DecoratorInstance,
+    ) -> Result<(), LibraryError> {
+        let mut project = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        project
+            .get_node_mut(node_id)
+            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
+            .decorators
+            .push(decorator);
+        Ok(())
+    }
+
+    pub fn update_node_decorators(
+        project: &Arc<RwLock<Project>>,
+        node_id: Uuid,
+        decorators: Vec<crate::model::ensemble::DecoratorInstance>,
+    ) -> Result<(), LibraryError> {
+        let mut project = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        project
+            .get_node_mut(node_id)
+            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
+            .decorators = decorators;
+        Ok(())
+    }
+
+    pub fn set_property_attribute(
+        project: &Arc<RwLock<Project>>,
+        owner: PropertyOwner,
+        target: PropertyTarget,
         property_key: &str,
         attribute_key: &str,
         attribute_value: PropertyValue,
     ) -> Result<(), LibraryError> {
-        let mut proj = project
+        let mut project = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
+        let properties = property_map_mut(&mut project, owner, target)?;
+        let property = properties.get_mut(property_key).ok_or_else(|| {
+            LibraryError::Project(format!("Property {property_key} not found on {owner:?}"))
+        })?;
+        property
+            .properties
+            .insert(attribute_key.to_string(), attribute_value);
+        Ok(())
+    }
+}
 
-        let clip = proj
-            .get_layer_mut(clip_id)
-            .ok_or_else(|| LibraryError::Project(format!("Clip with ID {} not found", clip_id)))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Composition, Track};
 
-        if let Some(effect) = clip.effects.get_mut(effect_index) {
-            if let Some(prop) = effect.properties.get_mut(property_key) {
-                prop.properties
-                    .insert(attribute_key.to_string(), attribute_value);
-                Ok(())
-            } else {
-                Err(LibraryError::Project(format!(
-                    "Property {} not found",
-                    property_key
-                )))
-            }
-        } else {
-            Err(LibraryError::Project(
-                "Effect index out of range".to_string(),
-            ))
-        }
+    fn project_with_composition(name: &str) -> (Project, Uuid, Uuid) {
+        let mut project = Project::new(name);
+        let (composition, track) = Composition::new(name, 1920, 1080, 30.0, 10.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        (project, composition_id, track_id)
+    }
+
+    #[test]
+    fn bundle_insertion_sets_clip_output_and_track_order_atomically() {
+        let (project, composition_id, track_id) = project_with_composition("test");
+        let clip = Clip::new("clip", 1.0, 2.0);
+        let node = Node::new(
+            "solid",
+            NodeContent::Generator(crate::model::GeneratorContent::Solid),
+        );
+        let clip_id = clip.id;
+        let node_id = node.id;
+        let project = Arc::new(RwLock::new(project));
+
+        ClipHandler::add_clip_to_track(
+            &project,
+            composition_id,
+            track_id,
+            ClipBundle::with_primary_node(clip, node),
+            None,
+        )
+        .unwrap();
+
+        let project = project.read().unwrap();
+        assert_eq!(project.get_track(track_id).unwrap().clip_ids, vec![clip_id]);
+        assert_eq!(project.get_clip(clip_id).unwrap().node_ids, vec![node_id]);
+        assert_eq!(
+            project.get_clip(clip_id).unwrap().output_node_id,
+            Some(node_id)
+        );
+        assert_eq!(
+            project.find_node_container(node_id),
+            Some(NodeContainer::Clip(clip_id))
+        );
+    }
+
+    #[test]
+    fn recursion_validation_walks_every_top_level_track_and_clip() {
+        let (mut project, parent_id, _) = project_with_composition("parent");
+        let (child, child_first_track) = Composition::new("child", 1920, 1080, 30.0, 10.0);
+        let child_id = child.id;
+        project.add_track(child_first_track);
+        project.add_composition(child);
+
+        let child_second_track = Track::new("child second");
+        let child_second_track_id = child_second_track.id;
+        project.add_track(child_second_track);
+        project
+            .attach_track_to_composition(child_id, child_second_track_id)
+            .unwrap();
+
+        let reference_node = Node::new(
+            "reference to parent",
+            NodeContent::Reference(ReferenceContent {
+                target_id: parent_id,
+                sync_global_time: false,
+            }),
+        );
+        let reference_id = reference_node.id;
+        let mut reference_clip = Clip::new("reference", 0.0, 10.0);
+        let reference_clip_id = reference_clip.id;
+        reference_clip.node_ids.push(reference_id);
+        reference_clip.output_node_id = Some(reference_id);
+        project.add_node(reference_node);
+        project.add_clip(reference_clip);
+        project
+            .attach_node_to_container(NodeContainer::Clip(reference_clip_id), reference_id)
+            .unwrap();
+        project
+            .set_output_node(NodeContainer::Clip(reference_clip_id), Some(reference_id))
+            .unwrap();
+        project
+            .attach_clip_to_track(child_second_track_id, reference_clip_id)
+            .unwrap();
+
+        assert!(!ClipHandler::validate_recursion(
+            &project, child_id, parent_id
+        ));
+    }
+
+    #[test]
+    fn clip_timing_update_commits_start_duration_and_trim_together() {
+        let (mut project, _, track_id) = project_with_composition("timing");
+        let clip = Clip::new("clip", 1.0, 4.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id).unwrap();
+        let project = Arc::new(RwLock::new(project));
+
+        ClipHandler::update_clip_timing(&project, clip_id, 2.5, 2.5, 1.75).unwrap();
+        let read = project.read().unwrap();
+        let clip = read.get_clip(clip_id).unwrap();
+        assert_eq!(clip.start_time.into_inner(), 2.5);
+        assert_eq!(clip.duration.into_inner(), 2.5);
+        assert_eq!(clip.trim_in.into_inner(), 1.75);
+        drop(read);
+
+        assert!(ClipHandler::update_clip_timing(&project, clip_id, 99.0, f64::NAN, 99.0,).is_err());
+        let read = project.read().unwrap();
+        let clip = read.get_clip(clip_id).unwrap();
+        assert_eq!(clip.start_time.into_inner(), 2.5);
+        assert_eq!(clip.duration.into_inner(), 2.5);
+        assert_eq!(clip.trim_in.into_inner(), 1.75);
     }
 }

@@ -1,7 +1,8 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
+use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::entity::{FrameContent, FrameObject};
-// use crate::model::project::TrackClip;
 
+#[derive(Default)]
 pub struct ShapeEntityConverterPlugin;
 
 impl ShapeEntityConverterPlugin {
@@ -112,32 +113,167 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
                 "Path Data",
                 PropertyValue::String("".to_string()),
             ),
+            PropertyDefinition::new(
+                "path_effect",
+                PropertyUiType::Dropdown {
+                    options: vec![
+                        "None".to_string(),
+                        "Dash".to_string(),
+                        "Corner".to_string(),
+                        "Discrete".to_string(),
+                        "Trim".to_string(),
+                    ],
+                },
+                "Path Effect",
+                PropertyValue::String("None".to_string()),
+            ),
+            PropertyDefinition::new(
+                "path_effect_intervals",
+                PropertyUiType::Text,
+                "Dash Intervals",
+                PropertyValue::String("8 4".to_string()),
+            ),
+            PropertyDefinition::new(
+                "path_effect_phase",
+                PropertyUiType::Float {
+                    min: 0.0,
+                    max: 1000.0,
+                    step: 1.0,
+                    suffix: "px".to_string(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
+                },
+                "Dash Phase",
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+            PropertyDefinition::new(
+                "path_effect_radius",
+                PropertyUiType::Float {
+                    min: 0.0,
+                    max: 1000.0,
+                    step: 1.0,
+                    suffix: "px".to_string(),
+                    min_hard_limit: true,
+                    max_hard_limit: false,
+                },
+                "Corner Radius",
+                PropertyValue::Number(OrderedFloat(8.0)),
+            ),
+            PropertyDefinition::new(
+                "path_effect_segment_length",
+                PropertyUiType::Float {
+                    min: 0.1,
+                    max: 1000.0,
+                    step: 1.0,
+                    suffix: "px".to_string(),
+                    min_hard_limit: true,
+                    max_hard_limit: false,
+                },
+                "Discrete Segment",
+                PropertyValue::Number(OrderedFloat(8.0)),
+            ),
+            PropertyDefinition::new(
+                "path_effect_deviation",
+                PropertyUiType::Float {
+                    min: 0.0,
+                    max: 1000.0,
+                    step: 1.0,
+                    suffix: "px".to_string(),
+                    min_hard_limit: true,
+                    max_hard_limit: false,
+                },
+                "Discrete Deviation",
+                PropertyValue::Number(OrderedFloat(2.0)),
+            ),
+            PropertyDefinition::new(
+                "path_effect_seed",
+                PropertyUiType::Integer {
+                    min: 0,
+                    max: i64::MAX,
+                    suffix: String::new(),
+                    min_hard_limit: true,
+                    max_hard_limit: true,
+                },
+                "Discrete Seed",
+                PropertyValue::Integer(0),
+            ),
+            PropertyDefinition::new(
+                "path_effect_trim_start",
+                PropertyUiType::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    step: 0.01,
+                    suffix: String::new(),
+                    min_hard_limit: true,
+                    max_hard_limit: true,
+                },
+                "Trim Start",
+                PropertyValue::Number(OrderedFloat(0.0)),
+            ),
+            PropertyDefinition::new(
+                "path_effect_trim_end",
+                PropertyUiType::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    step: 0.01,
+                    suffix: String::new(),
+                    min_hard_limit: true,
+                    max_hard_limit: true,
+                },
+                "Trim End",
+                PropertyValue::Number(OrderedFloat(1.0)),
+            ),
         ]
     }
 
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        layer: &crate::model::Layer,
+        node: &crate::model::Node,
         time: f64,
     ) -> Option<FrameObject> {
-        let props = &layer.properties;
+        let props = &node.properties;
         let _comp_fps = evaluator.composition.fps;
 
-        // Calculate evaluation time based on Layer timeframe
-        let time_since_start = time - layer.start_time.into_inner();
-        let eval_time =
-            time_since_start * layer.time_stretch.into_inner() + layer.trim_in.into_inner();
+        // Calculate evaluation time based on Node timeframe
+        let eval_time = time;
 
         let path = evaluator.require_string(props, "path", eval_time, "shape")?;
-        let transform = evaluator.build_transform(props, eval_time);
+        let mut transform = evaluator.build_transform(props, eval_time);
 
-        let styles = evaluator.build_styles(&layer.styles, eval_time);
+        let styles = evaluator.resolved_styles_or_legacy(&node.styles, eval_time);
 
-        // Uses the signature defined in mod.rs: parse_path_effects(&self, props: &PropertyMap, time: f64)
         let path_effects = evaluator.parse_path_effects(props, eval_time);
 
-        let effects = evaluator.build_image_effects(&layer.effects, eval_time);
+        let effects = evaluator.build_image_effects(&node.effects, eval_time);
+
+        let effectors = evaluator.resolved_effectors_or_legacy(&node.effectors, eval_time);
+        if !effectors.is_empty() {
+            let effector_transform =
+                crate::core::ensemble::effectors::evaluate_configured_transform(
+                    &effectors,
+                    eval_time as f32,
+                    crate::core::ensemble::effectors::EffectorElementContext {
+                        global_index: 0,
+                        line_index: 0,
+                        line_char_index: 0,
+                        total_chars: 1,
+                        line_char_count: 1,
+                        char_center: skia_safe::Point::new(0.0, 0.0),
+                    },
+                )
+                .map_err(|error| {
+                    log::warn!("Shape Effector evaluation failed: {error}");
+                    error
+                })
+                .ok()?;
+            transform.position.x += f64::from(effector_transform.translate.0);
+            transform.position.y += f64::from(effector_transform.translate.1);
+            transform.rotation += f64::from(effector_transform.rotate);
+            transform.scale.x *= f64::from(effector_transform.scale.0);
+            transform.scale.y *= f64::from(effector_transform.scale.1);
+            transform.opacity *= f64::from(effector_transform.opacity);
+        }
 
         Some(FrameObject {
             content: FrameContent::Shape {
@@ -154,24 +290,67 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
     fn get_bounds(
         &self,
         evaluator: &FrameEvaluationContext,
-        layer: &crate::model::Layer,
+        node: &crate::model::Node,
         time: f64,
     ) -> Option<(f32, f32, f32, f32)> {
-        let props = &layer.properties;
+        let props = &node.properties;
         let _comp_fps = evaluator.composition.fps;
 
-        // Calculate evaluation time based on Layer timeframe
-        let time_since_start = time - layer.start_time.into_inner();
-        let eval_time =
-            time_since_start * layer.time_stretch.into_inner() + layer.trim_in.into_inner();
+        // Calculate evaluation time based on Node timeframe
+        let eval_time = time;
 
         let path_str = evaluator.require_string(props, "path", eval_time, "shape")?;
-
-        if let Some(path) = skia_safe::utils::parse_path::from_svg(&path_str) {
-            let bounds = path.compute_tight_bounds();
-            Some((bounds.left, bounds.top, bounds.width(), bounds.height()))
-        } else {
-            Some((0.0, 0.0, 100.0, 100.0))
-        }
+        let styles = evaluator.resolved_styles_or_legacy(&node.styles, eval_time);
+        let path_effects = evaluator.parse_path_effects(props, eval_time);
+        measure_shape_visual_bounds(&path_str, &styles, &path_effects)
     }
+}
+
+/// Return the local-space visual bounds painted by Shape rendering.
+///
+/// Skia's tight path bounds only describe the path geometry. Positive fill
+/// offsets, strokes, and Discrete path deviation can all paint outside it and
+/// must be reflected by Preview selection/hit testing as well.
+pub fn measure_shape_visual_bounds(
+    path_data: &str,
+    styles: &[crate::model::frame::entity::StyleConfig],
+    path_effects: &[PathEffect],
+) -> Option<(f32, f32, f32, f32)> {
+    let path = skia_safe::utils::parse_path::from_svg(path_data)?;
+    if path.is_empty() {
+        return None;
+    }
+    let bounds = path.compute_tight_bounds();
+    let style_outset = styles.iter().fold(0.0_f32, |outset, config| {
+        let candidate = match &config.style {
+            DrawStyle::Fill { offset, .. } => offset.max(0.0) as f32,
+            DrawStyle::Stroke { width, offset, .. } if *width > 0.0 => {
+                if *offset > 0.0 {
+                    (offset + width / 2.0) as f32
+                } else if *offset == 0.0 {
+                    (width / 2.0) as f32
+                } else {
+                    // Negative offset strokes are explicitly clipped inside.
+                    0.0
+                }
+            }
+            DrawStyle::Stroke { .. } => 0.0,
+        };
+        outset.max(candidate)
+    });
+    let effect_outset = path_effects.iter().fold(0.0_f32, |outset, effect| {
+        if let PathEffect::Discrete { deviation, .. } = effect {
+            outset.max(deviation.abs() as f32)
+        } else {
+            outset
+        }
+    });
+    let outset = style_outset + effect_outset;
+
+    Some((
+        bounds.left - outset,
+        bounds.top - outset,
+        bounds.width() + outset * 2.0,
+        bounds.height() + outset * 2.0,
+    ))
 }

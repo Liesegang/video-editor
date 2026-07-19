@@ -1,24 +1,24 @@
-use crate::model::vector::VectorEditorState;
+use library::model::vector::VectorPath;
 
-pub fn to_svg_path(state: &VectorEditorState) -> String {
-    if state.path.points.is_empty() {
+pub fn to_svg_path(path_model: &VectorPath) -> String {
+    if path_model.points.is_empty() {
         return String::new();
     }
 
     let mut path = String::new();
 
-    let first = &state.path.points[0];
+    let first = &path_model.points[0];
     path.push_str(&format!("M {},{} ", first.position[0], first.position[1]));
 
-    for i in 0..state.path.points.len() {
-        let current = &state.path.points[i];
-        let next_idx = (i + 1) % state.path.points.len();
+    for i in 0..path_model.points.len() {
+        let current = &path_model.points[i];
+        let next_idx = (i + 1) % path_model.points.len();
 
-        if !state.path.is_closed && i == state.path.points.len() - 1 {
+        if !path_model.is_closed && i == path_model.points.len() - 1 {
             break;
         }
 
-        let next = &state.path.points[next_idx];
+        let next = &path_model.points[next_idx];
 
         if is_zero(current.handle_out) && is_zero(next.handle_in) {
             path.push_str(&format!("L {},{} ", next.position[0], next.position[1]));
@@ -36,7 +36,7 @@ pub fn to_svg_path(state: &VectorEditorState) -> String {
         }
     }
 
-    if state.path.is_closed {
+    if path_model.is_closed {
         path.push_str("Z");
     }
 

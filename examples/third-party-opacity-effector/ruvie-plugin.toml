@@ -1,0 +1,7 @@
+manifest_version = 1
+
+[library]
+macos = "libthird_party_opacity_effector.dylib"
+linux = "libthird_party_opacity_effector.so"
+windows = "third_party_opacity_effector.dll"
+

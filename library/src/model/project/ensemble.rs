@@ -2,7 +2,7 @@ use crate::model::property::PropertyMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EffectorInstance {
     pub id: Uuid,
     pub effector_type: String,
@@ -20,21 +20,7 @@ impl EffectorInstance {
     }
 }
 
-impl PartialEq for EffectorInstance {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.properties == other.properties
-    }
-}
-impl Eq for EffectorInstance {}
-
-impl std::hash::Hash for EffectorInstance {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-        self.properties.hash(state);
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DecoratorInstance {
     pub id: Uuid,
     pub decorator_type: String, // e.g. "backplate"
@@ -49,19 +35,5 @@ impl DecoratorInstance {
             decorator_type: decorator_type.to_string(),
             properties,
         }
-    }
-}
-
-impl PartialEq for DecoratorInstance {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.properties == other.properties
-    }
-}
-impl Eq for DecoratorInstance {}
-
-impl std::hash::Hash for DecoratorInstance {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-        self.properties.hash(state);
     }
 }

@@ -8,15 +8,14 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 // use skia_safe::M44; // Removed, as it's not directly used here
 
+#[derive(Default)]
 pub struct FfmpegExportPlugin {
     sessions: Mutex<HashMap<String, FfmpegSession>>,
 }
 
 impl FfmpegExportPlugin {
     pub fn new() -> Self {
-        Self {
-            sessions: Mutex::new(HashMap::new()),
-        }
+        Self::default()
     }
 }
 
@@ -59,7 +58,10 @@ impl ExportPlugin for FfmpegExportPlugin {
             );
         }
 
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| LibraryError::Runtime("FFmpeg session lock poisoned".to_string()))?;
         if !sessions.contains_key(path) {
             info!(
                 "Starting ffmpeg export session: codec={} container={} pixel_format={}",
@@ -78,7 +80,10 @@ impl ExportPlugin for FfmpegExportPlugin {
     }
 
     fn finish_export(&self, path: &str) -> Result<(), LibraryError> {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| LibraryError::Runtime("FFmpeg session lock poisoned".to_string()))?;
         if let Some(_session) = sessions.remove(path) {
             info!("Finishing ffmpeg export session for {}", path);
             // session is dropped here, which closes stdin and waits for child
@@ -297,9 +302,13 @@ impl FfmpegSession {
 
 impl Drop for FfmpegSession {
     fn drop(&mut self) {
-        if let Some(mut stdin) = self.stdin.take() {
-            let _ = stdin.flush();
+        if let Some(mut stdin) = self.stdin.take()
+            && let Err(error) = stdin.flush()
+        {
+            warn!("failed to flush FFmpeg stdin during shutdown: {error}");
         }
-        let _ = self.child.wait();
+        if let Err(error) = self.child.wait() {
+            warn!("failed to wait for FFmpeg during shutdown: {error}");
+        }
     }
 }

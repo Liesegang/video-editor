@@ -23,6 +23,7 @@ pub struct AppTabViewer<'a> {
     composition_dialog: &'a mut CompositionDialog,
     render_server: &'a RenderServer,
     command_registry: &'a CommandRegistry,
+    node_editor_rendered_this_frame: bool,
 }
 
 impl<'a> AppTabViewer<'a> {
@@ -43,6 +44,17 @@ impl<'a> AppTabViewer<'a> {
             composition_dialog,
             render_server,
             command_registry,
+            node_editor_rendered_this_frame: false,
+        }
+    }
+
+    pub fn finish_frame(&mut self) {
+        if !self.node_editor_rendered_this_frame {
+            node_editor::flush_pending_continuous_edit(
+                self.project,
+                self.history_manager,
+                &mut self.editor_context.node_editor_state,
+            );
         }
     }
 }
@@ -94,13 +106,17 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                     self.command_registry,
                 );
             }
-            Tab::NodeGraph => {
+            Tab::NodeEditor => {
+                self.node_editor_rendered_this_frame = true;
                 let comp_id = self.editor_context.selection.composition_id;
                 node_editor::node_editor_panel(
                     ui,
-                    &mut self.editor_context.node_graph_state,
                     comp_id,
                     self.project,
+                    self.project_service,
+                    self.history_manager,
+                    &mut self.editor_context.selection,
+                    self.editor_context.timeline.current_time as f64,
                     &mut self.editor_context.node_editor_context_menu,
                     &mut self.editor_context.node_editor_state,
                 );
@@ -110,10 +126,10 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                     self.editor_context.node_editor_state.pending_navigation
                 {
                     self.editor_context.selection.composition_id = Some(target_comp_id);
-                    // Also switch tab to Timeline? Or stay in Node Graph?
-                    // User probably wants to see the graph of the new container, so stay in Node Graph.
+                    // Also switch tab to Timeline? Or stay in Node Editor?
+                    // User probably wants to see the graph of the new container, so stay in Node Editor.
                     // But if it's a "Composite", maybe they want Timeline?
-                    // For "Container Node" editing, Node Graph is primary.
+                    // For "Container Node" editing, Node Editor is primary.
 
                     self.editor_context.node_editor_state.pending_navigation = None;
                 }
@@ -128,8 +144,22 @@ impl<'a> TabViewer for AppTabViewer<'a> {
             Tab::Inspector => format!("{} {}", icons::WRENCH, "Inspector").into(),
             Tab::Assets => format!("{} {}", icons::FOLDER, "Assets").into(),
             Tab::GraphEditor => format!("{} {}", icons::CHART_LINE, "Graph Editor").into(),
-            Tab::NodeGraph => format!("{} {}", icons::SHARE_NETWORK, "Node Editor").into(),
+            Tab::NodeEditor => format!("{} {}", icons::SHARE_NETWORK, "Node Editor").into(),
         }
+    }
+
+    fn on_tab_button(&mut self, tab: &mut Self::Tab, response: &egui::Response) {
+        let slug = tab.name().to_ascii_lowercase().replace(' ', "_");
+        crate::qa::register_component_with_metadata(
+            format!("dock.tab:{slug}"),
+            "dock_tab",
+            response.rect,
+            response.enabled(),
+            Some(serde_json::json!({
+                "label": tab.name(),
+                "hovered": response.hovered(),
+            })),
+        );
     }
 }
 
@@ -141,7 +171,7 @@ pub fn create_initial_dock_state() -> DockState<Tab> {
     let [main_area, _] = surface.split_below(
         egui_dock::NodeIndex::root(),
         0.7,
-        vec![Tab::Timeline, Tab::GraphEditor, Tab::NodeGraph],
+        vec![Tab::Timeline, Tab::GraphEditor, Tab::NodeEditor],
     );
 
     // 2. Split off the inspector on the right (20% of width)

@@ -1,0 +1,12 @@
+# Keep these thresholds explicit so a toolchain update cannot silently relax the
+# repository policy. They intentionally match Clippy's Rust 1.95 defaults.
+msrv = "1.95.0"
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-unwrap-in-tests = true
+enum-variant-size-threshold = 200
+large-error-threshold = 128
+pass-by-value-size-limit = 256
+stack-size-threshold = 512000
+too-many-arguments-threshold = 7
+type-complexity-threshold = 250

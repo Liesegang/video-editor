@@ -1,0 +1,13 @@
+[package]
+name = "ruvie-plugin-api"
+version = "0.1.0"
+edition = "2024"
+description = "Stable native plugin ABI and wire types for RuViE"
+license = "MIT"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0"

@@ -5,6 +5,7 @@ use log::warn;
 use ordered_float::OrderedFloat;
 use std::sync::Arc;
 
+#[derive(Default)]
 pub struct ConstantPropertyPlugin;
 
 impl ConstantPropertyPlugin {

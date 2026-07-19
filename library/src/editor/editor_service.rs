@@ -1,20 +1,24 @@
 use crate::core::audio::engine::AudioEngine;
 use crate::core::cache::CacheManager;
 use crate::editor::audio_service::AudioService;
-use crate::editor::project_service::ProjectManager;
+use crate::editor::handlers::clip_handler::ClipBundle;
+use crate::editor::handlers::keyframe_handler::KeyframeBatchUpdate;
+use crate::editor::handlers::property_ops::PropertyOwner;
+use crate::editor::project_service::{GeneratorNodeRequest, ProjectManager};
 use crate::error::LibraryError;
-use crate::model::EffectConfig;
 use crate::model::asset::Asset;
-use crate::model::project::{Composite, Project};
-use crate::model::property::PropertyValue;
-use crate::model::{Layer, Track};
+use crate::model::frame::color::Color;
+use crate::model::project::{Composition, NodeGraphBundle, Project};
+use crate::model::property::{KeyframeId, KeyframeUpdate, PropertyTarget, PropertyValue};
+use crate::model::{EffectConfig, Node, Track};
 use crate::plugin::PluginManager;
+use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 pub struct EditorService {
     project_manager: Arc<ProjectManager>,
-    audio_service: Arc<AudioService>,
+    audio_service: Rc<AudioService>,
 }
 
 impl Clone for EditorService {
@@ -33,28 +37,31 @@ impl EditorService {
         project: Arc<RwLock<Project>>,
         plugin_manager: Arc<PluginManager>,
         cache_manager: Arc<CacheManager>,
-    ) -> Self {
-        let audio_engine = Arc::new(AudioEngine::new().expect("Failed to initialize Audio Engine"));
+    ) -> Result<Self, LibraryError> {
+        let audio_engine = Rc::new(AudioEngine::new().map_err(|error| {
+            LibraryError::Runtime(format!("Failed to initialize audio engine: {error}"))
+        })?);
 
         let project_manager = Arc::new(ProjectManager::new(project.clone(), plugin_manager));
         // AudioService also needs shared access to Project for mixing
-        let audio_service = Arc::new(AudioService::new(project, audio_engine, cache_manager));
+        let audio_service = Rc::new(AudioService::new(project, audio_engine, cache_manager));
 
-        Self {
+        Ok(Self {
             project_manager,
             audio_service,
-        }
+        })
     }
 
     pub fn get_project(&self) -> Arc<RwLock<Project>> {
         self.project_manager.get_project()
     }
 
-    pub fn set_project(&self, project: crate::model::project::Project) {
-        let _ = self.project_manager.set_project(project);
+    pub fn set_project(&self, project: crate::model::project::Project) -> Result<(), LibraryError> {
+        self.audio_service.invalidate_project();
+        self.project_manager.set_project(project)
     }
 
-    pub fn get_audio_service(&self) -> Arc<AudioService> {
+    pub fn get_audio_service(&self) -> Rc<AudioService> {
         self.audio_service.clone()
     }
 
@@ -66,14 +73,7 @@ impl EditorService {
         self.project_manager.get_plugin_manager()
     }
 
-    // For compatibility with App that might access audio_engine directly
-    // Ideally App shouldn't, but `ProjectService` exposed it as pub
-    pub fn get_audio_engine(&self) -> Arc<AudioEngine> {
-        self.audio_service.get_audio_engine()
-    }
-
-    // Proxy for backward compatibility if needed, though we can change call sites to get accessor
-    pub fn audio_engine(&self) -> Arc<AudioEngine> {
+    pub fn get_audio_engine(&self) -> Rc<AudioEngine> {
         self.audio_service.get_audio_engine()
     }
 
@@ -91,28 +91,22 @@ impl EditorService {
         self.audio_service.render_audio(start_time, duration)
     }
 
+    pub fn set_active_composition(&self, composition_id: Option<Uuid>, time: f64) -> bool {
+        self.audio_service
+            .set_active_composition(composition_id, time)
+    }
+
     // --- Project Operations ---
 
     pub fn load_project(&self, json_str: &str) -> Result<(), LibraryError> {
-        let new_project = self.project_manager.load_project(json_str)?;
-
-        // Hydrate Audio Cache (Orchestration logic)
-        for asset in &new_project.assets {
-            if asset.kind == crate::model::asset::AssetKind::Audio {
-                self.audio_service
-                    .trigger_audio_loading(asset.id, asset.path.clone());
-            }
-        }
-
-        // Note: ProjectManager::load_project already updated the shared Arc<RwLock<Project>>
-        // so AudioService sees the new data automatically because it holds the same Arc.
-
+        self.audio_service.invalidate_project();
+        self.project_manager.load_project(json_str)?;
         Ok(())
     }
 
     pub fn create_new_project(&self) -> Result<Uuid, LibraryError> {
+        self.audio_service.invalidate_project();
         let (new_comp_id, _) = self.project_manager.create_new_project()?;
-        // No audio to hydrate for new project
         Ok(new_comp_id)
     }
 
@@ -122,23 +116,6 @@ impl EditorService {
 
     pub fn import_file(&self, path: &str) -> Result<Vec<Uuid>, LibraryError> {
         let asset_ids = self.project_manager.import_file(path)?;
-
-        // Orchestration: Check if Audio
-        if let Ok(project) = self.project_manager.get_project().read() {
-            for &asset_id in &asset_ids {
-                if let Some(asset) = project.assets.iter().find(|a| a.id == asset_id) {
-                    if asset.kind == crate::model::asset::AssetKind::Audio {
-                        let path_clone = asset.path.clone();
-                        // self.audio_service needs to trigger loading, but we are holding project read lock
-                        // trigger_audio_loading doesn't seem to lock project?
-                        // Actually it might.
-                        // Ideally we collect need-to-load paths and do it after drop(project).
-                        self.audio_service
-                            .trigger_audio_loading(asset_id, path_clone);
-                    }
-                }
-            }
-        }
 
         Ok(asset_ids)
     }
@@ -163,6 +140,99 @@ impl EditorService {
 
     // --- Clip Factory Methods ---
 
+    pub fn create_generator_node(
+        &self,
+        request: GeneratorNodeRequest,
+        canvas_width: u64,
+        canvas_height: u64,
+        clip_width: u64,
+        clip_height: u64,
+    ) -> Result<Node, LibraryError> {
+        self.project_manager.create_generator_node(
+            request,
+            canvas_width,
+            canvas_height,
+            clip_width,
+            clip_height,
+        )
+    }
+
+    pub fn create_text_node(
+        &self,
+        text: &str,
+        font: &str,
+        canvas_width: u64,
+        canvas_height: u64,
+    ) -> Result<Node, LibraryError> {
+        self.project_manager
+            .create_text_node(text, font, canvas_width, canvas_height)
+    }
+
+    pub fn create_text_graph(
+        &self,
+        text: &str,
+        font: &str,
+        canvas_width: u64,
+        canvas_height: u64,
+    ) -> Result<NodeGraphBundle, LibraryError> {
+        self.project_manager
+            .create_text_graph(text, font, canvas_width, canvas_height)
+    }
+
+    pub fn create_shape_node(
+        &self,
+        path: &str,
+        canvas_width: u64,
+        canvas_height: u64,
+        shape_width: u64,
+        shape_height: u64,
+    ) -> Result<Node, LibraryError> {
+        self.project_manager.create_shape_node(
+            path,
+            canvas_width,
+            canvas_height,
+            shape_width,
+            shape_height,
+        )
+    }
+
+    pub fn create_shape_graph(
+        &self,
+        path: &str,
+        canvas_width: u64,
+        canvas_height: u64,
+        shape_width: u64,
+        shape_height: u64,
+    ) -> Result<NodeGraphBundle, LibraryError> {
+        self.project_manager.create_shape_graph(
+            path,
+            canvas_width,
+            canvas_height,
+            shape_width,
+            shape_height,
+        )
+    }
+
+    pub fn create_sksl_node(
+        &self,
+        shader: &str,
+        canvas_width: u64,
+        canvas_height: u64,
+    ) -> Result<Node, LibraryError> {
+        self.project_manager
+            .create_sksl_node(shader, canvas_width, canvas_height)
+    }
+
+    pub fn create_solid_node(
+        &self,
+        color: Color,
+        canvas_width: u64,
+        canvas_height: u64,
+    ) -> Result<Node, LibraryError> {
+        self.project_manager
+            .create_solid_node(color, canvas_width, canvas_height)
+    }
+
     pub fn create_audio_clip(
         &self,
         reference_id: Uuid,
@@ -171,7 +241,7 @@ impl EditorService {
         duration: f64,
         source_start_time: f64,
         speed: f64,
-    ) -> Result<Layer, LibraryError> {
+    ) -> Result<ClipBundle, LibraryError> {
         self.project_manager.create_audio_clip(
             reference_id,
             file_path,
@@ -182,6 +252,10 @@ impl EditorService {
         )
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "detached video Clip creation requires source timing and canvas dimensions atomically"
+    )]
     pub fn create_video_clip(
         &self,
         reference_id: Uuid,
@@ -192,7 +266,7 @@ impl EditorService {
         speed: f64,
         canvas_width: u32,
         canvas_height: u32,
-    ) -> Result<Layer, LibraryError> {
+    ) -> Result<ClipBundle, LibraryError> {
         self.project_manager.create_video_clip(
             reference_id,
             file_path,
@@ -205,6 +279,10 @@ impl EditorService {
         )
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the editor facade preserves image timing, canvas dimensions, and caller FPS as one operation"
+    )]
     pub fn create_image_clip(
         &self,
         reference_id: Uuid,
@@ -214,7 +292,7 @@ impl EditorService {
         canvas_width: u32,
         canvas_height: u32,
         _fps: f64,
-    ) -> Result<Layer, LibraryError> {
+    ) -> Result<ClipBundle, LibraryError> {
         self.project_manager.create_image_clip(
             reference_id,
             file_path,
@@ -232,7 +310,7 @@ impl EditorService {
         duration: f64,
         canvas_width: u32,
         canvas_height: u32,
-    ) -> Result<Layer, LibraryError> {
+    ) -> Result<ClipBundle, LibraryError> {
         self.project_manager.create_text_clip(
             text,
             start_time,
@@ -248,7 +326,7 @@ impl EditorService {
         duration: f64,
         canvas_width: u32,
         canvas_height: u32,
-    ) -> Result<Layer, LibraryError> {
+    ) -> Result<ClipBundle, LibraryError> {
         self.project_manager
             .create_shape_clip(start_time, duration, canvas_width, canvas_height)
     }
@@ -259,7 +337,7 @@ impl EditorService {
         duration: f64,
         canvas_width: u32,
         canvas_height: u32,
-    ) -> Result<Layer, LibraryError> {
+    ) -> Result<ClipBundle, LibraryError> {
         self.project_manager
             .create_sksl_clip(start_time, duration, canvas_width, canvas_height)
     }
@@ -269,7 +347,7 @@ impl EditorService {
         target_node_id: Uuid,
         start_time: f64,
         duration: f64,
-    ) -> Result<Layer, LibraryError> {
+    ) -> Result<ClipBundle, LibraryError> {
         self.project_manager
             .create_reference_clip(target_node_id, start_time, duration)
     }
@@ -299,7 +377,7 @@ impl EditorService {
             .update_composition(id, name, width, height, fps, duration)
     }
 
-    pub fn get_composition(&self, id: Uuid) -> Result<Composite, LibraryError> {
+    pub fn get_composition(&self, id: Uuid) -> Result<Composition, LibraryError> {
         self.project_manager.get_composition(id)
     }
 
@@ -329,29 +407,32 @@ impl EditorService {
         self.project_manager.remove_track(composition_id, track_id)
     }
 
-    pub fn add_sub_track(
-        &self,
-        composition_id: Uuid,
-        parent_track_id: Uuid,
-        track_name: &str,
-    ) -> Result<Uuid, LibraryError> {
-        self.project_manager
-            .add_sub_track(composition_id, parent_track_id, track_name)
-    }
-
     pub fn rename_track(&self, track_id: Uuid, new_name: &str) -> Result<(), LibraryError> {
         self.project_manager.rename_track(track_id, new_name)
+    }
+
+    pub fn move_track_within_composition(
+        &self,
+        composition_id: Uuid,
+        track_id: Uuid,
+        destination_index: usize,
+    ) -> Result<bool, LibraryError> {
+        self.project_manager.move_track_within_composition(
+            composition_id,
+            track_id,
+            destination_index,
+        )
     }
 
     pub fn add_clip_to_track(
         &self,
         composition_id: Uuid,
         track_id: Uuid,
-        layer: Layer,
+        bundle: ClipBundle,
         insert_index: Option<usize>,
     ) -> Result<Uuid, LibraryError> {
         self.project_manager
-            .add_clip_to_track(composition_id, track_id, layer, insert_index)
+            .add_clip_to_track(composition_id, track_id, bundle, insert_index)
     }
 
     pub fn remove_clip_from_track(
@@ -369,8 +450,14 @@ impl EditorService {
         property_key: &str,
         value: PropertyValue,
     ) -> Result<(), LibraryError> {
-        self.project_manager
-            .update_track_clip_property(clip_id, property_key, value)
+        self.project_manager.update_property_or_keyframe(
+            PropertyOwner::Clip(clip_id),
+            PropertyTarget::Direct,
+            property_key,
+            0.0,
+            value,
+            None,
+        )
     }
 
     pub fn move_clip_to_track(
@@ -410,16 +497,20 @@ impl EditorService {
     }
 
     pub fn add_effect_to_clip(&self, clip_id: Uuid, effect_id: &str) -> Result<(), LibraryError> {
-        self.project_manager.add_effect_to_clip(clip_id, effect_id)
+        self.project_manager
+            .add_effect(PropertyOwner::Clip(clip_id), effect_id)
     }
 
-    pub fn update_track_clip_effects(
+    pub fn add_effect(&self, owner: PropertyOwner, effect_id: &str) -> Result<(), LibraryError> {
+        self.project_manager.add_effect(owner, effect_id)
+    }
+
+    pub fn update_effects(
         &self,
-        clip_id: Uuid,
+        owner: PropertyOwner,
         effects: Vec<EffectConfig>,
     ) -> Result<(), LibraryError> {
-        self.project_manager
-            .update_track_clip_effects(clip_id, effects)
+        self.project_manager.update_effects(owner, effects)
     }
 
     pub fn evaluate_property_value(
@@ -435,28 +526,42 @@ impl EditorService {
 
     pub fn add_keyframe(
         &self,
-        clip_id: Uuid,
+        owner: PropertyOwner,
+        target: PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
         self.project_manager
-            .add_keyframe(clip_id, property_key, time, value, easing)
+            .add_keyframe(owner, target, property_key, time, value, easing)
+    }
+
+    pub fn add_keyframe_with_id(
+        &self,
+        owner: PropertyOwner,
+        target: PropertyTarget,
+        property_key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<crate::animation::EasingFunction>,
+    ) -> Result<KeyframeId, LibraryError> {
+        self.project_manager
+            .add_keyframe_with_id(owner, target, property_key, time, value, easing)
     }
 
     pub fn add_effect_keyframe(
         &self,
         clip_id: Uuid,
-        effect_index: usize,
+        effect_id: Uuid,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        self.project_manager.add_effect_keyframe(
-            clip_id,
-            effect_index,
+        self.project_manager.add_keyframe(
+            PropertyOwner::Clip(clip_id),
+            PropertyTarget::Effect(effect_id),
             property_key,
             time,
             value,
@@ -471,18 +576,10 @@ impl EditorService {
         clip_id: Uuid,
         start_time: f64,
         duration: f64,
+        trim_in: f64,
     ) -> Result<(), LibraryError> {
-        self.update_clip_property(
-            clip_id,
-            "start_time",
-            PropertyValue::Number(ordered_float::OrderedFloat(start_time)),
-        )?;
-        self.update_clip_property(
-            clip_id,
-            "duration",
-            PropertyValue::Number(ordered_float::OrderedFloat(duration)),
-        )?;
-        Ok(())
+        self.project_manager
+            .update_clip_timing(clip_id, start_time, duration, trim_in)
     }
 
     pub fn update_clip_source_start(&self, clip_id: Uuid, time: f64) -> Result<(), LibraryError> {
@@ -514,79 +611,51 @@ impl EditorService {
 
     pub fn update_property_or_keyframe(
         &self,
-        clip_id: Uuid,
+        owner: PropertyOwner,
+        target: PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        self.project_manager
-            .update_property_or_keyframe(clip_id, property_key, time, value, easing)
-    }
-
-    pub fn update_keyframe(
-        &self,
-        clip_id: Uuid,
-        property_key: &str,
-        index: usize,
-        new_time: Option<f64>,
-        new_value: Option<PropertyValue>,
-        new_easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_keyframe(
-            clip_id,
+        self.project_manager.update_property_or_keyframe(
+            owner,
+            target,
             property_key,
-            index,
-            new_time,
-            new_value,
-            new_easing,
+            time,
+            value,
+            easing,
         )
     }
 
-    pub fn update_effect_keyframe_by_index(
+    pub fn update_keyframe_by_id(
         &self,
-        clip_id: Uuid,
-        effect_index: usize,
+        owner: PropertyOwner,
+        target: PropertyTarget,
         property_key: &str,
-        keyframe_index: usize,
-        new_time: Option<f64>,
-        new_value: Option<PropertyValue>,
-        new_easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_effect_keyframe_by_index(
-            clip_id,
-            effect_index,
-            property_key,
-            keyframe_index,
-            new_time,
-            new_value,
-            new_easing,
-        )
-    }
-
-    pub fn remove_effect_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        effect_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.remove_effect_keyframe_by_index(
-            clip_id,
-            effect_index,
-            property_key,
-            keyframe_index,
-        )
-    }
-
-    pub fn remove_keyframe(
-        &self,
-        clip_id: Uuid,
-        property_key: &str,
-        index: usize,
+        keyframe_id: KeyframeId,
+        update: KeyframeUpdate,
     ) -> Result<(), LibraryError> {
         self.project_manager
-            .remove_keyframe(clip_id, property_key, index)
+            .update_keyframe_by_id(owner, target, property_key, keyframe_id, update)
+    }
+
+    pub fn update_keyframes_batch(
+        &self,
+        updates: &[KeyframeBatchUpdate],
+    ) -> Result<(), LibraryError> {
+        self.project_manager.update_keyframes_batch(updates)
+    }
+
+    pub fn remove_keyframe_by_id(
+        &self,
+        owner: PropertyOwner,
+        target: PropertyTarget,
+        property_key: &str,
+        keyframe_id: KeyframeId,
+    ) -> Result<(), LibraryError> {
+        self.project_manager
+            .remove_keyframe_by_id(owner, target, property_key, keyframe_id)
     }
 
     pub fn has_asset_with_path(&self, path: &str) -> bool {
@@ -603,42 +672,69 @@ impl EditorService {
             .map_err(|e| LibraryError::Runtime(format!("Failed to read project file: {}", e)))?;
         self.load_project(&content)
     }
-    pub fn update_track_clip_styles(
+    pub fn update_node_styles(
         &self,
-        clip_id: Uuid,
+        node_id: Uuid,
         styles: Vec<crate::model::style::StyleInstance>,
     ) -> Result<(), LibraryError> {
-        self.project_manager
-            .update_track_clip_styles(clip_id, styles)
+        self.project_manager.update_node_styles(node_id, styles)
     }
 
-    pub fn update_track_clip_style_property(
+    pub fn add_effector(&self, node_id: Uuid, effector_type: &str) -> Result<(), LibraryError> {
+        self.project_manager.add_effector(node_id, effector_type)
+    }
+
+    pub fn update_node_effectors(
         &self,
-        clip_id: Uuid,
-        style_index: usize,
-        property_key: &str,
-        value: PropertyValue,
+        node_id: Uuid,
+        effectors: Vec<crate::model::ensemble::EffectorInstance>,
     ) -> Result<(), LibraryError> {
-        self.project_manager.update_track_clip_style_property(
-            clip_id,
-            style_index,
+        self.project_manager
+            .update_node_effectors(node_id, effectors)
+    }
+
+    pub fn add_decorator(&self, node_id: Uuid, decorator_type: &str) -> Result<(), LibraryError> {
+        self.project_manager.add_decorator(node_id, decorator_type)
+    }
+
+    pub fn update_node_decorators(
+        &self,
+        node_id: Uuid,
+        decorators: Vec<crate::model::ensemble::DecoratorInstance>,
+    ) -> Result<(), LibraryError> {
+        self.project_manager
+            .update_node_decorators(node_id, decorators)
+    }
+
+    pub fn set_property_attribute(
+        &self,
+        owner: PropertyOwner,
+        target: PropertyTarget,
+        property_key: &str,
+        attribute_key: &str,
+        attribute_value: PropertyValue,
+    ) -> Result<(), LibraryError> {
+        self.project_manager.set_property_attribute(
+            owner,
+            target,
             property_key,
-            value,
+            attribute_key,
+            attribute_value,
         )
     }
 
     pub fn add_style_keyframe(
         &self,
-        clip_id: Uuid,
-        style_index: usize,
+        node_id: Uuid,
+        style_id: Uuid,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        self.project_manager.add_style_keyframe(
-            clip_id,
-            style_index,
+        self.project_manager.add_keyframe(
+            PropertyOwner::Node(node_id),
+            PropertyTarget::Style(style_id),
             property_key,
             time,
             value,
@@ -649,55 +745,34 @@ impl EditorService {
     pub fn update_effect_property_or_keyframe(
         &self,
         clip_id: Uuid,
-        effect_index: usize,
+        effect_id: Uuid,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        self.project_manager.update_effect_property_or_keyframe(
-            clip_id,
-            effect_index,
+        self.project_manager.update_property_or_keyframe(
+            PropertyOwner::Clip(clip_id),
+            PropertyTarget::Effect(effect_id),
             property_key,
             time,
             value,
             easing,
-        )
-    }
-
-    pub fn update_style_keyframe_by_index(
-        &self,
-        clip_id: Uuid,
-        style_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-        new_time: Option<f64>,
-        new_value: Option<PropertyValue>,
-        new_easing: Option<crate::animation::EasingFunction>,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.update_style_keyframe_by_index(
-            clip_id,
-            style_index,
-            property_key,
-            keyframe_index,
-            new_time,
-            new_value,
-            new_easing,
         )
     }
 
     pub fn update_style_property_or_keyframe(
         &self,
-        clip_id: Uuid,
-        style_index: usize,
+        node_id: Uuid,
+        style_id: Uuid,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        self.project_manager.update_style_property_or_keyframe(
-            clip_id,
-            style_index,
+        self.project_manager.update_property_or_keyframe(
+            PropertyOwner::Node(node_id),
+            PropertyTarget::Style(style_id),
             property_key,
             time,
             value,
@@ -705,32 +780,17 @@ impl EditorService {
         )
     }
 
-    pub fn remove_style_keyframe(
-        &self,
-        clip_id: Uuid,
-        style_index: usize,
-        property_key: &str,
-        keyframe_index: usize,
-    ) -> Result<(), LibraryError> {
-        self.project_manager.remove_style_keyframe(
-            clip_id,
-            style_index,
-            property_key,
-            keyframe_index,
-        )
-    }
-
     pub fn set_style_property_attribute(
         &self,
-        clip_id: Uuid,
-        style_index: usize,
+        node_id: Uuid,
+        style_id: Uuid,
         property_key: &str,
         attribute_key: &str,
         attribute_value: PropertyValue,
     ) -> Result<(), LibraryError> {
-        self.project_manager.set_style_property_attribute(
-            clip_id,
-            style_index,
+        self.project_manager.set_property_attribute(
+            PropertyOwner::Node(node_id),
+            PropertyTarget::Style(style_id),
             property_key,
             attribute_key,
             attribute_value,
@@ -744,8 +804,9 @@ impl EditorService {
         attribute_key: &str,
         attribute_value: PropertyValue,
     ) -> Result<(), LibraryError> {
-        self.project_manager.set_clip_property_attribute(
-            clip_id,
+        self.project_manager.set_property_attribute(
+            PropertyOwner::Clip(clip_id),
+            PropertyTarget::Direct,
             property_key,
             attribute_key,
             attribute_value,
@@ -755,21 +816,21 @@ impl EditorService {
     pub fn set_effect_property_attribute(
         &self,
         clip_id: Uuid,
-        effect_index: usize,
+        effect_id: Uuid,
         property_key: &str,
         attribute_key: &str,
         attribute_value: PropertyValue,
     ) -> Result<(), LibraryError> {
-        self.project_manager.set_effect_property_attribute(
-            clip_id,
-            effect_index,
+        self.project_manager.set_property_attribute(
+            PropertyOwner::Clip(clip_id),
+            PropertyTarget::Effect(effect_id),
             property_key,
             attribute_key,
             attribute_value,
         )
     }
 
-    pub fn add_style(&self, clip_id: Uuid, style_type: &str) -> Result<(), LibraryError> {
-        self.project_manager.add_style(clip_id, style_type)
+    pub fn add_style(&self, node_id: Uuid, style_type: &str) -> Result<(), LibraryError> {
+        self.project_manager.add_style_to_node(node_id, style_type)
     }
 }

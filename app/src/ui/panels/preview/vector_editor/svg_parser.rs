@@ -1,11 +1,10 @@
-use crate::model::vector::VectorEditorState;
 use library::model::vector::{ControlPoint, PointType, VectorPath};
 use skia_safe::PathVerb;
 
-pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
+pub fn parse_svg_path(path_data: &str) -> VectorPath {
     let path = match skia_safe::utils::parse_path::from_svg(path_data) {
         Some(p) => p,
-        None => return VectorEditorState::default(),
+        None => return VectorPath::default(),
     };
 
     let mut points = Vec::new();
@@ -100,10 +99,7 @@ pub fn parse_svg_path(path_data: &str) -> VectorEditorState {
         }
     }
 
-    VectorEditorState {
-        path: VectorPath { points, is_closed },
-        ..Default::default()
-    }
+    VectorPath { points, is_closed }
 }
 
 fn is_zero(v: [f32; 2]) -> bool {
@@ -149,11 +145,11 @@ mod tests {
         // Line -> Corner
         // Close -> is_closed
 
-        let state = parse_svg_path(original_path);
-        assert_eq!(state.path.points.len(), 4);
-        assert!(state.path.is_closed);
+        let path = parse_svg_path(original_path);
+        assert_eq!(path.points.len(), 4);
+        assert!(path.is_closed);
 
-        let generated = to_svg_path(&state);
+        let generated = to_svg_path(&path);
         // Expect: M 10,10 L 90,10 L 90,90 L 10,90 Z
         // Note: Floats might format differently.
         assert!(generated.contains("M 10,10"));

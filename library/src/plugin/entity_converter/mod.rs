@@ -1,33 +1,141 @@
 use crate::model::EffectConfig;
-use crate::model::Layer;
-use crate::model::frame::entity::FrameObject;
+use crate::model::Node;
+use crate::model::Project;
+use crate::model::frame::entity::{FrameObject, StyleConfig};
 use crate::model::frame::transform::{Position, Scale, Transform};
-use crate::model::project::Composite;
+use crate::model::project::Composition;
+use crate::model::project::{
+    DECORATORS_INPUT_PORT, EFFECTORS_INPUT_PORT, EvalOutput, STYLES_INPUT_PORT,
+};
 use crate::model::property::{PropertyMap, PropertyValue, Vec2};
 use crate::model::style::StyleInstance;
 use crate::plugin::{EvaluationContext, PluginManager, PropertyEvaluatorRegistry};
+use std::collections::HashMap;
 
-pub mod effector;
 mod image;
 mod shape;
 mod sksl;
+mod solid;
 mod text;
 mod video;
 
 pub use image::ImageEntityConverterPlugin;
 pub use shape::ShapeEntityConverterPlugin;
+pub use shape::measure_shape_visual_bounds;
 pub use sksl::SkSLEntityConverterPlugin;
+pub use solid::SolidEntityConverterPlugin;
 pub use text::TextEntityConverterPlugin;
 pub use text::measure_text_size;
 pub use video::VideoEntityConverterPlugin;
 
+/// Render-only typed values resolved from canonical Project connections.
+/// These values are never persisted and never become a second authored model.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResolvedNodeInputs {
+    /// Active scope metadata. Kept separate so an authored property literally
+    /// named `time`, `duration`, or `fps` is never shadowed implicitly.
+    pub metadata: HashMap<String, EvalOutput<PropertyValue>>,
+    /// Explicit scalar/property wires keyed by their logical PropertyMap key.
+    pub properties: HashMap<String, EvalOutput<PropertyValue>>,
+    pub styles: HashMap<String, Vec<EvalOutput<StyleConfig>>>,
+    pub effectors: HashMap<String, Vec<EvalOutput<crate::core::ensemble::types::EffectorConfig>>>,
+    pub decorators: HashMap<String, Vec<EvalOutput<crate::core::ensemble::types::DecoratorConfig>>>,
+}
+
+impl ResolvedNodeInputs {
+    pub fn from_metadata(metadata: HashMap<String, EvalOutput<PropertyValue>>) -> Self {
+        Self {
+            metadata,
+            properties: HashMap::new(),
+            styles: HashMap::new(),
+            effectors: HashMap::new(),
+            decorators: HashMap::new(),
+        }
+    }
+}
+
 pub struct FrameEvaluationContext<'a> {
-    pub composition: &'a Composite,
+    pub project: &'a Project,
+    pub composition: &'a Composition,
     pub property_evaluators: &'a PropertyEvaluatorRegistry,
     pub plugin_manager: &'a PluginManager,
+    /// Render-time values arriving through canonical Project connections.
+    /// These override same-key authored/keyframed properties without mutating
+    /// the authoritative PropertyMap.
+    pub resolved_inputs: Option<&'a ResolvedNodeInputs>,
 }
 
 impl<'a> FrameEvaluationContext<'a> {
+    /// Return a context for an independently owned nested PropertyMap.
+    /// Node graph inputs must not override an identically named style,
+    /// effector, or decorator property (for example `duration`).
+    pub fn without_resolved_inputs(&self) -> FrameEvaluationContext<'a> {
+        FrameEvaluationContext {
+            project: self.project,
+            composition: self.composition,
+            property_evaluators: self.property_evaluators,
+            plugin_manager: self.plugin_manager,
+            resolved_inputs: None,
+        }
+    }
+
+    pub fn connected_input(&self, key: &str) -> Option<&PropertyValue> {
+        match self
+            .resolved_inputs
+            .and_then(|inputs| inputs.properties.get(key))
+        {
+            Some(EvalOutput::Produced(value)) => Some(value),
+            Some(EvalOutput::NoOutput) | None => None,
+        }
+    }
+
+    pub fn connected_port(&self, key: &str) -> Option<&EvalOutput<PropertyValue>> {
+        self.resolved_inputs
+            .and_then(|inputs| inputs.properties.get(key))
+    }
+
+    pub fn metadata_input(&self, key: &str) -> Option<&PropertyValue> {
+        match self
+            .resolved_inputs
+            .and_then(|inputs| inputs.metadata.get(key))
+        {
+            Some(EvalOutput::Produced(value)) => Some(value),
+            Some(EvalOutput::NoOutput) | None => None,
+        }
+    }
+
+    pub fn evaluation_fps(&self) -> f64 {
+        self.metadata_input(crate::model::project::FPS_PORT)
+            .and_then(|value| value.get_as::<f64>())
+            .filter(|fps| fps.is_finite() && *fps > 0.0)
+            .unwrap_or(self.composition.fps)
+    }
+
+    pub fn evaluation_resolution(&self) -> (u64, u64) {
+        self.metadata_input(crate::model::project::RESOLUTION_PORT)
+            .and_then(|value| value.get_as::<Vec2>())
+            .map(|value| {
+                (
+                    value.x.into_inner().max(1.0) as u64,
+                    value.y.into_inner().max(1.0) as u64,
+                )
+            })
+            .unwrap_or((self.composition.width, self.composition.height))
+    }
+
+    fn evaluate_key(&self, props: &PropertyMap, key: &str, time: f64) -> Option<PropertyValue> {
+        match self.connected_port(key) {
+            Some(EvalOutput::Produced(value)) => Some(value.clone()),
+            Some(EvalOutput::NoOutput) => {
+                log::debug!("Input {key} produced NoOutput");
+                None
+            }
+            None => props
+                .get(key)
+                .map(|property| self.evaluate_property_value(property, props, time)),
+        }
+    }
+
     pub fn evaluate_property_value(
         &self,
         property: &crate::model::property::Property,
@@ -36,18 +144,15 @@ impl<'a> FrameEvaluationContext<'a> {
     ) -> PropertyValue {
         let ctx = EvaluationContext {
             property_map: properties,
-            fps: self.composition.fps,
+            fps: self.evaluation_fps(),
         };
         self.property_evaluators.evaluate(property, time, &ctx)
     }
 
     pub fn evaluate_number(&self, props: &PropertyMap, key: &str, time: f64, default: f64) -> f64 {
-        if let Some(prop) = props.get(key) {
-            let val = self.evaluate_property_value(prop, props, time);
-            val.get_as::<f64>().unwrap_or(default)
-        } else {
-            default
-        }
+        self.evaluate_key(props, key, time)
+            .and_then(|value| value.get_as::<f64>())
+            .unwrap_or(default)
     }
 
     pub fn evaluate_vec2(
@@ -57,11 +162,10 @@ impl<'a> FrameEvaluationContext<'a> {
         time: f64,
         default: [f64; 2],
     ) -> [f64; 2] {
-        if let Some(prop) = props.get(key) {
-            let val = self.evaluate_property_value(prop, props, time);
-            if let Some(v) = val.get_as::<Vec2>() {
-                return [v.x.into_inner(), v.y.into_inner()];
-            }
+        if let Some(val) = self.evaluate_key(props, key, time)
+            && let Some(v) = val.get_as::<Vec2>()
+        {
+            return [v.x.into_inner(), v.y.into_inner()];
         }
         default
     }
@@ -73,20 +177,18 @@ impl<'a> FrameEvaluationContext<'a> {
         key_x: &str,
         key_y: &str,
         time: f64,
-        default_x: f64,
-        default_y: f64,
+        default: (f64, f64),
     ) -> (f64, f64) {
         // Try main key first (Vec2)
-        if let Some(prop) = props.get(key_main) {
-            let val = self.evaluate_property_value(prop, props, time);
-            if let Some(v) = val.get_as::<Vec2>() {
-                return (v.x.into_inner(), v.y.into_inner());
-            }
+        if let Some(val) = self.evaluate_key(props, key_main, time)
+            && let Some(v) = val.get_as::<Vec2>()
+        {
+            return (v.x.into_inner(), v.y.into_inner());
         }
 
         // Fallback to components
-        let x = self.evaluate_number(props, key_x, time, default_x);
-        let y = self.evaluate_number(props, key_y, time, default_y);
+        let x = self.evaluate_number(props, key_x, time, default.0);
+        let y = self.evaluate_number(props, key_y, time, default.1);
         (x, y)
     }
 
@@ -97,11 +199,10 @@ impl<'a> FrameEvaluationContext<'a> {
         time: f64,
         context: &str,
     ) -> Option<String> {
-        if let Some(prop) = props.get(key) {
-            let val = self.evaluate_property_value(prop, props, time);
-            if let Some(s) = val.get_as::<String>() {
-                return Some(s);
-            }
+        if let Some(val) = self.evaluate_key(props, key, time)
+            && let Some(s) = val.get_as::<String>()
+        {
+            return Some(s);
         }
         log::warn!(
             "Missing or invalid string property '{}' for {}",
@@ -111,22 +212,30 @@ impl<'a> FrameEvaluationContext<'a> {
         None
     }
 
-    pub fn optional_string(&self, props: &PropertyMap, key: &str, time: f64) -> Option<String> {
-        if let Some(prop) = props.get(key) {
-            let val = self.evaluate_property_value(prop, props, time);
-            val.get_as::<String>()
-        } else {
-            None
+    pub fn require_color(
+        &self,
+        props: &PropertyMap,
+        key: &str,
+        time: f64,
+        context: &str,
+    ) -> Option<crate::model::frame::color::Color> {
+        if let Some(value) = self.evaluate_key(props, key, time)
+            && let Some(color) = value.get_as::<crate::model::frame::color::Color>()
+        {
+            return Some(color);
         }
+        log::warn!("Missing or invalid color property '{key}' for {context}");
+        None
+    }
+
+    pub fn optional_string(&self, props: &PropertyMap, key: &str, time: f64) -> Option<String> {
+        self.evaluate_key(props, key, time)
+            .and_then(|value| value.get_as::<String>())
     }
 
     pub fn optional_bool(&self, props: &PropertyMap, key: &str, time: f64) -> Option<bool> {
-        if let Some(prop) = props.get(key) {
-            let val = self.evaluate_property_value(prop, props, time);
-            val.get_as::<bool>()
-        } else {
-            None
-        }
+        self.evaluate_key(props, key, time)
+            .and_then(|value| value.get_as::<bool>())
     }
 
     pub fn build_transform(&self, props: &PropertyMap, time: f64) -> Transform {
@@ -176,6 +285,60 @@ impl<'a> FrameEvaluationContext<'a> {
             .collect()
     }
 
+    /// Evaluates every property declared by an operation descriptor from its
+    /// authoritative PropertyMap plus explicit scalar wires. Missing,
+    /// NoOutput, or invalid values keep the operation at NoOutput rather than
+    /// letting an individual plugin silently substitute a fallback.
+    pub fn evaluate_operation_properties(
+        &self,
+        definitions: &[crate::model::property::PropertyDefinition],
+        properties: &PropertyMap,
+        time: f64,
+        operation_label: &str,
+    ) -> Option<HashMap<String, PropertyValue>> {
+        let mut evaluated = HashMap::with_capacity(definitions.len());
+        for definition in definitions {
+            let Some(value) = self.evaluate_key(properties, definition.name(), time) else {
+                log::warn!(
+                    "{operation_label} property {} is missing or produced NoOutput",
+                    definition.name()
+                );
+                return None;
+            };
+            if let Err(error) = definition.validate_value(&value) {
+                log::warn!(
+                    "{operation_label} property {} evaluated to an invalid value: {}",
+                    definition.name(),
+                    error
+                );
+                return None;
+            }
+            evaluated.insert(definition.name().to_string(), value);
+        }
+        Some(evaluated)
+    }
+
+    /// Builds one descriptor-backed Effect after applying the shared
+    /// operation-property validation contract.
+    pub fn build_operation_effect(
+        &self,
+        effect_type: &str,
+        definitions: &[crate::model::property::PropertyDefinition],
+        properties: &PropertyMap,
+        time: f64,
+    ) -> Option<crate::model::frame::effect::ImageEffect> {
+        let evaluated = self.evaluate_operation_properties(
+            definitions,
+            properties,
+            time,
+            &format!("Effect {effect_type}"),
+        )?;
+        Some(crate::model::frame::effect::ImageEffect {
+            effect_type: effect_type.to_string(),
+            properties: evaluated,
+        })
+    }
+
     pub fn build_styles(
         &self,
         styles: &[StyleInstance],
@@ -185,7 +348,7 @@ impl<'a> FrameEvaluationContext<'a> {
             .iter()
             .filter_map(|s| {
                 if let Some(plugin) = self.plugin_manager.get_style_plugin(&s.style_type) {
-                    plugin.convert(self, s, time)
+                    plugin.convert_legacy(&self.without_resolved_inputs(), s, time)
                 } else {
                     log::warn!("Unknown style type: {}", s.style_type);
                     None
@@ -194,12 +357,170 @@ impl<'a> FrameEvaluationContext<'a> {
             .collect()
     }
 
+    /// Resolves the variadic graph Style input when at least one wire exists;
+    /// otherwise retains isolated legacy Node::styles behavior. NoOutput and
+    /// unavailable Style producers are normal skipped items, never frame
+    /// errors and never a reason to fall back to embedded state.
+    pub fn resolved_styles_or_legacy(
+        &self,
+        legacy_styles: &[StyleInstance],
+        time: f64,
+    ) -> Vec<StyleConfig> {
+        let Some(wired) = self
+            .resolved_inputs
+            .and_then(|inputs| inputs.styles.get(STYLES_INPUT_PORT))
+        else {
+            return self.build_styles(legacy_styles, time);
+        };
+        wired
+            .iter()
+            .filter_map(|value| match value {
+                EvalOutput::Produced(style) => Some(style.clone()),
+                EvalOutput::NoOutput => None,
+            })
+            .collect()
+    }
+
+    fn build_effectors(
+        &self,
+        effectors: &[crate::model::ensemble::EffectorInstance],
+        time: f64,
+    ) -> Vec<crate::core::ensemble::types::EffectorConfig> {
+        let nested_context = self.without_resolved_inputs();
+        effectors
+            .iter()
+            .filter_map(|instance| {
+                self.plugin_manager
+                    .convert_effector_instance(&nested_context, instance, time)
+            })
+            .collect()
+    }
+
+    /// Resolves the variadic graph Effector input when at least one wire
+    /// exists; otherwise retains read-only compatibility with embedded
+    /// `Node::effectors`. An all-NoOutput wire set never restores legacy state.
+    pub fn resolved_effectors_or_legacy(
+        &self,
+        legacy_effectors: &[crate::model::ensemble::EffectorInstance],
+        time: f64,
+    ) -> Vec<crate::core::ensemble::types::EffectorConfig> {
+        let Some(wired) = self
+            .resolved_inputs
+            .and_then(|inputs| inputs.effectors.get(EFFECTORS_INPUT_PORT))
+        else {
+            return self.build_effectors(legacy_effectors, time);
+        };
+        wired
+            .iter()
+            .filter_map(|value| match value {
+                EvalOutput::Produced(effector) => Some(effector.clone()),
+                EvalOutput::NoOutput => None,
+            })
+            .collect()
+    }
+
+    fn build_decorators(
+        &self,
+        decorators: &[crate::model::ensemble::DecoratorInstance],
+        time: f64,
+    ) -> Vec<crate::core::ensemble::types::DecoratorConfig> {
+        let nested_context = self.without_resolved_inputs();
+        decorators
+            .iter()
+            .filter_map(|instance| {
+                self.plugin_manager
+                    .convert_decorator_instance(&nested_context, instance, time)
+            })
+            .collect()
+    }
+
+    /// Resolves the variadic graph Decorator input when wired, otherwise
+    /// retains read-only compatibility with embedded `Node::decorators`.
+    pub fn resolved_decorators_or_legacy(
+        &self,
+        legacy_decorators: &[crate::model::ensemble::DecoratorInstance],
+        time: f64,
+    ) -> Vec<crate::core::ensemble::types::DecoratorConfig> {
+        let Some(wired) = self
+            .resolved_inputs
+            .and_then(|inputs| inputs.decorators.get(DECORATORS_INPUT_PORT))
+        else {
+            return self.build_decorators(legacy_decorators, time);
+        };
+        wired
+            .iter()
+            .filter_map(|value| match value {
+                EvalOutput::Produced(decorator) => Some(decorator.clone()),
+                EvalOutput::NoOutput => None,
+            })
+            .collect()
+    }
+
     pub fn parse_path_effects(
         &self,
-        _props: &PropertyMap,
-        _time: f64,
+        props: &PropertyMap,
+        time: f64,
     ) -> Vec<crate::model::frame::draw_type::PathEffect> {
-        Vec::new()
+        use crate::model::frame::draw_type::PathEffect;
+
+        let Some(effect_type) = self.optional_string(props, "path_effect", time) else {
+            return Vec::new();
+        };
+        match effect_type.to_ascii_lowercase().as_str() {
+            "none" | "" => Vec::new(),
+            "dash" => {
+                let intervals = self
+                    .evaluate_number_array(props, "path_effect_intervals", time)
+                    .into_iter()
+                    .filter(|value| value.is_finite() && *value > 0.0)
+                    .collect::<Vec<_>>();
+                if intervals.len() < 2 || intervals.len() % 2 != 0 {
+                    log::warn!("Dash path effect requires an even number of positive intervals");
+                    Vec::new()
+                } else {
+                    vec![PathEffect::Dash {
+                        intervals,
+                        phase: self.evaluate_number(props, "path_effect_phase", time, 0.0),
+                    }]
+                }
+            }
+            "corner" => vec![PathEffect::Corner {
+                radius: self
+                    .evaluate_number(props, "path_effect_radius", time, 8.0)
+                    .max(0.0),
+            }],
+            "discrete" => vec![PathEffect::Discrete {
+                seg_length: self
+                    .evaluate_number(props, "path_effect_segment_length", time, 8.0)
+                    .max(f64::EPSILON),
+                deviation: self
+                    .evaluate_number(props, "path_effect_deviation", time, 2.0)
+                    .max(0.0),
+                seed: self
+                    .evaluate_key(props, "path_effect_seed", time)
+                    .and_then(|value| value.get_as::<i64>())
+                    .unwrap_or_default()
+                    .max(0) as u64,
+            }],
+            "trim" => {
+                let start = self
+                    .evaluate_number(props, "path_effect_trim_start", time, 0.0)
+                    .clamp(0.0, 1.0);
+                let end = self
+                    .evaluate_number(props, "path_effect_trim_end", time, 1.0)
+                    .clamp(0.0, 1.0);
+                if start >= end {
+                    log::warn!("Trim path effect requires start < end");
+                    Vec::new()
+                } else {
+                    vec![PathEffect::Trim { start, end }]
+                }
+            }
+            unsupported => {
+                log::warn!("Unsupported path effect {unsupported:?}");
+                Vec::new()
+            }
+        }
     }
 
     pub fn evaluate_color(
@@ -210,11 +531,10 @@ impl<'a> FrameEvaluationContext<'a> {
         default: crate::model::frame::color::Color,
     ) -> crate::model::frame::color::Color {
         use crate::model::frame::color::Color;
-        if let Some(prop) = props.get(key) {
-            let val = self.evaluate_property_value(prop, props, time);
-            if let Some(c) = val.get_as::<Color>() {
-                return c;
-            }
+        if let Some(val) = self.evaluate_key(props, key, time)
+            && let Some(c) = val.get_as::<Color>()
+        {
+            return c;
         }
         default
     }
@@ -227,19 +547,18 @@ impl<'a> FrameEvaluationContext<'a> {
         default: crate::model::frame::draw_type::CapType,
     ) -> crate::model::frame::draw_type::CapType {
         use crate::model::frame::draw_type::CapType;
-        if let Some(prop) = props.get(key) {
-            let val = self.evaluate_property_value(prop, props, time);
-            if let Some(s) = val.get_as::<String>() {
-                return match s.to_lowercase().as_str() {
-                    "round" => CapType::Round,
-                    "square" => CapType::Square,
-                    "butt" => CapType::Butt,
-                    _ => {
-                        log::warn!("Unknown CapType: {}", s);
-                        default
-                    }
-                };
-            }
+        if let Some(val) = self.evaluate_key(props, key, time)
+            && let Some(s) = val.get_as::<String>()
+        {
+            return match s.to_lowercase().as_str() {
+                "round" => CapType::Round,
+                "square" => CapType::Square,
+                "butt" => CapType::Butt,
+                _ => {
+                    log::warn!("Unknown CapType: {}", s);
+                    default
+                }
+            };
         }
         default
     }
@@ -252,27 +571,25 @@ impl<'a> FrameEvaluationContext<'a> {
         default: crate::model::frame::draw_type::JoinType,
     ) -> crate::model::frame::draw_type::JoinType {
         use crate::model::frame::draw_type::JoinType;
-        if let Some(prop) = props.get(key) {
-            let val = self.evaluate_property_value(prop, props, time);
-            if let Some(s) = val.get_as::<String>() {
-                return match s.to_lowercase().as_str() {
-                    "round" => JoinType::Round,
-                    "bevel" => JoinType::Bevel,
-                    "miter" => JoinType::Miter,
-                    _ => {
-                        log::warn!("Unknown JoinType: {}", s);
-                        default
-                    }
-                };
-            }
+        if let Some(val) = self.evaluate_key(props, key, time)
+            && let Some(s) = val.get_as::<String>()
+        {
+            return match s.to_lowercase().as_str() {
+                "round" => JoinType::Round,
+                "bevel" => JoinType::Bevel,
+                "miter" => JoinType::Miter,
+                _ => {
+                    log::warn!("Unknown JoinType: {}", s);
+                    default
+                }
+            };
         }
         default
     }
 
     pub fn evaluate_number_array(&self, props: &PropertyMap, key: &str, time: f64) -> Vec<f64> {
         use crate::model::property::PropertyValue;
-        if let Some(prop) = props.get(key) {
-            let val = self.evaluate_property_value(prop, props, time);
+        if let Some(val) = self.evaluate_key(props, key, time) {
             if let Some(arr) = val.get_as::<Vec<PropertyValue>>() {
                 return arr.iter().filter_map(|v| v.get_as::<f64>()).collect();
             }
@@ -295,14 +612,14 @@ pub trait EntityConverterPlugin: crate::plugin::Plugin + Send + Sync {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        layer: &Layer,
+        layer: &Node,
         time: f64,
     ) -> Option<FrameObject>;
 
     fn get_bounds(
         &self,
         _evaluator: &FrameEvaluationContext,
-        _layer: &Layer,
+        _node: &Node,
         _time: f64,
     ) -> Option<(f32, f32, f32, f32)> {
         None

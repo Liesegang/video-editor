@@ -10,6 +10,7 @@ use crate::plugin::effects::EffectPlugin;
 use crate::plugin::evaluator::PropertyEvaluatorRegistry;
 use crate::plugin::exporters::ExportPlugin;
 use crate::plugin::loaders::LoadRepository;
+use crate::plugin::runtime_native::RuntimePluginRegistry;
 use crate::plugin::traits::Plugin;
 use crate::plugin::{DecoratorPlugin, EffectorPlugin, StylePlugin};
 
@@ -18,11 +19,17 @@ pub struct PluginRepository<T: ?Sized> {
     pub plugins: HashMap<String, Arc<T>>,
 }
 
-impl<T: ?Sized + Plugin> PluginRepository<T> {
-    pub fn new() -> Self {
+impl<T: ?Sized + Plugin> Default for PluginRepository<T> {
+    fn default() -> Self {
         Self {
             plugins: HashMap::new(),
         }
+    }
+}
+
+impl<T: ?Sized + Plugin> PluginRepository<T> {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn register(&mut self, plugin: Arc<T>) {
@@ -49,4 +56,5 @@ pub(crate) struct PluginRegistry {
     pub style_plugins: PluginRepository<dyn StylePlugin>,
     pub property_evaluators: PropertyEvaluatorRegistry,
     pub dynamic_libraries: Vec<Library>,
+    pub runtime_plugins: RuntimePluginRegistry,
 }

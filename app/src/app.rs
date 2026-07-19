@@ -1,7 +1,7 @@
 use eframe::egui::{self, Visuals};
 use egui_dock::{DockArea, DockState, Style};
-use library::model::project::{Composite, Project};
-use library::EditorService;
+use library::model::project::{Composition, Project};
+use library::{EditorService, LibraryError};
 use log::warn;
 #[allow(deprecated)]
 use raw_window_handle::HasRawWindowHandle;
@@ -43,30 +43,46 @@ pub struct RuViEApp {
 
     pub triggered_action: Option<CommandId>,
     pub render_server: RenderServer,
+    qa_runtime: Option<crate::qa::QaRuntime>,
 }
 
 impl RuViEApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, LibraryError> {
         let app_config = config::load_config();
         setup_theme(&cc.egui_ctx, &app_config);
         setup_fonts(&cc.egui_ctx);
 
-        let command_registry = CommandRegistry::new(&app_config);
-        let (default_project, default_comp_id) = create_default_project();
         let plugin_manager = setup_plugin_manager(&app_config);
+        let command_registry = CommandRegistry::new(&app_config);
+        let (default_project, default_comp_id, qa_fixture) =
+            create_startup_project(&plugin_manager);
 
         let cache_manager = Arc::new(library::cache::CacheManager::new());
         let project_service = EditorService::new(
             Arc::clone(&default_project),
             plugin_manager.clone(),
             cache_manager.clone(),
-        );
+        )?;
 
         let mut editor_context = EditorContext::new(default_comp_id); // Pass default_comp_id
         editor_context.selection.composition_id = Some(default_comp_id); // Select the default composition
+        if let Some(fixture) = &qa_fixture {
+            editor_context
+                .timeline
+                .expanded_tracks
+                .extend(fixture.expanded_tracks.iter().copied());
+            editor_context.timeline.current_time = 2.0;
+        }
         editor_context.available_fonts = library::rendering::skia_utils::get_available_fonts();
 
         let render_server = RenderServer::new(plugin_manager.clone(), cache_manager.clone());
+        let qa_runtime = match crate::qa::QaRuntime::from_env(&cc.egui_ctx) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                log::error!("QA HTTP API is disabled: {error}");
+                None
+            }
+        };
 
         let mut app = Self {
             editor_context,
@@ -87,6 +103,7 @@ impl RuViEApp {
             export_dialog: ExportDialog::new(plugin_manager.clone(), cache_manager.clone()),
             command_palette: CommandPalette::new(),
             render_server,
+            qa_runtime,
         };
 
         if let Ok(proj_read) = app.project_service.get_project().read() {
@@ -96,12 +113,22 @@ impl RuViEApp {
         setup_gpu_sharing(&app.render_server, cc);
 
         cc.egui_ctx.request_repaint();
-        app
+        Ok(app)
     }
 }
 
 impl eframe::App for RuViEApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if let Some(runtime) = self.qa_runtime.as_mut() {
+            runtime.inject_for_frame(ctx, raw_input);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        crate::qa::begin_frame(ctx);
+        if let Some(runtime) = self.qa_runtime.as_ref() {
+            runtime.issue_capture_for_frame(ctx);
+        }
         self.triggered_action = None;
         let mut is_listening_for_shortcut = false;
 
@@ -192,9 +219,6 @@ impl eframe::App for RuViEApp {
                                 self.project_service.get_project().read().unwrap().clone();
                             self.history_manager.push_project_state(current_state);
                         }
-                    }
-                    _ => {
-                        log::warn!("Unhandled confirmation action: {:?}", action);
                     }
                 }
                 // Reset dialog logic is handled inside show() which sets is_open=false,
@@ -297,6 +321,7 @@ impl eframe::App for RuViEApp {
                     .style(Style::from_egui(ui.style().as_ref()))
                     .show_leaf_collapse_buttons(false)
                     .show_inside(ui, &mut tab_viewer);
+                tab_viewer.finish_frame();
             });
         });
 
@@ -304,9 +329,26 @@ impl eframe::App for RuViEApp {
             self.editor_context.interaction.dragged_item = None;
         }
 
-        // Always pump audio to keep buffer full if playing (or pre-buffer)
-        if self.editor_context.timeline.is_playing {
-            self.project_service.pump_audio();
+        // Audio follows the same selected Composition as every visual view.
+        // Selection is transient UI state; authored data remains exclusively
+        // in the authoritative Project.
+        self.project_service.set_active_composition(
+            self.editor_context.selection.composition_id,
+            self.editor_context.timeline.current_time as f64,
+        );
+
+        self.project_service
+            .get_audio_service()
+            .set_playing(self.editor_context.timeline.is_playing);
+        // The pump also completes an asynchronous scrub preview while paused;
+        // regular playback samples are emitted only when `is_playing` is true.
+        self.project_service.pump_audio();
+        if self
+            .project_service
+            .get_audio_service()
+            .has_pending_work()
+        {
+            ctx.request_repaint_after(std::time::Duration::from_millis(10));
         }
 
         if self.editor_context.timeline.is_playing {
@@ -323,6 +365,16 @@ impl eframe::App for RuViEApp {
             // Reset accumulator when not playing to avoid jump on resume
             self.editor_context.timeline.playback_accumulator = 0.0;
         }
+
+        crate::qa::end_frame();
+        if let Some(runtime) = self.qa_runtime.as_mut() {
+            runtime.answer_state_queries(
+                &self.project,
+                &self.editor_context,
+                &self.dock_state,
+                &self.history_manager,
+            );
+        }
     }
 }
 
@@ -331,6 +383,7 @@ fn setup_theme(ctx: &egui::Context, config: &config::AppConfig) {
     visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(255, 120, 0);
     ctx.set_visuals(visuals);
     crate::ui::theme::apply_theme(ctx, config);
+    crate::ui::theme::disable_display_text_selection(ctx);
 }
 
 fn setup_fonts(ctx: &egui::Context) {
@@ -371,21 +424,43 @@ fn setup_fonts(ctx: &egui::Context) {
     }
 }
 
-fn create_default_project() -> (Arc<RwLock<Project>>, Uuid) {
-    let default_project = Arc::new(RwLock::new(Project::new("Default Project")));
+fn create_startup_project(
+    plugin_manager: &Arc<library::plugin::PluginManager>,
+) -> (Arc<RwLock<Project>>, Uuid, Option<crate::qa::FixtureInfo>) {
+    let project = Arc::new(RwLock::new(Project::new("Default Project")));
+    match crate::qa::install_fixture_from_env(&project, plugin_manager) {
+        Ok(Some(fixture)) => {
+            return (project, fixture.composition_id, Some(fixture));
+        }
+        Ok(None) => {}
+        Err(error) => log::error!("QA fixture is disabled: {error}"),
+    }
+
     // Add a default composition when the app starts
-    let (default_comp, root_track) = Composite::new("Main Composition", 1920, 1080, 30.0, 60.0);
+    let (default_comp, root_track) = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
     let default_comp_id = default_comp.id;
     {
-        let mut proj = default_project.write().unwrap();
-        proj.add_node(library::model::Node::Track(root_track));
+        let mut proj = project.write().unwrap();
+        proj.add_track(root_track);
         proj.add_composition(default_comp);
     }
-    (default_project, default_comp_id)
+    (project, default_comp_id, None)
 }
 
 fn setup_plugin_manager(app_config: &config::AppConfig) -> Arc<library::plugin::PluginManager> {
     let plugin_manager = Arc::new(library::plugin::PluginManager::default());
+
+    let runtime_report = plugin_manager.rescan_runtime_plugins(&app_config.plugins.paths);
+    for bundle in &runtime_report.loaded_bundles {
+        log::info!("Loaded runtime plugin bundle: {}", bundle.display());
+    }
+    for (path, error) in &runtime_report.failures {
+        log::error!(
+            "Failed to load runtime plugin bundle from {}: {}",
+            path.display(),
+            error
+        );
+    }
 
     // Load plugins from configured paths
     for path in &app_config.plugins.paths {

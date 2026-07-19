@@ -1,15 +1,9 @@
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq)]
-#[allow(dead_code)]
 pub enum ConfirmationAction {
     DeleteComposition(Uuid),
     DeleteAsset(Uuid),
-    RemoveTrack {
-        composition_id: Uuid,
-        track_id: Uuid,
-    },
-    // Add other actions as needed
 }
 
 #[derive(Clone, Debug)]

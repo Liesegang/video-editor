@@ -15,6 +15,14 @@ use library::plugin::{ExportSettings, PluginManager};
 use library::rendering::skia_renderer::SkiaRenderer;
 use library::{EditorService, ExportService, ProjectModel};
 
+use crate::utils::lock::read_or_recover;
+
+enum ExportUpdate {
+    Progress(f32),
+    Complete,
+    Failed(String),
+}
+
 pub struct ExportDialog {
     pub is_open: bool,
     selected_exporter_id: Option<String>,
@@ -29,7 +37,7 @@ pub struct ExportDialog {
     is_exporting: bool,
     progress: f32,
     status_message: String,
-    progress_rx: Option<Receiver<f32>>, // Receive progress updates
+    progress_rx: Option<Receiver<ExportUpdate>>,
     pub cancellation_token: Option<Arc<std::sync::atomic::AtomicBool>>,
 
     // New Fields
@@ -79,6 +87,40 @@ impl ExportDialog {
         self.is_open = true;
     }
 
+    fn poll_export_updates(&mut self) {
+        if !self.is_exporting {
+            return;
+        }
+
+        let mut latest_progress = None;
+        let mut finished = false;
+        let mut failure = None;
+        if let Some(rx) = &self.progress_rx {
+            while let Ok(update) = rx.try_recv() {
+                match update {
+                    ExportUpdate::Progress(progress) => latest_progress = Some(progress),
+                    ExportUpdate::Complete => finished = true,
+                    ExportUpdate::Failed(message) => failure = Some(message),
+                }
+            }
+        }
+
+        if let Some(progress) = latest_progress {
+            self.progress = progress;
+        }
+        if let Some(message) = failure {
+            self.is_exporting = false;
+            self.status_message = message;
+            self.progress_rx = None;
+            self.cancellation_token = None;
+        } else if finished {
+            self.is_exporting = false;
+            self.status_message = "Export complete!".to_string();
+            self.progress_rx = None;
+            self.cancellation_token = None;
+        }
+    }
+
     pub fn show(
         &mut self,
         ctx: &egui::Context,
@@ -89,29 +131,7 @@ impl ExportDialog {
         self.active_composition_id = active_composition_id;
         let mut is_open = self.is_open;
 
-        // Poll progress
-        if self.is_exporting {
-            let mut latest_progress = None;
-            let mut finished = false;
-
-            if let Some(rx) = &self.progress_rx {
-                while let Ok(p) = rx.try_recv() {
-                    latest_progress = Some(p);
-                    if p >= 1.0 {
-                        finished = true;
-                    }
-                }
-            }
-
-            if let Some(p) = latest_progress {
-                self.progress = p;
-            }
-            if finished {
-                self.is_exporting = false;
-                self.status_message = "Export complete!".to_string();
-                self.progress_rx = None;
-            }
-        }
+        self.poll_export_updates();
 
         let result = crate::ui::widgets::modal::Modal::new("Export")
             .open(&mut is_open)
@@ -176,11 +196,19 @@ impl ExportDialog {
     ) -> bool {
         let mut close_dialog = false;
         ui.heading("Export Settings");
+        if !self.status_message.is_empty() {
+            let color = if self.status_message.starts_with("Export failed") {
+                ui.visuals().error_fg_color
+            } else {
+                ui.visuals().text_color()
+            };
+            ui.colored_label(color, &self.status_message);
+        }
 
         // 1. Composition Selection
         ui.horizontal(|ui| {
             ui.label("Composition:");
-            let project_read = project.read().unwrap();
+            let project_read = read_or_recover(project.as_ref());
             let current_comp_name = self
                 .active_composition_id
                 .and_then(|id| project_read.compositions.iter().find(|c| c.id == id))
@@ -267,7 +295,7 @@ impl ExportDialog {
             });
         } else {
             // Show info about selected range
-            let project_read = project.read().unwrap();
+            let project_read = read_or_recover(project.as_ref());
             if let Some(comp_id) = self.active_composition_id {
                 if let Some(comp) = project_read.compositions.iter().find(|c| c.id == comp_id) {
                     let (start, end) = match self.export_range {
@@ -298,7 +326,7 @@ impl ExportDialog {
                 if override_res {
                     // Initialize with current composition limits if available, or valid defaults
                     if let Some(comp_id) = self.active_composition_id {
-                        let project_read = project.read().unwrap();
+                        let project_read = read_or_recover(project.as_ref());
                         if let Some(comp) =
                             project_read.compositions.iter().find(|c| c.id == comp_id)
                         {
@@ -331,7 +359,7 @@ impl ExportDialog {
             if ui.checkbox(&mut override_fps, "Override FPS").changed() {
                 if override_fps {
                     if let Some(comp_id) = self.active_composition_id {
-                        let project_read = project.read().unwrap();
+                        let project_read = read_or_recover(project.as_ref());
                         if let Some(comp) =
                             project_read.compositions.iter().find(|c| c.id == comp_id)
                         {
@@ -524,8 +552,8 @@ impl ExportDialog {
         self.progress = 0.0;
 
         // Prepare data for thread
-        let project_snapshot = project_lock.read().unwrap().clone();
-        let exporter_id_owned = exporter_id.clone();
+        let project_snapshot = Arc::new(read_or_recover(project_lock.as_ref()).clone());
+        let exporter_id_owned = exporter_id;
         let output_path_owned = self.output_path.clone();
         let property_values_owned = self.property_values.clone();
         let plugin_manager = self.plugin_manager.clone();
@@ -565,14 +593,26 @@ impl ExportDialog {
         thread::spawn(move || {
             // Initialize Renderer inside thread (requires context)
             let composition = &project_snapshot.compositions[comp_index];
-            let renderer = SkiaRenderer::new(
+            let renderer = match SkiaRenderer::new(
                 composition.width as u32,
                 composition.height as u32,
                 composition.background_color.clone(),
                 false,
                 None,
                 Some(cache_manager.clone()),
-            );
+            ) {
+                Ok(renderer) => renderer,
+                Err(error) => {
+                    let message = format!(
+                        "Export failed to initialize renderer: {error}. No output was written."
+                    );
+                    error!("{message}");
+                    if tx.send(ExportUpdate::Failed(message)).is_err() {
+                        log::debug!("export progress receiver was dropped");
+                    }
+                    return;
+                }
+            };
 
             let render_service_plugin_manager = plugin_manager.clone();
             let mut render_service = RenderService::new(
@@ -582,14 +622,19 @@ impl ExportDialog {
             );
 
             // Construct ProjectModel
-            let project_model =
-                match ProjectModel::new(Arc::new(project_snapshot.clone()), comp_index) {
-                    Ok(pm) => pm,
-                    Err(e) => {
-                        error!("Failed to create project model: {}", e);
-                        return; // Should report error to UI
+            let project_model = match ProjectModel::new(Arc::clone(&project_snapshot), comp_index) {
+                Ok(pm) => pm,
+                Err(e) => {
+                    let message = format!(
+                        "Export failed to create project model: {e}. No output was written."
+                    );
+                    error!("{message}");
+                    if tx.send(ExportUpdate::Failed(message)).is_err() {
+                        log::debug!("export progress receiver was dropped");
                     }
-                };
+                    return;
+                }
+            };
 
             // Build ExportSettings
             let mut settings = ExportSettings::for_dimensions(
@@ -603,9 +648,8 @@ impl ExportDialog {
             for (k, v) in &property_values_owned {
                 let json_val = match v {
                     PropertyValue::String(s) => serde_json::Value::String(s.clone()),
-                    PropertyValue::Number(n) => {
-                        serde_json::Value::Number(serde_json::Number::from_f64(n.0).unwrap())
-                    }
+                    PropertyValue::Number(n) => serde_json::Number::from_f64(n.0)
+                        .map_or(serde_json::Value::Null, serde_json::Value::Number),
                     PropertyValue::Boolean(b) => serde_json::Value::Bool(*b),
                     _ => serde_json::Value::Null,
                 };
@@ -662,7 +706,7 @@ impl ExportDialog {
                 let start_sample = (start_time * sample_rate as f64).round() as u64;
                 let frames = (duration * sample_rate as f64).round() as usize;
 
-                let audio_data = library::audio::mixer::mix_samples(
+                let audio_data = library::audio::mixer::render_samples(
                     &project_model.project().assets,
                     project_model.project(),
                     project_model.composition(),
@@ -682,29 +726,45 @@ impl ExportDialog {
                     let stem_str = stem_path.to_str().unwrap_or("output");
 
                     let audio_path = format!("{}_audio.raw", stem_str);
-                    if let Ok(mut file) = std::fs::File::create(&audio_path) {
-                        for sample in audio_data {
-                            let _ = file.write_all(&sample.to_le_bytes());
+                    match std::fs::File::create(&audio_path) {
+                        Ok(mut file) => {
+                            let write_result = audio_data
+                                .iter()
+                                .try_for_each(|sample| file.write_all(&sample.to_le_bytes()));
+                            if let Err(error) = write_result {
+                                error!("Failed to write temporary export audio: {error}");
+                                if let Err(remove_error) = std::fs::remove_file(&audio_path) {
+                                    error!(
+                                        "Failed to remove partial export audio {audio_path}: {remove_error}"
+                                    );
+                                }
+                            } else {
+                                settings.parameters.insert(
+                                    "audio_source".to_string(),
+                                    serde_json::Value::String(audio_path.clone()),
+                                );
+                                settings.parameters.insert(
+                                    "audio_channels".to_string(),
+                                    serde_json::Value::Number(serde_json::Number::from(2)),
+                                );
+                                settings.parameters.insert(
+                                    "audio_sample_rate".to_string(),
+                                    serde_json::Value::Number(serde_json::Number::from(
+                                        sample_rate,
+                                    )),
+                                );
+                                audio_temp_path = Some(audio_path);
+                            }
                         }
-
-                        settings.parameters.insert(
-                            "audio_source".to_string(),
-                            serde_json::Value::String(audio_path.clone()),
-                        );
-                        settings.parameters.insert(
-                            "audio_channels".to_string(),
-                            serde_json::Value::Number(serde_json::Number::from(2)),
-                        );
-                        settings.parameters.insert(
-                            "audio_sample_rate".to_string(),
-                            serde_json::Value::Number(serde_json::Number::from(sample_rate)),
-                        );
-                        audio_temp_path = Some(audio_path);
+                        Err(error) => {
+                            error!("Failed to create temporary export audio {audio_path}: {error}");
+                        }
                     }
                 }
             }
 
-            let settings_arc = Arc::new(settings.clone());
+            let output_container = settings.container.clone();
+            let settings_arc = Arc::new(settings);
 
             let mut export_service = ExportService::new(
                 plugin_manager.clone(),
@@ -721,54 +781,118 @@ impl ExportDialog {
             let stem_str = stem_path.to_str().unwrap_or("output");
 
             // Construct absolute final path for finish_export key
-            let final_output_path = if settings.container.is_empty() {
+            let final_output_path = if output_container.is_empty() {
                 output_path_owned.clone()
             } else {
-                format!("{}.{}", stem_str, settings.container)
+                format!("{}.{}", stem_str, output_container)
             };
 
             let chunk_size = 10;
             let mut current_frame = start_frame;
+            let mut export_error = None;
+            let mut receiver_dropped = false;
+            let mut cancelled = false;
 
             while current_frame < end_frame_total {
                 if cancel_token.load(std::sync::atomic::Ordering::Relaxed) {
-                    let _ = plugin_manager.finish_export(&exporter_id_owned, &final_output_path);
+                    cancelled = true;
                     break;
                 }
 
                 let end = (current_frame + chunk_size).min(end_frame_total);
                 let range = current_frame..end;
 
-                if let Err(e) = export_service.render_range(
+                if let Err(error) = export_service.render_range(
                     &mut render_service,
                     &project_model,
                     range,
                     stem_str,
                 ) {
-                    error!("Export failed: {}", e);
-                    let _ = plugin_manager.finish_export(&exporter_id_owned, &final_output_path);
+                    let message = format!(
+                        "Export failed while rendering: {error}. Partial output may remain at {final_output_path}."
+                    );
+                    error!("{message}");
+                    export_error = Some(message);
                     break;
                 }
 
                 current_frame = end;
                 let pct =
                     (current_frame.saturating_sub(start_frame)) as f32 / duration_frames as f32;
-                let _ = tx.send(pct);
+                if tx.send(ExportUpdate::Progress(pct)).is_err() {
+                    log::debug!("export progress receiver was dropped");
+                    receiver_dropped = true;
+                    break;
+                }
             }
 
-            let _ = export_service.shutdown();
+            if let Err(error) = export_service.shutdown() {
+                error!("Failed to shut down export workers: {error}");
+                export_error.get_or_insert_with(|| {
+                    format!(
+                        "Export failed while shutting down workers: {error}. Partial output may remain at {final_output_path}."
+                    )
+                });
+            }
 
             // Cleanup audio temp file
             if let Some(path) = audio_temp_path {
-                let _ = std::fs::remove_file(path);
+                if let Err(error) = std::fs::remove_file(&path) {
+                    error!("Failed to remove temporary export audio {path}: {error}");
+                }
             }
 
             // Finalize export
-            if let Err(e) = plugin_manager.finish_export(&exporter_id_owned, &final_output_path) {
-                error!("Failed to finalize export: {}", e);
+            if let Err(error) = plugin_manager.finish_export(&exporter_id_owned, &final_output_path)
+            {
+                error!("Failed to finalize export: {error}");
+                export_error
+                    .get_or_insert_with(|| {
+                        format!(
+                            "Export failed to finalize: {error}. Partial output may remain at {final_output_path}."
+                        )
+                    });
             }
 
-            let _ = tx.send(1.0); // Done
+            if cancelled || receiver_dropped {
+                return;
+            }
+            let update = export_error.map_or(ExportUpdate::Complete, ExportUpdate::Failed);
+            if tx.send(update).is_err() {
+                log::debug!("export completion receiver was dropped");
+            }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{channel, ExportDialog, ExportUpdate};
+    use library::cache::CacheManager;
+    use library::plugin::PluginManager;
+    use std::sync::Arc;
+
+    #[test]
+    fn failed_export_update_stops_progress_and_preserves_the_user_visible_error() {
+        let mut dialog = ExportDialog::new(
+            Arc::new(PluginManager::default()),
+            Arc::new(CacheManager::new()),
+        );
+        let (sender, receiver) = channel();
+        dialog.is_exporting = true;
+        dialog.progress_rx = Some(receiver);
+        dialog.cancellation_token = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+        sender
+            .send(ExportUpdate::Failed(
+                "Export failed. Partial output may remain at test.mp4.".to_string(),
+            ))
+            .unwrap();
+
+        dialog.poll_export_updates();
+
+        assert!(!dialog.is_exporting);
+        assert!(dialog.progress_rx.is_none());
+        assert!(dialog.cancellation_token.is_none());
+        assert!(dialog.status_message.contains("Partial output may remain"));
     }
 }

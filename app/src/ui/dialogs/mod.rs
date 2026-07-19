@@ -7,9 +7,10 @@ pub mod settings_dialog;
 /// Renders a standard dialog footer with buttons aligned to the bottom-right.
 ///
 /// # Arguments
-/// * `ui` - The egui Ui.
-/// * `add_contents` - A closure that adds buttons. Buttons should be added in Reverse Order (Right to Left)
-///                    because this helper uses `Layout::right_to_left`.
+/// - `ui` - The egui Ui.
+/// - `add_contents` - A closure that adds buttons. Buttons should be added in
+///   reverse order (right to left) because this helper uses
+///   `Layout::right_to_left`.
 ///
 /// # Example
 /// ```rust

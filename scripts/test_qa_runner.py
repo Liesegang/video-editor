@@ -1,0 +1,245 @@
+import importlib.util
+import http.server
+import pathlib
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+
+
+MODULE_PATH = pathlib.Path(__file__).with_name("qa-runner.py")
+SPEC = importlib.util.spec_from_file_location("ruvie_qa_runner", MODULE_PATH)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load qa-runner.py")
+RUNNER = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = RUNNER
+SPEC.loader.exec_module(RUNNER)
+
+E2E_PATH = pathlib.Path(__file__).with_name("qa-e2e.py")
+E2E_SPEC = importlib.util.spec_from_file_location("ruvie_qa_e2e", E2E_PATH)
+if E2E_SPEC is None or E2E_SPEC.loader is None:
+    raise RuntimeError("cannot load qa-e2e.py")
+E2E = importlib.util.module_from_spec(E2E_SPEC)
+sys.modules[E2E_SPEC.name] = E2E
+E2E_SPEC.loader.exec_module(E2E)
+
+
+class EmptyCaptureHandler(http.server.BaseHTTPRequestHandler):
+    bodies = []
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        type(self).bodies.append(self.rfile.read(length))
+        payload = b'{"queued":true,"capture_id":1,"phase":"queued"}'
+        self.send_response(202)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, _format, *_args):
+        pass
+
+
+class SettlingQaClient(E2E.QaClient):
+    def __init__(self):
+        super().__init__("http://127.0.0.1", timeout=0.2)
+        self.snapshots = iter(
+            [
+                (10, 1.0),
+                (10, 1.0),
+                (11, 1.0),
+                (12, 1.01),
+            ]
+        )
+
+    def state(self):
+        return {"frame": 99}
+
+    def component(self, component_id, require_visible=True):
+        self.assert_component_id = component_id
+        frame, min_x = next(self.snapshots)
+        rect = {
+            "min_x": min_x,
+            "min_y": 2.0,
+            "max_x": min_x + 10.0,
+            "max_y": 12.0,
+            "width": 10.0,
+            "height": 10.0,
+        }
+        return {"frame": frame}, {"id": component_id, "rect_points": rect}
+
+
+class InjectingQaClient(E2E.QaClient):
+    def __init__(self):
+        super().__init__("http://127.0.0.1", timeout=0.2)
+        self.state_frames = iter((20, 21))
+
+    def component_snapshot(self):
+        return {"frame": 20, "components": []}
+
+    def request(self, path, data=None, method=None):
+        if path == "/v1/input/click":
+            return {"action_id": 7}
+        if path == "/v1/actions/7":
+            return {"action_id": 7, "phase": "injected"}
+        raise AssertionError("unexpected request: {}".format(path))
+
+    def state(self):
+        return {"frame": next(self.state_frames)}
+
+
+class QaRunnerTests(unittest.TestCase):
+    def test_capture_clients_send_an_explicit_empty_body_post(self):
+        EmptyCaptureHandler.bodies = []
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), EmptyCaptureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = "http://127.0.0.1:{}".format(server.server_port)
+        try:
+            queued = RUNNER.json_request(base_url, "/v1/captures", method="POST")
+            self.assertEqual(queued["capture_id"], 1)
+            queued = E2E.QaClient(base_url).request("/v1/captures", method="POST")
+            self.assertEqual(queued["capture_id"], 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=1.0)
+        self.assertEqual(EmptyCaptureHandler.bodies, [b"", b""])
+
+    def test_reused_suite_directory_cannot_supply_stale_evidence_or_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            suite_dir = pathlib.Path(directory)
+            for name in RUNNER.SUITE_OUTPUT_NAMES:
+                (suite_dir / name).write_text("stale", encoding="utf-8")
+            untouched = suite_dir / "app.log"
+            untouched.write_text("diagnostic", encoding="utf-8")
+
+            RUNNER.prepare_suite_directory(suite_dir)
+
+            self.assertTrue(all(not (suite_dir / name).exists() for name in RUNNER.SUITE_OUTPUT_NAMES))
+            self.assertEqual(untouched.read_text(encoding="utf-8"), "diagnostic")
+
+    def test_evidence_must_belong_to_the_current_run(self):
+        self.assertTrue(RUNNER.evidence_matches_run({"ok": True, "run_id": "current"}, "current"))
+        self.assertFalse(RUNNER.evidence_matches_run({"ok": True, "run_id": "old"}, "current"))
+        self.assertFalse(RUNNER.evidence_matches_run({"ok": True}, "current"))
+
+    def test_zero_time_stretch_is_a_valid_freeze_clip(self):
+        project = {
+            "compositions": [
+                {
+                    "id": "composition",
+                    "track_ids": ["track"],
+                    "node_ids": [],
+                    "output_node_id": None,
+                }
+            ],
+            "tracks": {
+                "track": {
+                    "clip_ids": ["clip"],
+                    "node_ids": [],
+                    "output_node_id": None,
+                }
+            },
+            "clips": {
+                "clip": {
+                    "start_time": 0.0,
+                    "duration": 1.0,
+                    "trim_in": 0.25,
+                    "time_stretch": 0.0,
+                    "node_ids": [],
+                    "output_node_id": None,
+                }
+            },
+            "nodes": {},
+        }
+        owners = E2E.validate_canonical_ownership(project)
+        self.assertEqual(owners["clip_owners"], {"clip": "track"})
+
+    def test_component_settle_requires_distinct_completed_frames(self):
+        client = SettlingQaClient()
+
+        snapshot, component = client.wait_component_settled(
+            "timeline.clip", consecutive_reads=2
+        )
+
+        self.assertEqual(snapshot["frame"], 12)
+        self.assertEqual(component["id"], "timeline.clip")
+
+    def test_input_evidence_records_a_completed_frame_after_injection(self):
+        client = InjectingQaClient()
+
+        action_id = client.inject("click", {"x": 1.0, "y": 2.0})
+
+        self.assertEqual(action_id, 7)
+        self.assertEqual(client.evidence[0]["phase"], "injected")
+        self.assertEqual(client.evidence[0]["completed_frame"], 21)
+
+    def test_modes_expand_to_the_expected_independent_suites(self):
+        self.assertEqual([item.name for item in RUNNER.suite_specs("smoke")], ["smoke"])
+        self.assertEqual(
+            [item.name for item in RUNNER.suite_specs("full")],
+            ["all", "timeline", "keyframe", "node-editor"],
+        )
+        with self.assertRaises(ValueError):
+            RUNNER.suite_specs("unknown")
+
+    def test_published_endpoint_accepts_only_a_real_ipv4_loopback_port(self):
+        self.assertEqual(
+            RUNNER.parse_published_endpoint('{"host":"127.0.0.1","port":43123}'),
+            ("127.0.0.1", 43123),
+        )
+        for invalid in (
+            '{"host":"0.0.0.0","port":43123}',
+            '{"host":"127.0.0.1","port":0}',
+            '{"host":"127.0.0.1","port":70000}',
+        ):
+            with self.assertRaises(ValueError):
+                RUNNER.parse_published_endpoint(invalid)
+
+    def test_aggregation_fails_closed(self):
+        self.assertFalse(RUNNER.aggregate_ok([]))
+        self.assertTrue(RUNNER.aggregate_ok([{"ok": True}, {"ok": True}]))
+        self.assertFalse(RUNNER.aggregate_ok([{"ok": True}, {"ok": False}]))
+        self.assertFalse(RUNNER.aggregate_ok([{"ok": True}, {}]))
+
+    def test_summary_records_failure_log_without_claiming_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            result = {
+                "name": "timeline",
+                "ok": False,
+                "duration_seconds": 1.25,
+                "suite_log": str(root / "timeline" / "suite.log"),
+                "error": "coordinate drag failed",
+            }
+            summary = RUNNER.write_summary(
+                root,
+                "full",
+                {"ok": True},
+                [result],
+            )
+            self.assertFalse(summary["ok"])
+            text = (root / "summary.txt").read_text(encoding="utf-8")
+            self.assertIn("timeline: FAIL", text)
+            self.assertIn("coordinate drag failed", text)
+            self.assertNotIn("All suites passed", text)
+
+    def test_process_group_cleanup_terminates_a_live_process(self):
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            start_new_session=True,
+        )
+        try:
+            time.sleep(0.05)
+            RUNNER.terminate_process_group(process, grace_seconds=0.2)
+            self.assertIsNotNone(process.poll())
+        finally:
+            RUNNER.terminate_process_group(process, grace_seconds=0.1)
+
+
+if __name__ == "__main__":
+    unittest.main()

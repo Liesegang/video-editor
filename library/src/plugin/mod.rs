@@ -1,11 +1,16 @@
 //! Plugin system for effects, loaders, exporters, property evaluators, and more.
 
-#![allow(improper_ctypes_definitions)]
+#![allow(
+    improper_ctypes_definitions,
+    reason = "dynamic plugins intentionally exchange Rust trait objects and require an exact same-toolchain ABI"
+)]
 
 pub mod entity_converter;
 mod evaluator;
 mod manager;
+mod operation;
 mod repository;
+mod runtime_native;
 mod traits;
 
 pub mod decorators;
@@ -17,10 +22,18 @@ pub mod properties;
 pub mod styles;
 
 // Re-export from submodules
-pub use entity_converter::{EntityConverterPlugin, FrameEvaluationContext};
+pub use entity_converter::{EntityConverterPlugin, FrameEvaluationContext, ResolvedNodeInputs};
 pub use evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
 pub use manager::{PluginInfo, PluginManager};
+pub use operation::{
+    DECORATOR_CATEGORY, DECORATOR_PRODUCE_OPERATION, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
+    EFFECTOR_CATEGORY, EFFECTOR_PRODUCE_OPERATION, OperationDescriptor, OperationDescriptorError,
+    PROPERTY_PORT_PREFIX, STYLE_CATEGORY, STYLE_PRODUCE_OPERATION, property_name_from_port,
+    property_port_key, property_ui_type_to_port_data_type,
+};
 pub use repository::PluginRepository;
+pub use runtime_native::{RuntimePluginDescriptor, RuntimePluginScanReport};
+pub use ruvie_plugin_api as native_plugin_api;
 pub use traits::{Plugin, PropertyPlugin};
 
 // Re-export from sub-crate modules
@@ -28,7 +41,10 @@ pub use decorators::DecoratorPlugin;
 pub use effectors::EffectorPlugin;
 pub use effects::{EffectDefinition, EffectPlugin, EffectRepository};
 pub use exporters::{ExportFormat, ExportPlugin, ExportRepository, ExportSettings};
-pub use loaders::{AssetMetadata, LoadPlugin, LoadRepository, LoadRequest, LoadResponse};
+pub use loaders::{
+    AssetMetadata, LoadPlugin, LoadPluginError, LoadPluginResult, LoadRepository, LoadRequest,
+    LoadResponse,
+};
 pub use styles::StylePlugin;
 
 // Re-export plugin implementations

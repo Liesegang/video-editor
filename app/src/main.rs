@@ -5,6 +5,7 @@ mod app;
 mod command;
 mod config;
 mod model;
+mod qa;
 mod shortcut;
 mod state;
 mod ui;
@@ -19,6 +20,6 @@ fn main() -> eframe::Result<()> {
             viewport: egui::ViewportBuilder::default().with_inner_size([1920.0, 1080.0]),
             ..Default::default()
         },
-        Box::new(|cc| Ok(Box::new(app::RuViEApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(app::RuViEApp::new(cc)?))),
     )
 }

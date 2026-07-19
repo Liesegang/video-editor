@@ -6,6 +6,7 @@ use crate::rendering::skia_utils::GpuContext;
 use skia_safe::{Color, image_filters};
 use std::collections::HashMap;
 
+#[derive(Default)]
 pub struct DropShadowEffectPlugin;
 
 impl DropShadowEffectPlugin {
@@ -69,10 +70,8 @@ impl EffectPlugin for DropShadowEffectPlugin {
             .and_then(|pv| pv.get_as::<bool>())
             .unwrap_or(false);
 
-        if dx == 0.0 && dy == 0.0 && sigma_x == 0.0 && sigma_y == 0.0 {
-            if !shadow_only {
-                return Ok(input.clone());
-            }
+        if dx == 0.0 && dy == 0.0 && sigma_x == 0.0 && sigma_y == 0.0 && !shadow_only {
+            return Ok(input.clone());
         }
 
         use crate::plugin::effects::utils::apply_skia_filter;

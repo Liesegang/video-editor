@@ -65,18 +65,18 @@ pub fn show_clip_area(
     let selected_composition_id = editor_context.selection.composition_id;
 
     // ===== PHASE 1: Extract owned data from project (scoped read lock) =====
-    let (root_track_ids, num_visible_tracks, current_comp_duration) = {
+    let (track_ids, num_visible_tracks, current_comp_duration) = {
         let proj_read = match project.read() {
             Ok(p) => p,
             Err(_) => return (content_rect_for_clip_area, response),
         };
 
-        let mut root_ids: Vec<uuid::Uuid> = Vec::new();
+        let mut composition_track_ids: Vec<uuid::Uuid> = Vec::new();
         let mut comp_duration = 300.0;
 
         if let Some(comp_id) = selected_composition_id {
             if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
-                root_ids.push(comp.root_track_id);
+                composition_track_ids = comp.track_ids.clone();
                 comp_duration = comp.duration;
             }
         }
@@ -84,12 +84,12 @@ pub fn show_clip_area(
         // Flatten tracks to get correct visible count
         let display_rows = super::utils::flatten::flatten_tracks_to_rows(
             &proj_read,
-            &root_ids,
+            &composition_track_ids,
             &editor_context.timeline.expanded_tracks,
         );
         let visible_count = display_rows.len();
 
-        (root_ids, visible_count, comp_duration)
+        (composition_track_ids, visible_count, comp_duration)
     }; // proj_read dropped here
 
     // ===== PHASE 2: Drawing and UI (no project lock held) =====
@@ -192,7 +192,7 @@ pub fn show_clip_area(
         project_service,
         history_manager,
         project,
-        &root_track_ids,
+        &track_ids,
         pixels_per_unit,
         row_height,
         track_spacing,
@@ -229,7 +229,7 @@ pub fn show_clip_area(
                             selection_rect,
                             editor_context,
                             &proj_read,
-                            &root_track_ids,
+                            &track_ids,
                             pixels_per_unit,
                             row_height,
                             track_spacing,

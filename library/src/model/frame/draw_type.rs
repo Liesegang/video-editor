@@ -3,30 +3,20 @@ use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub enum JoinType {
+    #[default]
     Round,
     Bevel,
     Miter,
 }
 
-impl Default for JoinType {
-    fn default() -> Self {
-        Self::Round
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub enum CapType {
     Round,
+    #[default]
     Square,
     Butt,
-}
-
-impl Default for CapType {
-    fn default() -> Self {
-        Self::Square
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)] // Removed PartialEq, Eq

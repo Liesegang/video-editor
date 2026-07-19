@@ -1,17 +1,69 @@
 use crate::core::ensemble::effectors::OpacityMode;
+use crate::core::ensemble::target::EffectorTarget;
 use crate::core::ensemble::types::EffectorConfig;
-use crate::model::EffectConfig;
-use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+use crate::model::ensemble::EffectorInstance;
+use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
 use crate::plugin::entity_converter::FrameEvaluationContext;
-use crate::plugin::{Plugin, PluginCategory};
+use crate::plugin::{OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory};
+use uuid::Uuid;
+
+fn target_property() -> PropertyDefinition {
+    PropertyDefinition::new(
+        "target",
+        PropertyUiType::Dropdown {
+            options: vec!["Block".to_string(), "Line".to_string(), "Char".to_string()],
+        },
+        "Target",
+        PropertyValue::String("Block".to_string()),
+    )
+}
+
+fn evaluate_target(
+    context: &FrameEvaluationContext,
+    instance: &EffectorInstance,
+    eval_time: f64,
+) -> EffectorTarget {
+    match context
+        .optional_string(&instance.properties, "target", eval_time)
+        .as_deref()
+    {
+        Some("Line") => EffectorTarget::Line,
+        Some("Char") => EffectorTarget::Char,
+        _ => EffectorTarget::Block,
+    }
+}
 
 pub trait EffectorPlugin: Plugin {
     fn properties(&self) -> Vec<PropertyDefinition>;
 
+    /// Authoritative graph operation identity, typed ports, property metadata,
+    /// and defaults. The default preserves existing built-in/runtime plugin
+    /// implementations while every manager/factory path consumes the
+    /// validated descriptor.
+    fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
+        OperationDescriptor::effector(self.id(), self.name(), self.properties())
+    }
+
+    /// Evaluates a standalone Effector producer. The temporary adapter keeps
+    /// the existing plugin implementation boundary compatible; authored graph
+    /// state itself remains the operation Node's PropertyMap.
+    fn evaluate_source(
+        &self,
+        context: &FrameEvaluationContext,
+        source_id: Uuid,
+        properties: &PropertyMap,
+        eval_time: f64,
+    ) -> Option<EffectorConfig> {
+        let mut instance = EffectorInstance::new(self.id(), properties.clone());
+        instance.id = source_id;
+        self.convert(context, &instance, eval_time)
+    }
+
+    /// Temporary legacy adapter for embedded `Node::effectors` state.
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectConfig,
+        instance: &EffectorInstance,
         eval_time: f64,
     ) -> Option<EffectorConfig>;
 
@@ -104,13 +156,14 @@ impl EffectorPlugin for TransformEffectorPlugin {
                 "Rotation",
                 PropertyValue::from(0.0),
             ),
+            target_property(),
         ]
     }
 
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectConfig,
+        instance: &EffectorInstance,
         eval_time: f64,
     ) -> Option<EffectorConfig> {
         let tx = context.evaluate_number(&instance.properties, "tx", eval_time, 0.0) as f32;
@@ -123,7 +176,7 @@ impl EffectorPlugin for TransformEffectorPlugin {
             translate: (tx, ty),
             rotate: r,
             scale: (sx, sy),
-            target: Default::default(),
+            target: evaluate_target(context, instance, eval_time),
         })
     }
 }
@@ -199,13 +252,14 @@ impl EffectorPlugin for StepDelayEffectorPlugin {
                 "To Opacity",
                 PropertyValue::from(100.0),
             ),
+            target_property(),
         ]
     }
 
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectConfig,
+        instance: &EffectorInstance,
         eval_time: f64,
     ) -> Option<EffectorConfig> {
         let delay = context.evaluate_number(&instance.properties, "delay", eval_time, 0.05) as f32;
@@ -221,7 +275,7 @@ impl EffectorPlugin for StepDelayEffectorPlugin {
             duration,
             from_opacity,
             to_opacity,
-            target: Default::default(),
+            target: evaluate_target(context, instance, eval_time),
         })
     }
 }
@@ -310,13 +364,14 @@ impl EffectorPlugin for RandomizeEffectorPlugin {
                 "Scale Range",
                 PropertyValue::from(0.5),
             ),
+            target_property(),
         ]
     }
 
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectConfig,
+        instance: &EffectorInstance,
         eval_time: f64,
     ) -> Option<EffectorConfig> {
         let seed = context.evaluate_number(&instance.properties, "seed", eval_time, 0.0) as u64;
@@ -334,7 +389,7 @@ impl EffectorPlugin for RandomizeEffectorPlugin {
             rotate_range: rr_val * amount,
             scale_range: (sr_val * amount, sr_val * amount),
             seed,
-            target: Default::default(),
+            target: evaluate_target(context, instance, eval_time),
         })
     }
 }
@@ -379,13 +434,14 @@ impl EffectorPlugin for OpacityEffectorPlugin {
                 "Mode",
                 PropertyValue::String("Set".to_string()),
             ),
+            target_property(),
         ]
     }
 
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &EffectConfig,
+        instance: &EffectorInstance,
         eval_time: f64,
     ) -> Option<EffectorConfig> {
         let target_opacity =
@@ -403,7 +459,7 @@ impl EffectorPlugin for OpacityEffectorPlugin {
         Some(EffectorConfig::Opacity {
             target_opacity,
             mode,
-            target: Default::default(),
+            target: evaluate_target(context, instance, eval_time),
         })
     }
 }

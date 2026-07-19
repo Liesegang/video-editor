@@ -7,6 +7,7 @@ use log::debug;
 use rayon::prelude::*;
 use std::collections::HashMap; // Add rayon prelude
 
+#[derive(Default)]
 pub struct PixelSorterPlugin;
 
 impl PixelSorterPlugin {
@@ -84,7 +85,7 @@ impl EffectPlugin for PixelSorterPlugin {
                     let image_info = skia_safe::ImageInfo::new(
                         skia_safe::ISize::new(info.width as i32, info.height as i32),
                         skia_safe::ColorType::RGBA8888,
-                        skia_safe::AlphaType::Premul,
+                        skia_safe::AlphaType::Unpremul,
                         None,
                     );
                     if !sk_image.read_pixels(
@@ -98,11 +99,7 @@ impl EffectPlugin for PixelSorterPlugin {
                             "Failed to read texture pixels".to_string(),
                         ));
                     }
-                    Image {
-                        width: info.width,
-                        height: info.height,
-                        data: buffer,
-                    }
+                    Image::new(info.width, info.height, buffer)
                 } else {
                     return Err(LibraryError::Render(
                         "Cannot read texture without GPU context".to_string(),
@@ -239,11 +236,11 @@ impl EffectPlugin for PixelSorterPlugin {
             }
         }
 
-        Ok(crate::rendering::renderer::RenderOutput::Image(Image {
-            width: image.width,
-            height: image.height,
-            data: processed_data,
-        }))
+        Ok(crate::rendering::renderer::RenderOutput::Image(Image::new(
+            image.width,
+            image.height,
+            processed_data,
+        )))
     }
 
     fn properties(&self) -> Vec<crate::model::property::PropertyDefinition> {

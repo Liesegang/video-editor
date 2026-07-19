@@ -110,8 +110,13 @@ impl EnsembleLine {
 #[derive(Debug, Clone)]
 pub struct EffectorContext {
     pub time: f32,
+    /// Index within the target's animation scope. Char intentionally uses 0
+    /// so delay/easing starts simultaneously for every character.
     pub index: usize,
     pub total: usize,
+    /// Stable identity for deterministic per-element variation. Unlike
+    /// `index`, this never resets merely because the target scope is Char.
+    pub element_index: usize,
     pub line_index: usize,
     pub char_center: Point,
 }

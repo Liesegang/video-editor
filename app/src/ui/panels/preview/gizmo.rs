@@ -4,7 +4,7 @@ use crate::ui::panels::preview::{action::PreviewAction, clip::PreviewClip};
 use egui::{CursorIcon, Pos2, Rect, Sense, Ui, Vec2};
 use library::model::project::Project;
 use library::model::property::{PropertyValue, Vec2 as PropVec2};
-use library::model::LayerContent;
+use library::model::NodeContent;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -13,7 +13,6 @@ pub fn handle_gizmo_interaction(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
     project: &Arc<RwLock<Project>>,
-    history_manager: &mut crate::action::HistoryManager,
     pointer_pos: Option<Pos2>,
     to_world: impl Fn(Pos2) -> Pos2,
     pending_actions: &mut Vec<PreviewAction>,
@@ -55,10 +54,7 @@ pub fn handle_gizmo_interaction(
             editor_context.interaction.gizmo_state = None;
             interacted_with_gizmo = true; // Prevent click-through to selection logic on release
 
-            // Push project state to history
-            if let Ok(proj) = project.read() {
-                history_manager.push_project_state(proj.clone());
-            }
+            pending_actions.push(PreviewAction::CommitHistory);
         } else if let Some(mouse_pos) = pointer_pos {
             interacted_with_gizmo = true;
 
@@ -67,30 +63,19 @@ pub fn handle_gizmo_interaction(
                 // Clone needed properties to avoid borrow issues
                 let (comp_id, track_id, current_props) = if let Ok(proj_read) = project.read() {
                     if let Some(comp) = editor_context.get_current_composition(&proj_read) {
-                        // Use flat O(1) lookup instead of nested traversal
-                        if let Some(layer) = proj_read.get_layer(selected_id) {
-                            // Find parent track by checking all tracks in the composition
-                            // TODO: This is O(T) where T is tracks, but should be fast enough.
-                            // Ideally, Layer should assume its location or we have a cheaper lookup.
-                            // For now, iterate root nodes or track list.
-                            let mut parent_track_id = Uuid::nil();
-
-                            // Simple BFS/Linear search to find parent track (not efficient but correct for now)
-                            // Since we don't have parent pointers, we look through comp.nodes (tracks)
-                            // and their children.
-                            'outer: for (nid, node) in &proj_read.nodes {
-                                if let library::model::Node::Track(track) = node {
-                                    if track.children.contains(&selected_id) {
-                                        parent_track_id = *nid;
-                                        break 'outer;
-                                    }
-                                }
-                            }
-
+                        if let Some(node_id) =
+                            crate::utils::property::visual_node_id(&proj_read, selected_id)
+                        {
+                            let parent_track_id = proj_read
+                                .find_parent_track(selected_id)
+                                .or_else(|| proj_read.find_parent_track(node_id))
+                                .unwrap_or_else(Uuid::nil);
                             (
                                 Some(comp.id),
                                 Some(parent_track_id),
-                                Some(layer.properties.clone()),
+                                proj_read
+                                    .get_node(node_id)
+                                    .map(|node| node.properties.clone()),
                             )
                         } else {
                             (None, None, None)
@@ -292,6 +277,7 @@ pub fn draw_gizmo(
     project: &Arc<RwLock<Project>>,
     gui_clips: &[PreviewClip],
     to_screen: impl Fn(Pos2) -> Pos2,
+    interaction_enabled: bool,
 ) {
     // Draw outlines for ALL selected entities to show multi-selection
     for selected_id in &editor_context.selection.selected_entities {
@@ -303,7 +289,7 @@ pub fn draw_gizmo(
 
         if let Some(gc) = gui_clips.iter().find(|gc| gc.id() == *selected_id) {
             // Check if audio
-            if let LayerContent::Media(media) = &gc.clip.content {
+            if let NodeContent::Media(media) = &gc.node.content {
                 if let Ok(proj) = project.read() {
                     if let Some(asset) = proj.get_asset(media.asset_id) {
                         if matches!(asset.kind, library::model::asset::AssetKind::Audio) {
@@ -320,7 +306,7 @@ pub fn draw_gizmo(
 
     if let Some(selected_id) = editor_context.selection.last_selected_entity_id {
         if let Some(gc) = gui_clips.iter().find(|gc| gc.id() == selected_id) {
-            if let LayerContent::Media(media) = &gc.clip.content {
+            if let NodeContent::Media(media) = &gc.node.content {
                 if let Ok(proj) = project.read() {
                     if let Some(asset) = proj.get_asset(media.asset_id) {
                         if matches!(asset.kind, library::model::asset::AssetKind::Audio) {
@@ -367,6 +353,10 @@ pub fn draw_gizmo(
 
             for (pos, handle, cursor) in handles {
                 painter.circle_filled(pos, handle_radius, gizmo_color);
+
+                if !interaction_enabled {
+                    continue;
+                }
 
                 // Interaction Area
                 let interact_rect = Rect::from_center_size(pos, Vec2::splat(handle_radius * 3.0)); // Larger hit area

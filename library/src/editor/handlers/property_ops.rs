@@ -1,41 +1,109 @@
 //! Shared property operations for handlers.
 //!
 //! This module provides a unified interface for property updates across
-//! clip properties, effect properties, and style properties.
+//! directly-owned and nested property maps.
 
 use crate::animation::EasingFunction;
 use crate::error::LibraryError;
-use crate::model::property::{Property, PropertyValue};
+use crate::model::project::Project;
+use crate::model::property::{Property, PropertyMap, PropertyTarget, PropertyValue};
+use uuid::Uuid;
+
+/// Explicit owner of an editable property tree.
+///
+/// The owner disambiguates whether a direct property map belongs to a timeline
+/// Clip or to a leaf Node. Nested targets use their persistent model identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PropertyOwner {
+    Clip(Uuid),
+    Node(Uuid),
+}
+
+impl PropertyOwner {
+    pub fn id(self) -> Uuid {
+        match self {
+            Self::Clip(id) | Self::Node(id) => id,
+        }
+    }
+}
+
+pub fn property_map(
+    project: &Project,
+    owner: PropertyOwner,
+    target: PropertyTarget,
+) -> Result<&PropertyMap, LibraryError> {
+    match owner {
+        PropertyOwner::Clip(clip_id) => project
+            .get_clip(clip_id)
+            .ok_or_else(|| LibraryError::Project(format!("Clip {clip_id} not found")))?
+            .property_map(target),
+        PropertyOwner::Node(node_id) => project
+            .get_node(node_id)
+            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
+            .property_map(target),
+    }
+    .ok_or_else(|| {
+        LibraryError::Project(format!("Property target {target:?} not found on {owner:?}"))
+    })
+}
+
+pub fn property_map_mut(
+    project: &mut Project,
+    owner: PropertyOwner,
+    target: PropertyTarget,
+) -> Result<&mut PropertyMap, LibraryError> {
+    match owner {
+        PropertyOwner::Clip(clip_id) => project
+            .get_clip_mut(clip_id)
+            .ok_or_else(|| LibraryError::Project(format!("Clip {clip_id} not found")))?
+            .property_map_mut(target),
+        PropertyOwner::Node(node_id) => project
+            .get_node_mut(node_id)
+            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
+            .property_map_mut(target),
+    }
+    .ok_or_else(|| {
+        LibraryError::Project(format!("Property target {target:?} not found on {owner:?}"))
+    })
+}
 
 /// Target types for nested property operations
 pub enum PropertyContainer<'a> {
-    /// Direct clip property
-    Clip(&'a mut crate::model::property::PropertyMap),
-    /// Effect property (effect index, property map)
+    /// Property map directly owned by a Clip or Node.
+    Direct(&'a mut crate::model::property::PropertyMap),
     Effect(&'a mut crate::model::EffectConfig),
-    /// Style property (style index, property map)
     Style(&'a mut crate::model::style::StyleInstance),
+    Effector(&'a mut crate::model::ensemble::EffectorInstance),
+    Decorator(&'a mut crate::model::ensemble::DecoratorInstance),
 }
 
-impl<'a> PropertyContainer<'a> {
+impl PropertyContainer<'_> {
     /// Get mutable reference to the property by key
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Property> {
         match self {
-            PropertyContainer::Clip(map) => map.get_mut(key),
+            PropertyContainer::Direct(map) => map.get_mut(key),
             PropertyContainer::Effect(effect) => effect.properties.get_mut(key),
             PropertyContainer::Style(style) => style.properties.get_mut(key),
+            PropertyContainer::Effector(effector) => effector.properties.get_mut(key),
+            PropertyContainer::Decorator(decorator) => decorator.properties.get_mut(key),
         }
     }
 
     /// Set a property value
     pub fn set(&mut self, key: String, prop: Property) {
         match self {
-            PropertyContainer::Clip(map) => map.set(key, prop),
+            PropertyContainer::Direct(map) => map.set(key, prop),
             PropertyContainer::Effect(effect) => {
                 effect.properties.set(key, prop);
             }
             PropertyContainer::Style(style) => {
                 style.properties.set(key, prop);
+            }
+            PropertyContainer::Effector(effector) => {
+                effector.properties.set(key, prop);
+            }
+            PropertyContainer::Decorator(decorator) => {
+                decorator.properties.set(key, prop);
             }
         }
     }
@@ -61,47 +129,6 @@ pub fn upsert_property_or_keyframe(
     } else {
         // Property doesn't exist, create as constant
         container.set(property_key.to_string(), Property::constant(value));
-    }
-    Ok(())
-}
-
-/// Update a keyframe at the given index.
-pub fn update_keyframe_at_index(
-    container: &mut PropertyContainer,
-    property_key: &str,
-    index: usize,
-    new_time: Option<f64>,
-    new_value: Option<PropertyValue>,
-    new_easing: Option<EasingFunction>,
-) -> Result<(), LibraryError> {
-    let prop = container
-        .get_mut(property_key)
-        .ok_or_else(|| LibraryError::Project(format!("Property {} not found", property_key)))?;
-
-    if !prop.update_keyframe_at_index(index, new_time, new_value, new_easing) {
-        return Err(LibraryError::Project(
-            "Failed to update keyframe (not a keyframe property or index out of bounds)"
-                .to_string(),
-        ));
-    }
-    Ok(())
-}
-
-/// Remove a keyframe at the given index.
-pub fn remove_keyframe_at_index(
-    container: &mut PropertyContainer,
-    property_key: &str,
-    index: usize,
-) -> Result<(), LibraryError> {
-    let prop = container
-        .get_mut(property_key)
-        .ok_or_else(|| LibraryError::Project(format!("Property {} not found", property_key)))?;
-
-    if !prop.remove_keyframe_at_index(index) {
-        return Err(LibraryError::Project(
-            "Failed to remove keyframe (not a keyframe property or index out of bounds)"
-                .to_string(),
-        ));
     }
     Ok(())
 }

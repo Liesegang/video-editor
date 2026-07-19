@@ -6,8 +6,7 @@
 use crate::action::HistoryManager;
 use crate::ui::panels::inspector::properties::PropertyAction;
 use library::model::property::{Property, PropertyValue};
-use library::EditorService;
-use uuid::Uuid;
+use library::{EditorService, PropertyOwner};
 
 pub use library::model::property::PropertyTarget;
 
@@ -15,7 +14,7 @@ pub use library::model::property::PropertyTarget;
 pub struct ActionContext<'a> {
     pub project_service: &'a mut EditorService,
     pub history_manager: &'a mut HistoryManager,
-    pub clip_id: Uuid,
+    pub owner: PropertyOwner,
     pub current_time: f64,
 }
 
@@ -24,13 +23,13 @@ impl<'a> ActionContext<'a> {
     pub fn new(
         project_service: &'a mut EditorService,
         history_manager: &'a mut HistoryManager,
-        clip_id: Uuid,
+        owner: PropertyOwner,
         current_time: f64,
     ) -> Self {
         Self {
             project_service,
             history_manager,
-            clip_id,
+            owner,
             current_time,
         }
     }
@@ -43,57 +42,31 @@ impl<'a> ActionContext<'a> {
         value: PropertyValue,
         get_property: impl Fn(&str) -> Option<library::model::property::Property>,
     ) -> bool {
-        let is_keyframed = get_property(name)
-            .map(|p| p.evaluator == "keyframe")
-            .unwrap_or(false);
+        let _ = get_property;
+        let result = self.project_service.update_property_or_keyframe(
+            self.owner,
+            target,
+            name,
+            self.current_time,
+            value,
+            None,
+        );
 
-        let result = match target {
-            PropertyTarget::Clip => {
-                if is_keyframed {
-                    self.project_service.update_property_or_keyframe(
-                        self.clip_id,
-                        name,
-                        self.current_time,
-                        value,
-                        None,
-                    )
-                } else {
-                    self.project_service
-                        .update_clip_property(self.clip_id, name, value)
-                }
+        match result {
+            Ok(()) => true,
+            Err(e) => {
+                log::error!("Failed to update property {}: {:?}", name, e);
+                false
             }
-            PropertyTarget::Effect(idx) | PropertyTarget::Effector(idx) => {
-                self.project_service.update_effect_property_or_keyframe(
-                    self.clip_id,
-                    idx,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                )
-            }
-            PropertyTarget::Style(idx) | PropertyTarget::Decorator(idx) => {
-                self.project_service.update_style_property_or_keyframe(
-                    self.clip_id,
-                    idx,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                )
-            }
-        };
-
-        if let Err(e) = result {
-            log::error!("Failed to update property {}: {:?}", name, e);
         }
-        true
     }
 
     /// Handle a Commit action - saves the current project state to history.
     pub fn handle_commit(&mut self) {
-        let current_state = self.project_service.get_project().read().unwrap().clone();
-        self.history_manager.push_project_state(current_state);
+        match self.project_service.get_project().read() {
+            Ok(project) => self.history_manager.push_project_state(project.clone()),
+            Err(error) => log::error!("Failed to capture Inspector history: {error}"),
+        }
     }
 
     /// Handle a ToggleKeyframe action - adds or removes a keyframe at current time.
@@ -107,55 +80,42 @@ impl<'a> ActionContext<'a> {
         const TOLERANCE: f64 = 0.001;
 
         // Check if keyframe exists at current time
-        let keyframe_index = get_property(name).and_then(|prop| {
+        let keyframe_id = get_property(name).and_then(|prop| {
             if prop.evaluator == "keyframe" {
-                prop.keyframe_index_at(self.current_time, TOLERANCE)
+                prop.keyframe_id_at(self.current_time, TOLERANCE)
             } else {
                 None
             }
         });
 
-        let result = if let Some(index) = keyframe_index {
+        let result = if let Some(keyframe_id) = keyframe_id {
             // Remove existing keyframe
-            match target {
-                PropertyTarget::Clip => {
-                    self.project_service
-                        .remove_keyframe(self.clip_id, name, index)
-                }
-                PropertyTarget::Effect(idx) | PropertyTarget::Effector(idx) => self
-                    .project_service
-                    .remove_effect_keyframe_by_index(self.clip_id, idx, name, index),
-                PropertyTarget::Style(_idx) | PropertyTarget::Decorator(_idx) => {
-                    // Assuming remove_style_keyframe exists (need to verify) or fallback
-                    // If remove_style_keyframe is missing, check editor_service.
-                    Err(library::LibraryError::Validation(
-                        "Style keyframe removal not implemented".to_string(),
-                    ))
-                }
-            }
+            self.project_service
+                .remove_keyframe_by_id(self.owner, target, name, keyframe_id)
         } else {
-            // Add new keyframe
-            match target {
-                PropertyTarget::Clip => self.project_service.add_keyframe(
-                    self.clip_id,
-                    name,
-                    self.current_time,
-                    value,
-                    None,
-                ),
-                PropertyTarget::Effect(idx) | PropertyTarget::Effector(idx) => self
-                    .project_service
-                    .add_effect_keyframe(self.clip_id, idx, name, self.current_time, value, None),
-                PropertyTarget::Style(idx) | PropertyTarget::Decorator(idx) => self
-                    .project_service
-                    .add_style_keyframe(self.clip_id, idx, name, self.current_time, value, None),
-            }
+            library::editor::handlers::keyframe_handler::KeyframeHandler::add_keyframe(
+                &self.project_service.get_project(),
+                self.owner,
+                target,
+                name,
+                self.current_time,
+                value,
+                None,
+            )
         };
 
-        if let Err(e) = result {
-            log::error!("Failed to toggle keyframe for {}: {:?}", name, e);
+        match result {
+            Ok(()) => {
+                // Keyframe toggles are atomic button actions and do not emit a
+                // separate widget Commit event.
+                self.handle_commit();
+                true
+            }
+            Err(e) => {
+                log::error!("Failed to toggle keyframe for {}: {:?}", name, e);
+                false
+            }
         }
-        true
     }
 
     /// Handle a SetAttribute action - sets a property attribute.
@@ -166,35 +126,22 @@ impl<'a> ActionContext<'a> {
         attr_key: &str,
         attr_val: PropertyValue,
     ) -> bool {
-        let result = match target {
-            PropertyTarget::Clip => self.project_service.set_clip_property_attribute(
-                self.clip_id,
-                name,
-                attr_key,
-                attr_val,
-            ),
-            PropertyTarget::Effect(idx) => self.project_service.set_effect_property_attribute(
-                self.clip_id,
-                idx,
-                name,
-                attr_key,
-                attr_val,
-            ),
-            PropertyTarget::Style(idx) => self.project_service.set_style_property_attribute(
-                self.clip_id,
-                idx,
-                name,
-                attr_key,
-                attr_val,
-            ),
-            // TODO: Implement for Effector/Decorator
-            PropertyTarget::Effector(_) | PropertyTarget::Decorator(_) => Ok(()),
-        };
+        let result = self
+            .project_service
+            .set_property_attribute(self.owner, target, name, attr_key, attr_val);
 
-        if let Err(e) = result {
-            log::error!("Failed to set attribute {} for {}: {:?}", attr_key, name, e);
+        match result {
+            Ok(()) => {
+                // Attribute dropdowns are atomic and do not emit a separate
+                // Commit event after changing the Project.
+                self.handle_commit();
+                true
+            }
+            Err(e) => {
+                log::error!("Failed to set attribute {} for {}: {:?}", attr_key, name, e);
+                false
+            }
         }
-        true
     }
 
     /// Process a list of PropertyActions, handling updates and history commits.
@@ -208,22 +155,194 @@ impl<'a> ActionContext<'a> {
         for action in actions {
             match action {
                 PropertyAction::Update(name, val) => {
-                    self.handle_update(target, &name, val, &get_property);
-                    needs_refresh = true;
+                    needs_refresh |= self.handle_update(target, &name, val, &get_property);
                 }
                 PropertyAction::Commit => {
                     self.handle_commit();
                 }
                 PropertyAction::ToggleKeyframe(name, val) => {
-                    self.handle_toggle_keyframe(target, &name, val, &get_property);
-                    needs_refresh = true;
+                    needs_refresh |= self.handle_toggle_keyframe(target, &name, val, &get_property);
                 }
                 PropertyAction::SetAttribute(name, key, val) => {
-                    self.handle_set_attribute(target, &name, &key, val);
-                    needs_refresh = true;
+                    needs_refresh |= self.handle_set_attribute(target, &name, &key, val);
                 }
             }
         }
         needs_refresh
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use library::cache::CacheManager;
+    use library::model::ensemble::{DecoratorInstance, EffectorInstance};
+    use library::model::property::{PropertyMap, PropertyValue};
+    use library::model::style::StyleInstance;
+    use library::model::{EffectConfig, Node, NodeContent, Project};
+    use library::plugin::PluginManager;
+    use ordered_float::OrderedFloat;
+    use std::sync::{Arc, RwLock};
+    use uuid::Uuid;
+
+    fn number(value: f64) -> PropertyValue {
+        PropertyValue::Number(OrderedFloat(value))
+    }
+
+    fn map_with(key: &str, value: f64) -> PropertyMap {
+        let mut map = PropertyMap::new();
+        map.set(key.to_string(), Property::constant(number(value)));
+        map
+    }
+
+    fn target_property(
+        project: &Project,
+        node_id: Uuid,
+        target: PropertyTarget,
+        key: &str,
+    ) -> Option<Property> {
+        project
+            .get_node(node_id)?
+            .property_map(target)?
+            .get(key)
+            .cloned()
+    }
+
+    #[test]
+    fn inspector_keyframe_crud_uses_ids_for_every_target_and_restores_typed_constants() {
+        let effect_id = Uuid::new_v4();
+        let style_id = Uuid::new_v4();
+        let effector_id = Uuid::new_v4();
+        let decorator_id = Uuid::new_v4();
+        let mut node = Node::new("animated", NodeContent::Merge);
+        let node_id = node.id;
+        node.properties = map_with("amount", 1.0);
+        node.effects.push(EffectConfig {
+            id: effect_id,
+            effect_type: "test".to_string(),
+            properties: map_with("amount", 2.0),
+        });
+        let mut style = StyleInstance::new("test", map_with("amount", 3.0));
+        style.id = style_id;
+        node.styles.push(style);
+        let mut effector = EffectorInstance::new("test", map_with("amount", 4.0));
+        effector.id = effector_id;
+        node.effectors.push(effector);
+        let mut decorator = DecoratorInstance::new("test", map_with("amount", 5.0));
+        decorator.id = decorator_id;
+        node.decorators.push(decorator);
+
+        let mut project = Project::new("inspector keyframes");
+        project.add_node(node);
+        let project = Arc::new(RwLock::new(project));
+        let mut service = EditorService::new(
+            Arc::clone(&project),
+            Arc::new(PluginManager::default()),
+            Arc::new(CacheManager::new()),
+        )
+        .unwrap();
+        let mut history = HistoryManager::new();
+        history.push_project_state(project.read().unwrap().clone());
+
+        let targets = [
+            PropertyTarget::Direct,
+            PropertyTarget::Effect(effect_id),
+            PropertyTarget::Style(style_id),
+            PropertyTarget::Effector(effector_id),
+            PropertyTarget::Decorator(decorator_id),
+        ];
+        for (index, target) in targets.into_iter().enumerate() {
+            let initial_depth = history.undo_depth();
+            let property = target_property(&project.read().unwrap(), node_id, target, "amount");
+            let mut context = ActionContext::new(
+                &mut service,
+                &mut history,
+                PropertyOwner::Node(node_id),
+                2.5,
+            );
+            assert!(context
+                .handle_toggle_keyframe(target, "amount", number(10.0), |_| { property.clone() }));
+            assert_eq!(history.undo_depth(), initial_depth + 1);
+
+            let keyframed = target_property(&project.read().unwrap(), node_id, target, "amount")
+                .expect("target property should remain present");
+            assert_eq!(keyframed.evaluator, "keyframe");
+            let keyframe = keyframed.keyframes().into_iter().next().unwrap();
+            assert_eq!(keyframe.time, OrderedFloat(2.5));
+
+            let mut context = ActionContext::new(
+                &mut service,
+                &mut history,
+                PropertyOwner::Node(node_id),
+                2.5,
+            );
+            assert!(context.handle_actions(
+                vec![
+                    PropertyAction::Update("amount".to_string(), number(20.0 + index as f64)),
+                    PropertyAction::Commit,
+                ],
+                target,
+                |name| target_property(&project.read().unwrap(), node_id, target, name),
+            ));
+            let updated =
+                target_property(&project.read().unwrap(), node_id, target, "amount").unwrap();
+            assert_eq!(
+                updated.keyframe_by_id(keyframe.id).unwrap().value,
+                number(20.0 + index as f64)
+            );
+
+            let property = Some(updated);
+            let mut context = ActionContext::new(
+                &mut service,
+                &mut history,
+                PropertyOwner::Node(node_id),
+                2.5,
+            );
+            assert!(context
+                .handle_toggle_keyframe(target, "amount", number(0.0), |_| { property.clone() }));
+            let restored =
+                target_property(&project.read().unwrap(), node_id, target, "amount").unwrap();
+            assert_eq!(restored.evaluator, "constant");
+            assert_eq!(restored.value(), Some(&number(20.0 + index as f64)));
+        }
+    }
+
+    #[test]
+    fn inspector_materializes_a_missing_property_as_a_typed_keyframe() {
+        let node = Node::new("sparse", NodeContent::Merge);
+        let node_id = node.id;
+        let mut initial = Project::new("missing property");
+        initial.add_node(node);
+        let project = Arc::new(RwLock::new(initial));
+        let mut service = EditorService::new(
+            Arc::clone(&project),
+            Arc::new(PluginManager::default()),
+            Arc::new(CacheManager::new()),
+        )
+        .unwrap();
+        let mut history = HistoryManager::new();
+        history.push_project_state(project.read().unwrap().clone());
+        let mut context = ActionContext::new(
+            &mut service,
+            &mut history,
+            PropertyOwner::Node(node_id),
+            1.25,
+        );
+
+        assert!(context.handle_toggle_keyframe(
+            PropertyTarget::Direct,
+            "new_amount",
+            number(7.5),
+            |_| None,
+        ));
+        let property = target_property(
+            &project.read().unwrap(),
+            node_id,
+            PropertyTarget::Direct,
+            "new_amount",
+        )
+        .unwrap();
+        assert_eq!(property.evaluator, "keyframe");
+        assert_eq!(property.keyframes()[0].value, number(7.5));
     }
 }

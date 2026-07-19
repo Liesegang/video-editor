@@ -1,18 +1,40 @@
 use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
 use crate::core::ensemble::types::DecoratorConfig;
+use crate::model::ensemble::DecoratorInstance;
 use crate::model::frame::color::Color;
-use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
-use crate::model::style::StyleInstance;
+use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
 use crate::plugin::entity_converter::FrameEvaluationContext;
-use crate::plugin::{Plugin, PluginCategory};
+use crate::plugin::{OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory};
+use uuid::Uuid;
 
 pub trait DecoratorPlugin: Plugin {
     fn properties(&self) -> Vec<PropertyDefinition>;
 
+    /// Authoritative graph operation contract. Existing plugin implementations
+    /// remain source-compatible while manager/factory paths consume this
+    /// validated descriptor.
+    fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
+        OperationDescriptor::decorator(self.id(), self.name(), self.properties())
+    }
+
+    /// Evaluates a standalone Decorator producer from Node-owned properties.
+    fn evaluate_source(
+        &self,
+        context: &FrameEvaluationContext,
+        source_id: Uuid,
+        properties: &PropertyMap,
+        eval_time: f64,
+    ) -> Option<DecoratorConfig> {
+        let mut instance = DecoratorInstance::new(self.id(), properties.clone());
+        instance.id = source_id;
+        self.convert(context, &instance, eval_time)
+    }
+
+    /// Temporary legacy adapter for embedded `Node::decorators` state.
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &StyleInstance,
+        instance: &DecoratorInstance,
         eval_time: f64,
     ) -> Option<DecoratorConfig>;
 
@@ -97,7 +119,7 @@ impl DecoratorPlugin for BackplateDecoratorPlugin {
     fn convert(
         &self,
         context: &FrameEvaluationContext,
-        instance: &StyleInstance,
+        instance: &DecoratorInstance,
         eval_time: f64,
     ) -> Option<DecoratorConfig> {
         let color =
