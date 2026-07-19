@@ -64,8 +64,8 @@ impl EffectRepository {
         Self::default()
     }
 
-    pub fn register(&mut self, plugin: Arc<dyn EffectPlugin>) {
-        self.plugins.insert(plugin.id().to_string(), plugin);
+    pub fn register(&mut self, plugin: Arc<dyn EffectPlugin>) -> Option<Arc<dyn EffectPlugin>> {
+        self.plugins.insert(plugin.id().to_string(), plugin)
     }
 
     pub fn get(&self, id: &str) -> Option<&Arc<dyn EffectPlugin>> {

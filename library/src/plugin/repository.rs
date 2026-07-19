@@ -32,8 +32,12 @@ impl<T: ?Sized + Plugin> PluginRepository<T> {
         Self::default()
     }
 
-    pub fn register(&mut self, plugin: Arc<T>) {
-        self.plugins.insert(plugin.id().to_string(), plugin);
+    /// Registers a plugin and returns the replaced instance, if any.
+    ///
+    /// Callers holding a manager lock must drop the returned `Arc` only after
+    /// releasing that lock: plugin destructors may call back into the manager.
+    pub fn register(&mut self, plugin: Arc<T>) -> Option<Arc<T>> {
+        self.plugins.insert(plugin.id().to_string(), plugin)
     }
 
     pub fn get(&self, id: &str) -> Option<&Arc<T>> {

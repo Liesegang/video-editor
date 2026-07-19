@@ -176,47 +176,71 @@ impl PluginManager {
     }
 
     pub fn register_effect(&self, plugin: Arc<dyn EffectPlugin>) {
-        let mut inner = self.write_registry();
-        inner.effect_plugins.register(plugin);
+        let replaced = {
+            let mut inner = self.write_registry();
+            inner.effect_plugins.register(plugin)
+        };
+        drop(replaced);
     }
 
     pub fn register_load_plugin(&self, plugin: Arc<dyn LoadPlugin>) {
-        let mut inner = self.write_registry();
-        inner.load_plugins.register(plugin);
+        let replaced = {
+            let mut inner = self.write_registry();
+            inner.load_plugins.register(plugin)
+        };
+        drop(replaced);
     }
 
     pub fn register_export_plugin(&self, plugin: Arc<dyn ExportPlugin>) {
-        let mut inner = self.write_registry();
-        inner.export_plugins.register(plugin);
+        let replaced = {
+            let mut inner = self.write_registry();
+            inner.export_plugins.register(plugin)
+        };
+        drop(replaced);
     }
 
     pub fn register_entity_converter_plugin(&self, plugin: Arc<dyn EntityConverterPlugin>) {
-        let mut inner = self.write_registry();
-        inner.entity_converter_plugins.register(plugin);
+        let replaced = {
+            let mut inner = self.write_registry();
+            inner.entity_converter_plugins.register(plugin)
+        };
+        drop(replaced);
     }
 
     pub fn register_property_plugin(&self, plugin: Arc<dyn PropertyPlugin>) {
-        let mut inner = self.write_registry();
         let evaluator_id = plugin.id();
         let evaluator_instance = plugin.get_evaluator_instance();
-        inner
-            .property_evaluators
-            .register(evaluator_id, evaluator_instance);
+        let replaced = {
+            let mut inner = self.write_registry();
+            inner
+                .property_evaluators
+                .register(evaluator_id, evaluator_instance)
+        };
+        drop(replaced);
     }
 
     pub fn register_effector_plugin(&self, plugin: Arc<dyn EffectorPlugin>) {
-        let mut inner = self.write_registry();
-        inner.effector_plugins.register(plugin);
+        let replaced = {
+            let mut inner = self.write_registry();
+            inner.effector_plugins.register(plugin)
+        };
+        drop(replaced);
     }
 
     pub fn register_decorator_plugin(&self, plugin: Arc<dyn DecoratorPlugin>) {
-        let mut inner = self.write_registry();
-        inner.decorator_plugins.register(plugin);
+        let replaced = {
+            let mut inner = self.write_registry();
+            inner.decorator_plugins.register(plugin)
+        };
+        drop(replaced);
     }
 
     pub fn register_style_plugin(&self, plugin: Arc<dyn StylePlugin>) {
-        let mut inner = self.write_registry();
-        inner.style_plugins.register(plugin);
+        let replaced = {
+            let mut inner = self.write_registry();
+            inner.style_plugins.register(plugin)
+        };
+        drop(replaced);
     }
 
     pub fn get_effector_plugin(&self, id: &str) -> Option<Arc<dyn EffectorPlugin>> {
@@ -885,7 +909,7 @@ impl PluginManager {
         &self,
         path: &Path,
         symbol: &[u8],
-        register: impl FnOnce(&mut PluginRegistry, Arc<T>),
+        register: impl FnOnce(&mut PluginRegistry, Arc<T>) -> Option<Arc<T>>,
     ) -> Result<(), LibraryError> {
         // SAFETY: The caller guarantees that this is a trusted native plugin;
         // loading it may execute platform-specific initializers.
@@ -906,9 +930,13 @@ impl PluginManager {
         // Box::into_raw exactly once. Arc takes ownership of the reconstructed Box.
         let plugin = unsafe { Arc::from(Box::from_raw(raw)) };
 
-        let mut inner = self.write_registry();
-        register(&mut inner, plugin);
-        inner.dynamic_libraries.push(library);
+        let replaced = {
+            let mut inner = self.write_registry();
+            let replaced = register(&mut inner, plugin);
+            inner.dynamic_libraries.push(library);
+            replaced
+        };
+        drop(replaced);
         Ok(())
     }
 
@@ -922,9 +950,7 @@ impl PluginManager {
             self.load_plugin_generic::<dyn EffectPlugin>(
                 path.as_ref(),
                 b"create_effect_plugin",
-                |inner, plugin| {
-                    inner.effect_plugins.register(plugin);
-                },
+                |inner, plugin| inner.effect_plugins.register(plugin),
             )
         }
     }
@@ -936,9 +962,7 @@ impl PluginManager {
             self.load_plugin_generic::<dyn LoadPlugin>(
                 path.as_ref(),
                 b"create_load_plugin",
-                |inner, plugin| {
-                    inner.load_plugins.register(plugin);
-                },
+                |inner, plugin| inner.load_plugins.register(plugin),
             )
         }
     }
@@ -953,9 +977,7 @@ impl PluginManager {
             self.load_plugin_generic::<dyn ExportPlugin>(
                 path.as_ref(),
                 b"create_export_plugin",
-                |inner, plugin| {
-                    inner.export_plugins.register(plugin);
-                },
+                |inner, plugin| inner.export_plugins.register(plugin),
             )
         }
     }
@@ -970,9 +992,7 @@ impl PluginManager {
             self.load_plugin_generic::<dyn EntityConverterPlugin>(
                 path.as_ref(),
                 b"create_entity_converter_plugin",
-                |inner, plugin| {
-                    inner.entity_converter_plugins.register(plugin);
-                },
+                |inner, plugin| inner.entity_converter_plugins.register(plugin),
             )
         }
     }
@@ -1277,6 +1297,66 @@ mod tests {
 
     struct EvaluatedValueStylePlugin;
 
+    const REENTRANT_EFFECT_ID: &str = "reentrant-drop-effect";
+
+    struct ReentrantDropEffect {
+        manager: Arc<PluginManager>,
+        callback_completed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Drop for ReentrantDropEffect {
+        fn drop(&mut self) {
+            let replacement_is_visible = self
+                .manager
+                .get_effect_plugin(REENTRANT_EFFECT_ID)
+                .is_some();
+            self.callback_completed
+                .store(replacement_is_visible, Ordering::SeqCst);
+        }
+    }
+
+    struct ReplacementEffect;
+
+    macro_rules! impl_reentrant_test_effect {
+        ($effect:ty) => {
+            impl Plugin for $effect {
+                fn id(&self) -> &str {
+                    REENTRANT_EFFECT_ID
+                }
+
+                fn name(&self) -> String {
+                    "Reentrant Drop Effect".to_string()
+                }
+
+                fn category(&self) -> String {
+                    "Tests".to_string()
+                }
+
+                fn version(&self) -> (u32, u32, u32) {
+                    (0, 1, 0)
+                }
+            }
+
+            impl EffectPlugin for $effect {
+                fn apply(
+                    &self,
+                    input: &crate::rendering::renderer::RenderOutput,
+                    _params: &HashMap<String, PropertyValue>,
+                    _gpu_context: Option<&mut crate::rendering::skia_utils::GpuContext>,
+                ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
+                    Ok(input.clone())
+                }
+
+                fn properties(&self) -> Vec<PropertyDefinition> {
+                    Vec::new()
+                }
+            }
+        };
+    }
+
+    impl_reentrant_test_effect!(ReentrantDropEffect);
+    impl_reentrant_test_effect!(ReplacementEffect);
+
     impl Plugin for EvaluatedValueStylePlugin {
         fn id(&self) -> &str {
             "evaluated-value-style"
@@ -1388,6 +1468,34 @@ mod tests {
             evaluations.load(Ordering::SeqCst),
             1,
             "validation must not invoke an authored evaluator again inside plugin code"
+        );
+    }
+
+    #[test]
+    fn replacing_effect_drops_old_plugin_after_manager_write_lock_is_released() {
+        let manager = Arc::new(PluginManager::new());
+        let callback_completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        manager.register_effect(Arc::new(ReentrantDropEffect {
+            manager: Arc::clone(&manager),
+            callback_completed: Arc::clone(&callback_completed),
+        }));
+
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+        let worker_manager = Arc::clone(&manager);
+        let worker = std::thread::spawn(move || {
+            worker_manager.register_effect(Arc::new(ReplacementEffect));
+            completed_tx
+                .send(())
+                .expect("replacement completion receiver must remain alive");
+        });
+
+        completed_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("plugin Drop re-entry must not deadlock on the manager write lock");
+        worker.join().expect("replacement worker must not panic");
+        assert!(
+            callback_completed.load(Ordering::SeqCst),
+            "the old plugin destructor must be able to read the committed replacement"
         );
     }
 }

@@ -55,7 +55,11 @@ fn project_with_tracks(track_names: &[&str]) -> (Project, Uuid, Vec<Uuid>) {
 
 fn evaluated_track_order(project: &Project, composition_id: Uuid) -> Vec<Uuid> {
     let mut property_evaluators = PropertyEvaluatorRegistry::new();
-    property_evaluators.register("constant", Arc::new(ConstantEvaluator));
+    assert!(
+        property_evaluators
+            .register("constant", Arc::new(ConstantEvaluator))
+            .is_none()
+    );
     let property_evaluators = Arc::new(property_evaluators);
     let plugin_manager = Arc::new(PluginManager::default());
     let composition = project.get_composition(composition_id).unwrap();

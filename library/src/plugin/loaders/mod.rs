@@ -100,12 +100,12 @@ impl LoadRepository {
         Self::default()
     }
 
-    pub fn register(&mut self, plugin: Arc<dyn LoadPlugin>) {
+    pub fn register(&mut self, plugin: Arc<dyn LoadPlugin>) -> Option<Arc<dyn LoadPlugin>> {
         let id = plugin.id().to_string();
         if !self.priority_order.contains(&id) {
             self.priority_order.push(id.clone());
         }
-        self.plugins.insert(id, plugin);
+        self.plugins.insert(id, plugin)
     }
 
     pub fn get(&self, id: &str) -> Option<&Arc<dyn LoadPlugin>> {
