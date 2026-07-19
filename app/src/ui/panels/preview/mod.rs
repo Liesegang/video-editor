@@ -280,6 +280,22 @@ fn arbitrate_primary_gesture(
     }
 }
 
+fn apply_owned_primary_pan(
+    pan_owned: bool,
+    primary_down: bool,
+    pointer_delta: egui::Vec2,
+    pan: &mut egui::Vec2,
+    handled_hand_tool_drag: &mut bool,
+) -> bool {
+    if !pan_owned || !primary_down || pointer_delta == egui::Vec2::ZERO {
+        return false;
+    }
+
+    *pan += pointer_delta;
+    *handled_hand_tool_drag = true;
+    true
+}
+
 /// Submit only a fully evaluated frame. Evaluation failures invalidate the
 /// displayed output because keeping a previous texture would present stale
 /// pixels as if they were the current Project state.
@@ -551,37 +567,49 @@ pub fn preview_panel(
         gesture_input,
     );
 
-    let mut state = PreviewViewportState {
-        pan: &mut editor_context.view.pan,
-        zoom: &mut editor_context.view.zoom,
+    let pointer_delta = ui.input(|input| input.pointer.delta());
+    let (mut viewport_changed, response) = {
+        let mut state = PreviewViewportState {
+            pan: &mut editor_context.view.pan,
+            zoom: &mut editor_context.view.zoom,
+        };
+        let controller_id = ui.make_persistent_id("unique_preview_viewport_controller_id");
+        let mut controller = ViewportController::new(ui, controller_id, None)
+            .with_config(ViewportConfig {
+                zoom_uniform: true,
+                min_zoom: PREVIEW_MIN_ZOOM,
+                max_zoom: PREVIEW_MAX_ZOOM,
+                ..Default::default()
+            })
+            // A latched primary pan uses the raw per-frame pointer delta below
+            // instead of asking Response to re-arbitrate gesture ownership.
+            .with_pan_tool_active(!gesture_input.primary_down && pan_requested)
+            .with_zoom_tool_active(
+                editor_context.view.active_tool == PreviewTool::Zoom && !gesture_decision.pan_owned,
+            );
+
+        controller.interact_with_rect(
+            preview_rect,
+            &mut state,
+            &mut editor_context.interaction.handled_hand_tool_drag,
+        )
     };
-
-    let mut controller = ViewportController::new(
-        ui,
-        ui.make_persistent_id("unique_preview_viewport_controller_id"),
-        None,
-    )
-    .with_config(ViewportConfig {
-        zoom_uniform: true,
-        min_zoom: PREVIEW_MIN_ZOOM,
-        max_zoom: PREVIEW_MAX_ZOOM,
-        ..Default::default()
-    })
-    // Keep a latched pan alive after Space is released. When no button is
-    // down, `pan_requested` is included only to show the hand cursor.
-    .with_pan_tool_active(
-        gesture_decision.pan_owned || (!gesture_input.primary_down && pan_requested),
-    )
-    .with_zoom_tool_active(
-        editor_context.view.active_tool == PreviewTool::Zoom && !gesture_decision.pan_owned,
-    );
-
-    // Provide specific rect to controller (excluding bottom bar)
-    let (viewport_changed, response) = controller.interact_with_rect(
-        preview_rect,
-        &mut state,
+    viewport_changed |= apply_owned_primary_pan(
+        gesture_decision.pan_owned,
+        gesture_input.primary_down,
+        pointer_delta,
+        &mut editor_context.view.pan,
         &mut editor_context.interaction.handled_hand_tool_drag,
     );
+    if gesture_decision.pan_owned {
+        ui.output_mut(|output| {
+            output.cursor_icon = if gesture_input.primary_down {
+                egui::CursorIcon::Grabbing
+            } else {
+                egui::CursorIcon::Grab
+            };
+        });
+    }
 
     if viewport_changed {
         editor_context.interaction.preview_viewport.auto_fit = false;
@@ -1230,19 +1258,25 @@ mod tests {
                         input,
                     );
 
-                    let mut viewport_state = PreviewViewportState {
-                        pan: &mut editor_context.view.pan,
-                        zoom: &mut editor_context.view.zoom,
+                    let pointer_delta = ui.input(|input| input.pointer.delta());
+                    let (mut viewport_changed, response) = {
+                        let mut viewport_state = PreviewViewportState {
+                            pan: &mut editor_context.view.pan,
+                            zoom: &mut editor_context.view.zoom,
+                        };
+                        let controller_id = ui.make_persistent_id("preview-space-pan-real-events");
+                        let mut controller = ViewportController::new(ui, controller_id, None);
+                        controller.interact_with_rect(
+                            viewport,
+                            &mut viewport_state,
+                            &mut editor_context.interaction.handled_hand_tool_drag,
+                        )
                     };
-                    let mut controller = ViewportController::new(
-                        ui,
-                        ui.make_persistent_id("preview-space-pan-real-events"),
-                        None,
-                    )
-                    .with_pan_tool_active(decision.pan_owned);
-                    let (viewport_changed, response) = controller.interact_with_rect(
-                        viewport,
-                        &mut viewport_state,
+                    viewport_changed |= apply_owned_primary_pan(
+                        decision.pan_owned,
+                        input.primary_down,
+                        pointer_delta,
+                        &mut editor_context.view.pan,
                         &mut editor_context.interaction.handled_hand_tool_drag,
                     );
                     if viewport_changed {
@@ -1444,6 +1478,7 @@ mod tests {
         let pan_before = editor_context.view.pan;
         let zoom_before = editor_context.view.zoom;
         let start = egui::pos2(180.0, 160.0);
+        let midpoint = egui::pos2(255.0, 202.5);
         let end = egui::pos2(330.0, 245.0);
         let key_event = |pressed| egui::Event::Key {
             key: egui::Key::Space,
@@ -1478,9 +1513,38 @@ mod tests {
             &project,
             &mut pending_actions,
             2,
-            vec![egui::Event::PointerMoved(end)],
+            vec![egui::Event::PointerMoved(midpoint)],
         );
         assert!(dragged.pan_owned);
+        assert_near(
+            editor_context.view.pan.x,
+            pan_before.x + midpoint.x - start.x,
+        );
+        assert_near(
+            editor_context.view.pan.y,
+            pan_before.y + midpoint.y - start.y,
+        );
+
+        let modifier_released = run_preview_interaction_frame(
+            &context,
+            &mut editor_context,
+            &project,
+            &mut pending_actions,
+            3,
+            vec![key_event(false)],
+        );
+        assert!(modifier_released.pan_owned);
+        assert!(!modifier_released.finish_after_frame);
+
+        let dragged_after_modifier_release = run_preview_interaction_frame(
+            &context,
+            &mut editor_context,
+            &project,
+            &mut pending_actions,
+            4,
+            vec![egui::Event::PointerMoved(end)],
+        );
+        assert!(dragged_after_modifier_release.pan_owned);
         assert_near(editor_context.view.pan.x, pan_before.x + end.x - start.x);
         assert_near(editor_context.view.pan.y, pan_before.y + end.y - start.y);
         assert_eq!(editor_context.view.zoom, zoom_before);
@@ -1491,16 +1555,13 @@ mod tests {
             &mut editor_context,
             &project,
             &mut pending_actions,
-            3,
-            vec![
-                egui::Event::PointerButton {
-                    pos: end,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: egui::Modifiers::NONE,
-                },
-                key_event(false),
-            ],
+            5,
+            vec![egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
         );
         assert!(released.pan_owned);
         assert!(released.finish_after_frame);
