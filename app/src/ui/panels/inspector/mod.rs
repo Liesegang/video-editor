@@ -259,7 +259,11 @@ fn inspector_panel_content(
                 "inspector_owner",
                 heading.rect,
                 true,
-                Some(serde_json::json!({"owner": "clip", "id": clip.id})),
+                Some(serde_json::json!({
+                    "owner": "clip",
+                    "id": clip.id,
+                    "track_id": track_id,
+                })),
             );
             ui.separator();
 
@@ -1533,6 +1537,15 @@ fn render_clip_timing(
             ui.label(format!("{} Frame", start_definition.label()));
             let mut edited_start = start_frame;
             let response = ui.add(start_config.widget(&mut edited_start));
+            register_clip_timing_control(
+                clip.id,
+                start_definition,
+                &response,
+                clip.start_time.into_inner(),
+                start_frame,
+                fps,
+                "frame",
+            );
             if response.changed() {
                 if let Err(error) = project_service.update_clip_timing(
                     clip.id,
@@ -1551,6 +1564,15 @@ fn render_clip_timing(
             ui.label("Out Frame");
             let mut edited_end = start_frame + duration_frame;
             let response = ui.add(duration_config.widget(&mut edited_end));
+            register_clip_timing_control(
+                clip.id,
+                duration_definition,
+                &response,
+                clip.duration.into_inner(),
+                start_frame + duration_frame,
+                fps,
+                "out_frame",
+            );
             if response.changed() {
                 let duration = edited_end / fps - clip.start_time.into_inner();
                 if let Err(error) = project_service.update_clip_timing(
@@ -1570,6 +1592,15 @@ fn render_clip_timing(
             ui.label(format!("{} Frame", trim_definition.label()));
             let mut edited_trim = trim_in_frame;
             let response = ui.add(trim_config.widget(&mut edited_trim));
+            register_clip_timing_control(
+                clip.id,
+                trim_definition,
+                &response,
+                clip.trim_in.into_inner(),
+                trim_in_frame,
+                fps,
+                "frame",
+            );
             if response.changed() {
                 if let Err(error) = project_service.update_clip_property(
                     clip.id,
@@ -1587,6 +1618,15 @@ fn render_clip_timing(
             ui.label(stretch_definition.label());
             let mut edited_stretch = clip.time_stretch.into_inner();
             let response = ui.add(stretch_config.widget(&mut edited_stretch));
+            register_clip_timing_control(
+                clip.id,
+                stretch_definition,
+                &response,
+                clip.time_stretch.into_inner(),
+                edited_stretch,
+                fps,
+                "ratio",
+            );
             if response.changed() {
                 if let Err(error) = project_service.update_clip_property(
                     clip.id,
@@ -1605,6 +1645,33 @@ fn render_clip_timing(
             ui.label(format!("{duration_frame:.0} fr"));
             ui.end_row();
         });
+}
+
+fn register_clip_timing_control(
+    clip_id: Uuid,
+    definition: &PropertyDefinition,
+    response: &egui::Response,
+    value: f64,
+    display_value: f64,
+    fps: f64,
+    display_semantics: &str,
+) {
+    crate::qa::register_component_with_metadata(
+        format!("inspector.property.clip:{clip_id}:{}", definition.name()),
+        "inspector_property_control",
+        response.rect,
+        response.enabled(),
+        Some(serde_json::json!({
+            "scope": format!("clip:{clip_id}"),
+            "property": definition.name(),
+            "control_kind": "float_drag",
+            "value": value,
+            "display_value": display_value,
+            "display_semantics": display_semantics,
+            "fps": fps,
+            "definition": properties::property_definition_metadata(definition),
+        })),
+    );
 }
 
 fn inspector_timing_drag_config(
