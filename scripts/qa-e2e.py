@@ -881,6 +881,65 @@ def undo_project_edit(client, description, predicate):
     return client.wait_project(description + " undo", predicate)
 
 
+def wait_preview_hash_after(client, expected_hash, previous_revision, operation):
+    def rendered():
+        state = client.state()
+        preview = state["editor"]["preview"]
+        if (
+            preview["render_revision"] > previous_revision
+            and preview["pixel_hash"] == expected_hash
+            and preview["nontransparent_pixels"] is not None
+            and preview["nontransparent_pixels"] > 0
+            and preview["modal_error"] is None
+        ):
+            return state
+        return None
+
+    return client.wait_until(
+        "Preview hash restored after {}".format(operation), rendered
+    )
+
+
+def click_disabled_component(client, component_id):
+    """Inject a real coordinate click into a disabled QA component."""
+    snapshot = client.component_snapshot()
+    component = next(
+        (item for item in snapshot["components"] if item["id"] == component_id),
+        None,
+    )
+    if component is None:
+        raise QaFailure("disabled component {!r} is absent".format(component_id))
+    if component.get("enabled", True):
+        raise QaFailure("component {!r} should be disabled".format(component_id))
+    rect = component["rect_points"]
+    if not component.get("visible", False) or rect["width"] <= 0 or rect["height"] <= 0:
+        raise QaFailure("disabled component {!r} has no hit rectangle".format(component_id))
+    point = client.point(rect)
+    client.inject(
+        "click",
+        {
+            "x": point["x"],
+            "y": point["y"],
+            "coordinate_space": "points",
+            "button": "primary",
+        },
+        {
+            "component_id": component_id,
+            "component_frame": snapshot["frame"],
+            "component_rect_points": rect,
+            "expected_disabled_no_op": True,
+        },
+    )
+    client.wait_until(
+        "disabled {} click input frames".format(component_id),
+        lambda: (
+            current
+            if (current := client.component_snapshot())["frame"] > snapshot["frame"]
+            else None
+        ),
+    )
+
+
 def create_node_from_add_search(client, query, item_id, scope_component_id=None):
     before = client.state()
     node_ids_before = set(before["project"]["nodes"])
@@ -1953,6 +2012,222 @@ def run_node_wire_suite(client):
         else None,
     )
 
+    # Merge layer metadata belongs to each canonical input wire. Ordering is
+    # explicitly Back->Front, and both ordering and authored blend are real
+    # coordinate menu actions with one Project history entry each.
+    def valid_preview():
+        state = client.state()
+        preview = state["editor"]["preview"]
+        if (
+            preview["pixel_hash"] is not None
+            and preview["nontransparent_pixels"] is not None
+            and preview["nontransparent_pixels"] > 0
+            and preview["modal_error"] is None
+        ):
+            return state
+        return None
+
+    def merge_layers(project):
+        return sorted(
+            [
+                connection
+                for connection in project["connections"]
+                if connection["to"]["owner"].get("owner_type") == "Node"
+                and connection["to"]["owner"].get("owner_id") == MERGE
+                and connection["to"]["port"] == "images"
+            ],
+            key=lambda connection: (connection["order"], connection["id"]),
+        )
+
+    layer_initial = client.wait_until("valid Merge preview", valid_preview)
+    original_layers = merge_layers(layer_initial["project"])
+    if len(original_layers) != 3 or original_layers[0]["id"] != connection_id:
+        raise QaFailure(
+            "Merge fixture must start with the Solid as the back-most of three layers"
+        )
+    original_connections = list(layer_initial["project"]["connections"])
+    original_preview = dict(layer_initial["editor"]["preview"])
+    _, edge_component = client.component(edge_id)
+    edge_metadata = edge_component.get("metadata") or {}
+    if not (
+        edge_metadata.get("authored_order") == original["order"]
+        and edge_metadata.get("back_to_front_index") == 0
+        and edge_metadata.get("layer_count") == 3
+        and edge_metadata.get("authored_blend_mode") == "normal"
+        and edge_metadata.get("authored_blend_available") is True
+    ):
+        raise QaFailure("Merge edge omitted canonical order/blend QA metadata")
+
+    client.click_component(edge_id, button="secondary")
+    order_id = "node_editor.wire_menu.order:" + connection_id
+    back_id = "node_editor.wire_menu.order_back:" + connection_id
+    front_id = "node_editor.wire_menu.order_front:" + connection_id
+    blend_id = "node_editor.wire_menu.blend.multiply:" + connection_id
+    _, order_component = client.wait_component(order_id)
+    order_metadata = order_component.get("metadata") or {}
+    if not (
+        order_metadata.get("back_to_front_index") == 0
+        and order_metadata.get("layer_count") == 3
+        and order_metadata.get("authored_blend_mode") == "normal"
+    ):
+        raise QaFailure("Merge wire menu did not identify Back->Front index 0/3")
+    boundary_before = client.state()
+    click_disabled_component(client, back_id)
+    boundary_after = client.state()
+    if (
+        boundary_after["project"]["connections"] != original_connections
+        or history_depth(boundary_after) != history_depth(boundary_before)
+    ):
+        raise QaFailure("disabled Move Back changed Project or history")
+
+    client.click_component(front_id)
+    expected_order_one = [
+        original_layers[1]["id"],
+        connection_id,
+        original_layers[2]["id"],
+    ]
+    order_one_project = client.wait_project(
+        "Solid Merge layer moved one step toward Front",
+        lambda project: [item["id"] for item in merge_layers(project)]
+        == expected_order_one,
+    )
+    order_one_connection = project_connection(order_one_project["project"], connection_id)
+    if not (
+        order_one_connection["id"] == original["id"]
+        and order_one_connection["from"] == original["from"]
+        and order_one_connection["to"] == original["to"]
+        and order_one_connection["order"] == 1
+        and order_one_connection["blend_mode"] == original["blend_mode"]
+    ):
+        raise QaFailure("Move Front changed wire identity, endpoints, or authored blend")
+    assert_history_delta(
+        boundary_after, order_one_project, 1, "Merge layer Move Front"
+    )
+    order_one_rendered = client.wait_preview_change(
+        original_preview["pixel_hash"], original_preview["render_revision"]
+    )
+    order_one_connections = list(order_one_rendered["project"]["connections"])
+    order_one_preview = dict(order_one_rendered["editor"]["preview"])
+
+    client.click_component(edge_id, button="secondary")
+    _, blend_component = client.wait_component(blend_id)
+    blend_metadata = blend_component.get("metadata") or {}
+    if not (
+        blend_metadata.get("blend_mode") == "multiply"
+        and blend_metadata.get("runtime_first_produced_may_be_normal") is True
+    ):
+        raise QaFailure("Merge blend menu omitted authored/runtime distinction")
+    blend_before = client.state()
+    client.click_component(blend_id)
+    blend_project = client.wait_project(
+        "Merge wire authored Multiply",
+        lambda project: (
+            project_connection(project, connection_id)["blend_mode"] == "Multiply"
+            and project_connection(project, connection_id)["order"] == 1
+        ),
+    )
+    blended_connection = project_connection(blend_project["project"], connection_id)
+    for field in ("id", "from", "to", "order"):
+        if blended_connection[field] != order_one_connection[field]:
+            raise QaFailure("authored blend changed wire {}".format(field))
+    assert_history_delta(blend_before, blend_project, 1, "Merge authored Multiply")
+    blended_rendered = client.wait_preview_change(
+        order_one_preview["pixel_hash"], order_one_preview["render_revision"]
+    )
+    blended_connections = list(blended_rendered["project"]["connections"])
+    blended_preview = dict(blended_rendered["editor"]["preview"])
+
+    client.click_component(edge_id, button="secondary")
+    client.wait_component(front_id)
+    second_front_before = client.state()
+    client.click_component(front_id)
+    expected_front = [
+        original_layers[1]["id"],
+        original_layers[2]["id"],
+        connection_id,
+    ]
+    front_project = client.wait_project(
+        "Solid Merge layer moved to the front",
+        lambda project: [item["id"] for item in merge_layers(project)]
+        == expected_front,
+    )
+    front_connection = project_connection(front_project["project"], connection_id)
+    if not (
+        front_connection["id"] == original["id"]
+        and front_connection["from"] == original["from"]
+        and front_connection["to"] == original["to"]
+        and front_connection["order"] == 2
+        and front_connection["blend_mode"] == "Multiply"
+    ):
+        raise QaFailure("front-most reorder lost wire identity or authored blend")
+    assert_history_delta(
+        second_front_before, front_project, 1, "Merge second Move Front"
+    )
+    front_rendered = client.wait_preview_change(
+        blended_preview["pixel_hash"], blended_preview["render_revision"]
+    )
+    front_connections = list(front_rendered["project"]["connections"])
+    front_preview = dict(front_rendered["editor"]["preview"])
+
+    client.click_component(edge_id, button="secondary")
+    _, last_order = client.wait_component(order_id)
+    last_order_metadata = last_order.get("metadata") or {}
+    if not (
+        last_order_metadata.get("back_to_front_index") == 2
+        and last_order_metadata.get("layer_count") == 3
+        and last_order_metadata.get("authored_blend_mode") == "multiply"
+    ):
+        raise QaFailure("front-most wire menu metadata lost order/blend state")
+    last_boundary_before = client.state()
+    click_disabled_component(client, front_id)
+    last_boundary_after = client.state()
+    if (
+        last_boundary_after["project"]["connections"] != front_connections
+        or history_depth(last_boundary_after) != history_depth(last_boundary_before)
+        or last_boundary_after["editor"]["preview"]["pixel_hash"]
+        != front_preview["pixel_hash"]
+    ):
+        raise QaFailure("disabled front-most Move Front was not a strict no-op")
+
+    undo_front = undo_project_edit(
+        client,
+        "front-most Merge reorder",
+        lambda project: project["connections"] == blended_connections,
+    )
+    blended_restored = wait_preview_hash_after(
+        client,
+        blended_preview["pixel_hash"],
+        last_boundary_after["editor"]["preview"]["render_revision"],
+        "front-most Merge reorder Undo",
+    )
+    undo_blend = undo_project_edit(
+        client,
+        "Merge authored Multiply",
+        lambda project: project["connections"] == order_one_connections,
+    )
+    order_one_restored = wait_preview_hash_after(
+        client,
+        order_one_preview["pixel_hash"],
+        blended_restored["editor"]["preview"]["render_revision"],
+        "authored blend Undo",
+    )
+    undo_order = undo_project_edit(
+        client,
+        "Merge layer Move Front",
+        lambda project: project["connections"] == original_connections,
+    )
+    merge_restored = wait_preview_hash_after(
+        client,
+        original_preview["pixel_hash"],
+        order_one_restored["editor"]["preview"]["render_revision"],
+        "Merge order Undo",
+    )
+    if any(
+        state["editor"]["preview"]["modal_error"] is not None
+        for state in (undo_front, undo_blend, undo_order, merge_restored)
+    ):
+        raise QaFailure("Merge order/blend Undo surfaced a render error")
+
     # Secondary-click opens a wire command menu; Delete is one undoable
     # canonical mutation and Undo restores the exact UUID/target/order tuple.
     delete_before = client.state()
@@ -2161,7 +2436,9 @@ def run_node_wire_suite(client):
     final = client.state()
     validate_explicit_operation_fixture(final["project"])
     validate_canonical_ownership(final["project"])
-    print("[qa-e2e] searchable Add/context/wire/reconnect/splice/knife passed")
+    print(
+        "[qa-e2e] searchable Add/context/wire/order/blend/reconnect/splice/knife passed"
+    )
     return {
         "ok": True,
         "suite": "node-wire",
@@ -2169,6 +2446,17 @@ def run_node_wire_suite(client):
         "initial_frame": initial["frame"],
         "final_frame": final["frame"],
         "removed_by_knife": sorted(removed_ids),
+        "merge_wire": {
+            "connection_id": connection_id,
+            "back_to_front_ids": [item["id"] for item in original_layers],
+            "preview_hashes": {
+                "original": original_preview["pixel_hash"],
+                "order_one": order_one_preview["pixel_hash"],
+                "multiply": blended_preview["pixel_hash"],
+                "front": front_preview["pixel_hash"],
+                "restored": merge_restored["editor"]["preview"]["pixel_hash"],
+            },
+        },
         "final_history": final["history"],
         "actions": client.evidence,
     }
