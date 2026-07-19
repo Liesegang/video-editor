@@ -1328,21 +1328,50 @@ fn render_clip_timing(
             } else {
                 1.0
             };
-            let start_definition = Clip::timing_property_definition(CLIP_START_TIME_PROPERTY)
-                .expect("Clip start timing metadata");
-            let duration_definition = Clip::timing_property_definition(CLIP_DURATION_PROPERTY)
-                .expect("Clip duration timing metadata");
-            let trim_definition = Clip::timing_property_definition(CLIP_TRIM_IN_PROPERTY)
-                .expect("Clip source-start timing metadata");
-            let stretch_definition = Clip::timing_property_definition(CLIP_TIME_STRETCH_PROPERTY)
-                .expect("Clip stretch timing metadata");
+            let (
+                Some(start_definition),
+                Some(duration_definition),
+                Some(trim_definition),
+                Some(stretch_definition),
+            ) = (
+                Clip::timing_property_definition(CLIP_START_TIME_PROPERTY),
+                Clip::timing_property_definition(CLIP_DURATION_PROPERTY),
+                Clip::timing_property_definition(CLIP_TRIM_IN_PROPERTY),
+                Clip::timing_property_definition(CLIP_TIME_STRETCH_PROPERTY),
+            )
+            else {
+                log::error!("Clip timing definitions are incomplete");
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    "Clip timing metadata is incomplete.",
+                );
+                return;
+            };
             let start_frame = clip.start_time.into_inner() * fps;
             let duration_frame = clip.duration.into_inner() * fps;
             let trim_in_frame = clip.trim_in.into_inner() * fps;
+            let (
+                Some(start_config),
+                Some(duration_config),
+                Some(trim_config),
+                Some(stretch_config),
+            ) = (
+                inspector_timing_drag_config(start_definition, fps, 0.0),
+                inspector_timing_drag_config(duration_definition, fps, start_frame),
+                inspector_timing_drag_config(trim_definition, fps, 0.0),
+                FloatDragValueConfig::from_definition(stretch_definition),
+            )
+            else {
+                log::error!("Clip timing definitions do not use Float UI metadata");
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    "Clip timing controls have invalid metadata.",
+                );
+                return;
+            };
 
             ui.label(format!("{} Frame", start_definition.label()));
             let mut edited_start = start_frame;
-            let start_config = inspector_timing_drag_config(start_definition, fps, 0.0);
             let response = ui.add(start_config.widget(&mut edited_start));
             if response.changed() {
                 if let Err(error) = project_service.update_clip_timing(
@@ -1361,8 +1390,6 @@ fn render_clip_timing(
 
             ui.label("Out Frame");
             let mut edited_end = start_frame + duration_frame;
-            let duration_config =
-                inspector_timing_drag_config(duration_definition, fps, start_frame);
             let response = ui.add(duration_config.widget(&mut edited_end));
             if response.changed() {
                 let duration = edited_end / fps - clip.start_time.into_inner();
@@ -1382,7 +1409,6 @@ fn render_clip_timing(
 
             ui.label(format!("{} Frame", trim_definition.label()));
             let mut edited_trim = trim_in_frame;
-            let trim_config = inspector_timing_drag_config(trim_definition, fps, 0.0);
             let response = ui.add(trim_config.widget(&mut edited_trim));
             if response.changed() {
                 if let Err(error) = project_service.update_clip_property(
@@ -1400,8 +1426,6 @@ fn render_clip_timing(
 
             ui.label(stretch_definition.label());
             let mut edited_stretch = clip.time_stretch.into_inner();
-            let stretch_config = FloatDragValueConfig::from_definition(stretch_definition)
-                .expect("Clip stretch has Float drag metadata");
             let response = ui.add(stretch_config.widget(&mut edited_stretch));
             if response.changed() {
                 if let Err(error) = project_service.update_clip_property(
@@ -1427,10 +1451,9 @@ fn inspector_timing_drag_config(
     definition: &PropertyDefinition,
     fps: f64,
     frame_offset: f64,
-) -> FloatDragValueConfig {
+) -> Option<FloatDragValueConfig> {
     FloatDragValueConfig::from_definition(definition)
-        .expect("Clip timing definition has Float drag metadata")
-        .transformed(fps, frame_offset, " fr")
+        .map(|config| config.transformed(fps, frame_offset, " fr"))
 }
 
 fn commit_timing_edit(
@@ -2083,7 +2106,7 @@ mod tests {
     fn node_and_inspector_timing_adapters_derive_from_the_same_clip_metadata() {
         let duration = Clip::timing_property_definition("duration").unwrap();
         let node = crate::ui::panels::node_editor::node_timing_drag_config(duration);
-        let inspector = inspector_timing_drag_config(duration, 30.0, 120.0);
+        let inspector = inspector_timing_drag_config(duration, 30.0, 120.0).unwrap();
 
         assert_eq!(inspector.speed, node.speed * 30.0);
         assert_eq!(

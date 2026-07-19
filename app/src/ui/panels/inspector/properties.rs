@@ -213,8 +213,20 @@ where
                     .unwrap_or(prop_def.default_value().get_as::<f64>().unwrap_or(0.0));
 
                 let mut val_mut = current_val;
-                let config = FloatDragValueConfig::from_definition(prop_def)
-                    .expect("Float definition has Float drag metadata");
+                let Some(config) = FloatDragValueConfig::from_definition(prop_def) else {
+                    log::error!(
+                        "Float property '{}' has incompatible UI metadata",
+                        prop_def.name()
+                    );
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        format!("Invalid Float metadata for {}", prop_def.label()),
+                    );
+                    if context.in_grid {
+                        ui.end_row();
+                    }
+                    continue;
+                };
                 let response = ui.add(config.widget(&mut val_mut));
                 register_property_control(
                     context,
@@ -249,8 +261,20 @@ where
                     .unwrap_or(prop_def.default_value().get_as::<i64>().unwrap_or(0));
 
                 let mut val_mut = current_val;
-                let config = IntegerDragValueConfig::from_ui_type(prop_def.ui_type())
-                    .expect("Integer definition has Integer drag metadata");
+                let Some(config) = IntegerDragValueConfig::from_ui_type(prop_def.ui_type()) else {
+                    log::error!(
+                        "Integer property '{}' has incompatible UI metadata",
+                        prop_def.name()
+                    );
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        format!("Invalid Integer metadata for {}", prop_def.label()),
+                    );
+                    if context.in_grid {
+                        ui.end_row();
+                    }
+                    continue;
+                };
                 let response = ui.add(config.widget(&mut val_mut));
                 register_property_control(
                     context,
