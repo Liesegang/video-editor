@@ -359,6 +359,8 @@ pub fn show_track_list(
 
                 if track_interaction_response.clicked_by(egui::PointerButton::Primary) {
                     editor_context.selection.last_selected_track_id = Some(track.id);
+                    editor_context.selection.last_selected_entity_id = None;
+                    editor_context.selection.selected_entities.clear();
                 }
 
                 if track_interaction_response.drag_started_by(egui::PointerButton::Primary) {
