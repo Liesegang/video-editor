@@ -811,6 +811,7 @@ impl RuntimeLibrary {
     }
 }
 
+#[derive(Debug)]
 enum ExtensionStatus {
     Ok,
     Unsupported(String),
@@ -2959,6 +2960,47 @@ mod tests {
         }
     }
 
+    fn effect_component() -> ComponentDescriptorV1 {
+        ComponentDescriptorV1 {
+            id: "example.runtime_effect".to_string(),
+            name: "Runtime Effect".to_string(),
+            category: EFFECT_CATEGORY.to_string(),
+            group: "Tests".to_string(),
+            version: "1.0.0".to_string(),
+            operations: vec![EFFECT_PROCESS_CPU_RGBA8_V1.to_string()],
+            properties: vec![PropertyDefinitionV1 {
+                name: "amount".to_string(),
+                label: "Amount".to_string(),
+                ui: PropertyUiV1::Float {
+                    min: 0.0,
+                    max: 1.0,
+                    step: 0.1,
+                    suffix: String::new(),
+                    min_hard_limit: true,
+                    max_hard_limit: true,
+                },
+                default: serde_json::json!(0.5),
+            }],
+            output_default: None,
+        }
+    }
+
+    fn loader_component() -> ComponentDescriptorV1 {
+        ComponentDescriptorV1 {
+            id: "example.runtime_loader".to_string(),
+            name: "Runtime Loader".to_string(),
+            category: LOADER_CATEGORY.to_string(),
+            group: "Tests".to_string(),
+            version: "1.0.0".to_string(),
+            operations: vec![
+                LOADER_OPEN_V1.to_string(),
+                LOADER_LOAD_CPU_RGBA8_V1.to_string(),
+            ],
+            properties: Vec::new(),
+            output_default: None,
+        }
+    }
+
     fn config_descriptor() -> PluginDescriptorV1 {
         PluginDescriptorV1 {
             name: "Runtime config test".to_string(),
@@ -3772,6 +3814,72 @@ mod tests {
     }
 
     #[test]
+    fn high_bandwidth_categories_require_exact_extensions_and_loader_has_no_fake_properties() {
+        let effect = effect_component();
+        let loader = loader_component();
+        validate_descriptor(&PluginDescriptorV1 {
+            name: "Typed hot paths".to_string(),
+            vendor: "Tests".to_string(),
+            version: "1.0.0".to_string(),
+            components: vec![effect.clone(), loader.clone()],
+        })
+        .expect("the exact typed Effect/Loader contracts are accepted");
+
+        let mut missing_effect_operation = effect;
+        missing_effect_operation.operations = vec!["effect.apply.v1".to_string()];
+        assert!(
+            validate_descriptor(&descriptor_with(missing_effect_operation))
+                .expect_err("Effect must declare its typed CPU RGBA8 operation")
+                .to_string()
+                .contains(EFFECT_PROCESS_CPU_RGBA8_V1)
+        );
+
+        let mut fake_loader_property = loader;
+        fake_loader_property.properties = style_component().properties;
+        assert!(
+            validate_descriptor(&descriptor_with(fake_loader_property))
+                .expect_err("Loader config cannot be advertised without an execution contract")
+                .to_string()
+                .contains("must not declare properties")
+        );
+    }
+
+    #[test]
+    fn missing_effect_extension_rejects_the_entire_mixed_bundle_before_registration() {
+        let descriptor = PluginDescriptorV1 {
+            name: "Atomic Style and Effect".to_string(),
+            vendor: "Tests".to_string(),
+            version: "1.0.0".to_string(),
+            components: vec![style_component(), effect_component()],
+        };
+        let mut registry = RuntimePluginRegistry::new();
+        let mut effects: PluginRepository<dyn EffectPlugin> = PluginRepository::new();
+        let mut loaders = LoadRepository::new();
+        let mut effectors: PluginRepository<dyn EffectorPlugin> = PluginRepository::new();
+        let mut decorators: PluginRepository<dyn DecoratorPlugin> = PluginRepository::new();
+        let mut styles: PluginRepository<dyn StylePlugin> = PluginRepository::new();
+        let mut property_evaluators = PropertyEvaluatorRegistry::new();
+        let error = registry
+            .register_bundle(
+                pending_bundle(descriptor),
+                RuntimeRegistrationTargets {
+                    effect_plugins: &mut effects,
+                    load_plugins: &mut loaders,
+                    effector_plugins: &mut effectors,
+                    decorator_plugins: &mut decorators,
+                    style_plugins: &mut styles,
+                    property_evaluators: &mut property_evaluators,
+                },
+            )
+            .expect_err("a missing typed Effect extension rejects the mixed bundle")
+            .to_string();
+        assert!(error.contains(EFFECT_CPU_RGBA8_EXTENSION_V1));
+        assert!(registry.components.is_empty());
+        assert!(effects.plugins.is_empty());
+        assert!(styles.plugins.is_empty());
+    }
+
+    #[test]
     fn property_category_requires_a_valid_explicit_output_default() {
         let valid = property_component(Some(PropertyValueV1::Number { value: 0.0 }));
         validate_descriptor(&descriptor_with(valid))
@@ -3931,5 +4039,169 @@ mod tests {
         assert_eq!(registered.len(), 2);
         assert!(effectors.get("example.first").is_some());
         assert!(effectors.get("example.second").is_some());
+    }
+
+    static FREED_TEST_FRAMES: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    unsafe extern "C" fn free_test_frame(
+        _context: *mut std::ffi::c_void,
+        frame: RuvieOwnedRgba8FrameV1,
+    ) {
+        FREED_TEST_FRAMES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // SAFETY: Each test frame below is allocated by `RuvieBuffer::from_vec`
+        // and this callback receives the exact buffer once.
+        unsafe { ruvie_plugin_api::free_owned_buffer(frame.pixels) };
+    }
+
+    fn owned_test_frame(
+        pixels: Vec<u8>,
+        width: u32,
+        height: u32,
+        stride_bytes: usize,
+    ) -> RuvieOwnedRgba8FrameV1 {
+        RuvieOwnedRgba8FrameV1 {
+            struct_size: size_of::<RuvieOwnedRgba8FrameV1>(),
+            width,
+            height,
+            stride_bytes,
+            alpha_mode: ALPHA_MODE_STRAIGHT_V1,
+            color_profile: COLOR_PROFILE_SRGB_V1,
+            pixels: RuvieBuffer::from_vec(pixels),
+        }
+    }
+
+    #[test]
+    fn malformed_and_overflowing_rgba8_outputs_are_rejected_and_reclaimed() {
+        FREED_TEST_FRAMES.store(0, std::sync::atomic::Ordering::SeqCst);
+
+        let mut wrong_alpha = owned_test_frame(vec![1, 2, 3, 255], 1, 1, 4);
+        wrong_alpha.alpha_mode = 99;
+        assert!(
+            copy_owned_frame(std::ptr::null_mut(), Some(free_test_frame), wrong_alpha)
+                .expect_err("unknown alpha semantics must be rejected")
+                .to_string()
+                .contains("alpha mode")
+        );
+
+        let overflowing = owned_test_frame(vec![0; 4], 1, 2, usize::MAX);
+        assert!(
+            copy_owned_frame(std::ptr::null_mut(), Some(free_test_frame), overflowing)
+                .expect_err("stride times height overflow must be rejected before reading")
+                .to_string()
+                .contains("overflow")
+        );
+        assert_eq!(
+            FREED_TEST_FRAMES.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "semantic rejection must still return plugin allocations exactly once"
+        );
+
+        let unreclaimable = RuvieOwnedRgba8FrameV1 {
+            pixels: RuvieBuffer {
+                ptr: std::ptr::null_mut(),
+                len: 4,
+                capacity: 4,
+            },
+            ..RuvieOwnedRgba8FrameV1::empty()
+        };
+        assert!(
+            copy_owned_frame(std::ptr::null_mut(), Some(free_test_frame), unreclaimable)
+                .expect_err("a null non-empty buffer cannot be dereferenced or freed")
+                .to_string()
+                .contains("unreclaimable")
+        );
+        assert_eq!(
+            FREED_TEST_FRAMES.load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+    }
+
+    #[test]
+    fn rgba8_and_metadata_bounds_fail_before_large_allocation() {
+        assert!(
+            validate_rgba8_layout(1, 2, usize::MAX, 0)
+                .expect_err("multiplication overflow must be explicit")
+                .to_string()
+                .contains("overflow")
+        );
+        let stride = usize::try_from(MAX_CPU_RGBA8_DIMENSION_V1).unwrap_or(usize::MAX) * 4;
+        let oversized_len = stride * 5_000;
+        assert!(oversized_len > MAX_CPU_RGBA8_FRAME_BYTES_V1);
+        assert!(
+            validate_rgba8_layout(MAX_CPU_RGBA8_DIMENSION_V1, 5_000, stride, oversized_len)
+                .expect_err("the ABI frame byte cap must be enforced")
+                .to_string()
+                .contains("bounded layout")
+        );
+
+        let invalid_metadata = RuvieAssetMetadataV1 {
+            kind: ASSET_KIND_VIDEO_V1,
+            present_fields: ASSET_METADATA_FPS_V1 | ASSET_METADATA_TIME_BASE_V1,
+            fps: f64::NAN,
+            time_base_numerator: 1,
+            time_base_denominator: 0,
+            ..RuvieAssetMetadataV1::default()
+        };
+        assert!(
+            metadata_from_wire(invalid_metadata)
+                .expect_err("non-finite FPS must be rejected")
+                .to_string()
+                .contains("FPS")
+        );
+    }
+
+    #[test]
+    fn panic_status_and_message_cross_the_boundary_without_becoming_no_output() {
+        let library = RuntimeLibrary {
+            api: RuviePluginApiV1 {
+                abi_version: RUVIE_PLUGIN_ABI_V1,
+                struct_size: size_of::<RuviePluginApiV1>(),
+                context: std::ptr::null_mut(),
+                descriptor_json: None,
+                invoke_json: None,
+                free_buffer: Some(test_free_buffer),
+                query_extension: None,
+            },
+            _library: current_process_library(),
+        };
+        let error = library
+            .consume_extension_result(RuvieExtensionResultV1::error(
+                ruvie_plugin_api::STATUS_PANIC,
+                "fixture callback panicked",
+            ))
+            .expect_err("STATUS_PANIC must remain a real plugin failure")
+            .to_string();
+        assert!(error.contains("status 3"));
+        assert!(error.contains("fixture callback panicked"));
+    }
+
+    #[test]
+    fn runtime_cache_keys_include_plugin_operation_source_config_and_time() {
+        let image_a = LoadRequest::Image {
+            path: "/virtual/a.fixture".to_string(),
+        };
+        let image_b = LoadRequest::Image {
+            path: "/virtual/b.fixture".to_string(),
+        };
+        assert_ne!(
+            runtime_loader_cache_key("loader.a", &image_a),
+            runtime_loader_cache_key("loader.b", &image_a)
+        );
+        assert_ne!(
+            runtime_loader_cache_key("loader.a", &image_a),
+            runtime_loader_cache_key("loader.a", &image_b)
+        );
+        assert_ne!(source_time_bits(0.25), source_time_bits(0.5));
+
+        let first = EffectConfigKey(vec![(
+            "amount".to_string(),
+            PropertyValue::Number(OrderedFloat(0.25)),
+        )]);
+        let second = EffectConfigKey(vec![(
+            "amount".to_string(),
+            PropertyValue::Number(OrderedFloat(0.5)),
+        )]);
+        assert_ne!(first, second);
     }
 }
