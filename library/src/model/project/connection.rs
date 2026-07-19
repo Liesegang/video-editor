@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-use crate::model::{GeneratorContent, NodeContent};
+use crate::model::{BlendMode, GeneratorContent, NodeContent};
 
 use super::{NodeContainer, Project, ProjectGraphError};
 
@@ -198,6 +198,7 @@ impl PortDefinition {
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectConnection {
     pub id: Uuid,
     pub from: PortAddress,
@@ -205,6 +206,9 @@ pub struct ProjectConnection {
     /// Stable evaluation order for variadic inputs. It is independent of UI
     /// pin indices and remains meaningful after layout changes.
     pub order: i64,
+    /// Compositing mode owned by this wire. This is meaningful only for an
+    /// Image connection targeting a Merge Node's variadic `images` input.
+    pub blend_mode: BlendMode,
 }
 
 impl ProjectConnection {
@@ -214,6 +218,7 @@ impl ProjectConnection {
             from,
             to,
             order,
+            blend_mode: BlendMode::Normal,
         }
     }
 }
@@ -633,6 +638,35 @@ impl Project {
         Ok(())
     }
 
+    /// Set the compositing mode for one canonical Merge input without
+    /// changing its persistent identity or order. Non-normal modes belong to
+    /// Image -> Merge `images` wires; every other connection remains Normal.
+    pub fn set_connection_blend_mode(
+        &mut self,
+        connection_id: Uuid,
+        blend_mode: BlendMode,
+    ) -> Result<(), ProjectGraphError> {
+        let index = self
+            .connections
+            .iter()
+            .position(|connection| connection.id == connection_id)
+            .ok_or(ProjectGraphError::ConnectionNotFound(connection_id))?;
+        let mut candidate = self.connections[index].clone();
+        candidate.blend_mode = blend_mode;
+        if let Some(error) = self
+            .validate_connection_blend_mode(&candidate)
+            .into_iter()
+            .next()
+        {
+            return Err(error);
+        }
+        if self.connections[index].blend_mode == blend_mode {
+            return Ok(());
+        }
+        self.connections[index].blend_mode = blend_mode;
+        Ok(())
+    }
+
     pub fn disconnect_connection(&mut self, id: Uuid) -> bool {
         self.disconnect_connections([id]) == 1
     }
@@ -756,7 +790,7 @@ impl Project {
         }
         let baseline = self.validate_connections();
         let mut candidate = self.clone();
-        let upstream_id = candidate.connect_ports(original.from.clone(), via_input)?;
+        let upstream_id = candidate.connect_ports(original.from, via_input)?;
         let downstream = candidate
             .connections
             .iter_mut()
@@ -936,7 +970,7 @@ impl Project {
     }
 
     pub fn validate_connection(&self, connection: &ProjectConnection) -> Vec<ProjectGraphError> {
-        let mut errors = Vec::new();
+        let mut errors = self.validate_connection_blend_mode(connection);
         let Some(source) = self.port_definition(&connection.from, PortDirection::Output) else {
             errors.push(ProjectGraphError::PortNotFound(connection.from.clone()));
             return errors;
@@ -972,6 +1006,49 @@ impl Project {
             errors.push(ProjectGraphError::ConnectionCycle {
                 from: connection.from.owner,
                 to: connection.to.owner,
+            });
+        }
+        errors
+    }
+
+    fn validate_connection_blend_mode(
+        &self,
+        connection: &ProjectConnection,
+    ) -> Vec<ProjectGraphError> {
+        if connection.blend_mode == BlendMode::Normal {
+            return Vec::new();
+        }
+
+        let mut errors = Vec::new();
+        let source_is_image = self
+            .port_definition(&connection.from, PortDirection::Output)
+            .is_some_and(|source| source.data_type == PortDataType::Image);
+        if !source_is_image {
+            errors.push(ProjectGraphError::ConnectionBlendRequiresImageSource {
+                connection_id: connection.id,
+                blend_mode: connection.blend_mode,
+            });
+        }
+
+        let target_is_merge_images = connection.to.port == MERGE_IMAGES_PORT
+            && matches!(
+                connection.to.owner,
+                PortOwner::Node(node_id)
+                    if self
+                        .get_node(node_id)
+                        .is_some_and(|node| matches!(node.content, NodeContent::Merge))
+            )
+            && self
+                .port_definition(&connection.to, PortDirection::Input)
+                .is_some_and(|target| {
+                    target.data_type == PortDataType::Image
+                        && target.multiplicity == PortMultiplicity::Variadic
+                });
+        if !target_is_merge_images {
+            errors.push(ProjectGraphError::ConnectionBlendRequiresMergeImagesInput {
+                connection_id: connection.id,
+                blend_mode: connection.blend_mode,
+                target: connection.to.clone(),
             });
         }
         errors
@@ -1278,16 +1355,20 @@ mod tests {
                 kind: ContainerImageSourceKind::OutputBinding,
             }]
         );
-        assert!(project
-            .container_image_sources(PortOwner::Node(second_clip_node))
-            .is_empty());
-        assert!(project
-            .container_image_sources(PortOwner::Track(Uuid::new_v4()))
-            .is_empty());
+        assert!(
+            project
+                .container_image_sources(PortOwner::Node(second_clip_node))
+                .is_empty()
+        );
+        assert!(
+            project
+                .container_image_sources(PortOwner::Track(Uuid::new_v4()))
+                .is_empty()
+        );
     }
 
     #[test]
-    fn reconnect_and_splice_keep_the_downstream_connection_identity_order_and_target() {
+    fn reconnect_reorder_and_splice_keep_the_downstream_wire_identity_and_blend() {
         let mut project = Project::new("connection editing");
         let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
         let composition_id = composition.id;
@@ -1313,6 +1394,10 @@ mod tests {
                 target_address.clone(),
             )
             .unwrap();
+        project
+            .set_connection_blend_mode(connection_id, BlendMode::Multiply)
+            .unwrap();
+        project.reorder_connection(connection_id, 0).unwrap();
         let original_order = project
             .connections
             .iter()
@@ -1334,6 +1419,7 @@ mod tests {
             .unwrap();
         assert_eq!(reconnected.to, target_address);
         assert_eq!(reconnected.order, original_order);
+        assert_eq!(reconnected.blend_mode, BlendMode::Multiply);
 
         let upstream_id = project
             .splice_connection(
@@ -1350,6 +1436,7 @@ mod tests {
         assert_eq!(downstream.from.owner, PortOwner::Node(via));
         assert_eq!(downstream.to, target_address);
         assert_eq!(downstream.order, original_order);
+        assert_eq!(downstream.blend_mode, BlendMode::Multiply);
         let upstream = project
             .connections
             .iter()
@@ -1357,7 +1444,134 @@ mod tests {
             .unwrap();
         assert_eq!(upstream.from.owner, PortOwner::Node(alternate_source));
         assert_eq!(upstream.to.owner, PortOwner::Node(via));
+        assert_eq!(upstream.blend_mode, BlendMode::Normal);
         assert!(project.validate_connections().is_empty());
+    }
+
+    #[test]
+    fn blend_modes_are_fanout_specific_and_invalid_assignments_are_atomic() {
+        let mut project = Project::new("wire blend contracts");
+        let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
+        let composition_id = composition.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let container = NodeContainer::Composition(composition_id);
+        let source = add_node(&mut project, container, "source");
+        let first_merge = add_node(&mut project, container, "first merge");
+        let second_merge = add_node(&mut project, container, "second merge");
+        let reference = add_reference_node(&mut project, container, "reference");
+
+        let source_output = PortAddress::new(PortOwner::Node(source), IMAGE_OUTPUT_PORT);
+        let first_wire = project
+            .connect_ports(
+                source_output.clone(),
+                PortAddress::new(PortOwner::Node(first_merge), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
+        let second_wire = project
+            .connect_ports(
+                source_output.clone(),
+                PortAddress::new(PortOwner::Node(second_merge), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
+        project
+            .set_connection_blend_mode(first_wire, BlendMode::Add)
+            .unwrap();
+        project
+            .set_connection_blend_mode(second_wire, BlendMode::Multiply)
+            .unwrap();
+        assert_eq!(
+            project
+                .connections
+                .iter()
+                .find(|connection| connection.id == first_wire)
+                .unwrap()
+                .blend_mode,
+            BlendMode::Add
+        );
+        assert_eq!(
+            project
+                .connections
+                .iter()
+                .find(|connection| connection.id == second_wire)
+                .unwrap()
+                .blend_mode,
+            BlendMode::Multiply
+        );
+
+        let non_merge_target = PortAddress::new(PortOwner::Node(reference), IMAGE_INPUT_PORT);
+        let non_merge_wire = project
+            .connect_ports(source_output, non_merge_target.clone())
+            .unwrap();
+        let before_non_merge = project.clone();
+        let before_non_merge_bytes = project.save().unwrap();
+        assert_eq!(
+            project
+                .set_connection_blend_mode(non_merge_wire, BlendMode::Screen)
+                .unwrap_err(),
+            ProjectGraphError::ConnectionBlendRequiresMergeImagesInput {
+                connection_id: non_merge_wire,
+                blend_mode: BlendMode::Screen,
+                target: non_merge_target.clone(),
+            }
+        );
+        assert_eq!(project, before_non_merge);
+        assert_eq!(project.save().unwrap(), before_non_merge_bytes);
+
+        let number_wire = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Composition(composition_id), TIME_PORT),
+                PortAddress::new(PortOwner::Node(source), TIME_PORT),
+            )
+            .unwrap();
+        let before_number = project.clone();
+        let before_number_bytes = project.save().unwrap();
+        assert_eq!(
+            project
+                .set_connection_blend_mode(number_wire, BlendMode::Overlay)
+                .unwrap_err(),
+            ProjectGraphError::ConnectionBlendRequiresImageSource {
+                connection_id: number_wire,
+                blend_mode: BlendMode::Overlay,
+            }
+        );
+        assert_eq!(project, before_number);
+        assert_eq!(project.save().unwrap(), before_number_bytes);
+
+        project
+            .connections
+            .iter_mut()
+            .find(|connection| connection.id == non_merge_wire)
+            .unwrap()
+            .blend_mode = BlendMode::Screen;
+        project
+            .connections
+            .iter_mut()
+            .find(|connection| connection.id == number_wire)
+            .unwrap()
+            .blend_mode = BlendMode::Overlay;
+        let malformed_bytes = project.save().unwrap();
+        assert!(matches!(
+            project
+                .set_connection_blend_mode(non_merge_wire, BlendMode::Screen)
+                .unwrap_err(),
+            ProjectGraphError::ConnectionBlendRequiresMergeImagesInput { .. }
+        ));
+        assert_eq!(project.save().unwrap(), malformed_bytes);
+        let errors = project.validate_connections();
+        assert!(errors.contains(
+            &ProjectGraphError::ConnectionBlendRequiresMergeImagesInput {
+                connection_id: non_merge_wire,
+                blend_mode: BlendMode::Screen,
+                target: non_merge_target,
+            }
+        ));
+        assert!(
+            errors.contains(&ProjectGraphError::ConnectionBlendRequiresImageSource {
+                connection_id: number_wire,
+                blend_mode: BlendMode::Overlay,
+            })
+        );
     }
 
     #[test]
@@ -1396,10 +1610,12 @@ mod tests {
                 single_a_input.clone(),
             )
             .unwrap();
-        assert!(!project
-            .connections
-            .iter()
-            .any(|item| item.id == occupied_id));
+        assert!(
+            !project
+                .connections
+                .iter()
+                .any(|item| item.id == occupied_id)
+        );
         assert_eq!(
             project
                 .connections
@@ -1419,11 +1635,14 @@ mod tests {
                 )
                 .unwrap();
         }
-        project
+        let target_b_existing = project
             .connect_ports(
                 PortAddress::new(PortOwner::Node(sources[3]), IMAGE_OUTPUT_PORT),
                 target_b_input.clone(),
             )
+            .unwrap();
+        project
+            .set_connection_blend_mode(target_b_existing, BlendMode::Screen)
             .unwrap();
         let moved_variadic = project
             .connections
@@ -1434,12 +1653,24 @@ mod tests {
             .unwrap()
             .id;
         project
+            .set_connection_blend_mode(moved_variadic, BlendMode::Add)
+            .unwrap();
+        project
             .reconnect_connection(
                 moved_variadic,
                 PortAddress::new(PortOwner::Node(sources[2]), IMAGE_OUTPUT_PORT),
                 target_b_input.clone(),
             )
             .unwrap();
+        assert_eq!(
+            project
+                .connections
+                .iter()
+                .find(|connection| connection.id == moved_variadic)
+                .unwrap()
+                .blend_mode,
+            BlendMode::Add,
+        );
         let orders = |project: &Project, target: &PortAddress| {
             let mut orders = project
                 .connections
@@ -1463,7 +1694,11 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             error,
-            ProjectGraphError::IncompatiblePortTypes { .. }
+            ProjectGraphError::ConnectionBlendRequiresMergeImagesInput {
+                connection_id,
+                blend_mode: BlendMode::Add,
+                ..
+            } if connection_id == moved_variadic
         ));
         assert_eq!(project, before_invalid, "failed reconnect must roll back");
 
@@ -1479,7 +1714,7 @@ mod tests {
             .connections
             .iter()
             .filter(|connection| connection.to == target_b_input)
-            .map(|connection| (connection.id, connection.order))
+            .map(|connection| (connection.id, connection.order, connection.blend_mode))
             .collect::<Vec<_>>();
         let first_target_a = project
             .connections
@@ -1494,10 +1729,10 @@ mod tests {
                 .connections
                 .iter()
                 .filter(|connection| connection.to == target_b_input)
-                .map(|connection| (connection.id, connection.order))
+                .map(|connection| (connection.id, connection.order, connection.blend_mode))
                 .collect::<Vec<_>>(),
             unaffected_before,
-            "unaffected target UUID/order pairs must be byte-for-byte stable",
+            "unaffected target UUID/order/blend tuples must be byte-for-byte stable",
         );
 
         let remaining_a = project
@@ -1507,9 +1742,19 @@ mod tests {
             .unwrap()
             .id;
         let first_b = unaffected_before[0].0;
+        let surviving_b_blend = unaffected_before[1].2;
         assert_eq!(project.disconnect_connections([remaining_a, first_b]), 2);
         assert!(orders(&project, &target_a_input).is_empty());
         assert_eq!(orders(&project, &target_b_input), vec![0]);
+        assert_eq!(
+            project
+                .connections
+                .iter()
+                .find(|connection| connection.to == target_b_input)
+                .unwrap()
+                .blend_mode,
+            surviving_b_blend,
+        );
     }
 
     #[test]

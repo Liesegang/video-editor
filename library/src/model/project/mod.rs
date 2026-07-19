@@ -406,6 +406,21 @@ pub enum ProjectGraphError {
     PortNotFound(PortAddress),
     #[error("connection {0} does not exist")]
     ConnectionNotFound(Uuid),
+    #[error(
+        "connection {connection_id} cannot use {blend_mode:?}: non-normal blending requires an Image source"
+    )]
+    ConnectionBlendRequiresImageSource {
+        connection_id: Uuid,
+        blend_mode: BlendMode,
+    },
+    #[error(
+        "connection {connection_id} cannot use {blend_mode:?}: target {target:?} is not a Merge images input"
+    )]
+    ConnectionBlendRequiresMergeImagesInput {
+        connection_id: Uuid,
+        blend_mode: BlendMode,
+        target: PortAddress,
+    },
     #[error("cannot splice through occupied single input: {target:?}")]
     SpliceInputOccupied { target: PortAddress },
     #[error("cannot connect {source_type:?} to {target_type:?}")]
