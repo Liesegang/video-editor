@@ -114,9 +114,11 @@ pub struct EffectorContext {
     /// so delay/easing starts simultaneously for every character.
     pub index: usize,
     pub total: usize,
-    /// Stable identity for deterministic per-element variation. Unlike
-    /// `index`, this never resets merely because the target scope is Char.
+    /// Absolute element index, independent of the target-local `index` above.
     pub element_index: usize,
+    /// Deterministic seed identity for target-scoped procedural variation.
+    /// Block uses the global index, Line the line-local index, and Char the
+    /// element's stable identity.
     pub element_identity: u64,
     pub block_group_id: u64,
     pub line_group_id: u64,

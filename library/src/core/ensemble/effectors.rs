@@ -32,10 +32,18 @@ pub fn evaluate_configured_transform(
             | EffectorConfig::Opacity { target, .. }
             | EffectorConfig::Randomize { target, .. } => *target,
         };
-        let (index, total) = match target {
-            EffectorTarget::Block => (element.global_index, element.total_chars),
-            EffectorTarget::Line => (element.line_char_index, element.line_char_count),
-            EffectorTarget::Char => (0, 1),
+        let (index, total, random_identity) = match target {
+            EffectorTarget::Block => (
+                element.global_index,
+                element.total_chars,
+                element.global_index as u64,
+            ),
+            EffectorTarget::Line => (
+                element.line_char_index,
+                element.line_char_count,
+                element.line_char_index as u64,
+            ),
+            EffectorTarget::Char => (0, 1, element.stable_id),
             EffectorTarget::Parts => {
                 return Err(LibraryError::Render(
                     "Ensemble EffectorTarget::Parts is not supported".to_string(),
@@ -47,7 +55,7 @@ pub fn evaluate_configured_transform(
             index,
             total,
             element_index: element.global_index,
-            element_identity: element.stable_id,
+            element_identity: random_identity,
             block_group_id: element.block_group_id,
             line_group_id: element.line_group_id,
             line_index: element.line_index,
