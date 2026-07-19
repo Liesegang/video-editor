@@ -13,21 +13,24 @@ use library::framing::get_frame_from_project;
 use library::model::frame::draw_type::{CapType, DrawStyle, JoinType};
 use library::model::frame::entity::{FrameContent, FrameItem};
 use library::model::project::{
-    EvalOutput, NodeContainer, PortAddress, PortOwner, ProjectConnection, SHAPE_INPUT_PORT,
-    SHAPE_OUTPUT_PORT,
+    EvalOutput, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer, PortAddress, PortOwner,
+    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::model::{Clip, Composition, GeneratorContent, Node, NodeContent, Project};
 use library::plugin::native_plugin_api::{
-    DECORATOR_CATEGORY, PROPERTY_CATEGORY, PropertyValueV1, STYLE_CATEGORY,
+    DECORATOR_CATEGORY, EFFECT_CATEGORY, LOADER_CATEGORY, PROPERTY_CATEGORY, PropertyValueV1,
+    STYLE_CATEGORY,
 };
-use library::plugin::{EvaluationContext, FrameEvaluationContext, PluginManager};
+use library::plugin::{EvaluationContext, FrameEvaluationContext, LoadRequest, PluginManager};
 use library::rendering::renderer::RenderOutput;
 use library::{RenderService, SkiaRenderer};
 
 const FILL_COMPONENT_ID: &str = "runtime_fill_style";
 const STROKE_COMPONENT_ID: &str = "runtime_stroke_style";
 const BACKPLATE_COMPONENT_ID: &str = "runtime_backplate_decorator";
+const EFFECT_COMPONENT_ID: &str = "runtime_solid_tint_effect";
+const LOADER_COMPONENT_ID: &str = "runtime_rgba_fixture_loader";
 
 fn main() -> anyhow::Result<()> {
     let bundle_path = std::env::args_os()
@@ -40,7 +43,7 @@ fn main() -> anyhow::Result<()> {
     if !report.failures.is_empty() {
         bail!("runtime scan failed: {:?}", report.failures);
     }
-    if report.loaded_bundles.len() != 1 || report.registered_components.len() != 4 {
+    if report.loaded_bundles.len() != 1 || report.registered_components.len() != 6 {
         bail!("unexpected first scan report: {report:?}");
     }
 
@@ -97,6 +100,7 @@ fn main() -> anyhow::Result<()> {
 
     verify_unknown_property_is_safe(&manager, &context)?;
     verify_config_operations(&manager, &descriptors)?;
+    verify_runtime_loader(&manager)?;
 
     let second = manager.rescan_runtime_plugin_path(&bundle_path);
     if !second.failures.is_empty() || second.already_loaded_bundles.len() != 1 {
@@ -138,13 +142,32 @@ fn verify_config_operations(
             component.category == DECORATOR_CATEGORY && component.id == BACKPLATE_COMPONENT_ID
         })
         .context("bundle descriptor has no runtime Backplate component")?;
+    let effect_component = components
+        .iter()
+        .copied()
+        .find(|component| {
+            component.category == EFFECT_CATEGORY && component.id == EFFECT_COMPONENT_ID
+        })
+        .context("bundle descriptor has no runtime Effect component")?;
+    let loader_component = components
+        .iter()
+        .copied()
+        .find(|component| {
+            component.category == LOADER_CATEGORY && component.id == LOADER_COMPONENT_ID
+        })
+        .context("bundle descriptor has no runtime Loader component")?;
 
     let fill = manager.create_style_operation_node(FILL_COMPONENT_ID)?;
     let stroke = manager.create_style_operation_node(STROKE_COMPONENT_ID)?;
     let backplate = manager.create_decorator_operation_node(BACKPLATE_COMPONENT_ID)?;
+    let effect = manager.create_effect_operation_node(EFFECT_COMPONENT_ID)?;
     verify_all_defaults(fill_component, &fill)?;
     verify_all_defaults(stroke_component, &stroke)?;
     verify_all_defaults(backplate_component, &backplate)?;
+    verify_all_defaults(effect_component, &effect)?;
+    if !loader_component.properties.is_empty() {
+        bail!("runtime Loader descriptor unexpectedly declares graph properties")
+    }
     verify_hard_minimum(stroke_component, "width")?;
     verify_hard_minimum(stroke_component, "miter")?;
     verify_soft_minimum(stroke_component, "offset")?;
@@ -280,6 +303,72 @@ fn verify_config_operations(
     Ok(())
 }
 
+fn verify_runtime_loader(manager: &PluginManager) -> anyhow::Result<()> {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "ruvie-runtime-loader-{}-{unique}.rgba-fixture",
+        std::process::id()
+    ));
+    let mut fixture = b"RUVRGBA1".to_vec();
+    fixture.extend_from_slice(&2_u32.to_le_bytes());
+    fixture.extend_from_slice(&1_u32.to_le_bytes());
+    fixture.extend_from_slice(&[9, 8, 7, 255, 100, 50, 25, 0]);
+    std::fs::write(&path, &fixture)?;
+    let path_text = path.to_string_lossy().into_owned();
+    let result = (|| -> anyhow::Result<()> {
+        let streams = manager
+            .get_available_streams(&path_text)
+            .context("runtime Loader did not inspect its fixture path")?;
+        let stream = streams
+            .first()
+            .context("runtime Loader returned no stream")?;
+        if stream.kind != library::model::asset::AssetKind::Image
+            || stream.width != Some(2)
+            || stream.height != Some(1)
+        {
+            bail!("runtime Loader returned wrong metadata: {stream:?}")
+        }
+        let loaded = manager.load_resource(
+            &LoadRequest::Image {
+                path: path_text.clone(),
+            },
+            &CacheManager::new(),
+        )?;
+        if loaded.image.width != 2
+            || loaded.image.height != 1
+            || loaded.image.data != [9, 8, 7, 255, 0, 0, 0, 0]
+        {
+            bail!("runtime Loader returned wrong/corrupt RGBA8 pixels")
+        }
+
+        let mut corrupt = b"RUVRGBA1".to_vec();
+        corrupt.extend_from_slice(&2_u32.to_le_bytes());
+        corrupt.extend_from_slice(&1_u32.to_le_bytes());
+        corrupt.extend_from_slice(&[1, 2, 3, 255]);
+        std::fs::write(&path, corrupt)?;
+        let error = manager
+            .load_resource(
+                &LoadRequest::Image {
+                    path: path_text.clone(),
+                },
+                &CacheManager::new(),
+            )
+            .expect_err("corrupt runtime fixture must retain its decoder failure")
+            .to_string();
+        if !error.contains(&path_text)
+            || !error.contains("fixture payload length")
+            || error.contains("No compatible load plugin")
+        {
+            bail!("runtime Loader lost the real path/cause: {error}")
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(path);
+    result
+}
+
 fn verify_runtime_config_graph(manager: &Arc<PluginManager>) -> anyhow::Result<()> {
     let factory = library::editor::project_service::ProjectManager::new(
         Arc::new(RwLock::new(Project::new("runtime graph factory"))),
@@ -308,6 +397,10 @@ fn verify_runtime_config_graph(manager: &Arc<PluginManager>) -> anyhow::Result<(
     backplate.ui_position = [360.0, 0.0];
     let backplate_id = backplate.id;
     graph.nodes.push(backplate);
+    let mut effect = manager.create_effect_operation_node(EFFECT_COMPONENT_ID)?;
+    effect.ui_position = [1_080.0, 0.0];
+    let effect_id = effect.id;
+    graph.nodes.push(effect);
     graph.connections = vec![
         ProjectConnection::new(
             PortAddress::new(PortOwner::Node(text_id), SHAPE_OUTPUT_PORT),
@@ -319,8 +412,13 @@ fn verify_runtime_config_graph(manager: &Arc<PluginManager>) -> anyhow::Result<(
             PortAddress::new(PortOwner::Node(fill_id), SHAPE_INPUT_PORT),
             0,
         ),
+        ProjectConnection::new(
+            PortAddress::new(PortOwner::Node(fill_id), IMAGE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(effect_id), IMAGE_INPUT_PORT),
+            0,
+        ),
     ];
-    graph.output_node_id = Some(fill_id);
+    graph.output_node_id = Some(effect_id);
 
     let (mut composition, track) = Composition::new("Runtime graph", 320, 180, 30.0, 1.0);
     composition.background_color = library::model::frame::color::Color {
@@ -396,12 +494,26 @@ fn verify_runtime_config_graph(manager: &Arc<PluginManager>) -> anyhow::Result<(
     let RenderOutput::Image(image) = render_service.render_from_frame_info(&frame)? else {
         bail!("CPU runtime graph proof unexpectedly returned a texture")
     };
-    if !image
+    let visible = image
         .data
         .chunks_exact(4)
-        .any(|pixel| pixel[3] > 0 && (pixel[0] > 0 || pixel[1] > 0 || pixel[2] > 0))
+        .filter(|pixel| pixel[3] > 0)
+        .collect::<Vec<_>>();
+    if visible.is_empty()
+        || visible
+            .iter()
+            .any(|pixel| !(219..=221).contains(&pixel[0]) || pixel[1] != 0 || pixel[2] != 0)
     {
-        bail!("runtime config graph produced no visible rendered pixels")
+        let samples = visible
+            .iter()
+            .filter(|pixel| !(219..=221).contains(&pixel[0]) || pixel[1] != 0 || pixel[2] != 0)
+            .take(16)
+            .map(|pixel| pixel.to_vec())
+            .collect::<Vec<_>>();
+        bail!(
+            "runtime Effect did not process the FrameEvaluator/CPU Skia pixels: visible={}, samples={samples:?}",
+            visible.len()
+        )
     }
     Ok(())
 }

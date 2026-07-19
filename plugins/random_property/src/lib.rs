@@ -1,23 +1,32 @@
 use std::ffi::c_void;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use ruvie_plugin_api::{
-    BackplateShapeV1, ColorV1, ComponentDescriptorV1, DECORATOR_CATEGORY, DECORATOR_EVALUATE_V1,
-    DecoratorEvaluateRequestV1, DecoratorOutputV1, DecoratorTargetV1, InsetsV1, InvokeRequestV1,
-    MAX_STYLE_DASH_INTERVALS_V1, PROPERTY_CATEGORY, PROPERTY_EVALUATE_V1, PluginDescriptorV1,
+    BackplateShapeV1, ColorV1, ComponentDescriptorV1, DecoratorEvaluateRequestV1,
+    DecoratorOutputV1, DecoratorTargetV1, InsetsV1, InvokeRequestV1, PluginDescriptorV1,
     PropertyDefinitionV1, PropertyEvaluateRequestV1, PropertyEvaluateResponseV1, PropertyUiV1,
-    PropertyValueV1, RUVIE_PLUGIN_ABI_V1, RuvieBuffer, RuvieBytesView, RuvieCallResult,
-    RuviePluginApiV1, STATUS_INVALID_REQUEST, STATUS_PANIC, STYLE_CATEGORY, STYLE_EVALUATE_V1,
-    StrokeCapV1, StrokeJoinV1, StyleEvaluateRequestV1, StyleOutputV1,
+    PropertyValueV1, RuvieAssetMetadataV1, RuvieBuffer, RuvieBytesView, RuvieCallResult,
+    RuvieEffectCpuRgba8ApiV1, RuvieExtensionResultV1, RuvieLoaderCpuRgba8ApiV1,
+    RuvieLoaderRequestV1, RuvieOwnedRgba8FrameV1, RuviePluginApiV1, RuviePropertyMapViewV1,
+    RuvieRgba8FrameViewV1, StrokeCapV1, StrokeJoinV1, StyleEvaluateRequestV1, StyleOutputV1,
+    ALPHA_MODE_STRAIGHT_V1, ASSET_KIND_IMAGE_V1, ASSET_METADATA_DIMENSIONS_V1,
+    COLOR_PROFILE_SRGB_V1, DECORATOR_CATEGORY, DECORATOR_EVALUATE_V1, EFFECT_CATEGORY,
+    EFFECT_CPU_RGBA8_EXTENSION_V1, EFFECT_PROCESS_CPU_RGBA8_V1, LOADER_CATEGORY,
+    LOADER_CPU_RGBA8_EXTENSION_V1, LOADER_LOAD_CPU_RGBA8_V1, LOADER_OPEN_V1, LOAD_REQUEST_IMAGE_V1,
+    MAX_CPU_RGBA8_DIMENSION_V1, MAX_CPU_RGBA8_FRAME_BYTES_V1, MAX_STYLE_DASH_INTERVALS_V1,
+    PROPERTY_CATEGORY, PROPERTY_EVALUATE_V1, PROPERTY_VALUE_INTEGER_V1, RUVIE_PLUGIN_ABI_V1,
+    STATUS_INVALID_REQUEST, STATUS_PANIC, STATUS_PLUGIN_ERROR, STYLE_CATEGORY, STYLE_EVALUATE_V1,
 };
 
 const COMPONENT_ID: &str = "random_property";
 const FILL_COMPONENT_ID: &str = "runtime_fill_style";
 const STROKE_COMPONENT_ID: &str = "runtime_stroke_style";
 const BACKPLATE_COMPONENT_ID: &str = "runtime_backplate_decorator";
+const EFFECT_COMPONENT_ID: &str = "runtime_solid_tint_effect";
+const LOADER_COMPONENT_ID: &str = "runtime_rgba_fixture_loader";
 const DESCRIPTOR_CALLS_OPERATION: &str = "random_property.descriptor_calls.v1";
 static DESCRIPTOR_CALLS: AtomicUsize = AtomicUsize::new(0);
 
@@ -31,7 +40,49 @@ fn descriptor() -> PluginDescriptorV1 {
             fill_descriptor(),
             stroke_descriptor(),
             backplate_descriptor(),
+            effect_descriptor(),
+            loader_descriptor(),
         ],
+    }
+}
+
+fn effect_descriptor() -> ComponentDescriptorV1 {
+    ComponentDescriptorV1 {
+        id: EFFECT_COMPONENT_ID.to_string(),
+        name: "Runtime Solid Tint".to_string(),
+        category: EFFECT_CATEGORY.to_string(),
+        group: "Effect/Runtime Fixture".to_string(),
+        version: "0.1.0".to_string(),
+        operations: vec![EFFECT_PROCESS_CPU_RGBA8_V1.to_string()],
+        properties: vec![PropertyDefinitionV1 {
+            name: "red".to_string(),
+            label: "Red".to_string(),
+            ui: PropertyUiV1::Integer {
+                min: 0,
+                max: 255,
+                suffix: String::new(),
+                min_hard_limit: true,
+                max_hard_limit: true,
+            },
+            default: serde_json::json!(220),
+        }],
+        output_default: None,
+    }
+}
+
+fn loader_descriptor() -> ComponentDescriptorV1 {
+    ComponentDescriptorV1 {
+        id: LOADER_COMPONENT_ID.to_string(),
+        name: "Runtime RGBA Fixture Loader".to_string(),
+        category: LOADER_CATEGORY.to_string(),
+        group: "Loader/Runtime Fixture".to_string(),
+        version: "0.1.0".to_string(),
+        operations: vec![
+            LOADER_OPEN_V1.to_string(),
+            LOADER_LOAD_CPU_RGBA8_V1.to_string(),
+        ],
+        properties: Vec::new(),
+        output_default: None,
     }
 }
 
@@ -638,6 +689,313 @@ fn invalid_request(detail: impl std::fmt::Display) -> RuvieCallResult {
     RuvieCallResult::error(STATUS_INVALID_REQUEST, detail.to_string())
 }
 
+fn extension_guard(action: impl FnOnce() -> RuvieExtensionResultV1) -> RuvieExtensionResultV1 {
+    match catch_unwind(AssertUnwindSafe(action)) {
+        Ok(result) => result,
+        Err(_) => RuvieExtensionResultV1::error(STATUS_PANIC, "plugin callback panicked"),
+    }
+}
+
+unsafe fn bytes_from_view<'a>(view: RuvieBytesView) -> Result<&'a [u8], &'static str> {
+    if view.len == 0 {
+        return Ok(&[]);
+    }
+    if view.ptr.is_null() {
+        return Err("non-empty byte view has a null pointer");
+    }
+    // SAFETY: The caller is inside the ABI callback for which the host keeps
+    // this immutable borrowed byte view alive.
+    Ok(unsafe { std::slice::from_raw_parts(view.ptr, view.len) })
+}
+
+unsafe fn utf8_from_view<'a>(view: RuvieBytesView) -> Result<&'a str, &'static str> {
+    // SAFETY: The same callback-scoped borrowed-view contract applies.
+    std::str::from_utf8(unsafe { bytes_from_view(view)? }).map_err(|_| "byte view is not UTF-8")
+}
+
+fn invalid_extension(detail: impl Into<String>) -> RuvieExtensionResultV1 {
+    RuvieExtensionResultV1::error(STATUS_INVALID_REQUEST, detail)
+}
+
+unsafe extern "C" fn effect_create_instance(
+    _context: *mut c_void,
+    component_id: RuvieBytesView,
+    properties: RuviePropertyMapViewV1,
+    out_instance: *mut u64,
+) -> RuvieExtensionResultV1 {
+    extension_guard(|| {
+        if out_instance.is_null() {
+            return invalid_extension("Effect out_instance is null");
+        }
+        // SAFETY: Component IDs are callback-scoped host byte views.
+        let component_id = match unsafe { utf8_from_view(component_id) } {
+            Ok(value) => value,
+            Err(error) => return invalid_extension(error),
+        };
+        if component_id != EFFECT_COMPONENT_ID {
+            return RuvieExtensionResultV1::unsupported();
+        }
+        if properties.len != 1 || properties.ptr.is_null() {
+            return invalid_extension("Effect requires exactly one typed property");
+        }
+        // SAFETY: The host provides `len` initialized property views for this
+        // callback and does not mutate them concurrently.
+        let properties = unsafe { std::slice::from_raw_parts(properties.ptr, properties.len) };
+        let property = &properties[0];
+        // SAFETY: Property names are callback-scoped host byte views.
+        let name = match unsafe { utf8_from_view(property.name) } {
+            Ok(value) => value,
+            Err(error) => return invalid_extension(error),
+        };
+        if name != "red"
+            || property.value_type != PROPERTY_VALUE_INTEGER_V1
+            || !(0..=255).contains(&property.integer)
+        {
+            return invalid_extension("Effect red must be an integer in 0..=255");
+        }
+        // Zero is reserved by the host, so encode red as one through 256.
+        // SAFETY: The pointer was checked above and is uniquely writable for
+        // this callback.
+        unsafe { *out_instance = u64::try_from(property.integer).unwrap_or_default() + 1 };
+        RuvieExtensionResultV1::ok()
+    })
+}
+
+unsafe extern "C" fn effect_process(
+    _context: *mut c_void,
+    instance: u64,
+    time_seconds: f64,
+    input: *const RuvieRgba8FrameViewV1,
+    output: *mut RuvieOwnedRgba8FrameV1,
+) -> RuvieExtensionResultV1 {
+    extension_guard(|| {
+        if input.is_null() || output.is_null() || !(1..=256).contains(&instance) {
+            return invalid_extension("Effect frame pointer or instance is invalid");
+        }
+        if !time_seconds.is_finite() {
+            return invalid_extension("Effect time must be finite");
+        }
+        // SAFETY: Both pointers are host-owned and valid for the callback.
+        let input = unsafe { &*input };
+        if input.struct_size < std::mem::size_of::<RuvieRgba8FrameViewV1>()
+            || input.alpha_mode != ALPHA_MODE_STRAIGHT_V1
+            || input.color_profile != COLOR_PROFILE_SRGB_V1
+            || input.width == 0
+            || input.height == 0
+            || input.width > MAX_CPU_RGBA8_DIMENSION_V1
+            || input.height > MAX_CPU_RGBA8_DIMENSION_V1
+        {
+            return invalid_extension("Effect input frame metadata is invalid");
+        }
+        let row_bytes = match usize::try_from(input.width)
+            .ok()
+            .and_then(|width| width.checked_mul(4))
+        {
+            Some(value) => value,
+            None => return invalid_extension("Effect input row-byte overflow"),
+        };
+        let expected = match input
+            .stride_bytes
+            .checked_mul(usize::try_from(input.height).unwrap_or(usize::MAX))
+        {
+            Some(value) => value,
+            None => return invalid_extension("Effect input frame-byte overflow"),
+        };
+        if input.stride_bytes < row_bytes
+            || expected != input.pixels.len
+            || expected > MAX_CPU_RGBA8_FRAME_BYTES_V1
+        {
+            return invalid_extension("Effect input stride or length is invalid");
+        }
+        // SAFETY: The complete input layout and non-null pointer contract are
+        // checked by `bytes_from_view` before iteration.
+        let pixels = match unsafe { bytes_from_view(input.pixels) } {
+            Ok(value) => value,
+            Err(error) => return invalid_extension(error),
+        };
+        let red = u8::try_from(instance - 1).unwrap_or_default();
+        let mut tinted = Vec::with_capacity(pixels.len());
+        for row in pixels.chunks_exact(input.stride_bytes) {
+            for pixel in row[..row_bytes].chunks_exact(4) {
+                if pixel[3] == 0 {
+                    tinted.extend_from_slice(&[0, 0, 0, 0]);
+                } else {
+                    tinted.extend_from_slice(&[red, 0, 0, pixel[3]]);
+                }
+            }
+            tinted.resize(tinted.len() + (input.stride_bytes - row_bytes), 0);
+        }
+        let frame = RuvieOwnedRgba8FrameV1 {
+            struct_size: std::mem::size_of::<RuvieOwnedRgba8FrameV1>(),
+            width: input.width,
+            height: input.height,
+            stride_bytes: input.stride_bytes,
+            alpha_mode: ALPHA_MODE_STRAIGHT_V1,
+            color_profile: COLOR_PROFILE_SRGB_V1,
+            pixels: RuvieBuffer::from_vec(tinted),
+        };
+        // SAFETY: The output pointer is uniquely writable for this callback.
+        unsafe { *output = frame };
+        RuvieExtensionResultV1::ok()
+    })
+}
+
+unsafe extern "C" fn effect_release_instance(_context: *mut c_void, _instance: u64) {}
+
+const FIXTURE_MAGIC: &[u8; 8] = b"RUVRGBA1";
+
+fn read_rgba_fixture(path: &str) -> Result<(u32, u32, Vec<u8>), String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("could not read fixture: {error}"))?;
+    if bytes.len() < 16 || &bytes[..8] != FIXTURE_MAGIC {
+        return Err("fixture header magic is invalid".to_string());
+    }
+    let width = u32::from_le_bytes(bytes[8..12].try_into().unwrap_or_default());
+    let height = u32::from_le_bytes(bytes[12..16].try_into().unwrap_or_default());
+    if width == 0
+        || height == 0
+        || width > MAX_CPU_RGBA8_DIMENSION_V1
+        || height > MAX_CPU_RGBA8_DIMENSION_V1
+    {
+        return Err(format!("fixture dimensions {width}x{height} are invalid"));
+    }
+    let expected_pixels = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .and_then(|row| row.checked_mul(usize::try_from(height).unwrap_or(usize::MAX)))
+        .ok_or_else(|| "fixture pixel length overflow".to_string())?;
+    if expected_pixels > MAX_CPU_RGBA8_FRAME_BYTES_V1 || bytes.len() != 16 + expected_pixels {
+        return Err(format!(
+            "fixture payload length {} does not match expected {expected_pixels}",
+            bytes.len().saturating_sub(16)
+        ));
+    }
+    Ok((width, height, bytes[16..].to_vec()))
+}
+
+unsafe extern "C" fn loader_open(
+    _context: *mut c_void,
+    component_id: RuvieBytesView,
+    path: RuvieBytesView,
+    metadata: *mut RuvieAssetMetadataV1,
+    metadata_capacity: usize,
+    out_metadata_len: *mut usize,
+) -> RuvieExtensionResultV1 {
+    extension_guard(|| {
+        // SAFETY: IDs and paths are callback-scoped host byte views.
+        let component_id = match unsafe { utf8_from_view(component_id) } {
+            Ok(value) => value,
+            Err(error) => return invalid_extension(error),
+        };
+        // SAFETY: Same borrowed-view contract as above.
+        let path = match unsafe { utf8_from_view(path) } {
+            Ok(value) => value,
+            Err(error) => return invalid_extension(error),
+        };
+        if component_id != LOADER_COMPONENT_ID || !path.ends_with(".rgba-fixture") {
+            return RuvieExtensionResultV1::unsupported();
+        }
+        if metadata.is_null() || out_metadata_len.is_null() || metadata_capacity < 1 {
+            return invalid_extension("Loader metadata output is invalid");
+        }
+        let (width, height, _) = match read_rgba_fixture(path) {
+            Ok(value) => value,
+            Err(error) => return RuvieExtensionResultV1::error(STATUS_PLUGIN_ERROR, error),
+        };
+        // SAFETY: Capacity is at least one and both output pointers were
+        // checked. The host initialized and owns this memory.
+        unsafe {
+            *metadata = RuvieAssetMetadataV1 {
+                kind: ASSET_KIND_IMAGE_V1,
+                present_fields: ASSET_METADATA_DIMENSIONS_V1,
+                width,
+                height,
+                ..RuvieAssetMetadataV1::default()
+            };
+            *out_metadata_len = 1;
+        }
+        RuvieExtensionResultV1::ok()
+    })
+}
+
+unsafe extern "C" fn loader_load(
+    _context: *mut c_void,
+    component_id: RuvieBytesView,
+    request: *const RuvieLoaderRequestV1,
+    output: *mut RuvieOwnedRgba8FrameV1,
+) -> RuvieExtensionResultV1 {
+    extension_guard(|| {
+        if request.is_null() || output.is_null() {
+            return invalid_extension("Loader request or output is null");
+        }
+        // SAFETY: Component IDs are callback-scoped host byte views.
+        let component_id = match unsafe { utf8_from_view(component_id) } {
+            Ok(value) => value,
+            Err(error) => return invalid_extension(error),
+        };
+        // SAFETY: The request pointer is host-owned for this callback.
+        let request = unsafe { &*request };
+        if request.struct_size < std::mem::size_of::<RuvieLoaderRequestV1>() {
+            return invalid_extension("Loader request table is truncated");
+        }
+        // SAFETY: The request path is callback-scoped host memory.
+        let path = match unsafe { utf8_from_view(request.path) } {
+            Ok(value) => value,
+            Err(error) => return invalid_extension(error),
+        };
+        if component_id != LOADER_COMPONENT_ID
+            || request.request_kind != LOAD_REQUEST_IMAGE_V1
+            || !path.ends_with(".rgba-fixture")
+        {
+            return RuvieExtensionResultV1::unsupported();
+        }
+        let (width, height, pixels) = match read_rgba_fixture(path) {
+            Ok(value) => value,
+            Err(error) => return RuvieExtensionResultV1::error(STATUS_PLUGIN_ERROR, error),
+        };
+        let stride_bytes = usize::try_from(width)
+            .ok()
+            .and_then(|width| width.checked_mul(4))
+            .unwrap_or_default();
+        // SAFETY: Output is uniquely writable and starts in the host-defined
+        // empty ownership state.
+        unsafe {
+            *output = RuvieOwnedRgba8FrameV1 {
+                struct_size: std::mem::size_of::<RuvieOwnedRgba8FrameV1>(),
+                width,
+                height,
+                stride_bytes,
+                alpha_mode: ALPHA_MODE_STRAIGHT_V1,
+                color_profile: COLOR_PROFILE_SRGB_V1,
+                pixels: RuvieBuffer::from_vec(pixels),
+            }
+        };
+        RuvieExtensionResultV1::ok()
+    })
+}
+
+unsafe extern "C" fn free_frame(_context: *mut c_void, frame: RuvieOwnedRgba8FrameV1) {
+    // SAFETY: The host returns a structurally reclaimable frame exactly once
+    // to the extension table that allocated it.
+    unsafe { ruvie_plugin_api::free_owned_buffer(frame.pixels) };
+}
+
+unsafe extern "C" fn query_extension(
+    _context: *mut c_void,
+    extension_name: RuvieBytesView,
+) -> *const c_void {
+    // This callback cannot report an error, so invalid views simply decline.
+    let Ok(name) = (unsafe { bytes_from_view(extension_name) }) else {
+        return std::ptr::null();
+    };
+    if name == EFFECT_CPU_RGBA8_EXTENSION_V1.as_bytes() {
+        (&EFFECT_API as *const RuvieEffectCpuRgba8ApiV1).cast()
+    } else if name == LOADER_CPU_RGBA8_EXTENSION_V1.as_bytes() {
+        (&LOADER_API as *const RuvieLoaderCpuRgba8ApiV1).cast()
+    } else {
+        std::ptr::null()
+    }
+}
+
 unsafe extern "C" fn free_buffer(_context: *mut c_void, buffer: RuvieBuffer) {
     // SAFETY: The host returns every plugin-owned buffer exactly once to the
     // same dynamic library that allocated it.
@@ -651,7 +1009,26 @@ static API: RuviePluginApiV1 = RuviePluginApiV1 {
     descriptor_json: Some(descriptor_json),
     invoke_json: Some(invoke_json),
     free_buffer: Some(free_buffer),
-    query_extension: None,
+    query_extension: Some(query_extension),
+};
+
+static EFFECT_API: RuvieEffectCpuRgba8ApiV1 = RuvieEffectCpuRgba8ApiV1 {
+    abi_version: RUVIE_PLUGIN_ABI_V1,
+    struct_size: std::mem::size_of::<RuvieEffectCpuRgba8ApiV1>(),
+    context: std::ptr::null_mut(),
+    create_instance: Some(effect_create_instance),
+    process: Some(effect_process),
+    release_instance: Some(effect_release_instance),
+    free_frame: Some(free_frame),
+};
+
+static LOADER_API: RuvieLoaderCpuRgba8ApiV1 = RuvieLoaderCpuRgba8ApiV1 {
+    abi_version: RUVIE_PLUGIN_ABI_V1,
+    struct_size: std::mem::size_of::<RuvieLoaderCpuRgba8ApiV1>(),
+    context: std::ptr::null_mut(),
+    open: Some(loader_open),
+    load: Some(loader_load),
+    free_frame: Some(free_frame),
 };
 
 #[unsafe(no_mangle)]
