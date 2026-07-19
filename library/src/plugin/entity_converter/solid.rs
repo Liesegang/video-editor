@@ -76,7 +76,7 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
 
         Some(FrameObject {
             source_node_id: node.id,
-            source_transform: transform.clone(),
+            source_transform: Box::new(transform.clone()),
             content_bounds: Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32)),
             content: FrameContent::Shape {
                 path,
@@ -89,7 +89,6 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
                 ensemble: None,
                 transform,
             },
-            properties: node.properties.clone(),
         })
     }
 }

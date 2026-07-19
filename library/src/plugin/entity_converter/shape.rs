@@ -1,8 +1,8 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::runtime_shape::{
-    measure_shape_visual_bounds, RuntimeBounds, RuntimePathShape, RuntimeShape,
-    RuntimeShapeGeometry,
+    RuntimeBounds, RuntimePathShape, RuntimeShape, RuntimeShapeGeometry,
+    measure_shape_visual_bounds,
 };
 
 #[derive(Default)]
@@ -266,7 +266,6 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
             effects: evaluator.build_image_effects(&node.effects, time),
             effector_configs: Vec::new(),
             decorator_configs: Vec::new(),
-            properties: props.clone(),
         })
     }
 

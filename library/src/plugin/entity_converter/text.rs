@@ -180,7 +180,6 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
             effects: evaluator.build_image_effects(&node.effects, time),
             effector_configs: Vec::new(),
             decorator_configs: Vec::new(),
-            properties: props.clone(),
         })
     }
 

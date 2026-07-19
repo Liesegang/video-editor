@@ -1,7 +1,6 @@
 use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::effect::ImageEffect;
 use crate::model::frame::transform::Transform;
-use crate::model::property::PropertyMap;
 use serde::{Deserialize, Serialize};
 
 use ordered_float::OrderedFloat;
@@ -298,10 +297,9 @@ pub struct FrameObject {
     /// Preview gizmos deliberately edit this direct source transform. Effect,
     /// Style, Merge, container, and Effector operation transforms remain
     /// independently editable through their own Node/Inspector controls.
-    pub source_transform: Transform,
+    pub source_transform: Box<Transform>,
     pub content_bounds: Option<FrameBounds>,
     pub content: FrameContent, // Renamed from entity: FrameEntity
-    pub properties: PropertyMap,
 }
 
 /// The kind of isolated image produced by a frame group.

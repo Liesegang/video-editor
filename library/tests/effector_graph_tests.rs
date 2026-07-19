@@ -4,16 +4,16 @@ use std::sync::{Arc, RwLock};
 use library::animation::EasingFunction;
 use library::cache::CacheManager;
 use library::core::ensemble::effectors::{
-    evaluate_configured_transform, EffectorElementContext, OpacityMode,
+    EffectorElementContext, OpacityMode, evaluate_configured_transform,
 };
 use library::core::ensemble::target::EffectorTarget;
 use library::core::ensemble::types::EffectorConfig;
 use library::editor::project_service::ProjectManager;
 use library::framing::get_frame_from_project;
+use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameItem};
 use library::model::frame::frame::FrameInfo;
-use library::model::frame::Image;
 use library::model::project::{
     Composition, EvalOutput, NodeContainer, NodeGraphBundle, PortAddress, PortDataType,
     PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner, PortSide, Project,
@@ -24,11 +24,11 @@ use library::model::property::{
 };
 use library::model::{Clip, EffectorInstance, Node, NodeContent, PluginOperationContent};
 use library::plugin::{
-    property_port_key, property_ui_type_to_port_data_type, EffectorPlugin, FrameEvaluationContext,
+    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin, FrameEvaluationContext,
     OperationDescriptor, OperationDescriptorError, Plugin, PluginManager, ResolvedNodeInputs,
-    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY,
+    property_port_key, property_ui_type_to_port_data_type,
 };
-use library::rendering::renderer::RenderOutput;
+use library::rendering::renderer::{Affine2D, RenderOutput};
 use library::{RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
 use skia_safe::Point;
@@ -136,6 +136,10 @@ fn evaluate(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) 
 
 fn preview(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -> Image {
     let frame = evaluate(project, plugins, frame_number);
+    render_frame(&frame, plugins)
+}
+
+fn render_frame(frame: &FrameInfo, plugins: &Arc<PluginManager>) -> Image {
     let renderer = SkiaRenderer::new(
         frame.width as u32,
         frame.height as u32,
@@ -164,6 +168,100 @@ fn first_object(items: &[FrameItem]) -> Option<&library::model::frame::entity::F
         FrameItem::Object(object) => Some(object),
         FrameItem::Group(group) => first_object(&group.items),
     })
+}
+
+fn group_effect_time(items: &[FrameItem], source_id: Uuid) -> Option<f64> {
+    items.iter().find_map(|item| match item {
+        FrameItem::Object(_) => None,
+        FrameItem::Group(group) => (group.source_id == source_id)
+            .then(|| group.effect_time.into_inner())
+            .or_else(|| group_effect_time(&group.items, source_id)),
+    })
+}
+
+fn collect_projected_bounds(
+    items: &[FrameItem],
+    parent: Affine2D,
+    bounds: &mut Option<(f64, f64, f64, f64)>,
+) {
+    for item in items {
+        match item {
+            FrameItem::Object(object) => {
+                let Some(local) = object.content_bounds else {
+                    panic!(
+                        "rendered object {} omitted Preview bounds",
+                        object.source_node_id
+                    )
+                };
+                let transform = parent.compose(Affine2D::from(object.content.transform()));
+                let (x, y, width, height) = local.as_tuple();
+                for (local_x, local_y) in [
+                    (x, y),
+                    (x + width, y),
+                    (x + width, y + height),
+                    (x, y + height),
+                ] {
+                    let (mapped_x, mapped_y) =
+                        transform.map_point(f64::from(local_x), f64::from(local_y));
+                    *bounds = Some(bounds.map_or(
+                        (mapped_x, mapped_y, mapped_x, mapped_y),
+                        |(left, top, right, bottom)| {
+                            (
+                                left.min(mapped_x),
+                                top.min(mapped_y),
+                                right.max(mapped_x),
+                                bottom.max(mapped_y),
+                            )
+                        },
+                    ));
+                }
+            }
+            FrameItem::Group(group) => collect_projected_bounds(
+                &group.items,
+                parent.compose(Affine2D::from(&group.transform)),
+                bounds,
+            ),
+        }
+    }
+}
+
+fn alpha_bounds(image: &Image) -> Option<(f64, f64, f64, f64)> {
+    let mut bounds: Option<(f64, f64, f64, f64)> = None;
+    for (index, pixel) in image.data.chunks_exact(4).enumerate() {
+        if pixel[3] == 0 {
+            continue;
+        }
+        let x = (index % image.width as usize) as f64;
+        let y = (index / image.width as usize) as f64;
+        bounds = Some(bounds.map_or((x, y, x + 1.0, y + 1.0), |current| {
+            (
+                current.0.min(x),
+                current.1.min(y),
+                current.2.max(x + 1.0),
+                current.3.max(y + 1.0),
+            )
+        }));
+    }
+    bounds
+}
+
+fn assert_alpha_inside_preview_bounds(frame: &FrameInfo, image: &Image) {
+    let mut preview = None;
+    collect_projected_bounds(&frame.items, Affine2D::IDENTITY, &mut preview);
+    let preview = preview.expect("frame must expose evaluated Preview bounds");
+    let alpha = alpha_bounds(image).expect("fixture must render non-transparent pixels");
+    assert!(
+        alpha.0 >= preview.0 && alpha.1 >= preview.1,
+        "alpha starts outside Preview bounds: alpha={alpha:?}, preview={preview:?}"
+    );
+    assert!(
+        alpha.2 <= preview.2 && alpha.3 <= preview.3,
+        "alpha ends outside Preview bounds: alpha={alpha:?}, preview={preview:?}"
+    );
+    assert!(
+        preview.2 - preview.0 < frame.width as f64 && preview.3 - preview.1 < frame.height as f64,
+        "regression must not pass through a full-composition fallback: {preview:?}"
+    );
 }
 
 #[test]
@@ -693,6 +791,276 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
         8.0.into(),
     );
     assert_ne!(image_a.data, preview(&changed_seed, &plugins, 0).data);
+}
+
+#[test]
+fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
+    let plugins = Arc::new(PluginManager::default());
+    let manager = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("factory"))),
+        plugins.clone(),
+    );
+
+    let mut text_graph = manager
+        .create_text_graph("AB\nCD", "Arial", WIDTH, HEIGHT)
+        .unwrap();
+    let text_id = text_graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.content,
+                NodeContent::Generator(library::model::GeneratorContent::Text)
+            )
+        })
+        .unwrap()
+        .id;
+    let text = text_graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == text_id)
+        .unwrap();
+    set_constant(text, "size", 18.0.into());
+    set_constant(
+        text,
+        "position",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(34.0),
+            y: OrderedFloat(12.0),
+        }),
+    );
+    set_constant(
+        text,
+        "anchor",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(0.0),
+            y: OrderedFloat(0.0),
+        }),
+    );
+
+    let mut line_transform = plugins.create_effector_operation_node("transform").unwrap();
+    set_constant(&mut line_transform, "tx", 6.0.into());
+    set_constant(&mut line_transform, "ty", 3.0.into());
+    set_constant(&mut line_transform, "rotation", 12.0.into());
+    set_constant(&mut line_transform, "scale_x", 1.1.into());
+    set_constant(&mut line_transform, "scale_y", 0.9.into());
+    set_constant(
+        &mut line_transform,
+        "target",
+        PropertyValue::String("Line".into()),
+    );
+    let mut char_random = plugins.create_effector_operation_node("randomize").unwrap();
+    set_constant(&mut char_random, "seed", 17.0.into());
+    set_constant(&mut char_random, "translate_range", 5.0.into());
+    set_constant(&mut char_random, "rotate_range", 8.0.into());
+    set_constant(&mut char_random, "scale_range", 0.15.into());
+    set_constant(
+        &mut char_random,
+        "target",
+        PropertyValue::String("Char".into()),
+    );
+    let mut char_backplate = plugins
+        .create_decorator_operation_node("backplate")
+        .unwrap();
+    set_constant(
+        &mut char_backplate,
+        "target",
+        PropertyValue::String("Char".into()),
+    );
+    set_constant(&mut char_backplate, "padding", 5.0.into());
+    set_constant(
+        &mut char_backplate,
+        "color",
+        PropertyValue::Color(Color::white()),
+    );
+    let char_backplate_id = char_backplate.id;
+    let text_chain = [line_transform.id, char_random.id, char_backplate.id];
+    text_graph
+        .nodes
+        .extend([line_transform, char_random, char_backplate]);
+    insert_effector_chain(&mut text_graph, &text_chain);
+    let (mut text_project, _) = project_with_graph(text_graph, 0.0, 2.0);
+    text_project.compositions[0].background_color = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    let text_frame = evaluate(&text_project, &plugins, 0);
+    assert_eq!(
+        first_object(&text_frame.items).unwrap().source_node_id,
+        text_id
+    );
+    let text_image = render_frame(&text_frame, &plugins);
+    assert_alpha_inside_preview_bounds(&text_frame, &text_image);
+    for target in ["Line", "Block"] {
+        set_constant(
+            text_project.get_node_mut(char_backplate_id).unwrap(),
+            "target",
+            PropertyValue::String(target.into()),
+        );
+        let frame = evaluate(&text_project, &plugins, 0);
+        let image = render_frame(&frame, &plugins);
+        assert_alpha_inside_preview_bounds(&frame, &image);
+    }
+
+    let mut path_graph = manager
+        .create_shape_graph("M 0 0 H 30 V 20 H 0 Z", WIDTH, HEIGHT, 30, 20)
+        .unwrap();
+    let path_id = path_graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.content,
+                NodeContent::Generator(library::model::GeneratorContent::Shape)
+            )
+        })
+        .unwrap()
+        .id;
+    let path = path_graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == path_id)
+        .unwrap();
+    set_constant(path, "rotation", 23.0.into());
+    set_constant(
+        path,
+        "scale",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(115.0),
+            y: OrderedFloat(90.0),
+        }),
+    );
+    let mut path_backplate = plugins
+        .create_decorator_operation_node("backplate")
+        .unwrap();
+    set_constant(&mut path_backplate, "padding", 11.0.into());
+    set_constant(
+        &mut path_backplate,
+        "color",
+        PropertyValue::Color(Color::white()),
+    );
+    let path_backplate_id = path_backplate.id;
+    path_graph.nodes.push(path_backplate);
+    insert_effector_chain(&mut path_graph, &[path_backplate_id]);
+    let (mut path_project, _) = project_with_graph(path_graph, 0.0, 2.0);
+    path_project.compositions[0].background_color = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    let path_frame = evaluate(&path_project, &plugins, 0);
+    let path_object = first_object(&path_frame.items).unwrap();
+    let path_bounds = path_object.content_bounds.unwrap();
+    assert!(path_bounds.width.into_inner() >= 52.0);
+    assert!(path_bounds.height.into_inner() >= 42.0);
+    let path_image = render_frame(&path_frame, &plugins);
+    assert_alpha_inside_preview_bounds(&path_frame, &path_image);
+}
+
+#[test]
+fn style_local_scope_time_drives_ensemble_bounds_and_pixels() {
+    let plugins = Arc::new(PluginManager::default());
+    let manager = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("factory"))),
+        plugins.clone(),
+    );
+    let mut graph = manager
+        .create_text_graph("ABCD", "Arial", WIDTH, HEIGHT)
+        .unwrap();
+    let source_id = graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.content,
+                NodeContent::Generator(library::model::GeneratorContent::Text)
+            )
+        })
+        .unwrap()
+        .id;
+    let style_id = graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                &node.content,
+                NodeContent::PluginOperation(operation) if operation.category == "style"
+            )
+        })
+        .unwrap()
+        .id;
+    let source = graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == source_id)
+        .unwrap();
+    set_constant(source, "size", 18.0.into());
+    set_constant(
+        source,
+        "position",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(20.0),
+            y: OrderedFloat(12.0),
+        }),
+    );
+    set_constant(
+        source,
+        "anchor",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(0.0),
+            y: OrderedFloat(0.0),
+        }),
+    );
+    let mut delay = plugins
+        .create_effector_operation_node("step_delay")
+        .unwrap();
+    set_constant(&mut delay, "delay", 0.5.into());
+    set_constant(&mut delay, "duration", 0.0.into());
+    set_constant(&mut delay, "from_opacity", 0.0.into());
+    set_constant(&mut delay, "to_opacity", 100.0.into());
+    set_constant(&mut delay, "target", PropertyValue::String("Block".into()));
+    let delay_id = delay.id;
+    graph.nodes.push(delay);
+    insert_effector_chain(&mut graph, &[delay_id]);
+
+    let (mut local_project, _) = project_with_graph(graph.clone(), 2.0, 4.0);
+    let (mut global_project, _) = project_with_graph(graph, 0.0, 4.0);
+    for project in [&mut local_project, &mut global_project] {
+        project.compositions[0].background_color = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        };
+    }
+
+    let local_frame = evaluate(&local_project, &plugins, 21);
+    let global_frame = evaluate(&global_project, &plugins, 21);
+    let local_time = group_effect_time(&local_frame.items, style_id).unwrap();
+    let global_time = group_effect_time(&global_frame.items, style_id).unwrap();
+    assert!((local_time - 0.1).abs() < 1e-9);
+    assert!((global_time - 2.1).abs() < 1e-9);
+
+    let local_bounds = first_object(&local_frame.items)
+        .unwrap()
+        .content_bounds
+        .unwrap();
+    let global_bounds = first_object(&global_frame.items)
+        .unwrap()
+        .content_bounds
+        .unwrap();
+    assert!(
+        local_bounds.width < global_bounds.width,
+        "bounds must evaluate StepDelay at Style-local time, not global time"
+    );
+    let local_image = render_frame(&local_frame, &plugins);
+    let global_image = render_frame(&global_frame, &plugins);
+    assert_alpha_inside_preview_bounds(&local_frame, &local_image);
+    assert_alpha_inside_preview_bounds(&global_frame, &global_image);
+    assert_ne!(local_image.data, global_image.data);
 }
 
 #[test]

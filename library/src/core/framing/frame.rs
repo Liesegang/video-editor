@@ -498,7 +498,7 @@ impl<'a> FrameEvaluator<'a> {
             EvalOutput::Produced(style) => style,
             EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
-        let object = shape.into_styled_object(style);
+        let object = shape.into_styled_object(style, scope.time as f32)?;
         Ok(EvalOutput::Produced(FrameItem::Group(FrameGroup {
             source_id: node.id,
             kind: FrameGroupKind::Node,
