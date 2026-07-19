@@ -76,6 +76,7 @@ def suite_specs(mode: str) -> tuple[SuiteSpec, ...]:
             SuiteSpec("timeline", "qa-e2e.py", ("--suite", "timeline")),
             SuiteSpec("keyframe", "qa-keyframe-e2e.py"),
             SuiteSpec("node-editor", "qa-node-editor-e2e.py"),
+            SuiteSpec("node-wire", "qa-e2e.py", ("--suite", "node-wire")),
         )
     raise ValueError("unknown QA mode: {}".format(mode))
 

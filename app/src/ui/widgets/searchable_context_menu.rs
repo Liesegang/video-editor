@@ -1,8 +1,6 @@
 use egui::{Key, RichText, ScrollArea, TextEdit, Ui};
 use std::collections::BTreeMap;
 
-type MenuItem<T> = (String, Option<String>, T);
-
 /// One entry in a searchable menu.
 ///
 /// `keywords` contain aliases that should find the item without being shown in
@@ -119,18 +117,6 @@ pub fn navigate_searchable_items<T>(
                 .or(Some(first))
         }),
     }
-}
-
-/// Render a categorized searchable menu and return the selected value.
-///
-/// Callers can use the returned value directly, while the legacy callback API
-/// below remains available for existing menus.
-pub fn show_searchable_items<T: Clone>(
-    ui: &mut Ui,
-    id_source: &str,
-    items: &[SearchableItem<T>],
-) -> Option<T> {
-    show_searchable_items_with_qa(ui, id_source, None, items)
 }
 
 /// Render a categorized searchable menu while exposing its actual search box
@@ -273,27 +259,6 @@ pub fn show_searchable_items_with_qa<T: Clone>(
     }
     ui.data_mut(|data| data.insert_temp(id, state));
     selection
-}
-
-/// Backward-compatible tuple + callback API.
-pub fn show_searchable_menu<T: Clone + 'static>(
-    ui: &mut Ui,
-    id_source: &str,
-    items: &[MenuItem<T>],
-    mut on_select: impl FnMut(T),
-) {
-    let searchable_items = items
-        .iter()
-        .map(|(label, category, value)| {
-            let mut item = SearchableItem::new(label.clone(), value.clone());
-            item.category = category.clone();
-            item
-        })
-        .collect::<Vec<_>>();
-
-    if let Some(value) = show_searchable_items(ui, id_source, &searchable_items) {
-        on_select(value);
-    }
 }
 
 fn categorized_indices<T>(items: &[SearchableItem<T>], filtered: &[usize]) -> Vec<usize> {
