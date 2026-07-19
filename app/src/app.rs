@@ -3,15 +3,15 @@ use egui_dock::{DockArea, DockState, Style};
 use library::model::project::{Composition, Project};
 use library::{EditorService, LibraryError};
 use log::warn;
-#[allow(deprecated)]
-use raw_window_handle::HasRawWindowHandle;
+#[cfg(target_os = "windows")]
+use raw_window_handle::HasWindowHandle;
 use std::fs;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use crate::action::{
-    handler::{handle_command, ActionContext},
     HistoryManager,
+    handler::{ActionContext, handle_command},
 };
 use crate::command::{CommandId, CommandRegistry};
 use crate::config;
@@ -22,7 +22,8 @@ use crate::ui::command_palette::CommandPalette;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::ui::dialogs::export_dialog::ExportDialog;
 use crate::ui::dialogs::settings_dialog::SettingsDialog;
-use crate::ui::tab_viewer::{create_initial_dock_state, AppTabViewer};
+use crate::ui::tab_viewer::{AppTabViewer, create_initial_dock_state};
+use crate::utils::lock::read_or_recover;
 use library::RenderServer;
 
 pub struct RuViEApp {
@@ -46,6 +47,8 @@ pub struct RuViEApp {
     qa_runtime: Option<crate::qa::QaRuntime>,
 }
 
+type StartupProject = (Arc<RwLock<Project>>, Uuid, Option<crate::qa::FixtureInfo>);
+
 impl RuViEApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, LibraryError> {
         let app_config = config::load_config();
@@ -55,7 +58,7 @@ impl RuViEApp {
         let plugin_manager = setup_plugin_manager(&app_config);
         let command_registry = CommandRegistry::new(&app_config);
         let (default_project, default_comp_id, qa_fixture) =
-            create_startup_project(&plugin_manager);
+            create_startup_project(&plugin_manager)?;
 
         let cache_manager = Arc::new(library::cache::CacheManager::new());
         let project_service = EditorService::new(
@@ -100,7 +103,7 @@ impl RuViEApp {
             ),
             triggered_action: None,
             composition_dialog: CompositionDialog::new(),
-            export_dialog: ExportDialog::new(plugin_manager.clone(), cache_manager.clone()),
+            export_dialog: ExportDialog::new(plugin_manager, cache_manager.clone()),
             command_palette: CommandPalette::new(),
             render_server,
             qa_runtime,
@@ -201,8 +204,8 @@ impl eframe::App for RuViEApp {
                             log::error!("Failed to remove asset: {}", e);
                         } else {
                             // Push history
-                            let current_state =
-                                self.project_service.get_project().read().unwrap().clone();
+                            let project = self.project_service.get_project();
+                            let current_state = read_or_recover(project.as_ref()).clone();
                             self.history_manager.push_project_state(current_state);
                         }
                     }
@@ -215,8 +218,8 @@ impl eframe::App for RuViEApp {
                                 self.editor_context.selection.composition_id = None;
                                 self.editor_context.selection.selected_entities.clear();
                             }
-                            let current_state =
-                                self.project_service.get_project().read().unwrap().clone();
+                            let project = self.project_service.get_project();
+                            let current_state = read_or_recover(project.as_ref()).clone();
                             self.history_manager.push_project_state(current_state);
                         }
                     }
@@ -343,11 +346,7 @@ impl eframe::App for RuViEApp {
         // The pump also completes an asynchronous scrub preview while paused;
         // regular playback samples are emitted only when `is_playing` is true.
         self.project_service.pump_audio();
-        if self
-            .project_service
-            .get_audio_service()
-            .has_pending_work()
-        {
+        if self.project_service.get_audio_service().has_pending_work() {
             ctx.request_repaint_after(std::time::Duration::from_millis(10));
         }
 
@@ -426,11 +425,11 @@ fn setup_fonts(ctx: &egui::Context) {
 
 fn create_startup_project(
     plugin_manager: &Arc<library::plugin::PluginManager>,
-) -> (Arc<RwLock<Project>>, Uuid, Option<crate::qa::FixtureInfo>) {
+) -> Result<StartupProject, LibraryError> {
     let project = Arc::new(RwLock::new(Project::new("Default Project")));
     match crate::qa::install_fixture_from_env(&project, plugin_manager) {
         Ok(Some(fixture)) => {
-            return (project, fixture.composition_id, Some(fixture));
+            return Ok((project, fixture.composition_id, Some(fixture)));
         }
         Ok(None) => {}
         Err(error) => log::error!("QA fixture is disabled: {error}"),
@@ -440,11 +439,13 @@ fn create_startup_project(
     let (default_comp, root_track) = Composition::new("Main Composition", 1920, 1080, 30.0, 60.0);
     let default_comp_id = default_comp.id;
     {
-        let mut proj = project.write().unwrap();
+        let mut proj = project
+            .write()
+            .map_err(|_| LibraryError::Runtime("startup project lock poisoned".to_string()))?;
         proj.add_track(root_track);
         proj.add_composition(default_comp);
     }
-    (project, default_comp_id, None)
+    Ok((project, default_comp_id, None))
 }
 
 fn setup_plugin_manager(app_config: &config::AppConfig) -> Arc<library::plugin::PluginManager> {
@@ -476,24 +477,20 @@ fn setup_plugin_manager(app_config: &config::AppConfig) -> Arc<library::plugin::
     plugin_manager
 }
 
-fn setup_gpu_sharing(render_server: &RenderServer, cc: &eframe::CreationContext<'_>) {
+fn setup_gpu_sharing(render_server: &RenderServer, _cc: &eframe::CreationContext<'_>) {
     // Zero-Copy GPU Sharing: Capture the main thread's OpenGL context handle
     // and pass it to the background render server. This enables sharing of textures.
     if let Some(handle) = library::rendering::skia_utils::get_current_context_handle() {
-        #[allow(deprecated)]
-        let hwnd = if let Ok(raw_handle) = cc.raw_window_handle() {
-            #[allow(unused_variables)]
-            let _ = raw_handle; // Silence usage warning on non-windows
-            #[cfg(target_os = "windows")]
-            match raw_handle {
-                raw_window_handle::RawWindowHandle::Win32(h) => Some(h.hwnd.get() as isize),
-                _ => None,
-            }
-            #[cfg(not(target_os = "windows"))]
-            None
-        } else {
-            None
-        };
+        #[cfg(target_os = "windows")]
+        let hwnd =
+            _cc.window_handle()
+                .ok()
+                .and_then(|window_handle| match window_handle.as_raw() {
+                    raw_window_handle::RawWindowHandle::Win32(h) => Some(h.hwnd.get() as isize),
+                    _ => None,
+                });
+        #[cfg(not(target_os = "windows"))]
+        let hwnd: Option<isize> = None;
 
         log::info!(
             "MyApp: Capturing main GL context handle: {}, HWND: {:?}",

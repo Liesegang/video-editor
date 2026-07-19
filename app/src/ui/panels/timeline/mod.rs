@@ -5,15 +5,15 @@ pub mod track_list;
 pub mod utils;
 
 use egui::Ui;
-use library::model::project::Project;
 use library::EditorService;
+use library::model::project::Project;
 use std::sync::{Arc, RwLock};
 
 use crate::command::CommandRegistry;
 use crate::{action::HistoryManager, state::context::EditorContext};
 
+use clip_area::{ClipAreaContext, show_clip_area};
 // Re-export functions for easier access
-pub use clip_area::show_clip_area;
 pub use controls::show_timeline_controls;
 pub use ruler::show_timeline_ruler;
 pub use track_list::show_track_list;
@@ -74,7 +74,7 @@ pub fn timeline_panel(
         ui.with_layout(
             egui::Layout::left_to_right(egui::Align::TOP),
             |ui_content| {
-                let (num_tracks, row_height, track_spacing) = show_track_list(
+                let (_num_tracks, row_height, track_spacing) = show_track_list(
                     ui_content,
                     editor_context,
                     history_manager,
@@ -87,16 +87,17 @@ pub fn timeline_panel(
 
                 let (clip_area_rect, _) = show_clip_area(
                     ui_content,
-                    editor_context,
-                    history_manager,
-                    project_service,
-                    project,
-                    pixels_per_unit,
-                    num_tracks,
-                    row_height,
-                    track_spacing,
-                    current_composition_fps,
-                    registry,
+                    ClipAreaContext {
+                        editor_context,
+                        history_manager,
+                        project_service,
+                        project,
+                        pixels_per_unit,
+                        row_height,
+                        track_spacing,
+                        composition_fps: current_composition_fps,
+                        registry,
+                    },
                 );
 
                 // Draw cursor after all panels are laid out

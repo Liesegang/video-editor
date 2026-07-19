@@ -1,6 +1,6 @@
 use egui::Ui;
-use library::model::project::Project;
 use library::EditorService as ProjectService;
+use library::model::project::Project;
 use std::sync::{Arc, RwLock};
 
 use crate::{action::HistoryManager, state::context::EditorContext};
@@ -44,20 +44,33 @@ impl<'a> ViewportState for TimelineViewportState<'a> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn show_clip_area(
+pub(super) struct ClipAreaContext<'a> {
+    pub(super) editor_context: &'a mut EditorContext,
+    pub(super) history_manager: &'a mut HistoryManager,
+    pub(super) project_service: &'a mut ProjectService,
+    pub(super) project: &'a Arc<RwLock<Project>>,
+    pub(super) pixels_per_unit: f32,
+    pub(super) row_height: f32,
+    pub(super) track_spacing: f32,
+    pub(super) composition_fps: f64,
+    pub(super) registry: &'a CommandRegistry,
+}
+
+pub(super) fn show_clip_area(
     ui_content: &mut Ui,
-    editor_context: &mut EditorContext,
-    history_manager: &mut HistoryManager,
-    project_service: &mut ProjectService,
-    project: &Arc<RwLock<Project>>,
-    pixels_per_unit: f32,
-    _num_tracks_ignored: usize,
-    row_height: f32,
-    track_spacing: f32,
-    composition_fps: f64,
-    registry: &CommandRegistry,
+    context: ClipAreaContext<'_>,
 ) -> (egui::Rect, egui::Response) {
+    let ClipAreaContext {
+        editor_context,
+        history_manager,
+        project_service,
+        project,
+        pixels_per_unit,
+        row_height,
+        track_spacing,
+        composition_fps,
+        registry,
+    } = context;
     let (content_rect_for_clip_area, response) =
         ui_content.allocate_at_least(ui_content.available_size(), egui::Sense::hover());
 
@@ -172,16 +185,17 @@ pub fn show_clip_area(
     interactions::handle_drag_drop_and_context_menu(
         ui_content,
         &vp_response,
-        content_rect_for_clip_area,
         editor_context,
         project,
         project_service,
         history_manager,
-        pixels_per_unit,
-        composition_fps,
-        num_visible_tracks,
-        row_height,
-        track_spacing,
+        interactions::InteractionGeometry {
+            content_rect: content_rect_for_clip_area,
+            pixels_per_unit,
+            num_tracks: num_visible_tracks,
+            row_height,
+            track_spacing,
+        },
     );
 
     // ===== PHASE 4: Draw clips (separate read lock scope) =====
