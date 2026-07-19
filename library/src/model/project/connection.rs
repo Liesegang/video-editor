@@ -634,10 +634,21 @@ impl Project {
     }
 
     pub fn disconnect_connection(&mut self, id: Uuid) -> bool {
+        self.disconnect_connections([id]) == 1
+    }
+
+    /// Remove a set of canonical connections and normalize every affected
+    /// variadic target once. This is the atomic model primitive used by a
+    /// multi-wire knife gesture.
+    pub fn disconnect_connections(&mut self, ids: impl IntoIterator<Item = Uuid>) -> usize {
+        let ids = ids.into_iter().collect::<HashSet<_>>();
         let old_len = self.connections.len();
-        self.connections.retain(|item| item.id != id);
-        self.normalize_connection_orders();
-        old_len != self.connections.len()
+        self.connections.retain(|item| !ids.contains(&item.id));
+        let removed = old_len - self.connections.len();
+        if removed != 0 {
+            self.normalize_connection_orders();
+        }
+        removed
     }
 
     /// Move either end of one canonical connection without changing its
@@ -1257,16 +1268,12 @@ mod tests {
                 kind: ContainerImageSourceKind::OutputBinding,
             }]
         );
-        assert!(
-            project
-                .container_image_sources(PortOwner::Node(second_clip_node))
-                .is_empty()
-        );
-        assert!(
-            project
-                .container_image_sources(PortOwner::Track(Uuid::new_v4()))
-                .is_empty()
-        );
+        assert!(project
+            .container_image_sources(PortOwner::Node(second_clip_node))
+            .is_empty());
+        assert!(project
+            .container_image_sources(PortOwner::Track(Uuid::new_v4()))
+            .is_empty());
     }
 
     #[test]
@@ -1379,12 +1386,10 @@ mod tests {
                 single_a_input.clone(),
             )
             .unwrap();
-        assert!(
-            !project
-                .connections
-                .iter()
-                .any(|item| item.id == occupied_id)
-        );
+        assert!(!project
+            .connections
+            .iter()
+            .any(|item| item.id == occupied_id));
         assert_eq!(
             project
                 .connections
@@ -1451,6 +1456,21 @@ mod tests {
             ProjectGraphError::IncompatiblePortTypes { .. }
         ));
         assert_eq!(project, before_invalid, "failed reconnect must roll back");
+
+        let remove = [&target_a_input, &target_b_input]
+            .into_iter()
+            .map(|target| {
+                project
+                    .connections
+                    .iter()
+                    .find(|connection| &connection.to == target && connection.order == 0)
+                    .unwrap()
+                    .id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(project.disconnect_connections(remove), 2);
+        assert_eq!(orders(&project, &target_a_input), vec![0]);
+        assert_eq!(orders(&project, &target_b_input), vec![0]);
     }
 
     #[test]
