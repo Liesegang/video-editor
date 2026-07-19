@@ -27,6 +27,7 @@ extern "C" {
 #define RUVIE_PROPERTY_EVALUATE_V1 "property.evaluate.v1"
 #define RUVIE_STYLE_CATEGORY "style"
 #define RUVIE_STYLE_EVALUATE_V1 "style.evaluate.v1"
+#define RUVIE_STYLE_MAX_DASH_INTERVALS_V1 1024u
 #define RUVIE_DECORATOR_CATEGORY "decorator"
 #define RUVIE_DECORATOR_EVALUATE_V1 "decorator.evaluate.v1"
 #define RUVIE_EFFECTOR_TARGET_BLOCK "block"

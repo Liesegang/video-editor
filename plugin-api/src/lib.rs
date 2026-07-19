@@ -238,6 +238,8 @@ pub const PROPERTY_CATEGORY: &str = "property";
 pub const PROPERTY_EVALUATE_V1: &str = "property.evaluate.v1";
 pub const STYLE_CATEGORY: &str = "style";
 pub const STYLE_EVALUATE_V1: &str = "style.evaluate.v1";
+/// Maximum non-empty Stroke dash interval count accepted by Style ABI v1.
+pub const MAX_STYLE_DASH_INTERVALS_V1: usize = 1024;
 pub const DECORATOR_CATEGORY: &str = "decorator";
 pub const DECORATOR_EVALUATE_V1: &str = "decorator.evaluate.v1";
 

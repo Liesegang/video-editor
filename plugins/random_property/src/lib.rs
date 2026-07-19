@@ -1,17 +1,17 @@
 use std::ffi::c_void;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use ruvie_plugin_api::{
-    BackplateShapeV1, ColorV1, ComponentDescriptorV1, DecoratorEvaluateRequestV1,
-    DecoratorOutputV1, DecoratorTargetV1, InsetsV1, InvokeRequestV1, PluginDescriptorV1,
+    BackplateShapeV1, ColorV1, ComponentDescriptorV1, DECORATOR_CATEGORY, DECORATOR_EVALUATE_V1,
+    DecoratorEvaluateRequestV1, DecoratorOutputV1, DecoratorTargetV1, InsetsV1, InvokeRequestV1,
+    MAX_STYLE_DASH_INTERVALS_V1, PROPERTY_CATEGORY, PROPERTY_EVALUATE_V1, PluginDescriptorV1,
     PropertyDefinitionV1, PropertyEvaluateRequestV1, PropertyEvaluateResponseV1, PropertyUiV1,
-    PropertyValueV1, RuvieBuffer, RuvieBytesView, RuvieCallResult, RuviePluginApiV1, StrokeCapV1,
-    StrokeJoinV1, StyleEvaluateRequestV1, StyleOutputV1, DECORATOR_CATEGORY, DECORATOR_EVALUATE_V1,
-    PROPERTY_CATEGORY, PROPERTY_EVALUATE_V1, RUVIE_PLUGIN_ABI_V1, STATUS_INVALID_REQUEST,
-    STATUS_PANIC, STYLE_CATEGORY, STYLE_EVALUATE_V1,
+    PropertyValueV1, RUVIE_PLUGIN_ABI_V1, RuvieBuffer, RuvieBytesView, RuvieCallResult,
+    RuviePluginApiV1, STATUS_INVALID_REQUEST, STATUS_PANIC, STYLE_CATEGORY, STYLE_EVALUATE_V1,
+    StrokeCapV1, StrokeJoinV1, StyleEvaluateRequestV1, StyleOutputV1,
 };
 
 const COMPONENT_ID: &str = "random_property";
@@ -372,6 +372,9 @@ fn evaluate_fill(payload: serde_json::Value) -> RuvieCallResult {
     let Some(offset) = property_number(&payload.properties, "offset") else {
         return invalid_request("Fill offset is invalid");
     };
+    if finite_f32(offset).is_none() || finite_f32(offset * 2.0).is_none() {
+        return invalid_request("Fill offset is outside the renderer f32 contract");
+    }
     RuvieCallResult::ok_json(&StyleOutputV1::Fill { color, offset })
 }
 
@@ -407,6 +410,9 @@ fn evaluate_stroke(payload: serde_json::Value) -> RuvieCallResult {
     let Some(offset) = property_number(&payload.properties, "offset") else {
         return invalid_request("Stroke offset is invalid");
     };
+    if !valid_stroke_geometry(width, offset) {
+        return invalid_request("Stroke renderer-derived widths are unsafe");
+    }
     let cap = match property_string(&payload.properties, "cap") {
         Some("Round") => StrokeCapV1::Round,
         Some("Square") => StrokeCapV1::Square,
@@ -422,8 +428,8 @@ fn evaluate_stroke(payload: serde_json::Value) -> RuvieCallResult {
     let Some(miter) = property_number(&payload.properties, "miter") else {
         return invalid_request("Stroke miter is invalid");
     };
-    if miter < 0.0 {
-        return invalid_request("Stroke miter must be non-negative");
+    if miter < 0.0 || finite_f32(miter).is_none() {
+        return invalid_request("Stroke miter must be a non-negative f32");
     }
     let Some(dash_array) = property_string(&payload.properties, "dash_array").and_then(|value| {
         value
@@ -434,17 +440,15 @@ fn evaluate_stroke(payload: serde_json::Value) -> RuvieCallResult {
     }) else {
         return invalid_request("Stroke dash array is invalid");
     };
-    if !dash_array.is_empty()
-        && (!dash_array.len().is_multiple_of(2)
-            || dash_array
-                .iter()
-                .any(|value| !value.is_finite() || *value <= 0.0))
-    {
-        return invalid_request("Stroke dash intervals must be positive pairs");
+    if !valid_dash_array(&dash_array) {
+        return invalid_request("Stroke dash intervals violate the ABI work or period limits");
     }
     let Some(dash_offset) = property_number(&payload.properties, "dash_offset") else {
         return invalid_request("Stroke dash offset is invalid");
     };
+    if finite_f32(dash_offset).is_none() {
+        return invalid_request("Stroke dash offset is outside the f32 contract");
+    }
     RuvieCallResult::ok_json(&StyleOutputV1::Stroke {
         color,
         width,
@@ -455,6 +459,41 @@ fn evaluate_stroke(payload: serde_json::Value) -> RuvieCallResult {
         dash_array,
         dash_offset,
     })
+}
+
+fn valid_stroke_geometry(width: f64, offset: f64) -> bool {
+    let finite_scalar = |value: f64| value.is_finite() && (value as f32).is_finite();
+    if width < 0.0 || !finite_scalar(width) || !finite_scalar(offset) {
+        return false;
+    }
+    if !finite_scalar((width + offset * 2.0).max(0.0)) {
+        return false;
+    }
+    if width <= 0.0 || offset == 0.0 {
+        return true;
+    }
+    let half_width = width / 2.0;
+    let outer_radius = offset.abs() + half_width;
+    let inner_radius = offset.abs() - half_width;
+    finite_scalar(outer_radius * 2.0) && (inner_radius <= 0.0 || finite_scalar(inner_radius * 2.0))
+}
+
+fn valid_dash_array(values: &[f64]) -> bool {
+    if values.is_empty() {
+        return true;
+    }
+    if values.len() > MAX_STYLE_DASH_INTERVALS_V1 || !values.len().is_multiple_of(2) {
+        return false;
+    }
+    let mut period = 0.0_f32;
+    values.iter().all(|value| {
+        let interval = *value as f32;
+        if !value.is_finite() || !interval.is_finite() || interval <= 0.0 {
+            return false;
+        }
+        period += interval;
+        period.is_finite()
+    }) && period > 0.0
 }
 
 fn evaluate_backplate(payload: serde_json::Value) -> RuvieCallResult {
@@ -506,6 +545,9 @@ fn evaluate_backplate(payload: serde_json::Value) -> RuvieCallResult {
     let Some(corner_radius) = finite_f32(corner_radius).filter(|value| *value >= 0.0) else {
         return invalid_request("Backplate corner radius must be a non-negative f32");
     };
+    if !valid_backplate_geometry(padding, corner_radius) {
+        return invalid_request("Backplate renderer-derived geometry is unsafe");
+    }
     RuvieCallResult::ok_json(&DecoratorOutputV1::Backplate {
         target,
         shape,
@@ -513,6 +555,32 @@ fn evaluate_backplate(payload: serde_json::Value) -> RuvieCallResult {
         padding,
         corner_radius,
     })
+}
+
+fn valid_backplate_geometry(padding: InsetsV1, corner_radius: f32) -> bool {
+    let InsetsV1 {
+        top,
+        right,
+        bottom,
+        left,
+    } = padding;
+    let padded_left = -1.0_f32 - left;
+    let padded_top = -2.0_f32 - top;
+    let padded_right = 3.0_f32 + right;
+    let padded_bottom = 4.0_f32 + bottom;
+    [
+        left + right,
+        top + bottom,
+        padded_left,
+        padded_top,
+        padded_right,
+        padded_bottom,
+        padded_right - padded_left,
+        padded_bottom - padded_top,
+        corner_radius * 2.0,
+    ]
+    .into_iter()
+    .all(f32::is_finite)
 }
 
 fn valid_config_metadata(time: f64, fps: f64) -> bool {
@@ -682,5 +750,40 @@ mod tests {
         };
         assert_eq!(options, &["Block", "Line", "Char"]);
         assert!(!options.iter().any(|option| option == "Parts"));
+    }
+
+    #[test]
+    fn stroke_fixture_honors_the_abi_dash_work_and_period_limits() {
+        assert!(valid_dash_array(&[]));
+        assert!(valid_dash_array(&vec![1.0; MAX_STYLE_DASH_INTERVALS_V1]));
+        assert!(!valid_dash_array(&[f32::MAX as f64, f32::MAX as f64]));
+        assert!(!valid_dash_array(&vec![
+            1.0;
+            MAX_STYLE_DASH_INTERVALS_V1 + 2
+        ]));
+    }
+
+    #[test]
+    fn config_fixture_rejects_renderer_derived_overflow() {
+        assert!(!valid_stroke_geometry(1.0, -(f32::MAX as f64)));
+        assert!(valid_stroke_geometry(1.0, -(f32::MAX as f64) / 4.0));
+        assert!(!valid_backplate_geometry(
+            InsetsV1 {
+                top: 0.0,
+                right: f32::MAX,
+                bottom: 0.0,
+                left: f32::MAX,
+            },
+            0.0,
+        ));
+        assert!(valid_backplate_geometry(
+            InsetsV1 {
+                top: -1.0,
+                right: 2.0,
+                bottom: -1.0,
+                left: 2.0,
+            },
+            1.0,
+        ));
     }
 }

@@ -11,8 +11,8 @@ use ruvie_plugin_api::{
     BackplateShapeV1, ColorV1, ComponentDescriptorV1, DECORATOR_CATEGORY, DECORATOR_EVALUATE_V1,
     DecoratorEvaluateRequestV1, DecoratorOutputV1, DecoratorTargetV1, EFFECTOR_CATEGORY,
     EFFECTOR_EVALUATE_V1, EffectorEvaluateRequestV1, EffectorOutputV1, EffectorTargetV1, InsetsV1,
-    InvokeRequestV1, MAX_PLUGIN_PAYLOAD_BYTES, OpacityModeV1, PROPERTY_CATEGORY,
-    PROPERTY_EVALUATE_V1, PluginDescriptorV1, PropertyEvaluateRequestV1,
+    InvokeRequestV1, MAX_PLUGIN_PAYLOAD_BYTES, MAX_STYLE_DASH_INTERVALS_V1, OpacityModeV1,
+    PROPERTY_CATEGORY, PROPERTY_EVALUATE_V1, PluginDescriptorV1, PropertyEvaluateRequestV1,
     PropertyEvaluateResponseV1, PropertyUiV1, PropertyValueV1, RUVIE_PLUGIN_ABI_V1,
     RUVIE_PLUGIN_ENTRY_V1, RuvieBuffer, RuvieBytesView, RuvieCallResult, RuviePluginApiV1,
     STATUS_OK, STYLE_CATEGORY, STYLE_EVALUATE_V1, StrokeCapV1, StrokeJoinV1,
@@ -963,15 +963,11 @@ fn style_config_from_wire(
             dash_array,
             dash_offset,
         } => {
-            let effective_width = (width + offset * 2.0).max(0.0);
-            if !finite_render_scalar(width)
-                || !finite_render_scalar(offset)
-                || !finite_render_scalar(effective_width)
+            if !valid_stroke_render_geometry(width, offset)
                 || !finite_render_scalar(miter)
                 || !finite_render_scalar(dash_offset)
-                || width < 0.0
                 || miter < 0.0
-                || !valid_stroke_dash_array(&dash_array)
+                || !valid_stroke_dash_pattern(&dash_array, dash_offset)
             {
                 return Err(invalid("has invalid Stroke numeric fields"));
             }
@@ -1001,12 +997,57 @@ fn style_config_from_wire(
     }))
 }
 
-fn valid_stroke_dash_array(values: &[f64]) -> bool {
-    values.is_empty()
-        || (values.len().is_multiple_of(2)
-            && values
-                .iter()
-                .all(|value| finite_render_scalar(*value) && *value > 0.0))
+fn valid_stroke_render_geometry(width: f64, offset: f64) -> bool {
+    if width < 0.0 || !finite_render_scalar(width) || !finite_render_scalar(offset) {
+        return false;
+    }
+    let effective_width = (width + offset * 2.0).max(0.0);
+    if !finite_render_scalar(effective_width) {
+        return false;
+    }
+    if width <= 0.0 || offset == 0.0 {
+        return true;
+    }
+
+    // Shape rendering paints a 2*outer radius and may erase a 2*inner radius.
+    // This differs from the effective width used by text rendering, so both
+    // paths need their exact derived scalars checked before f64 -> f32 casts.
+    let half_width = width / 2.0;
+    let offset_magnitude = offset.abs();
+    let outer_radius = offset_magnitude + half_width;
+    let inner_radius = offset_magnitude - half_width;
+    finite_render_scalar(half_width)
+        && finite_render_scalar(outer_radius)
+        && finite_render_scalar(outer_radius * 2.0)
+        && (inner_radius <= 0.0
+            || (finite_render_scalar(inner_radius) && finite_render_scalar(inner_radius * 2.0)))
+}
+
+fn valid_stroke_dash_pattern(values: &[f64], phase: f64) -> bool {
+    if !finite_render_scalar(phase) {
+        return false;
+    }
+    if values.is_empty() {
+        return true;
+    }
+    if values.len() > MAX_STYLE_DASH_INTERVALS_V1 || !values.len().is_multiple_of(2) {
+        return false;
+    }
+
+    let mut intervals = Vec::with_capacity(values.len());
+    let mut period = 0.0_f32;
+    for value in values {
+        let interval = *value as f32;
+        if !value.is_finite() || !interval.is_finite() || interval <= 0.0 {
+            return false;
+        }
+        period += interval;
+        if !period.is_finite() {
+            return false;
+        }
+        intervals.push(interval);
+    }
+    period > 0.0 && skia_safe::PathEffect::dash(&intervals, phase as f32).is_some()
 }
 
 fn finite_render_scalar(value: f64) -> bool {
@@ -1121,13 +1162,7 @@ fn decorator_config_from_wire(
         bottom,
         left,
     } = padding;
-    if !top.is_finite()
-        || !right.is_finite()
-        || !bottom.is_finite()
-        || !left.is_finite()
-        || !corner_radius.is_finite()
-        || corner_radius < 0.0
-    {
+    if !valid_backplate_render_geometry((top, right, bottom, left), corner_radius) {
         return Err(LibraryError::Plugin(
             "Runtime Decorator output has invalid Backplate numeric fields".to_string(),
         ));
@@ -1147,6 +1182,46 @@ fn decorator_config_from_wire(
         padding: (top, right, bottom, left),
         corner_radius,
     }))
+}
+
+fn valid_backplate_render_geometry(padding: (f32, f32, f32, f32), corner_radius: f32) -> bool {
+    let (top, right, bottom, left) = padding;
+    top.is_finite()
+        && right.is_finite()
+        && bottom.is_finite()
+        && left.is_finite()
+        // A padded rectangle's width and height add these signed pairs to its
+        // original spans. Check the actual f32 operations, not f64 algebra.
+        && (left + right).is_finite()
+        && (top + bottom).is_finite()
+        // Exercise RuntimeBounds::pad itself against a finite, non-zero
+        // reference rectangle. Config validation cannot guarantee arithmetic
+        // against every possible source bound; source geometry has its own
+        // independent finite-value precondition.
+        && backplate_pad_is_finite(
+            crate::model::frame::runtime_shape::RuntimeBounds::new(-1.0, -2.0, 3.0, 4.0),
+            padding,
+        )
+        && corner_radius.is_finite()
+        && corner_radius >= 0.0
+        && (corner_radius * 2.0).is_finite()
+}
+
+fn backplate_pad_is_finite(
+    bounds: crate::model::frame::runtime_shape::RuntimeBounds,
+    padding: (f32, f32, f32, f32),
+) -> bool {
+    let padded = bounds.pad(padding);
+    [
+        padded.left,
+        padded.top,
+        padded.right,
+        padded.bottom,
+        padded.right - padded.left,
+        padded.bottom - padded.top,
+    ]
+    .into_iter()
+    .all(f32::is_finite)
 }
 
 fn color_from_wire(color: ColorV1) -> crate::model::frame::color::Color {
@@ -2255,8 +2330,8 @@ mod tests {
                 "unsafe dash config must become NoOutput"
             );
         }
-        assert!(valid_stroke_dash_array(&[]));
-        assert!(valid_stroke_dash_array(&[2.0, 1.0]));
+        assert!(valid_stroke_dash_pattern(&[], 0.0));
+        assert!(valid_stroke_dash_pattern(&[2.0, 1.0], 0.0));
         assert!(
             skia_safe::PathEffect::dash(&[1.0], 0.0).is_none(),
             "Skia rejects an odd number of dash intervals"
@@ -2306,6 +2381,125 @@ mod tests {
             .is_none(),
             "a decoded but unsafe dash response must fail safely as NoOutput"
         );
+    }
+
+    #[test]
+    fn stroke_rejects_overflow_in_each_renderer_derived_width() {
+        let source_id = uuid::Uuid::new_v4();
+        let renderer_limit = f32::MAX as f64;
+
+        assert!(
+            !valid_stroke_render_geometry(1.0, -renderer_limit),
+            "a negative offset can overflow the shape outer/inner widths even when text clamps to zero"
+        );
+        assert!(
+            !valid_stroke_render_geometry(1.0, renderer_limit),
+            "a positive offset can overflow both text and shape widths"
+        );
+        assert!(
+            safe_style_config_from_response(
+                serde_json::json!({
+                    "type": "stroke",
+                    "color": {"r": 0, "g": 0, "b": 0, "a": 255},
+                    "width": 1.0,
+                    "offset": -renderer_limit,
+                    "cap": "round",
+                    "join": "round",
+                    "miter": 4.0,
+                    "dash_array": [],
+                    "dash_offset": 0.0
+                }),
+                source_id,
+                "test runtime Style"
+            )
+            .is_none(),
+            "unsafe derived widths must turn a decoded response into NoOutput"
+        );
+
+        let safe_boundary = renderer_limit / 4.0;
+        for offset in [-safe_boundary, safe_boundary] {
+            assert!(
+                valid_stroke_render_geometry(1.0, offset),
+                "large positive and negative offsets remain valid below every f32 derived-width limit"
+            );
+            assert!(
+                style_config_from_wire(
+                    StyleOutputV1::Stroke {
+                        color: ColorV1 {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 255,
+                        },
+                        width: 1.0,
+                        offset,
+                        cap: StrokeCapV1::Round,
+                        join: StrokeJoinV1::Round,
+                        miter: 4.0,
+                        dash_array: Vec::new(),
+                        dash_offset: 0.0,
+                    },
+                    source_id,
+                )
+                .expect("boundary-safe Stroke converts")
+                .is_some()
+            );
+
+            let outer_width = ((offset.abs() + 0.5) * 2.0) as f32;
+            let mut paint = skia_safe::Paint::default();
+            paint.set_style(skia_safe::PaintStyle::Stroke);
+            paint.set_stroke_width(outer_width);
+            assert_eq!(
+                paint.stroke_width(),
+                outer_width,
+                "the boundary-safe derived width is retained by an actual Skia paint"
+            );
+        }
+    }
+
+    #[test]
+    fn stroke_dash_rejects_f32_period_overflow_and_caps_work() {
+        let source_id = uuid::Uuid::new_v4();
+        let overflowing = [f32::MAX as f64, f32::MAX as f64];
+        assert!(
+            !valid_stroke_dash_pattern(&overflowing, 0.0),
+            "individually finite intervals can still overflow their f32 period"
+        );
+        assert!(
+            skia_safe::PathEffect::dash(&[f32::MAX, f32::MAX], 0.0).is_none(),
+            "Skia rejects the overflowing period instead of producing a dash effect"
+        );
+        assert!(
+            safe_style_config_from_response(
+                serde_json::json!({
+                    "type": "stroke",
+                    "color": {"r": 0, "g": 0, "b": 0, "a": 255},
+                    "width": 1.0,
+                    "offset": 0.0,
+                    "cap": "round",
+                    "join": "round",
+                    "miter": 4.0,
+                    "dash_array": overflowing,
+                    "dash_offset": 0.0
+                }),
+                source_id,
+                "test runtime Style"
+            )
+            .is_none(),
+            "an overflowing dash response must be NoOutput, not a silent solid stroke"
+        );
+
+        let at_limit = vec![1.0; MAX_STYLE_DASH_INTERVALS_V1];
+        assert!(valid_stroke_dash_pattern(&at_limit, 0.0));
+        assert!(
+            skia_safe::PathEffect::dash(&vec![1.0_f32; MAX_STYLE_DASH_INTERVALS_V1], 0.0).is_some(),
+            "the maximum accepted interval count constructs a real Skia effect"
+        );
+        assert!(
+            !valid_stroke_dash_pattern(&vec![1.0; MAX_STYLE_DASH_INTERVALS_V1 + 2], 0.0),
+            "dash work is bounded even for otherwise-valid pairs"
+        );
+        assert!(!valid_stroke_dash_pattern(&[], f64::INFINITY));
     }
 
     #[test]
@@ -2388,6 +2582,120 @@ mod tests {
             )
             .is_none(),
             "unknown Decorator output must fail safely as NoOutput"
+        );
+    }
+
+    #[test]
+    fn backplate_rejects_padding_derived_overflow_but_allows_safe_negative_padding() {
+        let renderer_limit = f32::MAX;
+        let overflowing_padding = (0.0, renderer_limit, 0.0, renderer_limit);
+        assert!(
+            !valid_backplate_render_geometry(overflowing_padding, 0.0),
+            "finite left/right padding can overflow the derived f32 span"
+        );
+        assert!(
+            !backplate_pad_is_finite(
+                crate::model::frame::runtime_shape::RuntimeBounds::new(-1.0, -2.0, 3.0, 4.0),
+                overflowing_padding,
+            ),
+            "the real RuntimeBounds::pad arithmetic exposes that overflow"
+        );
+        assert!(
+            safe_decorator_config_from_response(
+                serde_json::json!({
+                    "type": "backplate",
+                    "target": "block",
+                    "shape": "rect",
+                    "color": {"r": 0, "g": 0, "b": 0, "a": 255},
+                    "padding": {
+                        "top": 0.0,
+                        "right": renderer_limit,
+                        "bottom": 0.0,
+                        "left": renderer_limit
+                    },
+                    "corner_radius": 0.0
+                }),
+                "test runtime Decorator"
+            )
+            .is_none(),
+            "unsafe padding must turn a decoded response into NoOutput"
+        );
+
+        let safe_boundary = renderer_limit / 4.0;
+        let boundary_padding = (safe_boundary, safe_boundary, safe_boundary, safe_boundary);
+        assert!(valid_backplate_render_geometry(boundary_padding, 1.0));
+        let reference =
+            crate::model::frame::runtime_shape::RuntimeBounds::new(-1.0, -2.0, 3.0, 4.0)
+                .pad(boundary_padding);
+        let boundary_rect = skia_safe::Rect::new(
+            reference.left,
+            reference.top,
+            reference.right,
+            reference.bottom,
+        );
+        assert!(boundary_rect.is_finite());
+        assert!(skia_safe::RRect::new_rect_xy(boundary_rect, 1.0, 1.0).is_valid());
+        assert!(valid_backplate_render_geometry((-1.0, 2.0, -1.0, 2.0), 1.0));
+        assert!(
+            safe_decorator_config_from_response(
+                serde_json::json!({
+                    "type": "backplate",
+                    "target": "block",
+                    "shape": "rounded_rect",
+                    "color": {"r": 0, "g": 0, "b": 0, "a": 255},
+                    "padding": {"top": -1.0, "right": 2.0, "bottom": -1.0, "left": 2.0},
+                    "corner_radius": 1.0
+                }),
+                "test runtime Decorator"
+            )
+            .is_some(),
+            "negative padding remains legal when every derived operation is finite"
+        );
+        assert!(
+            !valid_backplate_render_geometry((0.0, 0.0, 0.0, 0.0), renderer_limit),
+            "rounded-rect diameter derivation must also remain finite"
+        );
+    }
+
+    #[test]
+    fn accepted_style_and_backplate_configs_execute_in_skia() {
+        use skia_safe::{Paint, PaintStyle, PathBuilder, RRect, Rect};
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((32, 32))
+            .expect("create a CPU Skia surface for runtime config validation");
+        surface.canvas().clear(skia_safe::Color::TRANSPARENT);
+
+        let mut stroke = Paint::default();
+        stroke.set_anti_alias(true);
+        stroke.set_color(skia_safe::Color::WHITE);
+        stroke.set_style(PaintStyle::Stroke);
+        stroke.set_stroke_width(2.0);
+        let dash = skia_safe::PathEffect::dash(&[2.0, 1.0], 0.5)
+            .expect("accepted dash config constructs a Skia path effect");
+        stroke.set_path_effect(dash);
+        let mut path_builder = PathBuilder::new();
+        path_builder.move_to((2.0, 6.0));
+        path_builder.line_to((30.0, 6.0));
+        let path = path_builder.detach();
+        surface.canvas().draw_path(&path, &stroke);
+
+        let bounds = crate::model::frame::runtime_shape::RuntimeBounds::new(8.0, 12.0, 24.0, 24.0);
+        let padding = (-1.0, 2.0, -1.0, 2.0);
+        assert!(backplate_pad_is_finite(bounds, padding));
+        let padded = bounds.pad(padding);
+        let rect = Rect::new(padded.left, padded.top, padded.right, padded.bottom);
+        assert!(rect.is_finite());
+        let rounded = RRect::new_rect_xy(rect, 2.0, 2.0);
+        assert!(rounded.is_valid());
+        let mut backplate = Paint::default();
+        backplate.set_color(skia_safe::Color::RED);
+        surface.canvas().draw_rrect(rounded, &backplate);
+
+        let image = crate::core::rendering::skia_utils::surface_to_image(&mut surface, 32, 32)
+            .expect("read pixels rendered by accepted runtime configs");
+        assert!(
+            image.data.chunks_exact(4).any(|pixel| pixel[3] != 0),
+            "accepted configs must produce visible Skia output"
         );
     }
 
