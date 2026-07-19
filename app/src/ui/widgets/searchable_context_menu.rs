@@ -14,6 +14,11 @@ pub struct SearchableItem<T> {
     pub category: Option<String>,
     pub keywords: Vec<String>,
     pub enabled: bool,
+    /// Stable QA bridge identifier for the real egui button, when the menu is
+    /// used by a coordinate-driven integration test.
+    pub qa_id: Option<String>,
+    /// Caller-defined action data exposed alongside `qa_id`.
+    pub qa_metadata: Option<serde_json::Value>,
     pub value: T,
 }
 
@@ -24,6 +29,8 @@ impl<T> SearchableItem<T> {
             category: None,
             keywords: Vec::new(),
             enabled: true,
+            qa_id: None,
+            qa_metadata: None,
             value,
         }
     }
@@ -123,10 +130,31 @@ pub fn show_searchable_items<T: Clone>(
     id_source: &str,
     items: &[SearchableItem<T>],
 ) -> Option<T> {
+    show_searchable_items_with_qa(ui, id_source, None, items)
+}
+
+/// Render a categorized searchable menu while exposing its actual search box
+/// and item buttons to the loopback QA bridge. Input is still delivered via
+/// egui; these identifiers do not provide a model-mutation shortcut.
+pub fn show_searchable_items_with_qa<T: Clone>(
+    ui: &mut Ui,
+    id_source: &str,
+    qa_search_id: Option<&str>,
+    items: &[SearchableItem<T>],
+) -> Option<T> {
     let id = ui.make_persistent_id(id_source);
     let mut state = ui.data_mut(|data| data.get_temp::<MenuState>(id).unwrap_or_default());
 
     let text_response = ui.add(TextEdit::singleline(&mut state.query).hint_text("Search..."));
+    if let Some(qa_search_id) = qa_search_id {
+        crate::qa::register_component_with_metadata(
+            qa_search_id,
+            "searchable_menu_query",
+            text_response.rect,
+            text_response.enabled(),
+            Some(serde_json::json!({"action": "filter"})),
+        );
+    }
     if state.query.is_empty() && !ui.memory(|memory| memory.has_focus(text_response.id)) {
         text_response.request_focus();
     }
@@ -200,6 +228,29 @@ pub fn show_searchable_items<T: Clone>(
                 item.enabled,
                 egui::Button::selectable(selected, &item.label).frame(false),
             );
+            if let Some(qa_id) = &item.qa_id {
+                let mut metadata = item.qa_metadata.clone().unwrap_or_else(|| {
+                    serde_json::json!({
+                        "label": item.label,
+                        "category": item.category,
+                    })
+                });
+                if let Some(object) = metadata.as_object_mut() {
+                    object
+                        .entry("label")
+                        .or_insert_with(|| serde_json::json!(item.label));
+                    object
+                        .entry("category")
+                        .or_insert_with(|| serde_json::json!(item.category));
+                }
+                crate::qa::register_component_with_metadata(
+                    qa_id,
+                    "searchable_menu_item",
+                    response.rect,
+                    response.enabled(),
+                    Some(metadata),
+                );
+            }
             if response.clicked() {
                 clicked_selection = Some(index);
             }
@@ -286,6 +337,8 @@ mod tests {
                     .map(|keyword| (*keyword).to_string())
                     .collect(),
                 enabled,
+                qa_id: None,
+                qa_metadata: None,
                 value,
             }
         }

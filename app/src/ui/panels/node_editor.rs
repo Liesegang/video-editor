@@ -4,6 +4,7 @@ use crate::state::context_types::{
     NodeEditorState, SelectionState,
 };
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
+use crate::ui::widgets::searchable_context_menu::{show_searchable_items_with_qa, SearchableItem};
 use eframe::egui::{self, Color32};
 use egui_snarl::{
     ui::{
@@ -351,6 +352,10 @@ enum NodeEdit {
     },
     Delete {
         owner: PortOwner,
+    },
+    SetEnabled {
+        node_id: Uuid,
+        enabled: bool,
     },
     RenameContainer {
         owner: PortOwner,
@@ -1044,6 +1049,37 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             }
             _ => None,
         };
+        if let GraphItem::Node(project_node_id) = item {
+            if let Some(node) = self.project.get_node(project_node_id) {
+                let enabled = !node.enabled;
+                let label = if enabled {
+                    "Enable Node"
+                } else {
+                    "Disable Node"
+                };
+                let response = ui.button(label);
+                crate::qa::register_component_with_metadata(
+                    format!("node_editor.menu.toggle_enabled.node:{project_node_id}"),
+                    "node_editor_menu_item",
+                    response.rect,
+                    response.enabled(),
+                    Some(serde_json::json!({
+                        "action": if enabled { "enable" } else { "disable" },
+                        "owner": qa_container_key(PortOwner::Node(project_node_id)),
+                        "enabled": enabled,
+                    })),
+                );
+                if response.clicked() {
+                    self.edits
+                        .push(QueuedNodeEdit::Atomic(NodeEdit::SetEnabled {
+                            node_id: project_node_id,
+                            enabled,
+                        }));
+                    ui.close();
+                    return;
+                }
+            }
+        }
         if let Some((owner, label)) = delete_target {
             let response = ui.button(label);
             crate::qa::register_component_with_metadata(
@@ -4750,6 +4786,15 @@ fn apply_edit(project: &mut Project, edit: NodeEdit) -> bool {
             PortOwner::Track(id) => project.remove_track(id).is_some(),
             PortOwner::Composition(_) => false,
         },
+        NodeEdit::SetEnabled { node_id, enabled } => {
+            project.get_node_mut(node_id).is_some_and(|node| {
+                if node.enabled == enabled {
+                    return false;
+                }
+                node.enabled = enabled;
+                true
+            })
+        }
         NodeEdit::RenameContainer { owner, name } => match owner {
             PortOwner::Composition(id) => {
                 let Some(composition) = project.get_composition_mut(id) else {
@@ -4924,6 +4969,282 @@ pub fn flush_pending_continuous_edit(
     flush_pending_continuous_edit_with_project(&project, history_manager, node_editor_state)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NodeCreateRequest {
+    Text,
+    Solid,
+    Shape,
+    Style(String),
+    Effector(String),
+    Effect(String),
+    Merge,
+    Clip,
+    Track,
+    Composition,
+}
+
+impl NodeCreateRequest {
+    fn qa_kind(&self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Solid => "solid",
+            Self::Shape => "shape",
+            Self::Style(_) => "style",
+            Self::Effector(_) => "effector",
+            Self::Effect(_) => "effect",
+            Self::Merge => "merge",
+            Self::Clip => "clip",
+            Self::Track => "track",
+            Self::Composition => "composition",
+        }
+    }
+}
+
+fn node_create_menu_item(
+    label: impl Into<String>,
+    category: impl Into<String>,
+    keywords: impl IntoIterator<Item = impl Into<String>>,
+    qa_id: impl Into<String>,
+    value: NodeCreateRequest,
+) -> SearchableItem<NodeCreateRequest> {
+    let mut item = SearchableItem::new(label, value);
+    item.category = Some(category.into());
+    item.keywords = keywords.into_iter().map(Into::into).collect();
+    item.qa_id = Some(qa_id.into());
+    item.qa_metadata = Some(serde_json::json!({
+        "action": "create",
+        "kind": item.value.qa_kind(),
+    }));
+    item
+}
+
+fn node_create_menu_items(
+    plugin_manager: &PluginManager,
+) -> Vec<SearchableItem<NodeCreateRequest>> {
+    let mut items = vec![
+        node_create_menu_item(
+            "Text",
+            "Generators",
+            ["title", "caption", "shape"],
+            "node_editor.menu.create.text",
+            NodeCreateRequest::Text,
+        ),
+        node_create_menu_item(
+            "Solid Color",
+            "Generators",
+            ["solid", "color", "image"],
+            "node_editor.menu.create.solid",
+            NodeCreateRequest::Solid,
+        ),
+        node_create_menu_item(
+            "Shape (Rectangle)",
+            "Generators",
+            ["shape", "rectangle", "path"],
+            "node_editor.menu.create.shape",
+            NodeCreateRequest::Shape,
+        ),
+        node_create_menu_item(
+            "Fill",
+            "Shape Operations",
+            ["fill", "style", "shape", "image"],
+            "node_editor.menu.create.fill",
+            NodeCreateRequest::Style("fill".to_string()),
+        ),
+        node_create_menu_item(
+            "Stroke",
+            "Shape Operations",
+            ["stroke", "style", "outline", "shape", "image"],
+            "node_editor.menu.create.stroke",
+            NodeCreateRequest::Style("stroke".to_string()),
+        ),
+        node_create_menu_item(
+            "Merge",
+            "Compositing",
+            ["merge", "composite", "blend", "layers"],
+            "node_editor.menu.create.merge",
+            NodeCreateRequest::Merge,
+        ),
+        node_create_menu_item(
+            "Container (Clip)",
+            "Containers",
+            ["clip", "container", "timeline"],
+            "node_editor.menu.create.clip",
+            NodeCreateRequest::Clip,
+        ),
+        node_create_menu_item(
+            "Container (Track)",
+            "Containers",
+            ["track", "container", "timeline"],
+            "node_editor.menu.create.track",
+            NodeCreateRequest::Track,
+        ),
+        node_create_menu_item(
+            "Container (Composition)",
+            "Containers",
+            ["composition", "container", "nested"],
+            "node_editor.menu.create.composition",
+            NodeCreateRequest::Composition,
+        ),
+    ];
+
+    items.extend(
+        available_effector_menu_entries(plugin_manager)
+            .into_iter()
+            .map(|(component_id, label)| {
+                node_create_menu_item(
+                    format!("Effector · {label}"),
+                    "Shape Operations / Effectors",
+                    ["effector".to_string(), label, component_id.clone()],
+                    format!("node_editor.menu.create.effector:{component_id}"),
+                    NodeCreateRequest::Effector(component_id),
+                )
+            }),
+    );
+
+    let mut effects = plugin_manager.get_available_effects();
+    effects.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+    items.extend(
+        effects
+            .into_iter()
+            .map(|(effect_id, effect_name, effect_category)| {
+                node_create_menu_item(
+                    format!("Effect · {effect_name}"),
+                    format!("Image Effects / {effect_category}"),
+                    [
+                        "effect".to_string(),
+                        effect_name,
+                        effect_id.clone(),
+                        effect_category,
+                    ],
+                    format!("node_editor.menu.create.effect:{effect_id}"),
+                    NodeCreateRequest::Effect(effect_id),
+                )
+            }),
+    );
+    items
+}
+
+type CreateAction = Box<dyn FnOnce(&mut Project) -> bool>;
+
+fn create_action_for_request(
+    request: NodeCreateRequest,
+    project_service: &EditorService,
+    canvas_size: (u64, u64),
+    graph_position: egui::Pos2,
+    comp_id: Uuid,
+) -> Option<CreateAction> {
+    let plugin_manager = project_service.get_plugin_manager();
+    match request {
+        NodeCreateRequest::Text => match project_service.create_text_node(
+            "Hello World",
+            library::editor::project_service::DEFAULT_TEXT_FONT,
+            canvas_size.0,
+            canvas_size.1,
+        ) {
+            Ok(node) => Some(Box::new(move |project| {
+                create_prebuilt_node(project, graph_position, node, comp_id)
+            })),
+            Err(error) => {
+                log::error!("Cannot create Text Node: {error}");
+                None
+            }
+        },
+        NodeCreateRequest::Solid => match project_service.create_solid_node(
+            library::model::frame::color::Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            canvas_size.0,
+            canvas_size.1,
+        ) {
+            Ok(node) => Some(Box::new(move |project| {
+                create_prebuilt_node(project, graph_position, node, comp_id)
+            })),
+            Err(error) => {
+                log::error!("Cannot create Solid Node: {error}");
+                None
+            }
+        },
+        NodeCreateRequest::Shape => match project_service.create_shape_node(
+            library::editor::project_service::DEFAULT_SHAPE_PATH,
+            canvas_size.0,
+            canvas_size.1,
+            100,
+            100,
+        ) {
+            Ok(node) => Some(Box::new(move |project| {
+                create_prebuilt_node(project, graph_position, node, comp_id)
+            })),
+            Err(error) => {
+                log::error!("Cannot create Shape Node: {error}");
+                None
+            }
+        },
+        NodeCreateRequest::Style(component_id) => {
+            match plugin_manager.create_style_operation_node(&component_id) {
+                Ok(node) => Some(Box::new(move |project| {
+                    insert_prebuilt_graph(
+                        project,
+                        graph_position,
+                        NodeGraphBundle::new(vec![node], Vec::new(), None),
+                        comp_id,
+                    )
+                })),
+                Err(error) => {
+                    log::error!("Cannot create Style Node {component_id}: {error}");
+                    None
+                }
+            }
+        }
+        NodeCreateRequest::Effector(component_id) => {
+            match plugin_manager.create_effector_operation_node(&component_id) {
+                Ok(node) => Some(Box::new(move |project| {
+                    insert_prebuilt_graph(
+                        project,
+                        graph_position,
+                        NodeGraphBundle::new(vec![node], Vec::new(), None),
+                        comp_id,
+                    )
+                })),
+                Err(error) => {
+                    log::error!("Cannot create Effector Node {component_id}: {error}");
+                    None
+                }
+            }
+        }
+        NodeCreateRequest::Effect(effect_id) => {
+            match plugin_manager.create_effect_operation_node(&effect_id) {
+                Ok(node) => Some(Box::new(move |project| {
+                    insert_prebuilt_graph(
+                        project,
+                        graph_position,
+                        NodeGraphBundle::new(vec![node], Vec::new(), None),
+                        comp_id,
+                    )
+                })),
+                Err(error) => {
+                    log::error!("Cannot create Effect Node {effect_id}: {error}");
+                    None
+                }
+            }
+        }
+        NodeCreateRequest::Merge => Some(Box::new(move |project| {
+            create_merge_node(project, graph_position, comp_id)
+        })),
+        NodeCreateRequest::Clip => Some(Box::new(move |project| {
+            create_clip_at_free_slot(project, graph_position, comp_id, "Clip").is_some()
+        })),
+        NodeCreateRequest::Track => Some(Box::new(move |project| {
+            create_track_at_free_slot(project, graph_position, comp_id, "Track").is_some()
+        })),
+        NodeCreateRequest::Composition => Some(Box::new(move |project| {
+            create_composition_node(project, graph_position, comp_id)
+        })),
+    }
+}
+
 fn handle_context_menu(
     ui: &mut egui::Ui,
     state: &mut Option<ContextMenuState>,
@@ -4961,7 +5282,6 @@ fn handle_context_menu(
     );
 
     let mut should_close = false;
-    type CreateAction = Box<dyn FnOnce(&mut Project) -> bool>;
     let mut action: Option<CreateAction> = None;
 
     if let Some(context) = state {
@@ -4971,220 +5291,24 @@ fn handle_context_menu(
             .fixed_pos(position)
             .show(ui.ctx(), |ui| {
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
-                    ui.set_max_width(220.0);
-                    let search = ui.text_edit_singleline(&mut context.search_query);
-                    if context.search_query.is_empty()
-                        && !ui.memory(|memory| memory.has_focus(search.id))
-                    {
-                        search.request_focus();
-                    }
-                    ui.separator();
-
-                    let query = context.search_query.to_lowercase();
-                    if matches_query(&query, "text")
-                        && qa_menu_button(ui, "Text", "node_editor.menu.create.text").clicked()
-                    {
-                        match project_service.create_text_node(
-                            "Hello World",
-                            library::editor::project_service::DEFAULT_TEXT_FONT,
-                            canvas_size.0,
-                            canvas_size.1,
-                        ) {
-                            Ok(node) => {
-                                action = Some(Box::new(move |project| {
-                                    create_prebuilt_node(project, graph_position, node, comp_id)
-                                }));
-                            }
-                            Err(error) => log::error!("Cannot create Text Node: {error}"),
-                        }
-                        should_close = true;
-                    }
-                    if matches_query(&query, "solid color")
-                        && qa_menu_button(ui, "Solid Color", "node_editor.menu.create.solid")
-                            .clicked()
-                    {
-                        match project_service.create_solid_node(
-                            library::model::frame::color::Color {
-                                r: 255,
-                                g: 0,
-                                b: 0,
-                                a: 255,
-                            },
-                            canvas_size.0,
-                            canvas_size.1,
-                        ) {
-                            Ok(node) => {
-                                action = Some(Box::new(move |project| {
-                                    create_prebuilt_node(project, graph_position, node, comp_id)
-                                }));
-                            }
-                            Err(error) => log::error!("Cannot create Solid Node: {error}"),
-                        }
-                        should_close = true;
-                    }
-                    if matches_query(&query, "shape rectangle")
-                        && qa_menu_button(ui, "Shape (Rectangle)", "node_editor.menu.create.shape")
-                            .clicked()
-                    {
-                        match project_service.create_shape_node(
-                            library::editor::project_service::DEFAULT_SHAPE_PATH,
-                            canvas_size.0,
-                            canvas_size.1,
-                            100,
-                            100,
-                        ) {
-                            Ok(node) => {
-                                action = Some(Box::new(move |project| {
-                                    create_prebuilt_node(project, graph_position, node, comp_id)
-                                }));
-                            }
-                            Err(error) => log::error!("Cannot create Shape Node: {error}"),
-                        }
-                        should_close = true;
-                    }
-                    if matches_query(&query, "fill style")
-                        && qa_menu_button(ui, "Fill", "node_editor.menu.create.fill").clicked()
-                    {
-                        match project_service
-                            .get_plugin_manager()
-                            .create_style_operation_node("fill")
-                        {
-                            Ok(node) => {
-                                action = Some(Box::new(move |project| {
-                                    insert_prebuilt_graph(
-                                        project,
-                                        graph_position,
-                                        NodeGraphBundle::new(vec![node], Vec::new(), None),
-                                        comp_id,
-                                    )
-                                }));
-                            }
-                            Err(error) => log::error!("Cannot create Fill Node: {error}"),
-                        }
-                        should_close = true;
-                    }
-                    if matches_query(&query, "stroke style")
-                        && qa_menu_button(ui, "Stroke", "node_editor.menu.create.stroke").clicked()
-                    {
-                        match project_service
-                            .get_plugin_manager()
-                            .create_style_operation_node("stroke")
-                        {
-                            Ok(node) => {
-                                action = Some(Box::new(move |project| {
-                                    insert_prebuilt_graph(
-                                        project,
-                                        graph_position,
-                                        NodeGraphBundle::new(vec![node], Vec::new(), None),
-                                        comp_id,
-                                    )
-                                }));
-                            }
-                            Err(error) => log::error!("Cannot create Stroke Node: {error}"),
-                        }
-                        should_close = true;
-                    }
                     let plugin_manager = project_service.get_plugin_manager();
-                    for (effector_id, effector_label) in
-                        available_effector_menu_entries(plugin_manager.as_ref())
-                    {
-                        let search_label =
-                            format!("effector {effector_label} {effector_id}").to_lowercase();
-                        if !matches_query(&query, &search_label) {
-                            continue;
-                        }
-                        let label = format!("Effector · {effector_label}");
-                        let qa_id = format!("node_editor.menu.create.effector:{effector_id}");
-                        if qa_menu_button(ui, &label, &qa_id).clicked() {
-                            match plugin_manager.create_effector_operation_node(&effector_id) {
-                                Ok(node) => {
-                                    action = Some(Box::new(move |project| {
-                                        insert_prebuilt_graph(
-                                            project,
-                                            graph_position,
-                                            NodeGraphBundle::new(vec![node], Vec::new(), None),
-                                            comp_id,
-                                        )
-                                    }));
-                                }
-                                Err(error) => log::error!(
-                                    "Cannot create Effector Node {effector_id}: {error}"
-                                ),
-                            }
-                            should_close = true;
-                        }
-                    }
-                    let mut available_effects = plugin_manager.get_available_effects();
-                    available_effects.sort_by(|left, right| {
-                        left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0))
-                    });
-                    for (effect_id, effect_name, effect_category) in available_effects {
-                        let search_label =
-                            format!("effect {effect_name} {effect_id} {effect_category}")
-                                .to_lowercase();
-                        if !matches_query(&query, &search_label) {
-                            continue;
-                        }
-                        let label = format!("Effect · {effect_name}");
-                        let qa_id = format!("node_editor.menu.create.effect:{effect_id}");
-                        if qa_menu_button(ui, &label, &qa_id).clicked() {
-                            match plugin_manager.create_effect_operation_node(&effect_id) {
-                                Ok(node) => {
-                                    action = Some(Box::new(move |project| {
-                                        insert_prebuilt_graph(
-                                            project,
-                                            graph_position,
-                                            NodeGraphBundle::new(vec![node], Vec::new(), None),
-                                            comp_id,
-                                        )
-                                    }));
-                                }
-                                Err(error) => {
-                                    log::error!("Cannot create Effect Node {effect_id}: {error}")
-                                }
-                            }
-                            should_close = true;
-                        }
-                    }
-                    if matches_query(&query, "merge composite")
-                        && qa_menu_button(ui, "Merge", "node_editor.menu.create.merge").clicked()
-                    {
-                        action = Some(Box::new(move |project| {
-                            create_merge_node(project, graph_position, comp_id)
-                        }));
-                        should_close = true;
-                    }
-                    if matches_query(&query, "clip container")
-                        && qa_menu_button(ui, "Container (Clip)", "node_editor.menu.create.clip")
-                            .clicked()
-                    {
-                        action = Some(Box::new(move |project| {
-                            create_clip_at_free_slot(project, graph_position, comp_id, "Clip")
-                                .is_some()
-                        }));
-                        should_close = true;
-                    }
-                    if matches_query(&query, "track container")
-                        && qa_menu_button(ui, "Container (Track)", "node_editor.menu.create.track")
-                            .clicked()
-                    {
-                        action = Some(Box::new(move |project| {
-                            create_track_at_free_slot(project, graph_position, comp_id, "Track")
-                                .is_some()
-                        }));
-                        should_close = true;
-                    }
-                    if matches_query(&query, "container composition")
-                        && qa_menu_button(
-                            ui,
-                            "Container (Composition)",
-                            "node_editor.menu.create.composition",
-                        )
-                        .clicked()
-                    {
-                        action = Some(Box::new(move |project| {
-                            create_composition_node(project, graph_position, comp_id)
-                        }));
+                    ui.set_min_width(260.0);
+                    ui.set_max_width(320.0);
+                    let items = node_create_menu_items(plugin_manager.as_ref());
+                    let menu_id = format!("node_editor_add_menu:{}", context.open_time.to_bits());
+                    if let Some(request) = show_searchable_items_with_qa(
+                        ui,
+                        &menu_id,
+                        Some("node_editor.menu.search"),
+                        &items,
+                    ) {
+                        action = create_action_for_request(
+                            request,
+                            project_service,
+                            canvas_size,
+                            graph_position,
+                            comp_id,
+                        );
                         should_close = true;
                     }
                 });
@@ -5252,16 +5376,6 @@ fn push_history_snapshot(
     if let Ok(project) = project_lock.read() {
         history_manager.push_project_state(project.clone());
     }
-}
-
-fn matches_query(query: &str, label: &str) -> bool {
-    query.is_empty() || label.contains(query)
-}
-
-fn qa_menu_button(ui: &mut egui::Ui, label: &str, id: &str) -> egui::Response {
-    let response = ui.button(label);
-    crate::qa::register_component(id, "node_editor_menu_item", response.rect);
-    response
 }
 
 fn available_effector_menu_entries(plugin_manager: &PluginManager) -> Vec<(String, String)> {
@@ -6063,6 +6177,54 @@ mod tests {
                 rects[&to],
             );
         }
+    }
+
+    #[test]
+    fn add_menu_uses_shared_search_categories_and_indexes_effect_metadata() {
+        let plugins = PluginManager::default();
+        let items = node_create_menu_items(&plugins);
+        assert!(items.iter().all(|item| item.category.is_some()));
+        let blur = items
+            .iter()
+            .find(|item| {
+                matches!(&item.value, NodeCreateRequest::Effect(effect_id) if effect_id == "blur")
+            })
+            .expect("built-in Blur effect is exposed in the Add menu");
+        assert!(blur
+            .category
+            .as_deref()
+            .is_some_and(|category| category.starts_with("Image Effects /")));
+        assert_eq!(
+            blur.qa_id.as_deref(),
+            Some("node_editor.menu.create.effect:blur")
+        );
+        assert!(blur.keywords.iter().any(|keyword| keyword == "blur"));
+        let matches = crate::ui::widgets::searchable_context_menu::filter_searchable_items(
+            &items,
+            "effect blur",
+        );
+        assert!(matches.iter().any(|index| items[*index] == *blur));
+    }
+
+    #[test]
+    fn node_enabled_context_command_is_atomic_and_undoable() {
+        let (mut project, _, _, _, node_id, _) = fixture();
+        let initial = project.clone();
+        let mut history = HistoryManager::new();
+        history.push_project_state(initial.clone());
+        let mut state = NodeEditorState::default();
+        assert!(apply_queued_node_edits(
+            &mut project,
+            vec![QueuedNodeEdit::Atomic(NodeEdit::SetEnabled {
+                node_id,
+                enabled: false,
+            })],
+            &mut history,
+            &mut state,
+        ));
+        assert!(!project.get_node(node_id).unwrap().enabled);
+        let edited = project.clone();
+        assert_single_gesture_undo_redo(&mut history, &initial, &edited);
     }
 
     fn queued_property_edit(
