@@ -88,6 +88,16 @@ class NodeWireQaTests(unittest.TestCase):
                     "rect_points": canvas,
                 },
                 {
+                    "id": "node_editor.edge:boundary",
+                    "visible": True,
+                    "rect_points": rect(0.0, 42.0, 13.0, 58.0),
+                    "metadata": {
+                        "kind": "explicit",
+                        "connection_id": "boundary",
+                        "hit_point": {"x": 5.0, "y": 50.0},
+                    },
+                },
+                {
                     "id": "node_editor.edge:first",
                     "visible": True,
                     "rect_points": rect(82.0, 62.0, 98.0, 78.0),
