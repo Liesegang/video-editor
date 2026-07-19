@@ -1,39 +1,38 @@
 use egui::Ui;
-use library::model::asset::AssetKind;
-use library::model::project::Project;
 use library::ClipBundle;
 use library::EditorService as ProjectService;
+use library::model::asset::AssetKind;
+use library::model::project::Project;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+use crate::utils::lock::read_or_recover;
 use crate::{
     action::HistoryManager, state::context::EditorContext, state::context_types::DragStateItem,
 };
 
-pub fn handle_drag_and_drop(
+use super::interactions::InteractionGeometry;
+
+pub(super) fn handle_drag_and_drop(
     ui: &mut Ui,
     response: &egui::Response,
-    content_rect: egui::Rect,
     editor_context: &mut EditorContext,
     project: &Arc<RwLock<Project>>,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
-    pixels_per_unit: f32,
-    _composition_fps: f64, // Unused for time calculations now? Maybe for snapping.
-    row_height: f32,
-    track_spacing: f32,
+    geometry: InteractionGeometry,
 ) {
     if ui.input(|i| i.pointer.any_released()) {
         if let Some(dragged_item) = &editor_context.interaction.dragged_item {
             if let Some(mouse_pos) = response.hover_pos() {
-                let drop_time_f64 = ((mouse_pos.x - content_rect.min.x
+                let drop_time_f64 = ((mouse_pos.x - geometry.content_rect.min.x
                     + editor_context.timeline.scroll_offset.x)
-                    / pixels_per_unit)
+                    / geometry.pixels_per_unit)
                     .max(0.0) as f64;
 
-                let visible_row_index = ((mouse_pos.y - content_rect.min.y
+                let visible_row_index = ((mouse_pos.y - geometry.content_rect.min.y
                     + editor_context.timeline.scroll_offset.y)
-                    / (row_height + track_spacing))
+                    / (geometry.row_height + geometry.track_spacing))
                     .floor() as usize;
 
                 if let Some(comp_id) = editor_context.selection.composition_id {
@@ -240,7 +239,14 @@ pub fn handle_drag_and_drop(
                                     calculated_insert_index,
                                 ) {
                                     log::error!("Failed to add clip to new track: {:?}", e);
-                                    project_service.remove_track(comp_id, new_track_id).ok();
+                                    if let Err(cleanup_error) =
+                                        project_service.remove_track(comp_id, new_track_id)
+                                    {
+                                        log::error!(
+                                            "Failed to remove empty track after clip insertion failed: {}",
+                                            cleanup_error
+                                        );
+                                    }
                                 } else {
                                     editor_context.timeline.expanded_tracks.insert(new_track_id);
                                     success = true;
@@ -249,8 +255,8 @@ pub fn handle_drag_and_drop(
                         }
 
                         if success {
-                            let current_state =
-                                project_service.get_project().read().unwrap().clone();
+                            let project = project_service.get_project();
+                            let current_state = read_or_recover(project.as_ref()).clone();
                             history_manager.push_project_state(current_state);
                         }
                     }

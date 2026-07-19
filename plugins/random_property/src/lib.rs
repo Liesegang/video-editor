@@ -55,7 +55,10 @@ impl PropertyEvaluator for RandomNoiseEvaluator {
     }
 }
 
-#[allow(improper_ctypes_definitions)]
+#[allow(
+    improper_ctypes_definitions,
+    reason = "legacy Rust-to-Rust property ABI exports a trait object until this example migrates to ruvie-plugin-api v1"
+)]
 #[no_mangle]
 pub extern "C" fn create_property_plugin() -> *mut dyn PropertyPlugin {
     let plugin: Box<dyn PropertyPlugin> = Box::new(RandomPropertyPlugin);

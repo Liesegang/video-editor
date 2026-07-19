@@ -1,24 +1,22 @@
 use egui::Ui;
-use library::model::project::Project;
 use library::ClipBundle;
 use library::EditorService as ProjectService;
+use library::model::project::Project;
 use std::sync::{Arc, RwLock};
 
+use crate::utils::lock::read_or_recover;
 use crate::{action::HistoryManager, state::context::EditorContext};
 
-pub fn handle_context_menu(
+use super::interactions::InteractionGeometry;
+
+pub(super) fn handle_context_menu(
     ui: &mut Ui,
     response: &egui::Response,
-    content_rect: egui::Rect,
     editor_context: &mut EditorContext,
     project: &Arc<RwLock<Project>>,
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
-    pixels_per_unit: f32,
-    _composition_fps: f64,
-    num_tracks: usize,
-    row_height: f32,
-    track_spacing: f32,
+    geometry: InteractionGeometry,
 ) {
     // Capture right-click position BEFORE the context menu opens/draws
     if response.hovered() && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary))
@@ -46,13 +44,16 @@ pub fn handle_context_menu(
 
         // Try to recover clicked position
         if let Some(pos) = editor_context.interaction.context_menu_open_pos {
-            let local_x = pos.x - content_rect.min.x + editor_context.timeline.scroll_offset.x;
-            let time_at_click = (local_x / pixels_per_unit).max(0.0) as f64;
+            let local_x =
+                pos.x - geometry.content_rect.min.x + editor_context.timeline.scroll_offset.x;
+            let time_at_click = (local_x / geometry.pixels_per_unit).max(0.0) as f64;
             drop_start_time = time_at_click;
 
-            let local_y = pos.y - content_rect.min.y + editor_context.timeline.scroll_offset.y;
-            let track_idx = (local_y / (row_height + track_spacing)).floor() as isize;
-            if track_idx >= 0 && track_idx < num_tracks as isize {
+            let local_y =
+                pos.y - geometry.content_rect.min.y + editor_context.timeline.scroll_offset.y;
+            let track_idx =
+                (local_y / (geometry.row_height + geometry.track_spacing)).floor() as isize;
+            if track_idx >= 0 && track_idx < geometry.num_tracks as isize {
                 drop_track_index_opt = Some(track_idx as usize);
             }
         }
@@ -165,7 +166,8 @@ fn add_clip_to_best_track(
             if let Err(e) = project_service.add_clip_to_track(comp_id, track_id, bundle, None) {
                 log::error!("Failed to add clip: {}", e);
             } else {
-                let current_state = project_service.get_project().read().unwrap().clone();
+                let project = project_service.get_project();
+                let current_state = read_or_recover(project.as_ref()).clone();
                 history_manager.push_project_state(current_state);
             }
         }
