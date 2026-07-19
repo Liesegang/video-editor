@@ -1,10 +1,15 @@
 use egui::{epaint::StrokeKind, Ui};
 use egui_phosphor::regular as icons;
 use library::audio::cache::{AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
+use library::audio::mixer::audio_stream_index_for_media;
 use library::model::asset::AssetKind;
-use library::model::project::Project;
+use library::model::project::{
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortOwner, Project,
+    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+};
 use library::model::{Clip, Node, NodeContent, Track};
 use library::EditorService as ProjectService;
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -135,18 +140,110 @@ fn collect_track_clips<'a>(project: &'a Project, track: &'a Track, clips: &mut V
     }
 }
 
-fn primary_node<'a>(clip: &Clip, project: &'a Project) -> Option<&'a Node> {
-    clip.output_node_id
-        .and_then(|node_id| project.get_node(node_id))
-        .or_else(|| {
-            clip.node_ids
-                .iter()
-                .find_map(|node_id| project.get_node(*node_id))
-        })
+#[derive(Clone, Copy)]
+struct ClipGraphNodes<'a> {
+    /// The authored Clip result binding. This can be a Style, Effect, or
+    /// Merge and is deliberately not used as the Timeline's semantic label.
+    output: Option<&'a Node>,
+    /// The first active direct source feeding `output`, following canonical
+    /// content connections back through operations and Merge inputs.
+    semantic_source: Option<&'a Node>,
 }
 
-fn get_clip_color(clip: &Clip, project: &Project) -> (u8, u8, u8) {
-    match primary_node(clip, project).map(|node| &node.content) {
+fn clip_graph_nodes<'a>(clip: &Clip, project: &'a Project) -> ClipGraphNodes<'a> {
+    let output = clip
+        .output_node_id
+        .filter(|node_id| clip.node_ids.contains(node_id))
+        .and_then(|node_id| project.get_node(node_id));
+    let semantic_source = output.and_then(|output| {
+        semantic_source_for_result(project, output.id, &mut HashSet::new())
+    });
+    ClipGraphNodes {
+        output,
+        semantic_source,
+    }
+}
+
+fn semantic_source_for_result<'a>(
+    project: &'a Project,
+    node_id: Uuid,
+    path: &mut HashSet<Uuid>,
+) -> Option<&'a Node> {
+    let node = project.get_node(node_id)?;
+    if !node.enabled || !path.insert(node_id) {
+        return None;
+    }
+
+    let result = match &node.content {
+        NodeContent::Media(_)
+        | NodeContent::Generator(_)
+        | NodeContent::Reference(_) => Some(node),
+        NodeContent::PluginOperation(_) | NodeContent::Merge => {
+            let mut incoming = project
+                .connections
+                .iter()
+                .filter(|connection| {
+                    connection.to.owner == PortOwner::Node(node_id)
+                        && is_content_flow_connection(connection)
+                })
+                .collect::<Vec<_>>();
+            // Merge order is the canonical layer authority. The UUID
+            // tie-breaker keeps malformed equal-order projects deterministic
+            // without adopting Clip.node_ids storage order as a second model.
+            incoming.sort_by(|left, right| {
+                left.order
+                    .cmp(&right.order)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            incoming.into_iter().find_map(|connection| {
+                let PortOwner::Node(source_id) = connection.from.owner else {
+                    return None;
+                };
+                semantic_source_for_result(project, source_id, path)
+            })
+        }
+    };
+    path.remove(&node_id);
+    result
+}
+
+fn is_content_flow_connection(connection: &ProjectConnection) -> bool {
+    matches!(
+        (connection.from.port.as_str(), connection.to.port.as_str()),
+        (IMAGE_OUTPUT_PORT, IMAGE_INPUT_PORT | MERGE_IMAGES_PORT)
+            | (SHAPE_OUTPUT_PORT, SHAPE_INPUT_PORT)
+    )
+}
+
+fn semantic_source_kind(node: &Node) -> &'static str {
+    match &node.content {
+        NodeContent::Media(_) => "Media",
+        NodeContent::Generator(library::model::GeneratorContent::Text) => "Text",
+        NodeContent::Generator(library::model::GeneratorContent::Shape) => "Shape",
+        NodeContent::Generator(library::model::GeneratorContent::SkSL) => "Shader",
+        NodeContent::Generator(library::model::GeneratorContent::Solid) => "Solid",
+        NodeContent::Reference(_) => "Reference",
+        NodeContent::PluginOperation(_) | NodeContent::Merge => "Result",
+    }
+}
+
+fn semantic_source_label(node: &Node) -> String {
+    let kind = semantic_source_kind(node);
+    match &node.content {
+        NodeContent::Generator(library::model::GeneratorContent::Text)
+        | NodeContent::Generator(library::model::GeneratorContent::Shape) => {
+            if node.name.eq_ignore_ascii_case(kind) {
+                kind.to_string()
+            } else {
+                format!("{kind} · {}", node.name)
+            }
+        }
+        _ => node.name.clone(),
+    }
+}
+
+fn get_clip_color(source: Option<&Node>, project: &Project) -> (u8, u8, u8) {
+    match source.map(|node| &node.content) {
         Some(NodeContent::Media(m)) => {
             if let Some(asset) = project.assets.iter().find(|a| a.id == m.asset_id) {
                 match asset.kind {
@@ -631,8 +728,11 @@ fn draw_single_clip(
     display_rows: &[DisplayRow],
     reorder_state: &Option<(Uuid, Uuid, usize, usize, usize)>,
 ) {
-    // Determine Color based on kind helper
-    let (r, g, b) = get_clip_color(clip, project);
+    let graph_nodes = clip_graph_nodes(clip, project);
+    // Result and semantic source are separate: explicit Style/Effect/Merge
+    // results retain the color, label, and audio identity of their reachable
+    // direct source.
+    let (r, g, b) = get_clip_color(graph_nodes.semantic_source, project);
     let clip_color = egui::Color32::from_rgb(r, g, b);
 
     // Apply Live Reordering Visual Shift
@@ -719,6 +819,9 @@ fn draw_single_clip(
                 "canonical_index": canonical_index,
                 "start_time": clip.start_time.into_inner(),
                 "duration": clip.duration.into_inner(),
+                "output_node_id": graph_nodes.output.map(|node| node.id),
+                "semantic_source_node_id": graph_nodes.semantic_source.map(|node| node.id),
+                "semantic_source_kind": graph_nodes.semantic_source.map(semantic_source_kind),
             })),
         );
     }
@@ -1007,18 +1110,18 @@ fn draw_single_clip(
     painter.rect_filled(drawing_clip_rect, 4.0, transparent_color);
 
     // Draw Audio Waveform
-    if let Some(NodeContent::Media(m)) = primary_node(clip, project).map(|node| &node.content) {
-        if let Some(asset) = project
-            .assets
-            .iter()
-            .find(|asset| asset.id == m.asset_id && asset.kind == AssetKind::Audio)
-        {
+    if let Some(NodeContent::Media(m)) =
+        graph_nodes.semantic_source.map(|node| &node.content)
+    {
+        if let Some(asset) = project.assets.iter().find(|asset| {
+            asset.id == m.asset_id && matches!(asset.kind, AssetKind::Audio | AssetKind::Video)
+        }) {
             if safe_width > 10.0 {
                 let cache = project_service.get_cache_manager();
                 let engine = project_service.get_audio_service().get_audio_engine();
                 let sample_rate = engine.get_sample_rate();
                 let channels = engine.get_channels();
-                let stream_index = m.audio_stream_index.or(asset.stream_index);
+                let stream_index = audio_stream_index_for_media(asset, m);
                 let format = AudioDecodeFormat::new(sample_rate, channels);
                 let source = format.and_then(|format| {
                     AudioSourceKey::read(&asset.path, stream_index, format).ok()
@@ -1055,8 +1158,9 @@ fn draw_single_clip(
         );
     }
 
-    let mut clip_text = primary_node(clip, project)
-        .map(|node| node.name.clone())
+    let mut clip_text = graph_nodes
+        .semantic_source
+        .map(semantic_source_label)
         .unwrap_or_else(|| clip.name.clone());
 
     if is_summary_clip {
@@ -1168,7 +1272,209 @@ pub fn get_clips_in_box(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
+    use library::model::project::{NodeContainer, PortAddress};
+    use library::model::{Asset, GeneratorContent, MediaContent};
+    use library::plugin::PluginManager;
+
+    fn project_with_clip(name: &str) -> (Project, Uuid) {
+        let mut project = Project::new("timeline semantic source");
+        let clip = Clip::new(name, 0.0, 3.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        (project, clip_id)
+    }
+
+    fn attach_node(project: &mut Project, clip_id: Uuid, node: Node) -> Uuid {
+        let node_id = node.id;
+        project.add_node(node);
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
+            .unwrap();
+        node_id
+    }
+
+    fn style_result_project(source: Node) -> (Project, Uuid, Uuid, Uuid) {
+        let (mut project, clip_id) = project_with_clip("styled source");
+        // Storage order is not semantic authority. This disconnected source
+        // deliberately precedes the connected one.
+        attach_node(
+            &mut project,
+            clip_id,
+            Node::new(
+                "Unreachable",
+                NodeContent::Generator(GeneratorContent::Shape),
+            ),
+        );
+        let source_id = attach_node(&mut project, clip_id, source);
+        let style = PluginManager::default()
+            .create_style_operation_node("fill")
+            .unwrap();
+        let style_id = attach_node(&mut project, clip_id, style);
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(source_id), SHAPE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(style_id), SHAPE_INPUT_PORT),
+            )
+            .unwrap();
+        project
+            .set_output_node(NodeContainer::Clip(clip_id), Some(style_id))
+            .unwrap();
+        (project, clip_id, source_id, style_id)
+    }
+
+    #[test]
+    fn style_results_preserve_reachable_text_and_shape_semantics() {
+        for (generator, name, label, color) in [
+            (
+                GeneratorContent::Text,
+                "Main title",
+                "Text · Main title",
+                (200, 150, 100),
+            ),
+            (
+                GeneratorContent::Shape,
+                "Logo path",
+                "Shape · Logo path",
+                (200, 200, 100),
+            ),
+        ] {
+            let source = Node::new(name, NodeContent::Generator(generator));
+            let (mut project, clip_id, source_id, style_id) = style_result_project(source);
+            let clip = project.get_clip(clip_id).unwrap();
+            let graph = clip_graph_nodes(clip, &project);
+            assert_eq!(graph.output.map(|node| node.id), Some(style_id));
+            assert_eq!(graph.semantic_source.map(|node| node.id), Some(source_id));
+            assert_eq!(semantic_source_label(graph.semantic_source.unwrap()), label);
+            assert_eq!(get_clip_color(graph.semantic_source, &project), color);
+
+            project.get_node_mut(source_id).unwrap().enabled = false;
+            let graph = clip_graph_nodes(project.get_clip(clip_id).unwrap(), &project);
+            assert_eq!(graph.output.map(|node| node.id), Some(style_id));
+            assert!(graph.semantic_source.is_none());
+        }
+    }
+
+    #[test]
+    fn effect_result_preserves_media_audio_stream_and_rejects_disabled_paths() {
+        let (mut project, clip_id) = project_with_clip("effect media");
+        let mut asset = Asset::new("dialog", "dialog.mov", AssetKind::Video);
+        asset.stream_index = Some(2);
+        let asset_id = asset.id;
+        project.assets.push(asset);
+        let media = Node::new(
+            "Dialog",
+            NodeContent::Media(MediaContent {
+                asset_id,
+                stream_index: Some(2),
+                audio_stream_index: Some(7),
+            }),
+        );
+        let media_id = attach_node(&mut project, clip_id, media);
+        let effect = PluginManager::default()
+            .create_effect_operation_node("blur")
+            .unwrap();
+        let effect_id = attach_node(&mut project, clip_id, effect);
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(media_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(effect_id), IMAGE_INPUT_PORT),
+            )
+            .unwrap();
+        project
+            .set_output_node(NodeContainer::Clip(clip_id), Some(effect_id))
+            .unwrap();
+
+        let graph = clip_graph_nodes(project.get_clip(clip_id).unwrap(), &project);
+        assert_eq!(graph.output.map(|node| node.id), Some(effect_id));
+        assert_eq!(graph.semantic_source.map(|node| node.id), Some(media_id));
+        assert_eq!(get_clip_color(graph.semantic_source, &project), (100, 100, 200));
+        let NodeContent::Media(media) = &graph.semantic_source.unwrap().content else {
+            panic!("Effect result must resolve to its Media source")
+        };
+        assert_eq!(
+            audio_stream_index_for_media(&project.assets[0], media),
+            Some(7)
+        );
+
+        project.get_node_mut(effect_id).unwrap().enabled = false;
+        let graph = clip_graph_nodes(project.get_clip(clip_id).unwrap(), &project);
+        assert_eq!(graph.output.map(|node| node.id), Some(effect_id));
+        assert!(graph.semantic_source.is_none());
+
+        project.get_node_mut(effect_id).unwrap().enabled = true;
+        project.get_node_mut(media_id).unwrap().enabled = false;
+        assert!(
+            clip_graph_nodes(project.get_clip(clip_id).unwrap(), &project)
+                .semantic_source
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn merge_semantic_source_follows_canonical_order_and_skips_disabled_inputs() {
+        let (mut project, clip_id) = project_with_clip("multi input");
+        let unreachable_id = attach_node(
+            &mut project,
+            clip_id,
+            Node::new(
+                "Unreachable text",
+                NodeContent::Generator(GeneratorContent::Text),
+            ),
+        );
+        let first_id = attach_node(
+            &mut project,
+            clip_id,
+            Node::new(
+                "First solid",
+                NodeContent::Generator(GeneratorContent::Solid),
+            ),
+        );
+        let second_id = attach_node(
+            &mut project,
+            clip_id,
+            Node::new(
+                "Second solid",
+                NodeContent::Generator(GeneratorContent::Solid),
+            ),
+        );
+        let merge_id = attach_node(
+            &mut project,
+            clip_id,
+            Node::new("Result", NodeContent::Merge),
+        );
+        let first_connection = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(first_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
+        let second_connection = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(second_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
+        project
+            .set_output_node(NodeContainer::Clip(clip_id), Some(merge_id))
+            .unwrap();
+
+        let semantic_id = |project: &Project| {
+            clip_graph_nodes(project.get_clip(clip_id).unwrap(), project)
+                .semantic_source
+                .map(|node| node.id)
+        };
+        assert_eq!(semantic_id(&project), Some(first_id));
+        assert_ne!(semantic_id(&project), Some(unreachable_id));
+
+        project.reorder_connection(second_connection, 0).unwrap();
+        assert_eq!(semantic_id(&project), Some(second_id));
+        project.get_node_mut(second_id).unwrap().enabled = false;
+        assert_eq!(semantic_id(&project), Some(first_id));
+        project.get_node_mut(first_id).unwrap().enabled = false;
+        assert_eq!(semantic_id(&project), None);
+
+        assert!(project.disconnect_connection(first_connection));
+    }
 
     fn expanded_track_project() -> (Project, Uuid, Vec<Uuid>) {
         let mut project = Project::new("timeline reorder");
