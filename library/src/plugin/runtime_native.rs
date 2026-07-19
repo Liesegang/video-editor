@@ -39,6 +39,7 @@ use crate::model::property::{
 };
 use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
+use crate::plugin::loaders::ffmpeg_video::FileIdentity;
 use crate::plugin::repository::PluginRepository;
 use crate::plugin::{
     AssetMetadata, DecoratorPlugin, EffectPlugin, EffectorPlugin, LoadPlugin, LoadPluginError,
@@ -1627,20 +1628,17 @@ fn loader_request_to_wire(
 
 fn runtime_loader_cache_key(loader_id: &str, request: &LoadRequest) -> String {
     let path = request.path();
-    let source_identity = std::fs::metadata(path)
-        .ok()
-        .map(|metadata| {
-            let modified = metadata
-                .modified()
-                .ok()
-                .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0_u128, |duration| duration.as_nanos());
-            format!("{}:{modified}", metadata.len())
-        })
-        .unwrap_or_else(|| "unavailable".to_string());
+    let identity = FileIdentity::read(path).ok();
+    let canonical_path = identity
+        .as_ref()
+        .map_or_else(|| Path::new(path), |identity| identity.canonical_path());
+    let source_identity = identity
+        .as_ref()
+        .map_or_else(|| "unavailable".to_string(), FileIdentity::cache_token);
     match request {
         LoadRequest::Image { .. } => format!(
-            "runtime-loader:{loader_id}:{LOADER_LOAD_CPU_RGBA8_V1}:image:{path}:{source_identity}"
+            "runtime-loader:{loader_id}:{LOADER_LOAD_CPU_RGBA8_V1}:image:{}:{source_identity}",
+            canonical_path.display()
         ),
         LoadRequest::VideoFrame {
             stream_index,
@@ -1648,7 +1646,8 @@ fn runtime_loader_cache_key(loader_id: &str, request: &LoadRequest) -> String {
             output_color_space,
             ..
         } => format!(
-            "runtime-loader:{loader_id}:{LOADER_LOAD_CPU_RGBA8_V1}:video:{path}:{source_identity}:stream={stream_index:?}:input={input_color_space:?}:output={output_color_space:?}"
+            "runtime-loader:{loader_id}:{LOADER_LOAD_CPU_RGBA8_V1}:video:{}:{source_identity}:stream={stream_index:?}:input={input_color_space:?}:output={output_color_space:?}",
+            canonical_path.display()
         ),
     }
 }
@@ -4410,5 +4409,41 @@ mod tests {
             PropertyValue::Number(OrderedFloat(0.5)),
         )]);
         assert_ne!(first, second);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_loader_cache_detects_same_size_mtime_file_replacement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory =
+            std::env::temp_dir().join(format!("runtime-loader-identity-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory)?;
+        let path = directory.join("source.rgba-fixture");
+        let replacement = directory.join("replacement.rgba-fixture");
+        std::fs::write(&path, b"aaaa")?;
+        let original_metadata = std::fs::metadata(&path)?;
+        let original_modified = original_metadata.modified()?;
+        let request = LoadRequest::Image {
+            path: path.to_string_lossy().into_owned(),
+        };
+        let original_key = runtime_loader_cache_key("loader.identity", &request);
+
+        std::fs::write(&replacement, b"bbbb")?;
+        let replacement_file = std::fs::OpenOptions::new().write(true).open(&replacement)?;
+        replacement_file.set_times(std::fs::FileTimes::new().set_modified(original_modified))?;
+        std::fs::rename(&replacement, &path)?;
+
+        let replaced_metadata = std::fs::metadata(&path)?;
+        assert_eq!(replaced_metadata.len(), original_metadata.len());
+        assert_eq!(replaced_metadata.modified()?, original_modified);
+        let replaced_key = runtime_loader_cache_key("loader.identity", &request);
+        assert_ne!(
+            original_key, replaced_key,
+            "device/inode/ctime identity must invalidate a same-path, same-size, same-mtime replacement"
+        );
+
+        std::fs::remove_file(path)?;
+        std::fs::remove_dir(directory)?;
+        Ok(())
     }
 }

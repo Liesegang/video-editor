@@ -678,7 +678,7 @@ fn buffered_target_is_ready(
 // ============================================================================
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct FileIdentity {
+pub(crate) struct FileIdentity {
     canonical_path: PathBuf,
     length: u64,
     modified_nanos: u128,
@@ -693,7 +693,7 @@ struct FileIdentity {
 }
 
 impl FileIdentity {
-    fn read(path: &str) -> Result<Self, LibraryError> {
+    pub(crate) fn read(path: &str) -> Result<Self, LibraryError> {
         let canonical_path = Path::new(path).canonicalize()?;
         let metadata = std::fs::metadata(&canonical_path)?;
         let modified_nanos = metadata
@@ -725,10 +725,14 @@ impl FileIdentity {
         }
     }
 
-    fn cache_token(&self) -> String {
+    pub(crate) fn cache_token(&self) -> String {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.hash(&mut hasher);
         format!("{:016x}", hasher.finish())
+    }
+
+    pub(crate) fn canonical_path(&self) -> &Path {
+        &self.canonical_path
     }
 }
 
