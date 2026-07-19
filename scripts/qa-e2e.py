@@ -956,6 +956,17 @@ def find_wire_knife_gesture(snapshot):
     )
     if canvas is None:
         raise QaFailure("Node Editor canvas is absent while planning a knife gesture")
+    canvas_rect = canvas["rect_points"]
+    hit_margin = 18.0
+
+    def hit_point_is_inside_stroke(point):
+        return (
+            canvas_rect["min_x"] + hit_margin <= point["x"] <= canvas_rect["max_x"] - hit_margin
+            and canvas_rect["min_y"] + hit_margin
+            <= point["y"]
+            <= canvas_rect["max_y"] - hit_margin
+        )
+
     edges = [
         item
         for item in components
@@ -963,6 +974,10 @@ def find_wire_knife_gesture(snapshot):
         and item.get("visible", False)
         and (item.get("metadata") or {}).get("kind") == "explicit"
         and (item.get("metadata") or {}).get("hit_point") is not None
+        # A hit rect may be partially visible while its Bezier midpoint sits
+        # at the canvas edge. The knife span deliberately stops inside the
+        # canvas, so only promise IDs whose actual hit point lies on that span.
+        and hit_point_is_inside_stroke(item["metadata"]["hit_point"])
     ]
     obstacle_prefixes = (
         "node_editor.node:",
@@ -986,7 +1001,7 @@ def find_wire_knife_gesture(snapshot):
             left_point = left["metadata"]["hit_point"]
             right_point = right["metadata"]["hit_point"]
             span = line_span_inside_rect(
-                left_point, right_point, canvas["rect_points"], margin=14.0
+                left_point, right_point, canvas_rect, margin=14.0
             )
             if span is None:
                 continue
