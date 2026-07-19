@@ -867,7 +867,7 @@ mod tests {
                 a: 255,
             })),
         );
-        green.blend_mode = BlendMode::Add;
+        green.blend_mode = BlendMode::Multiply;
         let green_id = green.id;
         project.add_node(green);
         project
@@ -896,6 +896,9 @@ mod tests {
                 PortAddress::new(PortOwner::Node(green_id), IMAGE_OUTPUT_PORT),
                 target,
             )
+            .unwrap();
+        project
+            .set_connection_blend_mode(green_connection, BlendMode::Add)
             .unwrap();
 
         let plugin_manager = Arc::new(PluginManager::default());

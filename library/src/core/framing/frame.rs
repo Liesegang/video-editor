@@ -865,7 +865,7 @@ impl<'a> FrameEvaluator<'a> {
             let blend_mode = if items.is_empty() {
                 crate::model::BlendMode::Normal
             } else {
-                self.blend_mode_for_owner(connection.from.owner)
+                connection.blend_mode
             };
             items.push(FrameItem::Group(FrameGroup {
                 source_id: connection.id,
@@ -1272,18 +1272,6 @@ impl<'a> FrameEvaluator<'a> {
             }
         };
         self.project.get_composition(id)
-    }
-
-    fn blend_mode_for_owner(&self, owner: PortOwner) -> crate::model::BlendMode {
-        match owner {
-            PortOwner::Composition(id) => {
-                self.project.get_composition(id).map(|item| item.blend_mode)
-            }
-            PortOwner::Track(id) => self.project.get_track(id).map(|item| item.blend_mode),
-            PortOwner::Clip(id) => self.project.get_clip(id).map(|item| item.blend_mode),
-            PortOwner::Node(id) => self.project.get_node(id).map(|item| item.blend_mode),
-        }
-        .unwrap_or_default()
     }
 
     fn context<'b>(

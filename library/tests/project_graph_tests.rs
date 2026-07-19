@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use library::animation::EasingFunction;
+use library::cache::CacheManager;
 use library::framing::get_frame_from_project;
+use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameGroup, FrameGroupKind, FrameItem};
 use library::model::project::{
@@ -17,6 +19,8 @@ use library::model::{
     PluginOperationContent, ReferenceContent, Track,
 };
 use library::plugin::PluginManager;
+use library::rendering::renderer::RenderOutput;
+use library::{RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
@@ -43,6 +47,15 @@ fn solid_node(name: &str) -> Node {
     node.properties.set(
         "color".to_string(),
         Property::constant(PropertyValue::Color(Color::black())),
+    );
+    node
+}
+
+fn colored_solid_node(name: &str, color: Color) -> Node {
+    let mut node = solid_node(name);
+    node.properties.set(
+        "color".to_string(),
+        Property::constant(PropertyValue::Color(color)),
     );
     node
 }
@@ -102,6 +115,43 @@ fn frame_for_composition(
         &plugins,
     )
     .unwrap()
+}
+
+fn preview(project: &Project) -> Image {
+    let plugins = Arc::new(PluginManager::default());
+    let frame = get_frame_from_project(
+        project,
+        0,
+        0,
+        1.0,
+        None,
+        &plugins.get_property_evaluators(),
+        &plugins,
+    )
+    .unwrap();
+    let renderer = SkiaRenderer::new(
+        frame.width as u32,
+        frame.height as u32,
+        frame.background_color.clone(),
+        false,
+        None,
+        None,
+    )
+    .unwrap();
+    let mut service = RenderService::new(
+        renderer,
+        Arc::clone(&plugins),
+        Arc::new(CacheManager::new()),
+    );
+    match service.render_from_frame_info(&frame).unwrap() {
+        RenderOutput::Image(image) => image,
+        RenderOutput::Texture(_) => panic!("CPU renderer unexpectedly returned a texture"),
+    }
+}
+
+fn center_pixel(image: &Image) -> [u8; 4] {
+    let index = ((image.height / 2 * image.width + image.width / 2) * 4) as usize;
+    image.data[index..index + 4].try_into().unwrap()
 }
 
 fn container_owner(container: NodeContainer) -> PortOwner {
@@ -187,6 +237,73 @@ fn direct_pre_v1_schema_roundtrips_without_version_or_legacy_node_timing() {
     let loaded = Project::load(&json).unwrap();
     assert_eq!(loaded, project);
     assert!(loaded.validate_containment().is_empty());
+}
+
+#[test]
+fn wire_blend_is_required_and_distinct_fanout_values_roundtrip_losslessly() {
+    let (mut project, _composition_id, track_id) = project_with_composition();
+    let clip_id = add_clip(&mut project, track_id, "fanout");
+    let container = NodeContainer::Clip(clip_id);
+    let source_id = add_node(&mut project, container, solid_node("shared source"));
+    let first_merge_id = add_node(
+        &mut project,
+        container,
+        Node::new("first merge", NodeContent::Merge),
+    );
+    let second_merge_id = add_node(
+        &mut project,
+        container,
+        Node::new("second merge", NodeContent::Merge),
+    );
+    let source = address(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT);
+    let first_wire = project
+        .connect_ports(
+            source.clone(),
+            address(PortOwner::Node(first_merge_id), MERGE_IMAGES_PORT),
+        )
+        .unwrap();
+    let second_wire = project
+        .connect_ports(
+            source,
+            address(PortOwner::Node(second_merge_id), MERGE_IMAGES_PORT),
+        )
+        .unwrap();
+    project
+        .set_connection_blend_mode(first_wire, BlendMode::Add)
+        .unwrap();
+    project
+        .set_connection_blend_mode(second_wire, BlendMode::Multiply)
+        .unwrap();
+
+    let json = project.save().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let serialized_connections = value["connections"].as_array().unwrap();
+    let serialized_blend = |id: Uuid| {
+        serialized_connections
+            .iter()
+            .find(|connection| connection["id"] == id.to_string())
+            .unwrap()["blend_mode"]
+            .as_str()
+            .unwrap()
+    };
+    assert_eq!(serialized_blend(first_wire), "Add");
+    assert_eq!(serialized_blend(second_wire), "Multiply");
+    assert_eq!(Project::load(&json).unwrap(), project);
+
+    let mut missing_field = value;
+    missing_field["connections"]
+        .as_array_mut()
+        .unwrap()
+        .first_mut()
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("blend_mode");
+    let error = Project::load(&serde_json::to_string(&missing_field).unwrap()).unwrap_err();
+    assert!(
+        error.to_string().contains("missing field `blend_mode`"),
+        "pre-v1 Projects with an old connection shape must be rejected explicitly: {error}",
+    );
 }
 
 #[test]
@@ -1145,6 +1262,9 @@ fn node_reparent_preserves_graph_image_wires_ids_orders_targets_and_rendering() 
         )
         .unwrap();
     project
+        .set_connection_blend_mode(second_image_connection_id, BlendMode::Overlay)
+        .unwrap();
+    project
         .reorder_connection(second_image_connection_id, 0)
         .unwrap();
     let metadata_connection_id = project
@@ -1170,6 +1290,7 @@ fn node_reparent_preserves_graph_image_wires_ids_orders_targets_and_rendering() 
             .unwrap();
         assert_eq!(current.id, original.id);
         assert_eq!(current.order, original.order);
+        assert_eq!(current.blend_mode, original.blend_mode);
         assert_eq!(current.to, original.to);
         if original.id == metadata_connection_id {
             assert_eq!(
@@ -1953,14 +2074,30 @@ fn cross_container_image_consumers_do_not_hide_the_source_containers_fallback() 
 }
 
 #[test]
-fn merge_evaluates_variadic_order_and_uses_each_source_blend_mode() {
+fn merge_order_and_wire_blend_change_real_pixels_without_reading_source_blend() {
     let (mut project, _composition_id, track_id) = project_with_composition();
     let clip_id = add_clip(&mut project, track_id, "clip");
-    let mut first = solid_node("first");
-    first.blend_mode = BlendMode::Multiply;
+    let mut first = colored_solid_node(
+        "first",
+        Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+    );
+    first.blend_mode = BlendMode::Overlay;
     let first_id = add_node(&mut project, NodeContainer::Clip(clip_id), first);
-    let mut second = solid_node("second");
-    second.blend_mode = BlendMode::Add;
+    let mut second = colored_solid_node(
+        "second",
+        Color {
+            r: 0,
+            g: 255,
+            b: 0,
+            a: 255,
+        },
+    );
+    second.blend_mode = BlendMode::Screen;
     let second_id = add_node(&mut project, NodeContainer::Clip(clip_id), second);
     let merge_id = add_node(
         &mut project,
@@ -1983,6 +2120,9 @@ fn merge_evaluates_variadic_order_and_uses_each_source_blend_mode() {
             target,
         )
         .unwrap();
+    project
+        .set_connection_blend_mode(second_connection, BlendMode::Multiply)
+        .unwrap();
 
     let rendered = frame(&project, 0);
     let merge = find_group(&rendered.items, merge_id).unwrap();
@@ -2000,10 +2140,15 @@ fn merge_evaluates_variadic_order_and_uses_each_source_blend_mode() {
         wrappers,
         vec![
             (first_connection, BlendMode::Normal),
-            (second_connection, BlendMode::Add),
+            (second_connection, BlendMode::Multiply),
         ]
     );
     assert_eq!(object_source_ids(&merge.items), vec![first_id, second_id]);
+    assert_eq!(
+        center_pixel(&preview(&project)),
+        [0, 0, 0, 255],
+        "red followed by a green Multiply wire must render black",
+    );
 
     project.reorder_connection(second_connection, 0).unwrap();
     let rendered = frame(&project, 0);
@@ -2020,10 +2165,15 @@ fn merge_evaluates_variadic_order_and_uses_each_source_blend_mode() {
         wrappers,
         vec![
             (second_connection, BlendMode::Normal),
-            (first_connection, BlendMode::Multiply),
+            (first_connection, BlendMode::Normal),
         ]
     );
     assert_eq!(object_source_ids(&merge.items), vec![second_id, first_id]);
+    assert_eq!(
+        center_pixel(&preview(&project)),
+        [255, 0, 0, 255],
+        "the produced green base followed by a Normal red wire must render red",
+    );
 }
 
 #[test]
@@ -2109,20 +2259,22 @@ fn merge_keeps_an_empty_nested_composition_as_a_transparent_produced_input() {
 }
 
 #[test]
-fn merge_skips_an_inactive_first_input_and_keeps_a_later_produced_input() {
+fn merge_skips_a_disabled_first_input_and_normalizes_the_first_produced_wire_at_runtime() {
     let (mut project, composition_id, track_id) = project_with_composition();
 
-    let inactive_clip = Clip::new("inactive first", 5.0, 2.0);
+    let inactive_clip = Clip::new("disabled first", 0.0, 2.0);
     let inactive_clip_id = inactive_clip.id;
     project.add_clip(inactive_clip);
     project
         .attach_clip_to_track(track_id, inactive_clip_id)
         .unwrap();
+    project.get_clip_mut(inactive_clip_id).unwrap().blend_mode = BlendMode::Multiply;
     let inactive_node_id = add_node(
         &mut project,
         NodeContainer::Clip(inactive_clip_id),
         solid_node("inactive source"),
     );
+    project.get_node_mut(inactive_node_id).unwrap().enabled = false;
     project
         .set_output_node(
             NodeContainer::Clip(inactive_clip_id),
@@ -2136,6 +2288,7 @@ fn merge_skips_an_inactive_first_input_and_keeps_a_later_produced_input() {
     project
         .attach_clip_to_track(track_id, active_clip_id)
         .unwrap();
+    project.get_clip_mut(active_clip_id).unwrap().blend_mode = BlendMode::Overlay;
     let active_node_id = add_node(
         &mut project,
         NodeContainer::Clip(active_clip_id),
@@ -2154,7 +2307,7 @@ fn merge_skips_an_inactive_first_input_and_keeps_a_later_produced_input() {
         .set_output_node(NodeContainer::Composition(composition_id), Some(merge_id))
         .unwrap();
     let target = address(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
-    project
+    let inactive_connection_id = project
         .connect_ports(
             address(PortOwner::Clip(inactive_clip_id), IMAGE_OUTPUT_PORT),
             target.clone(),
@@ -2166,6 +2319,15 @@ fn merge_skips_an_inactive_first_input_and_keeps_a_later_produced_input() {
             target,
         )
         .unwrap();
+    project
+        .set_connection_blend_mode(inactive_connection_id, BlendMode::Add)
+        .unwrap();
+    project
+        .set_connection_blend_mode(active_connection_id, BlendMode::Screen)
+        .unwrap();
+
+    let project_before_render = project.clone();
+    let serialized_connections_before = serde_json::to_value(&project.connections).unwrap();
 
     let rendered = frame(&project, 0);
     let merge = find_group(&rendered.items, merge_id).unwrap();
@@ -2174,8 +2336,33 @@ fn merge_skips_an_inactive_first_input_and_keeps_a_later_produced_input() {
         panic!("a produced Merge input must be wrapped as a connected image");
     };
     assert_eq!(active_wrapper.source_id, active_connection_id);
+    assert_eq!(active_wrapper.blend_mode, BlendMode::Normal);
     assert!(find_group(&active_wrapper.items, active_node_id).is_some());
     assert_eq!(object_source_ids(&merge.items), vec![active_node_id]);
+    assert_eq!(project, project_before_render);
+    assert_eq!(
+        serde_json::to_value(&project.connections).unwrap(),
+        serialized_connections_before,
+        "base-layer normalization is runtime-only and must not rewrite wire blend metadata",
+    );
+    assert_eq!(
+        project
+            .connections
+            .iter()
+            .find(|connection| connection.id == inactive_connection_id)
+            .unwrap()
+            .blend_mode,
+        BlendMode::Add,
+    );
+    assert_eq!(
+        project
+            .connections
+            .iter()
+            .find(|connection| connection.id == active_connection_id)
+            .unwrap()
+            .blend_mode,
+        BlendMode::Screen,
+    );
 
     // At ten seconds both Clips are inactive, so Merge and the root
     // Composition materialize as an empty background-only frame.
