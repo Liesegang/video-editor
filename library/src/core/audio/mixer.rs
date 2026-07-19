@@ -213,6 +213,10 @@ fn mix_global_nodes(
             log::trace!("audio mixer skipped missing Node {node_id}");
             continue;
         };
+        if !node.enabled {
+            log::trace!("audio mixer skipped disabled Node {node_id}");
+            continue;
+        }
         let Some(source_key) = audio_source_for_node(node, assets, sample_rate, channels) else {
             continue;
         };
@@ -261,6 +265,13 @@ fn mix_clip(
             );
             continue;
         };
+        if !node.enabled {
+            log::trace!(
+                "audio mixer skipped disabled Node {node_id} in Clip {}",
+                clip.id
+            );
+            continue;
+        }
         let Some(source_key) = audio_source_for_node(node, assets, sample_rate, channels) else {
             continue;
         };
@@ -526,6 +537,9 @@ fn collect_node_windows(
         let Some(node) = project.get_node(*node_id) else {
             continue;
         };
+        if !node.enabled {
+            continue;
+        }
         let NodeContent::Media(media) = &node.content else {
             continue;
         };
@@ -645,9 +659,36 @@ mod tests {
         files: &mut TestAudioFiles,
         samples: Vec<f32>,
     ) -> uuid::Uuid {
-        let asset = Asset::new("audio", &files.create(), AssetKind::Audio);
+        add_media_node(
+            project,
+            cache_manager,
+            files,
+            samples,
+            AssetKind::Audio,
+            None,
+            true,
+        )
+        .0
+    }
+
+    fn add_media_node(
+        project: &mut Project,
+        cache_manager: &CacheManager,
+        files: &mut TestAudioFiles,
+        samples: Vec<f32>,
+        kind: AssetKind,
+        audio_stream_index: Option<usize>,
+        enabled: bool,
+    ) -> (uuid::Uuid, String) {
+        let is_video = matches!(&kind, AssetKind::Video);
+        let mut asset = Asset::new("audio", &files.create(), kind);
+        if is_video {
+            // Preserve a distinct visual stream while the Media Node selects
+            // its embedded audio stream explicitly.
+            asset.stream_index = Some(0);
+        }
         let format = AudioDecodeFormat::new(4, 1).unwrap();
-        let source = AudioSourceKey::read(&asset.path, None, format).unwrap();
+        let source = AudioSourceKey::read(&asset.path, audio_stream_index, format).unwrap();
         let samples_per_chunk = format.chunk_frames() as usize * usize::from(format.channels);
         for (chunk_index, chunk_samples) in samples.chunks(samples_per_chunk).enumerate() {
             cache_manager.put_audio_chunk(
@@ -661,18 +702,20 @@ mod tests {
                 .unwrap(),
             );
         }
-        let node = Node::new(
+        let mut node = Node::new(
             "audio",
             NodeContent::Media(MediaContent {
                 asset_id: asset.id,
-                stream_index: None,
-                audio_stream_index: None,
+                stream_index: is_video.then_some(0),
+                audio_stream_index,
             }),
         );
+        node.enabled = enabled;
         let node_id = node.id;
+        let path = asset.path.clone();
         project.assets.push(asset);
         project.add_node(node);
-        node_id
+        (node_id, path)
     }
 
     fn set_volume(properties: &mut PropertyMap, volume: f64) {
@@ -680,6 +723,124 @@ mod tests {
             "volume".to_string(),
             Property::constant(PropertyValue::Number(OrderedFloat(volume))),
         );
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum TestNodeScope {
+        Composition,
+        Track,
+        Clip,
+    }
+
+    fn assert_disabled_media_contract(scope: TestNodeScope) {
+        let mut project = Project::new("disabled audio contract");
+        let (composition, mut track) = Composition::new("main", 16, 16, 4.0, 1.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        if !matches!(scope, TestNodeScope::Composition) {
+            set_volume(&mut track.properties, 0.5);
+        }
+        project.add_track(track);
+        project.add_composition(composition);
+
+        let container = match scope {
+            TestNodeScope::Composition => NodeContainer::Composition(composition_id),
+            TestNodeScope::Track => NodeContainer::Track(track_id),
+            TestNodeScope::Clip => {
+                // At 4 Hz, only output frames 1 and 2 are inside [0.25, 0.75).
+                let mut clip = Clip::new("half-open", 0.25, 0.5);
+                set_volume(&mut clip.properties, 0.5);
+                let clip_id = clip.id;
+                project.add_clip(clip);
+                project.attach_clip_to_track(track_id, clip_id).unwrap();
+                NodeContainer::Clip(clip_id)
+            }
+        };
+
+        let cache = CacheManager::new();
+        let mut files = TestAudioFiles::default();
+        let mut enabled_sources = HashSet::new();
+        let mut disabled_sources = HashSet::new();
+        for (sample, kind, stream_index, enabled) in [
+            (1.0, AssetKind::Audio, None, true),
+            (10.0, AssetKind::Audio, None, false),
+            (2.0, AssetKind::Video, Some(2), true),
+            (20.0, AssetKind::Video, Some(3), false),
+        ] {
+            let (node_id, path) = add_media_node(
+                &mut project,
+                &cache,
+                &mut files,
+                vec![sample; 8],
+                kind,
+                stream_index,
+                enabled,
+            );
+            project
+                .attach_node_to_container(container, node_id)
+                .unwrap();
+            let source = (path, stream_index);
+            if enabled {
+                enabled_sources.insert(source);
+            } else {
+                disabled_sources.insert(source);
+            }
+        }
+
+        let composition = project.get_composition(composition_id).unwrap();
+        let expected = match scope {
+            // Enabled Audio (1) + enabled embedded Video audio (2).
+            TestNodeScope::Composition => vec![3.0; 4],
+            // Track volume is applied once to direct Track audio.
+            TestNodeScope::Track => vec![1.5; 4],
+            // Clip and Track gains are both 0.5, and the Clip end is excluded.
+            TestNodeScope::Clip => vec![0.0, 0.75, 0.75, 0.0],
+        };
+        assert_eq!(
+            mix_samples(&project.assets, &project, composition, &cache, 0, 4, 4, 1),
+            expected
+        );
+        assert_eq!(
+            render_samples(&project.assets, &project, composition, &cache, 0, 4, 4, 1),
+            expected
+        );
+
+        let requests = audio_window_requests_for_composition(&project, composition, 0, 4, 4);
+        let requested_sources = requests
+            .iter()
+            .map(|request| (request.source.path.clone(), request.source.stream_index))
+            .collect::<HashSet<_>>();
+        assert_eq!(requested_sources, enabled_sources);
+        assert!(requested_sources.is_disjoint(&disabled_sources));
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.source.stream_index == Some(2)),
+            "enabled Video embedded-audio stream was not planned"
+        );
+        let expected_bounds = match scope {
+            TestNodeScope::Composition | TestNodeScope::Track => (0, 4),
+            TestNodeScope::Clip => (0, 2),
+        };
+        assert!(requests.iter().all(|request| {
+            (request.first_source_frame, request.last_source_frame) == expected_bounds
+        }));
+    }
+
+    #[test]
+    fn disabled_composition_media_is_no_output_for_mix_render_and_prefetch() {
+        assert_disabled_media_contract(TestNodeScope::Composition);
+    }
+
+    #[test]
+    fn disabled_track_media_is_no_output_for_mix_render_and_prefetch() {
+        assert_disabled_media_contract(TestNodeScope::Track);
+    }
+
+    #[test]
+    fn disabled_clip_media_is_no_output_for_mix_render_and_prefetch() {
+        assert_disabled_media_contract(TestNodeScope::Clip);
     }
 
     #[test]
