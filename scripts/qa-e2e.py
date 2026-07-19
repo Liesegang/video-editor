@@ -763,18 +763,17 @@ def wait_timeline_edit(client, before, description, predicate):
     )
 
 
-def find_free_canvas_point(client):
+def find_free_canvas_point(client, scope_component_id=None):
     snapshot = client.component_snapshot()
     components = snapshot["components"]
     canvas_component = next(
         item for item in components if item["id"] == "node_editor.canvas"
     )
     canvas = canvas_component["rect_points"]
-    containers = [
-        item
-        for item in components
-        if item["id"] == "node_editor.container.composition:{}".format(COMPOSITION)
-    ]
+    scope_component_id = scope_component_id or "node_editor.container.composition:{}".format(
+        COMPOSITION
+    )
+    containers = [item for item in components if item["id"] == scope_component_id]
     search = containers[0]["rect_points"] if containers else canvas
     obstacles = [
         item["rect_points"]
@@ -804,8 +803,8 @@ def find_free_canvas_point(client):
     raise QaFailure("no unobstructed point was found in the Node Editor canvas")
 
 
-def open_create_menu(client):
-    snapshot, point = find_free_canvas_point(client)
+def open_create_menu(client, scope_component_id=None):
+    snapshot, point = find_free_canvas_point(client, scope_component_id)
     client.inject(
         "click",
         {
@@ -882,10 +881,10 @@ def undo_project_edit(client, description, predicate):
     return client.wait_project(description + " undo", predicate)
 
 
-def create_node_from_add_search(client, query, item_id):
+def create_node_from_add_search(client, query, item_id, scope_component_id=None):
     before = client.state()
     node_ids_before = set(before["project"]["nodes"])
-    open_create_menu(client)
+    open_create_menu(client, scope_component_id)
     client.wait_component("node_editor.menu.search")
     client.replace_component_text("node_editor.menu.search", query)
     _, item = client.wait_component_settled(item_id)
@@ -1115,11 +1114,52 @@ def reveal_node_editor_components(client, component_ids, max_drags=20, margin=12
                 canvas_rect, unclipped, margin
             )
         except QaFailure as error:
-            raise QaFailure(
-                "Node Editor components cannot fit together in the visible canvas: {} ({})".format(
-                    ", ".join(component_ids), error
+            previous_scale = float((canvas.get("metadata") or {}).get("scale", 0.0))
+            client.inject(
+                "scroll",
+                {
+                    "x": canvas_rect["center_x"],
+                    "y": canvas_rect["center_y"],
+                    "delta_x": 0.0,
+                    "delta_y": -90.0,
+                    "coordinate_space": "points",
+                    "modifiers": {"command": True},
+                },
+                {
+                    "component_id": "node_editor.canvas",
+                    "target_component_ids": list(component_ids),
+                    "component_frame": snapshot["frame"],
+                    "component_rect_points": canvas_rect,
+                    "coordinate_reason": "zoom out until all drag endpoints fit",
+                },
+            )
+
+            def scale_decreased():
+                current = client.component_snapshot()
+                current_canvas = next(
+                    (
+                        item
+                        for item in current["components"]
+                        if item["id"] == "node_editor.canvas"
+                    ),
+                    None,
                 )
-            ) from error
+                if current_canvas is None:
+                    return None
+                scale = float(
+                    (current_canvas.get("metadata") or {}).get("scale", 0.0)
+                )
+                return current if scale < previous_scale - 1.0e-4 else None
+
+            try:
+                client.wait_until("Node Editor endpoint-fit zoom", scale_decreased)
+            except QaFailure as zoom_error:
+                raise QaFailure(
+                    "Node Editor components cannot fit together in the visible canvas: {} ({})".format(
+                        ", ".join(component_ids), error
+                    )
+                ) from zoom_error
+            continue
         if abs(horizontal_step) < 1.0 and abs(vertical_step) < 1.0:
             raise QaFailure(
                 "Node Editor components did not become fully visible: {}".format(
@@ -1161,6 +1201,63 @@ def reveal_node_editor_components(client, component_ids, max_drags=20, margin=12
             max_drags, ", ".join(component_ids)
         )
     )
+
+
+def ensure_node_editor_ports_interactive(client, component_ids, max_zooms=6):
+    """Zoom through real Cmd/Ctrl-wheel input until normal pin drags are enabled."""
+    snapshot, targets = reveal_node_editor_components(client, component_ids)
+    for _ in range(max_zooms):
+        components = {item["id"]: item for item in snapshot["components"]}
+        canvas = components["node_editor.canvas"]
+        if (canvas.get("metadata") or {}).get("port_interaction_enabled"):
+            return reveal_node_editor_components(client, component_ids)
+        canvas_rect = canvas["rect_points"]
+        focus = {
+            "x": sum(target["rect_points"]["center_x"] for target in targets)
+            / len(targets),
+            "y": sum(target["rect_points"]["center_y"] for target in targets)
+            / len(targets),
+        }
+        focus["x"] = max(canvas_rect["min_x"] + 8.0, min(canvas_rect["max_x"] - 8.0, focus["x"]))
+        focus["y"] = max(canvas_rect["min_y"] + 8.0, min(canvas_rect["max_y"] - 8.0, focus["y"]))
+        previous_scale = float((canvas.get("metadata") or {}).get("scale", 0.0))
+        client.inject(
+            "scroll",
+            {
+                "x": focus["x"],
+                "y": focus["y"],
+                "delta_x": 0.0,
+                "delta_y": 90.0,
+                "coordinate_space": "points",
+                "modifiers": {"command": True},
+            },
+            {
+                "component_id": "node_editor.canvas",
+                "target_component_ids": list(component_ids),
+                "component_frame": snapshot["frame"],
+                "coordinate_reason": "enable real Node port interactions",
+            },
+        )
+
+        def scale_increased():
+            current = client.component_snapshot()
+            current_canvas = next(
+                (
+                    item
+                    for item in current["components"]
+                    if item["id"] == "node_editor.canvas"
+                ),
+                None,
+            )
+            if current_canvas is None:
+                return None
+            scale = float((current_canvas.get("metadata") or {}).get("scale", 0.0))
+            return current if scale > previous_scale + 1.0e-4 else None
+
+        snapshot = client.wait_until("Node Editor port-interaction zoom", scale_increased)
+        current_components = {item["id"]: item for item in snapshot["components"]}
+        targets = [current_components[item_id] for item_id in component_ids]
+    raise QaFailure("Node Editor did not enable normal port interactions after zoom")
 
 
 def validate_explicit_operation_fixture(project):
@@ -1707,6 +1804,101 @@ def run_node_wire_suite(client):
         raise QaFailure("Blur Add item omitted descriptor/category QA metadata")
     delete_node_through_context_menu(client, added_blur)
 
+    # Native value operations live in the same categorized Add catalog. Time
+    # is deliberately not implicit: zoom to real Snarl pin interaction and
+    # drag between the value input and the owning container's internal Time
+    # output. The canonical connection remains Time -> value regardless of
+    # which endpoint starts the physical gesture.
+    time_node, time_state, time_metadata = create_node_from_add_search(
+        client,
+        "loop value",
+        "node_editor.menu.create.time_modulo",
+        "node_editor.container.clip:{}".format(CLIP_A1),
+    )
+    time_content = time_state["project"]["nodes"][time_node]["content"]
+    if time_content != {"type": "Value", "data": "TimeModulo"}:
+        raise QaFailure("Time Modulo Add item did not create the native value Node")
+    if not (
+        time_metadata.get("kind") == "time_modulo"
+        and time_metadata.get("category") == "Timing / Values"
+    ):
+        raise QaFailure("Time Modulo Add item omitted value/category QA metadata")
+    owner_key = validate_canonical_ownership(time_state["project"])["node_owners"][
+        time_node
+    ]
+    time_output = "node_editor.container_port.{}.internal_output:time".format(
+        owner_key
+    )
+    value_input = "node_editor.port.node:{}.input:value".format(time_node)
+    time_header = "node_editor.node_header:" + time_node
+    move_snapshot, (header_component, output_component) = reveal_node_editor_components(
+        client, [time_header, time_output]
+    )
+    old_position = list(time_state["project"]["nodes"][time_node]["ui_position"])
+    start = client.point(header_component["rect_points"])
+    output_point = client.point(output_component["rect_points"])
+    canvas = next(
+        item
+        for item in move_snapshot["components"]
+        if item["id"] == "node_editor.canvas"
+    )["rect_points"]
+    end = {
+        "x": min(canvas["max_x"] - 20.0, output_point["x"] + 72.0),
+        "y": min(canvas["max_y"] - 20.0, output_point["y"] + 28.0),
+    }
+    client.inject(
+        "drag",
+        {
+            "from": start,
+            "to": end,
+            "coordinate_space": "points",
+            "steps": 14,
+            "button": "primary",
+        },
+        {
+            "source_component_id": time_header,
+            "target_component_id": time_output,
+            "component_frame": move_snapshot["frame"],
+            "coordinate_reason": "place the new value Node near its explicit Time source",
+        },
+    )
+    client.wait_project(
+        "Time Modulo coordinate move near Time output",
+        lambda project: project["nodes"][time_node]["ui_position"] != old_position,
+    )
+    ensure_node_editor_ports_interactive(client, [time_output, value_input])
+    connect_before = client.state()
+    client.drag_components(value_input, time_output, steps=16)
+
+    def explicit_time_connection(project):
+        return next(
+            (
+                connection
+                for connection in project["connections"]
+                if connection["from"]["port"] == "time"
+                and connection["to"]["owner"].get("owner_type") == "Node"
+                and connection["to"]["owner"].get("owner_id") == time_node
+                and connection["to"]["port"] == "value"
+            ),
+            None,
+        )
+
+    connected = client.wait_project(
+        "explicit container Time to Time Modulo value connection",
+        lambda project: explicit_time_connection(project) is not None,
+    )
+    time_connection = explicit_time_connection(connected["project"])
+    assert_history_delta(connect_before, connected, 1, "explicit Time value connection")
+    undo_project_edit(
+        client,
+        "explicit Time value connection",
+        lambda project: all(
+            connection["id"] != time_connection["id"]
+            for connection in project["connections"]
+        ),
+    )
+    delete_node_through_context_menu(client, time_node)
+
     # Node right-click owns Node commands, not the blank-canvas Add menu.
     text_header = "node_editor.node_header:" + TEXT
     reveal_node_editor_component(client, text_header)
@@ -2165,6 +2357,17 @@ def free_port():
         return listener.getsockname()[1]
 
 
+def repository_git_commit():
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            text=True,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default=None)
@@ -2219,6 +2422,9 @@ def main():
         else:
             result = run_suite(client)
         result["run_id"] = os.environ.get("RUVIE_QA_RUN_ID")
+        result["git_commit"] = repository_git_commit()
+        result["component_frame"] = client.component_snapshot()["frame"]
+        result["action_count"] = len(result.get("actions", []))
         evidence_path = os.path.abspath(args.evidence)
         os.makedirs(os.path.dirname(evidence_path), exist_ok=True)
         with open(evidence_path, "w", encoding="utf-8") as output:

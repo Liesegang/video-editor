@@ -526,6 +526,11 @@ pub struct NodeEditorState {
     /// Pointer gesture captured by a wire or one of its endpoint handles.
     #[serde(skip)]
     pub wire_gesture: Option<NodeEditorWireGesture>,
+    /// A normal Snarl pin owns the primary gesture from press through release.
+    /// Keeping this explicit prevents the foreground reconnect surface from
+    /// stealing the drag after the pointer leaves a connected pin.
+    #[serde(skip)]
+    pub normal_wire_drag_active: bool,
     /// Alt+primary stroke started on empty canvas; every intersected canonical
     /// wire is removed in one history transaction when the stroke ends.
     #[serde(skip)]
