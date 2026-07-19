@@ -4,32 +4,33 @@ use std::sync::{Arc, RwLock};
 use library::animation::EasingFunction;
 use library::cache::CacheManager;
 use library::core::ensemble::effectors::{
-    EffectorElementContext, OpacityMode, evaluate_configured_transform,
+    evaluate_configured_transform, EffectorElementContext, OpacityMode,
 };
 use library::core::ensemble::target::EffectorTarget;
 use library::core::ensemble::types::EffectorConfig;
 use library::editor::project_service::ProjectManager;
 use library::framing::get_frame_from_project;
-use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameItem};
 use library::model::frame::frame::FrameInfo;
+use library::model::frame::Image;
 use library::model::project::{
     Composition, EvalOutput, NodeContainer, NodeGraphBundle, PortAddress, PortDataType,
     PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner, PortSide, Project,
     ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{
-    Keyframe, Property, PropertyDefinition, PropertyMap, PropertyValue,
+    Keyframe, Property, PropertyDefinition, PropertyMap, PropertyValue, Vec2,
 };
 use library::model::{Clip, EffectorInstance, Node, NodeContent, PluginOperationContent};
 use library::plugin::{
-    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin, FrameEvaluationContext,
+    property_port_key, property_ui_type_to_port_data_type, EffectorPlugin, FrameEvaluationContext,
     OperationDescriptor, OperationDescriptorError, Plugin, PluginManager, ResolvedNodeInputs,
-    property_port_key, property_ui_type_to_port_data_type,
+    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY,
 };
 use library::rendering::renderer::RenderOutput;
 use library::{RenderService, SkiaRenderer};
+use ordered_float::OrderedFloat;
 use skia_safe::Point;
 use uuid::Uuid;
 
@@ -155,6 +156,13 @@ fn first_content(items: &[FrameItem]) -> Option<&FrameContent> {
     items.iter().find_map(|item| match item {
         FrameItem::Object(object) => Some(&object.content),
         FrameItem::Group(group) => first_content(&group.items),
+    })
+}
+
+fn first_object(items: &[FrameItem]) -> Option<&library::model::frame::entity::FrameObject> {
+    items.iter().find_map(|item| match item {
+        FrameItem::Object(object) => Some(object),
+        FrameItem::Group(group) => first_object(&group.items),
     })
 }
 
@@ -717,13 +725,55 @@ fn shape_variadic_effector_input_applies_single_element_transform() {
     let opacity_id = opacity.id;
     graph.nodes.extend([transform, opacity]);
     insert_effector_chain(&mut graph, &[transform_id, opacity_id]);
-    let (project, _) = project_with_graph(graph, 0.0, 2.0);
+    let (mut project, _) = project_with_graph(graph, 0.0, 2.0);
 
     let rendered = evaluate(&project, &plugins, 0);
-    let FrameContent::Shape { transform, .. } = first_content(&rendered.items).unwrap() else {
+    let object = first_object(&rendered.items).unwrap();
+    let FrameContent::Shape { transform, .. } = &object.content else {
         panic!()
     };
+    assert_eq!(object.source_node_id, shape_id);
+    assert_eq!(
+        (
+            object.source_transform.position.x,
+            object.source_transform.position.y
+        ),
+        (64.0, 40.0),
+        "Preview edits the evaluated generator transform, not the downstream Effector"
+    );
     assert_eq!((transform.position.x, transform.position.y), (72.0, 43.0));
     assert!((transform.opacity - 0.5).abs() < f64::EPSILON);
     assert!(project.get_node(shape_id).unwrap().effectors.is_empty());
+
+    let before = preview(&project, &plugins, 0);
+    set_constant(
+        project.get_node_mut(shape_id).unwrap(),
+        "position",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(70.0),
+            y: OrderedFloat(44.0),
+        }),
+    );
+    let moved = evaluate(&project, &plugins, 0);
+    let moved_object = first_object(&moved.items).unwrap();
+    assert_eq!(
+        (
+            moved_object.source_transform.position.x,
+            moved_object.source_transform.position.y
+        ),
+        (70.0, 44.0)
+    );
+    assert_eq!(
+        (
+            moved_object.content.transform().position.x,
+            moved_object.content.transform().position.y
+        ),
+        (78.0, 47.0),
+        "the unchanged Effector remains composed after the source edit"
+    );
+    assert_ne!(
+        before.data,
+        preview(&project, &plugins, 0).data,
+        "editing the direct source transform must change real rendered pixels"
+    );
 }
