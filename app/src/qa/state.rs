@@ -1,6 +1,7 @@
 use crate::action::HistoryManager;
 use crate::model::ui_types::Tab;
 use crate::state::context::EditorContext;
+use crate::state::context_types::NodeEditorEditableWire;
 use egui_dock::DockState;
 use library::model::project::Project;
 use serde_json::{json, Value};
@@ -141,6 +142,21 @@ pub fn snapshot(
                     .node_editor_state
                     .wire_context_menu
                     .is_some(),
+                "wire_context_menu_target": editor_context
+                    .node_editor_state
+                    .wire_context_menu
+                    .as_ref()
+                    .map(|context| match context.target {
+                        NodeEditorEditableWire::ProjectConnection { connection_id } => serde_json::json!({
+                            "kind": "explicit",
+                            "connection_id": connection_id,
+                        }),
+                        NodeEditorEditableWire::OutputBinding { owner, node_id } => serde_json::json!({
+                            "kind": "output_binding",
+                            "owner": owner,
+                            "node_id": node_id,
+                        }),
+                    }),
                 "wire_gesture": editor_context.node_editor_state.wire_gesture.as_ref().map(|gesture| {
                     serde_json::json!({
                         "connection_id": gesture.connection_id,
@@ -150,11 +166,34 @@ pub fn snapshot(
                     })
                 }),
                 "wire_knife": editor_context.node_editor_state.wire_knife.as_ref().map(|gesture| {
-                    let mut crossed = gesture.crossed_connection_ids.iter().copied().collect::<Vec<_>>();
-                    crossed.sort_unstable();
+                    let mut crossed = gesture.crossed_wires.iter().copied().collect::<Vec<_>>();
+                    crossed.sort_by_key(|target| match target {
+                        NodeEditorEditableWire::ProjectConnection { connection_id } => {
+                            format!("explicit:{connection_id}")
+                        }
+                        NodeEditorEditableWire::OutputBinding { owner, node_id } => {
+                            format!("output_binding:{owner:?}:{node_id}")
+                        }
+                    });
+                    let crossed_connection_ids = crossed.iter().filter_map(|target| match target {
+                        NodeEditorEditableWire::ProjectConnection { connection_id } => Some(*connection_id),
+                        NodeEditorEditableWire::OutputBinding { .. } => None,
+                    }).collect::<Vec<_>>();
+                    let crossed_wires = crossed.into_iter().map(|target| match target {
+                        NodeEditorEditableWire::ProjectConnection { connection_id } => serde_json::json!({
+                            "kind": "explicit",
+                            "connection_id": connection_id,
+                        }),
+                        NodeEditorEditableWire::OutputBinding { owner, node_id } => serde_json::json!({
+                            "kind": "output_binding",
+                            "owner": owner,
+                            "node_id": node_id,
+                        }),
+                    }).collect::<Vec<_>>();
                     serde_json::json!({
                         "point_count": gesture.points.len(),
-                        "crossed_connection_ids": crossed,
+                        "crossed_connection_ids": crossed_connection_ids,
+                        "crossed_wires": crossed_wires,
                     })
                 }),
             },

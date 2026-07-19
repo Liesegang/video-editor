@@ -1,9 +1,10 @@
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use crate::state::context_types::{
-    ContainerResizeEdge, ContainerResizeState, ContextMenuState, NodeEditorPendingEdit,
-    NodeEditorNormalConnectGesture, NodeEditorState, NodeEditorWireContextMenu,
-    NodeEditorWireDragKind, NodeEditorWireGesture, NodeEditorWireKnifeGesture,
+    ContainerResizeEdge, ContainerResizeState, ContextMenuState, NodeEditorEditableWire,
+    NodeEditorNormalConnectGesture, NodeEditorPendingEdit, NodeEditorState,
+    NodeEditorWireContextMenu, NodeEditorWireDragKind, NodeEditorWireGesture,
+    NodeEditorWireKnifeGesture,
 };
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 use crate::ui::widgets::searchable_context_menu::{show_searchable_items_with_qa, SearchableItem};
@@ -257,19 +258,60 @@ struct RenderedPortKey {
 
 #[derive(Clone, Debug)]
 struct RenderedEdge {
-    connection_id: Uuid,
+    kind: RenderedEdgeKind,
     start: egui::Pos2,
     control_a: egui::Pos2,
     control_b: egui::Pos2,
     end: egui::Pos2,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum RenderedEdgeKind {
+    ProjectConnection { connection_id: Uuid },
+    OutputBinding { owner: PortOwner, node_id: Uuid },
+    DerivedOutput { owner: PortOwner, source: PortOwner },
+}
+
+impl RenderedEdgeKind {
+    fn metadata_kind(self) -> &'static str {
+        match self {
+            Self::ProjectConnection { .. } => "explicit",
+            Self::OutputBinding { .. } => "output_binding",
+            Self::DerivedOutput { .. } => "derived_output",
+        }
+    }
+
+    fn editable_wire(self) -> Option<NodeEditorEditableWire> {
+        match self {
+            Self::ProjectConnection { connection_id } => {
+                Some(NodeEditorEditableWire::ProjectConnection { connection_id })
+            }
+            Self::OutputBinding { owner, node_id } => {
+                Some(NodeEditorEditableWire::OutputBinding { owner, node_id })
+            }
+            Self::DerivedOutput { .. } => None,
+        }
+    }
+
+    fn connection_id(self) -> Option<Uuid> {
+        match self {
+            Self::ProjectConnection { connection_id } => Some(connection_id),
+            Self::OutputBinding { .. } | Self::DerivedOutput { .. } => None,
+        }
+    }
+
+    fn blocked_reason(self) -> Option<&'static str> {
+        matches!(self, Self::DerivedOutput { .. }).then_some(
+            "Derived wire follows authoritative containment; reparent or remove the child instead",
+        )
+    }
+}
+
 struct EdgeComponent<'a> {
     id: String,
-    kind: &'a str,
+    kind: RenderedEdgeKind,
     from: &'a PortAddress,
     to: &'a PortAddress,
-    connection_id: Option<Uuid>,
     wire_color: Color32,
     authored_order: Option<i64>,
     back_to_front_index: Option<usize>,
@@ -391,8 +433,8 @@ enum NodeEdit {
     DisconnectConnection {
         connection_id: Uuid,
     },
-    DisconnectConnections {
-        connection_ids: Vec<Uuid>,
+    DisconnectWires {
+        wires: Vec<NodeEditorEditableWire>,
     },
     ReconnectConnection {
         connection_id: Uuid,
@@ -511,7 +553,7 @@ struct ProjectNodeViewer<'a> {
     pending_selection: &'a mut Option<PortOwner>,
     current_time: f64,
     context_menu_exclusion_rects: &'a mut Vec<egui::Rect>,
-    wire_context_request: &'a mut Option<Uuid>,
+    wire_context_request: &'a mut Option<NodeEditorEditableWire>,
     suppress_wire_connect: bool,
     locked_canvas_transform: Option<egui::emath::TSTransform>,
     to_global: &'a mut egui::emath::TSTransform,
@@ -1253,16 +1295,29 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             to.id.input,
             false,
         );
-        if let Some(NodeEdit::Disconnect { from, to }) = &edit {
-            if let Some(connection) = self
+        let context_target = match &edit {
+            Some(NodeEdit::Disconnect { from, to }) => self
                 .project
                 .connections
                 .iter()
                 .find(|connection| connection.from == *from && connection.to == *to)
-            {
-                *self.wire_context_request = Some(connection.id);
-                return;
-            }
+                .map(|connection| NodeEditorEditableWire::ProjectConnection {
+                    connection_id: connection.id,
+                }),
+            Some(NodeEdit::SetOutputNode {
+                owner,
+                node_id: None,
+            }) => container_output_node_id(self.project, *owner).map(|node_id| {
+                NodeEditorEditableWire::OutputBinding {
+                    owner: *owner,
+                    node_id,
+                }
+            }),
+            _ => None,
+        };
+        if let Some(target) = context_target {
+            *self.wire_context_request = Some(target);
+            return;
         }
         if let Some(edit) = edit {
             self.edits.push(QueuedNodeEdit::Atomic(edit));
@@ -2516,10 +2571,11 @@ fn register_rendered_edges(
         let edge = register_edge_component(
             EdgeComponent {
                 id: format!("node_editor.edge:{}", connection.id),
-                kind: "explicit",
+                kind: RenderedEdgeKind::ProjectConnection {
+                    connection_id: connection.id,
+                },
                 from: &connection.from,
                 to: &connection.to,
-                connection_id: Some(connection.id),
                 wire_color: project
                     .port_definition(&connection.from, PortDirection::Output)
                     .map_or_else(
@@ -2558,32 +2614,35 @@ fn register_rendered_edges(
             let from = PortAddress::new(source.source, library::model::project::IMAGE_OUTPUT_PORT);
             let source_key = qa_container_key(source.source);
             let (id, kind) = match source.kind {
-                ContainerImageSourceKind::OutputBinding => (
-                    format!(
-                        "node_editor.edge.output_binding:{}:{}",
-                        qa_container_key(owner),
-                        match source.source {
-                            PortOwner::Node(node_id) => node_id.to_string(),
-                            _ => source_key.clone(),
-                        },
-                    ),
-                    "output_binding",
-                ),
+                ContainerImageSourceKind::OutputBinding => {
+                    let PortOwner::Node(node_id) = source.source else {
+                        continue;
+                    };
+                    (
+                        format!(
+                            "node_editor.edge.output_binding:{}:{node_id}",
+                            qa_container_key(owner),
+                        ),
+                        RenderedEdgeKind::OutputBinding { owner, node_id },
+                    )
+                }
                 ContainerImageSourceKind::DerivedChild => (
                     format!(
                         "node_editor.edge.derived:{}:{source_key}",
                         qa_container_key(owner)
                     ),
-                    "derived_output",
+                    RenderedEdgeKind::DerivedOutput {
+                        owner,
+                        source: source.source,
+                    },
                 ),
             };
-            let _ = register_edge_component(
+            if let Some(edge) = register_edge_component(
                 EdgeComponent {
                     id,
                     kind,
                     from: &from,
                     to: &sink,
-                    connection_id: None,
                     wire_color: pin_color(PortDataType::Image),
                     authored_order: None,
                     back_to_front_index: None,
@@ -2594,7 +2653,9 @@ fn register_rendered_edges(
                 &ports,
                 canvas_clip,
                 overview,
-            );
+            ) {
+                rendered_edges.push(edge);
+            }
         }
     }
     rendered_edges
@@ -2629,7 +2690,7 @@ fn register_edge_component(
     let screen_points = [start, control_a, control_b, end];
     if let Some(overview) = overview {
         if let Some(graph_points) = overview_wire_graph_points(screen_points, overview.to_global) {
-            let width = if edge.kind == "derived_output" {
+            let width = if matches!(edge.kind, RenderedEdgeKind::DerivedOutput { .. }) {
                 1.15
             } else {
                 1.65
@@ -2652,10 +2713,30 @@ fn register_edge_component(
     let midpoint = cubic_bezier_point(start, control_a, control_b, end, 0.5);
     let unclipped_hit_rect = egui::Rect::from_center_size(midpoint, egui::vec2(16.0, 16.0));
     let hit_rect = clipped_qa_rect(unclipped_hit_rect, canvas_clip);
-    let qa_rect = if edge.connection_id.is_some() {
+    let editable_wire = edge.kind.editable_wire();
+    let connection_id = edge.kind.connection_id();
+    let qa_rect = if editable_wire.is_some() {
         hit_rect
     } else {
         bbox
+    };
+    let (binding_owner, binding_node_id) = match edge.kind {
+        RenderedEdgeKind::OutputBinding { owner, node_id } => {
+            (Some(qa_container_key(owner)), Some(node_id))
+        }
+        _ => (None, None),
+    };
+    let (derived_owner, derived_source) = match edge.kind {
+        RenderedEdgeKind::DerivedOutput { owner, source } => (
+            Some(qa_container_key(owner)),
+            Some(qa_container_key(source)),
+        ),
+        _ => (None, None),
+    };
+    let action = match edge.kind {
+        RenderedEdgeKind::ProjectConnection { .. } => Some("select_or_edit"),
+        RenderedEdgeKind::OutputBinding { .. } => Some("delete_output_binding"),
+        RenderedEdgeKind::DerivedOutput { .. } => None,
     };
     #[cfg(test)]
     capture_test_rect(&edge.id, qa_rect);
@@ -2665,9 +2746,15 @@ fn register_edge_component(
         qa_rect,
         true,
         Some(serde_json::json!({
-            "kind": edge.kind,
-            "connection_id": edge.connection_id,
-            "action": edge.connection_id.map(|_| "select"),
+            "kind": edge.kind.metadata_kind(),
+            "connection_id": connection_id,
+            "action": action,
+            "editable": editable_wire.is_some(),
+            "edit_blocked_reason": edge.kind.blocked_reason(),
+            "binding_owner": binding_owner,
+            "binding_node_id": binding_node_id,
+            "derived_owner": derived_owner,
+            "derived_source": derived_source,
             "from": {
                 "owner": qa_container_key(edge.from.owner),
                 "port": edge.from.port,
@@ -2693,28 +2780,29 @@ fn register_edge_component(
             "hit_point": {"x": midpoint.x, "y": midpoint.y},
         })),
     );
-    let connection_id = edge.connection_id?;
-    for (suffix, role, position) in [
-        ("from_handle", "source", start),
-        ("to_handle", "target", end),
-    ] {
-        let unclipped_rect = egui::Rect::from_center_size(position, egui::vec2(18.0, 18.0));
-        let rect = clipped_qa_rect(unclipped_rect, canvas_clip);
-        crate::qa::register_component_with_metadata(
-            format!("node_editor.edge:{connection_id}.{suffix}"),
-            "node_edge_endpoint",
-            rect,
-            true,
-            Some(edge_endpoint_qa_metadata(
-                connection_id,
-                role,
-                position,
-                unclipped_rect,
-            )),
-        );
+    if let Some(connection_id) = connection_id {
+        for (suffix, role, position) in [
+            ("from_handle", "source", start),
+            ("to_handle", "target", end),
+        ] {
+            let unclipped_rect = egui::Rect::from_center_size(position, egui::vec2(18.0, 18.0));
+            let rect = clipped_qa_rect(unclipped_rect, canvas_clip);
+            crate::qa::register_component_with_metadata(
+                format!("node_editor.edge:{connection_id}.{suffix}"),
+                "node_edge_endpoint",
+                rect,
+                true,
+                Some(edge_endpoint_qa_metadata(
+                    connection_id,
+                    role,
+                    position,
+                    unclipped_rect,
+                )),
+            );
+        }
     }
     Some(RenderedEdge {
-        connection_id,
+        kind: edge.kind,
         start,
         control_a,
         control_b,
@@ -2846,10 +2934,70 @@ fn rendered_edge_at_position(
         .iter()
         .filter_map(|edge| {
             let distance = distance_to_rendered_edge(position, edge);
-            (distance <= WIRE_HIT_RADIUS).then_some((edge, distance))
+            (distance <= WIRE_HIT_RADIUS).then_some((
+                edge,
+                edge.kind.editable_wire().is_none(),
+                distance,
+            ))
         })
-        .min_by(|left, right| left.1.total_cmp(&right.1))
-        .map(|(edge, _)| edge)
+        .min_by(|left, right| {
+            left.1
+                .cmp(&right.1)
+                .then_with(|| left.2.total_cmp(&right.2))
+        })
+        .map(|(edge, _, _)| edge)
+}
+
+fn editable_wire_sort_key(target: NodeEditorEditableWire) -> (u8, u8, Uuid, Uuid) {
+    match target {
+        NodeEditorEditableWire::ProjectConnection { connection_id } => {
+            (0, 0, connection_id, Uuid::nil())
+        }
+        NodeEditorEditableWire::OutputBinding { owner, node_id } => {
+            let owner_kind = match owner {
+                PortOwner::Composition(_) => 0,
+                PortOwner::Track(_) => 1,
+                PortOwner::Clip(_) => 2,
+                PortOwner::Node(_) => 3,
+            };
+            (1, owner_kind, owner.id(), node_id)
+        }
+    }
+}
+
+fn editable_wire_qa_value(target: NodeEditorEditableWire) -> serde_json::Value {
+    match target {
+        NodeEditorEditableWire::ProjectConnection { connection_id } => serde_json::json!({
+            "kind": "explicit",
+            "connection_id": connection_id,
+        }),
+        NodeEditorEditableWire::OutputBinding { owner, node_id } => serde_json::json!({
+            "kind": "output_binding",
+            "owner": qa_container_key(owner),
+            "node_id": node_id,
+        }),
+    }
+}
+
+fn editable_wire_stable_key(target: NodeEditorEditableWire) -> String {
+    match target {
+        NodeEditorEditableWire::ProjectConnection { connection_id } => connection_id.to_string(),
+        NodeEditorEditableWire::OutputBinding { owner, node_id } => {
+            format!("output_binding:{}:{node_id}", qa_container_key(owner))
+        }
+    }
+}
+
+fn editable_wire_is_current(project: &Project, target: NodeEditorEditableWire) -> bool {
+    match target {
+        NodeEditorEditableWire::ProjectConnection { connection_id } => project
+            .connections
+            .iter()
+            .any(|connection| connection.id == connection_id),
+        NodeEditorEditableWire::OutputBinding { owner, node_id } => {
+            container_output_node_id(project, owner) == Some(node_id)
+        }
+    }
 }
 
 fn rendered_wire_drag_kind(edge: &RenderedEdge, position: egui::Pos2) -> NodeEditorWireDragKind {
@@ -2978,7 +3126,7 @@ fn wire_knife_interaction(
                 state.wire_context_menu = None;
                 state.wire_knife = Some(NodeEditorWireKnifeGesture {
                     points: vec![position],
-                    crossed_connection_ids: HashSet::new(),
+                    crossed_wires: HashSet::new(),
                     canvas_transform: frame.to_global,
                 });
             }
@@ -2991,7 +3139,9 @@ fn wire_knife_interaction(
             if previous.distance(position) > 0.5 {
                 for edge in frame.edges {
                     if knife_segment_hits_edge(previous, position, edge) {
-                        gesture.crossed_connection_ids.insert(edge.connection_id);
+                        if let Some(target) = edge.kind.editable_wire() {
+                            gesture.crossed_wires.insert(target);
+                        }
                     }
                 }
                 gesture.points.push(position);
@@ -3003,6 +3153,15 @@ fn wire_knife_interaction(
     if let Some(gesture) = state.wire_knife.as_ref() {
         paint_wire_knife(ui, gesture, frame.canvas_clip);
         let rect = egui::Rect::from_points(&gesture.points).expand(6.0);
+        let mut crossed_wires = gesture.crossed_wires.iter().copied().collect::<Vec<_>>();
+        crossed_wires.sort_by_key(|target| editable_wire_sort_key(*target));
+        let crossed_connection_ids = crossed_wires
+            .iter()
+            .filter_map(|target| match target {
+                NodeEditorEditableWire::ProjectConnection { connection_id } => Some(*connection_id),
+                NodeEditorEditableWire::OutputBinding { .. } => None,
+            })
+            .collect::<Vec<_>>();
         crate::qa::register_component_with_metadata(
             "node_editor.knife_gesture",
             "node_editor_knife_gesture",
@@ -3010,7 +3169,12 @@ fn wire_knife_interaction(
             true,
             Some(serde_json::json!({
                 "action": "knife",
-                "crossed_connection_ids": gesture.crossed_connection_ids,
+                "crossed_wires": crossed_wires
+                    .iter()
+                    .copied()
+                    .map(editable_wire_qa_value)
+                    .collect::<Vec<_>>(),
+                "crossed_connection_ids": crossed_connection_ids,
                 "point_count": gesture.points.len(),
                 "start_accepted": true,
                 "canvas_transform": {
@@ -3026,21 +3190,17 @@ fn wire_knife_interaction(
 
     if primary_released {
         if let Some(gesture) = state.wire_knife.take() {
-            let mut connection_ids = gesture
-                .crossed_connection_ids
-                .into_iter()
-                .collect::<Vec<_>>();
-            connection_ids.sort_unstable();
-            if !connection_ids.is_empty() {
-                if state
-                    .selected_connection_id
-                    .is_some_and(|selected| connection_ids.contains(&selected))
-                {
+            let mut wires = gesture.crossed_wires.into_iter().collect::<Vec<_>>();
+            wires.sort_by_key(|target| editable_wire_sort_key(*target));
+            if !wires.is_empty() {
+                if state.selected_connection_id.is_some_and(|selected| {
+                    wires.contains(&NodeEditorEditableWire::ProjectConnection {
+                        connection_id: selected,
+                    })
+                }) {
                     state.selected_connection_id = None;
                 }
-                return vec![QueuedNodeEdit::Atomic(NodeEdit::DisconnectConnections {
-                    connection_ids,
-                })];
+                return vec![QueuedNodeEdit::Atomic(NodeEdit::DisconnectWires { wires })];
             }
         }
     }
@@ -3219,6 +3379,30 @@ fn wire_interactions(
         return Vec::new();
     }
 
+    if let Some((position, edge)) = pointer.and_then(|position| {
+        rendered_edge_at_position(frame.edges, position).map(|edge| (position, edge))
+    }) {
+        let hover_text = match edge.kind {
+            RenderedEdgeKind::OutputBinding { .. } => Some(
+                "Container output binding. Right-click to clear it, or cross it with the Alt knife.",
+            ),
+            RenderedEdgeKind::DerivedOutput { .. } => edge.kind.blocked_reason(),
+            RenderedEdgeKind::ProjectConnection { .. } => None,
+        };
+        if let Some(hover_text) = hover_text {
+            let hover_rect = egui::Rect::from_center_size(position, egui::vec2(2.0, 2.0));
+            ui.interact(
+                hover_rect,
+                ui.make_persistent_id(("node_editor_wire_hover", edge.kind)),
+                egui::Sense::hover(),
+            )
+            .on_hover_text(hover_text);
+            if matches!(edge.kind, RenderedEdgeKind::DerivedOutput { .. }) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+            }
+        }
+    }
+
     let normal_port = node_editor_port_interactions_enabled(frame.to_global.scaling)
         .then(|| {
             pointer.and_then(|position| {
@@ -3270,6 +3454,7 @@ fn wire_interactions(
         .filter(|_| !pointer_on_normal_port)
         .and_then(|position| {
             let edge = rendered_edge_at_position(frame.edges, position)?;
+            edge.kind.connection_id()?;
             let endpoint = rendered_wire_drag_kind(edge, position);
             let graph_position = frame.to_global.inverse() * position;
             let over_graph_item = frame
@@ -3283,19 +3468,22 @@ fn wire_interactions(
             frame
                 .edges
                 .iter()
-                .find(|edge| edge.connection_id == connection_id)
+                .find(|edge| edge.kind.connection_id() == Some(connection_id))
         })
         .or(hovered);
     let mut edits = Vec::new();
 
     if let Some(edge) = interaction_edge {
+        let Some(connection_id) = edge.kind.connection_id() else {
+            return edits;
+        };
         let response = ui.interact(
             frame.canvas_clip,
-            ui.make_persistent_id(("node_editor_wire", edge.connection_id)),
+            ui.make_persistent_id(("node_editor_wire", connection_id)),
             egui::Sense::click_and_drag(),
         );
         if response.clicked_by(egui::PointerButton::Primary) {
-            state.selected_connection_id = Some(edge.connection_id);
+            state.selected_connection_id = Some(connection_id);
         }
         let (primary_pressed, primary_down, primary_released, pointer_position) =
             ui.input(|input| {
@@ -3306,14 +3494,14 @@ fn wire_interactions(
                     input.pointer.interact_pos(),
                 )
             });
-        let pointer_started_on_edge =
-            hovered.is_some_and(|hovered_edge| hovered_edge.connection_id == edge.connection_id);
+        let pointer_started_on_edge = hovered
+            .is_some_and(|hovered_edge| hovered_edge.kind.connection_id() == Some(connection_id));
         if primary_pressed && pointer_started_on_edge {
             if let Some(position) = pointer_position {
-                state.selected_connection_id = Some(edge.connection_id);
+                state.selected_connection_id = Some(connection_id);
                 state.wire_context_menu = None;
                 state.wire_gesture = Some(NodeEditorWireGesture {
-                    connection_id: edge.connection_id,
+                    connection_id,
                     kind: rendered_wire_drag_kind(edge, position),
                     start: position,
                     current: position,
@@ -3329,7 +3517,7 @@ fn wire_interactions(
         }
         if primary_released {
             if let Some(gesture) = state.wire_gesture.take() {
-                if gesture.connection_id == edge.connection_id
+                if gesture.connection_id == connection_id
                     && gesture.current.distance(gesture.start) >= WIRE_DRAG_THRESHOLD
                 {
                     match gesture.kind {
@@ -3395,7 +3583,7 @@ fn wire_interactions(
         if let Some(edge) = frame
             .edges
             .iter()
-            .find(|edge| edge.connection_id == connection_id)
+            .find(|edge| edge.kind.connection_id() == Some(connection_id))
         {
             paint_wire_interaction(ui, edge, state.wire_gesture.as_ref(), frame.canvas_clip);
         }
@@ -3825,6 +4013,7 @@ pub fn node_editor_panel(
     let mut snarl;
     let layout_edits;
     let rendered_edges;
+    let mut suppress_wire_secondary_click = false;
     let mut edits = Vec::new();
     let mut pending_selection = None;
     let mut context_menu_exclusion_rects = Vec::new();
@@ -3916,16 +4105,37 @@ pub fn node_editor_panel(
             register_container_chrome(container, to_global, canvas_clip, &project, current_time);
         }
 
-        if let Some(connection_id) = wire_context_request {
+        if ui.input(|input| input.pointer.secondary_clicked()) {
+            if let Some(position) = ui.input(|input| input.pointer.interact_pos()) {
+                let graph_position = to_global.inverse() * position;
+                let over_graph_item = context_menu_exclusion_rects
+                    .iter()
+                    .any(|rect| rect.contains(graph_position));
+                if over_graph_item {
+                    wire_context_request = None;
+                } else if let Some(edge) = rendered_edge_at_position(&rendered_edges, position) {
+                    if let Some(target) = edge.kind.editable_wire() {
+                        suppress_wire_secondary_click = true;
+                        if wire_context_request.is_none() {
+                            wire_context_request = Some(target);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(target) = wire_context_request {
             let (position, open_time) = ui.input(|input| {
                 (
                     input.pointer.interact_pos().unwrap_or(canvas_clip.center()),
                     input.time,
                 )
             });
-            node_editor_state.selected_connection_id = Some(connection_id);
+            node_editor_state.selected_connection_id = match target {
+                NodeEditorEditableWire::ProjectConnection { connection_id } => Some(connection_id),
+                NodeEditorEditableWire::OutputBinding { .. } => None,
+            };
             node_editor_state.wire_context_menu = Some(NodeEditorWireContextMenu {
-                connection_id,
+                target,
                 position,
                 open_time,
                 inserting: false,
@@ -4024,7 +4234,7 @@ pub fn node_editor_panel(
             let dropped_wire = ui
                 .input(|input| input.pointer.interact_pos())
                 .and_then(|position| rendered_edge_at_position(&rendered_edges, position))
-                .map(|edge| edge.connection_id);
+                .and_then(|edge| edge.kind.connection_id());
             if moved_node_ids.len() == 1 {
                 if let (Some(connection_id), Some(node_id)) =
                     (dropped_wire, moved_node_ids.iter().next().copied())
@@ -4069,7 +4279,8 @@ pub fn node_editor_panel(
             comp_id,
             exclusion_rects: &context_menu_exclusion_rects,
             to_global,
-            suppress_secondary_click: wire_context_request.is_some(),
+            suppress_secondary_click: suppress_wire_secondary_click
+                || wire_context_request.is_some(),
         },
     );
     // Creation already places its item in a free slot and grows only the
@@ -5820,6 +6031,50 @@ fn insert_node_on_connection(
     true
 }
 
+fn container_for_output_owner(owner: PortOwner) -> Option<NodeContainer> {
+    match owner {
+        PortOwner::Composition(id) => Some(NodeContainer::Composition(id)),
+        PortOwner::Track(id) => Some(NodeContainer::Track(id)),
+        PortOwner::Clip(id) => Some(NodeContainer::Clip(id)),
+        PortOwner::Node(_) => None,
+    }
+}
+
+fn disconnect_editable_wires(project: &mut Project, wires: Vec<NodeEditorEditableWire>) -> bool {
+    let mut wires = wires
+        .into_iter()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    wires.sort_by_key(|target| editable_wire_sort_key(*target));
+    let mut candidate = project.clone();
+    let mut changed = false;
+    for target in wires {
+        match target {
+            NodeEditorEditableWire::ProjectConnection { connection_id } => {
+                changed |= candidate.disconnect_connection(connection_id);
+            }
+            NodeEditorEditableWire::OutputBinding { owner, node_id } => {
+                if container_output_node_id(&candidate, owner) != Some(node_id) {
+                    continue;
+                }
+                let Some(container) = container_for_output_owner(owner) else {
+                    return false;
+                };
+                if let Err(error) = candidate.set_output_node(container, None) {
+                    log::warn!("Cannot clear container output binding: {error}");
+                    return false;
+                }
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        *project = candidate;
+    }
+    changed
+}
+
 fn apply_edit(project: &mut Project, edit: NodeEdit) -> bool {
     match edit {
         NodeEdit::Connect { from, to } => match project.connect_ports(from, to) {
@@ -5833,9 +6088,7 @@ fn apply_edit(project: &mut Project, edit: NodeEdit) -> bool {
         NodeEdit::DisconnectConnection { connection_id } => {
             project.disconnect_connection(connection_id)
         }
-        NodeEdit::DisconnectConnections { connection_ids } => {
-            project.disconnect_connections(connection_ids) != 0
-        }
+        NodeEdit::DisconnectWires { wires } => disconnect_editable_wires(project, wires),
         NodeEdit::ReconnectConnection {
             connection_id,
             from,
@@ -5917,11 +6170,8 @@ fn apply_edit(project: &mut Project, edit: NodeEdit) -> bool {
             composition_id,
         } => insert_node_on_connection(project, connection_id, *node, position, composition_id),
         NodeEdit::SetOutputNode { owner, node_id } => {
-            let container = match owner {
-                PortOwner::Composition(id) => NodeContainer::Composition(id),
-                PortOwner::Track(id) => NodeContainer::Track(id),
-                PortOwner::Clip(id) => NodeContainer::Clip(id),
-                PortOwner::Node(_) => return false,
+            let Some(container) = container_for_output_owner(owner) else {
+                return false;
             };
             let before = container_output_node_id(project, owner);
             if before == node_id {
@@ -6584,18 +6834,24 @@ fn show_wire_context_menu(
     composition_id: Uuid,
     to_global: egui::emath::TSTransform,
 ) -> Option<QueuedNodeEdit> {
+    let target = state.wire_context_menu.as_ref()?.target;
+    if let NodeEditorEditableWire::OutputBinding { owner, node_id } = target {
+        return show_output_binding_wire_context_menu(ui, state, project, owner, node_id);
+    }
     let context = state.wire_context_menu.as_mut()?;
+    let NodeEditorEditableWire::ProjectConnection { connection_id } = context.target else {
+        return None;
+    };
     let Some(connection) = project
         .connections
         .iter()
-        .find(|connection| connection.id == context.connection_id)
+        .find(|connection| connection.id == connection_id)
         .cloned()
     else {
         state.wire_context_menu = None;
         return None;
     };
 
-    let connection_id = context.connection_id;
     let order_state = wire_order_menu_state(project, &connection);
     let authored_blend_available = connection_supports_authored_blend(project, &connection);
     let position = context.position;
@@ -6809,8 +7065,10 @@ fn show_wire_context_menu(
                     })),
                 );
                 if delete.clicked() {
-                    edit = Some(QueuedNodeEdit::Atomic(NodeEdit::DisconnectConnection {
-                        connection_id,
+                    edit = Some(QueuedNodeEdit::Atomic(NodeEdit::DisconnectWires {
+                        wires: vec![NodeEditorEditableWire::ProjectConnection {
+                            connection_id,
+                        }],
                     }));
                     should_close = true;
                 }
@@ -6857,6 +7115,86 @@ fn show_wire_context_menu(
 
     if ui.input(|input| input.pointer.any_click())
         && ui.input(|input| input.time) - context.open_time > 0.2
+        && ui
+            .input(|input| input.pointer.interact_pos())
+            .is_some_and(|pointer| !response.response.rect.contains(pointer))
+    {
+        should_close = true;
+    }
+    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        should_close = true;
+    }
+    if should_close {
+        state.wire_context_menu = None;
+    }
+    edit
+}
+
+fn show_output_binding_wire_context_menu(
+    ui: &mut egui::Ui,
+    state: &mut NodeEditorState,
+    project: &Project,
+    owner: PortOwner,
+    node_id: Uuid,
+) -> Option<QueuedNodeEdit> {
+    let target = NodeEditorEditableWire::OutputBinding { owner, node_id };
+    if !editable_wire_is_current(project, target) {
+        state.wire_context_menu = None;
+        return None;
+    }
+    let context = state.wire_context_menu.as_mut()?;
+    let position = context.position;
+    let open_time = context.open_time;
+    let stable_key = editable_wire_stable_key(target);
+    let mut edit = None;
+    let mut should_close = false;
+    let response = egui::Area::new(egui::Id::new(("node_wire_context_menu", target)))
+        .order(egui::Order::Foreground)
+        .fixed_pos(position)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::menu(ui.style()).show(ui, |ui| {
+                ui.set_min_width(240.0);
+                non_selectable_label(ui, "Container Output Binding")
+                    .on_hover_text("This authored wire selects the Node rendered by the container");
+                let delete = ui
+                    .button("Delete Wire")
+                    .on_hover_text("Clear the container output binding without deleting the Node");
+                crate::qa::register_component_with_metadata(
+                    format!("node_editor.wire_menu.delete:{stable_key}"),
+                    "node_editor_menu_item",
+                    delete.rect,
+                    delete.enabled(),
+                    Some(serde_json::json!({
+                        "action": "clear_output_binding",
+                        "kind": "output_binding",
+                        "owner": qa_container_key(owner),
+                        "node_id": node_id,
+                    })),
+                );
+                if delete.clicked() {
+                    edit = Some(QueuedNodeEdit::Atomic(NodeEdit::DisconnectWires {
+                        wires: vec![target],
+                    }));
+                    should_close = true;
+                }
+            });
+        });
+    crate::qa::register_component_with_metadata(
+        format!("node_editor.wire_menu:{stable_key}"),
+        "node_editor_wire_menu",
+        response.response.rect,
+        true,
+        Some(serde_json::json!({
+            "kind": "output_binding",
+            "owner": qa_container_key(owner),
+            "node_id": node_id,
+            "mode": "commands",
+            "editable": true,
+        })),
+    );
+
+    if ui.input(|input| input.pointer.any_click())
+        && ui.input(|input| input.time) - open_time > 0.2
         && ui
             .input(|input| input.pointer.interact_pos())
             .is_some_and(|pointer| !response.response.rect.contains(pointer))
@@ -8757,7 +9095,9 @@ mod tests {
             })
             .unwrap();
         let edge = RenderedEdge {
-            connection_id: connection.id,
+            kind: RenderedEdgeKind::ProjectConnection {
+                connection_id: connection.id,
+            },
             start: egui::pos2(120.0, 180.0),
             control_a: egui::pos2(200.0, 180.0),
             control_b: egui::pos2(300.0, 180.0),
@@ -8831,7 +9171,9 @@ mod tests {
         let source = egui::pos2(120.0, 180.0);
         let invalid_target = egui::pos2(540.0, 340.0);
         let edge = RenderedEdge {
-            connection_id: connection.id,
+            kind: RenderedEdgeKind::ProjectConnection {
+                connection_id: connection.id,
+            },
             start: source,
             control_a: egui::pos2(200.0, 180.0),
             control_b: egui::pos2(300.0, 180.0),
@@ -8923,7 +9265,9 @@ mod tests {
     #[test]
     fn overview_wire_midpoint_remains_a_body_target_when_endpoint_radii_overlap() {
         let edge = RenderedEdge {
-            connection_id: Uuid::new_v4(),
+            kind: RenderedEdgeKind::ProjectConnection {
+                connection_id: Uuid::new_v4(),
+            },
             start: egui::pos2(100.0, 100.0),
             control_a: egui::pos2(106.0, 100.0),
             control_b: egui::pos2(114.0, 100.0),
@@ -8963,7 +9307,9 @@ mod tests {
             .unwrap()
             .clone();
         let edge = RenderedEdge {
-            connection_id: connection.id,
+            kind: RenderedEdgeKind::ProjectConnection {
+                connection_id: connection.id,
+            },
             start: egui::pos2(120.0, 180.0),
             control_a: egui::pos2(200.0, 180.0),
             control_b: egui::pos2(300.0, 180.0),
@@ -10169,10 +10515,11 @@ mod tests {
                 let _ = register_edge_component(
                     EdgeComponent {
                         id: "node_editor.edge:overview-wire-transform-test".to_string(),
-                        kind: "explicit",
+                        kind: RenderedEdgeKind::ProjectConnection {
+                            connection_id: Uuid::from_u128(0x8_001),
+                        },
                         from: &from,
                         to: &to,
-                        connection_id: None,
                         wire_color: pin_color(PortDataType::Image),
                         authored_order: None,
                         back_to_front_index: None,
@@ -10439,7 +10786,7 @@ mod tests {
 
     #[test]
     fn edge_endpoint_qa_metadata_exposes_screen_position_and_unclipped_rect() {
-        let connection_id = Uuid::from_u128(0xE_D6_E);
+        let connection_id = Uuid::from_u128(0xED6E);
         let position = egui::pos2(321.5, 654.25);
         let rect = egui::Rect::from_center_size(position, egui::vec2(18.0, 18.0));
         let metadata = edge_endpoint_qa_metadata(connection_id, "source", position, rect);
@@ -10821,7 +11168,9 @@ mod tests {
         let knife_start = egui::pos2(10.0, -1_000.0);
         let knife_end = egui::pos2(10.0, 1_000.0);
         let edge = RenderedEdge {
-            connection_id: Uuid::new_v4(),
+            kind: RenderedEdgeKind::ProjectConnection {
+                connection_id: Uuid::new_v4(),
+            },
             start: egui::pos2(-1_000.0, 0.0),
             control_a: egui::pos2(-333.333_34, 0.0),
             control_b: egui::pos2(333.333_34, 0.0),
@@ -10838,8 +11187,12 @@ mod tests {
     }
 
     #[test]
-    fn alt_drag_knife_crosses_multiple_beziers_and_commits_one_atomic_history_edit() {
-        let (mut project, _, _, _, _, _) = fixture();
+    fn alt_drag_knife_batches_explicit_and_output_binding_but_preserves_derived_wires(
+    ) -> Result<(), String> {
+        let (mut project, _, track_id, clip_id, _, merge_id) = fixture();
+        project
+            .set_output_node(NodeContainer::Clip(clip_id), Some(merge_id))
+            .map_err(|error| error.to_string())?;
         let connection_ids = project
             .connections
             .iter()
@@ -10849,18 +11202,42 @@ mod tests {
         assert_eq!(connection_ids.len(), 2);
         let edges = vec![
             RenderedEdge {
-                connection_id: connection_ids[0],
+                kind: RenderedEdgeKind::ProjectConnection {
+                    connection_id: connection_ids[0],
+                },
                 start: egui::pos2(100.0, 160.0),
                 control_a: egui::pos2(180.0, 120.0),
                 control_b: egui::pos2(320.0, 200.0),
                 end: egui::pos2(400.0, 160.0),
             },
             RenderedEdge {
-                connection_id: connection_ids[1],
+                kind: RenderedEdgeKind::ProjectConnection {
+                    connection_id: connection_ids[1],
+                },
                 start: egui::pos2(100.0, 230.0),
                 control_a: egui::pos2(180.0, 190.0),
                 control_b: egui::pos2(320.0, 270.0),
                 end: egui::pos2(400.0, 230.0),
+            },
+            RenderedEdge {
+                kind: RenderedEdgeKind::OutputBinding {
+                    owner: PortOwner::Clip(clip_id),
+                    node_id: merge_id,
+                },
+                start: egui::pos2(100.0, 300.0),
+                control_a: egui::pos2(180.0, 260.0),
+                control_b: egui::pos2(320.0, 340.0),
+                end: egui::pos2(400.0, 300.0),
+            },
+            RenderedEdge {
+                kind: RenderedEdgeKind::DerivedOutput {
+                    owner: PortOwner::Track(track_id),
+                    source: PortOwner::Clip(clip_id),
+                },
+                start: egui::pos2(100.0, 350.0),
+                control_a: egui::pos2(180.0, 310.0),
+                control_b: egui::pos2(320.0, 390.0),
+                end: egui::pos2(400.0, 350.0),
             },
         ];
         assert!(knife_segment_hits_edge(
@@ -10877,7 +11254,7 @@ mod tests {
         let context = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 420.0));
         let start = egui::pos2(250.0, 100.0);
-        let end = egui::pos2(250.0, 290.0);
+        let end = egui::pos2(250.0, 390.0);
         let alt = egui::Modifiers {
             alt: true,
             ..Default::default()
@@ -10890,7 +11267,7 @@ mod tests {
                 pressed: true,
                 modifiers: alt,
             }],
-            vec![egui::Event::PointerMoved(egui::pos2(250.0, 195.0))],
+            vec![egui::Event::PointerMoved(egui::pos2(250.0, 245.0))],
             vec![egui::Event::PointerMoved(end)],
             vec![egui::Event::PointerButton {
                 pos: end,
@@ -10903,7 +11280,7 @@ mod tests {
         let mut state = NodeEditorState::default();
         let mut queued = Vec::new();
         for (frame, events) in frames.into_iter().enumerate() {
-            let _ = context.run(
+            drop(context.run(
                 egui::RawInput {
                     screen_rect: Some(screen),
                     time: Some(frame as f64 / 60.0),
@@ -10927,16 +11304,23 @@ mod tests {
                         ));
                     });
                 },
-            );
+            ));
         }
-        let [QueuedNodeEdit::Atomic(NodeEdit::DisconnectConnections {
-            connection_ids: crossed,
-        })] = queued.as_slice()
+        let [QueuedNodeEdit::Atomic(NodeEdit::DisconnectWires { wires: crossed })] =
+            queued.as_slice()
         else {
-            panic!("knife did not emit one batch: {queued:?}");
+            return Err(format!("knife did not emit one batch: {queued:?}"));
         };
-        let mut expected = connection_ids.clone();
-        expected.sort_unstable();
+        let mut expected = connection_ids
+            .iter()
+            .copied()
+            .map(|connection_id| NodeEditorEditableWire::ProjectConnection { connection_id })
+            .chain(std::iter::once(NodeEditorEditableWire::OutputBinding {
+                owner: PortOwner::Clip(clip_id),
+                node_id: merge_id,
+            }))
+            .collect::<Vec<_>>();
+        expected.sort_by_key(|target| editable_wire_sort_key(*target));
         assert_eq!(crossed, &expected);
         let initial = project.clone();
         let mut history = HistoryManager::new();
@@ -10951,8 +11335,14 @@ mod tests {
             .connections
             .iter()
             .all(|connection| !connection_ids.contains(&connection.id)));
+        let edited_clip = project
+            .get_clip(clip_id)
+            .ok_or_else(|| "knife removed its Clip".to_string())?;
+        assert_eq!(edited_clip.output_node_id, None);
+        assert_eq!(project.find_track_for_clip(clip_id), Some(track_id));
         let edited = project.clone();
         assert_single_gesture_undo_redo(&mut history, &initial, &edited);
+        Ok(())
     }
 
     #[test]
@@ -10968,7 +11358,7 @@ mod tests {
             .unwrap()
             .id;
         let edge = RenderedEdge {
-            connection_id,
+            kind: RenderedEdgeKind::ProjectConnection { connection_id },
             start: egui::pos2(100.0, 180.0),
             control_a: egui::pos2(200.0, 180.0),
             control_b: egui::pos2(300.0, 180.0),

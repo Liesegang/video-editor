@@ -574,16 +574,27 @@ pub struct NodeEditorNormalConnectGesture {
 #[derive(Clone, Debug)]
 pub struct NodeEditorWireKnifeGesture {
     pub points: Vec<egui::Pos2>,
-    pub crossed_connection_ids: std::collections::HashSet<Uuid>,
+    pub crossed_wires: std::collections::HashSet<NodeEditorEditableWire>,
     /// Freeze the Snarl scene for the lifetime of the stroke. Snarl normally
     /// pans blank-canvas primary drags; without this snapshot the wires move
     /// away from the knife in screen space while the gesture is in progress.
     pub canvas_transform: egui::emath::TSTransform,
 }
 
+/// An authored wire that can be removed without changing containment.
+///
+/// Container-derived display wires are deliberately absent: they are a
+/// projection of authoritative parent/child ownership and cannot be edited as
+/// graph connections.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NodeEditorEditableWire {
+    ProjectConnection { connection_id: Uuid },
+    OutputBinding { owner: PortOwner, node_id: Uuid },
+}
+
 #[derive(Clone, Debug)]
 pub struct NodeEditorWireContextMenu {
-    pub connection_id: Uuid,
+    pub target: NodeEditorEditableWire,
     pub position: egui::Pos2,
     pub open_time: f64,
     pub inserting: bool,
