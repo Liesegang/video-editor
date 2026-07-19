@@ -123,10 +123,9 @@ impl EntityConverterPlugin for ImageEntityConverterPlugin {
             .or_else(|| evaluator.require_string(props, "file_path", time, "image"))?;
         let transform = evaluator.build_transform(props, time);
 
-        let effects = evaluator.build_image_effects(&node.effects, time);
         let surface = ImageSurface {
             file_path,
-            effects,
+            effects: Vec::new(),
             transform: transform.clone(),
             input_color_space: None,
             output_color_space: None,

@@ -3,10 +3,9 @@
 //! This module provides a unified interface for property updates across
 //! directly-owned and nested property maps.
 
-use crate::animation::EasingFunction;
 use crate::error::LibraryError;
 use crate::model::project::Project;
-use crate::model::property::{Property, PropertyMap, PropertyTarget, PropertyValue};
+use crate::model::property::{PropertyMap, PropertyTarget};
 use uuid::Uuid;
 
 /// Explicit owner of an editable property tree.
@@ -65,86 +64,4 @@ pub fn property_map_mut(
     .ok_or_else(|| {
         LibraryError::Project(format!("Property target {target:?} not found on {owner:?}"))
     })
-}
-
-/// Target types for nested property operations
-pub enum PropertyContainer<'a> {
-    /// Property map directly owned by a Clip or Node.
-    Direct(&'a mut crate::model::property::PropertyMap),
-    Effect(&'a mut crate::model::EffectConfig),
-    Style(&'a mut crate::model::style::StyleInstance),
-    Effector(&'a mut crate::model::ensemble::EffectorInstance),
-    Decorator(&'a mut crate::model::ensemble::DecoratorInstance),
-}
-
-impl PropertyContainer<'_> {
-    /// Get mutable reference to the property by key
-    pub fn get_mut(&mut self, key: &str) -> Option<&mut Property> {
-        match self {
-            PropertyContainer::Direct(map) => map.get_mut(key),
-            PropertyContainer::Effect(effect) => effect.properties.get_mut(key),
-            PropertyContainer::Style(style) => style.properties.get_mut(key),
-            PropertyContainer::Effector(effector) => effector.properties.get_mut(key),
-            PropertyContainer::Decorator(decorator) => decorator.properties.get_mut(key),
-        }
-    }
-
-    /// Set a property value
-    pub fn set(&mut self, key: String, prop: Property) {
-        match self {
-            PropertyContainer::Direct(map) => map.set(key, prop),
-            PropertyContainer::Effect(effect) => {
-                effect.properties.set(key, prop);
-            }
-            PropertyContainer::Style(style) => {
-                style.properties.set(key, prop);
-            }
-            PropertyContainer::Effector(effector) => {
-                effector.properties.set(key, prop);
-            }
-            PropertyContainer::Decorator(decorator) => {
-                decorator.properties.set(key, prop);
-            }
-        }
-    }
-}
-
-/// Update a property value or keyframe at the given time.
-/// Creates constant property if property doesn't exist.
-pub fn upsert_property_or_keyframe(
-    container: &mut PropertyContainer,
-    property_key: &str,
-    time: f64,
-    value: PropertyValue,
-    easing: Option<EasingFunction>,
-) -> Result<(), LibraryError> {
-    if let Some(prop) = container.get_mut(property_key) {
-        if prop.evaluator == "keyframe" {
-            prop.upsert_keyframe(time, value, easing);
-        } else {
-            // Update as constant
-            let key = property_key.to_string();
-            container.set(key, Property::constant(value));
-        }
-    } else {
-        // Property doesn't exist, create as constant
-        container.set(property_key.to_string(), Property::constant(value));
-    }
-    Ok(())
-}
-
-/// Set a property attribute.
-pub fn set_property_attribute(
-    container: &mut PropertyContainer,
-    property_key: &str,
-    attribute_key: &str,
-    attribute_value: PropertyValue,
-) -> Result<(), LibraryError> {
-    let prop = container
-        .get_mut(property_key)
-        .ok_or_else(|| LibraryError::Project(format!("Property {} not found", property_key)))?;
-
-    prop.properties
-        .insert(attribute_key.to_string(), attribute_value);
-    Ok(())
 }

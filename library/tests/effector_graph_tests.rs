@@ -22,7 +22,7 @@ use library::model::project::{
 use library::model::property::{
     Keyframe, Property, PropertyDefinition, PropertyMap, PropertyValue, Vec2,
 };
-use library::model::{Clip, EffectorInstance, Node, NodeContent, PluginOperationContent};
+use library::model::{Clip, Node, NodeContent, PluginOperationContent};
 use library::plugin::{
     EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin, FrameEvaluationContext,
     OperationDescriptor, OperationDescriptorError, Plugin, PluginManager, ResolvedNodeInputs,
@@ -288,7 +288,6 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
         assert_eq!(operation.component_id, component_id);
         assert_eq!(operation.operation, EFFECTOR_APPLY_OPERATION);
         assert_eq!(operation.declared_ports, descriptor.declared_ports());
-        assert!(node.effectors.is_empty());
         for definition in descriptor.properties() {
             assert_eq!(
                 node.properties
@@ -375,17 +374,6 @@ fn graph_order_keyframes_and_scalar_overrides_produce_one_ensemble_and_roundtrip
     let mut graph = manager
         .create_text_graph("ORDER", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let source_id = graph
-        .nodes
-        .iter()
-        .find(|node| {
-            matches!(
-                node.content,
-                NodeContent::Generator(library::model::GeneratorContent::Text)
-            )
-        })
-        .unwrap()
-        .id;
     let mut transform = plugins.create_effector_operation_node("transform").unwrap();
     transform.properties.set(
         "tx".into(),
@@ -437,7 +425,6 @@ fn graph_order_keyframes_and_scalar_overrides_produce_one_ensemble_and_roundtrip
             target: EffectorTarget::Block,
         } if (target_opacity - 0.5).abs() < f32::EPSILON
     ));
-    assert!(project.get_node(source_id).unwrap().effectors.is_empty());
 
     let saved = project.save().unwrap();
     assert!(!saved.contains("schema_version"));
@@ -515,24 +502,6 @@ fn missing_invalid_unknown_and_scalar_no_output_never_restore_embedded_effectors
     let mut graph = manager
         .create_text_graph("unknown", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let source_id = graph
-        .nodes
-        .iter()
-        .find(|node| {
-            matches!(
-                node.content,
-                NodeContent::Generator(library::model::GeneratorContent::Text)
-            )
-        })
-        .unwrap()
-        .id;
-    graph
-        .nodes
-        .iter_mut()
-        .find(|node| node.id == source_id)
-        .unwrap()
-        .effectors
-        .push(plugins.create_effector_instance("transform").unwrap());
     let mut unknown = plugins.create_effector_operation_node("opacity").unwrap();
     let unknown_id = unknown.id;
     let NodeContent::PluginOperation(operation) = &mut unknown.content else {
@@ -580,10 +549,11 @@ impl EffectorPlugin for CountingEffectorPlugin {
         OperationDescriptor::effector(self.id(), self.name(), self.properties())
     }
 
-    fn convert(
+    fn evaluate_source(
         &self,
         _context: &FrameEvaluationContext,
-        _instance: &EffectorInstance,
+        _source_id: Uuid,
+        _properties: &PropertyMap,
         _eval_time: f64,
     ) -> Option<EffectorConfig> {
         self.evaluations.fetch_add(1, Ordering::SeqCst);
@@ -1111,8 +1081,6 @@ fn shape_variadic_effector_input_applies_single_element_transform() {
     );
     assert_eq!((transform.position.x, transform.position.y), (72.0, 43.0));
     assert!((transform.opacity - 0.5).abs() < f64::EPSILON);
-    assert!(project.get_node(shape_id).unwrap().effectors.is_empty());
-
     let before = preview(&project, &plugins, 0);
     set_constant(
         project.get_node_mut(shape_id).unwrap(),

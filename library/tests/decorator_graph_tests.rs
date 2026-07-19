@@ -19,7 +19,7 @@ use library::model::project::{
 use library::model::property::{
     Keyframe, Property, PropertyDefinition, PropertyMap, PropertyValue,
 };
-use library::model::{Clip, DecoratorInstance, Node, NodeContent};
+use library::model::{Clip, Node, NodeContent};
 use library::plugin::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, DecoratorPlugin, FrameEvaluationContext,
     OperationDescriptor, OperationDescriptorError, Plugin, PluginManager, ResolvedNodeInputs,
@@ -169,7 +169,6 @@ fn descriptor_factory_and_text_shape_sources_have_complete_typed_contracts() {
     assert_eq!(operation.component_id, "backplate");
     assert_eq!(operation.operation, DECORATOR_APPLY_OPERATION);
     assert_eq!(operation.declared_ports, descriptor.declared_ports());
-    assert!(decorator.decorators.is_empty());
     assert_eq!(
         descriptor
             .properties()
@@ -255,7 +254,6 @@ fn graph_order_keyframes_and_scalar_overrides_build_decorators_and_roundtrip() {
     let mut graph = manager
         .create_text_graph("ORDER", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let source_id = shape_source_id(&graph);
     let mut first = plugins
         .create_decorator_operation_node("backplate")
         .unwrap();
@@ -317,7 +315,6 @@ fn graph_order_keyframes_and_scalar_overrides_build_decorators_and_roundtrip() {
             ..
         } if (corner_radius - 0.5).abs() < f32::EPSILON
     ));
-    assert!(project.get_node(source_id).unwrap().decorators.is_empty());
 
     let saved = project.save().unwrap();
     assert!(!saved.contains("schema_version"));
@@ -403,14 +400,6 @@ fn missing_invalid_unknown_and_scalar_no_output_do_not_restore_legacy_decorators
     let mut graph = manager
         .create_text_graph("unknown", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let source_id = shape_source_id(&graph);
-    graph
-        .nodes
-        .iter_mut()
-        .find(|node| node.id == source_id)
-        .unwrap()
-        .decorators
-        .push(plugins.create_decorator_instance("backplate").unwrap());
     let mut unknown = plugins
         .create_decorator_operation_node("backplate")
         .unwrap();
@@ -463,10 +452,11 @@ impl DecoratorPlugin for CountingDecoratorPlugin {
         OperationDescriptor::decorator(self.id(), self.name(), self.properties())
     }
 
-    fn convert(
+    fn evaluate_source(
         &self,
         _context: &FrameEvaluationContext,
-        _instance: &DecoratorInstance,
+        _source_id: Uuid,
+        _properties: &PropertyMap,
         _eval_time: f64,
     ) -> Option<DecoratorConfig> {
         self.evaluations.fetch_add(1, Ordering::SeqCst);
@@ -563,7 +553,6 @@ fn graph_backplate_pixels_are_stable_across_project_roundtrip() {
     let mut graph = manager
         .create_text_graph("PARITY", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let source_id = shape_source_id(&graph);
     let mut backplate = plugins
         .create_decorator_operation_node("backplate")
         .unwrap();
@@ -591,13 +580,6 @@ fn graph_backplate_pixels_are_stable_across_project_roundtrip() {
         preview(&loaded, &plugins, 0).data,
         expected.data,
         "the explicit Shape Decorator graph must survive serialization"
-    );
-    assert!(
-        graph_project
-            .get_node(source_id)
-            .unwrap()
-            .decorators
-            .is_empty()
     );
 }
 
@@ -689,9 +671,15 @@ fn rounded_path_backplate_is_drawn_once_without_alpha_overdraw() {
         }],
         patches: Default::default(),
     };
-    let mut renderer =
-        SkiaRenderer::new(WIDTH as u32, HEIGHT as u32, Color::black(), false, None, None)
-            .unwrap();
+    let mut renderer = SkiaRenderer::new(
+        WIDTH as u32,
+        HEIGHT as u32,
+        Color::black(),
+        false,
+        None,
+        None,
+    )
+    .unwrap();
     let RenderOutput::Image(image) = renderer
         .rasterize_shape_layer(ShapeRasterRequest {
             path_data: "M 20 20 H 60 V 40 H 20 Z",
@@ -722,9 +710,15 @@ fn path_backplate_parts_target_is_explicitly_unsupported() {
         }],
         patches: Default::default(),
     };
-    let mut renderer =
-        SkiaRenderer::new(WIDTH as u32, HEIGHT as u32, Color::black(), false, None, None)
-            .unwrap();
+    let mut renderer = SkiaRenderer::new(
+        WIDTH as u32,
+        HEIGHT as u32,
+        Color::black(),
+        false,
+        None,
+        None,
+    )
+    .unwrap();
     let error = renderer
         .rasterize_shape_layer(ShapeRasterRequest {
             path_data: "M 10 10 H 40 V 30 H 10 Z",

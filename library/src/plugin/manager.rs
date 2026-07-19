@@ -312,20 +312,6 @@ impl PluginManager {
         self.create_operation_node(DECORATOR_CATEGORY, component_id, DECORATOR_APPLY_OPERATION)
     }
 
-    /// Temporary legacy factory backed by the same descriptor defaults as a
-    /// standalone Style operation Node.
-    pub fn create_style_instance(
-        &self,
-        component_id: &str,
-    ) -> Result<crate::model::style::StyleInstance, LibraryError> {
-        let descriptor =
-            self.operation_descriptor(STYLE_CATEGORY, component_id, STYLE_APPLY_OPERATION)?;
-        Ok(crate::model::style::StyleInstance::new(
-            component_id,
-            crate::model::property::PropertyMap::from_definitions(descriptor.properties()),
-        ))
-    }
-
     /// Evaluates one Style producer through its descriptor-backed render-only
     /// input contract. Every declared value is resolved and validated before
     /// plugin code runs, so missing or invalid authored/keyframed/scalar input
@@ -503,149 +489,6 @@ impl PluginManager {
         self.get_style_plugin(id)
             .map(|p| p.properties())
             .unwrap_or_default()
-    }
-
-    /// Temporary legacy embedded-instance factory. New authored Effectors use
-    /// [`PluginManager::create_effector_operation_node`]. Both factories are
-    /// backed by the exact same descriptor defaults.
-    pub fn create_effector_instance(
-        &self,
-        effector_id: &str,
-    ) -> Result<crate::model::ensemble::EffectorInstance, LibraryError> {
-        let descriptor =
-            self.operation_descriptor(EFFECTOR_CATEGORY, effector_id, EFFECTOR_APPLY_OPERATION)?;
-        Ok(crate::model::ensemble::EffectorInstance::new(
-            effector_id,
-            crate::model::property::PropertyMap::from_definitions(descriptor.properties()),
-        ))
-    }
-
-    /// Fills definition-backed defaults that are absent from a known
-    /// Effector instance without deleting unknown properties. Unknown plugin
-    /// IDs are intentionally left untouched so their Project data is lossless.
-    pub fn complete_effector_instance(
-        &self,
-        instance: &mut crate::model::ensemble::EffectorInstance,
-    ) -> bool {
-        let Ok(descriptor) = self.operation_descriptor(
-            EFFECTOR_CATEGORY,
-            &instance.effector_type,
-            EFFECTOR_APPLY_OPERATION,
-        ) else {
-            return false;
-        };
-        for definition in descriptor.properties() {
-            if instance.properties.get(definition.name()).is_none() {
-                instance.properties.set(
-                    definition.name().to_string(),
-                    crate::model::property::Property::constant(definition.default_value().clone()),
-                );
-            }
-        }
-        true
-    }
-
-    /// Evaluates an Effector through the common definition-backed path.
-    /// Sparse known instances receive descriptor defaults in a temporary copy;
-    /// the authoritative Project and unknown plugin data remain untouched.
-    pub fn convert_effector_instance(
-        &self,
-        context: &crate::plugin::FrameEvaluationContext,
-        instance: &crate::model::ensemble::EffectorInstance,
-        eval_time: f64,
-    ) -> Option<crate::core::ensemble::types::EffectorConfig> {
-        let plugin = self.get_effector_plugin(&instance.effector_type)?;
-        let descriptor = self
-            .operation_descriptor(
-                EFFECTOR_CATEGORY,
-                &instance.effector_type,
-                EFFECTOR_APPLY_OPERATION,
-            )
-            .ok()?;
-        let mut resolved = instance.clone();
-        for definition in descriptor.properties() {
-            if resolved.properties.get(definition.name()).is_none() {
-                resolved.properties.set(
-                    definition.name().to_string(),
-                    crate::model::property::Property::constant(definition.default_value().clone()),
-                );
-            }
-        }
-        context.evaluate_operation_properties(
-            descriptor.properties(),
-            &resolved.properties,
-            eval_time,
-            &format!("Legacy Effector {}", instance.effector_type),
-        )?;
-        plugin.evaluate_source(context, resolved.id, &resolved.properties, eval_time)
-    }
-
-    /// Temporary legacy embedded-instance factory backed by the same
-    /// descriptor defaults as a standalone Decorator operation Node.
-    pub fn create_decorator_instance(
-        &self,
-        decorator_id: &str,
-    ) -> Result<crate::model::ensemble::DecoratorInstance, LibraryError> {
-        let descriptor =
-            self.operation_descriptor(DECORATOR_CATEGORY, decorator_id, DECORATOR_APPLY_OPERATION)?;
-        Ok(crate::model::ensemble::DecoratorInstance::new(
-            decorator_id,
-            crate::model::property::PropertyMap::from_definitions(descriptor.properties()),
-        ))
-    }
-
-    pub fn complete_decorator_instance(
-        &self,
-        instance: &mut crate::model::ensemble::DecoratorInstance,
-    ) -> bool {
-        let Ok(descriptor) = self.operation_descriptor(
-            DECORATOR_CATEGORY,
-            &instance.decorator_type,
-            DECORATOR_APPLY_OPERATION,
-        ) else {
-            return false;
-        };
-        for definition in descriptor.properties() {
-            if instance.properties.get(definition.name()).is_none() {
-                instance.properties.set(
-                    definition.name().to_string(),
-                    crate::model::property::Property::constant(definition.default_value().clone()),
-                );
-            }
-        }
-        true
-    }
-
-    pub fn convert_decorator_instance(
-        &self,
-        context: &crate::plugin::FrameEvaluationContext,
-        instance: &crate::model::ensemble::DecoratorInstance,
-        eval_time: f64,
-    ) -> Option<crate::core::ensemble::types::DecoratorConfig> {
-        let plugin = self.get_decorator_plugin(&instance.decorator_type)?;
-        let descriptor = self
-            .operation_descriptor(
-                DECORATOR_CATEGORY,
-                &instance.decorator_type,
-                DECORATOR_APPLY_OPERATION,
-            )
-            .ok()?;
-        let mut resolved = instance.clone();
-        for definition in descriptor.properties() {
-            if resolved.properties.get(definition.name()).is_none() {
-                resolved.properties.set(
-                    definition.name().to_string(),
-                    crate::model::property::Property::constant(definition.default_value().clone()),
-                );
-            }
-        }
-        context.evaluate_operation_properties(
-            descriptor.properties(),
-            &resolved.properties,
-            eval_time,
-            &format!("Legacy Decorator {}", instance.decorator_type),
-        )?;
-        plugin.evaluate_source(context, resolved.id, &resolved.properties, eval_time)
     }
 
     /// Returns descriptors reported by successfully loaded ABI-v1 bundles.
@@ -860,18 +703,6 @@ impl PluginManager {
         Some(EffectDefinition {
             label: descriptor.label().to_string(),
             properties: descriptor.properties().to_vec(),
-        })
-    }
-
-    pub fn get_default_effect_config(&self, effect_id: &str) -> Option<crate::model::EffectConfig> {
-        let descriptor = self
-            .operation_descriptor(EFFECT_CATEGORY, effect_id, EFFECT_APPLY_OPERATION)
-            .ok()?;
-        let props = crate::model::property::PropertyMap::from_definitions(descriptor.properties());
-        Some(crate::model::EffectConfig {
-            id: uuid::Uuid::new_v4(),
-            effect_type: effect_id.to_string(),
-            properties: props,
         })
     }
 

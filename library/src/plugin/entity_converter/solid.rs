@@ -69,7 +69,6 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
         };
         let eval_time = time;
         let transform = evaluator.build_transform(&node.properties, eval_time);
-        let effects = evaluator.build_image_effects(&node.effects, eval_time);
         let color = evaluator.require_color(&node.properties, "color", eval_time, "solid")?;
         let (width, height) = evaluator.evaluation_resolution();
         let path = format!("M 0 0 H {width} V {height} H 0 Z");
@@ -85,7 +84,7 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
                     style: DrawStyle::Fill { color, offset: 0.0 },
                 }],
                 path_effects: Vec::new(),
-                effects,
+                effects: Vec::new(),
                 ensemble: None,
                 transform,
             },

@@ -263,7 +263,7 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
             }),
             source_transform: transform.clone(),
             transform,
-            effects: evaluator.build_image_effects(&node.effects, time),
+            effects: Vec::new(),
             effector_configs: Vec::new(),
             decorator_configs: Vec::new(),
         })

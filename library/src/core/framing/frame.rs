@@ -175,17 +175,18 @@ impl<'a> FrameEvaluator<'a> {
             .composition_for_owner(owner)
             .ok_or_else(|| missing_error(owner))?;
         let inputs = ResolvedNodeInputs::from_metadata(scope.as_inputs());
-        let context = self.context(composition, Some(&inputs));
         let item = FrameItem::Group(FrameGroup {
             source_id: track.id,
             kind: FrameGroupKind::Track,
             width: scope.width,
             height: scope.height,
             background_color: transparent(),
-            transform: context.build_transform(&track.properties, scope.time),
+            transform: self
+                .context(composition, Some(&inputs))
+                .build_transform(&track.properties, scope.time),
             blend_mode: track.blend_mode,
             effect_time: OrderedFloat(scope.time),
-            effects: context.build_image_effects(&track.effects, scope.time),
+            effects: Vec::new(),
             items,
         });
         path.remove(&owner);
@@ -224,17 +225,18 @@ impl<'a> FrameEvaluator<'a> {
             .composition_for_owner(owner)
             .ok_or_else(|| missing_error(owner))?;
         let inputs = ResolvedNodeInputs::from_metadata(scope.as_inputs());
-        let context = self.context(composition, Some(&inputs));
         let item = FrameItem::Group(FrameGroup {
             source_id: clip.id,
             kind: FrameGroupKind::Clip,
             width: scope.width,
             height: scope.height,
             background_color: transparent(),
-            transform: context.build_transform(&clip.properties, scope.time),
+            transform: self
+                .context(composition, Some(&inputs))
+                .build_transform(&clip.properties, scope.time),
             blend_mode: clip.blend_mode,
             effect_time: OrderedFloat(scope.time),
-            effects: context.build_image_effects(&clip.effects, scope.time),
+            effects: Vec::new(),
             items,
         });
         path.remove(&owner);
@@ -508,7 +510,7 @@ impl<'a> FrameEvaluator<'a> {
             transform: Default::default(),
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
-            effects: context.build_image_effects(&node.effects, scope.time),
+            effects: Vec::new(),
             items: vec![FrameItem::Object(object)],
         })))
     }
@@ -801,7 +803,7 @@ impl<'a> FrameEvaluator<'a> {
             transform: context.build_transform(&node.properties, scope.time),
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
-            effects: context.build_image_effects(&node.effects, scope.time),
+            effects: Vec::new(),
             items: vec![item],
         })))
     }
@@ -894,7 +896,7 @@ impl<'a> FrameEvaluator<'a> {
             transform: context.build_transform(&node.properties, scope.time),
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
-            effects: context.build_image_effects(&node.effects, scope.time),
+            effects: Vec::new(),
             items,
         })))
     }
@@ -935,7 +937,7 @@ impl<'a> FrameEvaluator<'a> {
                     transform: context.build_transform(&composition.properties, scope.time),
                     blend_mode: composition.blend_mode,
                     effect_time: OrderedFloat(scope.time),
-                    effects: context.build_image_effects(&composition.effects, scope.time),
+                    effects: Vec::new(),
                     items,
                 })))
             }

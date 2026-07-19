@@ -334,7 +334,6 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
         .iter()
         .find(|node| operation_component(node) == Some("fill"))
         .unwrap();
-    assert!(text_consumer.styles.is_empty());
     assert_eq!(text_consumer.ui_position, [0.0, 0.0]);
     assert_eq!(fill.ui_position, [360.0, 0.0]);
     assert_eq!(text.output_node_id, Some(fill.id));
@@ -356,7 +355,6 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
             )
         })
         .unwrap();
-    assert!(shape_consumer.styles.is_empty());
     assert_eq!(shape_consumer.ui_position, [0.0, 110.0]);
     let merge = shape
         .nodes
@@ -435,14 +433,7 @@ fn text_and_shape_clip_graphs_roundtrip_with_explicit_raster_boundaries() {
         .create_text_clip("hello", 0.0, 2.0, WIDTH as u32, HEIGHT as u32)
         .unwrap();
     assert!(text_bundle.clip.node_ids.is_empty());
-    assert!(
-        text_bundle
-            .graph
-            .output_node()
-            .expect("text consumer")
-            .styles
-            .is_empty()
-    );
+    assert!(text_bundle.graph.output_node().is_some());
     manager
         .add_clip_to_track(composition_id, track_id, text_bundle, None)
         .unwrap();

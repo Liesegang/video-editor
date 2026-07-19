@@ -152,10 +152,9 @@ impl EntityConverterPlugin for VideoEntityConverterPlugin {
             .or_else(|| asset.and_then(|asset| asset.stream_index));
 
         let transform = evaluator.build_transform(props, eval_time);
-        let effects = evaluator.build_image_effects(&node.effects, eval_time);
         let surface = ImageSurface {
             file_path,
-            effects,
+            effects: Vec::new(),
             transform: transform.clone(),
             input_color_space,
             output_color_space,

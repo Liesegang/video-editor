@@ -1,10 +1,7 @@
 use crate::model::project::connection::PortDefinition;
-use crate::model::project::effect::EffectConfig;
-use crate::model::project::ensemble::{DecoratorInstance, EffectorInstance};
 use crate::model::project::property::{
     PropertyDefinition, PropertyMap, PropertyTarget, PropertyUiType, PropertyValue,
 };
-use crate::model::project::style::StyleInstance;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -84,6 +81,7 @@ pub enum BlendMode {
 
 /// A top-level timeline container owned by one Composition.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct Track {
     pub id: Uuid,
     pub name: String,
@@ -100,8 +98,6 @@ pub struct Track {
     /// Explicit graph result for the Track image output.
     #[serde(default)]
     pub output_node_id: Option<Uuid>,
-    #[serde(default)]
-    pub effects: Vec<EffectConfig>,
     #[serde(default)]
     pub ui_position: [f32; 2],
     #[serde(default = "default_track_ui_size")]
@@ -124,7 +120,6 @@ impl Track {
             clip_ids: Vec::new(),
             node_ids: Vec::new(),
             output_node_id: None,
-            effects: Vec::new(),
             ui_position: [0.0, 0.0],
             ui_size: default_track_ui_size(),
             ui_collapsed: false,
@@ -135,6 +130,7 @@ impl Track {
 /// Timeline placement and isolated image container. Timing exists only here;
 /// leaf Nodes never duplicate it.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct Clip {
     pub id: Uuid,
     pub name: String,
@@ -146,8 +142,6 @@ pub struct Clip {
     pub blend_mode: BlendMode,
     #[serde(default)]
     pub properties: PropertyMap,
-    #[serde(default)]
-    pub effects: Vec<EffectConfig>,
     #[serde(default)]
     pub node_ids: Vec<Uuid>,
     #[serde(default)]
@@ -226,7 +220,6 @@ impl Clip {
             time_stretch: OrderedFloat(1.0),
             blend_mode: BlendMode::Normal,
             properties: PropertyMap::new(),
-            effects: Vec::new(),
             node_ids: Vec::new(),
             output_node_id: None,
             ui_position: [0.0, 0.0],
@@ -247,28 +240,12 @@ impl Clip {
     pub fn property_map(&self, target: PropertyTarget) -> Option<&PropertyMap> {
         match target {
             PropertyTarget::Direct => Some(&self.properties),
-            PropertyTarget::Effect(effect_id) => self
-                .effects
-                .iter()
-                .find(|effect| effect.id == effect_id)
-                .map(|effect| &effect.properties),
-            PropertyTarget::Style(_)
-            | PropertyTarget::Effector(_)
-            | PropertyTarget::Decorator(_) => None,
         }
     }
 
     pub fn property_map_mut(&mut self, target: PropertyTarget) -> Option<&mut PropertyMap> {
         match target {
             PropertyTarget::Direct => Some(&mut self.properties),
-            PropertyTarget::Effect(effect_id) => self
-                .effects
-                .iter_mut()
-                .find(|effect| effect.id == effect_id)
-                .map(|effect| &mut effect.properties),
-            PropertyTarget::Style(_)
-            | PropertyTarget::Effector(_)
-            | PropertyTarget::Decorator(_) => None,
         }
     }
 
@@ -298,6 +275,7 @@ impl Clip {
 /// A leaf graph node. It owns media/generator/reference behavior and render
 /// properties, but never timeline timing or containment.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct Node {
     pub id: Uuid,
     pub name: String,
@@ -309,14 +287,6 @@ pub struct Node {
     pub blend_mode: BlendMode,
     #[serde(default)]
     pub properties: PropertyMap,
-    #[serde(default)]
-    pub styles: Vec<StyleInstance>,
-    #[serde(default)]
-    pub effects: Vec<EffectConfig>,
-    #[serde(default)]
-    pub effectors: Vec<EffectorInstance>,
-    #[serde(default)]
-    pub decorators: Vec<DecoratorInstance>,
     #[serde(default)]
     pub ui_position: [f32; 2],
     /// Authoritative Node Editor presentation state. These fields deliberately
@@ -334,10 +304,6 @@ impl Node {
             enabled: true,
             blend_mode: BlendMode::Normal,
             properties: PropertyMap::new(),
-            styles: Vec::new(),
-            effects: Vec::new(),
-            effectors: Vec::new(),
-            decorators: Vec::new(),
             ui_position: [0.0, 0.0],
             ui_size: [240.0, 160.0],
             ui_collapsed: false,
@@ -347,52 +313,12 @@ impl Node {
     pub fn property_map(&self, target: PropertyTarget) -> Option<&PropertyMap> {
         match target {
             PropertyTarget::Direct => Some(&self.properties),
-            PropertyTarget::Effect(effect_id) => self
-                .effects
-                .iter()
-                .find(|effect| effect.id == effect_id)
-                .map(|effect| &effect.properties),
-            PropertyTarget::Style(style_id) => self
-                .styles
-                .iter()
-                .find(|style| style.id == style_id)
-                .map(|style| &style.properties),
-            PropertyTarget::Effector(effector_id) => self
-                .effectors
-                .iter()
-                .find(|effector| effector.id == effector_id)
-                .map(|effector| &effector.properties),
-            PropertyTarget::Decorator(decorator_id) => self
-                .decorators
-                .iter()
-                .find(|decorator| decorator.id == decorator_id)
-                .map(|decorator| &decorator.properties),
         }
     }
 
     pub fn property_map_mut(&mut self, target: PropertyTarget) -> Option<&mut PropertyMap> {
         match target {
             PropertyTarget::Direct => Some(&mut self.properties),
-            PropertyTarget::Effect(effect_id) => self
-                .effects
-                .iter_mut()
-                .find(|effect| effect.id == effect_id)
-                .map(|effect| &mut effect.properties),
-            PropertyTarget::Style(style_id) => self
-                .styles
-                .iter_mut()
-                .find(|style| style.id == style_id)
-                .map(|style| &mut style.properties),
-            PropertyTarget::Effector(effector_id) => self
-                .effectors
-                .iter_mut()
-                .find(|effector| effector.id == effector_id)
-                .map(|effector| &mut effector.properties),
-            PropertyTarget::Decorator(decorator_id) => self
-                .decorators
-                .iter_mut()
-                .find(|decorator| decorator.id == decorator_id)
-                .map(|decorator| &mut decorator.properties),
         }
     }
 
