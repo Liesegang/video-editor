@@ -15,9 +15,7 @@ use skia_safe::{AlphaType, ColorType, Data, ISize, Image as SkImage, ImageInfo, 
 use glutin::config::ConfigSurfaceTypes;
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use glutin::context::ContextAttributesBuilder;
-#[cfg(feature = "gl")]
 use glutin::prelude::*;
-#[cfg(feature = "gl")]
 use glutin::surface::WindowSurface;
 #[cfg(all(feature = "gl", target_os = "windows"))]
 use raw_window_handle::{
@@ -421,6 +419,13 @@ pub fn surface_to_image(
     Ok(Image::new(width, height, buffer))
 }
 
+#[cfg_attr(
+    not(feature = "gl"),
+    expect(
+        unused_variables,
+        reason = "the CPU fallback preserves the texture conversion API"
+    )
+)]
 pub fn create_image_from_texture(
     context: &mut DirectContext,
     texture_id: u32,
