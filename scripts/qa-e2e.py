@@ -1806,9 +1806,9 @@ def run_node_wire_suite(client):
 
     # Native value operations live in the same categorized Add catalog. Time
     # is deliberately not implicit: zoom to real Snarl pin interaction and
-    # drag between the value input and the owning container's internal Time
-    # output. The canonical connection remains Time -> value regardless of
-    # which endpoint starts the physical gesture.
+    # drag the already-connected container Time output to a new value input.
+    # This is a real fan-out gesture and must leave the original Time wire in
+    # place while adding the canonical Time -> value connection.
     time_node, time_state, time_metadata = create_node_from_add_search(
         client,
         "loop value",
@@ -1868,7 +1868,16 @@ def run_node_wire_suite(client):
     )
     ensure_node_editor_ports_interactive(client, [time_output, value_input])
     connect_before = client.state()
-    client.drag_components(value_input, time_output, steps=16)
+    original_time_connections = [
+        connection
+        for connection in connect_before["project"]["connections"]
+        if connection["from"]["owner"].get("owner_type") == "Clip"
+        and connection["from"]["owner"].get("owner_id") == CLIP_A1
+        and connection["from"]["port"] == "time"
+    ]
+    if not original_time_connections:
+        raise QaFailure("fan-out fixture has no pre-existing Clip Time connection")
+    client.drag_components(time_output, value_input, steps=16)
 
     def explicit_time_connection(project):
         return next(
@@ -1887,6 +1896,11 @@ def run_node_wire_suite(client):
         "explicit container Time to Time Modulo value connection",
         lambda project: explicit_time_connection(project) is not None,
     )
+    for original_connection in original_time_connections:
+        if project_connection(
+            connected["project"], original_connection["id"]
+        ) != original_connection:
+            raise QaFailure("Time fan-out mutated an existing connection")
     time_connection = explicit_time_connection(connected["project"])
     assert_history_delta(connect_before, connected, 1, "explicit Time value connection")
     undo_project_edit(

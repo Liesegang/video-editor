@@ -6,7 +6,7 @@ use crate::model::vector::VectorEditorState;
 
 use library::PropertyOwner;
 use library::animation::EasingFunction; // Added import
-use library::model::project::PortOwner;
+use library::model::project::{PortAddress, PortOwner};
 use library::model::property::KeyframeId;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -531,6 +531,14 @@ pub struct NodeEditorState {
     /// stealing the drag after the pointer leaves a connected pin.
     #[serde(skip)]
     pub normal_wire_drag_active: bool,
+    /// A connected output owns this fan-out gesture independently from
+    /// Snarl's connected-wire hit ordering.
+    #[serde(skip)]
+    pub normal_connect_gesture: Option<NodeEditorNormalConnectGesture>,
+    /// Keep Snarl's connect callback suppressed after Escape until the
+    /// physical primary release has passed through the UI.
+    #[serde(skip)]
+    pub normal_connect_cancel_pending_release: bool,
     /// Alt+primary stroke started on empty canvas; every intersected canonical
     /// wire is removed in one history transaction when the stroke ends.
     #[serde(skip)]
@@ -553,6 +561,14 @@ pub struct NodeEditorWireGesture {
     pub kind: NodeEditorWireDragKind,
     pub start: egui::Pos2,
     pub current: egui::Pos2,
+}
+
+#[derive(Clone, Debug)]
+pub struct NodeEditorNormalConnectGesture {
+    pub from: PortAddress,
+    pub start: egui::Pos2,
+    pub current: egui::Pos2,
+    pub canvas_transform: egui::emath::TSTransform,
 }
 
 #[derive(Clone, Debug)]
