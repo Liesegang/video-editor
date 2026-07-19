@@ -158,6 +158,8 @@ class QaRunnerTests(unittest.TestCase):
         self.assertIn('tx_property = "node:tx"', source)
         self.assertIn('curve_id = "graph.curve_hit." + tx_property', source)
         self.assertIn('"graph.keyframe_menu.delete:" + added_key["id"]', source)
+        self.assertIn('"action_count": len(client.evidence)', source)
+        self.assertIn('result["git_commit"] = subprocess.check_output(', source)
         self.assertNotIn('tx_property = "direct:tx"', source)
         project = {
             "nodes": {
