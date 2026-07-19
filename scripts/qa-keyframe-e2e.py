@@ -28,52 +28,34 @@ QaFailure = BASE.QaFailure
 assert_history_delta = BASE.assert_history_delta
 free_port = BASE.free_port
 
-TEXT = "00000000-0000-0000-0000-000000000403"
-TEXT_FILL = "00000000-0000-0000-0000-000000000601"
-TRANSFORM_EFFECTOR = "00000000-0000-0000-0000-000000000501"
-BACKPLATE_DECORATOR = "00000000-0000-0000-0000-000000000503"
-BLUR_EFFECT = "00000000-0000-0000-0000-000000000504"
+CLIP_A2 = BASE.CLIP_A2
+TEXT_FILL = BASE.TEXT_FILL
+TRANSFORM_EFFECTOR = BASE.TRANSFORM_EFFECTOR
+BACKPLATE_DECORATOR = BASE.BACKPLATE_DECORATOR
+BLUR_EFFECT = BASE.BLUR_EFFECT
 
 
-def node(project):
-    return project["nodes"][TEXT]
+def target_property(project, node_id, property_name):
+    """Read a property authored directly on one explicit operation Node."""
+    return project["nodes"][node_id]["properties"][property_name]
 
 
-def instance(project, collection, instance_id):
-    return next(item for item in node(project)[collection] if item["id"] == instance_id)
-
-
-def target_property(project, target, property_name):
-    kind, instance_id = target
-    if kind == "direct":
-        owner = node(project)
-    else:
-        collection = {
-            "effect": "effects",
-            "style": "styles",
-            "effector": "effectors",
-            "decorator": "decorators",
-        }[kind]
-        owner = instance(project, collection, instance_id)
-    return owner["properties"][property_name]
-
-
-def only_keyframe(project, target, property_name):
-    prop = target_property(project, target, property_name)
+def only_keyframe(project, node_id, property_name):
+    prop = target_property(project, node_id, property_name)
     keyframes = prop["properties"]["keyframes"]
     if len(keyframes) != 1:
         raise QaFailure(
             "{}.{} has {} keyframes, expected one".format(
-                target, property_name, len(keyframes)
+                node_id, property_name, len(keyframes)
             )
         )
     return keyframes[0]
 
 
-def numeric_keyframe_value(project, target, property_name):
-    value = only_keyframe(project, target, property_name)["value"]
+def numeric_keyframe_value(project, node_id, property_name):
+    value = only_keyframe(project, node_id, property_name)["value"]
     if not isinstance(value, (int, float)):
-        raise QaFailure("{}.{} is not numeric: {!r}".format(target, property_name, value))
+        raise QaFailure("{}.{} is not numeric: {!r}".format(node_id, property_name, value))
     return float(value)
 
 
@@ -86,6 +68,7 @@ def modified_click(client, component_id, command=False, shift=False):
         {
             "x": point["x"],
             "y": point["y"],
+            "coordinate_space": "points",
             "button": "primary",
             "modifiers": {"command": command, "shift": shift},
         },
@@ -107,6 +90,7 @@ def coordinate_drag(client, component_id, dx, dy, steps=12):
         {
             "from": start,
             "to": end,
+            "coordinate_space": "points",
             "steps": steps,
             "button": "primary",
         },
@@ -123,8 +107,13 @@ def wait_component_settled(client, component_id, consecutive_frames=2):
 
     def settled():
         try:
+            # Force another completed UI pass; repeated reads of one registry
+            # snapshot are not evidence that geometry settled.
+            client.state()
             snapshot, component = client.component(component_id)
         except QaFailure:
+            return None
+        if snapshot["frame"] == observed["frame"]:
             return None
         rect = component["rect_points"]
         current = (
@@ -205,29 +194,39 @@ def ensure_in_inspector(client, component_id, max_attempts=48):
     )
 
 
-def expand_item(client, header_id, child_id):
+def expose_operation_property(client, operation_id, property_name):
+    header_id = "inspector.operation:" + operation_id
+    control_id = "inspector.property.node:{}:{}".format(operation_id, property_name)
     ensure_in_inspector(client, header_id)
-    try:
-        client.component(child_id)
-        return
-    except QaFailure:
-        pass
-    wait_component_settled(client, header_id)
-    client.click_component(header_id)
-    client.wait_component(child_id)
+    snapshot = client.component_snapshot()
+    if control_id not in {item["id"] for item in snapshot["components"]}:
+        client.click_component(header_id)
+        def registered():
+            current = client.component_snapshot()
+            return (
+                current
+                if control_id in {item["id"] for item in current["components"]}
+                else None
+            )
+
+        client.wait_until(
+            "direct operation property {}".format(control_id),
+            registered,
+        )
+    return ensure_in_inspector(client, control_id)
 
 
-def add_keyframe(client, control_id, target, property_name):
+def add_keyframe(client, control_id, node_id, property_name):
     ensure_in_inspector(client, control_id)
     wait_component_settled(client, control_id)
     before = client.state()
     client.click_component(control_id)
     after = client.wait_project(
-        "{} {} keyframe add".format(target[0], property_name),
-        lambda project: target_property(project, target, property_name)["type"]
+        "{} {} keyframe add".format(node_id, property_name),
+        lambda project: target_property(project, node_id, property_name)["type"]
         == "keyframe",
     )
-    assert_history_delta(before, after, 1, "{} keyframe add".format(target[0]))
+    assert_history_delta(before, after, 1, "{} keyframe add".format(node_id))
     return after
 
 
@@ -240,9 +239,7 @@ def approximately(actual, expected, label, tolerance=1.0e-4):
 
 def run_suite(client):
     health = client.wait_health()
-    initial = client.state()
-    if initial["project"].get("name") != "RuViE QA E2E":
-        raise QaFailure("start with RUVIE_QA_FIXTURE=node_editor_e2e")
+    initial = BASE.wait_fresh_fixture(client)
 
     wait_component_settled(client, "dock.tab:node_editor")
     client.click_component("dock.tab:node_editor")
@@ -252,138 +249,109 @@ def run_suite(client):
         if "Node Editor" in client.state()["dock"]["active_tabs"]
         else None,
     )
-    node_header = "node_editor.node_header:" + TEXT
-    wait_component_settled(client, node_header)
-    client.click_component(node_header)
+
+    # Select Clip A2 through its rendered container. Its Inspector facade
+    # exposes each explicit operation Node while retaining one Project model.
+    clip_header = "node_editor.container_header.clip:" + CLIP_A2
+    BASE.reveal_node_editor_component(client, clip_header)
+    client.click_component(clip_header)
     client.wait_until(
-        "Text Node coordinate selection",
+        "Clip A2 coordinate selection",
         lambda: client.state()
-        if client.state()["editor"]["selection"]["last_selected_entity_id"] == TEXT
+        if client.state()["editor"]["selection"]["last_selected_entity_id"] == CLIP_A2
         else None,
     )
-    client.wait_component("inspector.owner.node:" + TEXT)
+    client.wait_component("inspector.owner.clip:" + CLIP_A2)
 
-    direct = ("direct", None)
-    style = ("style", TEXT_FILL)
-    effect = ("effect", BLUR_EFFECT)
-    effector = ("effector", TRANSFORM_EFFECTOR)
-    decorator = ("decorator", BACKPLATE_DECORATOR)
+    tx_control = "inspector.property.node:{}:tx".format(TRANSFORM_EFFECTOR)
+    tx_key = "inspector.keyframe.node:{}:tx".format(TRANSFORM_EFFECTOR)
+    expose_operation_property(client, TRANSFORM_EFFECTOR, "tx")
 
-    # Inspector add/update/remove: deleting the final key must preserve the
-    # edited numeric value as a typed constant.
-    opacity_key = "inspector.keyframe.node:{}:opacity".format(TEXT)
-    add_keyframe(client, opacity_key, direct, "opacity")
-    opacity_control = "inspector.property.node:{}:opacity".format(TEXT)
-    ensure_in_inspector(client, opacity_control)
+    # Adding, editing, and removing the final keyframe all target Node 501
+    # directly. Removing the last key preserves its typed value as a constant.
+    add_keyframe(client, tx_key, TRANSFORM_EFFECTOR, "tx")
     before_update = client.state()
-    old_opacity = numeric_keyframe_value(before_update["project"], direct, "opacity")
-    coordinate_drag(client, opacity_control, -18.0, 0.0)
-    updated = client.wait_project(
-        "direct keyframe value update",
-        lambda project: numeric_keyframe_value(project, direct, "opacity") != old_opacity,
+    old_tx = numeric_keyframe_value(
+        before_update["project"], TRANSFORM_EFFECTOR, "tx"
     )
-    edited_opacity = numeric_keyframe_value(updated["project"], direct, "opacity")
-    assert_history_delta(before_update, updated, 1, "direct keyframe value update")
+    preview_before = before_update["editor"]["preview"]
+    coordinate_drag(client, tx_control, 22.0, 0.0)
+    updated = client.wait_project(
+        "Transform direct keyframe value update",
+        lambda project: numeric_keyframe_value(project, TRANSFORM_EFFECTOR, "tx")
+        != old_tx,
+    )
+    edited_tx = numeric_keyframe_value(updated["project"], TRANSFORM_EFFECTOR, "tx")
+    assert_history_delta(before_update, updated, 1, "Transform keyframe value update")
+    client.wait_preview_change(
+        preview_before["pixel_hash"], preview_before["render_revision"]
+    )
+
     before_remove = client.state()
-    client.click_component(opacity_key)
+    client.click_component(tx_key)
     removed = client.wait_project(
-        "last direct keyframe removal",
-        lambda project: target_property(project, direct, "opacity")["type"]
+        "last Transform keyframe removal",
+        lambda project: target_property(project, TRANSFORM_EFFECTOR, "tx")["type"]
         == "constant",
     )
-    restored = target_property(removed["project"], direct, "opacity")["properties"]["value"]
+    restored = target_property(removed["project"], TRANSFORM_EFFECTOR, "tx")[
+        "properties"
+    ]["value"]
     if not isinstance(restored, (int, float)):
         raise QaFailure("last-key removal did not restore a numeric constant")
-    approximately(float(restored), edited_opacity, "restored constant")
-    assert_history_delta(before_remove, removed, 1, "last keyframe removal")
+    approximately(float(restored), edited_tx, "restored Transform constant")
+    assert_history_delta(before_remove, removed, 1, "last Transform keyframe removal")
+    add_keyframe(client, tx_key, TRANSFORM_EFFECTOR, "tx")
 
-    style_key = "inspector.keyframe.node:{}.style:{}:color".format(TEXT, TEXT_FILL)
-    expand_item(
-        client,
-        "inspector.style.node:{}:{}".format(TEXT, TEXT_FILL),
-        style_key,
-    )
-    add_keyframe(client, style_key, style, "color")
+    # Other plugin categories use the same direct Node property/keyframe IDs;
+    # no embedded Style/Effect/Effector/Decorator collection is consulted.
+    for operation_id, property_name in (
+        (TEXT_FILL, "color"),
+        (BACKPLATE_DECORATOR, "padding"),
+        (BLUR_EFFECT, "sigma_x"),
+    ):
+        expose_operation_property(client, operation_id, property_name)
+        add_keyframe(
+            client,
+            "inspector.keyframe.node:{}:{}".format(operation_id, property_name),
+            operation_id,
+            property_name,
+        )
 
-    tx_key = "inspector.keyframe.node:{}.effector:{}:tx".format(
-        TEXT, TRANSFORM_EFFECTOR
+    # Graph Editor edits a direct operation Node. Selecting Clip A2 would map
+    # the graph to its Blur output, so select Transform by its real Node header.
+    transform_header = "node_editor.node_header:" + TRANSFORM_EFFECTOR
+    BASE.reveal_node_editor_component(client, transform_header)
+    client.click_component(transform_header)
+    client.wait_until(
+        "Transform operation Node selection",
+        lambda: client.state()
+        if client.state()["editor"]["selection"]["last_selected_entity_id"]
+        == TRANSFORM_EFFECTOR
+        else None,
     )
-    add_keyframe(client, tx_key, effector, "tx")
-    padding_key = "inspector.keyframe.node:{}.decorator:{}:padding".format(
-        TEXT, BACKPLATE_DECORATOR
-    )
-    add_keyframe(client, padding_key, decorator, "padding")
+    client.wait_component("inspector.owner.node:" + TRANSFORM_EFFECTOR)
 
-    sigma_key = "inspector.keyframe.node:{}.effect:{}:sigma_x".format(
-        TEXT, BLUR_EFFECT
-    )
-    expand_item(
-        client,
-        "inspector.effect.node:{}:{}".format(TEXT, BLUR_EFFECT),
-        sigma_key,
-    )
-    add_keyframe(client, sigma_key, effect, "sigma_x")
-
-    # Update one nested keyframe through Inspector and require the real Preview
-    # to observe the same authoritative Project mutation.
-    tx_control = "inspector.property.node:{}.effector:{}:tx".format(
-        TEXT, TRANSFORM_EFFECTOR
-    )
-    ensure_in_inspector(client, tx_control)
-    tx_before = client.state()
-    tx_preview = tx_before["editor"]["preview"]
-    old_tx = numeric_keyframe_value(tx_before["project"], effector, "tx")
-    coordinate_drag(client, tx_control, 22.0, 0.0)
-    tx_updated = client.wait_project(
-        "Effector keyframe update",
-        lambda project: numeric_keyframe_value(project, effector, "tx") != old_tx,
-    )
-    assert_history_delta(tx_before, tx_updated, 1, "Effector keyframe update")
-    client.wait_preview_change(tx_preview["pixel_hash"], tx_preview["render_revision"])
-
-    # Graph multi-selection and an actual coordinate drag. Both points share
-    # one cumulative screen delta, and the complete gesture commits once.
     client.click_component("dock.tab:graph_editor")
     client.wait_component("graph.canvas")
     current = client.state()
-    tx_frame = only_keyframe(current["project"], effector, "tx")
-    padding_frame = only_keyframe(current["project"], decorator, "padding")
-    tx_property = "effector:{}:tx".format(TRANSFORM_EFFECTOR)
-    padding_property = "decorator:{}:padding".format(BACKPLATE_DECORATOR)
+    tx_frame = only_keyframe(current["project"], TRANSFORM_EFFECTOR, "tx")
+    tx_property = "direct:tx"
     tx_point = "graph.keyframe.{}:{}".format(tx_property, tx_frame["id"])
-    padding_point = "graph.keyframe.{}:{}".format(
-        padding_property, padding_frame["id"]
-    )
     client.wait_component(tx_point)
-    client.wait_component(padding_point)
     modified_click(client, tx_point)
 
-    def only_tx_selected():
-        state = client.state()
-        selected = state["editor"]["graph"]["selected_keyframes"]
-        if len(selected) == 1 and selected[0] == {
-            "property": tx_property,
-            "keyframe_id": tx_frame["id"],
-        }:
-            return state
-        return None
-
     client.wait_until(
-        "first Graph keyframe selected",
-        only_tx_selected,
-    )
-    modified_click(client, padding_point, shift=True)
-    client.wait_until(
-        "two Graph keyframes selected",
+        "direct Transform Graph keyframe selection",
         lambda: client.state()
-        if len(client.state()["editor"]["graph"]["selected_keyframes"]) == 2
+        if client.state()["editor"]["graph"]["selected_keyframes"]
+        == [{"property": tx_property, "keyframe_id": tx_frame["id"]}]
         else None,
     )
 
     graph_before = client.state()
     preview_before = graph_before["editor"]["preview"]
-    tx_before_key = only_keyframe(graph_before["project"], effector, "tx")
-    padding_before_key = only_keyframe(graph_before["project"], decorator, "padding")
+    tx_before_key = only_keyframe(graph_before["project"], TRANSFORM_EFFECTOR, "tx")
     _, canvas = client.component("graph.canvas")
     zoom_x = float(canvas["metadata"]["zoom_x"])
     zoom_y = float(canvas["metadata"]["zoom_y"])
@@ -391,46 +359,37 @@ def run_suite(client):
     dy = -12.0
     coordinate_drag(client, tx_point, dx, dy, steps=12)
     graph_after = client.wait_project(
-        "Graph multi-keyframe coordinate drag",
-        lambda project: only_keyframe(project, effector, "tx")["time"]
+        "direct Transform Graph coordinate drag",
+        lambda project: only_keyframe(project, TRANSFORM_EFFECTOR, "tx")["time"]
         != tx_before_key["time"],
     )
-    tx_after_key = only_keyframe(graph_after["project"], effector, "tx")
-    padding_after_key = only_keyframe(graph_after["project"], decorator, "padding")
-    expected_time_delta = dx / zoom_x
-    expected_value_delta = -dy / zoom_y
+    tx_after_key = only_keyframe(graph_after["project"], TRANSFORM_EFFECTOR, "tx")
     approximately(
         float(tx_after_key["time"]) - float(tx_before_key["time"]),
-        expected_time_delta,
-        "Effector Graph time delta",
-    )
-    approximately(
-        float(padding_after_key["time"]) - float(padding_before_key["time"]),
-        expected_time_delta,
-        "Decorator Graph time delta",
+        dx / zoom_x,
+        "Transform Graph time delta",
     )
     approximately(
         float(tx_after_key["value"]) - float(tx_before_key["value"]),
-        expected_value_delta,
-        "Effector Graph value delta",
+        -dy / zoom_y,
+        "Transform Graph value delta",
     )
-    approximately(
-        float(padding_after_key["value"]) - float(padding_before_key["value"]),
-        expected_value_delta,
-        "Decorator Graph value delta",
-    )
-    assert_history_delta(graph_before, graph_after, 1, "Graph multi-keyframe drag")
+    assert_history_delta(graph_before, graph_after, 1, "Transform Graph drag")
     if graph_after["editor"]["graph"]["drag"] is not None:
         raise QaFailure("Graph drag transaction remained active after pointer release")
-    client.wait_preview_change(preview_before["pixel_hash"], preview_before["render_revision"])
+    client.wait_preview_change(
+        preview_before["pixel_hash"], preview_before["render_revision"]
+    )
 
-    # Inspector must display the value produced by Graph from the same Project.
-    ensure_in_inspector(client, tx_control)
+    # Inspector metadata must independently reflect the Project value produced
+    # by Graph Editor for the same direct operation Node.
+    direct_tx_control = "inspector.property.node:{}:tx".format(TRANSFORM_EFFECTOR)
+    ensure_in_inspector(client, direct_tx_control)
     inspector_component = client.wait_until(
         "Inspector value reflecting Graph",
-        lambda: client.component(tx_control)[1]
+        lambda: client.component(direct_tx_control)[1]
         if abs(
-            float(client.component(tx_control)[1]["metadata"]["value"])
+            float(client.component(direct_tx_control)[1]["metadata"]["value"])
             - float(tx_after_key["value"])
         )
         < 1.0e-4
@@ -442,8 +401,8 @@ def run_suite(client):
         "Inspector authoritative value",
     )
 
-    # Open the real point context menu and edit dialog. The fixture Clip starts
-    # at global 1s with trim=0/stretch=1, so source == global-1 exactly.
+    # The fixture Clip starts at global 1s with trim=0/stretch=1, so the dialog
+    # maps source time to global time by exactly +1.
     client.click_component(tx_point, button="secondary")
     edit_menu = "graph.keyframe_menu.edit:" + tx_after_key["id"]
     client.wait_component(edit_menu)
@@ -463,10 +422,12 @@ def run_suite(client):
     coordinate_drag(client, "keyframe_dialog.time", 20.0, 0.0)
     dialog_after = client.wait_project(
         "dialog time edit",
-        lambda project: only_keyframe(project, effector, "tx")["time"]
+        lambda project: only_keyframe(project, TRANSFORM_EFFECTOR, "tx")["time"]
         != tx_after_key["time"],
     )
-    source_time = float(only_keyframe(dialog_after["project"], effector, "tx")["time"])
+    source_time = float(
+        only_keyframe(dialog_after["project"], TRANSFORM_EFFECTOR, "tx")["time"]
+    )
     global_time = float(dialog_after["editor"]["keyframe_dialog"]["global_time"])
     approximately(source_time, global_time - 1.0, "dialog global/local mapping")
     assert_history_delta(dialog_before, dialog_after, 1, "keyframe dialog drag")
@@ -478,9 +439,7 @@ def run_suite(client):
         else None,
     )
 
-    # Keep the final interaction on the real Preview canvas. Space engages
-    # the hand tool, while the multi-frame coordinate drag must traverse
-    # egui hit testing and return its gesture owner to Idle on release.
+    # Finish through the real Preview hit-testing path.
     preview_before = client.state()
     selection_before = preview_before["editor"]["selection"]
     client.wait_component("preview.canvas")
@@ -499,7 +458,7 @@ def run_suite(client):
     if final["editor"]["selection"] != selection_before:
         raise QaFailure("final Preview pan changed the editor selection")
 
-    print("[qa-keyframe-e2e] Inspector/Graph/dialog/final Preview coordinate E2E passed")
+    print("[qa-keyframe-e2e] direct operation Inspector/Graph/dialog E2E passed")
     return {
         "ok": True,
         "initial_frame": initial["frame"],
