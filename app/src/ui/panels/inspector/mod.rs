@@ -2321,7 +2321,7 @@ mod tests {
     #[test]
     fn node_and_inspector_timing_adapters_derive_from_the_same_clip_metadata() {
         let duration = Clip::timing_property_definition("duration").unwrap();
-        let node = crate::ui::panels::node_editor::node_timing_drag_config(duration);
+        let node = crate::ui::panels::node_editor::node_timing_drag_config(duration).unwrap();
         let inspector = inspector_timing_drag_config(duration, 30.0, 120.0).unwrap();
 
         assert_eq!(inspector.speed, node.speed * 30.0);
@@ -2335,7 +2335,8 @@ mod tests {
         );
 
         let stretch = Clip::timing_property_definition("time_stretch").unwrap();
-        let node_stretch = crate::ui::panels::node_editor::node_timing_drag_config(stretch);
+        let node_stretch =
+            crate::ui::panels::node_editor::node_timing_drag_config(stretch).unwrap();
         assert_eq!(node_stretch.hard_min, Some(0.0));
         assert!(
             stretch

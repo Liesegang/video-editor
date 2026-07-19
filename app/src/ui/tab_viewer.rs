@@ -108,17 +108,12 @@ impl<'a> TabViewer for AppTabViewer<'a> {
             }
             Tab::NodeEditor => {
                 self.node_editor_rendered_this_frame = true;
-                let comp_id = self.editor_context.selection.composition_id;
                 node_editor::node_editor_panel(
                     ui,
-                    comp_id,
                     self.project,
                     self.project_service,
                     self.history_manager,
-                    &mut self.editor_context.selection,
-                    self.editor_context.timeline.current_time as f64,
-                    &mut self.editor_context.node_editor_context_menu,
-                    &mut self.editor_context.node_editor_state,
+                    self.editor_context,
                 );
 
                 // Handle Navigation Requests

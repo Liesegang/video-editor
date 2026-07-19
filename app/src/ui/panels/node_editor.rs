@@ -1,8 +1,9 @@
 use crate::action::HistoryManager;
+use crate::state::context::EditorContext;
 use crate::state::context_types::{
     ContainerResizeEdge, ContainerResizeState, ContextMenuState, NodeEditorPendingEdit,
     NodeEditorState, NodeEditorWireContextMenu, NodeEditorWireDragKind, NodeEditorWireGesture,
-    NodeEditorWireKnifeGesture, SelectionState,
+    NodeEditorWireKnifeGesture,
 };
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 use crate::ui::widgets::searchable_context_menu::{show_searchable_items_with_qa, SearchableItem};
@@ -399,7 +400,7 @@ enum NodeEdit {
     },
     InsertNodeOnConnection {
         connection_id: Uuid,
-        node: Node,
+        node: Box<Node>,
         position: egui::Pos2,
         composition_id: Uuid,
     },
@@ -936,7 +937,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                     egui::TextEdit::singleline(&mut name),
                 );
                 let finished = continuous_response_finished(ui, &response);
-                let edit = response.changed().then(|| NodeEdit::Rename {
+                let edit = response.changed().then_some(NodeEdit::Rename {
                     node_id: project_node_id,
                     name,
                 });
@@ -1599,7 +1600,7 @@ impl ProjectNodeViewer<'_> {
             let finished = continuous_response_finished(ui, &response);
             let edit = response
                 .changed()
-                .then(|| NodeEdit::RenameContainer { owner, name });
+                .then_some(NodeEdit::RenameContainer { owner, name });
             self.queue_continuous_edit(owner, "$name", edit, finished);
         });
 
@@ -1619,7 +1620,13 @@ impl ProjectNodeViewer<'_> {
                 let mut edited = value;
                 ui.horizontal(|ui| {
                     property_label(ui, definition.label());
-                    let config = node_timing_drag_config(definition);
+                    let Some(config) = node_timing_drag_config(definition) else {
+                        log::error!(
+                            "Clip timing property {} is missing Float drag metadata",
+                            definition.name()
+                        );
+                        return;
+                    };
                     let response = ui.add_sized(
                         [INLINE_CONTROL_WIDTH, PORT_ROW_HEIGHT],
                         config.widget(&mut edited),
@@ -2244,9 +2251,8 @@ fn plugin_operation_property_definition(
 
 pub(super) fn node_timing_drag_config(
     definition: &library::model::property::PropertyDefinition,
-) -> FloatDragValueConfig {
+) -> Option<FloatDragValueConfig> {
     FloatDragValueConfig::from_definition(definition)
-        .expect("Clip timing definition has Float drag metadata")
 }
 
 fn clip_is_active(clip: &library::model::Clip, current_time: f64) -> bool {
@@ -2573,18 +2579,14 @@ fn register_edge_component(
     canvas_clip: egui::Rect,
     overview: Option<OverviewWirePainter<'_>>,
 ) -> Option<RenderedEdge> {
-    let Some(from_rect) = ports.get(&RenderedPortKey {
+    let from_rect = ports.get(&RenderedPortKey {
         address: edge.from.clone(),
         direction: PortDirection::Output,
-    }) else {
-        return None;
-    };
-    let Some(to_rect) = ports.get(&RenderedPortKey {
+    })?;
+    let to_rect = ports.get(&RenderedPortKey {
         address: edge.to.clone(),
         direction: PortDirection::Input,
-    }) else {
-        return None;
-    };
+    })?;
     let start = from_rect.center();
     let end = to_rect.center();
     if ![start, end]
@@ -3517,15 +3519,16 @@ fn container_child_bounds(project: &Project, owner: PortOwner) -> Option<egui::R
 
 pub fn node_editor_panel(
     ui: &mut egui::Ui,
-    comp_id: Option<Uuid>,
     project_lock: &Arc<RwLock<Project>>,
     project_service: &EditorService,
     history_manager: &mut HistoryManager,
-    selection: &mut SelectionState,
-    current_time: f64,
-    context_menu_state: &mut Option<ContextMenuState>,
-    node_editor_state: &mut NodeEditorState,
+    editor_context: &mut EditorContext,
 ) {
+    let comp_id = editor_context.selection.composition_id;
+    let current_time = f64::from(editor_context.timeline.current_time);
+    let selection = &mut editor_context.selection;
+    let context_menu_state = &mut editor_context.node_editor_context_menu;
+    let node_editor_state = &mut editor_context.node_editor_state;
     let Some(comp_id) = comp_id else {
         flush_pending_continuous_edit(project_lock, history_manager, node_editor_state);
         ui.centered_and_justified(|ui| ui.label("No Composition Selected"));
@@ -3856,12 +3859,14 @@ pub fn node_editor_panel(
     let created = handle_context_menu(
         ui,
         context_menu_state,
-        project_lock,
-        project_service,
-        comp_id,
-        &context_menu_exclusion_rects,
-        to_global,
-        wire_context_request.is_some(),
+        NodeContextMenuFrame {
+            project_lock,
+            project_service,
+            comp_id,
+            exclusion_rects: &context_menu_exclusion_rects,
+            to_global,
+            suppress_secondary_click: wire_context_request.is_some(),
+        },
     );
     // Creation already places its item in a free slot and grows only the
     // necessary ancestors. Connections change dependency semantics, not
@@ -4614,8 +4619,10 @@ fn compute_selection_scope_layout(
         .filter(|node_id| !selected_set.contains(node_id))
         .filter_map(|node_id| estimated_node_rect(project, *node_id))
         .collect::<Vec<_>>();
-    let mut plan = AutoLayoutPlan::default();
-    plan.composition_size = Some(composition.ui_size);
+    let mut plan = AutoLayoutPlan {
+        composition_size: Some(composition.ui_size),
+        ..AutoLayoutPlan::default()
+    };
 
     for node_id in selected {
         let container = project.find_node_container(node_id)?;
@@ -5645,7 +5652,7 @@ fn apply_edit(project: &mut Project, edit: NodeEdit) -> bool {
             node,
             position,
             composition_id,
-        } => insert_node_on_connection(project, connection_id, node, position, composition_id),
+        } => insert_node_on_connection(project, connection_id, *node, position, composition_id),
         NodeEdit::SetOutputNode { owner, node_id } => {
             let container = match owner {
                 PortOwner::Composition(id) => NodeContainer::Composition(id),
@@ -5907,17 +5914,31 @@ fn node_create_menu_item(
     item
 }
 
-fn plugin_operation_menu_item(
-    plugin_manager: &PluginManager,
-    descriptor_category: &str,
-    operation: &str,
+struct PluginOperationMenuItemSpec {
+    descriptor_category: &'static str,
+    operation: &'static str,
     component_id: String,
-    menu_category: impl Into<String>,
-    display_kind: &str,
+    menu_category: String,
+    display_kind: &'static str,
     qa_id: String,
     request: NodeCreateRequest,
-    extra_keywords: impl IntoIterator<Item = String>,
+    extra_keywords: Vec<String>,
+}
+
+fn plugin_operation_menu_item(
+    plugin_manager: &PluginManager,
+    spec: PluginOperationMenuItemSpec,
 ) -> Option<SearchableItem<NodeCreateRequest>> {
+    let PluginOperationMenuItemSpec {
+        descriptor_category,
+        operation,
+        component_id,
+        menu_category,
+        display_kind,
+        qa_id,
+        request,
+        extra_keywords,
+    } = spec;
     let descriptor = match plugin_manager.operation_descriptor(
         descriptor_category,
         &component_id,
@@ -6029,14 +6050,16 @@ fn node_create_menu_items(
         };
         plugin_operation_menu_item(
             plugin_manager,
-            STYLE_CATEGORY,
-            STYLE_APPLY_OPERATION,
-            component_id.clone(),
-            "Shape Operations / Styles",
-            "Style",
-            qa_id,
-            NodeCreateRequest::Style(component_id),
-            ["shape".to_string(), "image".to_string()],
+            PluginOperationMenuItemSpec {
+                descriptor_category: STYLE_CATEGORY,
+                operation: STYLE_APPLY_OPERATION,
+                component_id: component_id.clone(),
+                menu_category: "Shape Operations / Styles".to_string(),
+                display_kind: "Style",
+                qa_id,
+                request: NodeCreateRequest::Style(component_id),
+                extra_keywords: vec!["shape".to_string(), "image".to_string()],
+            },
         )
     }));
 
@@ -6045,14 +6068,16 @@ fn node_create_menu_items(
     items.extend(effectors.into_iter().filter_map(|component_id| {
         plugin_operation_menu_item(
             plugin_manager,
-            EFFECTOR_CATEGORY,
-            EFFECTOR_APPLY_OPERATION,
-            component_id.clone(),
-            "Shape Operations / Effectors",
-            "Effector",
-            format!("node_editor.menu.create.effector:{component_id}"),
-            NodeCreateRequest::Effector(component_id),
-            ["shape".to_string()],
+            PluginOperationMenuItemSpec {
+                descriptor_category: EFFECTOR_CATEGORY,
+                operation: EFFECTOR_APPLY_OPERATION,
+                component_id: component_id.clone(),
+                menu_category: "Shape Operations / Effectors".to_string(),
+                display_kind: "Effector",
+                qa_id: format!("node_editor.menu.create.effector:{component_id}"),
+                request: NodeCreateRequest::Effector(component_id),
+                extra_keywords: vec!["shape".to_string()],
+            },
         )
     }));
 
@@ -6061,14 +6086,16 @@ fn node_create_menu_items(
     items.extend(decorators.into_iter().filter_map(|component_id| {
         plugin_operation_menu_item(
             plugin_manager,
-            DECORATOR_CATEGORY,
-            DECORATOR_APPLY_OPERATION,
-            component_id.clone(),
-            "Shape Operations / Decorators",
-            "Decorator",
-            format!("node_editor.menu.create.decorator:{component_id}"),
-            NodeCreateRequest::Decorator(component_id),
-            ["shape".to_string(), "ensemble".to_string()],
+            PluginOperationMenuItemSpec {
+                descriptor_category: DECORATOR_CATEGORY,
+                operation: DECORATOR_APPLY_OPERATION,
+                component_id: component_id.clone(),
+                menu_category: "Shape Operations / Decorators".to_string(),
+                display_kind: "Decorator",
+                qa_id: format!("node_editor.menu.create.decorator:{component_id}"),
+                request: NodeCreateRequest::Decorator(component_id),
+                extra_keywords: vec!["shape".to_string(), "ensemble".to_string()],
+            },
         )
     }));
 
@@ -6080,14 +6107,16 @@ fn node_create_menu_items(
             .filter_map(|(effect_id, effect_name, effect_category)| {
                 plugin_operation_menu_item(
                     plugin_manager,
-                    EFFECT_CATEGORY,
-                    EFFECT_APPLY_OPERATION,
-                    effect_id.clone(),
-                    format!("Image Effects / {effect_category}"),
-                    "Effect",
-                    format!("node_editor.menu.create.effect:{effect_id}"),
-                    NodeCreateRequest::Effect(effect_id),
-                    [effect_name, effect_category, "image".to_string()],
+                    PluginOperationMenuItemSpec {
+                        descriptor_category: EFFECT_CATEGORY,
+                        operation: EFFECT_APPLY_OPERATION,
+                        component_id: effect_id.clone(),
+                        menu_category: format!("Image Effects / {effect_category}"),
+                        display_kind: "Effect",
+                        qa_id: format!("node_editor.menu.create.effect:{effect_id}"),
+                        request: NodeCreateRequest::Effect(effect_id),
+                        extra_keywords: vec![effect_name, effect_category, "image".to_string()],
+                    },
                 )
             }),
     );
@@ -6207,7 +6236,7 @@ fn show_wire_context_menu(
                         {
                             edit = Some(QueuedNodeEdit::Atomic(NodeEdit::InsertNodeOnConnection {
                                 connection_id,
-                                node,
+                                node: Box::new(node),
                                 position: graph_position,
                                 composition_id,
                             }));
@@ -6429,26 +6458,31 @@ fn create_action_for_request(
     }
 }
 
+struct NodeContextMenuFrame<'a> {
+    project_lock: &'a Arc<RwLock<Project>>,
+    project_service: &'a EditorService,
+    comp_id: Uuid,
+    exclusion_rects: &'a [egui::Rect],
+    to_global: egui::emath::TSTransform,
+    suppress_secondary_click: bool,
+}
+
 fn handle_context_menu(
     ui: &mut egui::Ui,
     state: &mut Option<ContextMenuState>,
-    project_lock: &Arc<RwLock<Project>>,
-    project_service: &EditorService,
-    comp_id: Uuid,
-    context_menu_exclusion_rects: &[egui::Rect],
-    to_global: egui::emath::TSTransform,
-    suppress_secondary_click: bool,
+    frame: NodeContextMenuFrame<'_>,
 ) -> bool {
-    let canvas_size = project_lock
+    let canvas_size = frame
+        .project_lock
         .read()
         .ok()
         .and_then(|project| {
             project
-                .get_composition(comp_id)
+                .get_composition(frame.comp_id)
                 .map(|composition| (composition.width, composition.height))
         })
         .unwrap_or((1920, 1080));
-    let from_global = to_global.inverse();
+    let from_global = frame.to_global.inverse();
     let (secondary_clicked, pointer_position, open_time) = ui.input(|input| {
         (
             input.pointer.secondary_clicked(),
@@ -6458,11 +6492,11 @@ fn handle_context_menu(
     });
     update_global_context_menu_for_secondary_click(
         state,
-        secondary_clicked && !suppress_secondary_click,
+        secondary_clicked && !frame.suppress_secondary_click,
         pointer_position,
         ui.min_rect(),
-        context_menu_exclusion_rects,
-        to_global,
+        frame.exclusion_rects,
+        frame.to_global,
         open_time,
     );
 
@@ -6476,7 +6510,7 @@ fn handle_context_menu(
             .fixed_pos(position)
             .show(ui.ctx(), |ui| {
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
-                    let plugin_manager = project_service.get_plugin_manager();
+                    let plugin_manager = frame.project_service.get_plugin_manager();
                     ui.set_min_width(260.0);
                     ui.set_max_width(320.0);
                     let items = node_create_menu_items(plugin_manager.as_ref());
@@ -6489,10 +6523,10 @@ fn handle_context_menu(
                     ) {
                         action = create_action_for_request(
                             request,
-                            project_service,
+                            frame.project_service,
                             canvas_size,
                             graph_position,
-                            comp_id,
+                            frame.comp_id,
                         );
                         should_close = true;
                     }
@@ -6515,7 +6549,7 @@ fn handle_context_menu(
 
     let mut changed = false;
     if let Some(action) = action {
-        if let Ok(mut project) = project_lock.write() {
+        if let Ok(mut project) = frame.project_lock.write() {
             changed = action(&mut project);
         }
     }
