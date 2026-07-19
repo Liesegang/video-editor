@@ -118,6 +118,9 @@ def preview_geometry(snapshot, tolerance=0.1):
     canvas_zoom = finite_number(canvas_metadata.get("zoom"), "canvas.zoom")
     if abs(canvas_zoom - zoom) > tolerance:
         raise QaFailure("Preview canvas/content zoom metadata disagrees")
+    primary_gesture = canvas_metadata.get("primary_gesture")
+    if primary_gesture not in ("Idle", "Pending", "Pan", "Content"):
+        raise QaFailure("Preview canvas omitted a valid primary gesture owner")
 
     return {
         "frame": snapshot["frame"],
@@ -128,6 +131,7 @@ def preview_geometry(snapshot, tolerance=0.1):
         "pan": pan,
         "zoom": zoom,
         "auto_fit": auto_fit,
+        "primary_gesture": primary_gesture,
     }
 
 
@@ -269,6 +273,8 @@ def run_suite(client):
         raise QaFailure("fresh Preview did not start in automatic fit mode")
     if initial_state["editor"]["preview"]["primary_gesture"] != "Idle":
         raise QaFailure("fresh Preview did not start with an Idle gesture owner")
+    if initial_geometry["primary_gesture"] != "Idle":
+        raise QaFailure("fresh Preview component metadata did not start Idle")
 
     client.key("space", True)
     press_snapshot, press_geometry = wait_geometry(
@@ -307,6 +313,8 @@ def run_suite(client):
         "fresh Preview geometry before pointer movement",
         after_frame=press_snapshot["frame"],
     )
+    if move_geometry["primary_gesture"] != "Pan":
+        raise QaFailure("Preview component metadata did not latch pan ownership")
     client.inject(
         "move",
         point_payload(midpoint),
@@ -338,6 +346,8 @@ def run_suite(client):
     )
     if release_geometry["pan"] != moved_geometry["pan"]:
         raise QaFailure("Preview moved while only the Space key was released")
+    if release_geometry["primary_gesture"] != "Pan":
+        raise QaFailure("Preview component metadata released pan ownership too early")
 
     client.inject(
         "release",
@@ -357,6 +367,8 @@ def run_suite(client):
         predicate=lambda value: value["pan"] != initial_geometry["pan"],
     )
     actual_delta = assert_space_pan(initial_geometry, final_geometry)
+    if final_geometry["primary_gesture"] != "Idle":
+        raise QaFailure("completed Preview component metadata did not return to Idle")
     final_state = client.state()
     final_preview = final_state["editor"]["preview"]
     if final_preview["primary_gesture"] != "Idle":

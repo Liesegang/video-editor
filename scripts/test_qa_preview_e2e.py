@@ -26,7 +26,14 @@ def rect(min_x, min_y, width, height):
     }
 
 
-def snapshot(pan_x=80.0, pan_y=90.0, zoom=1.0, auto_fit=True, frame=42):
+def snapshot(
+    pan_x=80.0,
+    pan_y=90.0,
+    zoom=1.0,
+    auto_fit=True,
+    primary_gesture="Idle",
+    frame=42,
+):
     canvas = rect(100.0, 50.0, 800.0, 600.0)
     content = rect(canvas["min_x"] + pan_x, canvas["min_y"] + pan_y, 640.0 * zoom, 360.0 * zoom)
     return {
@@ -42,6 +49,7 @@ def snapshot(pan_x=80.0, pan_y=90.0, zoom=1.0, auto_fit=True, frame=42):
                     "pan": {"x": pan_x, "y": pan_y},
                     "zoom": zoom,
                     "auto_fit": auto_fit,
+                    "primary_gesture": primary_gesture,
                 },
             },
             {
@@ -82,6 +90,7 @@ class PreviewQaTests(unittest.TestCase):
         self.assertEqual(geometry["composition_id"], "composition")
         self.assertEqual(geometry["pan"], {"x": 80.0, "y": 90.0})
         self.assertEqual(geometry["zoom"], 1.0)
+        self.assertEqual(geometry["primary_gesture"], "Idle")
 
         invalid = snapshot()
         invalid["components"][1]["rect_points"]["min_x"] += 5.0
