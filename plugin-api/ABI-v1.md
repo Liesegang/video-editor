@@ -186,11 +186,18 @@ service extension rather than relying on RuViE implementation layouts.
 
 Fill and Stroke are the complete set of host `DrawStyle` variants at the time
 this operation was defined. Every numeric field must be finite and remain
-finite when converted to the host renderer's 32-bit scalar. Derived stroke
-width (`width + 2 * offset`) must satisfy the same rule. Stroke width and
-miter must be non-negative. An empty dash array means a solid stroke;
-a non-empty dash array must have even length and every interval must be
-strictly positive. Cap values are `round`,
+finite when converted to the host renderer's 32-bit scalar. Stroke width and
+miter must be non-negative. Text's effective width
+`max(0, width + 2 * offset)` must remain a finite renderer scalar. For a
+non-zero Shape offset, both `2 * (abs(offset) + width / 2)` and the positive
+inner width `2 * (abs(offset) - width / 2)` must also remain finite.
+
+An empty dash array means a solid stroke. A non-empty dash array must have an
+even length no greater than `RUVIE_STYLE_MAX_DASH_INTERVALS_V1` (1024), every
+interval must remain strictly positive as a 32-bit renderer scalar, and the
+32-bit period sum must remain finite and positive. The complete pattern and
+phase must be accepted by Skia's dash constructor; otherwise the response is
+`no_output`, never a silently solid stroke. Cap values are `round`,
 `square`, and `butt`; join values are `round`, `bevel`, and `miter`. The host
 assigns the resulting config the authored operation Node's ID; plugins neither
 receive nor choose Project identity.
@@ -208,8 +215,17 @@ receive nor choose Project identity.
 Backplate is the complete set of host `DecoratorConfig` variants at the time
 this operation was defined. Targets are `block`, `line`, and `char`; `parts`
 is intentionally absent because the host renderer does not implement it.
-Shapes are `rect`, `rounded_rect`, and `circle`. Padding fields may be any
-finite values and corner radius must be finite and non-negative.
+Shapes are `rect`, `rounded_rect`, and `circle`. Every padding field must be
+finite, and the signed horizontal (`left + right`) and vertical
+(`top + bottom`) sums that contribute to the padded width and height must
+remain finite 32-bit values. The host also applies the padding to a finite,
+non-zero reference rectangle (`left=-1`, `top=-2`, `right=3`, `bottom=4`) and
+requires all four resulting coordinates and both raw spans to remain finite.
+Negative padding is allowed when those checks pass. These config-only checks do
+not make non-finite or extreme source bounds safe; source geometry must
+independently satisfy the renderer's finite-value precondition. Corner radius
+must be non-negative, and both it and its diameter must remain finite 32-bit
+values.
 
 Style and Decorator requests contain only resolved declared properties and
 scalar metadata. They never transport source shapes, raster frames, paths,
@@ -217,11 +233,11 @@ Project types, or renderer/GPU state. Unknown output variants or fields,
 non-finite values, invalid enum strings, and fields that violate the rules
 above are rejected as `no_output`; they are never partially adapted.
 
-Do not transport video frames, decoded audio, GPU objects, Project objects, or other hot-path
-resources as JSON. Such categories use `query_extension` with a separately
-named/versioned C table and host-owned opaque resource handles or an explicit
-pixel/audio buffer contract. No high-bandwidth extension is standardized in
-v1 yet.
+Do not transport video frames, decoded audio, GPU objects, Project objects, or
+other hot-path resources as JSON. Such categories use `query_extension` with a
+separately named/versioned C table and host-owned opaque resource handles or an
+explicit pixel/audio buffer contract. No high-bandwidth extension is
+standardized in v1 yet.
 
 ## Bundle manifest
 
