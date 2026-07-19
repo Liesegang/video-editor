@@ -1,7 +1,7 @@
 //! Stable C-ABI native plugin host.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::mem::size_of;
+use std::mem::{align_of, size_of};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -48,6 +48,50 @@ use crate::plugin::{
 
 const BUNDLE_MANIFEST_NAME: &str = "ruvie-plugin.toml";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+
+#[repr(C)]
+struct AbiTableHeader {
+    abi_version: u32,
+    struct_size: usize,
+}
+
+fn copy_abi_table<T: Copy>(
+    pointer: *const std::ffi::c_void,
+    label: &str,
+) -> Result<T, LibraryError> {
+    if pointer.is_null() {
+        return Err(LibraryError::Plugin(format!(
+            "{label} returned a null ABI table"
+        )));
+    }
+    let required_alignment = align_of::<T>();
+    if (pointer as usize) % required_alignment != 0 {
+        return Err(LibraryError::Plugin(format!(
+            "{label} returned a misaligned ABI table; host requires {required_alignment}-byte alignment"
+        )));
+    }
+
+    let header = pointer.cast::<AbiTableHeader>();
+    // SAFETY: The pointer is non-null and aligned for `T`, which begins with
+    // this ABI header. Native plugins are trusted to return readable table
+    // storage; raw field reads avoid creating a reference before the complete
+    // table size has been validated.
+    let abi_version = unsafe { std::ptr::addr_of!((*header).abi_version).read() };
+    // SAFETY: Same validated header prefix as above.
+    let struct_size = unsafe { std::ptr::addr_of!((*header).struct_size).read() };
+    if abi_version != RUVIE_PLUGIN_ABI_V1 || struct_size < size_of::<T>() {
+        return Err(LibraryError::Plugin(format!(
+            "{label} ABI mismatch: version {abi_version}, table {struct_size} bytes; host requires v{} and at least {} bytes",
+            RUVIE_PLUGIN_ABI_V1,
+            size_of::<T>()
+        )));
+    }
+
+    // SAFETY: Nullness, alignment, version, and complete table size were
+    // checked above. `T: Copy`, so the plugin retains ownership of its static
+    // table while the host takes an inert value copy.
+    Ok(unsafe { pointer.cast::<T>().read() })
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -597,28 +641,10 @@ impl RuntimeLibrary {
             unsafe { library.get(RUVIE_PLUGIN_ENTRY_V1)? };
         // SAFETY: Calling the versioned entry symbol is the ABI-v1 contract.
         let api_ptr = unsafe { entry() };
-        if api_ptr.is_null() {
-            return Err(LibraryError::Plugin(format!(
-                "Runtime plugin entry returned null: {}",
-                path.display()
-            )));
-        }
-        // SAFETY: The pointer is non-null and points to the static ABI table
-        // returned by the just-loaded library. We copy only after checking the
-        // leading version/size fields available in every v1 table.
-        let abi_version = unsafe { (*api_ptr).abi_version };
-        // SAFETY: Same static table and field-prefix guarantee as above.
-        let struct_size = unsafe { (*api_ptr).struct_size };
-        if abi_version != RUVIE_PLUGIN_ABI_V1 || struct_size < size_of::<RuviePluginApiV1>() {
-            return Err(LibraryError::Plugin(format!(
-                "Runtime plugin ABI mismatch in {}: version {abi_version}, table {struct_size} bytes; host requires v{} and at least {} bytes",
-                path.display(),
-                RUVIE_PLUGIN_ABI_V1,
-                size_of::<RuviePluginApiV1>()
-            )));
-        }
-        // SAFETY: Version and complete v1 table size were validated.
-        let api = unsafe { *api_ptr };
+        let api = copy_abi_table::<RuviePluginApiV1>(
+            api_ptr.cast(),
+            &format!("Runtime plugin {}", path.display()),
+        )?;
         if api.descriptor_json.is_none() || api.invoke_json.is_none() || api.free_buffer.is_none() {
             return Err(LibraryError::Plugin(format!(
                 "Runtime plugin {} is missing a required ABI-v1 callback",
@@ -687,12 +713,6 @@ impl RuntimeLibrary {
     }
 
     fn query_extension<T: Copy>(&self, name: &str) -> Result<T, LibraryError> {
-        #[repr(C)]
-        struct ExtensionHeader {
-            abi_version: u32,
-            struct_size: usize,
-        }
-
         let query = self.api.query_extension.ok_or_else(|| {
             LibraryError::Plugin(format!(
                 "Runtime plugin does not expose query_extension required by {name}"
@@ -708,22 +728,7 @@ impl RuntimeLibrary {
                 "Runtime plugin does not implement extension {name}"
             )));
         }
-        let header = pointer.cast::<ExtensionHeader>();
-        // SAFETY: Every queried extension table starts with this stable
-        // version/size prefix. The plugin contract requires proper alignment.
-        let abi_version = unsafe { (*header).abi_version };
-        // SAFETY: Same validated extension header prefix.
-        let struct_size = unsafe { (*header).struct_size };
-        if abi_version != RUVIE_PLUGIN_ABI_V1 || struct_size < size_of::<T>() {
-            return Err(LibraryError::Plugin(format!(
-                "Runtime extension {name} ABI mismatch: version {abi_version}, table {struct_size} bytes; host requires v{} and at least {} bytes",
-                RUVIE_PLUGIN_ABI_V1,
-                size_of::<T>()
-            )));
-        }
-        // SAFETY: Version and complete requested table size were checked; the
-        // table is copied while its owning library remains retained by `self`.
-        Ok(unsafe { *pointer.cast::<T>() })
+        copy_abi_table::<T>(pointer, &format!("Runtime extension {name}"))
     }
 
     fn consume_extension_result(
@@ -4048,6 +4053,90 @@ mod tests {
 
     static FREED_TEST_FRAMES: std::sync::atomic::AtomicUsize =
         std::sync::atomic::AtomicUsize::new(0);
+    static MISALIGNED_EXTENSION_POINTER: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    unsafe extern "C" fn misaligned_extension_query(
+        _context: *mut std::ffi::c_void,
+        _name: RuvieBytesView,
+    ) -> *const std::ffi::c_void {
+        MISALIGNED_EXTENSION_POINTER.load(std::sync::atomic::Ordering::SeqCst)
+            as *const std::ffi::c_void
+    }
+
+    #[test]
+    fn misaligned_base_and_extension_tables_are_rejected_before_table_use() {
+        let base = RuviePluginApiV1 {
+            abi_version: RUVIE_PLUGIN_ABI_V1,
+            struct_size: size_of::<RuviePluginApiV1>(),
+            context: std::ptr::null_mut(),
+            descriptor_json: None,
+            invoke_json: None,
+            free_buffer: None,
+            query_extension: None,
+        };
+        let mut base_storage =
+            vec![0_u8; size_of::<RuviePluginApiV1>() + align_of::<RuviePluginApiV1>()];
+        // A one-byte offset from Vec's allocation is deliberately unsuitable
+        // for every ABI table whose alignment is greater than one.
+        let base_pointer = unsafe { base_storage.as_mut_ptr().add(1) };
+        // SAFETY: The backing allocation has enough space and this write is
+        // explicitly unaligned; no reference is formed.
+        unsafe {
+            base_pointer
+                .cast::<RuviePluginApiV1>()
+                .write_unaligned(base)
+        };
+        let error = match copy_abi_table::<RuviePluginApiV1>(base_pointer.cast(), "base fixture") {
+            Ok(_) => panic!("a misaligned entry table must not be copied"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("misaligned ABI table"));
+
+        let extension = RuvieEffectCpuRgba8ApiV1 {
+            abi_version: RUVIE_PLUGIN_ABI_V1,
+            struct_size: size_of::<RuvieEffectCpuRgba8ApiV1>(),
+            context: std::ptr::null_mut(),
+            create_instance: None,
+            process: None,
+            release_instance: None,
+            free_frame: None,
+        };
+        let mut extension_storage = vec![
+            0_u8;
+            size_of::<RuvieEffectCpuRgba8ApiV1>()
+                + align_of::<RuvieEffectCpuRgba8ApiV1>()
+        ];
+        let extension_pointer = unsafe { extension_storage.as_mut_ptr().add(1) };
+        // SAFETY: Same bounded unaligned fixture construction as the base table.
+        unsafe {
+            extension_pointer
+                .cast::<RuvieEffectCpuRgba8ApiV1>()
+                .write_unaligned(extension)
+        };
+        MISALIGNED_EXTENSION_POINTER.store(
+            extension_pointer as usize,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        let library = RuntimeLibrary {
+            api: RuviePluginApiV1 {
+                abi_version: RUVIE_PLUGIN_ABI_V1,
+                struct_size: size_of::<RuviePluginApiV1>(),
+                context: std::ptr::null_mut(),
+                descriptor_json: None,
+                invoke_json: None,
+                free_buffer: None,
+                query_extension: Some(misaligned_extension_query),
+            },
+            _library: current_process_library(),
+        };
+        let error = match library.effect_cpu_rgba8_extension() {
+            Ok(_) => panic!("a misaligned extension must fail before callback validation"),
+            Err(error) => error.to_string(),
+        };
+        MISALIGNED_EXTENSION_POINTER.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert!(error.contains("misaligned ABI table"));
+    }
 
     unsafe extern "C" fn free_test_frame(
         _context: *mut std::ffi::c_void,
