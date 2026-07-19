@@ -302,6 +302,9 @@ pub struct Node {
     pub id: Uuid,
     pub name: String,
     pub content: NodeContent,
+    /// Authoritative authored evaluation state. Disabled Nodes produce
+    /// NoOutput before resolving descriptors, properties, or upstream values.
+    pub enabled: bool,
     #[serde(default)]
     pub blend_mode: BlendMode,
     #[serde(default)]
@@ -316,6 +319,10 @@ pub struct Node {
     pub decorators: Vec<DecoratorInstance>,
     #[serde(default)]
     pub ui_position: [f32; 2],
+    /// Authoritative Node Editor presentation state. These fields deliberately
+    /// have no serde fallback while the Project format is still pre-v1.
+    pub ui_size: [f32; 2],
+    pub ui_collapsed: bool,
 }
 
 impl Node {
@@ -324,6 +331,7 @@ impl Node {
             id: Uuid::new_v4(),
             name: name.to_string(),
             content,
+            enabled: true,
             blend_mode: BlendMode::Normal,
             properties: PropertyMap::new(),
             styles: Vec::new(),
@@ -331,6 +339,8 @@ impl Node {
             effectors: Vec::new(),
             decorators: Vec::new(),
             ui_position: [0.0, 0.0],
+            ui_size: [240.0, 160.0],
+            ui_collapsed: false,
         }
     }
 

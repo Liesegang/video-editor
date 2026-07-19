@@ -26,9 +26,9 @@ pub use entity_converter::{EntityConverterPlugin, FrameEvaluationContext, Resolv
 pub use evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
 pub use manager::{PluginInfo, PluginManager};
 pub use operation::{
-    DECORATOR_CATEGORY, DECORATOR_PRODUCE_OPERATION, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
-    EFFECTOR_CATEGORY, EFFECTOR_PRODUCE_OPERATION, OperationDescriptor, OperationDescriptorError,
-    PROPERTY_PORT_PREFIX, STYLE_CATEGORY, STYLE_PRODUCE_OPERATION, property_name_from_port,
+    DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
+    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, OperationDescriptor, OperationDescriptorError,
+    PROPERTY_PORT_PREFIX, STYLE_APPLY_OPERATION, STYLE_CATEGORY, property_name_from_port,
     property_port_key, property_ui_type_to_port_data_type,
 };
 pub use repository::PluginRepository;

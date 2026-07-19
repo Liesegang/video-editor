@@ -13,7 +13,7 @@ use library::model::frame::frame::FrameInfo;
 use library::model::project::{
     Composition, EvalOutput, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
     NodeGraphBundle, PortAddress, PortDataType, PortDefinition, PortExposure, PortOwner, PortSide,
-    Project, ProjectConnection, TIME_PORT,
+    Project, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{Keyframe, Property, PropertyValue, Vec2};
 use library::model::{Clip, Node, NodeContent};
@@ -57,6 +57,14 @@ fn image_wire(from: Uuid, to: Uuid) -> ProjectConnection {
     ProjectConnection::new(
         PortAddress::new(PortOwner::Node(from), IMAGE_OUTPUT_PORT),
         PortAddress::new(PortOwner::Node(to), IMAGE_INPUT_PORT),
+        0,
+    )
+}
+
+fn shape_wire(from: Uuid, to: Uuid) -> ProjectConnection {
+    ProjectConnection::new(
+        PortAddress::new(PortOwner::Node(from), SHAPE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(to), SHAPE_INPUT_PORT),
         0,
     )
 }
@@ -520,19 +528,33 @@ fn descriptor_effect_pixels_match_legacy_embedded_effect_pixels() {
         Property::constant(PropertyValue::Number(OrderedFloat(1.5))),
     );
     source.effects.push(legacy_effect);
-    let (legacy_project, _) =
-        project_with_graph(NodeGraphBundle::with_output_node(source.clone()), 0.0, 2.0);
+    let legacy_fill = plugins.create_style_operation_node("fill").unwrap();
+    let source_id = source.id;
+    let legacy_fill_id = legacy_fill.id;
+    let (legacy_project, _) = project_with_graph(
+        NodeGraphBundle::new(
+            vec![source.clone(), legacy_fill],
+            vec![shape_wire(source_id, legacy_fill_id)],
+            Some(legacy_fill_id),
+        ),
+        0.0,
+        2.0,
+    );
 
     source.effects.clear();
+    let fill = plugins.create_style_operation_node("fill").unwrap();
     let mut effect = plugins.create_effect_operation_node("blur").unwrap();
     set_constant(&mut effect, "sigma_x", 1.5.into());
     set_constant(&mut effect, "sigma_y", 1.5.into());
-    let source_id = source.id;
+    let fill_id = fill.id;
     let effect_id = effect.id;
     let (graph_project, _) = project_with_graph(
         NodeGraphBundle::new(
-            vec![source, effect],
-            vec![image_wire(source_id, effect_id)],
+            vec![source, fill, effect],
+            vec![
+                shape_wire(source_id, fill_id),
+                image_wire(fill_id, effect_id),
+            ],
             Some(effect_id),
         ),
         0.0,

@@ -6,9 +6,8 @@
 //! be installed merely to load or validate that data.
 
 use crate::model::project::{
-    DECORATOR_OUTPUT_PORT, DURATION_PORT, EFFECTOR_OUTPUT_PORT, FPS_PORT, FRAME_PORT,
     IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType, PortDefinition, PortExposure, PortSide,
-    RESOLUTION_PORT, STYLE_OUTPUT_PORT, TIME_PORT,
+    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType};
 use crate::model::{Node, NodeContent, PluginOperationContent};
@@ -16,22 +15,14 @@ use std::collections::HashSet;
 use thiserror::Error;
 
 pub const STYLE_CATEGORY: &str = "style";
-pub const STYLE_PRODUCE_OPERATION: &str = "style.produce.v1";
+pub const STYLE_APPLY_OPERATION: &str = "style.apply.v1";
 pub const EFFECT_CATEGORY: &str = "effect";
 pub const EFFECT_APPLY_OPERATION: &str = "effect.apply.v1";
 pub const EFFECTOR_CATEGORY: &str = "effector";
-pub const EFFECTOR_PRODUCE_OPERATION: &str = "effector.produce.v1";
+pub const EFFECTOR_APPLY_OPERATION: &str = "effector.apply.v1";
 pub const DECORATOR_CATEGORY: &str = "decorator";
-pub const DECORATOR_PRODUCE_OPERATION: &str = "decorator.produce.v1";
+pub const DECORATOR_APPLY_OPERATION: &str = "decorator.apply.v1";
 pub const PROPERTY_PORT_PREFIX: &str = "property:";
-
-const COMMON_METADATA_PORTS: [&str; 5] = [
-    TIME_PORT,
-    FRAME_PORT,
-    FPS_PORT,
-    DURATION_PORT,
-    RESOLUTION_PORT,
-];
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum OperationDescriptorError {
@@ -102,16 +93,20 @@ impl OperationDescriptor {
         Self::new(
             STYLE_CATEGORY,
             component_id,
-            STYLE_PRODUCE_OPERATION,
+            STYLE_APPLY_OPERATION,
             label,
             properties,
-            [PortDefinition::output(
-                STYLE_OUTPUT_PORT,
-                "Style",
-                PortDataType::Style,
-                PortSide::Right,
-                PortExposure::Graph,
-            )],
+            [
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                PortDefinition::input(SHAPE_INPUT_PORT, "Shape", PortDataType::Shape),
+                PortDefinition::output(
+                    IMAGE_OUTPUT_PORT,
+                    "Image",
+                    PortDataType::Image,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ],
         )
     }
 
@@ -127,6 +122,7 @@ impl OperationDescriptor {
             label,
             properties,
             [
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
                 PortDefinition::input(IMAGE_INPUT_PORT, "Image", PortDataType::Image),
                 PortDefinition::output(
                     IMAGE_OUTPUT_PORT,
@@ -147,16 +143,20 @@ impl OperationDescriptor {
         Self::new(
             EFFECTOR_CATEGORY,
             component_id,
-            EFFECTOR_PRODUCE_OPERATION,
+            EFFECTOR_APPLY_OPERATION,
             label,
             properties,
-            [PortDefinition::output(
-                EFFECTOR_OUTPUT_PORT,
-                "Effector",
-                PortDataType::Effector,
-                PortSide::Right,
-                PortExposure::Graph,
-            )],
+            [
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                PortDefinition::input(SHAPE_INPUT_PORT, "Shape", PortDataType::Shape),
+                PortDefinition::output(
+                    SHAPE_OUTPUT_PORT,
+                    "Shape",
+                    PortDataType::Shape,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ],
         )
     }
 
@@ -168,16 +168,20 @@ impl OperationDescriptor {
         Self::new(
             DECORATOR_CATEGORY,
             component_id,
-            DECORATOR_PRODUCE_OPERATION,
+            DECORATOR_APPLY_OPERATION,
             label,
             properties,
-            [PortDefinition::output(
-                DECORATOR_OUTPUT_PORT,
-                "Decorator",
-                PortDataType::Decorator,
-                PortSide::Right,
-                PortExposure::Graph,
-            )],
+            [
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                PortDefinition::input(SHAPE_INPUT_PORT, "Shape", PortDataType::Shape),
+                PortDefinition::output(
+                    SHAPE_OUTPUT_PORT,
+                    "Shape",
+                    PortDataType::Shape,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ],
         )
     }
 
@@ -275,7 +279,7 @@ impl OperationDescriptor {
         // and target roles imply direction, but address identity is also used
         // by graph mutation and validation. Therefore one owner may not reuse
         // a key for an input and output even though their directions differ.
-        let mut port_keys = COMMON_METADATA_PORTS.into_iter().collect::<HashSet<_>>();
+        let mut port_keys = HashSet::new();
         for port in &self.declared_ports {
             if !port_keys.insert(port.key.as_str()) {
                 return Err(OperationDescriptorError::PortCollision {

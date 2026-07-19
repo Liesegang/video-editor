@@ -227,6 +227,7 @@ impl<T: Renderer> RenderService<T> {
                 styles,
                 path_effects,
                 effects,
+                ensemble,
                 transform,
             } => {
                 let render_transform = context.transform(transform);
@@ -235,6 +236,7 @@ impl<T: Renderer> RenderService<T> {
                         path_data: path,
                         styles,
                         path_effects,
+                        ensemble: ensemble.as_ref(),
                         transform: render_transform,
                     })
                 })?;
@@ -597,6 +599,9 @@ mod tests {
         project
             .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
             .unwrap();
+        project
+            .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
+            .unwrap();
         node_id
     }
 
@@ -748,6 +753,9 @@ mod tests {
         project.add_node(reference);
         project
             .attach_node_to_container(NodeContainer::Clip(clip_id), reference_id)
+            .unwrap();
+        project
+            .set_output_node(NodeContainer::Clip(clip_id), Some(reference_id))
             .unwrap();
 
         let plugin_manager = Arc::new(PluginManager::default());

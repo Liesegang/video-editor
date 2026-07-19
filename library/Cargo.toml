@@ -55,6 +55,7 @@ cpal = "0.15"
 symphonia = { version = "0.5", features = ["all"] }
 rtrb = "0.3"
 anyhow = "1.0.103"
+unicode-segmentation = "1.12"
 
 [dev-dependencies]
 sha2 = "0.10"

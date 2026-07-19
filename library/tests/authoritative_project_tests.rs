@@ -40,6 +40,9 @@ fn project_with_solid() -> (Project, uuid::Uuid, uuid::Uuid) {
     project
         .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
         .unwrap();
+    project
+        .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
+        .unwrap();
     (project, composition_id, node_id)
 }
 

@@ -131,6 +131,7 @@ pub struct ShapeRasterRequest<'a> {
     pub path_data: &'a str,
     pub styles: &'a [StyleConfig],
     pub path_effects: &'a [PathEffect],
+    pub ensemble: Option<&'a crate::core::ensemble::EnsembleData>,
     pub transform: Affine2D,
 }
 

@@ -5,9 +5,8 @@ use crate::error::LibraryError;
 use crate::model::asset::Asset;
 use crate::model::frame::color::Color;
 use crate::model::project::{
-    Composition, DECORATOR_OUTPUT_PORT, DECORATORS_INPUT_PORT, EFFECTOR_OUTPUT_PORT,
-    EFFECTORS_INPUT_PORT, NodeGraphBundle, PortAddress, PortOwner, Project, ProjectConnection,
-    STYLE_OUTPUT_PORT, STYLES_INPUT_PORT,
+    Composition, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeGraphBundle, PortAddress, PortDataType,
+    PortDirection, PortOwner, Project, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use crate::model::property::{
     KeyframeId, KeyframeUpdate, Property, PropertyDefinition, PropertyMap, PropertyUiType,
@@ -19,6 +18,7 @@ use crate::model::{
 use crate::plugin::PluginManager;
 use crate::plugin::entity_converter::measure_text_size;
 use ordered_float::OrderedFloat;
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -127,30 +127,11 @@ impl ProjectManager {
         clip_width: u64,
         clip_height: u64,
     ) -> Result<Node, LibraryError> {
-        self.create_generator_node_with_style_mode(
-            request,
-            canvas_width,
-            canvas_height,
-            clip_width,
-            clip_height,
-            true,
-        )
-    }
-
-    fn create_generator_node_with_style_mode(
-        &self,
-        request: GeneratorNodeRequest,
-        canvas_width: u64,
-        canvas_height: u64,
-        clip_width: u64,
-        clip_height: u64,
-        include_legacy_styles: bool,
-    ) -> Result<Node, LibraryError> {
-        let (name, converter_kind, style_types): (&str, &str, &[&str]) = match &request {
-            GeneratorNodeRequest::Text { .. } => ("Text", "text", &["fill"]),
-            GeneratorNodeRequest::Shape { .. } => ("Shape", "shape", &["fill", "stroke"]),
-            GeneratorNodeRequest::Solid { .. } => ("Solid", "solid", &[]),
-            GeneratorNodeRequest::SkSL { .. } => ("SkSL", "sksl", &[]),
+        let (name, converter_kind): (&str, &str) = match &request {
+            GeneratorNodeRequest::Text { .. } => ("Text", "text"),
+            GeneratorNodeRequest::Shape { .. } => ("Shape", "shape"),
+            GeneratorNodeRequest::Solid { .. } => ("Solid", "solid"),
+            GeneratorNodeRequest::SkSL { .. } => ("SkSL", "sksl"),
         };
         let converter = self
             .plugin_manager
@@ -203,23 +184,13 @@ impl ProjectManager {
             }
         };
 
-        let styles = if include_legacy_styles {
-            style_types
-                .iter()
-                .map(|style_type| self.plugin_manager.create_style_instance(style_type))
-                .collect::<Result<Vec<_>, LibraryError>>()?
-        } else {
-            Vec::new()
-        };
-
         let mut node = Node::new(name, NodeContent::Generator(content));
         node.properties = properties;
-        node.styles = styles;
         Ok(node)
     }
 
-    /// Builds a detached Fill -> Text graph. The consumer has no embedded
-    /// styles; graph wiring is the only Style authority for this factory.
+    /// Builds a detached Text -> Fill graph. Text produces only Shape; Fill is
+    /// the explicit Shape -> Image boundary and therefore the graph output.
     pub fn create_text_graph(
         &self,
         text: &str,
@@ -228,7 +199,7 @@ impl ProjectManager {
         canvas_height: u64,
     ) -> Result<NodeGraphBundle, LibraryError> {
         let (text_width, text_height) = measure_text_size(text, font, 100.0);
-        let mut text_node = self.create_generator_node_with_style_mode(
+        let mut text_node = self.create_generator_node(
             GeneratorNodeRequest::Text {
                 text: text.to_string(),
                 font: font.to_string(),
@@ -237,26 +208,26 @@ impl ProjectManager {
             canvas_height,
             text_width as u64,
             text_height as u64,
-            false,
         )?;
         let mut fill_node = self.plugin_manager.create_style_operation_node("fill")?;
-        fill_node.ui_position = [0.0, 0.0];
-        text_node.ui_position = [360.0, 0.0];
-        let output_node_id = text_node.id;
+        text_node.ui_position = [0.0, 0.0];
+        fill_node.ui_position = [360.0, 0.0];
+        let output_node_id = fill_node.id;
         let connection = ProjectConnection::new(
-            PortAddress::new(PortOwner::Node(fill_node.id), STYLE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(text_node.id), STYLES_INPUT_PORT),
+            PortAddress::new(PortOwner::Node(text_node.id), SHAPE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(fill_node.id), SHAPE_INPUT_PORT),
             0,
         );
         Ok(NodeGraphBundle::new(
-            vec![fill_node, text_node],
+            vec![text_node, fill_node],
             vec![connection],
             Some(output_node_id),
         ))
     }
 
-    /// Builds detached Fill/Stroke -> Shape graph wiring. ProjectConnection
-    /// order, not vector or UI pin order, defines Style application order.
+    /// Builds Shape fan-out into Fill and Stroke, then explicitly merges both
+    /// Image branches. ProjectConnection order on Merge is the raster layer
+    /// authority; vector storage order and UI pin indices are irrelevant.
     pub fn create_shape_graph(
         &self,
         path: &str,
@@ -265,7 +236,7 @@ impl ProjectManager {
         shape_width: u64,
         shape_height: u64,
     ) -> Result<NodeGraphBundle, LibraryError> {
-        let mut shape_node = self.create_generator_node_with_style_mode(
+        let mut shape_node = self.create_generator_node(
             GeneratorNodeRequest::Shape {
                 path: path.to_string(),
             },
@@ -273,26 +244,39 @@ impl ProjectManager {
             canvas_height,
             shape_width,
             shape_height,
-            false,
         )?;
         let mut fill_node = self.plugin_manager.create_style_operation_node("fill")?;
         let mut stroke_node = self.plugin_manager.create_style_operation_node("stroke")?;
-        fill_node.ui_position = [0.0, 0.0];
-        stroke_node.ui_position = [0.0, 220.0];
-        shape_node.ui_position = [360.0, 110.0];
-        let output_node_id = shape_node.id;
-        let connections = [(&fill_node, 0), (&stroke_node, 1)]
-            .into_iter()
-            .map(|(style, order)| {
-                ProjectConnection::new(
-                    PortAddress::new(PortOwner::Node(style.id), STYLE_OUTPUT_PORT),
-                    PortAddress::new(PortOwner::Node(shape_node.id), STYLES_INPUT_PORT),
-                    order,
-                )
-            })
-            .collect();
+        let mut merge_node = Node::new("Merge", NodeContent::Merge);
+        shape_node.ui_position = [0.0, 110.0];
+        fill_node.ui_position = [360.0, 0.0];
+        stroke_node.ui_position = [360.0, 220.0];
+        merge_node.ui_position = [720.0, 110.0];
+        let output_node_id = merge_node.id;
+        let connections = vec![
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(shape_node.id), SHAPE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(fill_node.id), SHAPE_INPUT_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(shape_node.id), SHAPE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(stroke_node.id), SHAPE_INPUT_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(fill_node.id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_node.id), MERGE_IMAGES_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(stroke_node.id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_node.id), MERGE_IMAGES_PORT),
+                1,
+            ),
+        ];
         Ok(NodeGraphBundle::new(
-            vec![fill_node, stroke_node, shape_node],
+            vec![shape_node, fill_node, stroke_node, merge_node],
             connections,
             Some(output_node_id),
         ))
@@ -1129,41 +1113,114 @@ impl ProjectManager {
         handlers::clip_handler::ClipHandler::update_node_styles(&self.project, node_id, styles)
     }
 
-    pub fn add_effector(&self, node_id: Uuid, effector_type: &str) -> Result<(), LibraryError> {
-        let mut effector = self
-            .plugin_manager
-            .create_effector_operation_node(effector_type)?;
+    fn insert_shape_operation_after(
+        &self,
+        node_id: Uuid,
+        mut operation: Node,
+    ) -> Result<(), LibraryError> {
         let mut project = self
             .project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        let consumer = project
-            .get_node(node_id)
-            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?;
-        effector.ui_position = [consumer.ui_position[0] - 360.0, consumer.ui_position[1]];
+        let source = PortAddress::new(PortOwner::Node(node_id), SHAPE_OUTPUT_PORT);
+        let source_definition = project
+            .port_definition(&source, PortDirection::Output)
+            .filter(|definition| definition.data_type == PortDataType::Shape)
+            .ok_or_else(|| {
+                LibraryError::Project(format!("Node {node_id} does not produce Shape"))
+            })?;
+        debug_assert_eq!(source_definition.direction, PortDirection::Output);
         let container = project.find_node_container(node_id).ok_or_else(|| {
             LibraryError::Project(format!("Node {node_id} has no containing graph"))
         })?;
-        let target = PortAddress::new(PortOwner::Node(node_id), EFFECTORS_INPUT_PORT);
-        let order = project
+
+        // Appending through the public API follows the existing linear
+        // Effector/Decorator chain, so repeated additions preserve UI order.
+        // A final Shape fan-out is spliced as one atomic graph mutation.
+        let mut terminal_id = node_id;
+        let mut visited = HashSet::new();
+        loop {
+            if !visited.insert(terminal_id) {
+                return Err(LibraryError::Project(format!(
+                    "Shape chain from Node {node_id} contains a cycle"
+                )));
+            }
+            let terminal_output =
+                PortAddress::new(PortOwner::Node(terminal_id), SHAPE_OUTPUT_PORT);
+            let outgoing = project
+                .connections
+                .iter()
+                .filter(|connection| connection.from == terminal_output)
+                .collect::<Vec<_>>();
+            let [connection] = outgoing.as_slice() else {
+                break;
+            };
+            let PortOwner::Node(next_id) = connection.to.owner else {
+                break;
+            };
+            if connection.to.port != SHAPE_INPUT_PORT {
+                break;
+            }
+            if project.find_node_container(next_id) != Some(container) {
+                break;
+            }
+            let next_output = PortAddress::new(PortOwner::Node(next_id), SHAPE_OUTPUT_PORT);
+            let next_is_shape_operation = project
+                .port_definition(&next_output, PortDirection::Output)
+                .is_some_and(|definition| definition.data_type == PortDataType::Shape);
+            if !next_is_shape_operation {
+                break;
+            }
+            terminal_id = next_id;
+        }
+
+        let terminal_output = PortAddress::new(PortOwner::Node(terminal_id), SHAPE_OUTPUT_PORT);
+        let outgoing = project
             .connections
             .iter()
-            .filter(|connection| connection.to == target)
-            .map(|connection| connection.order)
-            .max()
-            .unwrap_or(-1)
-            + 1;
-        let connection = ProjectConnection::new(
-            PortAddress::new(PortOwner::Node(effector.id), EFFECTOR_OUTPUT_PORT),
-            target,
-            order,
-        );
-        project
+            .filter(|connection| connection.from == terminal_output)
+            .cloned()
+            .collect::<Vec<_>>();
+        let terminal_position = project
+            .get_node(terminal_id)
+            .map(|node| node.ui_position)
+            .ok_or_else(|| LibraryError::Project(format!("Node {terminal_id} not found")))?;
+        operation.ui_position = [terminal_position[0] + 240.0, terminal_position[1]];
+        let operation_id = operation.id;
+
+        let mut updated = project.clone();
+        let removed = outgoing
+            .iter()
+            .map(|connection| connection.id)
+            .collect::<HashSet<_>>();
+        updated
+            .connections
+            .retain(|connection| !removed.contains(&connection.id));
+        let mut connections = vec![ProjectConnection::new(
+            terminal_output,
+            PortAddress::new(PortOwner::Node(operation_id), SHAPE_INPUT_PORT),
+            0,
+        )];
+        connections.extend(outgoing.into_iter().map(|mut connection| {
+            connection.from =
+                PortAddress::new(PortOwner::Node(operation_id), SHAPE_OUTPUT_PORT);
+            connection
+        }));
+        updated
             .insert_node_graph(
                 container,
-                NodeGraphBundle::new(vec![effector], vec![connection], None),
+                NodeGraphBundle::new(vec![operation], connections, None),
             )
-            .map_err(|error| LibraryError::Project(error.to_string()))
+            .map_err(|error| LibraryError::Project(error.to_string()))?;
+        *project = updated;
+        Ok(())
+    }
+
+    pub fn add_effector(&self, node_id: Uuid, effector_type: &str) -> Result<(), LibraryError> {
+        let effector = self
+            .plugin_manager
+            .create_effector_operation_node(effector_type)?;
+        self.insert_shape_operation_after(node_id, effector)
     }
 
     pub fn update_node_effectors(
@@ -1182,40 +1239,10 @@ impl ProjectManager {
     }
 
     pub fn add_decorator(&self, node_id: Uuid, decorator_type: &str) -> Result<(), LibraryError> {
-        let mut decorator = self
+        let decorator = self
             .plugin_manager
             .create_decorator_operation_node(decorator_type)?;
-        let mut project = self
-            .project
-            .write()
-            .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        let consumer = project
-            .get_node(node_id)
-            .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?;
-        decorator.ui_position = [consumer.ui_position[0] - 360.0, consumer.ui_position[1]];
-        let container = project.find_node_container(node_id).ok_or_else(|| {
-            LibraryError::Project(format!("Node {node_id} has no containing graph"))
-        })?;
-        let target = PortAddress::new(PortOwner::Node(node_id), DECORATORS_INPUT_PORT);
-        let order = project
-            .connections
-            .iter()
-            .filter(|connection| connection.to == target)
-            .map(|connection| connection.order)
-            .max()
-            .unwrap_or(-1)
-            + 1;
-        let connection = ProjectConnection::new(
-            PortAddress::new(PortOwner::Node(decorator.id), DECORATOR_OUTPUT_PORT),
-            target,
-            order,
-        );
-        project
-            .insert_node_graph(
-                container,
-                NodeGraphBundle::new(vec![decorator], vec![connection], None),
-            )
-            .map_err(|error| LibraryError::Project(error.to_string()))
+        self.insert_shape_operation_after(node_id, decorator)
     }
 
     pub fn update_node_decorators(
@@ -1391,6 +1418,7 @@ impl ProjectManager {
 mod keyframe_tests {
     use super::*;
     use crate::editor::handlers::property_ops::PropertyOwner;
+    use crate::model::project::NodeContainer;
     use crate::model::property::{Property, PropertyMap, PropertyTarget, PropertyValue};
     use crate::model::style::StyleInstance;
     use crate::model::{DecoratorInstance, EffectorInstance};
@@ -1445,18 +1473,10 @@ mod keyframe_tests {
         );
     }
 
-    fn assert_default_styles(manager: &ProjectManager, node: &Node, expected_types: &[&str]) {
-        assert_eq!(node.styles.len(), expected_types.len());
-        for (style, expected_type) in node.styles.iter().zip(expected_types) {
-            assert_eq!(&style.style_type, expected_type);
-            let Some(plugin) = manager.plugin_manager.get_style_plugin(expected_type) else {
-                panic!("{expected_type} style should be registered");
-            };
-            assert_eq!(
-                style.properties,
-                PropertyMap::from_definitions(&plugin.properties())
-            );
-        }
+    fn assert_bare_generator(node: &Node) {
+        assert!(node.styles.is_empty());
+        assert!(node.effectors.is_empty());
+        assert!(node.decorators.is_empty());
     }
 
     #[test]
@@ -1744,7 +1764,7 @@ mod keyframe_tests {
             "font_family",
             PropertyValue::String(font.to_string()),
         );
-        assert_default_styles(&manager, &text_node, &["fill"]);
+        assert_bare_generator(&text_node);
 
         let path = "M 0 0 H 120 V 80 H 0 Z";
         let Ok(shape_node) = manager.create_shape_node(path, canvas.0, canvas.1, 120, 80) else {
@@ -1761,7 +1781,7 @@ mod keyframe_tests {
             (canvas.0, canvas.1, 120, 80),
         );
         assert_property_value(&shape_node, "path", PropertyValue::String(path.to_string()));
-        assert_default_styles(&manager, &shape_node, &["fill", "stroke"]);
+        assert_bare_generator(&shape_node);
 
         let shader = "half4 main(float2 p) { return half4(1); }";
         let Ok(sksl_node) = manager.create_sksl_node(shader, canvas.0, canvas.1) else {
@@ -1782,7 +1802,7 @@ mod keyframe_tests {
             "shader",
             PropertyValue::String(shader.to_string()),
         );
-        assert_default_styles(&manager, &sksl_node, &[]);
+        assert_bare_generator(&sksl_node);
 
         let color = Color {
             r: 12,
@@ -1804,7 +1824,7 @@ mod keyframe_tests {
             (canvas.0, canvas.1, canvas.0, canvas.1),
         );
         assert_property_value(&solid_node, "color", PropertyValue::Color(color.clone()));
-        assert_default_styles(&manager, &solid_node, &[]);
+        assert_bare_generator(&solid_node);
 
         for node in [&text_node, &shape_node, &sksl_node, &solid_node] {
             for required_transform in ["position", "scale", "rotation", "anchor", "opacity"] {
@@ -1858,7 +1878,7 @@ mod keyframe_tests {
     }
 
     #[test]
-    fn generator_clip_factories_share_consumer_defaults_and_detach_style_authority() {
+    fn generator_clip_factories_wrap_bare_sources_in_explicit_image_graphs() {
         let shared = Arc::new(RwLock::new(Project::new("shared generator factory")));
         let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
 
@@ -1868,13 +1888,19 @@ mod keyframe_tests {
         let Ok(text_bundle) = manager.create_text_clip("same", 0.0, 1.0, 640, 480) else {
             panic!("text clip factory should succeed");
         };
-        let Some(clip_text) = text_bundle.primary_node() else {
-            panic!("text clip should have one output node");
-        };
-        assert_eq!(clip_text.content, direct_text.content);
+        let clip_text = text_bundle
+            .graph
+            .nodes
+            .iter()
+            .find(|node| node.content == direct_text.content)
+            .expect("text clip must retain the bare Shape source");
         assert_eq!(clip_text.properties, direct_text.properties);
-        assert!(clip_text.styles.is_empty());
-        assert_eq!(direct_text.styles.len(), 1);
+        assert_bare_generator(clip_text);
+        assert_bare_generator(&direct_text);
+        assert!(matches!(
+            text_bundle.primary_node().map(|node| &node.content),
+            Some(NodeContent::PluginOperation(_))
+        ));
         assert_eq!(text_bundle.graph.nodes.len(), 2);
         assert_eq!(text_bundle.graph.connections.len(), 1);
         assert_eq!(text_bundle.graph.connections[0].order, 0);
@@ -1886,14 +1912,20 @@ mod keyframe_tests {
         let Ok(shape_bundle) = manager.create_shape_clip(0.0, 1.0, 640, 480) else {
             panic!("shape clip factory should succeed");
         };
-        let Some(clip_shape) = shape_bundle.primary_node() else {
-            panic!("shape clip should have one output node");
-        };
-        assert_eq!(clip_shape.content, direct_shape.content);
+        let clip_shape = shape_bundle
+            .graph
+            .nodes
+            .iter()
+            .find(|node| node.content == direct_shape.content)
+            .expect("shape clip must retain the bare Shape source");
         assert_eq!(clip_shape.properties, direct_shape.properties);
-        assert!(clip_shape.styles.is_empty());
-        assert_eq!(direct_shape.styles.len(), 2);
-        assert_eq!(shape_bundle.graph.nodes.len(), 3);
+        assert_bare_generator(clip_shape);
+        assert_bare_generator(&direct_shape);
+        assert!(matches!(
+            shape_bundle.primary_node().map(|node| &node.content),
+            Some(NodeContent::Merge)
+        ));
+        assert_eq!(shape_bundle.graph.nodes.len(), 4);
         assert_eq!(
             shape_bundle
                 .graph
@@ -1901,7 +1933,7 @@ mod keyframe_tests {
                 .iter()
                 .map(|connection| connection.order)
                 .collect::<Vec<_>>(),
-            vec![0, 1]
+            vec![0, 0, 0, 1]
         );
 
         let Ok(direct_sksl) = manager.create_sksl_node(DEFAULT_SKSL_SHADER, 640, 480) else {
@@ -1915,5 +1947,199 @@ mod keyframe_tests {
         };
         assert_eq!(clip_sksl.content, direct_sksl.content);
         assert_eq!(clip_sksl.properties, direct_sksl.properties);
+    }
+
+    fn manager_with_empty_clip() -> (Arc<RwLock<Project>>, ProjectManager, Uuid, Uuid) {
+        let mut project = Project::new("shape splice");
+        let (composition, track) = Composition::new("main", 640, 480, 30.0, 5.0);
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let clip = Clip::new("clip", 0.0, 5.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id).unwrap();
+        let shared = Arc::new(RwLock::new(project));
+        let manager =
+            ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
+        (shared, manager, track_id, clip_id)
+    }
+
+    #[test]
+    fn add_shape_operation_accepts_a_dangling_source() {
+        let (shared, manager, _, clip_id) = manager_with_empty_clip();
+        let source = manager
+            .create_text_node("draft", DEFAULT_TEXT_FONT, 640, 480)
+            .unwrap();
+        let source_id = source.id;
+        shared
+            .write()
+            .unwrap()
+            .insert_node_graph(
+                NodeContainer::Clip(clip_id),
+                NodeGraphBundle::new(vec![source], Vec::new(), None),
+            )
+            .unwrap();
+
+        manager.add_effector(source_id, "opacity").unwrap();
+        let project = shared.read().unwrap();
+        let operation = project
+            .nodes
+            .values()
+            .find(|node| {
+                matches!(
+                    &node.content,
+                    NodeContent::PluginOperation(operation)
+                        if operation.category == "effector" && operation.component_id == "opacity"
+                )
+            })
+            .unwrap();
+        assert_eq!(project.find_node_container(operation.id), Some(NodeContainer::Clip(clip_id)));
+        assert_eq!(project.connections.len(), 1);
+        assert_eq!(
+            project.connections[0].from,
+            PortAddress::new(PortOwner::Node(source_id), SHAPE_OUTPUT_PORT)
+        );
+        assert_eq!(
+            project.connections[0].to,
+            PortAddress::new(PortOwner::Node(operation.id), SHAPE_INPUT_PORT)
+        );
+    }
+
+    #[test]
+    fn add_shape_operation_preserves_one_downstream_connection_identity() {
+        let (shared, manager, _, clip_id) = manager_with_empty_clip();
+        let graph = manager
+            .create_text_graph("one", DEFAULT_TEXT_FONT, 640, 480)
+            .unwrap();
+        let source_id = graph
+            .nodes
+            .iter()
+            .find(|node| matches!(node.content, NodeContent::Generator(GeneratorContent::Text)))
+            .unwrap()
+            .id;
+        let original = graph
+            .connections
+            .iter()
+            .find(|connection| connection.from.owner == PortOwner::Node(source_id))
+            .unwrap()
+            .clone();
+        shared
+            .write()
+            .unwrap()
+            .insert_node_graph(NodeContainer::Clip(clip_id), graph)
+            .unwrap();
+
+        manager.add_decorator(source_id, "backplate").unwrap();
+        let project = shared.read().unwrap();
+        let rewired = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == original.id)
+            .unwrap();
+        assert_eq!(rewired.to, original.to);
+        assert_eq!(rewired.order, original.order);
+        assert_ne!(rewired.from, original.from);
+        assert_eq!(rewired.from.port, SHAPE_OUTPUT_PORT);
+    }
+
+    #[test]
+    fn add_shape_operation_preserves_every_fanout_connection_identity_and_order() {
+        let (shared, manager, _, clip_id) = manager_with_empty_clip();
+        let graph = manager
+            .create_shape_graph(DEFAULT_SHAPE_PATH, 640, 480, 100, 100)
+            .unwrap();
+        let source_id = graph
+            .nodes
+            .iter()
+            .find(|node| matches!(node.content, NodeContent::Generator(GeneratorContent::Shape)))
+            .unwrap()
+            .id;
+        let originals = graph
+            .connections
+            .iter()
+            .filter(|connection| connection.from.owner == PortOwner::Node(source_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(originals.len(), 2);
+        shared
+            .write()
+            .unwrap()
+            .insert_node_graph(NodeContainer::Clip(clip_id), graph)
+            .unwrap();
+
+        manager.add_effector(source_id, "transform").unwrap();
+        let project = shared.read().unwrap();
+        for original in originals {
+            let rewired = project
+                .connections
+                .iter()
+                .find(|connection| connection.id == original.id)
+                .unwrap();
+            assert_eq!(rewired.to, original.to);
+            assert_eq!(rewired.order, original.order);
+            assert_ne!(rewired.from, original.from);
+            assert_eq!(rewired.from.port, SHAPE_OUTPUT_PORT);
+        }
+    }
+
+    #[test]
+    fn add_shape_operation_stops_at_a_cross_container_boundary() {
+        let (shared, manager, track_id, clip_id) = manager_with_empty_clip();
+        let source = manager
+            .create_text_node("cross", DEFAULT_TEXT_FONT, 640, 480)
+            .unwrap();
+        let source_id = source.id;
+        let downstream = manager
+            .plugin_manager
+            .create_effector_operation_node("transform")
+            .unwrap();
+        let downstream_id = downstream.id;
+        {
+            let mut project = shared.write().unwrap();
+            project
+                .insert_node_graph(
+                    NodeContainer::Clip(clip_id),
+                    NodeGraphBundle::new(vec![source], Vec::new(), None),
+                )
+                .unwrap();
+            project
+                .insert_node_graph(
+                    NodeContainer::Track(track_id),
+                    NodeGraphBundle::new(vec![downstream], Vec::new(), None),
+                )
+                .unwrap();
+            project
+                .connect_ports(
+                    PortAddress::new(PortOwner::Node(source_id), SHAPE_OUTPUT_PORT),
+                    PortAddress::new(PortOwner::Node(downstream_id), SHAPE_INPUT_PORT),
+                )
+                .unwrap();
+        }
+        let original = shared.read().unwrap().connections[0].clone();
+
+        manager.add_decorator(source_id, "backplate").unwrap();
+        let project = shared.read().unwrap();
+        let inserted = project
+            .nodes
+            .values()
+            .find(|node| {
+                matches!(
+                    &node.content,
+                    NodeContent::PluginOperation(operation)
+                        if operation.category == "decorator"
+                            && operation.component_id == "backplate"
+                )
+            })
+            .unwrap();
+        assert_eq!(project.find_node_container(inserted.id), Some(NodeContainer::Clip(clip_id)));
+        let rewired = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == original.id)
+            .unwrap();
+        assert_eq!(rewired.to, original.to);
+        assert_eq!(rewired.order, original.order);
+        assert_eq!(rewired.from.owner, PortOwner::Node(inserted.id));
     }
 }

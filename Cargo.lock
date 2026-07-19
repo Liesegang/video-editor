@@ -2472,6 +2472,7 @@ dependencies = [
  "symphonia",
  "thiserror 2.0.19",
  "toml",
+ "unicode-segmentation",
  "uuid",
  "windows-sys 0.61.2",
 ]

@@ -3,27 +3,18 @@ use skia_safe::textlayout::{
     TextStyle,
 };
 use skia_safe::{FontMgr, Paint, Rect};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::StyleConfig;
+use crate::model::frame::runtime_shape::{
+    RuntimeBounds, RuntimeLine, RuntimeTextElement, RuntimeTextShape,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextLayoutMetrics {
     pub width: f32,
     pub height: f32,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct TextCharacterLayout {
-    pub value: char,
-    pub x: f32,
-    pub baseline: f32,
-    pub advance: f32,
-    pub top: f32,
-    pub bottom: f32,
-    pub line_index: usize,
-    pub line_char_index: usize,
-    pub line_char_count: usize,
 }
 
 /// Build the Paragraph used by both measurement and standard text painting.
@@ -75,46 +66,103 @@ pub fn text_style_outset(styles: &[StyleConfig]) -> f32 {
     })
 }
 
-/// Resolve per-character positions from the same shaped Paragraph used by the
-/// normal renderer. Ensemble still paints each character independently so it
-/// can transform it, but no longer invents a separate line height or advance.
-pub(crate) fn layout_text_characters(
+/// Resolve render-only Unicode grapheme metadata from the same Paragraph used
+/// by normal text painting. Glyph IDs/outlines remain SkParagraph-owned: this
+/// function does not pretend that a grapheme and a shaped glyph are 1:1.
+pub(crate) fn layout_runtime_text_shape(
     text: &str,
     primary_font_name: &str,
     size: f32,
-) -> Vec<TextCharacterLayout> {
+) -> RuntimeTextShape {
     let paragraph = build_text_paragraph(text, primary_font_name, size, None);
     let lines = paragraph.get_line_metrics();
-    let line_char_counts = text
-        .split('\n')
-        .map(|line| line.chars().count())
-        .collect::<Vec<_>>();
-    let mut line_index = 0_usize;
-    let mut line_char_index = 0_usize;
-    let mut characters = Vec::new();
-    let mut utf16_index = 0_usize;
+    #[derive(Clone)]
+    struct ElementSource<'a> {
+        source: &'a str,
+        utf8_range: std::ops::Range<usize>,
+        utf16_range: std::ops::Range<usize>,
+        line_index: usize,
+        line_element_index: usize,
+    }
 
-    for value in text.chars() {
-        // SkParagraph exposes text selection positions as UTF-16 code units,
-        // matching its cross-platform text API rather than Rust UTF-8 bytes.
-        let start = utf16_index;
-        let end = start + value.len_utf16();
-        utf16_index = end;
-        if value == '\n' {
+    #[derive(Clone)]
+    struct LineSource {
+        utf8_range: std::ops::Range<usize>,
+        utf16_range: std::ops::Range<usize>,
+    }
+
+    let mut sources = Vec::new();
+    let mut line_sources = Vec::new();
+    let mut line_index = 0_usize;
+    let mut line_element_index = 0_usize;
+    let mut utf16_index = 0_usize;
+    let mut line_utf8_start = 0_usize;
+    let mut line_utf16_start = 0_usize;
+    for (utf8_start, grapheme) in text.grapheme_indices(true) {
+        let utf8_end = utf8_start + grapheme.len();
+        let utf16_start = utf16_index;
+        let utf16_end = utf16_start + grapheme.encode_utf16().count();
+        utf16_index = utf16_end;
+        if grapheme.contains('\n') {
+            line_sources.push(LineSource {
+                utf8_range: line_utf8_start..utf8_start,
+                utf16_range: line_utf16_start..utf16_start,
+            });
             line_index += 1;
-            line_char_index = 0;
+            line_element_index = 0;
+            line_utf8_start = utf8_end;
+            line_utf16_start = utf16_end;
             continue;
         }
+        sources.push(ElementSource {
+            source: grapheme,
+            utf8_range: utf8_start..utf8_end,
+            utf16_range: utf16_start..utf16_end,
+            line_index,
+            line_element_index,
+        });
+        line_element_index += 1;
+    }
+    line_sources.push(LineSource {
+        utf8_range: line_utf8_start..text.len(),
+        utf16_range: line_utf16_start..utf16_index,
+    });
 
+    let block_group_id = stable_text_group_id(
+        0x42,
+        0..text.len(),
+        0..utf16_index,
+        line_sources.len(),
+        sources.len(),
+    );
+    let line_group_ids = line_sources
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            stable_text_group_id(
+                0x4c,
+                line.utf8_range.clone(),
+                line.utf16_range.clone(),
+                index,
+                block_group_id as usize,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut elements = Vec::with_capacity(sources.len());
+    for (block_element_index, source) in sources.into_iter().enumerate() {
         let Some(line) = lines
             .iter()
-            .find(|line| line.line_number == line_index)
-            .or_else(|| lines.get(line_index))
+            .find(|line| line.line_number == source.line_index)
+            .or_else(|| lines.get(source.line_index))
         else {
             continue;
         };
-        let boxes =
-            paragraph.get_rects_for_range(start..end, RectHeightStyle::Max, RectWidthStyle::Tight);
+        let boxes = paragraph.get_rects_for_range(
+            source.utf16_range.clone(),
+            RectHeightStyle::Max,
+            RectWidthStyle::Tight,
+        );
         let rect = boxes.iter().fold(None, |bounds: Option<Rect>, text_box| {
             Some(match bounds {
                 Some(bounds) => Rect::new(
@@ -130,62 +178,159 @@ pub(crate) fn layout_text_characters(
         // Selection boxes are present for visible glyphs and whitespace. A
         // zero-width control character may not have one; keeping it at the
         // line origin is safer than fabricating visible geometry.
-        let (x, advance) = rect
-            .map(|rect| (rect.left, rect.width().max(0.0)))
-            .unwrap_or((line.left as f32, 0.0));
+        let (left, right) = rect
+            .map(|rect| (rect.left, rect.right))
+            .unwrap_or((line.left as f32, line.left as f32));
         let baseline = line.baseline as f32;
         let top = (baseline - line.ascent as f32).max(0.0);
         let bottom = (baseline + line.descent as f32).min(paragraph.height());
-        characters.push(TextCharacterLayout {
-            value,
-            x,
+        let line_group_id = line_group_ids
+            .get(source.line_index)
+            .copied()
+            .unwrap_or(block_group_id);
+        let element_group_id = stable_text_group_id(
+            0x43,
+            source.utf8_range.clone(),
+            source.utf16_range.clone(),
+            source.line_index,
+            source.line_element_index,
+        );
+        elements.push(RuntimeTextElement {
+            source: source.source.to_string(),
+            utf8_range: source.utf8_range,
+            utf16_range: source.utf16_range,
+            line_index: source.line_index,
+            line_element_index: source.line_element_index,
+            block_element_index,
+            block_group_id,
+            line_group_id,
+            element_group_id,
+            bounds: RuntimeBounds::new(left, top, right, bottom),
+            advance: (right - left).max(0.0),
             baseline,
-            advance,
-            top,
-            bottom,
-            line_index,
-            line_char_index,
-            line_char_count: line_char_counts
-                .get(line_index)
-                .copied()
-                .unwrap_or_default(),
         });
-        line_char_index += 1;
     }
 
-    characters
+    let runtime_lines = line_sources
+        .into_iter()
+        .enumerate()
+        .map(|(index, source)| {
+            let element_start = elements
+                .iter()
+                .position(|element| element.line_index == index)
+                .unwrap_or_else(|| {
+                    elements
+                        .iter()
+                        .take_while(|element| element.line_index < index)
+                        .count()
+                });
+            let element_end = element_start
+                + elements
+                    .iter()
+                    .filter(|element| element.line_index == index)
+                    .count();
+            let bounds = elements[element_start..element_end]
+                .iter()
+                .map(|element| element.bounds)
+                .reduce(RuntimeBounds::union)
+                .unwrap_or_default();
+            RuntimeLine {
+                index,
+                element_range: element_start..element_end,
+                utf8_range: source.utf8_range,
+                utf16_range: source.utf16_range,
+                group_id: line_group_ids.get(index).copied().unwrap_or(block_group_id),
+                bounds,
+            }
+        })
+        .collect::<Vec<_>>();
+    let block_bounds = elements
+        .iter()
+        .map(|element| element.bounds)
+        .reduce(RuntimeBounds::union)
+        .unwrap_or_default();
+
+    RuntimeTextShape {
+        text: text.to_string(),
+        font: primary_font_name.to_string(),
+        size: f64::from(size),
+        elements,
+        lines: runtime_lines,
+        block_group_id,
+        block_bounds,
+    }
+}
+
+fn stable_text_group_id(
+    kind: u8,
+    utf8_range: std::ops::Range<usize>,
+    utf16_range: std::ops::Range<usize>,
+    group_index: usize,
+    element_index: usize,
+) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in [
+        u64::from(kind),
+        utf8_range.start as u64,
+        utf8_range.end as u64,
+        utf16_range.start as u64,
+        utf16_range.end as u64,
+        group_index as u64,
+        element_index as u64,
+    ]
+    .into_iter()
+    .flat_map(u64::to_le_bytes)
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{layout_text_characters, measure_text_layout};
+    use super::{layout_runtime_text_shape, measure_text_layout};
 
     #[test]
     fn paragraph_metrics_and_character_layout_share_multiline_baselines() {
         let metrics = measure_text_layout("Ag\nTy", "Arial", 42.0);
-        let characters = layout_text_characters("Ag\nTy", "Arial", 42.0);
+        let shape = layout_runtime_text_shape("Ag\nTy", "Arial", 42.0);
+        let elements = &shape.elements;
 
         assert!(metrics.width > 20.0);
         assert!(metrics.height > 60.0);
-        assert_eq!(characters.len(), 4);
-        assert_eq!(characters[0].line_index, 0);
-        assert_eq!(characters[2].line_index, 1);
-        assert!(characters[2].baseline > characters[0].baseline);
-        assert!(characters.iter().all(|character| {
-            character.top >= -0.01 && character.bottom <= metrics.height + 0.01
+        assert_eq!(elements.len(), 4);
+        assert_eq!(elements[0].line_index, 0);
+        assert_eq!(elements[2].line_index, 1);
+        assert!(elements[2].baseline > elements[0].baseline);
+        assert!(elements.iter().all(|element| {
+            element.bounds.top >= -0.01 && element.bounds.bottom <= metrics.height + 0.01
         }));
+        assert_eq!(shape.lines.len(), 2);
+        assert_eq!(shape.lines[0].element_range, 0..2);
+        assert_eq!(shape.lines[1].element_range, 2..4);
     }
 
     #[test]
-    fn character_ranges_support_multibyte_text() {
-        let characters = layout_text_characters("A日é", "Arial", 36.0);
+    fn grapheme_source_ranges_support_multibyte_and_combining_text() {
+        let shape = layout_runtime_text_shape("A日e\u{301}", "Arial", 36.0);
         assert_eq!(
-            characters
+            shape
+                .elements
                 .iter()
-                .map(|character| character.value)
+                .map(|element| element.source.as_str())
                 .collect::<String>(),
-            "A日é"
+            "A日e\u{301}"
         );
-        assert!(characters.iter().all(|character| character.advance > 0.0));
+        assert_eq!(shape.elements.len(), 3);
+        assert_eq!(shape.elements[2].source.chars().count(), 2);
+        assert_eq!(shape.elements[2].utf8_range, 4..7);
+        assert_eq!(shape.elements[2].utf16_range, 2..4);
+        assert!(shape.elements.iter().all(|element| element.advance > 0.0));
+        let clone = shape.clone();
+        assert_eq!(
+            clone.elements[2].element_group_id,
+            shape.elements[2].element_group_id
+        );
     }
 }

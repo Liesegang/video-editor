@@ -1,6 +1,9 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
 use crate::model::frame::draw_type::{DrawStyle, PathEffect};
-use crate::model::frame::entity::{FrameContent, FrameObject};
+use crate::model::frame::entity::FrameObject;
+use crate::model::frame::runtime_shape::{
+    RuntimeBounds, RuntimePathShape, RuntimeShape, RuntimeShapeGeometry,
+};
 
 #[derive(Default)]
 pub struct ShapeEntityConverterPlugin;
@@ -228,61 +231,39 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
 
     fn convert_entity(
         &self,
+        _evaluator: &FrameEvaluationContext,
+        _node: &crate::model::Node,
+        _time: f64,
+    ) -> Option<FrameObject> {
+        // Path generators are Shape-only. An explicit Style operation owns
+        // the sole Shape -> Image boundary.
+        None
+    }
+
+    fn convert_shape(
+        &self,
         evaluator: &FrameEvaluationContext,
         node: &crate::model::Node,
         time: f64,
-    ) -> Option<FrameObject> {
+    ) -> Option<RuntimeShape> {
         let props = &node.properties;
-        let _comp_fps = evaluator.composition.fps;
-
-        // Calculate evaluation time based on Node timeframe
-        let eval_time = time;
-
-        let path = evaluator.require_string(props, "path", eval_time, "shape")?;
-        let mut transform = evaluator.build_transform(props, eval_time);
-
-        let styles = evaluator.resolved_styles_or_legacy(&node.styles, eval_time);
-
-        let path_effects = evaluator.parse_path_effects(props, eval_time);
-
-        let effects = evaluator.build_image_effects(&node.effects, eval_time);
-
-        let effectors = evaluator.resolved_effectors_or_legacy(&node.effectors, eval_time);
-        if !effectors.is_empty() {
-            let effector_transform =
-                crate::core::ensemble::effectors::evaluate_configured_transform(
-                    &effectors,
-                    eval_time as f32,
-                    crate::core::ensemble::effectors::EffectorElementContext {
-                        global_index: 0,
-                        line_index: 0,
-                        line_char_index: 0,
-                        total_chars: 1,
-                        line_char_count: 1,
-                        char_center: skia_safe::Point::new(0.0, 0.0),
-                    },
-                )
-                .map_err(|error| {
-                    log::warn!("Shape Effector evaluation failed: {error}");
-                    error
-                })
-                .ok()?;
-            transform.position.x += f64::from(effector_transform.translate.0);
-            transform.position.y += f64::from(effector_transform.translate.1);
-            transform.rotation += f64::from(effector_transform.rotate);
-            transform.scale.x *= f64::from(effector_transform.scale.0);
-            transform.scale.y *= f64::from(effector_transform.scale.1);
-            transform.opacity *= f64::from(effector_transform.opacity);
+        let path = evaluator.require_string(props, "path", time, "shape")?;
+        let parsed = skia_safe::utils::parse_path::from_svg(&path)?;
+        if parsed.is_empty() {
+            return None;
         }
-
-        Some(FrameObject {
-            content: FrameContent::Shape {
+        let bounds = parsed.compute_tight_bounds();
+        Some(RuntimeShape {
+            source_id: node.id,
+            geometry: RuntimeShapeGeometry::Path(RuntimePathShape {
                 path,
-                transform,
-                styles,
-                path_effects,
-                effects,
-            },
+                bounds: RuntimeBounds::new(bounds.left, bounds.top, bounds.right, bounds.bottom),
+                path_effects: evaluator.parse_path_effects(props, time),
+            }),
+            transform: evaluator.build_transform(props, time),
+            effects: evaluator.build_image_effects(&node.effects, time),
+            effector_configs: Vec::new(),
+            decorator_configs: Vec::new(),
             properties: props.clone(),
         })
     }
@@ -300,9 +281,8 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
         let eval_time = time;
 
         let path_str = evaluator.require_string(props, "path", eval_time, "shape")?;
-        let styles = evaluator.resolved_styles_or_legacy(&node.styles, eval_time);
         let path_effects = evaluator.parse_path_effects(props, eval_time);
-        measure_shape_visual_bounds(&path_str, &styles, &path_effects)
+        measure_shape_visual_bounds(&path_str, &[], &path_effects)
     }
 }
 

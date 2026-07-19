@@ -13,8 +13,11 @@ use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameItem};
-use library::model::property::{Property, PropertyMap, PropertyValue, Vec2};
-use library::model::style::StyleInstance;
+use library::model::project::{
+    NodeGraphBundle, PortAddress, PortOwner, ProjectConnection, SHAPE_INPUT_PORT,
+    SHAPE_OUTPUT_PORT,
+};
+use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{
     Asset, AssetKind, Clip, Composition, GeneratorContent, MediaContent, Node, NodeContainer,
     NodeContent, Project, Track,
@@ -64,6 +67,23 @@ fn add_clip_node(project: &mut Project, track_id: Uuid, name: &str, node: Node) 
         .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
         .unwrap();
     (clip_id, node_id)
+}
+
+fn add_clip_graph(
+    project: &mut Project,
+    track_id: Uuid,
+    name: &str,
+    graph: NodeGraphBundle,
+) -> (Uuid, Uuid) {
+    let clip = Clip::new(name, 0.0, 3.0);
+    let clip_id = clip.id;
+    let output_node_id = graph.output_node_id.expect("fixture graph image output");
+    project.add_clip(clip);
+    project.attach_clip_to_track(track_id, clip_id).unwrap();
+    project
+        .insert_node_graph(NodeContainer::Clip(clip_id), graph)
+        .unwrap();
+    (clip_id, output_node_id)
 }
 
 #[derive(Clone, Copy)]
@@ -170,12 +190,23 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> (Project, MixedMediaId
             y: OrderedFloat(5.0),
         })),
     );
-    let fill = plugin_manager.get_style_plugin("fill").unwrap();
-    text.styles.push(StyleInstance::new(
-        "fill",
-        PropertyMap::from_definitions(&fill.properties()),
-    ));
-    add_clip_node(&mut project, text_track_id, "text clip", text);
+    let fill = plugin_manager.create_style_operation_node("fill").unwrap();
+    let text_id = text.id;
+    let fill_id = fill.id;
+    add_clip_graph(
+        &mut project,
+        text_track_id,
+        "text clip",
+        NodeGraphBundle::new(
+            vec![text, fill],
+            vec![ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(text_id), SHAPE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(fill_id), SHAPE_INPUT_PORT),
+                0,
+            )],
+            Some(fill_id),
+        ),
+    );
 
     // Keep a real, time-dependent shader in the same Preview/Export matrix.
     // It occupies only the lower-right corner so the media layers remain

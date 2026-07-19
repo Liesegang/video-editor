@@ -1,6 +1,9 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
-use crate::core::rendering::text_layout::{measure_text_layout, text_style_outset};
-use crate::model::frame::entity::{FrameContent, FrameObject};
+use crate::core::rendering::text_layout::{
+    layout_runtime_text_shape, measure_text_layout, text_style_outset,
+};
+use crate::model::frame::entity::FrameObject;
+use crate::model::frame::runtime_shape::{RuntimeShape, RuntimeShapeGeometry};
 
 #[derive(Default)]
 pub struct TextEntityConverterPlugin;
@@ -136,52 +139,45 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
 
     fn convert_entity(
         &self,
+        _evaluator: &FrameEvaluationContext,
+        _node: &crate::model::Node,
+        _time: f64,
+    ) -> Option<FrameObject> {
+        // Text is Shape-only. Rasterization is owned by an explicit Style
+        // operation and this legacy image-converter slot must stay closed.
+        None
+    }
+
+    fn convert_shape(
+        &self,
         evaluator: &FrameEvaluationContext,
         node: &crate::model::Node,
         time: f64,
-    ) -> Option<FrameObject> {
+    ) -> Option<RuntimeShape> {
         let props = &node.properties;
-        let _comp_fps = evaluator.composition.fps;
-
-        // Calculate evaluation time based on Node timeframe
-        let eval_time = time;
-
-        let text = evaluator.require_string(props, "text", eval_time, "text")?;
+        let text = evaluator.require_string(props, "text", time, "text")?;
         let font = evaluator
-            .optional_string(props, "font_family", eval_time)
+            .optional_string(props, "font_family", time)
             .unwrap_or_else(|| "Arial".to_string());
-        let size = evaluator.evaluate_number(props, "size", eval_time, 12.0);
-
-        let styles = evaluator.resolved_styles_or_legacy(&node.styles, eval_time);
-
-        let transform = evaluator.build_transform(props, eval_time);
-        let effects = evaluator.build_image_effects(&node.effects, eval_time);
-
-        let effector_configs = evaluator.resolved_effectors_or_legacy(&node.effectors, eval_time);
-        let decorator_configs =
-            evaluator.resolved_decorators_or_legacy(&node.decorators, eval_time);
-
-        let ensemble = if !effector_configs.is_empty() || !decorator_configs.is_empty() {
-            Some(crate::core::ensemble::EnsembleData {
-                enabled: true,
-                effector_configs,
-                decorator_configs,
-                patches: std::collections::HashMap::new(), // Patches not yet in UI
-            })
-        } else {
-            None
-        };
-
-        Some(FrameObject {
-            content: FrameContent::Text {
-                text,
-                font,
-                size,
-                styles,
-                effects,
-                ensemble,
-                transform,
-            },
+        let size = evaluator.evaluate_number(props, "size", time, 12.0);
+        if !size.is_finite() || size <= 0.0 {
+            log::warn!(
+                "Text Node {} has invalid size {size}; producing NoOutput",
+                node.id
+            );
+            return None;
+        }
+        Some(RuntimeShape {
+            source_id: node.id,
+            geometry: RuntimeShapeGeometry::Text(layout_runtime_text_shape(
+                &text,
+                &font,
+                size as f32,
+            )),
+            transform: evaluator.build_transform(props, time),
+            effects: evaluator.build_image_effects(&node.effects, time),
+            effector_configs: Vec::new(),
+            decorator_configs: Vec::new(),
             properties: props.clone(),
         })
     }
@@ -205,8 +201,7 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
         let size = evaluator.evaluate_number(props, "size", eval_time, 12.0);
 
         let metrics = measure_text_layout(&text, &font_name, size as f32);
-        let styles = evaluator.resolved_styles_or_legacy(&node.styles, eval_time);
-        let outset = text_style_outset(&styles);
+        let outset = text_style_outset(&[]);
 
         Some((
             -outset,

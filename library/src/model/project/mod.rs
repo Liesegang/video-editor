@@ -19,11 +19,10 @@ pub mod property;
 pub mod style;
 
 pub use connection::{
-    ContainerImageSource, ContainerImageSourceKind, DECORATOR_OUTPUT_PORT, DECORATORS_INPUT_PORT,
-    DURATION_PORT, EFFECTOR_OUTPUT_PORT, EFFECTORS_INPUT_PORT, EvalOutput, EvalResult,
+    ContainerImageSource, ContainerImageSourceKind, DURATION_PORT, EvalOutput, EvalResult,
     EvaluationError, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
     PortAddress, PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity,
-    PortOwner, PortSide, ProjectConnection, RESOLUTION_PORT, STYLE_OUTPUT_PORT, STYLES_INPUT_PORT,
+    PortOwner, PortSide, ProjectConnection, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
     TIME_PORT,
 };
 
@@ -994,6 +993,20 @@ impl Project {
         container: NodeContainer,
         output_node_id: Option<Uuid>,
     ) -> Result<(), ProjectGraphError> {
+        let previous_output_node_id = match container {
+            NodeContainer::Composition(id) => self
+                .get_composition(id)
+                .ok_or(ProjectGraphError::CompositionNotFound(id))?
+                .output_node_id,
+            NodeContainer::Track(id) => self
+                .get_track(id)
+                .ok_or(ProjectGraphError::TrackNotFound(id))?
+                .output_node_id,
+            NodeContainer::Clip(id) => self
+                .get_clip(id)
+                .ok_or(ProjectGraphError::ClipNotFound(id))?
+                .output_node_id,
+        };
         if let Some(node_id) = output_node_id
             && self.find_node_container(node_id) != Some(container)
         {
@@ -1008,22 +1021,14 @@ impl Project {
                 return Err(ProjectGraphError::OutputNodeHasNoImagePort { node_id, container });
             }
         }
-        match container {
-            NodeContainer::Composition(id) => {
-                self.get_composition_mut(id)
-                    .ok_or(ProjectGraphError::CompositionNotFound(id))?
-                    .output_node_id = output_node_id
-            }
-            NodeContainer::Track(id) => {
-                self.get_track_mut(id)
-                    .ok_or(ProjectGraphError::TrackNotFound(id))?
-                    .output_node_id = output_node_id
-            }
-            NodeContainer::Clip(id) => {
-                self.get_clip_mut(id)
-                    .ok_or(ProjectGraphError::ClipNotFound(id))?
-                    .output_node_id = output_node_id
-            }
+
+        let validation_baseline = self.validate_connections();
+        self.set_container_output_node_unchecked(container, output_node_id);
+        if let Some(error) =
+            first_new_project_validation_error(&validation_baseline, self.validate_connections())
+        {
+            self.set_container_output_node_unchecked(container, previous_output_node_id);
+            return Err(error);
         }
         Ok(())
     }

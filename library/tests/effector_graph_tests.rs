@@ -15,17 +15,18 @@ use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameItem};
 use library::model::frame::frame::FrameInfo;
 use library::model::project::{
-    Composition, EFFECTOR_OUTPUT_PORT, EFFECTORS_INPUT_PORT, EvalOutput, NodeContainer,
-    NodeGraphBundle, PortAddress, PortDataType, PortDirection, PortMultiplicity, PortOwner,
-    PortSide, Project, ProjectConnection, TIME_PORT,
+    Composition, EvalOutput, NodeContainer, NodeGraphBundle, PortAddress, PortDataType,
+    PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner, PortSide, Project,
+    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{
     Keyframe, Property, PropertyDefinition, PropertyMap, PropertyValue,
 };
-use library::model::{Clip, EffectorInstance, Node, NodeContent};
+use library::model::{Clip, EffectorInstance, Node, NodeContent, PluginOperationContent};
 use library::plugin::{
-    EFFECTOR_CATEGORY, EFFECTOR_PRODUCE_OPERATION, EffectorPlugin, FrameEvaluationContext, Plugin,
-    PluginManager, ResolvedNodeInputs, property_port_key, property_ui_type_to_port_data_type,
+    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin, FrameEvaluationContext,
+    OperationDescriptor, OperationDescriptorError, Plugin, PluginManager, ResolvedNodeInputs,
+    property_port_key, property_ui_type_to_port_data_type,
 };
 use library::rendering::renderer::RenderOutput;
 use library::{RenderService, SkiaRenderer};
@@ -41,12 +42,52 @@ fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
         .set(key.to_string(), Property::constant(value));
 }
 
-fn effector_wire(from: Uuid, to: Uuid, order: i64) -> ProjectConnection {
+fn shape_wire(from: Uuid, to: Uuid) -> ProjectConnection {
     ProjectConnection::new(
-        PortAddress::new(PortOwner::Node(from), EFFECTOR_OUTPUT_PORT),
-        PortAddress::new(PortOwner::Node(to), EFFECTORS_INPUT_PORT),
-        order,
+        PortAddress::new(PortOwner::Node(from), SHAPE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(to), SHAPE_INPUT_PORT),
+        0,
     )
+}
+
+fn insert_effector_chain(graph: &mut NodeGraphBundle, effector_ids: &[Uuid]) {
+    let source_id = graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.content,
+                NodeContent::Generator(
+                    library::model::GeneratorContent::Text
+                        | library::model::GeneratorContent::Shape
+                )
+            )
+        })
+        .expect("shape source")
+        .id;
+    let mut targets = Vec::new();
+    graph.connections.retain(|connection| {
+        let is_shape_fanout = connection.from
+            == PortAddress::new(PortOwner::Node(source_id), SHAPE_OUTPUT_PORT)
+            && connection.to.port == SHAPE_INPUT_PORT;
+        if is_shape_fanout {
+            targets.push(connection.to.clone());
+        }
+        !is_shape_fanout
+    });
+    assert!(!targets.is_empty(), "factory must expose a Shape consumer");
+    let mut upstream = source_id;
+    for effector_id in effector_ids {
+        graph.connections.push(shape_wire(upstream, *effector_id));
+        upstream = *effector_id;
+    }
+    for target in targets {
+        graph.connections.push(ProjectConnection::new(
+            PortAddress::new(PortOwner::Node(upstream), SHAPE_OUTPUT_PORT),
+            target,
+            0,
+        ));
+    }
 }
 
 fn setup_project() -> (Project, Uuid, Uuid) {
@@ -72,7 +113,11 @@ fn project_with_graph(graph: NodeGraphBundle, start_time: f64, duration: f64) ->
     (project, clip_id)
 }
 
-fn evaluate(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -> FrameInfo {
+fn evaluate_result(
+    project: &Project,
+    plugins: &Arc<PluginManager>,
+    frame_number: u64,
+) -> Result<FrameInfo, library::LibraryError> {
     get_frame_from_project(
         project,
         0,
@@ -82,7 +127,10 @@ fn evaluate(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) 
         &plugins.get_property_evaluators(),
         plugins,
     )
-    .unwrap()
+}
+
+fn evaluate(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -> FrameInfo {
+    evaluate_result(project, plugins, frame_number).unwrap()
 }
 
 fn preview(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -> Image {
@@ -122,7 +170,7 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
 
     for component_id in available {
         let descriptor = plugins
-            .operation_descriptor(EFFECTOR_CATEGORY, &component_id, EFFECTOR_PRODUCE_OPERATION)
+            .operation_descriptor(EFFECTOR_CATEGORY, &component_id, EFFECTOR_APPLY_OPERATION)
             .unwrap();
         let node = plugins
             .create_effector_operation_node(&component_id)
@@ -132,7 +180,7 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
         };
         assert_eq!(operation.category, EFFECTOR_CATEGORY);
         assert_eq!(operation.component_id, component_id);
-        assert_eq!(operation.operation, EFFECTOR_PRODUCE_OPERATION);
+        assert_eq!(operation.operation, EFFECTOR_APPLY_OPERATION);
         assert_eq!(operation.declared_ports, descriptor.declared_ports());
         assert!(node.effectors.is_empty());
         for definition in descriptor.properties() {
@@ -153,14 +201,22 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
                 property_ui_type_to_port_data_type(definition.ui_type())
             );
         }
+        let input = operation
+            .declared_ports
+            .iter()
+            .find(|port| port.key == SHAPE_INPUT_PORT)
+            .unwrap();
+        assert_eq!(input.direction, PortDirection::Input);
+        assert_eq!(input.data_type, PortDataType::Shape);
+        assert_eq!(input.multiplicity, PortMultiplicity::Single);
         let output = operation
             .declared_ports
             .iter()
-            .find(|port| port.key == EFFECTOR_OUTPUT_PORT)
+            .find(|port| port.key == SHAPE_OUTPUT_PORT)
             .unwrap();
         assert_eq!(output.direction, PortDirection::Output);
         assert_eq!(output.side, PortSide::Right);
-        assert_eq!(output.data_type, PortDataType::Effector);
+        assert_eq!(output.data_type, PortDataType::Shape);
     }
 
     let transform = plugins.create_effector_operation_node("transform").unwrap();
@@ -172,10 +228,7 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
         assert!(opacity.properties.get(key).is_some(), "missing {key}");
     }
 
-    let manager = ProjectManager::new(
-        Arc::new(RwLock::new(Project::new("factory"))),
-        plugins,
-    );
+    let manager = ProjectManager::new(Arc::new(RwLock::new(Project::new("factory"))), plugins);
     let text = manager
         .create_text_node("typed", "Arial", WIDTH, HEIGHT)
         .unwrap();
@@ -193,16 +246,16 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
     project
         .attach_node_to_container(NodeContainer::Composition(composition_id), shape_id)
         .unwrap();
-    for consumer in [text_id, shape_id] {
-        let input = project
+    for source in [text_id, shape_id] {
+        let output = project
             .port_definition(
-                &PortAddress::new(PortOwner::Node(consumer), EFFECTORS_INPUT_PORT),
-                PortDirection::Input,
+                &PortAddress::new(PortOwner::Node(source), SHAPE_OUTPUT_PORT),
+                PortDirection::Output,
             )
             .unwrap();
-        assert_eq!(input.data_type, PortDataType::Effector);
-        assert_eq!(input.multiplicity, PortMultiplicity::Variadic);
-        assert_eq!(input.side, PortSide::Left);
+        assert_eq!(output.data_type, PortDataType::Shape);
+        assert_eq!(output.multiplicity, PortMultiplicity::Single);
+        assert_eq!(output.side, PortSide::Right);
     }
 }
 
@@ -216,7 +269,17 @@ fn graph_order_keyframes_and_scalar_overrides_produce_one_ensemble_and_roundtrip
     let mut graph = manager
         .create_text_graph("ORDER", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let consumer_id = graph.output_node_id.unwrap();
+    let source_id = graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.content,
+                NodeContent::Generator(library::model::GeneratorContent::Text)
+            )
+        })
+        .unwrap()
+        .id;
     let mut transform = plugins.create_effector_operation_node("transform").unwrap();
     transform.properties.set(
         "tx".into(),
@@ -234,10 +297,7 @@ fn graph_order_keyframes_and_scalar_overrides_produce_one_ensemble_and_roundtrip
     let transform_id = transform.id;
     let opacity_id = opacity.id;
     graph.nodes.extend([transform, opacity]);
-    graph.connections.extend([
-        effector_wire(transform_id, consumer_id, 0),
-        effector_wire(opacity_id, consumer_id, 1),
-    ]);
+    insert_effector_chain(&mut graph, &[transform_id, opacity_id]);
     let (mut project, clip_id) = project_with_graph(graph, 0.0, 2.0);
     project
         .connect_ports(
@@ -271,7 +331,7 @@ fn graph_order_keyframes_and_scalar_overrides_produce_one_ensemble_and_roundtrip
             target: EffectorTarget::Block,
         } if (target_opacity - 0.5).abs() < f32::EPSILON
     ));
-    assert!(project.get_node(consumer_id).unwrap().effectors.is_empty());
+    assert!(project.get_node(source_id).unwrap().effectors.is_empty());
 
     let saved = project.save().unwrap();
     assert!(!saved.contains("schema_version"));
@@ -349,11 +409,21 @@ fn missing_invalid_unknown_and_scalar_no_output_never_restore_embedded_effectors
     let mut graph = manager
         .create_text_graph("unknown", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let consumer_id = graph.output_node_id.unwrap();
+    let source_id = graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.content,
+                NodeContent::Generator(library::model::GeneratorContent::Text)
+            )
+        })
+        .unwrap()
+        .id;
     graph
         .nodes
         .iter_mut()
-        .find(|node| node.id == consumer_id)
+        .find(|node| node.id == source_id)
         .unwrap()
         .effectors
         .push(plugins.create_effector_instance("transform").unwrap());
@@ -364,23 +434,16 @@ fn missing_invalid_unknown_and_scalar_no_output_never_restore_embedded_effectors
     };
     operation.component_id = "unavailable-effector".into();
     graph.nodes.push(unknown);
-    graph
-        .connections
-        .push(effector_wire(unknown_id, consumer_id, 0));
+    insert_effector_chain(&mut graph, &[unknown_id]);
     let (project, _) = project_with_graph(graph, 0.0, 2.0);
     let rendered = evaluate(&project, &plugins, 0);
-    let FrameContent::Text { ensemble, .. } = first_content(&rendered.items).unwrap() else {
-        panic!()
-    };
-    assert!(
-        ensemble.is_none(),
-        "wired NoOutput must not restore the embedded legacy Transform"
-    );
+    assert!(rendered.items.is_empty());
     assert_eq!(Project::load(&project.save().unwrap()).unwrap(), project);
 }
 
 struct CountingEffectorPlugin {
     evaluations: Arc<AtomicUsize>,
+    descriptors: Arc<AtomicUsize>,
 }
 
 impl Plugin for CountingEffectorPlugin {
@@ -406,6 +469,11 @@ impl EffectorPlugin for CountingEffectorPlugin {
         Vec::new()
     }
 
+    fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
+        self.descriptors.fetch_add(1, Ordering::SeqCst);
+        OperationDescriptor::effector(self.id(), self.name(), self.properties())
+    }
+
     fn convert(
         &self,
         _context: &FrameEvaluationContext,
@@ -422,11 +490,13 @@ impl EffectorPlugin for CountingEffectorPlugin {
 }
 
 #[test]
-fn inactive_effector_operation_is_not_evaluated() {
+fn disabled_and_inactive_effector_operations_short_circuit_before_plugin_work() {
     let evaluations = Arc::new(AtomicUsize::new(0));
+    let descriptors = Arc::new(AtomicUsize::new(0));
     let plugins = Arc::new(PluginManager::default());
     plugins.register_effector_plugin(Arc::new(CountingEffectorPlugin {
         evaluations: evaluations.clone(),
+        descriptors: descriptors.clone(),
     }));
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -435,121 +505,107 @@ fn inactive_effector_operation_is_not_evaluated() {
     let mut graph = manager
         .create_text_graph("inactive", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let consumer_id = graph.output_node_id.unwrap();
-    let counting = plugins.create_effector_operation_node("counting").unwrap();
+    let mut counting = plugins.create_effector_operation_node("counting").unwrap();
+    counting.enabled = false;
     let counting_id = counting.id;
     graph.nodes.push(counting);
-    graph
-        .connections
-        .push(effector_wire(counting_id, consumer_id, 0));
-    let (project, _) = project_with_graph(graph, 5.0, 2.0);
+    insert_effector_chain(&mut graph, &[counting_id]);
+    let descriptor_baseline = descriptors.load(Ordering::SeqCst);
+    let (mut project, _) = project_with_graph(graph, 0.0, 2.0);
 
     assert!(evaluate(&project, &plugins, 0).items.is_empty());
     assert_eq!(evaluations.load(Ordering::SeqCst), 0);
-    assert!(first_content(&evaluate(&project, &plugins, 50).items).is_some());
+    assert_eq!(
+        descriptors.load(Ordering::SeqCst),
+        descriptor_baseline,
+        "disabled Shape operations must not look up a plugin descriptor"
+    );
+
+    let mut broken_time = Node::new(
+        "broken time",
+        NodeContent::PluginOperation(PluginOperationContent {
+            category: "test".into(),
+            component_id: "broken-time".into(),
+            operation: "test.broken-time.v1".into(),
+            declared_ports: vec![PortDefinition::output(
+                "broken_time",
+                "Broken Time",
+                PortDataType::Number,
+                PortSide::Right,
+                PortExposure::Graph,
+            )],
+        }),
+    );
+    broken_time.ui_position = [-400.0, -200.0];
+    let broken_time_id = broken_time.id;
+    let container = project.find_node_container(counting_id).unwrap();
+    project.add_node(broken_time);
+    project
+        .attach_node_to_container(container, broken_time_id)
+        .unwrap();
+    let broken_connection = project
+        .connect_ports(
+            PortAddress::new(PortOwner::Node(broken_time_id), "broken_time"),
+            PortAddress::new(PortOwner::Node(counting_id), TIME_PORT),
+        )
+        .unwrap();
+    assert!(
+        evaluate(&project, &plugins, 0).items.is_empty(),
+        "a disabled Node must not resolve its Time wire"
+    );
+    project.get_node_mut(counting_id).unwrap().enabled = true;
+    assert!(
+        evaluate_result(&project, &plugins, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported value output port"),
+        "the fixture Time wire must fail when the gate is enabled"
+    );
+    project.disconnect_connection(broken_connection);
+
+    assert!(first_content(&evaluate(&project, &plugins, 0).items).is_some());
+    assert_eq!(evaluations.load(Ordering::SeqCst), 1);
+
+    let inactive_graph = {
+        let mut graph = manager
+            .create_text_graph("inactive", "Arial", WIDTH, HEIGHT)
+            .unwrap();
+        let counting = plugins.create_effector_operation_node("counting").unwrap();
+        let counting_id = counting.id;
+        graph.nodes.push(counting);
+        insert_effector_chain(&mut graph, &[counting_id]);
+        graph
+    };
+    let (inactive, _) = project_with_graph(inactive_graph, 5.0, 2.0);
+    assert!(evaluate(&inactive, &plugins, 0).items.is_empty());
     assert_eq!(evaluations.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-fn descriptor_graph_render_matches_legacy_embedded_effector_pixels() {
+fn normal_nonensemble_text_pixels_are_stable_across_project_roundtrip() {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
         plugins.clone(),
     );
-
-    let mut legacy = manager
-        .create_text_node("PARITY", "Arial", WIDTH, HEIGHT)
-        .unwrap();
-    let mut legacy_transform = plugins.create_effector_instance("transform").unwrap();
-    legacy_transform
-        .properties
-        .set("tx".into(), Property::constant(PropertyValue::from(4.0)));
-    legacy_transform.properties.set(
-        "rotation".into(),
-        Property::constant(PropertyValue::from(7.0)),
-    );
-    legacy_transform.properties.set(
-        "target".into(),
-        Property::constant(PropertyValue::String("Char".into())),
-    );
-    let mut legacy_opacity = plugins.create_effector_instance("opacity").unwrap();
-    legacy_opacity.properties.set(
-        "opacity".into(),
-        Property::constant(PropertyValue::from(70.0)),
-    );
-    legacy_opacity.properties.set(
-        "mode".into(),
-        Property::constant(PropertyValue::String("Multiply".into())),
-    );
-    legacy_opacity.properties.set(
-        "target".into(),
-        Property::constant(PropertyValue::String("Char".into())),
-    );
-    legacy.effectors = vec![legacy_transform, legacy_opacity];
-    let (legacy_project, _) =
-        project_with_graph(NodeGraphBundle::with_output_node(legacy), 0.0, 2.0);
-
-    let mut graph = manager
+    let graph = manager
         .create_text_graph("PARITY", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let consumer_id = graph.output_node_id.unwrap();
-    let mut transform = plugins.create_effector_operation_node("transform").unwrap();
-    set_constant(&mut transform, "tx", 4.0.into());
-    set_constant(&mut transform, "rotation", 7.0.into());
-    set_constant(
-        &mut transform,
-        "target",
-        PropertyValue::String("Char".into()),
-    );
-    let mut opacity = plugins.create_effector_operation_node("opacity").unwrap();
-    set_constant(&mut opacity, "opacity", 70.0.into());
-    set_constant(
-        &mut opacity,
-        "mode",
-        PropertyValue::String("Multiply".into()),
-    );
-    set_constant(&mut opacity, "target", PropertyValue::String("Char".into()));
-    let transform_id = transform.id;
-    let opacity_id = opacity.id;
-    graph.nodes.extend([transform, opacity]);
-    graph.connections.extend([
-        effector_wire(transform_id, consumer_id, 0),
-        effector_wire(opacity_id, consumer_id, 1),
-    ]);
-    let (graph_project, _) = project_with_graph(graph, 0.0, 2.0);
-
-    let legacy_frame = evaluate(&legacy_project, &plugins, 0);
-    let graph_frame = evaluate(&graph_project, &plugins, 0);
-    let FrameContent::Text {
-        ensemble: Some(legacy_ensemble),
-        ..
-    } = first_content(&legacy_frame.items).unwrap()
-    else {
+    let (project, _) = project_with_graph(graph, 0.0, 2.0);
+    let frame = evaluate(&project, &plugins, 0);
+    let FrameContent::Text { ensemble, .. } = first_content(&frame.items).unwrap() else {
         panic!()
     };
-    let FrameContent::Text {
-        ensemble: Some(graph_ensemble),
-        ..
-    } = first_content(&graph_frame.items).unwrap()
-    else {
-        panic!()
-    };
-    assert_eq!(
-        graph_ensemble.effector_configs,
-        legacy_ensemble.effector_configs
-    );
-    assert_eq!(
-        preview(&graph_project, &plugins, 0).data,
-        preview(&legacy_project, &plugins, 0).data
-    );
     assert!(
-        graph_project
-            .get_node(consumer_id)
-            .unwrap()
-            .effectors
-            .is_empty()
+        ensemble.is_none(),
+        "a plain Style branch must stay non-Ensemble"
     );
+    let expected = preview(&project, &plugins, 0);
+    assert!(expected.data.iter().any(|channel| *channel != 0));
+
+    let loaded = Project::load(&project.save().unwrap()).unwrap();
+    assert_eq!(loaded, project);
+    assert_eq!(preview(&loaded, &plugins, 0).data, expected.data);
 }
 
 #[test]
@@ -562,7 +618,6 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
     let mut graph = manager
         .create_text_graph("ABCDE", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let consumer_id = graph.output_node_id.unwrap();
     let mut random = plugins.create_effector_operation_node("randomize").unwrap();
     set_constant(&mut random, "seed", 7.0.into());
     set_constant(&mut random, "translate_range", 8.0.into());
@@ -571,9 +626,7 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
     set_constant(&mut random, "target", PropertyValue::String("Char".into()));
     let random_id = random.id;
     graph.nodes.push(random);
-    graph
-        .connections
-        .push(effector_wire(random_id, consumer_id, 0));
+    insert_effector_chain(&mut graph, &[random_id]);
     let (project, _) = project_with_graph(graph, 0.0, 2.0);
 
     let image_a = preview(&project, &plugins, 0);
@@ -593,6 +646,9 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
         0.0,
         EffectorElementContext {
             global_index: 0,
+            stable_id: 0x1000,
+            block_group_id: 0x10,
+            line_group_id: 0x11,
             line_index: 0,
             line_char_index: 0,
             total_chars: 5,
@@ -606,6 +662,9 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
         0.0,
         EffectorElementContext {
             global_index: 1,
+            stable_id: 0x1001,
+            block_group_id: 0x10,
+            line_group_id: 0x11,
             line_index: 0,
             line_char_index: 1,
             total_chars: 5,
@@ -638,7 +697,17 @@ fn shape_variadic_effector_input_applies_single_element_transform() {
     let mut graph = manager
         .create_shape_graph("M0 0 L20 0 L20 20 L0 20 Z", WIDTH, HEIGHT, 20, 20)
         .unwrap();
-    let shape_id = graph.output_node_id.unwrap();
+    let shape_id = graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.content,
+                NodeContent::Generator(library::model::GeneratorContent::Shape)
+            )
+        })
+        .unwrap()
+        .id;
     let mut transform = plugins.create_effector_operation_node("transform").unwrap();
     set_constant(&mut transform, "tx", 8.0.into());
     set_constant(&mut transform, "ty", 3.0.into());
@@ -647,10 +716,7 @@ fn shape_variadic_effector_input_applies_single_element_transform() {
     set_constant(&mut opacity, "opacity", 50.0.into());
     let opacity_id = opacity.id;
     graph.nodes.extend([transform, opacity]);
-    graph.connections.extend([
-        effector_wire(transform_id, shape_id, 0),
-        effector_wire(opacity_id, shape_id, 1),
-    ]);
+    insert_effector_chain(&mut graph, &[transform_id, opacity_id]);
     let (project, _) = project_with_graph(graph, 0.0, 2.0);
 
     let rendered = evaluate(&project, &plugins, 0);

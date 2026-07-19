@@ -33,9 +33,9 @@ use crate::plugin::runtime_native::{
 
 use crate::plugin::traits::{Plugin, PropertyPlugin};
 use crate::plugin::{
-    DECORATOR_CATEGORY, DECORATOR_PRODUCE_OPERATION, DecoratorPlugin, EFFECT_APPLY_OPERATION,
-    EFFECT_CATEGORY, EFFECTOR_CATEGORY, EFFECTOR_PRODUCE_OPERATION, EffectorPlugin,
-    OperationDescriptor, STYLE_CATEGORY, STYLE_PRODUCE_OPERATION, StylePlugin,
+    DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, DecoratorPlugin, EFFECT_APPLY_OPERATION,
+    EFFECT_CATEGORY, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin,
+    OperationDescriptor, STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin,
 };
 
 use crate::plugin::effects::{
@@ -218,7 +218,7 @@ impl PluginManager {
         operation: &str,
     ) -> Result<OperationDescriptor, LibraryError> {
         let descriptor = match (category, operation) {
-            (STYLE_CATEGORY, STYLE_PRODUCE_OPERATION) => self
+            (STYLE_CATEGORY, STYLE_APPLY_OPERATION) => self
                 .get_style_plugin(component_id)
                 .ok_or_else(|| {
                     LibraryError::Plugin(format!(
@@ -236,7 +236,7 @@ impl PluginManager {
                 })?
                 .descriptor()
                 .map_err(|error| LibraryError::Plugin(error.to_string()))?,
-            (EFFECTOR_CATEGORY, EFFECTOR_PRODUCE_OPERATION) => self
+            (EFFECTOR_CATEGORY, EFFECTOR_APPLY_OPERATION) => self
                 .get_effector_plugin(component_id)
                 .ok_or_else(|| {
                     LibraryError::Plugin(format!(
@@ -245,7 +245,7 @@ impl PluginManager {
                 })?
                 .descriptor()
                 .map_err(|error| LibraryError::Plugin(error.to_string()))?,
-            (DECORATOR_CATEGORY, DECORATOR_PRODUCE_OPERATION) => self
+            (DECORATOR_CATEGORY, DECORATOR_APPLY_OPERATION) => self
                 .get_decorator_plugin(component_id)
                 .ok_or_else(|| {
                     LibraryError::Plugin(format!(
@@ -288,7 +288,7 @@ impl PluginManager {
         &self,
         component_id: &str,
     ) -> Result<crate::model::Node, LibraryError> {
-        self.create_operation_node(STYLE_CATEGORY, component_id, STYLE_PRODUCE_OPERATION)
+        self.create_operation_node(STYLE_CATEGORY, component_id, STYLE_APPLY_OPERATION)
     }
 
     pub fn create_effect_operation_node(
@@ -302,18 +302,14 @@ impl PluginManager {
         &self,
         component_id: &str,
     ) -> Result<crate::model::Node, LibraryError> {
-        self.create_operation_node(EFFECTOR_CATEGORY, component_id, EFFECTOR_PRODUCE_OPERATION)
+        self.create_operation_node(EFFECTOR_CATEGORY, component_id, EFFECTOR_APPLY_OPERATION)
     }
 
     pub fn create_decorator_operation_node(
         &self,
         component_id: &str,
     ) -> Result<crate::model::Node, LibraryError> {
-        self.create_operation_node(
-            DECORATOR_CATEGORY,
-            component_id,
-            DECORATOR_PRODUCE_OPERATION,
-        )
+        self.create_operation_node(DECORATOR_CATEGORY, component_id, DECORATOR_APPLY_OPERATION)
     }
 
     /// Temporary legacy factory backed by the same descriptor defaults as a
@@ -323,7 +319,7 @@ impl PluginManager {
         component_id: &str,
     ) -> Result<crate::model::style::StyleInstance, LibraryError> {
         let descriptor =
-            self.operation_descriptor(STYLE_CATEGORY, component_id, STYLE_PRODUCE_OPERATION)?;
+            self.operation_descriptor(STYLE_CATEGORY, component_id, STYLE_APPLY_OPERATION)?;
         Ok(crate::model::style::StyleInstance::new(
             component_id,
             crate::model::property::PropertyMap::from_definitions(descriptor.properties()),
@@ -349,7 +345,7 @@ impl PluginManager {
         let descriptor = match self.operation_descriptor(
             STYLE_CATEGORY,
             component_id,
-            STYLE_PRODUCE_OPERATION,
+            STYLE_APPLY_OPERATION,
         ) {
             Ok(descriptor) => descriptor,
             Err(error) => {
@@ -393,7 +389,7 @@ impl PluginManager {
         let descriptor = match self.operation_descriptor(
             EFFECTOR_CATEGORY,
             component_id,
-            EFFECTOR_PRODUCE_OPERATION,
+            EFFECTOR_APPLY_OPERATION,
         ) {
             Ok(descriptor) => descriptor,
             Err(error) => {
@@ -437,7 +433,7 @@ impl PluginManager {
         let descriptor = match self.operation_descriptor(
             DECORATOR_CATEGORY,
             component_id,
-            DECORATOR_PRODUCE_OPERATION,
+            DECORATOR_APPLY_OPERATION,
         ) {
             Ok(descriptor) => descriptor,
             Err(error) => {
@@ -492,13 +488,13 @@ impl PluginManager {
     }
 
     pub fn get_effector_properties(&self, id: &str) -> Vec<PropertyDefinition> {
-        self.operation_descriptor(EFFECTOR_CATEGORY, id, EFFECTOR_PRODUCE_OPERATION)
+        self.operation_descriptor(EFFECTOR_CATEGORY, id, EFFECTOR_APPLY_OPERATION)
             .map(|descriptor| descriptor.properties().to_vec())
             .unwrap_or_default()
     }
 
     pub fn get_decorator_properties(&self, id: &str) -> Vec<PropertyDefinition> {
-        self.operation_descriptor(DECORATOR_CATEGORY, id, DECORATOR_PRODUCE_OPERATION)
+        self.operation_descriptor(DECORATOR_CATEGORY, id, DECORATOR_APPLY_OPERATION)
             .map(|descriptor| descriptor.properties().to_vec())
             .unwrap_or_default()
     }
@@ -517,7 +513,7 @@ impl PluginManager {
         effector_id: &str,
     ) -> Result<crate::model::ensemble::EffectorInstance, LibraryError> {
         let descriptor =
-            self.operation_descriptor(EFFECTOR_CATEGORY, effector_id, EFFECTOR_PRODUCE_OPERATION)?;
+            self.operation_descriptor(EFFECTOR_CATEGORY, effector_id, EFFECTOR_APPLY_OPERATION)?;
         Ok(crate::model::ensemble::EffectorInstance::new(
             effector_id,
             crate::model::property::PropertyMap::from_definitions(descriptor.properties()),
@@ -534,7 +530,7 @@ impl PluginManager {
         let Ok(descriptor) = self.operation_descriptor(
             EFFECTOR_CATEGORY,
             &instance.effector_type,
-            EFFECTOR_PRODUCE_OPERATION,
+            EFFECTOR_APPLY_OPERATION,
         ) else {
             return false;
         };
@@ -563,7 +559,7 @@ impl PluginManager {
             .operation_descriptor(
                 EFFECTOR_CATEGORY,
                 &instance.effector_type,
-                EFFECTOR_PRODUCE_OPERATION,
+                EFFECTOR_APPLY_OPERATION,
             )
             .ok()?;
         let mut resolved = instance.clone();
@@ -590,11 +586,8 @@ impl PluginManager {
         &self,
         decorator_id: &str,
     ) -> Result<crate::model::ensemble::DecoratorInstance, LibraryError> {
-        let descriptor = self.operation_descriptor(
-            DECORATOR_CATEGORY,
-            decorator_id,
-            DECORATOR_PRODUCE_OPERATION,
-        )?;
+        let descriptor =
+            self.operation_descriptor(DECORATOR_CATEGORY, decorator_id, DECORATOR_APPLY_OPERATION)?;
         Ok(crate::model::ensemble::DecoratorInstance::new(
             decorator_id,
             crate::model::property::PropertyMap::from_definitions(descriptor.properties()),
@@ -608,7 +601,7 @@ impl PluginManager {
         let Ok(descriptor) = self.operation_descriptor(
             DECORATOR_CATEGORY,
             &instance.decorator_type,
-            DECORATOR_PRODUCE_OPERATION,
+            DECORATOR_APPLY_OPERATION,
         ) else {
             return false;
         };
@@ -634,7 +627,7 @@ impl PluginManager {
             .operation_descriptor(
                 DECORATOR_CATEGORY,
                 &instance.decorator_type,
-                DECORATOR_PRODUCE_OPERATION,
+                DECORATOR_APPLY_OPERATION,
             )
             .ok()?;
         let mut resolved = instance.clone();
