@@ -8,8 +8,6 @@ use crate::ui::panels::inspector::properties::PropertyAction;
 use library::model::property::{Property, PropertyValue};
 use library::{EditorService, PropertyOwner};
 
-pub use library::model::property::PropertyTarget;
-
 /// Context for handling property actions.
 pub struct ActionContext<'a> {
     pub project_service: &'a mut EditorService,
@@ -37,7 +35,6 @@ impl<'a> ActionContext<'a> {
     /// Handle an Update action - updates the property value.
     pub fn handle_update(
         &mut self,
-        target: PropertyTarget,
         name: &str,
         value: PropertyValue,
         get_property: impl Fn(&str) -> Option<library::model::property::Property>,
@@ -45,7 +42,6 @@ impl<'a> ActionContext<'a> {
         let _ = get_property;
         let result = self.project_service.update_property_or_keyframe(
             self.owner,
-            target,
             name,
             self.current_time,
             value,
@@ -72,7 +68,6 @@ impl<'a> ActionContext<'a> {
     /// Handle a ToggleKeyframe action - adds or removes a keyframe at current time.
     pub fn handle_toggle_keyframe(
         &mut self,
-        target: PropertyTarget,
         name: &str,
         value: PropertyValue,
         get_property: impl Fn(&str) -> Option<library::model::property::Property>,
@@ -91,12 +86,11 @@ impl<'a> ActionContext<'a> {
         let result = if let Some(keyframe_id) = keyframe_id {
             // Remove existing keyframe
             self.project_service
-                .remove_keyframe_by_id(self.owner, target, name, keyframe_id)
+                .remove_keyframe_by_id(self.owner, name, keyframe_id)
         } else {
             library::editor::handlers::keyframe_handler::KeyframeHandler::add_keyframe(
                 &self.project_service.get_project(),
                 self.owner,
-                target,
                 name,
                 self.current_time,
                 value,
@@ -121,14 +115,13 @@ impl<'a> ActionContext<'a> {
     /// Handle a SetAttribute action - sets a property attribute.
     pub fn handle_set_attribute(
         &mut self,
-        target: PropertyTarget,
         name: &str,
         attr_key: &str,
         attr_val: PropertyValue,
     ) -> bool {
         let result = self
             .project_service
-            .set_property_attribute(self.owner, target, name, attr_key, attr_val);
+            .set_property_attribute(self.owner, name, attr_key, attr_val);
 
         match result {
             Ok(()) => {
@@ -148,23 +141,22 @@ impl<'a> ActionContext<'a> {
     pub fn handle_actions(
         &mut self,
         actions: Vec<PropertyAction>,
-        target: PropertyTarget,
         get_property: impl Fn(&str) -> Option<Property>,
     ) -> bool {
         let mut needs_refresh = false;
         for action in actions {
             match action {
                 PropertyAction::Update(name, val) => {
-                    needs_refresh |= self.handle_update(target, &name, val, &get_property);
+                    needs_refresh |= self.handle_update(&name, val, &get_property);
                 }
                 PropertyAction::Commit => {
                     self.handle_commit();
                 }
                 PropertyAction::ToggleKeyframe(name, val) => {
-                    needs_refresh |= self.handle_toggle_keyframe(target, &name, val, &get_property);
+                    needs_refresh |= self.handle_toggle_keyframe(&name, val, &get_property);
                 }
                 PropertyAction::SetAttribute(name, key, val) => {
-                    needs_refresh |= self.handle_set_attribute(target, &name, &key, val);
+                    needs_refresh |= self.handle_set_attribute(&name, &key, val);
                 }
             }
         }
@@ -176,10 +168,8 @@ impl<'a> ActionContext<'a> {
 mod tests {
     use super::*;
     use library::cache::CacheManager;
-    use library::model::ensemble::{DecoratorInstance, EffectorInstance};
-    use library::model::property::{PropertyMap, PropertyValue};
-    use library::model::style::StyleInstance;
-    use library::model::{EffectConfig, Node, NodeContent, Project};
+    use library::model::property::PropertyValue;
+    use library::model::{Node, NodeContent, Project};
     use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
     use std::sync::{Arc, RwLock};
@@ -189,122 +179,79 @@ mod tests {
         PropertyValue::Number(OrderedFloat(value))
     }
 
-    fn map_with(key: &str, value: f64) -> PropertyMap {
-        let mut map = PropertyMap::new();
-        map.set(key.to_string(), Property::constant(number(value)));
-        map
-    }
-
-    fn target_property(
-        project: &Project,
-        node_id: Uuid,
-        target: PropertyTarget,
-        key: &str,
-    ) -> Option<Property> {
-        project
-            .get_node(node_id)?
-            .property_map(target)?
-            .get(key)
-            .cloned()
+    fn node_property(project: &Project, node_id: Uuid, key: &str) -> Option<Property> {
+        project.get_node(node_id)?.properties.get(key).cloned()
     }
 
     #[test]
-    fn inspector_keyframe_crud_uses_ids_for_every_target_and_restores_typed_constants() {
-        let effect_id = Uuid::new_v4();
-        let style_id = Uuid::new_v4();
-        let effector_id = Uuid::new_v4();
-        let decorator_id = Uuid::new_v4();
-        let mut node = Node::new("animated", NodeContent::Merge);
+    fn inspector_keyframe_crud_edits_an_operation_nodes_direct_properties() {
+        let plugins = Arc::new(PluginManager::default());
+        let node = plugins.create_effect_operation_node("blur").unwrap();
         let node_id = node.id;
-        node.properties = map_with("amount", 1.0);
-        node.effects.push(EffectConfig {
-            id: effect_id,
-            effect_type: "test".to_string(),
-            properties: map_with("amount", 2.0),
-        });
-        let mut style = StyleInstance::new("test", map_with("amount", 3.0));
-        style.id = style_id;
-        node.styles.push(style);
-        let mut effector = EffectorInstance::new("test", map_with("amount", 4.0));
-        effector.id = effector_id;
-        node.effectors.push(effector);
-        let mut decorator = DecoratorInstance::new("test", map_with("amount", 5.0));
-        decorator.id = decorator_id;
-        node.decorators.push(decorator);
 
         let mut project = Project::new("inspector keyframes");
         project.add_node(node);
         let project = Arc::new(RwLock::new(project));
         let mut service = EditorService::new(
             Arc::clone(&project),
-            Arc::new(PluginManager::default()),
+            plugins,
             Arc::new(CacheManager::new()),
         )
         .unwrap();
         let mut history = HistoryManager::new();
         history.push_project_state(project.read().unwrap().clone());
 
-        let targets = [
-            PropertyTarget::Direct,
-            PropertyTarget::Effect(effect_id),
-            PropertyTarget::Style(style_id),
-            PropertyTarget::Effector(effector_id),
-            PropertyTarget::Decorator(decorator_id),
-        ];
-        for (index, target) in targets.into_iter().enumerate() {
-            let initial_depth = history.undo_depth();
-            let property = target_property(&project.read().unwrap(), node_id, target, "amount");
-            let mut context = ActionContext::new(
-                &mut service,
-                &mut history,
-                PropertyOwner::Node(node_id),
-                2.5,
-            );
-            assert!(context
-                .handle_toggle_keyframe(target, "amount", number(10.0), |_| { property.clone() }));
-            assert_eq!(history.undo_depth(), initial_depth + 1);
+        let initial_depth = history.undo_depth();
+        let property = node_property(&project.read().unwrap(), node_id, "sigma_x");
+        let mut context = ActionContext::new(
+            &mut service,
+            &mut history,
+            PropertyOwner::Node(node_id),
+            2.5,
+        );
+        assert!(context.handle_toggle_keyframe("sigma_x", number(10.0), |_| {
+            property.clone()
+        }));
+        assert_eq!(history.undo_depth(), initial_depth + 1);
 
-            let keyframed = target_property(&project.read().unwrap(), node_id, target, "amount")
-                .expect("target property should remain present");
-            assert_eq!(keyframed.evaluator, "keyframe");
-            let keyframe = keyframed.keyframes().into_iter().next().unwrap();
-            assert_eq!(keyframe.time, OrderedFloat(2.5));
+        let keyframed = node_property(&project.read().unwrap(), node_id, "sigma_x")
+            .expect("operation property should remain present");
+        assert_eq!(keyframed.evaluator, "keyframe");
+        let keyframe = keyframed.keyframes().into_iter().next().unwrap();
+        assert_eq!(keyframe.time, OrderedFloat(2.5));
 
-            let mut context = ActionContext::new(
-                &mut service,
-                &mut history,
-                PropertyOwner::Node(node_id),
-                2.5,
-            );
-            assert!(context.handle_actions(
-                vec![
-                    PropertyAction::Update("amount".to_string(), number(20.0 + index as f64)),
-                    PropertyAction::Commit,
-                ],
-                target,
-                |name| target_property(&project.read().unwrap(), node_id, target, name),
-            ));
-            let updated =
-                target_property(&project.read().unwrap(), node_id, target, "amount").unwrap();
-            assert_eq!(
-                updated.keyframe_by_id(keyframe.id).unwrap().value,
-                number(20.0 + index as f64)
-            );
+        let mut context = ActionContext::new(
+            &mut service,
+            &mut history,
+            PropertyOwner::Node(node_id),
+            2.5,
+        );
+        assert!(context.handle_actions(
+            vec![
+                PropertyAction::Update("sigma_x".to_string(), number(20.0)),
+                PropertyAction::Commit,
+            ],
+            |name| node_property(&project.read().unwrap(), node_id, name),
+        ));
+        let updated = node_property(&project.read().unwrap(), node_id, "sigma_x").unwrap();
+        assert_eq!(
+            updated.keyframe_by_id(keyframe.id).unwrap().value,
+            number(20.0)
+        );
 
-            let property = Some(updated);
-            let mut context = ActionContext::new(
-                &mut service,
-                &mut history,
-                PropertyOwner::Node(node_id),
-                2.5,
-            );
-            assert!(context
-                .handle_toggle_keyframe(target, "amount", number(0.0), |_| { property.clone() }));
-            let restored =
-                target_property(&project.read().unwrap(), node_id, target, "amount").unwrap();
-            assert_eq!(restored.evaluator, "constant");
-            assert_eq!(restored.value(), Some(&number(20.0 + index as f64)));
-        }
+        let property = Some(updated);
+        let mut context = ActionContext::new(
+            &mut service,
+            &mut history,
+            PropertyOwner::Node(node_id),
+            2.5,
+        );
+        assert!(context.handle_toggle_keyframe("sigma_x", number(0.0), |_| {
+            property.clone()
+        }));
+        let restored = node_property(&project.read().unwrap(), node_id, "sigma_x").unwrap();
+        assert_eq!(restored.evaluator, "constant");
+        assert_eq!(restored.value(), Some(&number(20.0)));
     }
 
     #[test]
@@ -330,18 +277,11 @@ mod tests {
         );
 
         assert!(context.handle_toggle_keyframe(
-            PropertyTarget::Direct,
             "new_amount",
             number(7.5),
             |_| None,
         ));
-        let property = target_property(
-            &project.read().unwrap(),
-            node_id,
-            PropertyTarget::Direct,
-            "new_amount",
-        )
-        .unwrap();
+        let property = node_property(&project.read().unwrap(), node_id, "new_amount").unwrap();
         assert_eq!(property.evaluator, "keyframe");
         assert_eq!(property.keyframes()[0].value, number(7.5));
     }

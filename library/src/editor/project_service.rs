@@ -900,16 +900,14 @@ impl ProjectManager {
     pub fn update_property_or_keyframe(
         &self,
         owner: PropertyOwner,
-        target: crate::model::property::PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        handlers::clip_handler::ClipHandler::update_target_property_or_keyframe(
+        handlers::clip_handler::ClipHandler::update_property_or_keyframe(
             &self.project,
             owner,
-            target,
             property_key,
             time,
             value,
@@ -920,7 +918,6 @@ impl ProjectManager {
     pub fn update_keyframe_by_id(
         &self,
         owner: PropertyOwner,
-        target: crate::model::property::PropertyTarget,
         property_key: &str,
         keyframe_id: KeyframeId,
         update: KeyframeUpdate,
@@ -928,7 +925,6 @@ impl ProjectManager {
         handlers::keyframe_handler::KeyframeHandler::update_keyframe_by_id(
             &self.project,
             owner,
-            target,
             property_key,
             keyframe_id,
             update,
@@ -945,14 +941,12 @@ impl ProjectManager {
     pub fn remove_keyframe_by_id(
         &self,
         owner: PropertyOwner,
-        target: crate::model::property::PropertyTarget,
         property_key: &str,
         keyframe_id: KeyframeId,
     ) -> Result<(), LibraryError> {
         handlers::keyframe_handler::KeyframeHandler::remove_keyframe_by_id(
             &self.project,
             owner,
-            target,
             property_key,
             keyframe_id,
         )
@@ -1008,7 +1002,6 @@ impl ProjectManager {
     pub fn add_keyframe(
         &self,
         owner: PropertyOwner,
-        target: crate::model::property::PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
@@ -1017,7 +1010,6 @@ impl ProjectManager {
         handlers::keyframe_handler::KeyframeHandler::add_keyframe(
             &self.project,
             owner,
-            target,
             property_key,
             time,
             value,
@@ -1028,7 +1020,6 @@ impl ProjectManager {
     pub fn add_keyframe_with_id(
         &self,
         owner: PropertyOwner,
-        target: crate::model::property::PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
@@ -1037,7 +1028,6 @@ impl ProjectManager {
         handlers::keyframe_handler::KeyframeHandler::add_keyframe_with_id(
             &self.project,
             owner,
-            target,
             property_key,
             time,
             value,
@@ -1201,7 +1191,6 @@ impl ProjectManager {
     pub fn set_property_attribute(
         &self,
         owner: PropertyOwner,
-        target: crate::model::property::PropertyTarget,
         property_key: &str,
         attribute_key: &str,
         attribute_value: PropertyValue,
@@ -1209,7 +1198,6 @@ impl ProjectManager {
         handlers::clip_handler::ClipHandler::set_property_attribute(
             &self.project,
             owner,
-            target,
             property_key,
             attribute_key,
             attribute_value,
@@ -1333,7 +1321,7 @@ mod keyframe_tests {
     use super::*;
     use crate::editor::handlers::property_ops::PropertyOwner;
     use crate::model::project::NodeContainer;
-    use crate::model::property::{Property, PropertyTarget, PropertyValue};
+    use crate::model::property::{Property, PropertyValue};
 
     fn assert_converter_properties(
         manager: &ProjectManager,
@@ -1381,7 +1369,6 @@ mod keyframe_tests {
         let id = manager
             .add_keyframe_with_id(
                 owner,
-                PropertyTarget::Direct,
                 "opacity",
                 1.0,
                 PropertyValue::Number(OrderedFloat(100.0)),
@@ -1391,7 +1378,6 @@ mod keyframe_tests {
         manager
             .update_keyframe_by_id(
                 owner,
-                PropertyTarget::Direct,
                 "opacity",
                 id,
                 KeyframeUpdate {
@@ -1431,7 +1417,7 @@ mod keyframe_tests {
         );
 
         manager
-            .remove_keyframe_by_id(owner, PropertyTarget::Direct, "opacity", id)
+            .remove_keyframe_by_id(owner, "opacity", id)
             .expect("service should remove the identified key");
         let read = shared.read().expect("project should remain readable");
         let property = read

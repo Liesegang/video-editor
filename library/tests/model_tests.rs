@@ -5,7 +5,7 @@ use library::model::project::{
     Composition, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, NodeContainer, PortAddress, PortOwner,
     Project, TIME_PORT,
 };
-use library::model::property::{Property, PropertyMap, PropertyTarget, PropertyValue};
+use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::model::{
     Clip, GeneratorContent, MediaContent, Node, NodeContent, ReferenceContent, Track,
 };
@@ -124,10 +124,9 @@ fn clip_timing_metadata_validates_freeze_and_never_duplicates_structural_values(
     let clip_id = clip.id;
     project.add_clip(clip);
     let shared = Arc::new(RwLock::new(project));
-    ClipHandler::update_target_property_or_keyframe(
+    ClipHandler::update_property_or_keyframe(
         &shared,
         library::editor::handlers::property_ops::PropertyOwner::Clip(clip_id),
-        PropertyTarget::Direct,
         "time_stretch",
         42.0,
         PropertyValue::Number(OrderedFloat(0.0)),
@@ -159,10 +158,9 @@ fn clip_timing_metadata_validates_freeze_and_never_duplicates_structural_values(
 
     let before = shared.read().unwrap().clone();
     assert!(
-        ClipHandler::update_target_property_or_keyframe(
+        ClipHandler::update_property_or_keyframe(
             &shared,
             library::editor::handlers::property_ops::PropertyOwner::Clip(clip_id),
-            PropertyTarget::Direct,
             "time_stretch",
             0.0,
             PropertyValue::Number(OrderedFloat(-1.0)),
@@ -187,14 +185,12 @@ fn node_properties_are_the_only_generator_value_authority() {
     let mut clip = Clip::new("placement", 0.0, 5.0);
 
     assert!(node.update_property_or_keyframe(
-        PropertyTarget::Direct,
         "text",
         0.0,
         PropertyValue::String("after".to_string()),
         None,
     ));
     assert!(clip.update_property_or_keyframe(
-        PropertyTarget::Direct,
         "start_time",
         0.0,
         PropertyValue::Number(OrderedFloat(2.5)),

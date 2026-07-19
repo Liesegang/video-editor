@@ -1,6 +1,6 @@
 use library::EditorService as ProjectService;
 use library::PropertyOwner;
-use library::model::property::{PropertyTarget, PropertyValue};
+use library::model::property::PropertyValue;
 use uuid::Uuid;
 
 fn node_local_time(service: &ProjectService, node_id: Uuid, global_time: f64) -> f64 {
@@ -42,7 +42,6 @@ pub fn update_node_property(
 
     service.update_property_or_keyframe(
         PropertyOwner::Node(node_id),
-        PropertyTarget::Direct,
         prop_name,
         node_local_time(service, node_id, time),
         value,

@@ -15,7 +15,6 @@ use crate::ui::panels::graph_editor::utils::time_mapper_for_entity;
 
 struct PreparedKeyframeDialogUpdate {
     owner: library::PropertyOwner,
-    target: library::model::property::PropertyTarget,
     property_key: String,
     keyframe_id: library::model::property::KeyframeId,
     update: KeyframeUpdate,
@@ -26,16 +25,15 @@ fn prepare_keyframe_dialog_update(
     state: &KeyframeDialogState,
 ) -> Option<PreparedKeyframeDialogUpdate> {
     let owner = state.owner?;
-    let target = state.target?;
     let keyframe_id = state.keyframe_id?;
     let entity_id = state.entity_id?;
     let current_value = match owner {
         library::PropertyOwner::Node(node_id) => project
             .get_node(node_id)
-            .and_then(|node| node.property_map(target)),
+            .map(|node| &node.properties),
         library::PropertyOwner::Clip(clip_id) => project
             .get_clip(clip_id)
-            .and_then(|clip| clip.property_map(target)),
+            .map(|clip| &clip.properties),
     }
     .and_then(|properties| properties.get(&state.property_key))
     .and_then(|property| property.keyframe_by_id(keyframe_id))
@@ -57,7 +55,6 @@ fn prepare_keyframe_dialog_update(
     };
     Some(PreparedKeyframeDialogUpdate {
         owner,
-        target,
         property_key: state.property_key.clone(),
         keyframe_id,
         update: KeyframeUpdate {
@@ -127,7 +124,6 @@ fn apply_keyframe_dialog_change(
     };
     match project_service.update_keyframe_by_id(
         prepared.owner,
-        prepared.target,
         &prepared.property_key,
         prepared.keyframe_id,
         prepared.update,
@@ -452,7 +448,7 @@ mod tests {
     use super::*;
     use library::animation::EasingFunction;
     use library::cache::CacheManager;
-    use library::model::property::{Keyframe, Property, PropertyTarget, Vec2};
+    use library::model::property::{Keyframe, Property, Vec2};
     use library::model::{Clip, Node, NodeContent};
     use library::plugin::PluginManager;
 
@@ -484,9 +480,8 @@ mod tests {
             is_open: true,
             track_id: None,
             entity_id: Some(node_id),
-            property_name: "direct:position.x".to_string(),
+            property_name: "node:position.x".to_string(),
             owner: Some(library::PropertyOwner::Node(node_id)),
-            target: Some(PropertyTarget::Direct),
             property_key: "position".to_string(),
             keyframe_id: Some(keyframe_id),
             component: KeyframeValueComponent::X,
@@ -534,9 +529,8 @@ mod tests {
         let mut state = KeyframeDialogState {
             is_open: true,
             entity_id: Some(node_id),
-            property_name: "direct:amount".to_string(),
+            property_name: "node:amount".to_string(),
             owner: Some(library::PropertyOwner::Node(node_id)),
-            target: Some(PropertyTarget::Direct),
             property_key: "amount".to_string(),
             keyframe_id: Some(keyframe_id),
             time: 1.0,

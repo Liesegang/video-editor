@@ -11,7 +11,7 @@ use library::model::project::{
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::property::{
-    PropertyDefinition, PropertyMap, PropertyTarget, PropertyUiType, PropertyValue,
+    PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
 };
 use library::model::{Clip, Composition, GeneratorContent, Node, NodeContent, Track};
 use library::plugin::PluginManager;
@@ -23,22 +23,7 @@ use crate::ui::widgets::property_drag_value::FloatDragValueConfig;
 use crate::{action::HistoryManager, state::context::EditorContext};
 
 pub mod action_handler;
-#[allow(
-    dead_code,
-    reason = "legacy embedded Effect UI is compiled during the operation-graph transition but has no authoritative Inspector entry point"
-)]
-pub mod effects;
-#[allow(
-    dead_code,
-    reason = "legacy embedded ensemble UI is compiled during the operation-graph transition but has no authoritative Inspector entry point"
-)]
-pub mod ensemble;
 pub mod properties;
-#[allow(
-    dead_code,
-    reason = "legacy embedded Style UI is compiled during the operation-graph transition but has no authoritative Inspector entry point"
-)]
-pub mod styles;
 
 use action_handler::ActionContext;
 use properties::{PropertyRenderContext, render_property_rows};
@@ -493,7 +478,7 @@ fn render_semantic_graph_facade(
     }
     for source in sources {
         let is_result = output_mode.explicit_node_id() == Some(source.id);
-        let reaches_result = reaches_result(source.id, output_mode, nodes, connections);
+        let wired_to_result = structurally_reaches_result(source.id, output_mode, connections);
         let outgoing = connections
             .iter()
             .filter(|connection| {
@@ -505,10 +490,10 @@ fn render_semantic_graph_facade(
             format!("{} · Disabled", source_semantic_label(source))
         } else if is_result {
             format!("{} · Result", source_semantic_label(source))
-        } else if reaches_result {
-            format!("{} · Used", source_semantic_label(source))
+        } else if wired_to_result {
+            format!("{} · Wired to result", source_semantic_label(source))
         } else {
-            format!("{} · Not used", source_semantic_label(source))
+            format!("{} · Not wired to result", source_semantic_label(source))
         };
         let response = egui::CollapsingHeader::new(title)
             .id_salt(("inspector_source", source.id))
@@ -540,7 +525,7 @@ fn render_semantic_graph_facade(
                 "source_id": source.id,
                 "source_kind": source_kind(source),
                 "is_result": is_result,
-                "reaches_result": reaches_result,
+                "structurally_reaches_result": wired_to_result,
                 "enabled": source.enabled,
                 "connection_count": outgoing.len(),
                 "connections": connection_metadata,
@@ -649,7 +634,7 @@ fn render_semantic_graph_facade(
     if operations.is_empty() && merges.is_empty() {
         ui.add_space(8.0);
         ui.label(
-            egui::RichText::new("No appearance, animation, or compositing operations are applied.")
+            egui::RichText::new("No explicit appearance, animation, or compositing Nodes.")
                 .weak(),
         );
     }
@@ -657,7 +642,7 @@ fn render_semantic_graph_facade(
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "a semantic operation category preserves graph connection metadata while sharing Inspector editing context"
+    reason = "an operation category preserves graph connection metadata while sharing Inspector editing context"
 )]
 fn render_operation_category(
     ui: &mut Ui,
@@ -705,12 +690,12 @@ fn render_operation_category(
             })
             .collect::<Vec<_>>();
         let is_result = output_mode.explicit_node_id() == Some(node.id);
-        let reaches_result = reaches_result(node.id, output_mode, all_nodes, connections);
+        let wired_to_result = structurally_reaches_result(node.id, output_mode, connections);
         let state = operation_state_label(
             available,
             node.enabled,
             is_result,
-            reaches_result,
+            wired_to_result,
             outgoing.as_slice(),
         );
         let response = egui::CollapsingHeader::new(format!("{label} · {state}"))
@@ -766,7 +751,7 @@ fn render_operation_category(
                 "available": available,
                 "enabled": node.enabled,
                 "is_result": is_result,
-                "reaches_result": reaches_result,
+                "structurally_reaches_result": wired_to_result,
                 "connection_count": outgoing.len(),
                 "connections": connection_metadata,
             })),
@@ -819,12 +804,12 @@ fn render_merge_category(
             })
             .collect::<Vec<_>>();
         let is_result = output_mode.explicit_node_id() == Some(merge.id);
-        let reaches_result = reaches_result(merge.id, output_mode, all_nodes, connections);
+        let wired_to_result = structurally_reaches_result(merge.id, output_mode, connections);
         let state = operation_state_label(
             true,
             merge.enabled,
             is_result,
-            reaches_result,
+            wired_to_result,
             outgoing.as_slice(),
         );
         let response = egui::CollapsingHeader::new(format!("Merge · {state}"))
@@ -902,7 +887,7 @@ fn render_merge_category(
                 "available": true,
                 "enabled": merge.enabled,
                 "is_result": is_result,
-                "reaches_result": reaches_result,
+                "structurally_reaches_result": wired_to_result,
                 "inputs": incoming_metadata,
                 "outputs": outgoing_metadata,
             })),
@@ -944,28 +929,20 @@ fn facade_output_metadata(
     })
 }
 
-fn reaches_result(
+/// Reports authored wire topology only. It deliberately does not infer runtime
+/// production state (enabled nodes, current Clip range, missing external
+/// sources, unavailable plug-ins, or NoOutput).
+fn structurally_reaches_result(
     start_node_id: Uuid,
     output_mode: FacadeOutputMode,
-    nodes: &[Node],
     connections: &[ProjectConnection],
 ) -> bool {
     let FacadeOutputMode::Explicit(output_node_id) = output_mode else {
         return false;
     };
-    if !has_active_content_input_path(start_node_id, nodes, connections, &mut HashSet::new()) {
-        return false;
-    }
     let mut pending = vec![start_node_id];
     let mut visited = HashSet::new();
     while let Some(node_id) = pending.pop() {
-        if nodes
-            .iter()
-            .find(|node| node.id == node_id)
-            .is_some_and(|node| !node.enabled)
-        {
-            continue;
-        }
         if output_node_id == node_id {
             return true;
         }
@@ -987,41 +964,6 @@ fn reaches_result(
         }));
     }
     false
-}
-
-fn has_active_content_input_path(
-    node_id: Uuid,
-    nodes: &[Node],
-    connections: &[ProjectConnection],
-    visited: &mut HashSet<Uuid>,
-) -> bool {
-    let Some(node) = nodes.iter().find(|node| node.id == node_id) else {
-        // A connection entering this facade from a different container is an
-        // authored external source. Its own facade reports its availability.
-        return true;
-    };
-    if !node.enabled || !visited.insert(node_id) {
-        return false;
-    }
-    if !matches!(
-        node.content,
-        NodeContent::PluginOperation(_) | NodeContent::Merge
-    ) {
-        return true;
-    }
-    connections.iter().any(|connection| {
-        if connection.to.owner != PortOwner::Node(node_id)
-            || !is_content_flow_connection(connection)
-        {
-            return false;
-        }
-        match connection.from.owner {
-            PortOwner::Node(source_id) => {
-                has_active_content_input_path(source_id, nodes, connections, visited)
-            }
-            PortOwner::Composition(_) | PortOwner::Track(_) | PortOwner::Clip(_) => true,
-        }
-    })
 }
 
 fn is_content_flow_connection(connection: &ProjectConnection) -> bool {
@@ -1054,7 +996,7 @@ fn operation_state_label(
     available: bool,
     enabled: bool,
     is_result: bool,
-    reaches_result: bool,
+    wired_to_result: bool,
     outgoing: &[&ProjectConnection],
 ) -> String {
     if !available {
@@ -1066,13 +1008,13 @@ fn operation_state_label(
     if is_result {
         return "Result".to_string();
     }
-    if !reaches_result {
-        return "Not applied".to_string();
+    if !wired_to_result {
+        return "Not wired to result".to_string();
     }
     match outgoing {
-        [] => "Applied".to_string(),
-        [connection] => format!("Applied · order {}", connection.order),
-        _ => format!("Applied on {} branches", outgoing.len()),
+        [] => "Wired to result".to_string(),
+        [connection] => format!("Wired to result · order {}", connection.order),
+        _ => format!("Wired to result on {} branches", outgoing.len()),
     }
 }
 
@@ -1346,7 +1288,7 @@ fn render_property_map(
         };
 
         let mut context = ActionContext::new(project_service, history_manager, owner, current_time);
-        if context.handle_actions(actions, PropertyTarget::Direct, |name| {
+        if context.handle_actions(actions, |name| {
             properties.get(name).cloned()
         }) {
             *needs_refresh = true;
@@ -1728,7 +1670,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_status_follows_canonical_branches_to_the_explicit_result() {
+    fn structural_status_follows_content_wires_to_the_explicit_result() {
         let source = Node::new("Title", NodeContent::Generator(GeneratorContent::Text));
         let applied = PluginManager::default()
             .create_style_operation_node("fill")
@@ -1737,12 +1679,6 @@ mod tests {
             .create_effect_operation_node("blur")
             .unwrap();
         let result = Node::new("Composite", NodeContent::Merge);
-        let all_nodes = [
-            source.clone(),
-            applied.clone(),
-            disconnected.clone(),
-            result.clone(),
-        ];
         let connections = vec![
             ProjectConnection::new(
                 library::model::project::PortAddress::new(
@@ -1779,22 +1715,19 @@ mod tests {
             ),
         ];
 
-        assert!(reaches_result(
+        assert!(structurally_reaches_result(
             source.id,
             FacadeOutputMode::Explicit(result.id),
-            &all_nodes,
             &connections
         ));
-        assert!(reaches_result(
+        assert!(structurally_reaches_result(
             applied.id,
             FacadeOutputMode::Explicit(result.id),
-            &all_nodes,
             &connections
         ));
-        assert!(!reaches_result(
+        assert!(!structurally_reaches_result(
             disconnected.id,
             FacadeOutputMode::Explicit(result.id),
-            &all_nodes,
             &connections
         ));
         let outgoing = connections
@@ -1820,11 +1753,11 @@ mod tests {
         assert_eq!(metadata["order"], 3);
         assert_eq!(
             operation_state_label(true, true, false, true, &outgoing),
-            "Applied · order 3"
+            "Wired to result · order 3"
         );
         assert_eq!(
             operation_state_label(true, true, false, false, &[]),
-            "Not applied"
+            "Not wired to result"
         );
         assert_eq!(
             operation_state_label(false, true, false, true, &outgoing),
@@ -1840,16 +1773,14 @@ mod tests {
             FacadeOwnerKind::Clip,
         ] {
             let output_mode = owner_kind.output_mode(None);
-            assert!(!reaches_result(
+            assert!(!structurally_reaches_result(
                 applied.id,
                 output_mode,
-                &all_nodes,
                 &connections
             ));
-            assert!(!reaches_result(
+            assert!(!structurally_reaches_result(
                 result.id,
                 output_mode,
-                &all_nodes,
                 &connections
             ));
         }

@@ -7,7 +7,7 @@ use uuid::Uuid;
 use super::property_ops::{PropertyOwner, property_map_mut};
 use crate::error::LibraryError;
 use crate::model::project::{NodeContainer, NodeGraphBundle, Project};
-use crate::model::property::{PropertyTarget, PropertyValue};
+use crate::model::property::PropertyValue;
 use crate::model::{Clip, Node, NodeContent, ReferenceContent};
 
 /// A detached Clip graph prepared by the factory methods on ProjectManager.
@@ -187,10 +187,9 @@ impl ClipHandler {
         Ok(())
     }
 
-    pub fn update_target_property_or_keyframe(
+    pub fn update_property_or_keyframe(
         project: &Arc<RwLock<Project>>,
         owner: PropertyOwner,
-        target: PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
@@ -205,9 +204,7 @@ impl ClipHandler {
                 let clip = project
                     .get_clip_mut(clip_id)
                     .ok_or_else(|| LibraryError::Project(format!("Clip {clip_id} not found")))?;
-                if target == PropertyTarget::Direct
-                    && Clip::timing_property_definition(property_key).is_some()
-                {
+                if Clip::timing_property_definition(property_key).is_some() {
                     if easing.is_some() {
                         return Err(LibraryError::Project(format!(
                             "Structural Clip timing property '{property_key}' cannot be keyframed"
@@ -217,20 +214,20 @@ impl ClipHandler {
                         .map_err(LibraryError::Project)?;
                     true
                 } else {
-                    clip.update_property_or_keyframe(target, property_key, time, value, easing)
+                    clip.update_property_or_keyframe(property_key, time, value, easing)
                 }
             }
             PropertyOwner::Node(node_id) => project
                 .get_node_mut(node_id)
                 .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found")))?
-                .update_property_or_keyframe(target, property_key, time, value, easing),
+                .update_property_or_keyframe(property_key, time, value, easing),
         };
 
         if updated {
             Ok(())
         } else {
             Err(LibraryError::Project(format!(
-                "Target {target:?} not found on {owner:?}"
+                "Property {property_key} could not be updated on {owner:?}"
             )))
         }
     }
@@ -351,7 +348,6 @@ impl ClipHandler {
     pub fn set_property_attribute(
         project: &Arc<RwLock<Project>>,
         owner: PropertyOwner,
-        target: PropertyTarget,
         property_key: &str,
         attribute_key: &str,
         attribute_value: PropertyValue,
@@ -359,7 +355,7 @@ impl ClipHandler {
         let mut project = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        let properties = property_map_mut(&mut project, owner, target)?;
+        let properties = property_map_mut(&mut project, owner)?;
         let property = properties.get_mut(property_key).ok_or_else(|| {
             LibraryError::Project(format!("Property {property_key} not found on {owner:?}"))
         })?;

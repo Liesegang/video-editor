@@ -1,6 +1,6 @@
 use crate::model::project::connection::PortDefinition;
 use crate::model::project::property::{
-    PropertyDefinition, PropertyMap, PropertyTarget, PropertyUiType, PropertyValue,
+    PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
 };
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
@@ -237,37 +237,20 @@ impl Clip {
             + self.trim_in.into_inner()
     }
 
-    pub fn property_map(&self, target: PropertyTarget) -> Option<&PropertyMap> {
-        match target {
-            PropertyTarget::Direct => Some(&self.properties),
-        }
-    }
-
-    pub fn property_map_mut(&mut self, target: PropertyTarget) -> Option<&mut PropertyMap> {
-        match target {
-            PropertyTarget::Direct => Some(&mut self.properties),
-        }
-    }
-
     pub fn update_property_or_keyframe(
         &mut self,
-        target: PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> bool {
-        if target == PropertyTarget::Direct
-            && Self::timing_property_definition(property_key).is_some()
-        {
+        if Self::timing_property_definition(property_key).is_some() {
             // Structural timing fields are static Clip placement, not
             // keyframeable PropertyMap entries.
             return easing.is_none() && self.update_timing_property(property_key, value).is_ok();
         }
-        let Some(properties) = self.property_map_mut(target) else {
-            return false;
-        };
-        properties.update_property_or_keyframe(property_key, time, value, easing);
+        self.properties
+            .update_property_or_keyframe(property_key, time, value, easing);
         true
     }
 }
@@ -310,30 +293,15 @@ impl Node {
         }
     }
 
-    pub fn property_map(&self, target: PropertyTarget) -> Option<&PropertyMap> {
-        match target {
-            PropertyTarget::Direct => Some(&self.properties),
-        }
-    }
-
-    pub fn property_map_mut(&mut self, target: PropertyTarget) -> Option<&mut PropertyMap> {
-        match target {
-            PropertyTarget::Direct => Some(&mut self.properties),
-        }
-    }
-
     pub fn update_property_or_keyframe(
         &mut self,
-        target: PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> bool {
-        let Some(properties) = self.property_map_mut(target) else {
-            return false;
-        };
-        properties.update_property_or_keyframe(property_key, time, value, easing);
+        self.properties
+            .update_property_or_keyframe(property_key, time, value, easing);
         true
     }
 }
