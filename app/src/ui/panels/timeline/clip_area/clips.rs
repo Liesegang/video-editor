@@ -4,8 +4,8 @@ use library::audio::cache::{AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
 use library::audio::mixer::audio_stream_index_for_media;
 use library::model::asset::AssetKind;
 use library::model::project::{
-    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortOwner, Project,
-    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+    PortOwner, Project, ProjectConnection, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::{Clip, Node, NodeContent, Track};
 use library::EditorService as ProjectService;
@@ -18,6 +18,53 @@ use crate::{action::HistoryManager, state::context::EditorContext};
 use super::super::utils::flatten::{flatten_tracks_to_rows, DisplayRow};
 
 const EDGE_DRAG_WIDTH: f32 = 5.0;
+
+#[derive(Clone, Copy)]
+pub(crate) struct ClipRowLayout {
+    pub(crate) content_min_y: f32,
+    pub(crate) scroll_y: f32,
+    pub(crate) row_height: f32,
+    pub(crate) row_spacing: f32,
+}
+
+impl ClipRowLayout {
+    fn row_step(self) -> f32 {
+        self.row_height + self.row_spacing
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ClipAreaGeometry {
+    pub(super) content_rect: egui::Rect,
+    pub(super) scroll_offset: egui::Vec2,
+    pub(super) pixels_per_unit: f32,
+    pub(super) row_height: f32,
+    pub(super) row_spacing: f32,
+}
+
+impl ClipAreaGeometry {
+    fn row_layout(self) -> ClipRowLayout {
+        ClipRowLayout {
+            content_min_y: self.content_rect.min.y,
+            scroll_y: self.scroll_offset.y,
+            row_height: self.row_height,
+            row_spacing: self.row_spacing,
+        }
+    }
+
+    fn clip_rect(self, start_time: f64, duration: f64, row_index: usize) -> egui::Rect {
+        let initial_x = self.content_rect.min.x + start_time as f32 * self.pixels_per_unit
+            - self.scroll_offset.x;
+        let initial_y = self.content_rect.min.y - self.scroll_offset.y
+            + row_index as f32 * (self.row_height + self.row_spacing);
+        let width = (duration as f32 * self.pixels_per_unit).max(1.0);
+
+        egui::Rect::from_min_size(
+            egui::pos2(initial_x, initial_y),
+            egui::vec2(width, self.row_height),
+        )
+    }
+}
 
 /// Deferred actions collected during UI phase, executed after read lock is released
 #[derive(Debug)]
@@ -44,80 +91,58 @@ enum DeferredClipAction {
     PushHistory,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn calculate_clip_rect(
+struct WaveformSource<'a> {
+    samples: &'a [f32],
     start_time: f64,
-    duration: f64,
-    track_index: usize,
-    scroll_offset: egui::Vec2,
-    pixels_per_unit: f32,
-    row_height: f32,
-    track_spacing: f32,
-    _composition_fps: f64,
-    base_offset: egui::Vec2,
-) -> egui::Rect {
-    let initial_x = base_offset.x + (start_time as f32) * pixels_per_unit - scroll_offset.x;
-    let initial_y =
-        base_offset.y - scroll_offset.y + track_index as f32 * (row_height + track_spacing);
-
-    let width = (duration as f32) * pixels_per_unit;
-    let safe_width = width.max(1.0);
-
-    egui::Rect::from_min_size(
-        egui::pos2(initial_x, initial_y),
-        egui::vec2(safe_width, row_height),
-    )
+    trim_in: f64,
+    sample_rate: f64,
+    channels: usize,
 }
 
 fn draw_waveform(
     painter: &egui::Painter,
     clip_rect: egui::Rect,
-    audio_data: &[f32],
-    audio_start_time: f64,
-    _layer_start_time: f64,
-    trim_in: f64,
-    _composition_fps: f64,
     pixels_per_unit: f32,
-    sample_rate: f64,
-    channels: usize,
+    source: WaveformSource<'_>,
 ) {
     let rect_w = clip_rect.width();
     let rect_h = clip_rect.height();
     let center_y = clip_rect.center().y;
     let max_amp_height = rect_h * 0.4;
 
-    let samples_per_pixel = (sample_rate / pixels_per_unit as f64) * channels as f64;
+    let samples_per_pixel =
+        (source.sample_rate / f64::from(pixels_per_unit)) * source.channels as f64;
     let step_width = if samples_per_pixel > 1000.0 { 2.0 } else { 1.0 };
     let mut x = 0.0;
 
     while x < rect_w {
-        let _time_offset = x as f32 / pixels_per_unit;
+        let time_offset = x / pixels_per_unit;
         // Source time = Time since start of clip (in source media)
         // Clip shows [trim_in, trim_in + duration] of source
-        let source_time = trim_in + _time_offset as f64;
+        let source_time = source.trim_in + f64::from(time_offset);
 
         // Map to sample index
-        let start_sample_idx = if source_time >= audio_start_time {
-            ((source_time - audio_start_time) * sample_rate) as usize * channels
+        let start_sample_idx = if source_time >= source.start_time {
+            ((source_time - source.start_time) * source.sample_rate) as usize * source.channels
         } else {
-            audio_data.len() + 1
+            source.samples.len() + 1
         };
         let end_sample_idx = start_sample_idx + samples_per_pixel as usize;
 
-        if start_sample_idx < audio_data.len() {
-            let end = end_sample_idx.min(audio_data.len());
+        if start_sample_idx < source.samples.len() {
+            let end = end_sample_idx.min(source.samples.len());
             let mut max_amp = 0.0f32;
             let stride = if end - start_sample_idx > 100 { 10 } else { 1 };
 
             for i in (start_sample_idx..end).step_by(stride) {
-                let abs_val = audio_data[i].abs();
+                let abs_val = source.samples[i].abs();
                 if abs_val > max_amp {
                     max_amp = abs_val;
                 }
             }
 
             if max_amp > 0.0 {
-                let height = (max_amp * max_amp_height as f32).max(1.0);
+                let height = (max_amp * max_amp_height).max(1.0);
                 let x_pos = clip_rect.min.x + x;
                 painter.line_segment(
                     [
@@ -155,9 +180,8 @@ fn clip_graph_nodes<'a>(clip: &Clip, project: &'a Project) -> ClipGraphNodes<'a>
         .output_node_id
         .filter(|node_id| clip.node_ids.contains(node_id))
         .and_then(|node_id| project.get_node(node_id));
-    let semantic_source = output.and_then(|output| {
-        semantic_source_for_result(project, output.id, &mut HashSet::new())
-    });
+    let semantic_source = output
+        .and_then(|output| semantic_source_for_result(project, output.id, &mut HashSet::new()));
     ClipGraphNodes {
         output,
         semantic_source,
@@ -175,9 +199,7 @@ fn semantic_source_for_result<'a>(
     }
 
     let result = match &node.content {
-        NodeContent::Media(_)
-        | NodeContent::Generator(_)
-        | NodeContent::Reference(_) => Some(node),
+        NodeContent::Media(_) | NodeContent::Generator(_) | NodeContent::Reference(_) => Some(node),
         NodeContent::PluginOperation(_) | NodeContent::Merge => {
             let mut incoming = project
                 .connections
@@ -267,17 +289,12 @@ fn get_clip_color(source: Option<&Node>, project: &Project) -> (u8, u8, u8) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn calculate_insert_index(
+pub(crate) fn calculate_insert_index(
     mouse_y: f32,
-    content_rect_min_y: f32,
-    scroll_offset_y: f32,
-    row_height: f32,
-    track_spacing: f32,
     display_rows: &[DisplayRow],
     project: &Project,
-    _track_ids: &[Uuid],
     hovered_track_id: Uuid,
+    layout: ClipRowLayout,
 ) -> Option<(usize, usize)> {
     // Returns (target_index, header_row_index)
 
@@ -285,10 +302,9 @@ pub fn calculate_insert_index(
     if let Some((header_idx, _)) = display_rows.iter().enumerate().find(|(_, r)| {
         r.track_id() == hovered_track_id && matches!(r, DisplayRow::TrackHeader { .. })
     }) {
-        let current_y_in_clip_area = mouse_y - content_rect_min_y + scroll_offset_y;
+        let current_y_in_clip_area = mouse_y - layout.content_min_y + layout.scroll_y;
 
-        let hovered_row_index =
-            (current_y_in_clip_area / (row_height + track_spacing)).floor() as isize;
+        let hovered_row_index = (current_y_in_clip_area / layout.row_step()).floor() as isize;
         let header_row_index = header_idx as isize;
 
         let raw_target_index = hovered_row_index - header_row_index - 1;
@@ -317,11 +333,8 @@ pub fn calculate_insert_index(
 fn clip_insertion_markers(
     display_rows: &[DisplayRow],
     track_id: Uuid,
-    content_rect_min_y: f32,
-    scroll_offset_y: f32,
-    row_height: f32,
-    track_spacing: f32,
     project: &Project,
+    layout: ClipRowLayout,
 ) -> Vec<(usize, f32)> {
     let Some(header_row) = display_rows.iter().position(|row| {
         row.track_id() == track_id && matches!(row, DisplayRow::TrackHeader { .. })
@@ -331,14 +344,13 @@ fn clip_insertion_markers(
     let Some(track) = project.get_track(track_id) else {
         return Vec::new();
     };
-    let row_step = row_height + track_spacing;
     let clip_count = track.clip_ids.len();
     (0..=clip_count)
         .map(|slot| {
             let boundary_row = header_row + 1 + (clip_count - slot);
             (
                 slot,
-                content_rect_min_y + boundary_row as f32 * row_step - scroll_offset_y,
+                layout.content_min_y + boundary_row as f32 * layout.row_step() - layout.scroll_y,
             )
         })
         .collect()
@@ -409,20 +421,82 @@ fn timing_after_body_drag(clip: &Clip, delta_time: f64) -> Option<ClipTiming> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn draw_clips(
-    ui_content: &mut Ui,
-    content_rect_for_clip_area: egui::Rect,
+pub(super) struct DrawClipsContext<'a> {
+    pub(super) editor_context: &'a mut EditorContext,
+    pub(super) project_service: &'a mut ProjectService,
+    pub(super) history_manager: &'a mut HistoryManager,
+    pub(super) project: &'a Arc<RwLock<Project>>,
+    pub(super) track_ids: &'a [Uuid],
+    pub(super) geometry: ClipAreaGeometry,
+}
+
+#[derive(Clone, Copy)]
+struct ClipReorderPreview {
+    dragged_id: Uuid,
+    target_track_id: Uuid,
+    source_index: usize,
+    target_index: usize,
+    header_row_index: usize,
+}
+
+#[derive(Default)]
+struct ClipMutationCommit {
+    persistent_change: bool,
+    timing_history_requested: bool,
+    timing_update_failed: bool,
+}
+
+impl ClipMutationCommit {
+    fn should_push_history(&self) -> bool {
+        self.persistent_change || (self.timing_history_requested && !self.timing_update_failed)
+    }
+}
+
+fn cancel_failed_timing_gesture(editor_context: &mut EditorContext) {
+    editor_context.interaction.is_resizing_entity = false;
+    editor_context.interaction.is_moving_selected_entity = false;
+    editor_context.interaction.dragged_entity_original_track_id = None;
+    editor_context.interaction.dragged_entity_hovered_track_id = None;
+    editor_context.interaction.dragged_entity_has_moved = false;
+}
+
+fn apply_timing_update_result(
+    clip_id: Uuid,
+    result: Result<(), library::LibraryError>,
     editor_context: &mut EditorContext,
-    project_service: &mut ProjectService,
-    history_manager: &mut HistoryManager,
+    commit: &mut ClipMutationCommit,
+) {
+    if let Err(error) = result {
+        log::error!("Failed to update timeline Clip {clip_id} timing: {error}");
+        commit.timing_update_failed = true;
+        cancel_failed_timing_gesture(editor_context);
+    }
+}
+
+fn push_clip_history_if_needed(
+    commit: &ClipMutationCommit,
     project: &Arc<RwLock<Project>>,
-    track_ids: &[Uuid],
-    pixels_per_unit: f32,
-    row_height: f32,
-    track_spacing: f32,
-    composition_fps: f64,
-) -> bool {
+    history_manager: &mut HistoryManager,
+) {
+    if !commit.should_push_history() {
+        return;
+    }
+
+    match project.read() {
+        Ok(project) => history_manager.push_project_state(project.clone()),
+        Err(error) => log::error!("Failed to snapshot timeline edit history: {error}"),
+    }
+}
+
+pub(super) fn draw_clips(ui_content: &mut Ui, context: DrawClipsContext<'_>) -> bool {
+    let DrawClipsContext {
+        editor_context,
+        project_service,
+        history_manager,
+        project,
+        track_ids,
+        geometry,
+    } = context;
     let mut clicked_on_entity = false;
     let mut deferred_actions: Vec<DeferredClipAction> = Vec::new();
 
@@ -444,18 +518,12 @@ pub fn draw_clips(
             if !editor_context.timeline.expanded_tracks.contains(track_id) {
                 continue;
             }
-            for (slot, y) in clip_insertion_markers(
-                &display_rows,
-                *track_id,
-                content_rect_for_clip_area.min.y,
-                editor_context.timeline.scroll_offset.y,
-                row_height,
-                track_spacing,
-                &proj_read,
-            ) {
+            for (slot, y) in
+                clip_insertion_markers(&display_rows, *track_id, &proj_read, geometry.row_layout())
+            {
                 let rect = egui::Rect::from_min_max(
-                    egui::pos2(content_rect_for_clip_area.min.x, y - 4.0),
-                    egui::pos2(content_rect_for_clip_area.max.x, y + 4.0),
+                    egui::pos2(geometry.content_rect.min.x, y - 4.0),
+                    egui::pos2(geometry.content_rect.max.x, y + 4.0),
                 );
                 crate::qa::register_component_with_metadata(
                     format!("timeline.clip_insertion_slot.{track_id}:{slot}"),
@@ -479,14 +547,10 @@ pub fn draw_clips(
             if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
                 if let Some((target_index, header_idx)) = calculate_insert_index(
                     mouse_pos.y,
-                    content_rect_for_clip_area.min.y,
-                    editor_context.timeline.scroll_offset.y,
-                    row_height,
-                    track_spacing,
                     &display_rows,
                     &proj_read,
-                    track_ids,
                     hovered_tid,
+                    geometry.row_layout(),
                 ) {
                     // Find dragged clip original info
                     let source_track_id = editor_context
@@ -501,82 +565,68 @@ pub fn draw_clips(
                                 .position(|clip_id| *clip_id == dragged_id)
                         })
                     {
-                        reorder_state = Some((
+                        reorder_state = Some(ClipReorderPreview {
                             dragged_id,
-                            hovered_tid,
-                            dragged_original_index,
+                            target_track_id: hovered_tid,
+                            source_index: dragged_original_index,
                             target_index,
-                            header_idx,
-                        ));
+                            header_row_index: header_idx,
+                        });
                     }
                 }
             }
         }
 
-        for row in &display_rows {
-            match row {
-                DisplayRow::TrackHeader {
-                    track,
-                    visible_row_index,
-                    is_expanded,
-                    ..
-                } => {
-                    // If collapsed, draw all clips on this row
-                    if !is_expanded {
-                        let mut clips_to_draw: Vec<&Clip> = Vec::new();
-                        collect_track_clips(&proj_read, track, &mut clips_to_draw);
+        {
+            let mut draw_context = SingleClipDrawContext {
+                ui_content,
+                editor_context,
+                deferred_actions: &mut deferred_actions,
+                project_service,
+                project: &proj_read,
+                geometry,
+                display_rows: &display_rows,
+                reorder_state,
+            };
 
-                        for clip in clips_to_draw {
-                            draw_single_clip(
-                                ui_content,
-                                content_rect_for_clip_area,
-                                editor_context,
-                                &mut deferred_actions,
-                                project_service,
-                                &proj_read,
-                                track_ids,
-                                clip,
-                                track,
-                                *visible_row_index,
-                                pixels_per_unit,
-                                row_height,
-                                track_spacing,
-                                composition_fps,
-                                false,
-                                &mut clicked_on_entity,
-                                &display_rows,
-                                &reorder_state,
-                            );
+            for row in &display_rows {
+                match row {
+                    DisplayRow::TrackHeader {
+                        track,
+                        visible_row_index,
+                        is_expanded,
+                        ..
+                    } => {
+                        // If collapsed, draw all clips on this row.
+                        if !is_expanded {
+                            let mut clips_to_draw: Vec<&Clip> = Vec::new();
+                            collect_track_clips(&proj_read, track, &mut clips_to_draw);
+
+                            for clip in clips_to_draw {
+                                clicked_on_entity |= draw_single_clip(
+                                    &mut draw_context,
+                                    clip,
+                                    track,
+                                    *visible_row_index,
+                                    false,
+                                );
+                            }
                         }
                     }
-                }
-                DisplayRow::ClipRow {
-                    clip,
-                    parent_track,
-                    visible_row_index,
-                    ..
-                } => {
-                    // Draw single clip on its own row
-                    draw_single_clip(
-                        ui_content,
-                        content_rect_for_clip_area,
-                        editor_context,
-                        &mut deferred_actions,
-                        project_service,
-                        &proj_read,
-                        track_ids,
+                    DisplayRow::ClipRow {
                         clip,
                         parent_track,
-                        *visible_row_index,
-                        pixels_per_unit,
-                        row_height,
-                        track_spacing,
-                        composition_fps,
-                        false,
-                        &mut clicked_on_entity,
-                        &display_rows,
-                        &reorder_state,
-                    );
+                        visible_row_index,
+                        ..
+                    } => {
+                        clicked_on_entity |= draw_single_clip(
+                            &mut draw_context,
+                            clip,
+                            parent_track,
+                            *visible_row_index,
+                            false,
+                        );
+                    }
                 }
             }
         }
@@ -584,16 +634,16 @@ pub fn draw_clips(
         // Draw asset drag preview indicator
         if let Some(ref _dragged_item) = editor_context.interaction.dragged_item {
             if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
-                if content_rect_for_clip_area.contains(mouse_pos) {
+                if geometry.content_rect.contains(mouse_pos) {
                     // Calculate insert position
-                    let relative_y = mouse_pos.y - content_rect_for_clip_area.min.y
+                    let relative_y = mouse_pos.y - geometry.content_rect.min.y
                         + editor_context.timeline.scroll_offset.y;
-                    let row_with_spacing = row_height + track_spacing;
+                    let row_with_spacing = geometry.row_height + geometry.row_spacing;
                     let row_index = (relative_y / row_with_spacing).floor() as usize;
 
                     // Determine if we're in the top or bottom half of a row
                     let y_in_row = relative_y % row_with_spacing;
-                    let insert_at_top = y_in_row < row_height / 2.0;
+                    let insert_at_top = y_in_row < geometry.row_height / 2.0;
 
                     // Calculate the Y position for the indicator line
                     let indicator_row = if insert_at_top {
@@ -601,14 +651,14 @@ pub fn draw_clips(
                     } else {
                         row_index + 1
                     };
-                    let indicator_y = content_rect_for_clip_area.min.y
+                    let indicator_y = geometry.content_rect.min.y
                         + (indicator_row as f32 * row_with_spacing)
                         - editor_context.timeline.scroll_offset.y;
 
                     // Draw a horizontal line indicator
                     let painter = ui_content.painter();
-                    let line_start = egui::pos2(content_rect_for_clip_area.min.x, indicator_y);
-                    let line_end = egui::pos2(content_rect_for_clip_area.max.x, indicator_y);
+                    let line_start = egui::pos2(geometry.content_rect.min.x, indicator_y);
+                    let line_end = egui::pos2(geometry.content_rect.max.x, indicator_y);
                     painter.line_segment(
                         [line_start, line_end],
                         egui::Stroke::new(3.0, egui::Color32::from_rgb(100, 200, 255)),
@@ -640,7 +690,7 @@ pub fn draw_clips(
     } // proj_read dropped here
 
     // ===== PHASE 2: Execute deferred actions (no lock held) =====
-    let mut needs_history_push = false;
+    let mut commit = ClipMutationCommit::default();
     let mut removed_clip_ids: Vec<Uuid> = Vec::new();
     for action in deferred_actions {
         match action {
@@ -649,11 +699,17 @@ pub fn draw_clips(
                 new_start_time,
                 new_duration,
                 new_trim_in,
-            } => {
-                project_service
-                    .update_clip_timing(clip_id, new_start_time, new_duration, new_trim_in)
-                    .ok();
-            }
+            } => apply_timing_update_result(
+                clip_id,
+                project_service.update_clip_timing(
+                    clip_id,
+                    new_start_time,
+                    new_duration,
+                    new_trim_in,
+                ),
+                editor_context,
+                &mut commit,
+            ),
             DeferredClipAction::MoveClip {
                 composition_id,
                 source_track_id,
@@ -670,7 +726,7 @@ pub fn draw_clips(
                     new_start_time,
                     target_index,
                 ) {
-                    Ok(()) => needs_history_push = true,
+                    Ok(()) => commit.persistent_change = true,
                     Err(error) => log::error!("Failed to move timeline clip: {error}"),
                 }
             }
@@ -680,11 +736,11 @@ pub fn draw_clips(
                     log::error!("Failed to remove clip: {:?}", e);
                 } else {
                     removed_clip_ids.push(clip_id);
-                    needs_history_push = true;
+                    commit.persistent_change = true;
                 }
             }
             DeferredClipAction::PushHistory => {
-                needs_history_push = true;
+                commit.timing_history_requested = true;
             }
         }
     }
@@ -698,36 +754,42 @@ pub fn draw_clips(
         }
     }
 
-    if needs_history_push {
-        if let Ok(proj) = project.read() {
-            history_manager.push_project_state(proj.clone());
-        }
+    if commit.timing_update_failed {
+        ui_content.ctx().request_repaint();
     }
+    push_clip_history_if_needed(&commit, project, history_manager);
 
     clicked_on_entity
 }
 
-#[allow(clippy::too_many_arguments)]
+struct SingleClipDrawContext<'a> {
+    ui_content: &'a mut Ui,
+    editor_context: &'a mut EditorContext,
+    deferred_actions: &'a mut Vec<DeferredClipAction>,
+    project_service: &'a ProjectService,
+    project: &'a Project,
+    geometry: ClipAreaGeometry,
+    display_rows: &'a [DisplayRow<'a>],
+    reorder_state: Option<ClipReorderPreview>,
+}
+
 fn draw_single_clip(
-    ui_content: &mut Ui,
-    content_rect_for_clip_area: egui::Rect,
-    editor_context: &mut EditorContext,
-    deferred_actions: &mut Vec<DeferredClipAction>,
-    project_service: &ProjectService,
-    project: &Project,
-    _track_ids: &[Uuid],
+    context: &mut SingleClipDrawContext<'_>,
     clip: &Clip,
     track: &Track,
     row_index: usize,
-    pixels_per_unit: f32,
-    row_height: f32,
-    track_spacing: f32,
-    composition_fps: f64,
     is_summary_clip: bool,
-    clicked_on_entity: &mut bool,
-    display_rows: &[DisplayRow],
-    reorder_state: &Option<(Uuid, Uuid, usize, usize, usize)>,
-) {
+) -> bool {
+    let SingleClipDrawContext {
+        ui_content,
+        editor_context,
+        deferred_actions,
+        project_service,
+        project,
+        geometry,
+        display_rows,
+        reorder_state,
+    } = context;
     let graph_nodes = clip_graph_nodes(clip, project);
     // Result and semantic source are separate: explicit Style/Effect/Merge
     // results retain the color, label, and audio identity of their reachable
@@ -739,10 +801,10 @@ fn draw_single_clip(
     let mut visual_row_index = row_index;
 
     // Check if we are in a reordering state
-    if let Some((dragged_id, r_track_id, src_idx, dst_idx, header_row_idx)) = reorder_state {
-        if clip.id == *dragged_id {
-            visual_row_index = header_row_idx + 1 + dst_idx;
-        } else if track.id == *r_track_id {
+    if let Some(reorder) = reorder_state {
+        if clip.id == reorder.dragged_id {
+            visual_row_index = reorder.header_row_index + 1 + reorder.target_index;
+        } else if track.id == reorder.target_track_id {
             // Get original child index from DisplayRow if available
             let mut original_child_index = None;
             if let Some(DisplayRow::ClipRow { child_index, .. }) = display_rows.get(row_index) {
@@ -751,13 +813,13 @@ fn draw_single_clip(
 
             if let Some(idx) = original_child_index {
                 let mut new_child_index = idx;
-                let src = *src_idx;
-                let dst = *dst_idx;
+                let src = reorder.source_index;
+                let dst = reorder.target_index;
 
                 let is_same_track_sort = if let Some(orig_tid) =
                     editor_context.interaction.dragged_entity_original_track_id
                 {
-                    orig_tid == *r_track_id
+                    orig_tid == reorder.target_track_id
                 } else {
                     false
                 };
@@ -767,40 +829,26 @@ fn draw_single_clip(
                         if idx > src && idx <= dst {
                             new_child_index = idx - 1;
                         }
-                    } else if src > dst {
-                        if idx >= dst && idx < src {
-                            new_child_index = idx + 1;
-                        }
-                    }
-                } else {
-                    if idx >= dst {
+                    } else if src > dst && idx >= dst && idx < src {
                         new_child_index = idx + 1;
                     }
+                } else if idx >= dst {
+                    new_child_index = idx + 1;
                 }
 
                 if new_child_index != idx {
-                    visual_row_index = header_row_idx + 1 + new_child_index;
+                    visual_row_index = reorder.header_row_index + 1 + new_child_index;
                 }
             }
         }
     }
 
-    let initial_clip_rect = calculate_clip_rect(
-        *clip.start_time,
-        *clip.duration,
-        visual_row_index,
-        editor_context.timeline.scroll_offset,
-        pixels_per_unit,
-        row_height,
-        track_spacing,
-        composition_fps,
-        content_rect_for_clip_area.min.to_vec2(),
-    );
+    let initial_clip_rect = geometry.clip_rect(*clip.start_time, *clip.duration, visual_row_index);
     let safe_width = initial_clip_rect.width();
 
     // Visibility Culling
-    if !content_rect_for_clip_area.intersects(initial_clip_rect) {
-        return;
+    if !geometry.content_rect.intersects(initial_clip_rect) {
+        return false;
     }
 
     if !is_summary_clip {
@@ -906,12 +954,10 @@ fn draw_single_clip(
     }
 
     // Handle edge dragging (resize)
-    let mut _is_resizing = false;
     if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
         if left.drag_started() || right.drag_started() {
             editor_context.interaction.is_resizing_entity = true;
             editor_context.select_clip(clip.id, track.id);
-            _is_resizing = true;
         }
     }
 
@@ -933,7 +979,7 @@ fn draw_single_clip(
             };
 
             // Convert to time
-            let delta_time = delta_x / pixels_per_unit;
+            let delta_time = delta_x / geometry.pixels_per_unit;
 
             if left.dragged() {
                 if let Some(timing) = timing_after_left_edge_drag(clip, delta_time as f64) {
@@ -998,9 +1044,9 @@ fn draw_single_clip(
         && !edge_is_dragging
     {
         if let Some(pointer) = clip_resp.interact_pointer_pos() {
-            let row = ((pointer.y - content_rect_for_clip_area.min.y
+            let row = ((pointer.y - geometry.content_rect.min.y
                 + editor_context.timeline.scroll_offset.y)
-                / (row_height + track_spacing))
+                / (geometry.row_height + geometry.row_spacing))
                 .floor()
                 .max(0.0) as usize;
             if let Some(target_row) = display_rows.get(row) {
@@ -1008,7 +1054,7 @@ fn draw_single_clip(
                     Some(target_row.track_id());
             }
         }
-        let delta_time = clip_resp.drag_delta().x as f64 / pixels_per_unit as f64;
+        let delta_time = f64::from(clip_resp.drag_delta().x) / f64::from(geometry.pixels_per_unit);
         if let Some(timing) = timing_after_body_drag(clip, delta_time) {
             deferred_actions.push(DeferredClipAction::UpdateClipTiming {
                 clip_id: clip.id,
@@ -1042,11 +1088,8 @@ fn draw_single_clip(
             let markers = clip_insertion_markers(
                 display_rows,
                 target_track_id,
-                content_rect_for_clip_area.min.y,
-                editor_context.timeline.scroll_offset.y,
-                row_height,
-                track_spacing,
                 project,
+                geometry.row_layout(),
             );
             let insertion_slot = nearest_clip_insertion_slot(pointer.y, &markers)?;
             let source_index = project
@@ -1089,7 +1132,7 @@ fn draw_single_clip(
 
     let drawing_clip_rect = egui::Rect::from_min_size(
         egui::pos2(display_x, display_y),
-        egui::vec2(safe_width, row_height),
+        egui::vec2(safe_width, geometry.row_height),
     );
 
     // --- Drawing ---
@@ -1106,13 +1149,11 @@ fn draw_single_clip(
         );
     }
 
-    let painter = ui_content.painter_at(content_rect_for_clip_area);
+    let painter = ui_content.painter_at(geometry.content_rect);
     painter.rect_filled(drawing_clip_rect, 4.0, transparent_color);
 
     // Draw Audio Waveform
-    if let Some(NodeContent::Media(m)) =
-        graph_nodes.semantic_source.map(|node| &node.content)
-    {
+    if let Some(NodeContent::Media(m)) = graph_nodes.semantic_source.map(|node| &node.content) {
         if let Some(asset) = project.assets.iter().find(|asset| {
             asset.id == m.asset_id && matches!(asset.kind, AssetKind::Audio | AssetKind::Video)
         }) {
@@ -1135,14 +1176,14 @@ fn draw_single_clip(
                     draw_waveform(
                         &painter,
                         drawing_clip_rect,
-                        audio_data.samples(),
-                        audio_start_time,
-                        *clip.start_time,
-                        *clip.trim_in,
-                        composition_fps,
-                        pixels_per_unit,
-                        f64::from(sample_rate),
-                        usize::from(channels),
+                        geometry.pixels_per_unit,
+                        WaveformSource {
+                            samples: audio_data.samples(),
+                            start_time: audio_start_time,
+                            trim_in: *clip.trim_in,
+                            sample_rate: f64::from(sample_rate),
+                            channels: usize::from(channels),
+                        },
                     );
                 }
             }
@@ -1175,14 +1216,14 @@ fn draw_single_clip(
         egui::Color32::BLACK,
     );
 
-    if !is_summary_clip {
-        if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
-            if left.hovered() || right.hovered() {
-                ui_content
-                    .ctx()
-                    .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-            }
-        }
+    let edge_hovered = left_edge_resp
+        .as_ref()
+        .zip(right_edge_resp.as_ref())
+        .is_some_and(|(left, right)| left.hovered() || right.hovered());
+    if !is_summary_clip && edge_hovered {
+        ui_content
+            .ctx()
+            .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
 
     if !editor_context.interaction.is_resizing_entity && clip_resp.clicked() {
@@ -1195,75 +1236,83 @@ fn draw_single_clip(
             crate::ui::selection::ClickAction::Select(id) => {
                 editor_context.select_clip(id, track.id);
             }
-            crate::ui::selection::ClickAction::Add(id) => {
-                if !editor_context.is_selected(id) {
-                    editor_context.toggle_selection(id, track.id);
-                }
+            crate::ui::selection::ClickAction::Add(id) if !editor_context.is_selected(id) => {
+                editor_context.toggle_selection(id, track.id);
             }
-            crate::ui::selection::ClickAction::Remove(id) => {
-                if editor_context.is_selected(id) {
-                    editor_context.toggle_selection(id, track.id);
-                }
+            crate::ui::selection::ClickAction::Remove(id) if editor_context.is_selected(id) => {
+                editor_context.toggle_selection(id, track.id);
             }
             crate::ui::selection::ClickAction::Toggle(id) => {
                 editor_context.toggle_selection(id, track.id);
             }
             _ => {}
         }
-        *clicked_on_entity = true;
+        return true;
     }
+
+    false
 }
 
-pub fn get_clips_in_box(
+pub(super) struct BoxSelectionContext<'a> {
+    pub(super) project: &'a Project,
+    pub(super) track_ids: &'a [Uuid],
+    pub(super) expanded_tracks: &'a HashSet<Uuid>,
+    pub(super) geometry: ClipAreaGeometry,
+}
+
+fn clip_intersects_selection(
+    clip: &Clip,
+    row_index: usize,
     selection_rect: egui::Rect,
-    editor_context: &EditorContext,
-    project: &Project,
-    track_ids: &[uuid::Uuid],
-    _pixels_per_unit: f32,
-    row_height: f32,
-    track_spacing: f32,
-    _composition_fps: f64,
-    clip_area_top_left: egui::Vec2,
-) -> Vec<(uuid::Uuid, uuid::Uuid)> {
-    let mut found = Vec::new();
-    let display_rows = super::super::utils::flatten::flatten_tracks_to_rows(
+    geometry: ClipAreaGeometry,
+) -> bool {
+    selection_rect.intersects(geometry.clip_rect(
+        clip.start_time.into_inner(),
+        clip.duration.into_inner(),
+        row_index,
+    ))
+}
+
+pub(super) fn get_clips_in_box(
+    selection_rect: egui::Rect,
+    context: BoxSelectionContext<'_>,
+) -> Vec<(Uuid, Uuid)> {
+    let BoxSelectionContext {
         project,
         track_ids,
-        &editor_context.timeline.expanded_tracks,
-    );
+        expanded_tracks,
+        geometry,
+    } = context;
+    let mut found = Vec::new();
+    let display_rows = flatten_tracks_to_rows(project, track_ids, expanded_tracks);
 
-    let scroll_y = editor_context.timeline.scroll_offset.y;
-    let scroll_x = editor_context.timeline.scroll_offset.x;
-    let pixels_per_second = editor_context.timeline.pixels_per_second;
-
-    for (row_idx, row) in display_rows.iter().enumerate() {
-        let track_y = row_idx as f32 * (row_height + track_spacing) - scroll_y;
-        if track_y + row_height < selection_rect.min.y || track_y > selection_rect.max.y {
-            continue;
-        }
-
-        if let Some(track) = project.get_track(row.track_id()) {
-            for clip_id in &track.clip_ids {
-                if let Some(clip) = project.get_clip(*clip_id) {
-                    // Calculate clip rect
-                    let start_x =
-                        (clip.start_time.into_inner() as f32 * pixels_per_second) - scroll_x;
-                    let duration = clip.duration.into_inner();
-                    let width = duration as f32 * pixels_per_second;
-
-                    let clip_rect = egui::Rect::from_min_size(
-                        egui::Pos2::new(
-                            clip_area_top_left.x + start_x,
-                            clip_area_top_left.y + track_y,
-                        ),
-                        egui::Vec2::new(width, row_height),
-                    );
-
-                    if selection_rect.intersects(clip_rect) {
+    for row in display_rows {
+        match row {
+            DisplayRow::TrackHeader {
+                track,
+                visible_row_index,
+                is_expanded: false,
+                ..
+            } => {
+                for clip_id in &track.clip_ids {
+                    if let Some(clip) = project.get_clip(*clip_id).filter(|clip| {
+                        clip_intersects_selection(clip, visible_row_index, selection_rect, geometry)
+                    }) {
                         found.push((clip.id, track.id));
                     }
                 }
             }
+            DisplayRow::ClipRow {
+                clip,
+                parent_track,
+                visible_row_index,
+                ..
+            } => {
+                if clip_intersects_selection(clip, visible_row_index, selection_rect, geometry) {
+                    found.push((clip.id, parent_track.id));
+                }
+            }
+            DisplayRow::TrackHeader { .. } => {}
         }
     }
     found
@@ -1387,7 +1436,10 @@ mod tests {
         let graph = clip_graph_nodes(project.get_clip(clip_id).unwrap(), &project);
         assert_eq!(graph.output.map(|node| node.id), Some(effect_id));
         assert_eq!(graph.semantic_source.map(|node| node.id), Some(media_id));
-        assert_eq!(get_clip_color(graph.semantic_source, &project), (100, 100, 200));
+        assert_eq!(
+            get_clip_color(graph.semantic_source, &project),
+            (100, 100, 200)
+        );
         let NodeContent::Media(media) = &graph.semantic_source.unwrap().content else {
             panic!("Effect result must resolve to its Media source")
         };
@@ -1498,7 +1550,17 @@ mod tests {
     fn expanded_track_exposes_every_canonical_insertion_slot_in_reverse_screen_order() {
         let (project, track_id, _) = expanded_track_project();
         let rows = flatten_tracks_to_rows(&project, &[track_id], &HashSet::from([track_id]));
-        let markers = clip_insertion_markers(&rows, track_id, 100.0, 30.0, 30.0, 2.0, &project);
+        let markers = clip_insertion_markers(
+            &rows,
+            track_id,
+            &project,
+            ClipRowLayout {
+                content_min_y: 100.0,
+                scroll_y: 30.0,
+                row_height: 30.0,
+                row_spacing: 2.0,
+            },
+        );
 
         assert_eq!(
             markers,
