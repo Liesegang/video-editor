@@ -224,6 +224,7 @@ fn semantic_source_for_result<'a>(
                 semantic_source_for_result(project, source_id, path)
             })
         }
+        NodeContent::Value(_) => None,
     };
     path.remove(&node_id);
     result
@@ -246,6 +247,7 @@ fn semantic_source_kind(node: &Node) -> &'static str {
         NodeContent::Generator(library::model::GeneratorContent::Solid) => "Solid",
         NodeContent::Reference(_) => "Reference",
         NodeContent::PluginOperation(_) | NodeContent::Merge => "Result",
+        NodeContent::Value(_) => "Value",
     }
 }
 
@@ -285,6 +287,7 @@ fn get_clip_color(source: Option<&Node>, project: &Project) -> (u8, u8, u8) {
             library::model::GeneratorContent::Solid => (150, 150, 150),
         },
         Some(NodeContent::PluginOperation(_)) => (180, 110, 210),
+        Some(NodeContent::Value(_)) => (90, 180, 200),
         Some(NodeContent::Reference(_)) | Some(NodeContent::Merge) | None => (150, 150, 150),
     }
 }
@@ -1388,6 +1391,21 @@ mod tests {
             .set_output_node(NodeContainer::Clip(clip_id), Some(style_id))
             .unwrap();
         (project, clip_id, source_id, style_id)
+    }
+
+    #[test]
+    fn value_output_is_never_projected_as_a_timeline_image_source() {
+        let (mut project, clip_id) = project_with_clip("value output");
+        let value_id = attach_node(
+            &mut project,
+            clip_id,
+            Node::new_time_modulo("Time Modulo"),
+        );
+        project.get_clip_mut(clip_id).unwrap().output_node_id = Some(value_id);
+
+        let graph = clip_graph_nodes(project.get_clip(clip_id).unwrap(), &project);
+        assert_eq!(graph.output.map(|node| node.id), Some(value_id));
+        assert!(graph.semantic_source.is_none());
     }
 
     #[test]

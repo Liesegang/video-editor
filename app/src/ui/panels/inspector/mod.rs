@@ -13,7 +13,9 @@ use library::model::project::{
 use library::model::property::{
     PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
 };
-use library::model::{Clip, Composition, GeneratorContent, Node, NodeContent, Track};
+use library::model::{
+    Clip, Composition, GeneratorContent, Node, NodeContent, Track, ValueContent,
+};
 use library::plugin::PluginManager;
 use library::{EditorService, PropertyOwner};
 use ordered_float::OrderedFloat;
@@ -453,15 +455,8 @@ fn render_semantic_graph_facade(
     needs_refresh: &mut bool,
 ) {
     let output_mode = owner_kind.output_mode(output_node_id);
-    let sources = nodes
-        .iter()
-        .filter(|node| {
-            !matches!(
-                node.content,
-                NodeContent::PluginOperation(_) | NodeContent::Merge
-            )
-        })
-        .collect::<Vec<_>>();
+    let sources = semantic_visual_sources(nodes);
+    let values = native_value_nodes(nodes);
     let merges = nodes
         .iter()
         .filter(|node| matches!(node.content, NodeContent::Merge))
@@ -532,6 +527,21 @@ fn render_semantic_graph_facade(
             })),
         );
     }
+
+    render_value_category(
+        ui,
+        &values,
+        nodes,
+        connections,
+        composition_id,
+        track_id,
+        current_time,
+        fps,
+        project_service,
+        history_manager,
+        editor_context,
+        needs_refresh,
+    );
 
     let category_sections = [
         ("decorator", "Decorator", "Shape modifier"),
@@ -636,6 +646,147 @@ fn render_semantic_graph_facade(
         ui.label(
             egui::RichText::new("No explicit appearance, animation, or compositing Nodes.")
                 .weak(),
+        );
+    }
+}
+
+fn semantic_visual_sources(nodes: &[Node]) -> Vec<&Node> {
+    nodes
+        .iter()
+        .filter(|node| {
+            matches!(
+                node.content,
+                NodeContent::Media(_) | NodeContent::Generator(_) | NodeContent::Reference(_)
+            )
+        })
+        .collect()
+}
+
+fn native_value_nodes(nodes: &[Node]) -> Vec<&Node> {
+    nodes
+        .iter()
+        .filter(|node| matches!(node.content, NodeContent::Value(_)))
+        .collect()
+}
+
+fn value_connection_source_label(connection: &ProjectConnection, nodes: &[Node]) -> String {
+    let owner = match connection.from.owner {
+        PortOwner::Node(id) => nodes
+            .iter()
+            .find(|node| node.id == id)
+            .map_or_else(|| "Node".to_string(), source_semantic_label),
+        PortOwner::Composition(_) => "Composition".to_string(),
+        PortOwner::Track(_) => "Track".to_string(),
+        PortOwner::Clip(_) => "Clip".to_string(),
+    };
+    format!("{owner}.{}", connection.from.port)
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "native Value presentation shares the authoritative Inspector editing context"
+)]
+fn render_value_category(
+    ui: &mut Ui,
+    values: &[&Node],
+    all_nodes: &[Node],
+    connections: &[ProjectConnection],
+    composition_id: Uuid,
+    track_id: Option<Uuid>,
+    current_time: f64,
+    fps: f64,
+    project_service: &mut EditorService,
+    history_manager: &mut HistoryManager,
+    editor_context: &mut EditorContext,
+    needs_refresh: &mut bool,
+) {
+    if values.is_empty() {
+        return;
+    }
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.heading("Timing / Values");
+        ui.label(egui::RichText::new("Explicit time remap").small().weak());
+    });
+    ui.separator();
+
+    for node in values {
+        let label = match node.content {
+            NodeContent::Value(ValueContent::TimeModulo) => "Time Modulo / Loop",
+            _ => continue,
+        };
+        let incoming = connections
+            .iter()
+            .filter(|connection| connection.to.owner == PortOwner::Node(node.id))
+            .collect::<Vec<_>>();
+        let outgoing = connections
+            .iter()
+            .filter(|connection| connection.from.owner == PortOwner::Node(node.id))
+            .collect::<Vec<_>>();
+        let state = if !node.enabled {
+            "Disabled".to_string()
+        } else if outgoing.is_empty() {
+            "Not wired".to_string()
+        } else if outgoing.len() == 1 {
+            "Wired".to_string()
+        } else {
+            format!("Wired to {} inputs", outgoing.len())
+        };
+        let response = egui::CollapsingHeader::new(format!("{label} · {state}"))
+            .id_salt(("inspector_value", node.id))
+            .default_open(outgoing.len() == 1)
+            .show(ui, |ui| {
+                for connection in &incoming {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} ← {}",
+                            connection.to.port,
+                            value_connection_source_label(connection, all_nodes),
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                }
+                for connection in &outgoing {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} → {}.{}",
+                            connection.from.port,
+                            connection_target_label(connection, all_nodes),
+                            connection.to.port,
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                }
+                render_node_properties(
+                    ui,
+                    node,
+                    composition_id,
+                    track_id,
+                    current_time,
+                    fps,
+                    project_service,
+                    history_manager,
+                    editor_context,
+                    needs_refresh,
+                );
+            });
+        crate::qa::register_component_with_metadata(
+            format!("inspector.value:{}", node.id),
+            "inspector_value_item",
+            response.header_response.rect,
+            true,
+            Some(serde_json::json!({
+                "value_id": node.id,
+                "category": "timing_values",
+                "operation": "time_modulo",
+                "enabled": node.enabled,
+                "input_connection_count": incoming.len(),
+                "output_connection_count": outgoing.len(),
+                "inputs": incoming.iter().map(|connection| content_connection_metadata(connection)).collect::<Vec<_>>(),
+                "outputs": outgoing.iter().map(|connection| content_connection_metadata(connection)).collect::<Vec<_>>(),
+            })),
         );
     }
 }
@@ -1066,6 +1217,7 @@ fn source_kind(node: &Node) -> &'static str {
             "effect" => "Effect",
             _ => "Plug-in",
         },
+        NodeContent::Value(ValueContent::TimeModulo) => "Time Modulo",
         NodeContent::Merge => "Composite",
     }
 }
@@ -1126,8 +1278,9 @@ fn render_node_properties(
     editor_context: &mut EditorContext,
     needs_refresh: &mut bool,
 ) {
-    let descriptor_definitions =
-        plugin_operation_property_definitions(project_service.get_plugin_manager().as_ref(), node);
+    let descriptor_definitions = canonical_value_property_definitions(node).or_else(|| {
+        plugin_operation_property_definitions(project_service.get_plugin_manager().as_ref(), node)
+    });
     let mut definitions = descriptor_definitions.unwrap_or_else(|| {
         project_service.get_property_definitions(
             composition_id,
@@ -1161,6 +1314,13 @@ fn render_node_properties(
             needs_refresh,
         );
     }
+}
+
+fn canonical_value_property_definitions(node: &Node) -> Option<Vec<PropertyDefinition>> {
+    let NodeContent::Value(value) = &node.content else {
+        return None;
+    };
+    Some(value.property_definitions().to_vec())
 }
 
 fn plugin_operation_property_definitions(
@@ -1484,6 +1644,7 @@ fn node_display_type(node: &Node) -> String {
             "Plugin Operation · {} / {}",
             operation.category, operation.operation
         ),
+        NodeContent::Value(ValueContent::TimeModulo) => "Time Modulo".to_string(),
         NodeContent::Merge => "Merge".to_string(),
     }
 }
@@ -1951,6 +2112,61 @@ mod tests {
             }
         ));
         assert_ne!(width.ui_type(), inferred_width.ui_type());
+    }
+
+    #[test]
+    fn time_modulo_uses_canonical_period_metadata_instead_of_inferred_ranges() {
+        let node = Node::new_time_modulo("Time Modulo");
+        let definitions = canonical_value_property_definitions(&node).unwrap();
+        let period = definitions
+            .iter()
+            .find(|definition| definition.name() == "period")
+            .unwrap();
+        assert_eq!(period.label(), "Period");
+        assert_eq!(period.default_value(), &PropertyValue::from(1.0));
+        assert!(matches!(
+            period.ui_type(),
+            PropertyUiType::Float {
+                min: 0.001,
+                max: 86_400.0,
+                step: 0.001,
+                suffix,
+                min_hard_limit: true,
+                max_hard_limit: false,
+            } if suffix == " s"
+        ));
+
+        let inferred = inferred_property_definitions(&node.properties, 0.0);
+        assert_ne!(inferred[0].ui_type(), period.ui_type());
+    }
+
+    #[test]
+    fn value_nodes_are_timing_values_and_never_visual_sources() {
+        let source = Node::new(
+            "Solid",
+            NodeContent::Generator(GeneratorContent::Solid),
+        );
+        let source_id = source.id;
+        let value = Node::new_time_modulo("Time Modulo");
+        let value_id = value.id;
+        let merge = Node::new("Merge", NodeContent::Merge);
+        let nodes = vec![source, value, merge];
+
+        assert_eq!(
+            semantic_visual_sources(&nodes)
+                .into_iter()
+                .map(|node| node.id)
+                .collect::<Vec<_>>(),
+            vec![source_id]
+        );
+        assert_eq!(
+            native_value_nodes(&nodes)
+                .into_iter()
+                .map(|node| node.id)
+                .collect::<Vec<_>>(),
+            vec![value_id]
+        );
+        assert_eq!(source_kind(&nodes[1]), "Time Modulo");
     }
 
     #[test]
