@@ -185,6 +185,22 @@ class QaRunnerTests(unittest.TestCase):
             12.16,
         )
 
+    def test_double_click_evidence_matches_the_timing_independent_raw_input(self):
+        frames = E2E.expected_pointer_frames(
+            "double-click", {"x": 12.0, "y": 34.0}
+        )
+        self.assertEqual(
+            frames,
+            [
+                {"kind": "settle", "point": {"x": 12.0, "y": 34.0}},
+                {
+                    "kind": "double_click",
+                    "point": {"x": 12.0, "y": 34.0},
+                    "events": ["press", "release", "press", "release"],
+                },
+            ],
+        )
+
     def test_capture_clients_send_an_explicit_empty_body_post(self):
         EmptyCaptureHandler.bodies = []
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), EmptyCaptureHandler)

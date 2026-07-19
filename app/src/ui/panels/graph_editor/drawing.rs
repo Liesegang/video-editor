@@ -349,49 +349,51 @@ pub fn draw_properties(
                     }
                 }
 
-                let keyframe_points = property
-                    .keyframes()
-                    .into_iter()
-                    .filter_map(|keyframe| {
-                        keyframe_component_value(&keyframe.value, component).map(|value| {
-                            transform.to_screen(
-                                time_mapper.to_global_time(keyframe.time.into_inner()),
-                                value,
-                            )
+                if crate::qa::is_enabled() && property.evaluator == "keyframe" {
+                    let keyframe_points = property
+                        .keyframes()
+                        .into_iter()
+                        .filter_map(|keyframe| {
+                            keyframe_component_value(&keyframe.value, component).map(|value| {
+                                transform.to_screen(
+                                    time_mapper.to_global_time(keyframe.time.into_inner()),
+                                    value,
+                                )
+                            })
                         })
-                    })
-                    .collect::<Vec<_>>();
-                let curve_hit = path_points
-                    .iter()
-                    .copied()
-                    .filter(|point| {
-                        graph_rect.shrink(8.0).contains(*point)
-                            && keyframe_points
-                                .iter()
-                                .all(|keyframe| keyframe.distance(*point) >= 24.0)
-                    })
-                    .min_by(|left, right| {
-                        (left.x - graph_rect.center().x)
-                            .abs()
-                            .total_cmp(&(right.x - graph_rect.center().x).abs())
-                    });
-                if let Some(curve_hit) = curve_hit {
-                    let (global_time, value) = transform.screen_to_graph(curve_hit);
-                    crate::qa::register_component_with_metadata(
-                        format!("graph.curve_hit.{name}"),
-                        "graph_curve_hit",
-                        Rect::from_center_size(curve_hit, Vec2::splat(12.0)),
-                        true,
-                        Some(serde_json::json!({
-                            "property": name,
-                            "component": format!("{component:?}"),
-                            "entity_id": entity_id,
-                            "global_time": global_time,
-                            "source_time": time_mapper.to_source_time(global_time),
-                            "value": value,
-                            "evaluator": property.evaluator,
-                        })),
-                    );
+                        .collect::<Vec<_>>();
+                    let curve_hit = path_points
+                        .iter()
+                        .copied()
+                        .filter(|point| {
+                            graph_rect.shrink(8.0).contains(*point)
+                                && keyframe_points
+                                    .iter()
+                                    .all(|keyframe| keyframe.distance(*point) >= 24.0)
+                        })
+                        .min_by(|left, right| {
+                            (left.x - graph_rect.center().x)
+                                .abs()
+                                .total_cmp(&(right.x - graph_rect.center().x).abs())
+                        });
+                    if let Some(curve_hit) = curve_hit {
+                        let (global_time, value) = transform.screen_to_graph(curve_hit);
+                        crate::qa::register_component_with_metadata(
+                            format!("graph.curve_hit.{name}"),
+                            "graph_curve_hit",
+                            Rect::from_center_size(curve_hit, Vec2::splat(12.0)),
+                            true,
+                            Some(serde_json::json!({
+                                "property": name,
+                                "component": format!("{component:?}"),
+                                "entity_id": entity_id,
+                                "global_time": global_time,
+                                "source_time": time_mapper.to_source_time(global_time),
+                                "value": value,
+                                "evaluator": property.evaluator,
+                            })),
+                        );
+                    }
                 }
 
                 if path_points.len() > 1 {

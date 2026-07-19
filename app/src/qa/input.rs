@@ -421,16 +421,15 @@ fn build_steps(command: InputCommand, pixels_per_point: f32) -> Vec<FrameStep> {
                 .point()
                 .to_points(request.coordinate_space, pixels_per_point);
             push(vec![egui::Event::PointerMoved(pos)], request.modifiers);
-            for _ in 0..2 {
-                push(
-                    vec![pointer_event(pos, request.button, true, request.modifiers)],
-                    request.modifiers,
-                );
-                push(
-                    vec![pointer_event(pos, request.button, false, request.modifiers)],
-                    request.modifiers,
-                );
-            }
+            push(
+                vec![
+                    pointer_event(pos, request.button, true, request.modifiers),
+                    pointer_event(pos, request.button, false, request.modifiers),
+                    pointer_event(pos, request.button, true, request.modifiers),
+                    pointer_event(pos, request.button, false, request.modifiers),
+                ],
+                request.modifiers,
+            );
         }
         InputAction::Drag(request) => {
             let from = request
@@ -552,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn double_click_uses_two_real_clicks_inside_one_frame_sequence() {
+    fn double_click_uses_two_real_clicks_after_a_settle_frame() {
         let steps = build_steps(
             InputCommand {
                 id: 27,
@@ -560,21 +559,51 @@ mod tests {
             },
             2.0,
         );
-        assert_eq!(steps.len(), 5);
+        assert_eq!(steps.len(), 2);
         assert!(matches!(
             steps[0].events.as_slice(),
             [egui::Event::PointerMoved(_)]
         ));
-        for (step, pressed) in steps[1..].iter().zip([true, false, true, false]) {
-            assert!(matches!(
-                step.events.as_slice(),
-                [egui::Event::PointerButton {
-                    pressed: event_pressed,
-                    ..
-                }] if *event_pressed == pressed
-            ));
+        for (event, pressed) in steps[1].events.iter().zip([true, false, true, false]) {
+            assert!(matches!(event, egui::Event::PointerButton {
+                pressed: event_pressed,
+                ..
+            } if *event_pressed == pressed));
         }
-        assert!(steps[4].final_step);
+        assert!(steps[1].final_step);
+    }
+
+    #[test]
+    fn double_click_reaches_egui_double_clicked_without_wall_clock_timing() {
+        let steps = build_steps(
+            InputCommand {
+                id: 28,
+                action: InputAction::DoubleClick(pointer_request(24.0, 36.0)),
+            },
+            1.0,
+        );
+        let context = egui::Context::default();
+        let mut observed_double_click = false;
+        for (frame, step) in steps.into_iter().enumerate() {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(160.0, 120.0),
+                )),
+                time: Some(frame as f64 * 10.0),
+                modifiers: step.modifiers,
+                events: step.events,
+                ..Default::default()
+            };
+            let _output = context.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let (_, response) =
+                        ui.allocate_exact_size(egui::vec2(120.0, 80.0), egui::Sense::click());
+                    observed_double_click |= response.double_clicked();
+                });
+            });
+        }
+        assert!(observed_double_click);
     }
 
     #[test]

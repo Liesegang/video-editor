@@ -6,7 +6,7 @@
 //! - `GET /health`
 //! - `GET /v1/components`
 //! - `GET /v1/components/{percent-encoded-stable-id}`
-//! - `POST /v1/input/{move|press|release|click}` with
+//! - `POST /v1/input/{move|press|release|click|double-click}` with
 //!   `{ "x": 10, "y": 20, "coordinate_space": "points" }`
 //! - `POST /v1/input/drag` with
 //!   `{ "from": {"x": 10, "y": 20}, "to": {"x": 50, "y": 20}, "steps": 8 }`

@@ -71,10 +71,10 @@ curl -s -X POST http://127.0.0.1:39091/v1/input/drag \
 
 Also available: `/v1/input/move`, `/v1/input/press`, and
 `/v1/input/release`. Clicks are emitted as press and release on separate UI
-frames. Double-clicks emit two such clicks as one uninterrupted action, inside
-egui's normal double-click interval. Drags emit press, intermediate pointer
-moves, and release across multiple frames, so normal hit testing and gesture
-lifecycle run.
+frames. Double-clicks settle the pointer, then emit two real press/release pairs
+in the following `RawInput` frame so wall-clock stalls cannot break egui's click
+counting. Drags emit press, intermediate pointer moves, and release across
+multiple frames, so normal hit testing and gesture lifecycle run.
 
 Inject a real command-modified wheel event at a screen coordinate with
 `/v1/input/scroll`:
