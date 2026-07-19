@@ -6,17 +6,25 @@ The repository uses one entry point locally and in CI:
 ./scripts/quality-gate.sh
 ```
 
-It runs, without excluding crates, targets, features, or tests:
+It runs an explicit feature/target matrix. The default pass is required because
+`--all-features` does not compile `cfg(not(feature = "..."))` branches; the
+library CPU-fallback pass is required because both the default and maximal
+workspace configurations enable `library/gl`:
 
 ```bash
+./scripts/quality-gate-self-test.sh
 cargo fmt --all -- --check
+cargo check --workspace --all-targets --locked
+cargo clippy --workspace --lib --bins --locked -- -D warnings
+cargo clippy -p library --lib --no-default-features --locked -- -D warnings
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
+cargo test --workspace --all-targets --locked
 cargo test --workspace --all-targets --all-features --locked
 ./scripts/dependency-audit.sh
 ```
 
-The Clippy command also receives the opt-in lints listed in
+The Clippy commands also receive the opt-in lints listed in
 `scripts/clippy-policy.sh`. CI installs the Linux development packages required
 by FFmpeg, Skia, CPAL, PyO3, glutin, and winit before invoking the same script.
 The macOS and Windows packaging workflows continue to validate their native
@@ -25,6 +33,12 @@ packaging paths separately.
 Rust 1.95.0 is pinned in `rust-toolchain.toml`. Rustup users get that toolchain
 automatically. A standalone Cargo installation, such as Homebrew Cargo, ignores
 the rustup override file; it must provide Rust 1.95.0 plus Clippy and rustfmt.
+
+The production/default Clippy pass intentionally selects only libraries and
+binaries. Consequently the `allow-unwrap-in-tests`, `allow-expect-in-tests`, and
+`allow-panic-in-tests` settings cannot weaken that production pass. The separate
+all-target passes compile and test assertion-oriented test code under those
+three narrowly scoped exceptions.
 
 ## Dependency audit
 
@@ -73,18 +87,30 @@ platform API generations.
 `scripts/quality-gate-self-test.sh` applies the shared Clippy arguments to a
 small independent crate. The valid fixture must pass, and each invalid feature
 must fail with its expected lint. This catches accidental removal or misspelling
-of the policy for `dbg!`, `todo!`, `unimplemented!`, ignored `Result`, redundant
-clone, oversized values/stack arrays, undocumented unsafe blocks, and
-`unwrap()`, `expect()`, or `panic!()` in production. Test targets may use the
-last three for assertion-oriented failures; the valid fixture proves that this
-exception is limited to test code while the invalid production fixtures fail.
+of the policy for unsafe pointer casts/transmutes, production-only cfg paths,
+fallible `From`, process exit, path replacement, `dbg!`, `todo!`,
+`unimplemented!`, ignored `Result`, redundant clone, oversized values/stack
+arrays, undocumented unsafe blocks, and `unwrap()`, `expect()`, or `panic!()` in
+production. Test targets may use the last three for assertion-oriented failures;
+the valid fixture proves that this exception is limited to test code while the
+invalid production fixtures fail.
+
+The self-test also requires a tracked, non-ignored, current root `Cargo.lock`
+and asserts the fail-closed command skeleton of `quality-gate.sh`. Removing fmt,
+check, either feature-matrix Clippy/test pass, the self-test itself, or the
+dependency audit therefore fails before the workspace build begins.
+The full gate clears the dependency script's fixture-only validation and
+exception-file overrides (and its tool-root override) before auditing, so a
+stray test environment cannot turn the real audit into validation-only mode.
 
 ## Lint inventory and decisions
 
 `scripts/lint-inventory.sh` uses compiler JSON rather than source-text matching
-and evaluates the full workspace with every target and feature. The exhaustive
-nonzero `all`, `pedantic`, `nursery`, and `restriction` snapshot, including a
-per-lint adopt/defer/exclude decision, is recorded in
+and evaluates every workspace target in the maximal `--all-features`
+configuration. It is a promotion inventory, not a substitute for the default
+and CPU-fallback gate passes above. The exhaustive nonzero `all`, `pedantic`,
+`nursery`, and `restriction` snapshot, including a per-lint
+adopt/defer/exclude decision, is recorded in
 [`clippy-lint-inventory.md`](clippy-lint-inventory.md). `clippy::all` and the
 curated safety/reliability lints are enforced now. Pedantic and nursery remain
 measured promotion candidates; the restriction group is never enabled as a

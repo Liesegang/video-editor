@@ -18,6 +18,7 @@ cleanup() {
 trap cleanup EXIT
 
 ROOT_LOCKFILE="${REPOSITORY_ROOT}/Cargo.lock"
+QUALITY_GATE="${SCRIPT_DIR}/quality-gate.sh"
 
 if [[ ! -f "${ROOT_LOCKFILE}" ]]; then
     echo "root Cargo.lock is required for reproducible quality gates" >&2
@@ -27,9 +28,46 @@ if git -C "${REPOSITORY_ROOT}" check-ignore --quiet --no-index -- Cargo.lock; th
     echo "root Cargo.lock must not be ignored by git" >&2
     exit 1
 fi
+if ! git -C "${REPOSITORY_ROOT}" ls-files --error-unmatch -- Cargo.lock > /dev/null; then
+    echo "root Cargo.lock must be tracked by git" >&2
+    exit 1
+fi
 
-# This also catches a stale lockfile after workspace manifests change. On a
-# fresh checkout, the existence check above guarantees Cargo.lock was tracked.
+require_gate_command() {
+    local command="$1"
+    if ! awk '
+        {
+            line = $0
+            sub(/^[[:space:]]+/, "", line)
+            if (line !~ /^#/) print line
+        }
+    ' "${QUALITY_GATE}" | grep -Fqx -- "${command}"; then
+        echo "quality gate is missing required command: ${command}" >&2
+        exit 1
+    fi
+}
+
+# These checks make deletion of an expensive stage fail closed. Keep the
+# asserted command prefixes on one line in quality-gate.sh.
+require_gate_command 'set -euo pipefail'
+require_gate_command 'bash -n "${SCRIPT_DIR}"/*.sh'
+require_gate_command 'cargo fmt --all -- --check'
+require_gate_command '"${SCRIPT_DIR}/check-default-no-libpython.sh"'
+require_gate_command 'cargo check --workspace --all-targets --locked'
+require_gate_command 'cargo clippy --workspace --lib --bins --locked -- \'
+require_gate_command 'cargo clippy -p library --lib --no-default-features --locked -- \'
+require_gate_command 'cargo clippy --workspace --all-targets --all-features --locked -- \'
+require_gate_command 'cargo test --workspace --all-targets --locked'
+require_gate_command 'cargo test --workspace --all-targets --all-features --locked'
+require_gate_command 'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked'
+require_gate_command 'RUSTDOCFLAGS="-D warnings" cargo test --workspace --all-features --doc --locked'
+require_gate_command '"${SCRIPT_DIR}/quality-gate-self-test.sh"'
+require_gate_command '-u QUALITY_ADVISORY_EXCEPTION_FILE \'
+require_gate_command '-u QUALITY_AUDIT_VALIDATE_ONLY \'
+require_gate_command '-u QUALITY_TOOL_ROOT \'
+require_gate_command '"${SCRIPT_DIR}/dependency-audit.sh"'
+
+# This also catches a stale lockfile after workspace manifests change.
 cargo metadata \
     --manifest-path "${REPOSITORY_ROOT}/Cargo.toml" \
     --locked \
@@ -71,16 +109,24 @@ run_fixture
 
 expect_policy_failure bad-allow-without-reason clippy::allow_attributes_without_reason
 expect_policy_failure bad-case-sensitive-extension clippy::case_sensitive_file_extension_comparisons
+expect_policy_failure bad-cast-ptr-alignment clippy::cast_ptr_alignment
+expect_policy_failure bad-cfg-not-test clippy::cfg_not_test
 expect_policy_failure bad-dbg clippy::dbg_macro
+expect_policy_failure bad-exit clippy::exit
 expect_policy_failure bad-ignored-result clippy::let_underscore_must_use
+expect_policy_failure bad-fallible-impl-from clippy::fallible_impl_from
+expect_policy_failure bad-fn-to-numeric-cast-any clippy::fn_to_numeric_cast_any
 expect_policy_failure bad-large-stack-array clippy::large_stack_arrays
 expect_policy_failure bad-large-value clippy::large_types_passed_by_value
 expect_policy_failure bad-non-send-field clippy::non_send_fields_in_send_ty
 expect_policy_failure bad-expect clippy::expect_used
 expect_policy_failure bad-panic clippy::panic
+expect_policy_failure bad-path-buf-push-overwrite clippy::path_buf_push_overwrite
 expect_policy_failure bad-redundant-clone clippy::redundant_clone
 expect_policy_failure bad-string-slice clippy::string_slice
 expect_policy_failure bad-todo clippy::todo
+expect_policy_failure bad-transmute-ptr-to-ptr clippy::transmute_ptr_to_ptr
+expect_policy_failure bad-transmute-undefined-repr clippy::transmute_undefined_repr
 expect_policy_failure bad-undocumented-unsafe clippy::undocumented_unsafe_blocks
 expect_policy_failure bad-unimplemented clippy::unimplemented
 expect_policy_failure bad-unreachable clippy::unreachable

@@ -14,11 +14,37 @@ Restriction lints are deliberately selected individually because many pairs
 encode mutually exclusive styles.
 
 Explicit denies, including those currently at zero: `allow_attributes_without_reason`,
-`dbg_macro`, `expect_used`, `large_stack_arrays`,
-`large_types_passed_by_value`, `let_underscore_must_use`,
-`non_send_fields_in_send_ty`, `panic`, `redundant_clone`, `todo`,
-`undocumented_unsafe_blocks`, `unimplemented`, `unwrap_in_result`, and
-`unwrap_used`.
+`case_sensitive_file_extension_comparisons`, `cast_ptr_alignment`,
+`cfg_not_test`, `dbg_macro`, `exit`, `expect_used`, `fallible_impl_from`,
+`fn_to_numeric_cast_any`, `large_stack_arrays`, `large_types_passed_by_value`,
+`let_underscore_must_use`, `non_send_fields_in_send_ty`, `panic`,
+`path_buf_push_overwrite`, `redundant_clone`, `string_slice`, `todo`,
+`transmute_ptr_to_ptr`, `transmute_undefined_repr`,
+`undocumented_unsafe_blocks`, `unimplemented`, `unreachable`,
+`unused_result_ok`, `unwrap_in_result`, and `unwrap_used`.
+
+## Adversarial promotion queue
+
+A fresh inventory at `41d6c9a` shows that several inconvenient lints are
+material production risks, not style rules that can be dismissed by labelling
+the whole restriction or pedantic group optional:
+
+| lint | current findings | why it remains high priority |
+| --- | ---: | --- |
+| `clippy::arithmetic_side_effects` | 465 | Frame, duration, byte-count, and coordinate overflow can change rendered output or panic. Stage this per media/math module with explicit checked, saturating, or justified arithmetic. |
+| `clippy::cast_possible_truncation` | 759 | Frame/time and buffer-size conversions need range proofs at their boundaries. |
+| `clippy::cast_precision_loss` | 279 | Integer-to-float time and pixel conversions can accumulate visible drift. |
+| `clippy::cast_sign_loss` | 182 | Negative timeline values must not silently become large indices or sizes. |
+| `clippy::indexing_slicing` | 584 | Decoder buffers and graph collections need checked access at untrusted or computed boundaries. |
+| `clippy::map_err_ignore` | 86 | Dropping source errors directly harms the decoder/plugin diagnostics needed for QA. |
+| `clippy::mem_forget` | 2 | The plugin ABI currently uses it for ownership transfer; prefer `ManuallyDrop` or document a narrow exception before promotion. |
+| `clippy::multiple_unsafe_ops_per_block` | 16 | Plugin/FFI review needs one safety proof per unsafe operation rather than a broad block. |
+| `clippy::significant_drop_tightening` | 92 | Long-lived locks or guards can stall render and decode work; verify each finding before enabling the nursery lint. |
+
+These are an explicit remediation queue. Their current nonzero baseline is why
+they were not silently promoted by this quality-only change; promotion requires
+production fixes and narrow, reasoned exceptions, not a permanent global
+allowance.
 
 | lint | findings | groups | decision |
 | --- | ---: | --- | --- |
@@ -27,7 +53,7 @@ Explicit denies, including those currently at zero: `allow_attributes_without_re
 | `clippy::allow_attributes_without_reason` | 42 | `restriction` | adopted: explicit deny; fix all production findings |
 | `clippy::arbitrary_source_item_ordering` | 1750 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::arc_with_non_send_sync` | 4 | `all` | adopted via `clippy::all`; fix before merge |
-| `clippy::arithmetic_side_effects` | 400 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
+| `clippy::arithmetic_side_effects` | 400 | `restriction` | defer: high-priority media/math audit; promote module by module |
 | `clippy::as_conversions` | 1466 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::assertions_on_constants` | 1 | `all` | adopted via `clippy::all`; fix before merge |
 | `clippy::assertions_on_result_states` | 2 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
@@ -36,12 +62,12 @@ Explicit denies, including those currently at zero: `allow_attributes_without_re
 | `clippy::bind_instead_of_map` | 2 | `all` | adopted via `clippy::all`; fix before merge |
 | `clippy::bool_to_int_with_if` | 4 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
 | `clippy::branches_sharing_code` | 14 | `nursery` | defer: measured backlog; promote individually after a zero baseline |
-| `clippy::case_sensitive_file_extension_comparisons` | 4 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
+| `clippy::case_sensitive_file_extension_comparisons` | 4 | `pedantic` | adopted: explicit deny; fix all production findings |
 | `clippy::cast_lossless` | 363 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
-| `clippy::cast_possible_truncation` | 702 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
+| `clippy::cast_possible_truncation` | 702 | `pedantic` | defer: high-priority frame/time/buffer conversion audit |
 | `clippy::cast_possible_wrap` | 64 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
-| `clippy::cast_precision_loss` | 243 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
-| `clippy::cast_sign_loss` | 166 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
+| `clippy::cast_precision_loss` | 243 | `pedantic` | defer: high-priority timeline and coordinate conversion audit |
+| `clippy::cast_sign_loss` | 166 | `pedantic` | defer: high-priority negative timeline/index boundary audit |
 | `clippy::clone_on_copy` | 4 | `all` | adopted via `clippy::all`; fix before merge |
 | `clippy::clone_on_ref_ptr` | 52 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::cloned_instead_of_copied` | 2 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
@@ -80,7 +106,7 @@ Explicit denies, including those currently at zero: `allow_attributes_without_re
 | `clippy::implicit_return` | 5189 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::imprecise_flops` | 14 | `nursery` | defer: measured backlog; promote individually after a zero baseline |
 | `clippy::inconsistent_struct_constructor` | 4 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
-| `clippy::indexing_slicing` | 392 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
+| `clippy::indexing_slicing` | 392 | `restriction` | defer: high-priority decoder/graph boundary audit; promote by module |
 | `clippy::integer_division` | 21 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::integer_division_remainder_used` | 53 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::items_after_statements` | 38 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
@@ -98,7 +124,7 @@ Explicit denies, including those currently at zero: `allow_attributes_without_re
 | `clippy::manual_string_new` | 46 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
 | `clippy::manual_strip` | 2 | `all` | adopted via `clippy::all`; fix before merge |
 | `clippy::many_single_char_names` | 20 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
-| `clippy::map_err_ignore` | 88 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
+| `clippy::map_err_ignore` | 88 | `restriction` | defer: high-priority diagnostics audit; preserve source error context |
 | `clippy::map_unwrap_or` | 84 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
 | `clippy::match_same_arms` | 28 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
 | `clippy::match_wildcard_for_single_variants` | 14 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
@@ -117,7 +143,7 @@ Explicit denies, including those currently at zero: `allow_attributes_without_re
 | `clippy::module_name_repetitions` | 190 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::modulo_arithmetic` | 36 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::multiple_inherent_impl` | 14 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
-| `clippy::multiple_unsafe_ops_per_block` | 16 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
+| `clippy::multiple_unsafe_ops_per_block` | 16 | `restriction` | defer: high-priority FFI audit; split blocks around individual safety proofs |
 | `clippy::must_use_candidate` | 390 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
 | `clippy::needless_borrow` | 14 | `all` | adopted via `clippy::all`; fix before merge |
 | `clippy::needless_borrows_for_generic_args` | 3 | `all` | adopted via `clippy::all`; fix before merge |
@@ -162,7 +188,7 @@ Explicit denies, including those currently at zero: `allow_attributes_without_re
 | `clippy::separated_literal_suffix` | 32 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::shadow_reuse` | 571 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::shadow_unrelated` | 253 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
-| `clippy::significant_drop_tightening` | 84 | `nursery` | defer: measured backlog; promote individually after a zero baseline |
+| `clippy::significant_drop_tightening` | 84 | `nursery` | defer: high-priority lock/guard lifetime audit; validate nursery false positives |
 | `clippy::similar_names` | 16 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
 | `clippy::single_call_fn` | 306 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::single_char_add_str` | 2 | `all` | adopted via `clippy::all`; fix before merge |
@@ -174,7 +200,7 @@ Explicit denies, including those currently at zero: `allow_attributes_without_re
 | `clippy::std_instead_of_alloc` | 143 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::std_instead_of_core` | 146 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::str_to_string` | 1228 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
-| `clippy::string_slice` | 2 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
+| `clippy::string_slice` | 2 | `restriction` | adopted: explicit deny; fix all production findings |
 | `clippy::struct_excessive_bools` | 10 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
 | `clippy::struct_field_names` | 4 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
 | `clippy::suboptimal_flops` | 286 | `nursery` | defer: measured backlog; promote individually after a zero baseline |
@@ -194,11 +220,11 @@ Explicit denies, including those currently at zero: `allow_attributes_without_re
 | `clippy::unnecessary_wraps` | 4 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
 | `clippy::unneeded_field_pattern` | 8 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::unnested_or_patterns` | 8 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
-| `clippy::unreachable` | 3 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
+| `clippy::unreachable` | 3 | `restriction` | adopted: explicit deny; fix all production findings |
 | `clippy::unreadable_literal` | 8 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
 | `clippy::unseparated_literal_suffix` | 52 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::unused_peekable` | 4 | `nursery` | defer: measured backlog; promote individually after a zero baseline |
-| `clippy::unused_result_ok` | 4 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
+| `clippy::unused_result_ok` | 4 | `restriction` | adopted: explicit deny; fix all production findings |
 | `clippy::unused_self` | 6 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
 | `clippy::unused_trait_names` | 43 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::unwrap_used` | 106 | `restriction` | adopted: explicit deny; fix all production findings |
@@ -211,4 +237,3 @@ Explicit denies, including those currently at zero: `allow_attributes_without_re
 | `clippy::while_let_on_iterator` | 2 | `all` | adopted via `clippy::all`; fix before merge |
 | `clippy::wildcard_enum_match_arm` | 128 | `restriction` | exclude globally; restriction lints require case-by-case opt-in |
 | `clippy::wildcard_imports` | 3 | `pedantic` | defer: measured backlog; promote individually after a zero baseline |
-

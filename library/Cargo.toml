@@ -14,7 +14,7 @@ gl = []
 python-easing = ["dep:pyo3"]
 
 [dependencies]
-ruvie-plugin-api = { path = "../plugin-api" }
+ruvie-plugin-api = { version = "0.1.0", path = "../plugin-api" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
 ffmpeg-next = "8.1.0"
