@@ -167,6 +167,7 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
             );
             return None;
         }
+        let transform = evaluator.build_transform(props, time);
         Some(RuntimeShape {
             source_id: node.id,
             geometry: RuntimeShapeGeometry::Text(layout_runtime_text_shape(
@@ -174,7 +175,8 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
                 &font,
                 size as f32,
             )),
-            transform: evaluator.build_transform(props, time),
+            source_transform: transform.clone(),
+            transform,
             effects: evaluator.build_image_effects(&node.effects, time),
             effector_configs: Vec::new(),
             decorator_configs: Vec::new(),

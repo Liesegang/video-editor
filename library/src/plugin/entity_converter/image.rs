@@ -1,6 +1,6 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
-use crate::model::NodeContent;
 use crate::model::frame::entity::{FrameBounds, FrameContent, FrameObject, ImageSurface};
+use crate::model::NodeContent;
 
 #[derive(Default)]
 pub struct ImageEntityConverterPlugin;
@@ -127,13 +127,14 @@ impl EntityConverterPlugin for ImageEntityConverterPlugin {
         let surface = ImageSurface {
             file_path,
             effects,
-            transform,
+            transform: transform.clone(),
             input_color_space: None,
             output_color_space: None,
         };
 
         Some(FrameObject {
             source_node_id: node.id,
+            source_transform: transform,
             content_bounds: asset.and_then(|asset| match (asset.width, asset.height) {
                 (Some(width), Some(height)) => {
                     Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32))

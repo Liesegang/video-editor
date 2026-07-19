@@ -2,10 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use library::SkiaRenderer;
 use library::cache::CacheManager;
 use library::core::ensemble::EnsembleData;
-use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::draw_type::{CapType, DrawStyle, JoinType};
 use library::model::frame::entity::{
@@ -13,14 +11,16 @@ use library::model::frame::entity::{
 };
 use library::model::frame::frame::FrameInfo;
 use library::model::frame::transform::{Position, Scale, Transform};
+use library::model::frame::Image;
 use library::model::property::PropertyMap;
-use library::plugin::PluginManager;
 use library::plugin::entity_converter::{measure_shape_visual_bounds, measure_text_size};
+use library::plugin::PluginManager;
 use library::rendering::renderer::{
     Affine2D, RenderOutput, Renderer, ShapeRasterRequest, TextRasterRequest,
 };
 use library::rendering::text_layout::text_style_outset;
-use library::{RenderService, model::BlendMode};
+use library::SkiaRenderer;
+use library::{model::BlendMode, RenderService};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
@@ -314,6 +314,7 @@ fn vector_object(is_text: bool, transform: Transform, styles: &[StyleConfig]) ->
     };
     FrameItem::Object(FrameObject {
         source_node_id: Uuid::new_v4(),
+        source_transform: content.transform().clone(),
         content_bounds: None,
         content,
         properties: PropertyMap::new(),

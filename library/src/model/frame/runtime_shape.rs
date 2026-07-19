@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use uuid::Uuid;
 
-use crate::core::ensemble::effectors::{EffectorElementContext, evaluate_configured_transform};
+use crate::core::ensemble::effectors::{evaluate_configured_transform, EffectorElementContext};
 use crate::core::ensemble::types::{DecoratorConfig, EffectorConfig, EnsembleData};
 use crate::error::LibraryError;
 use crate::model::frame::draw_type::{DrawStyle, PathEffect};
@@ -165,6 +165,9 @@ pub enum RuntimeShapeGeometry {
 pub struct RuntimeShape {
     pub source_id: Uuid,
     pub geometry: RuntimeShapeGeometry,
+    /// Transform evaluated directly from `source_id`. Downstream Effectors
+    /// may mutate `transform`, but must not change this edit baseline.
+    pub source_transform: Transform,
     pub transform: Transform,
     pub effects: Vec<ImageEffect>,
     pub effector_configs: Vec<EffectorConfig>,
@@ -272,6 +275,7 @@ impl RuntimeShape {
         };
         FrameObject {
             source_node_id,
+            source_transform: self.source_transform,
             content_bounds,
             content,
             properties: self.properties,

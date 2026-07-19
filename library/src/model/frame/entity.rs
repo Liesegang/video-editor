@@ -292,6 +292,13 @@ pub struct FrameObject {
     /// Style, Effect, Merge, and container wrappers deliberately do not
     /// replace this identity.
     pub source_node_id: Uuid,
+    /// Evaluated transform owned directly by `source_node_id`, before any
+    /// downstream Shape Effector modifies the rendered geometry.
+    ///
+    /// Preview gizmos deliberately edit this direct source transform. Effect,
+    /// Style, Merge, container, and Effector operation transforms remain
+    /// independently editable through their own Node/Inspector controls.
+    pub source_transform: Transform,
     pub content_bounds: Option<FrameBounds>,
     pub content: FrameContent, // Renamed from entity: FrameEntity
     pub properties: PropertyMap,
