@@ -136,6 +136,27 @@ pub fn snapshot(
             "node_editor": {
                 "context_menu_open": editor_context.node_editor_context_menu.is_some(),
                 "pending_navigation": editor_context.node_editor_state.pending_navigation,
+                "selected_connection_id": editor_context.node_editor_state.selected_connection_id,
+                "wire_context_menu_open": editor_context
+                    .node_editor_state
+                    .wire_context_menu
+                    .is_some(),
+                "wire_gesture": editor_context.node_editor_state.wire_gesture.as_ref().map(|gesture| {
+                    serde_json::json!({
+                        "connection_id": gesture.connection_id,
+                        "kind": format!("{:?}", gesture.kind),
+                        "start": {"x": gesture.start.x, "y": gesture.start.y},
+                        "current": {"x": gesture.current.x, "y": gesture.current.y},
+                    })
+                }),
+                "wire_knife": editor_context.node_editor_state.wire_knife.as_ref().map(|gesture| {
+                    let mut crossed = gesture.crossed_connection_ids.iter().copied().collect::<Vec<_>>();
+                    crossed.sort_unstable();
+                    serde_json::json!({
+                        "point_count": gesture.points.len(),
+                        "crossed_connection_ids": crossed,
+                    })
+                }),
             },
             "graph": {
                 "active_entity_id": editor_context.graph_editor.active_entity_id,
