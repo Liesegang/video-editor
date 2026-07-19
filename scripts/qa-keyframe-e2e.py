@@ -230,6 +230,46 @@ def wait_inspector_numeric_value(client, component_id, expected, label):
     return component
 
 
+def wait_preview_hash_change(client, previous_preview, operation):
+    def changed():
+        state = client.state()
+        preview = state["editor"]["preview"]
+        if (
+            preview["render_revision"] > previous_preview["render_revision"]
+            and preview["pixel_hash"] is not None
+            and preview["pixel_hash"] != previous_preview["pixel_hash"]
+            and preview["nontransparent_pixels"] is not None
+            and preview["nontransparent_pixels"] > 0
+            and preview["modal_error"] is None
+        ):
+            return state
+        return None
+
+    return client.wait_until(
+        "a non-transparent changed Preview after {}".format(operation), changed
+    )
+
+
+def wait_preview_hash_after(client, previous_preview, expected_hash, operation):
+    def rendered_expected_hash():
+        state = client.state()
+        preview = state["editor"]["preview"]
+        if (
+            preview["render_revision"] > previous_preview["render_revision"]
+            and preview["pixel_hash"] == expected_hash
+            and preview["nontransparent_pixels"] is not None
+            and preview["nontransparent_pixels"] > 0
+            and preview["modal_error"] is None
+        ):
+            return state
+        return None
+
+    return client.wait_until(
+        "Preview hash {} after {}".format(expected_hash, operation),
+        rendered_expected_hash,
+    )
+
+
 def assert_undo_transition(before, after, operation):
     if after["history"]["undo_depth"] != before["history"]["undo_depth"] - 1:
         raise QaFailure("{} did not remove exactly one Undo state".format(operation))
@@ -583,8 +623,10 @@ def run_suite(client):
     assert_history_delta(graph_before, graph_after, 1, "Transform Graph drag")
     if graph_after["editor"]["graph"]["drag"] is not None:
         raise QaFailure("Graph drag transaction remained active after pointer release")
-    client.wait_preview_change(
-        preview_before["pixel_hash"], preview_before["render_revision"]
+    wait_preview_hash_change(
+        client,
+        preview_before,
+        "Graph keyframe drag",
     )
 
     # Inspector metadata must independently reflect the Project value produced
@@ -646,9 +688,10 @@ def run_suite(client):
         "linear",
         "Linear",
     )
-    linear_render = client.wait_preview_change(
-        cubic_render["editor"]["preview"]["pixel_hash"],
-        cubic_render["editor"]["preview"]["render_revision"],
+    linear_render = wait_preview_hash_change(
+        client,
+        cubic_render["editor"]["preview"],
+        "Linear easing selection",
     )
     linear_expected = numeric_easing_value(
         float(start_key["value"]),
@@ -673,10 +716,6 @@ def run_suite(client):
         == "EaseInOutCubic",
     )
     assert_undo_transition(undo_before, cubic_undo, "Graph easing Undo")
-    cubic_undo_render = client.wait_preview_change(
-        linear_render["editor"]["preview"]["pixel_hash"],
-        linear_render["editor"]["preview"]["render_revision"],
-    )
     wait_inspector_numeric_value(
         client,
         direct_tx_control,
@@ -694,9 +733,17 @@ def run_suite(client):
         == "Linear",
     )
     assert_redo_transition(redo_before, linear_redo, "Graph easing Redo")
-    linear_redo_render = client.wait_preview_change(
-        cubic_undo_render["editor"]["preview"]["pixel_hash"],
-        cubic_undo_render["editor"]["preview"]["render_revision"],
+    wait_inspector_numeric_value(
+        client,
+        direct_tx_control,
+        linear_expected,
+        "Inspector easing Redo value",
+    )
+    linear_redo_render = wait_preview_hash_after(
+        client,
+        redo_before["editor"]["preview"],
+        linear_render["editor"]["preview"]["pixel_hash"],
+        "easing Redo",
     )
 
     set_graph_easing(
@@ -706,9 +753,10 @@ def run_suite(client):
         "ease_in_out_cubic",
         "EaseInOutCubic",
     )
-    cubic_again_render = client.wait_preview_change(
-        linear_redo_render["editor"]["preview"]["pixel_hash"],
-        linear_redo_render["editor"]["preview"]["render_revision"],
+    cubic_again_render = wait_preview_hash_change(
+        client,
+        linear_redo_render["editor"]["preview"],
+        "EaseInOutCubic reselection",
     )
 
     # Delete the key added by double-click through its rendered context item.
@@ -728,9 +776,10 @@ def run_suite(client):
         is None,
     )
     assert_history_delta(delete_before, deleted, 1, "Graph keyframe delete")
-    delete_render = client.wait_preview_change(
-        cubic_again_render["editor"]["preview"]["pixel_hash"],
-        cubic_again_render["editor"]["preview"]["render_revision"],
+    delete_render = wait_preview_hash_change(
+        client,
+        cubic_again_render["editor"]["preview"],
+        "Graph keyframe delete",
     )
 
     delete_undo_before = client.state()
@@ -743,11 +792,6 @@ def run_suite(client):
         is not None,
     )
     assert_undo_transition(delete_undo_before, delete_undone, "Graph delete Undo")
-    delete_undo_render = client.wait_preview_change(
-        delete_render["editor"]["preview"]["pixel_hash"],
-        delete_render["editor"]["preview"]["render_revision"],
-    )
-
     delete_redo_before = client.state()
     shortcut_undo_redo(client, redo=True)
     delete_redone = client.wait_project(
@@ -758,9 +802,11 @@ def run_suite(client):
         is None,
     )
     assert_redo_transition(delete_redo_before, delete_redone, "Graph delete Redo")
-    client.wait_preview_change(
-        delete_undo_render["editor"]["preview"]["pixel_hash"],
-        delete_undo_render["editor"]["preview"]["render_revision"],
+    wait_preview_hash_after(
+        client,
+        delete_redo_before["editor"]["preview"],
+        delete_render["editor"]["preview"]["pixel_hash"],
+        "keyframe delete Redo",
     )
 
     final_tx_key = only_keyframe(delete_redone["project"], TRANSFORM_EFFECTOR, "tx")
@@ -823,6 +869,7 @@ def run_suite(client):
         raise QaFailure("Preview gesture owner did not return to Idle")
     if final["editor"]["selection"] != selection_before:
         raise QaFailure("final Preview pan changed the editor selection")
+    final_component_frame = client.component_snapshot()["frame"]
 
     print("[qa-keyframe-e2e] direct operation Inspector/Graph/dialog E2E passed")
     return {
@@ -832,6 +879,8 @@ def run_suite(client):
         "final_history": final["history"],
         "final_preview": final["editor"]["preview"],
         "final_selection": final["editor"]["selection"],
+        "component_frame": final_component_frame,
+        "action_count": len(client.evidence),
         "graph_crud": {
             "property": tx_property,
             "curve_component_id": curve_id,
@@ -890,6 +939,11 @@ def main():
             )
         result = run_suite(QaClient(base_url, args.timeout))
         result["run_id"] = os.environ.get("RUVIE_QA_RUN_ID")
+        result["git_commit"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(SCRIPT_DIR),
+            text=True,
+        ).strip()
         evidence_path = os.path.abspath(args.evidence)
         os.makedirs(os.path.dirname(evidence_path), exist_ok=True)
         with open(evidence_path, "w", encoding="utf-8") as output:
