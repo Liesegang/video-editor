@@ -13,6 +13,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -247,7 +248,9 @@ def wait_preview_hash_change(client, previous_preview, operation):
 
 
 def wait_preview_hash_after(client, previous_preview, expected_hash, operation):
-    def rendered_expected_hash():
+    last_preview = None
+    deadline = time.monotonic() + client.timeout
+    while time.monotonic() < deadline:
         state = client.state()
         preview = state["editor"]["preview"]
         if (
@@ -258,11 +261,15 @@ def wait_preview_hash_after(client, previous_preview, expected_hash, operation):
             and preview["modal_error"] is None
         ):
             return state
-        return None
-
-    return client.wait_until(
-        "Preview hash {} after {}".format(expected_hash, operation),
-        rendered_expected_hash,
+        last_preview = preview
+        time.sleep(0.04)
+    raise QaFailure(
+        "timed out waiting for Preview hash {} after {}; previous={!r}; last={!r}".format(
+            expected_hash,
+            operation,
+            previous_preview,
+            last_preview,
+        )
     )
 
 
@@ -661,9 +668,7 @@ def run_suite(client):
         float(end_key["time"]) - float(start_key["time"])
     ) * fraction
     easing_global_time = source_time + 1.0
-    seek_before = client.state()
     click_graph_time(client, easing_global_time)
-    cubic_render = client.wait_preview_render_after(seek_before, "Graph ruler seek")
     cubic_expected = numeric_easing_value(
         float(start_key["value"]),
         float(end_key["value"]),
@@ -676,6 +681,10 @@ def run_suite(client):
         cubic_expected,
         "Inspector cubic value",
     )
+    cubic_ready = client.state()
+    cubic_render = client.wait_preview_render_after(
+        cubic_ready, "Graph cubic value after Inspector convergence"
+    )
 
     set_graph_easing(
         client,
@@ -683,11 +692,6 @@ def run_suite(client):
         start_key["id"],
         "linear",
         "Linear",
-    )
-    linear_render = wait_preview_hash_change(
-        client,
-        cubic_render["editor"]["preview"],
-        "Linear easing selection",
     )
     linear_expected = numeric_easing_value(
         float(start_key["value"]),
@@ -701,6 +705,15 @@ def run_suite(client):
         linear_expected,
         "Inspector linear value",
     )
+    linear_ready = client.state()
+    linear_render = client.wait_preview_render_after(
+        linear_ready, "Graph linear value after Inspector convergence"
+    )
+    if (
+        linear_render["editor"]["preview"]["pixel_hash"]
+        == cubic_render["editor"]["preview"]["pixel_hash"]
+    ):
+        raise QaFailure("Linear and cubic easing rendered identical Preview pixels")
 
     undo_before = client.state()
     shortcut_undo_redo(client)
@@ -717,6 +730,12 @@ def run_suite(client):
         direct_tx_control,
         cubic_expected,
         "Inspector easing Undo value",
+    )
+    wait_preview_hash_after(
+        client,
+        undo_before["editor"]["preview"],
+        cubic_render["editor"]["preview"]["pixel_hash"],
+        "easing Undo",
     )
 
     redo_before = client.state()
@@ -749,11 +768,22 @@ def run_suite(client):
         "ease_in_out_cubic",
         "EaseInOutCubic",
     )
-    cubic_again_render = wait_preview_hash_change(
+    wait_inspector_numeric_value(
         client,
-        linear_redo_render["editor"]["preview"],
-        "EaseInOutCubic reselection",
+        direct_tx_control,
+        cubic_expected,
+        "Inspector cubic reselection value",
     )
+    cubic_again_ready = client.state()
+    cubic_again_render = client.wait_preview_render_after(
+        cubic_again_ready,
+        "Graph cubic reselection after Inspector convergence",
+    )
+    if (
+        cubic_again_render["editor"]["preview"]["pixel_hash"]
+        != cubic_render["editor"]["preview"]["pixel_hash"]
+    ):
+        raise QaFailure("Cubic easing reselection did not restore exact Preview pixels")
 
     # Delete the key added by double-click through its rendered context item.
     # Undo/Redo must restore/remove that exact stable KeyframeId.
@@ -772,11 +802,15 @@ def run_suite(client):
         is None,
     )
     assert_history_delta(delete_before, deleted, 1, "Graph keyframe delete")
-    delete_render = wait_preview_hash_change(
-        client,
-        cubic_again_render["editor"]["preview"],
+    delete_render = client.wait_preview_render_after(
+        deleted,
         "Graph keyframe delete",
     )
+    if (
+        delete_render["editor"]["preview"]["pixel_hash"]
+        == cubic_again_render["editor"]["preview"]["pixel_hash"]
+    ):
+        raise QaFailure("Graph keyframe deletion did not change Preview pixels")
 
     delete_undo_before = client.state()
     shortcut_undo_redo(client)
@@ -788,6 +822,12 @@ def run_suite(client):
         is not None,
     )
     assert_undo_transition(delete_undo_before, delete_undone, "Graph delete Undo")
+    wait_preview_hash_after(
+        client,
+        delete_undo_before["editor"]["preview"],
+        cubic_again_render["editor"]["preview"]["pixel_hash"],
+        "keyframe delete Undo",
+    )
     delete_redo_before = client.state()
     shortcut_undo_redo(client, redo=True)
     delete_redone = client.wait_project(

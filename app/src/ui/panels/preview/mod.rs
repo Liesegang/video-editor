@@ -269,6 +269,14 @@ fn dispatch_preview_frame(
     }
 }
 
+fn preview_result_is_current(
+    frame_evaluation_failed: bool,
+    requested: Option<&library::model::frame::frame::FrameInfo>,
+    completed: &library::model::frame::frame::FrameInfo,
+) -> bool {
+    !frame_evaluation_failed && requested == Some(completed)
+}
+
 fn apply_preview_actions(
     actions: Vec<PreviewAction>,
     project_service: &EditorService,
@@ -539,6 +547,7 @@ pub fn preview_panel(
     // Lock project once for reading state
     let mut pending_actions = Vec::new();
     let mut frame_evaluation_failed = false;
+    let mut requested_frame_info = None;
     if let Ok(proj_read) = project.read() {
         let (comp_width, comp_height) =
             if let Some(comp) = editor_context.get_current_composition(&proj_read) {
@@ -615,6 +624,7 @@ pub fn preview_panel(
 
                     frame_evaluation_failed =
                         !dispatch_preview_frame(frame_info, editor_context, |frame_info| {
+                            requested_frame_info = Some(frame_info.clone());
                             render_server.send_request(frame_info)
                         });
                 }
@@ -627,9 +637,17 @@ pub fn preview_panel(
             latest_result = Some(result);
         }
 
-        // Always drain the RenderServer, but never apply an earlier successful
-        // result after the current Project failed frame evaluation.
-        if let Some(result) = latest_result.filter(|_| !frame_evaluation_failed) {
+        // Always drain the RenderServer, but only publish pixels evaluated from
+        // the Project/time/viewport requested by this UI frame. The worker may
+        // finish an older request after the user seeks or edits the Project;
+        // applying that result would briefly expose stale pixels as current.
+        if let Some(result) = latest_result.filter(|result| {
+            preview_result_is_current(
+                frame_evaluation_failed,
+                requested_frame_info.as_ref(),
+                &result.frame_info,
+            )
+        }) {
             match result.output {
                 Ok(output) => {
                     clear_preview_render_error(editor_context);
@@ -956,6 +974,30 @@ pub fn preview_panel(
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    fn empty_preview_frame(time: f64) -> library::model::frame::frame::FrameInfo {
+        library::model::frame::frame::FrameInfo {
+            width: 1920,
+            height: 1080,
+            background_color: library::model::frame::color::Color::black(),
+            color_profile: "sRGB".to_string(),
+            render_scale: ordered_float::OrderedFloat(1.0),
+            now_time: ordered_float::OrderedFloat(time),
+            region: None,
+            items: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn stale_preview_worker_results_never_replace_the_current_request() {
+        let current = empty_preview_frame(3.0);
+        let stale = empty_preview_frame(2.0);
+
+        assert!(preview_result_is_current(false, Some(&current), &current));
+        assert!(!preview_result_is_current(false, Some(&current), &stale));
+        assert!(!preview_result_is_current(false, None, &current));
+        assert!(!preview_result_is_current(true, Some(&current), &current));
+    }
 
     #[test]
     fn shared_gl_texture_validation_rejects_invalid_ffi_inputs() {
