@@ -23,6 +23,8 @@ extern "C" {
 /* JSON control-plane names standardized by ABI v1. */
 #define RUVIE_EFFECTOR_CATEGORY "effector"
 #define RUVIE_EFFECTOR_EVALUATE_V1 "effector.evaluate.v1"
+#define RUVIE_PROPERTY_CATEGORY "property"
+#define RUVIE_PROPERTY_EVALUATE_V1 "property.evaluate.v1"
 #define RUVIE_EFFECTOR_TARGET_BLOCK "block"
 #define RUVIE_EFFECTOR_TARGET_LINE "line"
 #define RUVIE_EFFECTOR_TARGET_CHAR "char"

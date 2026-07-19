@@ -161,6 +161,12 @@ pub struct ComponentDescriptorV1 {
     pub operations: Vec<String>,
     #[serde(default)]
     pub properties: Vec<PropertyDefinitionV1>,
+    /// Value returned by the host when a runtime property evaluator cannot be
+    /// invoked or returns an invalid response. Required for `property`
+    /// components and omitted for categories that do not produce a value. Its
+    /// variant also declares the component's ABI-v1 output type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_default: Option<PropertyValueV1>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -227,6 +233,38 @@ pub struct InvokeRequestV1 {
 
 pub const EFFECTOR_CATEGORY: &str = "effector";
 pub const EFFECTOR_EVALUATE_V1: &str = "effector.evaluate.v1";
+pub const PROPERTY_CATEGORY: &str = "property";
+pub const PROPERTY_EVALUATE_V1: &str = "property.evaluate.v1";
+
+/// Explicit value wire format for runtime property evaluators.
+///
+/// This is intentionally separate from RuViE's Project model. The tag keeps
+/// integer and floating-point values distinct and lets ABI v1 reject values it
+/// cannot faithfully adapt instead of guessing from untagged JSON.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PropertyValueV1 {
+    Number { value: f64 },
+    Integer { value: i64 },
+    String { value: String },
+    Boolean { value: bool },
+    Vec2 { x: f64, y: f64 },
+    Vec3 { x: f64, y: f64, z: f64 },
+    Vec4 { x: f64, y: f64, z: f64, w: f64 },
+    Color { r: u8, g: u8, b: u8, a: u8 },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PropertyEvaluateRequestV1 {
+    pub time: f64,
+    pub fps: f64,
+    pub properties: std::collections::BTreeMap<String, PropertyValueV1>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PropertyEvaluateResponseV1 {
+    pub value: PropertyValueV1,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct EffectorEvaluateRequestV1 {
@@ -292,6 +330,7 @@ mod tests {
                     },
                     default: serde_json::json!("Block"),
                 }],
+                output_default: None,
             }],
         };
         let bytes = serde_json::to_vec(&descriptor).expect("test descriptor serializes");
@@ -305,5 +344,23 @@ mod tests {
         let error = serde_json::from_str::<EffectorTargetV1>(r#""parts""#)
             .expect_err("ABI v1 must reject the unimplemented Parts target");
         assert!(error.to_string().contains("unknown variant"));
+    }
+
+    #[test]
+    fn property_values_are_explicitly_tagged_and_round_trip() {
+        let request = PropertyEvaluateRequestV1 {
+            time: 1.25,
+            fps: 30.0,
+            properties: std::collections::BTreeMap::from([
+                ("amount".to_string(), PropertyValueV1::Number { value: 2.5 }),
+                ("seed".to_string(), PropertyValueV1::Integer { value: 7 }),
+            ]),
+        };
+        let json = serde_json::to_value(&request).expect("property request serializes");
+        assert_eq!(json["properties"]["amount"]["type"], "number");
+        assert_eq!(json["properties"]["seed"]["type"], "integer");
+        let decoded: PropertyEvaluateRequestV1 =
+            serde_json::from_value(json).expect("property request parses");
+        assert_eq!(decoded, request);
     }
 }

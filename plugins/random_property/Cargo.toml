@@ -4,13 +4,15 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
-[lints]
-workspace = true
+# This plugin is intentionally outside the RuViE host workspace. Its code is
+# neither compiled nor linked when an already-built RuViE host is produced.
+[workspace]
+resolver = "2"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-library = { version = "0.1.0", path = "../../library" }
+ruvie-plugin-api = { path = "../../plugin-api" }
 rand = "0.8.6"
-ordered-float = "5.1.0"
+serde_json = "1.0"

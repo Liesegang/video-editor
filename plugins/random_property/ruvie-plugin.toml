@@ -1,0 +1,6 @@
+manifest_version = 1
+
+[library]
+macos = "librandom_property_plugin.dylib"
+linux = "librandom_property_plugin.so"
+windows = "random_property_plugin.dll"

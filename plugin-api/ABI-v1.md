@@ -72,10 +72,18 @@ strictly decoded and must match the selected UI type:
 - hard numeric bounds and dropdown membership apply to defaults. Dropdown
   options must be non-empty, non-empty strings, and unique.
 
-ABI v1 integrates only the `effector` category. If any component in a bundle
-declares another category, RuViE rejects the entire bundle before registering
-its descriptor or exposing generic invocation. This prevents a component from
-appearing installed without a functioning host adapter.
+ABI v1 integrates the `effector` and `property` categories. A property
+component must declare `property.evaluate.v1` and an `output_default` in its
+component descriptor. The default uses the same explicitly tagged value wire
+format as evaluation responses and is the host's safe result when invocation
+fails. Its tag also declares the component's output type; a successful response
+with another value variant is rejected and falls back to this declared value.
+Effector components omit `output_default`.
+
+If any component in a bundle declares another category, RuViE rejects the
+entire bundle before registering its descriptor or exposing generic
+invocation. This prevents a component from appearing installed without a
+functioning host adapter.
 
 ## Generic invocation JSON
 
@@ -90,7 +98,7 @@ The base table's JSON invocation is a low-bandwidth control plane:
 }
 ```
 
-The implemented operation is:
+The implemented operations are:
 
 - category `effector`, operation `effector.evaluate.v1`
 - payload:
@@ -109,6 +117,47 @@ explicitly versioned contract.
 
 Transform/Opacity evaluation is per authored Effector instance, not per glyph;
 RuViE applies the resulting config in its native batched render path.
+
+- category `property`, operation `property.evaluate.v1`
+- component descriptor excerpt:
+
+  ```json
+  {
+    "id": "org.vendor.random",
+    "category": "property",
+    "operations": ["property.evaluate.v1"],
+    "properties": [],
+    "output_default": {"type":"number", "value":0.0}
+  }
+  ```
+
+- payload:
+
+  ```json
+  {
+    "time": 1.25,
+    "fps": 30.0,
+    "properties": {
+      "amplitude": {"type":"number", "value":2.0},
+      "seed": {"type":"integer", "value":7}
+    }
+  }
+  ```
+
+- response:
+  `{"value":{"type":"number","value":-0.75}}`
+
+Property values are always tagged. The v1 variants are `number`, `integer`,
+`string`, `boolean`, `vec2`, `vec3`, `vec4`, and `color`. Scalars use a
+`value` field, vectors use their finite `x`/`y`/`z`/`w` fields, and color uses
+integer `r`/`g`/`b`/`a` channels in `0..=255`. Array/map values and non-finite
+numbers are not part of the v1 contract.
+
+The request contains only the evaluator instance's declared property values,
+time, and fps. ABI v1 deliberately does not expose RuViE's sibling Project
+`PropertyMap` or any internal Project type. A property evaluator that needs
+cross-property/project traversal requires a future explicitly versioned host
+service extension rather than relying on RuViE implementation layouts.
 
 Do not transport video frames, decoded audio, GPU objects, or other hot-path
 resources as JSON. Such categories use `query_extension` with a separately

@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+RUNTIME_PROPERTY_PLUGIN_MANIFEST="${REPOSITORY_ROOT}/plugins/random_property/Cargo.toml"
 
 # shellcheck source=scripts/clippy-policy.sh
 source "${SCRIPT_DIR}/clippy-policy.sh"
@@ -15,12 +16,14 @@ bash -n "${SCRIPT_DIR}"/*.sh
 
 echo "[quality] rustfmt"
 cargo fmt --all -- --check
+cargo fmt --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" -- --check
 
 echo "[quality] default build has no host libpython dependency"
 "${SCRIPT_DIR}/check-default-no-libpython.sh"
 
 echo "[quality] cargo check (default features)"
 cargo check --workspace --all-targets --locked
+cargo check --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" --all-targets --locked
 
 # `--all-features` does not compile branches guarded by
 # `cfg(not(feature = "..."))`. Keep this exact production/default pass even
@@ -39,6 +42,10 @@ echo "[quality] clippy (all targets, all features)"
 cargo clippy --workspace --all-targets --all-features --locked -- \
     "${CLIPPY_POLICY_ARGS[@]}"
 
+echo "[quality] clippy (standalone runtime property plugin)"
+cargo clippy --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" --all-targets --locked -- \
+    "${CLIPPY_POLICY_ARGS[@]}"
+
 echo "[quality] rustdoc"
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 
@@ -47,6 +54,7 @@ RUSTDOCFLAGS="-D warnings" cargo test --workspace --all-features --doc --locked
 
 echo "[quality] tests (default features)"
 cargo test --workspace --all-targets --locked
+cargo test --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" --all-targets --locked
 
 echo "[quality] tests (all features)"
 cargo test --workspace --all-targets --all-features --locked

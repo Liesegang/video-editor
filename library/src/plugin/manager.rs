@@ -653,9 +653,21 @@ impl PluginManager {
         self.read_registry().runtime_plugins.descriptors()
     }
 
+    /// Creates a runtime property evaluator instance with every descriptor
+    /// default materialized. Unknown evaluator IDs remain ordinary Project
+    /// data, but cannot be created through this definition-backed factory.
+    pub fn create_property_instance(
+        &self,
+        evaluator_id: &str,
+    ) -> Result<crate::model::property::Property, LibraryError> {
+        self.read_registry()
+            .runtime_plugins
+            .create_property(evaluator_id)
+    }
+
     /// Invokes a descriptor-declared low-bandwidth operation through the
-    /// generic JSON control plane. Effector rendering is the first category
-    /// integrated into the editor. Frame/resource-heavy categories require a
+    /// generic JSON control plane. Effectors and property evaluators have
+    /// ABI-v1 host adapters. Frame/resource-heavy categories require a
     /// separately versioned typed extension table and host-owned handles.
     pub fn invoke_runtime_plugin(
         &self,
@@ -774,9 +786,10 @@ impl PluginManager {
             let PluginRegistry {
                 runtime_plugins,
                 effector_plugins,
+                property_evaluators,
                 ..
             } = &mut *inner;
-            match runtime_plugins.register_bundle(pending, effector_plugins) {
+            match runtime_plugins.register_bundle(pending, effector_plugins, property_evaluators) {
                 Ok(registered) => {
                     report.loaded_bundles.push(manifest_path);
                     report.registered_components.extend(registered);
@@ -1018,27 +1031,6 @@ impl PluginManager {
         Ok(())
     }
 
-    pub fn load_property_plugin_from_file<P: AsRef<Path>>(
-        &self,
-        path: P,
-    ) -> Result<(), LibraryError> {
-        // SAFETY: Dynamic plugins are a trusted same-toolchain extension point;
-        // load_plugin_generic validates the pointer and retains the library.
-        unsafe {
-            self.load_plugin_generic::<dyn PropertyPlugin>(
-                path.as_ref(),
-                b"create_property_plugin",
-                |inner, plugin| {
-                    let evaluator_id = plugin.id();
-                    let evaluator_instance = plugin.get_evaluator_instance();
-                    inner
-                        .property_evaluators
-                        .register(evaluator_id, evaluator_instance);
-                },
-            )
-        }
-    }
-
     pub fn load_effect_plugin_from_file<P: AsRef<Path>>(
         &self,
         path: P,
@@ -1121,11 +1113,6 @@ impl PluginManager {
                 let extension = path.extension().and_then(|s| s.to_str());
                 if matches!(extension, Some("dll") | Some("so")) {
                     log::info!("Attempting to load plugin from: {}", path.display());
-                    if let Err(e) = self.load_property_plugin_from_file(&path) {
-                        log::debug!("Not a property plugin: {}", e);
-                    } else {
-                        continue;
-                    }
                     if let Err(e) = self.load_effect_plugin_from_file(&path) {
                         log::debug!("Not an effect plugin: {}", e);
                     } else {

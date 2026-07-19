@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Barrier, RwLock};
 
@@ -7,10 +8,11 @@ use library::core::ensemble::types::EffectorConfig;
 use library::editor::ProjectService;
 use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::model::{Composition, EffectorInstance, Node, NodeContainer, NodeContent, Project};
-use library::plugin::{FrameEvaluationContext, PluginManager};
+use library::plugin::native_plugin_api::{PROPERTY_CATEGORY, PropertyValueV1};
+use library::plugin::{EvaluationContext, FrameEvaluationContext, PluginManager};
 
-const COMPONENT_ID: &str = "example.third_party_opacity";
-const DESCRIPTOR_CALLS_OPERATION: &str = "example.descriptor_calls.v1";
+const COMPONENT_ID: &str = "random_property";
+const DESCRIPTOR_CALLS_OPERATION: &str = "random_property.descriptor_calls.v1";
 
 #[test]
 fn common_effector_factory_and_update_boundary_materialize_all_known_defaults() {
@@ -94,7 +96,7 @@ fn bundle_from_environment() -> PathBuf {
 
 #[test]
 #[ignore = "requires the independently built bundle from scripts/test-runtime-plugin.sh"]
-fn standalone_runtime_effector_loads_describes_builds_and_invokes() {
+fn standalone_runtime_property_loads_describes_builds_and_invokes() {
     let bundle = bundle_from_environment();
     let manager = Arc::new(PluginManager::default());
     let workers = 12;
@@ -140,7 +142,7 @@ fn standalone_runtime_effector_loads_describes_builds_and_invokes() {
     );
     let descriptor_calls = manager
         .invoke_runtime_plugin(
-            "effector",
+            PROPERTY_CATEGORY,
             COMPONENT_ID,
             DESCRIPTOR_CALLS_OPERATION,
             serde_json::json!({}),
@@ -160,51 +162,78 @@ fn standalone_runtime_effector_loads_describes_builds_and_invokes() {
         .expect("one scan loaded the runtime bundle");
     assert_eq!(
         report.registered_components,
-        vec![("effector".to_string(), COMPONENT_ID.to_string())]
+        vec![(PROPERTY_CATEGORY.to_string(), COMPONENT_ID.to_string())]
     );
 
     let descriptors = manager.get_runtime_plugin_descriptors();
     assert_eq!(descriptors.len(), 1);
     let component = &descriptors[0].descriptor.components[0];
     assert_eq!(component.id, COMPONENT_ID);
+    assert_eq!(component.category, PROPERTY_CATEGORY);
+    assert!(matches!(
+        component.output_default.as_ref(),
+        Some(PropertyValueV1::Number { value }) if value.abs() < f64::EPSILON
+    ));
     let names = component
         .properties
         .iter()
         .map(|definition| definition.name.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(names, vec!["opacity", "mode", "target"]);
+    assert_eq!(names, vec!["amplitude", "seed"]);
 
     let instance = manager
-        .create_effector_instance(COMPONENT_ID)
-        .expect("descriptor-backed factory creates the runtime effector");
-    assert!(instance.properties.get("opacity").is_some());
-    assert!(instance.properties.get("mode").is_some());
-    assert!(instance.properties.get("target").is_some());
+        .create_property_instance(COMPONENT_ID)
+        .expect("descriptor-backed factory creates the runtime property");
+    assert_eq!(
+        instance.properties.get("amplitude"),
+        Some(&PropertyValue::from(1.0))
+    );
+    assert_eq!(
+        instance.properties.get("seed"),
+        Some(&PropertyValue::Integer(0))
+    );
 
-    let project = Project::new("Runtime plugin test");
-    let (composition, _root_track) = Composition::new("Main", 640, 360, 30.0, 1.0);
     let evaluators = manager.get_property_evaluators();
-    let context = FrameEvaluationContext {
-        project: &project,
-        composition: &composition,
-        property_evaluators: &evaluators,
-        plugin_manager: &manager,
-        resolved_inputs: None,
+    let sibling_properties = PropertyMap::new();
+    let context = EvaluationContext {
+        property_map: &sibling_properties,
+        fps: 30.0,
     };
-    let plugin = manager
-        .get_effector_plugin(COMPONENT_ID)
-        .expect("runtime effector is registered in the normal repository");
-    let output = plugin
-        .convert(&context, &instance, 0.25)
-        .expect("runtime effector produces an integrated config");
+    let output = evaluators.evaluate(&instance, 0.25, &context);
     assert!(matches!(
-        output,
-        EffectorConfig::Opacity {
-            target_opacity,
-            mode: OpacityMode::Multiply,
-            target: EffectorTarget::Char,
-        } if (target_opacity - 37.5).abs() < f32::EPSILON
+        &output,
+        PropertyValue::Number(value) if (-1.0..=1.0).contains(&value.into_inner())
     ));
+    let sparse = Property {
+        evaluator: COMPONENT_ID.to_string(),
+        properties: HashMap::new(),
+    };
+    assert_eq!(evaluators.evaluate(&sparse, 0.25, &context), output);
+
+    let unavailable = Property {
+        evaluator: "not.installed.property".to_string(),
+        properties: HashMap::from([(
+            "private".to_string(),
+            PropertyValue::String("preserve".to_string()),
+        )]),
+    };
+    let unavailable_json =
+        serde_json::to_string(&unavailable).expect("unknown property serializes");
+    let preserved: Property =
+        serde_json::from_str(&unavailable_json).expect("unknown property stays loadable");
+    assert_eq!(preserved, unavailable);
+    let _safe_unknown_output = evaluators.evaluate(&preserved, 0.25, &context);
+    assert!(
+        manager
+            .invoke_runtime_plugin(
+                PROPERTY_CATEGORY,
+                "not.installed.property",
+                "property.evaluate.v1",
+                serde_json::json!({}),
+            )
+            .is_err(),
+        "unknown runtime component must not be routed to another plugin"
+    );
 
     // On Unix a loaded native image remains mapped after its file is renamed.
     // Temporarily removing the binary proves the already-loaded manifest check
@@ -228,9 +257,9 @@ fn standalone_runtime_effector_loads_describes_builds_and_invokes() {
     assert!(second.failures.is_empty());
     assert_eq!(second.already_loaded_bundles.len(), 1);
 
-    let serialized = serde_json::to_string(&instance).expect("instance serializes");
+    let serialized = serde_json::to_string(&instance).expect("property instance serializes");
     drop(manager);
-    let preserved: EffectorInstance =
+    let preserved: Property =
         serde_json::from_str(&serialized).expect("unavailable plugin config stays loadable");
     assert_eq!(preserved, instance);
 }

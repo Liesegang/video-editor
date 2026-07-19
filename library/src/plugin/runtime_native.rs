@@ -10,15 +10,20 @@ use ordered_float::OrderedFloat;
 use ruvie_plugin_api::{
     ComponentDescriptorV1, EFFECTOR_CATEGORY, EFFECTOR_EVALUATE_V1, EffectorEvaluateRequestV1,
     EffectorOutputV1, EffectorTargetV1, InvokeRequestV1, MAX_PLUGIN_PAYLOAD_BYTES, OpacityModeV1,
-    PluginDescriptorV1, PropertyUiV1, RUVIE_PLUGIN_ABI_V1, RUVIE_PLUGIN_ENTRY_V1, RuvieBuffer,
-    RuvieBytesView, RuvieCallResult, RuviePluginApiV1, STATUS_OK,
+    PROPERTY_CATEGORY, PROPERTY_EVALUATE_V1, PluginDescriptorV1, PropertyEvaluateRequestV1,
+    PropertyEvaluateResponseV1, PropertyUiV1, PropertyValueV1, RUVIE_PLUGIN_ABI_V1,
+    RUVIE_PLUGIN_ENTRY_V1, RuvieBuffer, RuvieBytesView, RuvieCallResult, RuviePluginApiV1,
+    STATUS_OK,
 };
 use serde::Deserialize;
 
 use crate::error::LibraryError;
 use crate::model::ensemble::EffectorInstance;
-use crate::model::property::{PropertyDefinition, PropertyUiType, PropertyValue, Vec2, Vec3, Vec4};
+use crate::model::property::{
+    Property, PropertyDefinition, PropertyUiType, PropertyValue, Vec2, Vec3, Vec4,
+};
 use crate::plugin::entity_converter::FrameEvaluationContext;
+use crate::plugin::evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
 use crate::plugin::repository::PluginRepository;
 use crate::plugin::{EffectorPlugin, Plugin, PluginCategory};
 
@@ -173,10 +178,33 @@ impl RuntimePluginRegistry {
         component.invoke(operation, payload)
     }
 
+    pub fn create_property(&self, evaluator_id: &str) -> Result<Property, LibraryError> {
+        let key = (PROPERTY_CATEGORY.to_string(), evaluator_id.to_string());
+        let component = self.components.get(&key).ok_or_else(|| {
+            LibraryError::Plugin(format!(
+                "Runtime property evaluator '{evaluator_id}' is not available"
+            ))
+        })?;
+        let definitions = property_definitions(&component.descriptor)?;
+        Ok(Property {
+            evaluator: evaluator_id.to_string(),
+            properties: definitions
+                .into_iter()
+                .map(|definition| {
+                    (
+                        definition.name().to_string(),
+                        definition.default_value().clone(),
+                    )
+                })
+                .collect(),
+        })
+    }
+
     pub fn register_bundle(
         &mut self,
         pending: PendingBundle,
         effector_plugins: &mut PluginRepository<dyn EffectorPlugin>,
+        property_evaluators: &mut PropertyEvaluatorRegistry,
     ) -> Result<Vec<(String, String)>, LibraryError> {
         // Prepare every fallible definition conversion and adapter before
         // touching either repository. A malformed later component must never
@@ -200,18 +228,32 @@ impl RuntimePluginRegistry {
                     key.0, key.1
                 )));
             }
-            if effector_plugins.get(&key.1).is_some() {
-                return Err(LibraryError::Plugin(format!(
-                    "Effector plugin ID '{}' is already registered",
-                    key.1
-                )));
+            match &component.adapter {
+                RuntimeAdapter::Effector(_) if effector_plugins.get(&key.1).is_some() => {
+                    return Err(LibraryError::Plugin(format!(
+                        "Effector plugin ID '{}' is already registered",
+                        key.1
+                    )));
+                }
+                RuntimeAdapter::Property(_) if property_evaluators.contains(&key.1) => {
+                    return Err(LibraryError::Plugin(format!(
+                        "Property evaluator ID '{}' is already registered",
+                        key.1
+                    )));
+                }
+                RuntimeAdapter::Effector(_) | RuntimeAdapter::Property(_) => {}
             }
         }
 
         // Everything below is an infallible commit of the prepared bundle.
         let mut registered = Vec::with_capacity(prepared.len());
         for component in prepared {
-            effector_plugins.register(component.effector_plugin);
+            match component.adapter {
+                RuntimeAdapter::Effector(plugin) => effector_plugins.register(plugin),
+                RuntimeAdapter::Property(evaluator) => {
+                    property_evaluators.register(&component.key.1, evaluator);
+                }
+            }
             registered.push(component.key.clone());
             self.components.insert(component.key, component.component);
         }
@@ -232,7 +274,12 @@ impl RuntimePluginRegistry {
 struct PreparedRuntimeComponent {
     key: (String, String),
     component: RuntimeComponent,
-    effector_plugin: Arc<dyn EffectorPlugin>,
+    adapter: RuntimeAdapter,
+}
+
+enum RuntimeAdapter {
+    Effector(Arc<dyn EffectorPlugin>),
+    Property(Arc<dyn PropertyEvaluator>),
 }
 
 fn prepare_runtime_components(
@@ -249,14 +296,30 @@ fn prepare_runtime_components(
                 library: Arc::clone(&pending.library),
             };
             let definitions = property_definitions(descriptor)?;
-            let effector_plugin: Arc<dyn EffectorPlugin> = Arc::new(RuntimeEffectorPlugin {
-                component: component.clone(),
-                definitions,
-            });
+            let adapter = match descriptor.category.as_str() {
+                EFFECTOR_CATEGORY => RuntimeAdapter::Effector(Arc::new(RuntimeEffectorPlugin {
+                    component: component.clone(),
+                    definitions,
+                })),
+                PROPERTY_CATEGORY => {
+                    let output_default = property_output_default(descriptor)?;
+                    RuntimeAdapter::Property(Arc::new(RuntimePropertyEvaluator {
+                        component: component.clone(),
+                        definitions,
+                        output_default,
+                    }))
+                }
+                _ => {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime plugin component '{}/{}' has no ABI-v1 host adapter",
+                        descriptor.category, descriptor.id
+                    )));
+                }
+            };
             Ok(PreparedRuntimeComponent {
                 key: (descriptor.category.clone(), descriptor.id.clone()),
                 component,
-                effector_plugin,
+                adapter,
             })
         })
         .collect()
@@ -712,6 +775,202 @@ impl EffectorPlugin for RuntimeEffectorPlugin {
     }
 }
 
+struct RuntimePropertyEvaluator {
+    component: RuntimeComponent,
+    definitions: Vec<PropertyDefinition>,
+    output_default: PropertyValue,
+}
+
+impl RuntimePropertyEvaluator {
+    fn fallback(&self, detail: impl std::fmt::Display) -> PropertyValue {
+        log::error!(
+            "Runtime property evaluator '{}' failed: {detail}",
+            self.component.descriptor.id
+        );
+        self.output_default.clone()
+    }
+}
+
+impl PropertyEvaluator for RuntimePropertyEvaluator {
+    fn evaluate(
+        &self,
+        property: &Property,
+        time: f64,
+        context: &EvaluationContext,
+    ) -> PropertyValue {
+        let mut properties = BTreeMap::new();
+        for definition in &self.definitions {
+            let value = property
+                .properties
+                .get(definition.name())
+                .unwrap_or_else(|| definition.default_value());
+            if let Err(error) = definition.validate_value(value) {
+                return self.fallback(format!(
+                    "property '{}' is invalid: {error}",
+                    definition.name()
+                ));
+            }
+            let value = match property_value_to_wire(value) {
+                Ok(value) => value,
+                Err(error) => {
+                    return self.fallback(format!(
+                        "property '{}' cannot cross ABI v1: {error}",
+                        definition.name()
+                    ));
+                }
+            };
+            properties.insert(definition.name().to_string(), value);
+        }
+        let payload = match serde_json::to_value(PropertyEvaluateRequestV1 {
+            time,
+            fps: context.fps,
+            properties,
+        }) {
+            Ok(payload) => payload,
+            Err(error) => return self.fallback(format!("request encoding failed: {error}")),
+        };
+        let response = match self.component.invoke(PROPERTY_EVALUATE_V1, payload) {
+            Ok(response) => response,
+            Err(error) => return self.fallback(error),
+        };
+        let response: PropertyEvaluateResponseV1 = match serde_json::from_value(response) {
+            Ok(response) => response,
+            Err(error) => return self.fallback(format!("invalid response: {error}")),
+        };
+        let value = match property_value_from_wire(&response.value) {
+            Ok(value) => value,
+            Err(error) => return self.fallback(format!("invalid response value: {error}")),
+        };
+        if std::mem::discriminant(&value) != std::mem::discriminant(&self.output_default) {
+            return self.fallback("response type differs from output_default");
+        }
+        value
+    }
+}
+
+fn property_value_to_wire(value: &PropertyValue) -> Result<PropertyValueV1, &'static str> {
+    match value {
+        PropertyValue::Number(value) if value.is_finite() => Ok(PropertyValueV1::Number {
+            value: value.into_inner(),
+        }),
+        PropertyValue::Number(_) => Err("number must be finite"),
+        PropertyValue::Integer(value) => Ok(PropertyValueV1::Integer { value: *value }),
+        PropertyValue::String(value) => Ok(PropertyValueV1::String {
+            value: value.clone(),
+        }),
+        PropertyValue::Boolean(value) => Ok(PropertyValueV1::Boolean { value: *value }),
+        PropertyValue::Vec2(value) if value.x.is_finite() && value.y.is_finite() => {
+            Ok(PropertyValueV1::Vec2 {
+                x: value.x.into_inner(),
+                y: value.y.into_inner(),
+            })
+        }
+        PropertyValue::Vec3(value)
+            if value.x.is_finite() && value.y.is_finite() && value.z.is_finite() =>
+        {
+            Ok(PropertyValueV1::Vec3 {
+                x: value.x.into_inner(),
+                y: value.y.into_inner(),
+                z: value.z.into_inner(),
+            })
+        }
+        PropertyValue::Vec4(value)
+            if value.x.is_finite()
+                && value.y.is_finite()
+                && value.z.is_finite()
+                && value.w.is_finite() =>
+        {
+            Ok(PropertyValueV1::Vec4 {
+                x: value.x.into_inner(),
+                y: value.y.into_inner(),
+                z: value.z.into_inner(),
+                w: value.w.into_inner(),
+            })
+        }
+        PropertyValue::Vec2(_) | PropertyValue::Vec3(_) | PropertyValue::Vec4(_) => {
+            Err("vector components must be finite")
+        }
+        PropertyValue::Color(value) => Ok(PropertyValueV1::Color {
+            r: value.r,
+            g: value.g,
+            b: value.b,
+            a: value.a,
+        }),
+        PropertyValue::Array(_) | PropertyValue::Map(_) => {
+            Err("array and map values are not supported by ABI v1")
+        }
+    }
+}
+
+fn property_value_from_wire(value: &PropertyValueV1) -> Result<PropertyValue, LibraryError> {
+    let non_finite =
+        || LibraryError::Plugin("Runtime property value contains a non-finite number".to_string());
+    match value {
+        PropertyValueV1::Number { value } => value
+            .is_finite()
+            .then_some(PropertyValue::Number(OrderedFloat(*value)))
+            .ok_or_else(non_finite),
+        PropertyValueV1::Integer { value } => Ok(PropertyValue::Integer(*value)),
+        PropertyValueV1::String { value } => Ok(PropertyValue::String(value.clone())),
+        PropertyValueV1::Boolean { value } => Ok(PropertyValue::Boolean(*value)),
+        PropertyValueV1::Vec2 { x, y } => {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(non_finite());
+            }
+            Ok(PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(*x),
+                y: OrderedFloat(*y),
+            }))
+        }
+        PropertyValueV1::Vec3 { x, y, z } => {
+            if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+                return Err(non_finite());
+            }
+            Ok(PropertyValue::Vec3(Vec3 {
+                x: OrderedFloat(*x),
+                y: OrderedFloat(*y),
+                z: OrderedFloat(*z),
+            }))
+        }
+        PropertyValueV1::Vec4 { x, y, z, w } => {
+            if !x.is_finite() || !y.is_finite() || !z.is_finite() || !w.is_finite() {
+                return Err(non_finite());
+            }
+            Ok(PropertyValue::Vec4(Vec4 {
+                x: OrderedFloat(*x),
+                y: OrderedFloat(*y),
+                z: OrderedFloat(*z),
+                w: OrderedFloat(*w),
+            }))
+        }
+        PropertyValueV1::Color { r, g, b, a } => {
+            Ok(PropertyValue::Color(crate::model::frame::color::Color {
+                r: *r,
+                g: *g,
+                b: *b,
+                a: *a,
+            }))
+        }
+    }
+}
+
+fn property_output_default(
+    component: &ComponentDescriptorV1,
+) -> Result<PropertyValue, LibraryError> {
+    let value = component.output_default.as_ref().ok_or_else(|| {
+        LibraryError::Plugin(format!(
+            "Runtime property '{}' must declare output_default",
+            component.id
+        ))
+    })?;
+    property_value_from_wire(value).map_err(|error| {
+        LibraryError::Plugin(format!(
+            "Runtime property '{}' has an invalid output_default: {error}",
+            component.id
+        ))
+    })
+}
+
 fn convert_target(value: EffectorTargetV1) -> crate::core::ensemble::target::EffectorTarget {
     match value {
         EffectorTargetV1::Block => crate::core::ensemble::target::EffectorTarget::Block,
@@ -755,21 +1014,44 @@ fn validate_descriptor(descriptor: &PluginDescriptorV1) -> Result<(), LibraryErr
                     .to_string(),
             ));
         }
-        if component.category != EFFECTOR_CATEGORY {
-            return Err(LibraryError::Plugin(format!(
-                "Runtime plugin component '{}/{}' uses category '{}', but ABI v1 integrates only '{}'; the entire bundle was rejected",
-                descriptor.name, component.id, component.category, EFFECTOR_CATEGORY
-            )));
-        }
-        if !component
-            .operations
-            .iter()
-            .any(|operation| operation == EFFECTOR_EVALUATE_V1)
-        {
-            return Err(LibraryError::Plugin(format!(
-                "Runtime effector '{}' does not declare {EFFECTOR_EVALUATE_V1}",
-                component.id
-            )));
+        match component.category.as_str() {
+            EFFECTOR_CATEGORY => {
+                if !component
+                    .operations
+                    .iter()
+                    .any(|operation| operation == EFFECTOR_EVALUATE_V1)
+                {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime effector '{}' does not declare {EFFECTOR_EVALUATE_V1}",
+                        component.id
+                    )));
+                }
+                if component.output_default.is_some() {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime effector '{}' must not declare output_default",
+                        component.id
+                    )));
+                }
+            }
+            PROPERTY_CATEGORY => {
+                if !component
+                    .operations
+                    .iter()
+                    .any(|operation| operation == PROPERTY_EVALUATE_V1)
+                {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime property '{}' does not declare {PROPERTY_EVALUATE_V1}",
+                        component.id
+                    )));
+                }
+                let _ = property_output_default(component)?;
+            }
+            unsupported => {
+                return Err(LibraryError::Plugin(format!(
+                    "Runtime plugin component '{}/{}' uses category '{unsupported}', but ABI v1 integrates only '{EFFECTOR_CATEGORY}' and '{PROPERTY_CATEGORY}'; the entire bundle was rejected",
+                    descriptor.name, component.id
+                )));
+            }
         }
         let mut names = HashSet::new();
         for property in &component.properties {
@@ -1024,6 +1306,7 @@ mod tests {
                 ui,
                 default,
             }],
+            output_default: None,
         }
     }
 
@@ -1089,6 +1372,65 @@ mod tests {
             version: "1.0.0".to_string(),
             components: vec![first, second],
         }
+    }
+
+    fn property_component(output_default: Option<PropertyValueV1>) -> ComponentDescriptorV1 {
+        ComponentDescriptorV1 {
+            id: "example.runtime_property".to_string(),
+            name: "Runtime Property".to_string(),
+            category: PROPERTY_CATEGORY.to_string(),
+            group: "Tests".to_string(),
+            version: "1.0.0".to_string(),
+            operations: vec![PROPERTY_EVALUATE_V1.to_string()],
+            properties: vec![PropertyDefinitionV1 {
+                name: "amplitude".to_string(),
+                label: "Amplitude".to_string(),
+                ui: PropertyUiV1::Float {
+                    min: 0.0,
+                    max: 100.0,
+                    step: 1.0,
+                    suffix: String::new(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
+                },
+                default: serde_json::json!(1.0),
+            }],
+            output_default,
+        }
+    }
+
+    fn descriptor_with(component: ComponentDescriptorV1) -> PluginDescriptorV1 {
+        PluginDescriptorV1 {
+            name: "Runtime property test".to_string(),
+            vendor: "Tests".to_string(),
+            version: "1.0.0".to_string(),
+            components: vec![component],
+        }
+    }
+
+    unsafe extern "C" fn invalid_property_response(
+        _context: *mut std::ffi::c_void,
+        _request: RuvieBytesView,
+    ) -> RuvieCallResult {
+        RuvieCallResult::ok_json(&serde_json::json!({
+            "value": {"type": "future_unknown_value", "value": 99}
+        }))
+    }
+
+    unsafe extern "C" fn failing_property_response(
+        _context: *mut std::ffi::c_void,
+        _request: RuvieBytesView,
+    ) -> RuvieCallResult {
+        RuvieCallResult::error(
+            ruvie_plugin_api::STATUS_PLUGIN_ERROR,
+            "intentional evaluator failure",
+        )
+    }
+
+    unsafe extern "C" fn test_free_buffer(_context: *mut std::ffi::c_void, buffer: RuvieBuffer) {
+        // SAFETY: `invalid_property_response` allocated this buffer with the
+        // SDK helper, and the host returns it to this callback exactly once.
+        unsafe { ruvie_plugin_api::free_owned_buffer(buffer) };
     }
 
     #[test]
@@ -1170,6 +1512,102 @@ mod tests {
     }
 
     #[test]
+    fn property_category_requires_a_valid_explicit_output_default() {
+        let valid = property_component(Some(PropertyValueV1::Number { value: 0.0 }));
+        validate_descriptor(&descriptor_with(valid))
+            .expect("property category and typed fail-safe are integrated in ABI v1");
+
+        let missing = property_component(None);
+        let error = validate_descriptor(&descriptor_with(missing))
+            .expect_err("property evaluator without a fail-safe must be rejected")
+            .to_string();
+        assert!(error.contains("must declare output_default"));
+
+        let non_finite = property_component(Some(PropertyValueV1::Number { value: f64::NAN }));
+        let error = validate_descriptor(&descriptor_with(non_finite))
+            .expect_err("non-finite fail-safe cannot cross JSON ABI v1")
+            .to_string();
+        assert!(error.contains("non-finite"));
+    }
+
+    #[test]
+    fn invalid_property_response_logs_and_uses_descriptor_fail_safe() {
+        let descriptor = property_component(Some(PropertyValueV1::Number { value: 7.0 }));
+        let component = RuntimeComponent {
+            descriptor: descriptor.clone(),
+            library: Arc::new(RuntimeLibrary {
+                api: RuviePluginApiV1 {
+                    abi_version: RUVIE_PLUGIN_ABI_V1,
+                    struct_size: size_of::<RuviePluginApiV1>(),
+                    context: std::ptr::null_mut(),
+                    descriptor_json: None,
+                    invoke_json: Some(invalid_property_response),
+                    free_buffer: Some(test_free_buffer),
+                    query_extension: None,
+                },
+                _library: current_process_library(),
+            }),
+        };
+        let evaluator = RuntimePropertyEvaluator {
+            component,
+            definitions: property_definitions(&descriptor).expect("test definition is valid"),
+            output_default: PropertyValue::Number(OrderedFloat(7.0)),
+        };
+        let property = Property {
+            evaluator: descriptor.id,
+            properties: HashMap::new(),
+        };
+        let siblings = crate::model::property::PropertyMap::new();
+        let context = EvaluationContext {
+            property_map: &siblings,
+            fps: 30.0,
+        };
+        assert_eq!(
+            evaluator.evaluate(&property, 0.0, &context),
+            PropertyValue::Number(OrderedFloat(7.0)),
+            "invalid plugin output must use the descriptor-declared fail-safe"
+        );
+    }
+
+    #[test]
+    fn property_invocation_failure_uses_only_the_declared_fail_safe() {
+        let descriptor = property_component(Some(PropertyValueV1::Number { value: 11.0 }));
+        let evaluator = RuntimePropertyEvaluator {
+            component: RuntimeComponent {
+                descriptor: descriptor.clone(),
+                library: Arc::new(RuntimeLibrary {
+                    api: RuviePluginApiV1 {
+                        abi_version: RUVIE_PLUGIN_ABI_V1,
+                        struct_size: size_of::<RuviePluginApiV1>(),
+                        context: std::ptr::null_mut(),
+                        descriptor_json: None,
+                        invoke_json: Some(failing_property_response),
+                        free_buffer: Some(test_free_buffer),
+                        query_extension: None,
+                    },
+                    _library: current_process_library(),
+                }),
+            },
+            definitions: property_definitions(&descriptor).expect("test definition is valid"),
+            output_default: PropertyValue::Number(OrderedFloat(11.0)),
+        };
+        let property = Property {
+            evaluator: descriptor.id,
+            properties: HashMap::new(),
+        };
+        let siblings = crate::model::property::PropertyMap::new();
+        let context = EvaluationContext {
+            property_map: &siblings,
+            fps: 30.0,
+        };
+        assert_eq!(
+            evaluator.evaluate(&property, 0.0, &context),
+            PropertyValue::Number(OrderedFloat(11.0)),
+            "plugin errors must not be disguised as an invented zero/default"
+        );
+    }
+
+    #[test]
     fn late_definition_failure_does_not_partially_commit_a_bundle() {
         let resolved = ResolvedBundle {
             manifest_path: PathBuf::from("/runtime-plugin-test/ruvie-plugin.toml"),
@@ -1177,6 +1615,7 @@ mod tests {
         };
         let mut registry = RuntimePluginRegistry::new();
         let mut effectors: PluginRepository<dyn EffectorPlugin> = PluginRepository::new();
+        let mut property_evaluators = PropertyEvaluatorRegistry::new();
         assert_eq!(
             registry.claim_bundle(&resolved),
             RuntimeBundleClaim::Claimed
@@ -1186,6 +1625,7 @@ mod tests {
             .register_bundle(
                 pending_bundle(two_component_descriptor(serde_json::json!(101.0))),
                 &mut effectors,
+                &mut property_evaluators,
             )
             .expect_err("the second component exceeds its hard maximum")
             .to_string();
@@ -1197,6 +1637,7 @@ mod tests {
         assert!(registry.libraries.is_empty());
         assert!(registry.loaded_manifests.is_empty());
         assert!(effectors.plugins.is_empty());
+        assert!(!property_evaluators.contains("example.first"));
 
         assert_eq!(
             registry.claim_bundle(&resolved),
@@ -1206,6 +1647,7 @@ mod tests {
             .register_bundle(
                 pending_bundle(two_component_descriptor(serde_json::json!(50.0))),
                 &mut effectors,
+                &mut property_evaluators,
             )
             .expect("a corrected rescan must not hit a stale partial-ID collision");
         assert_eq!(registered.len(), 2);

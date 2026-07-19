@@ -18,6 +18,7 @@ cleanup() {
 trap cleanup EXIT
 
 ROOT_LOCKFILE="${REPOSITORY_ROOT}/Cargo.lock"
+RUNTIME_PROPERTY_LOCKFILE="${REPOSITORY_ROOT}/plugins/random_property/Cargo.lock"
 QUALITY_GATE="${SCRIPT_DIR}/quality-gate.sh"
 
 if [[ ! -f "${ROOT_LOCKFILE}" ]]; then
@@ -30,6 +31,20 @@ if git -C "${REPOSITORY_ROOT}" check-ignore --quiet --no-index -- Cargo.lock; th
 fi
 if ! git -C "${REPOSITORY_ROOT}" ls-files --error-unmatch -- Cargo.lock > /dev/null; then
     echo "root Cargo.lock must be tracked by git" >&2
+    exit 1
+fi
+if [[ ! -f "${RUNTIME_PROPERTY_LOCKFILE}" ]]; then
+    echo "standalone runtime property plugin Cargo.lock is required" >&2
+    exit 1
+fi
+if git -C "${REPOSITORY_ROOT}" check-ignore --quiet --no-index -- \
+    plugins/random_property/Cargo.lock; then
+    echo "standalone runtime property plugin Cargo.lock must not be ignored" >&2
+    exit 1
+fi
+if ! git -C "${REPOSITORY_ROOT}" ls-files --error-unmatch -- \
+    plugins/random_property/Cargo.lock > /dev/null; then
+    echo "standalone runtime property plugin Cargo.lock must be tracked by git" >&2
     exit 1
 fi
 
@@ -52,12 +67,16 @@ require_gate_command() {
 require_gate_command 'set -euo pipefail'
 require_gate_command 'bash -n "${SCRIPT_DIR}"/*.sh'
 require_gate_command 'cargo fmt --all -- --check'
+require_gate_command 'cargo fmt --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" -- --check'
 require_gate_command '"${SCRIPT_DIR}/check-default-no-libpython.sh"'
 require_gate_command 'cargo check --workspace --all-targets --locked'
+require_gate_command 'cargo check --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" --all-targets --locked'
 require_gate_command 'cargo clippy --workspace --lib --bins --locked -- \'
 require_gate_command 'cargo clippy -p library --lib --no-default-features --locked -- \'
 require_gate_command 'cargo clippy --workspace --all-targets --all-features --locked -- \'
+require_gate_command 'cargo clippy --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" --all-targets --locked -- \'
 require_gate_command 'cargo test --workspace --all-targets --locked'
+require_gate_command 'cargo test --manifest-path "${RUNTIME_PROPERTY_PLUGIN_MANIFEST}" --all-targets --locked'
 require_gate_command 'cargo test --workspace --all-targets --all-features --locked'
 require_gate_command 'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked'
 require_gate_command 'RUSTDOCFLAGS="-D warnings" cargo test --workspace --all-features --doc --locked'
