@@ -21,7 +21,7 @@ use library::model::project::{
 };
 use library::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use library::model::{
-    Clip, GeneratorContent, Node, NodeContainer, NodeContent, NodeGraphBundle, Project,
+    BlendMode, Clip, GeneratorContent, Node, NodeContainer, NodeContent, NodeGraphBundle, Project,
 };
 use library::plugin::{
     property_name_from_port, PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY,
@@ -271,6 +271,11 @@ struct EdgeComponent<'a> {
     to: &'a PortAddress,
     connection_id: Option<Uuid>,
     wire_color: Color32,
+    authored_order: Option<i64>,
+    back_to_front_index: Option<usize>,
+    layer_count: Option<usize>,
+    authored_blend_mode: Option<&'static str>,
+    authored_blend_available: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -393,6 +398,14 @@ enum NodeEdit {
         connection_id: Uuid,
         from: PortAddress,
         to: PortAddress,
+    },
+    SetConnectionBlendMode {
+        connection_id: Uuid,
+        blend_mode: BlendMode,
+    },
+    ReorderConnection {
+        connection_id: Uuid,
+        new_order: i64,
     },
     SpliceExistingNode {
         connection_id: Uuid,
@@ -2496,7 +2509,10 @@ fn register_rendered_edges(
         return Vec::new();
     };
     let mut rendered_edges = Vec::new();
+    let order_states = wire_order_menu_states(project);
     for connection in &project.connections {
+        let order = order_states.get(&connection.id).copied();
+        let authored_blend_available = connection_supports_authored_blend(project, connection);
         let edge = register_edge_component(
             EdgeComponent {
                 id: format!("node_editor.edge:{}", connection.id),
@@ -2510,6 +2526,12 @@ fn register_rendered_edges(
                         || pin_color(PortDataType::Any),
                         |definition| pin_color(definition.data_type),
                     ),
+                authored_order: Some(connection.order),
+                back_to_front_index: order.map(|order| order.back_to_front_index),
+                layer_count: order.map(|order| order.layer_count),
+                authored_blend_mode: authored_blend_available
+                    .then(|| blend_mode_qa_key(connection.blend_mode)),
+                authored_blend_available,
             },
             &ports,
             canvas_clip,
@@ -2563,6 +2585,11 @@ fn register_rendered_edges(
                     to: &sink,
                     connection_id: None,
                     wire_color: pin_color(PortDataType::Image),
+                    authored_order: None,
+                    back_to_front_index: None,
+                    layer_count: None,
+                    authored_blend_mode: None,
+                    authored_blend_available: false,
                 },
                 &ports,
                 canvas_clip,
@@ -2656,6 +2683,12 @@ fn register_edge_component(
             "ltr": start.x <= end.x,
             "visible": qa_rect.is_positive(),
             "overview_painted": overview.is_some(),
+            "authored_order": edge.authored_order,
+            "back_to_front_index": edge.back_to_front_index,
+            "layer_count": edge.layer_count,
+            "authored_blend_mode": edge.authored_blend_mode,
+            "authored_blend_available": edge.authored_blend_available,
+            "runtime_first_produced_may_be_normal": edge.authored_blend_available,
             "unclipped_rect": qa_rect_metadata(unclipped_bbox),
             "hit_point": {"x": midpoint.x, "y": midpoint.y},
         })),
@@ -5814,6 +5847,65 @@ fn apply_edit(project: &mut Project, edit: NodeEdit) -> bool {
                 false
             }
         },
+        NodeEdit::SetConnectionBlendMode {
+            connection_id,
+            blend_mode,
+        } => {
+            let Some(connection) = project
+                .connections
+                .iter()
+                .find(|connection| connection.id == connection_id)
+            else {
+                return false;
+            };
+            if connection.blend_mode == blend_mode {
+                return false;
+            }
+            match project.set_connection_blend_mode(connection_id, blend_mode) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::warn!("Cannot set authored blend on wire {connection_id}: {error}");
+                    false
+                }
+            }
+        }
+        NodeEdit::ReorderConnection {
+            connection_id,
+            new_order,
+        } => {
+            let Some(connection) = project
+                .connections
+                .iter()
+                .find(|connection| connection.id == connection_id)
+            else {
+                return false;
+            };
+            let mut siblings = project
+                .connections
+                .iter()
+                .filter(|candidate| candidate.to == connection.to)
+                .map(|candidate| (candidate.order, candidate.id))
+                .collect::<Vec<_>>();
+            siblings.sort_by_key(|(order, id)| (*order, *id));
+            let Some(current_index) = siblings
+                .iter()
+                .position(|(_, id)| *id == connection_id)
+            else {
+                return false;
+            };
+            let target_index = new_order.max(0) as usize;
+            let target_index = target_index.min(siblings.len().saturating_sub(1));
+            if target_index == current_index {
+                return false;
+            }
+            match project.reorder_connection(connection_id, target_index as i64) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::warn!("Cannot reorder wire {connection_id}: {error}");
+                    false
+                }
+            }
+        }
         NodeEdit::SpliceExistingNode {
             connection_id,
             node_id,
@@ -6370,6 +6462,120 @@ fn wire_splice_menu_items(
         .collect()
 }
 
+const AUTHORED_BLEND_MODES: [BlendMode; 5] = [
+    BlendMode::Normal,
+    BlendMode::Add,
+    BlendMode::Multiply,
+    BlendMode::Screen,
+    BlendMode::Overlay,
+];
+
+fn blend_mode_label(blend_mode: BlendMode) -> &'static str {
+    match blend_mode {
+        BlendMode::Normal => "Normal",
+        BlendMode::Add => "Add",
+        BlendMode::Multiply => "Multiply",
+        BlendMode::Screen => "Screen",
+        BlendMode::Overlay => "Overlay",
+    }
+}
+
+fn blend_mode_qa_key(blend_mode: BlendMode) -> &'static str {
+    match blend_mode {
+        BlendMode::Normal => "normal",
+        BlendMode::Add => "add",
+        BlendMode::Multiply => "multiply",
+        BlendMode::Screen => "screen",
+        BlendMode::Overlay => "overlay",
+    }
+}
+
+fn connection_supports_authored_blend(
+    project: &Project,
+    connection: &library::model::project::ProjectConnection,
+) -> bool {
+    let source_is_image = project
+        .port_definition(&connection.from, PortDirection::Output)
+        .is_some_and(|definition| definition.data_type == PortDataType::Image);
+    let target_is_merge_images = connection.to.port == library::model::project::MERGE_IMAGES_PORT
+        && matches!(
+            connection.to.owner,
+            PortOwner::Node(node_id)
+                if project
+                    .get_node(node_id)
+                    .is_some_and(|node| matches!(node.content, NodeContent::Merge))
+        )
+        && project
+            .port_definition(&connection.to, PortDirection::Input)
+            .is_some_and(|definition| {
+                definition.data_type == PortDataType::Image
+                    && definition.multiplicity == PortMultiplicity::Variadic
+            });
+    source_is_image && target_is_merge_images
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WireOrderMenuState {
+    back_to_front_index: usize,
+    layer_count: usize,
+}
+
+fn wire_order_menu_state(
+    project: &Project,
+    connection: &library::model::project::ProjectConnection,
+) -> Option<WireOrderMenuState> {
+    wire_order_menu_states(project).get(&connection.id).copied()
+}
+
+fn wire_order_menu_states(project: &Project) -> HashMap<Uuid, WireOrderMenuState> {
+    let mut groups = HashMap::<PortAddress, Vec<(i64, Uuid)>>::new();
+    for connection in &project.connections {
+        let is_variadic = project
+            .port_definition(&connection.to, PortDirection::Input)
+            .is_some_and(|definition| definition.multiplicity == PortMultiplicity::Variadic);
+        if is_variadic {
+            groups
+                .entry(connection.to.clone())
+                .or_default()
+                .push((connection.order, connection.id));
+        }
+    }
+
+    let mut states = HashMap::new();
+    for siblings in groups.values_mut() {
+        siblings.sort_by_key(|(order, id)| (*order, *id));
+        let layer_count = siblings.len();
+        for (back_to_front_index, (_, connection_id)) in siblings.iter().enumerate() {
+            states.insert(
+                *connection_id,
+                WireOrderMenuState {
+                    back_to_front_index,
+                    layer_count,
+                },
+            );
+        }
+    }
+    states
+}
+
+fn wire_order_qa_metadata(
+    connection: &library::model::project::ProjectConnection,
+    order: WireOrderMenuState,
+    direction: &str,
+    target_index: Option<usize>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "action": "reorder",
+        "connection_id": connection.id,
+        "direction": direction,
+        "back_to_front_index": order.back_to_front_index,
+        "authored_order": connection.order,
+        "layer_count": order.layer_count,
+        "target_back_to_front_index": target_index,
+        "authored_blend_mode": blend_mode_qa_key(connection.blend_mode),
+    })
+}
+
 fn show_wire_context_menu(
     ui: &mut egui::Ui,
     state: &mut NodeEditorState,
@@ -6379,16 +6585,19 @@ fn show_wire_context_menu(
     to_global: egui::emath::TSTransform,
 ) -> Option<QueuedNodeEdit> {
     let context = state.wire_context_menu.as_mut()?;
-    if !project
+    let Some(connection) = project
         .connections
         .iter()
-        .any(|connection| connection.id == context.connection_id)
-    {
+        .find(|connection| connection.id == context.connection_id)
+        .cloned()
+    else {
         state.wire_context_menu = None;
         return None;
-    }
+    };
 
     let connection_id = context.connection_id;
+    let order_state = wire_order_menu_state(project, &connection);
+    let authored_blend_available = connection_supports_authored_blend(project, &connection);
     let position = context.position;
     let graph_position = to_global.inverse() * position;
     let mut edit = None;
@@ -6425,6 +6634,167 @@ fn show_wire_context_menu(
                         should_close = true;
                     }
                     return;
+                }
+
+                if let Some(order) = order_state {
+                    let order_label = non_selectable_label(
+                        ui,
+                        format!(
+                            "Layer Order · Back→Front {} / {}",
+                            order.back_to_front_index + 1,
+                            order.layer_count
+                        ),
+                    );
+                    crate::qa::register_component_with_metadata(
+                        format!("node_editor.wire_menu.order:{connection_id}"),
+                        "node_editor_wire_order",
+                        order_label.rect,
+                        true,
+                        Some(serde_json::json!({
+                            "connection_id": connection_id,
+                            "back_to_front_index": order.back_to_front_index,
+                            "authored_order": connection.order,
+                            "layer_count": order.layer_count,
+                            "authored_blend_mode": blend_mode_qa_key(connection.blend_mode),
+                        })),
+                    );
+                    ui.horizontal(|ui| {
+                        let back_index = order.back_to_front_index.checked_sub(1);
+                        let back = ui
+                            .add_enabled(
+                                back_index.is_some(),
+                                egui::Button::new("Move Back"),
+                            )
+                            .on_hover_text("Move this Merge input one layer toward the back");
+                        crate::qa::register_component_with_metadata(
+                            format!("node_editor.wire_menu.order_back:{connection_id}"),
+                            "node_editor_menu_item",
+                            back.rect,
+                            back.enabled(),
+                            Some(wire_order_qa_metadata(
+                                &connection,
+                                order,
+                                "back",
+                                back_index,
+                            )),
+                        );
+                        if back.clicked() {
+                            edit = back_index.map(|new_order| {
+                                QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
+                                    connection_id,
+                                    new_order: new_order as i64,
+                                })
+                            });
+                            should_close = true;
+                        }
+
+                        let front_index = (order.back_to_front_index + 1 < order.layer_count)
+                            .then_some(order.back_to_front_index + 1);
+                        let front = ui
+                            .add_enabled(
+                                front_index.is_some(),
+                                egui::Button::new("Move Front"),
+                            )
+                            .on_hover_text("Move this Merge input one layer toward the front");
+                        crate::qa::register_component_with_metadata(
+                            format!("node_editor.wire_menu.order_front:{connection_id}"),
+                            "node_editor_menu_item",
+                            front.rect,
+                            front.enabled(),
+                            Some(wire_order_qa_metadata(
+                                &connection,
+                                order,
+                                "front",
+                                front_index,
+                            )),
+                        );
+                        if front.clicked() {
+                            edit = front_index.map(|new_order| {
+                                QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
+                                    connection_id,
+                                    new_order: new_order as i64,
+                                })
+                            });
+                            should_close = true;
+                        }
+                    });
+                }
+
+                if authored_blend_available {
+                    ui.separator();
+                    let blend_label = non_selectable_label(
+                        ui,
+                        format!(
+                            "Authored Blend · {}",
+                            blend_mode_label(connection.blend_mode)
+                        ),
+                    )
+                    .on_hover_text(
+                        "This value belongs to the Merge input wire, not to the source Node",
+                    );
+                    crate::qa::register_component_with_metadata(
+                        format!("node_editor.wire_menu.authored_blend:{connection_id}"),
+                        "node_editor_wire_authored_blend",
+                        blend_label.rect,
+                        true,
+                        Some(serde_json::json!({
+                            "connection_id": connection_id,
+                            "authored_blend_mode": blend_mode_qa_key(connection.blend_mode),
+                            "runtime_note": "The first produced Merge layer composites as Normal; the wire keeps its authored blend.",
+                        })),
+                    );
+                    for blend_mode in AUTHORED_BLEND_MODES {
+                        let selected = blend_mode == connection.blend_mode;
+                        let blend = ui
+                            .add_enabled(
+                                !selected,
+                                egui::Button::selectable(
+                                    selected,
+                                    format!("Blend · {}", blend_mode_label(blend_mode)),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text(
+                                "Authored on this wire. The first produced runtime layer may composite as Normal.",
+                            );
+                        crate::qa::register_component_with_metadata(
+                            format!(
+                                "node_editor.wire_menu.blend.{}:{connection_id}",
+                                blend_mode_qa_key(blend_mode)
+                            ),
+                            "node_editor_menu_item",
+                            blend.rect,
+                            blend.enabled(),
+                            Some(serde_json::json!({
+                                "action": "set_authored_blend",
+                                "connection_id": connection_id,
+                                "blend_mode": blend_mode_qa_key(blend_mode),
+                                "selected": selected,
+                                "runtime_first_produced_may_be_normal": true,
+                            })),
+                        );
+                        if blend.clicked() {
+                            edit = Some(QueuedNodeEdit::Atomic(
+                                NodeEdit::SetConnectionBlendMode {
+                                    connection_id,
+                                    blend_mode,
+                                },
+                            ));
+                            should_close = true;
+                        }
+                    }
+                    non_selectable_label(
+                        ui,
+                        egui::RichText::new(
+                            "Runtime: first produced Merge layer composites as Normal",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                }
+
+                if order_state.is_some() || authored_blend_available {
+                    ui.separator();
                 }
 
                 let delete = ui.button("Delete Wire");
@@ -6469,6 +6839,19 @@ fn show_wire_context_menu(
         Some(serde_json::json!({
             "connection_id": connection_id,
             "mode": if context.inserting { "insert" } else { "commands" },
+            "order": order_state.map(|order| serde_json::json!({
+                "back_to_front_index": order.back_to_front_index,
+                "authored_order": connection.order,
+                "layer_count": order.layer_count,
+                "can_move_back": order.back_to_front_index > 0,
+                "can_move_front": order.back_to_front_index + 1 < order.layer_count,
+                "authored_blend_mode": blend_mode_qa_key(connection.blend_mode),
+            })),
+            "authored_blend": {
+                "available": authored_blend_available,
+                "mode": authored_blend_available.then(|| blend_mode_qa_key(connection.blend_mode)),
+                "runtime_first_produced_may_be_normal": authored_blend_available,
+            },
         })),
     );
 
@@ -8162,6 +8545,207 @@ mod tests {
     }
 
     #[test]
+    fn merge_wire_layer_order_and_authored_blend_are_canonical_and_undoable() {
+        let (mut project, _, _, clip_id, solid_id, merge_id) = fixture();
+        let first_connection_id = project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from.owner == PortOwner::Node(solid_id)
+                    && connection.to
+                        == PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT)
+            })
+            .unwrap()
+            .id;
+        let mut second = Node::new(
+            "Second Solid",
+            NodeContent::Generator(GeneratorContent::Solid),
+        );
+        second.ui_position = [450.0, 560.0];
+        let second_id = second.id;
+        project.add_node(second);
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), second_id)
+            .unwrap();
+        let second_connection_id = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(second_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
+
+        let first = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == first_connection_id)
+            .unwrap();
+        let second = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == second_connection_id)
+            .unwrap();
+        assert!(connection_supports_authored_blend(&project, first));
+        assert!(connection_supports_authored_blend(&project, second));
+        assert_eq!(
+            wire_order_menu_state(&project, first),
+            Some(WireOrderMenuState {
+                back_to_front_index: 0,
+                layer_count: 2,
+            })
+        );
+        assert_eq!(
+            wire_order_menu_state(&project, second),
+            Some(WireOrderMenuState {
+                back_to_front_index: 1,
+                layer_count: 2,
+            })
+        );
+
+        // Disabled boundary actions are true no-ops: no Project change and no
+        // extra history snapshot even if the QA bridge injects their click.
+        let boundary_initial = project.clone();
+        let mut boundary_history = HistoryManager::new();
+        boundary_history.push_project_state(boundary_initial.clone());
+        let mut state = NodeEditorState::default();
+        assert!(!apply_queued_node_edits(
+            &mut project,
+            vec![QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
+                connection_id: first_connection_id,
+                new_order: 0,
+            })],
+            &mut boundary_history,
+            &mut state,
+        ));
+        assert_eq!(project, boundary_initial);
+        assert_eq!(boundary_history.undo_depth(), 1);
+        assert!(!apply_queued_node_edits(
+            &mut project,
+            vec![QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
+                connection_id: second_connection_id,
+                new_order: 1,
+            })],
+            &mut boundary_history,
+            &mut state,
+        ));
+        assert_eq!(project, boundary_initial);
+        assert_eq!(boundary_history.undo_depth(), 1);
+
+        let blend_initial = project.clone();
+        let original_first = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == first_connection_id)
+            .unwrap()
+            .clone();
+        let mut blend_history = HistoryManager::new();
+        blend_history.push_project_state(blend_initial.clone());
+        assert!(apply_queued_node_edits(
+            &mut project,
+            vec![QueuedNodeEdit::Atomic(NodeEdit::SetConnectionBlendMode {
+                connection_id: first_connection_id,
+                blend_mode: BlendMode::Multiply,
+            })],
+            &mut blend_history,
+            &mut state,
+        ));
+        let blended_first = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == first_connection_id)
+            .unwrap();
+        assert_eq!(blended_first.id, original_first.id);
+        assert_eq!(blended_first.from, original_first.from);
+        assert_eq!(blended_first.to, original_first.to);
+        assert_eq!(blended_first.order, original_first.order);
+        assert_eq!(blended_first.blend_mode, BlendMode::Multiply);
+        let blend_edited = project.clone();
+        assert_single_gesture_undo_redo(&mut blend_history, &blend_initial, &blend_edited);
+
+        let reorder_initial = project.clone();
+        let original_second_blend = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == second_connection_id)
+            .unwrap()
+            .blend_mode;
+        let mut reorder_history = HistoryManager::new();
+        reorder_history.push_project_state(reorder_initial.clone());
+        assert!(apply_queued_node_edits(
+            &mut project,
+            vec![QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
+                connection_id: first_connection_id,
+                new_order: 1,
+            })],
+            &mut reorder_history,
+            &mut state,
+        ));
+        let mut merge_connections = project
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.to == PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT)
+            })
+            .collect::<Vec<_>>();
+        merge_connections.sort_by_key(|connection| connection.order);
+        assert_eq!(
+            merge_connections
+                .iter()
+                .map(|connection| (connection.id, connection.order))
+                .collect::<Vec<_>>(),
+            vec![(second_connection_id, 0), (first_connection_id, 1)]
+        );
+        assert_eq!(merge_connections[0].blend_mode, original_second_blend);
+        assert_eq!(merge_connections[1].blend_mode, BlendMode::Multiply);
+        assert_eq!(merge_connections[1].from, original_first.from);
+        assert_eq!(merge_connections[1].to, original_first.to);
+        let reorder_edited = project.clone();
+        assert_single_gesture_undo_redo(&mut reorder_history, &reorder_initial, &reorder_edited);
+
+        let no_op_initial = project.clone();
+        let mut no_op_history = HistoryManager::new();
+        no_op_history.push_project_state(no_op_initial.clone());
+        assert!(!apply_queued_node_edits(
+            &mut project,
+            vec![
+                QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
+                    connection_id: first_connection_id,
+                    new_order: 1,
+                }),
+                QueuedNodeEdit::Atomic(NodeEdit::SetConnectionBlendMode {
+                    connection_id: first_connection_id,
+                    blend_mode: BlendMode::Multiply,
+                }),
+            ],
+            &mut no_op_history,
+            &mut state,
+        ));
+        assert_eq!(project, no_op_initial);
+        assert_eq!(no_op_history.undo_depth(), 1);
+
+        let time_connection = project
+            .connections
+            .iter()
+            .find(|connection| connection.from.port == TIME_PORT)
+            .unwrap()
+            .clone();
+        assert!(!connection_supports_authored_blend(
+            &project,
+            &time_connection
+        ));
+        assert!(!apply_queued_node_edits(
+            &mut project,
+            vec![QueuedNodeEdit::Atomic(NodeEdit::SetConnectionBlendMode {
+                connection_id: time_connection.id,
+                blend_mode: BlendMode::Add,
+            })],
+            &mut no_op_history,
+            &mut state,
+        ));
+        assert_eq!(project, no_op_initial);
+        assert_eq!(no_op_history.undo_depth(), 1);
+    }
+
+    #[test]
     fn real_egui_wire_hit_selects_and_dragging_the_body_queues_disconnect() {
         let (project, _, _, _, solid_id, merge_id) = fixture();
         let connection = project
@@ -9590,6 +10174,11 @@ mod tests {
                         to: &to,
                         connection_id: None,
                         wire_color: pin_color(PortDataType::Image),
+                        authored_order: None,
+                        back_to_front_index: None,
+                        layer_count: None,
+                        authored_blend_mode: None,
+                        authored_blend_available: false,
                     },
                     &ports,
                     canvas,
