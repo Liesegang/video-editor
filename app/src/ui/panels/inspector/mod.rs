@@ -6,11 +6,14 @@ use library::model::node::{
     CLIP_DURATION_PROPERTY, CLIP_START_TIME_PROPERTY, CLIP_TIME_STRETCH_PROPERTY,
     CLIP_TRIM_IN_PROPERTY,
 };
-use library::model::project::Project;
+use library::model::project::{
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortOwner, Project, ProjectConnection,
+    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+};
 use library::model::property::{
     PropertyDefinition, PropertyMap, PropertyTarget, PropertyUiType, PropertyValue,
 };
-use library::model::{Clip, GeneratorContent, Node, NodeContent};
+use library::model::{Clip, Composition, GeneratorContent, Node, NodeContent, Track};
 use library::plugin::PluginManager;
 use library::{EditorService, PropertyOwner};
 use ordered_float::OrderedFloat;
@@ -20,16 +23,25 @@ use crate::ui::widgets::property_drag_value::FloatDragValueConfig;
 use crate::{action::HistoryManager, state::context::EditorContext};
 
 pub mod action_handler;
+#[allow(
+    dead_code,
+    reason = "legacy embedded Effect UI is compiled during the operation-graph transition but has no authoritative Inspector entry point"
+)]
 pub mod effects;
+#[allow(
+    dead_code,
+    reason = "legacy embedded ensemble UI is compiled during the operation-graph transition but has no authoritative Inspector entry point"
+)]
 pub mod ensemble;
 pub mod properties;
+#[allow(
+    dead_code,
+    reason = "legacy embedded Style UI is compiled during the operation-graph transition but has no authoritative Inspector entry point"
+)]
 pub mod styles;
 
 use action_handler::ActionContext;
-use effects::render_effects_section;
-use ensemble::render_ensemble_section;
-use properties::{render_property_rows, PropertyRenderContext};
-use styles::render_styles_section;
+use properties::{PropertyRenderContext, render_property_rows};
 
 #[derive(Clone, Debug)]
 #[allow(
@@ -37,9 +49,20 @@ use styles::render_styles_section;
     reason = "the Inspector takes one short-lived authoritative selection snapshot per frame"
 )]
 enum InspectorSelection {
+    Composition {
+        composition: Composition,
+        nodes: Vec<Node>,
+        connections: Vec<ProjectConnection>,
+    },
+    Track {
+        track: Track,
+        nodes: Vec<Node>,
+        connections: Vec<ProjectConnection>,
+    },
     Clip {
         clip: Clip,
         nodes: Vec<Node>,
+        connections: Vec<ProjectConnection>,
         track_id: Option<Uuid>,
     },
     Node {
@@ -47,6 +70,65 @@ enum InspectorSelection {
         track_id: Option<Uuid>,
         containing_clip: Option<Clip>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FacadeOwnerKind {
+    Composition,
+    Track,
+    Clip,
+}
+
+impl FacadeOwnerKind {
+    fn qa_value(self) -> &'static str {
+        match self {
+            Self::Composition => "composition",
+            Self::Track => "track",
+            Self::Clip => "clip",
+        }
+    }
+
+    fn output_mode(self, output_node_id: Option<Uuid>) -> FacadeOutputMode {
+        match output_node_id {
+            Some(node_id) => FacadeOutputMode::Explicit(node_id),
+            None => match self {
+                Self::Composition | Self::Track => FacadeOutputMode::DerivedChildren,
+                Self::Clip => FacadeOutputMode::NoOutput,
+            },
+        }
+    }
+
+    fn derived_children_label(self) -> Option<&'static str> {
+        match self {
+            Self::Composition => Some("ordered child Tracks"),
+            Self::Track => Some("ordered child Clips"),
+            Self::Clip => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FacadeOutputMode {
+    Explicit(Uuid),
+    DerivedChildren,
+    NoOutput,
+}
+
+impl FacadeOutputMode {
+    fn qa_value(self) -> &'static str {
+        match self {
+            Self::Explicit(_) => "explicit",
+            Self::DerivedChildren => "derived_children",
+            Self::NoOutput => "no_output",
+        }
+    }
+
+    fn explicit_node_id(self) -> Option<Uuid> {
+        match self {
+            Self::Explicit(node_id) => Some(node_id),
+            Self::DerivedChildren | Self::NoOutput => None,
+        }
+    }
 }
 
 pub fn inspector_panel(
@@ -85,13 +167,13 @@ fn inspector_panel_content(
         ui.label("No composition selected.");
         return;
     };
-    let Some(selected_entity_id) = editor_context.selection.last_selected_entity_id else {
-        ui.label("Select a Clip or Node to edit.");
-        return;
-    };
-
     let selection = match project.read() {
-        Ok(project) => resolve_selection(&project, selected_entity_id),
+        Ok(project) => resolve_selection(
+            &project,
+            editor_context.selection.last_selected_entity_id,
+            editor_context.selection.last_selected_track_id,
+            composition_id,
+        ),
         Err(error) => {
             log::error!("Failed to read Project for Inspector: {error}");
             ui.label("Project is temporarily unavailable.");
@@ -100,12 +182,9 @@ fn inspector_panel_content(
     };
 
     let Some(selection) = selection else {
-        ui.label("Selected Clip or Node was not found (it may have been deleted).");
+        ui.label("The selected Timeline item was not found (it may have been deleted).");
         editor_context.selection.last_selected_entity_id = None;
-        editor_context
-            .selection
-            .selected_entities
-            .remove(&selected_entity_id);
+        editor_context.selection.selected_entities.clear();
         return;
     };
 
@@ -119,9 +198,72 @@ fn inspector_panel_content(
     render_multi_selection_notice(ui, editor_context);
 
     match selection {
+        InspectorSelection::Composition {
+            composition,
+            nodes,
+            connections,
+        } => {
+            let heading = ui.heading(format!("Composition: {}", composition.name));
+            crate::qa::register_component_with_metadata(
+                format!("inspector.owner.composition:{}", composition.id),
+                "inspector_owner",
+                heading.rect,
+                true,
+                Some(serde_json::json!({"owner": "composition", "id": composition.id})),
+            );
+            ui.separator();
+            render_semantic_graph_facade(
+                ui,
+                "Composition Output",
+                FacadeOwnerKind::Composition,
+                &nodes,
+                &connections,
+                composition.output_node_id,
+                composition_id,
+                None,
+                global_time,
+                fps,
+                project_service,
+                history_manager,
+                editor_context,
+                &mut needs_refresh,
+            );
+        }
+        InspectorSelection::Track {
+            track,
+            nodes,
+            connections,
+        } => {
+            let heading = ui.heading(format!("Track: {}", track.name));
+            crate::qa::register_component_with_metadata(
+                format!("inspector.owner.track:{}", track.id),
+                "inspector_owner",
+                heading.rect,
+                true,
+                Some(serde_json::json!({"owner": "track", "id": track.id})),
+            );
+            ui.separator();
+            render_semantic_graph_facade(
+                ui,
+                "Track Output",
+                FacadeOwnerKind::Track,
+                &nodes,
+                &connections,
+                track.output_node_id,
+                composition_id,
+                Some(track.id),
+                global_time,
+                fps,
+                project_service,
+                history_manager,
+                editor_context,
+                &mut needs_refresh,
+            );
+        }
         InspectorSelection::Clip {
             clip,
             nodes,
+            connections,
             track_id,
         } => {
             let heading = ui.heading(format!("Clip: {}", clip.name));
@@ -165,50 +307,23 @@ fn inspector_panel_content(
                 );
             }
 
-            render_effects_section(
+            ui.add_space(12.0);
+            render_semantic_graph_facade(
                 ui,
+                "Clip Output",
+                FacadeOwnerKind::Clip,
+                &nodes,
+                &connections,
+                clip.output_node_id,
+                composition_id,
+                track_id,
+                local_time,
+                fps,
                 project_service,
                 history_manager,
                 editor_context,
-                PropertyOwner::Clip(clip.id),
-                &clip.effects,
-                local_time,
-                fps,
                 &mut needs_refresh,
             );
-
-            ui.add_space(12.0);
-            ui.heading(format!("Nodes ({})", nodes.len()));
-            ui.separator();
-            if nodes.is_empty() {
-                ui.label("This Clip contains no Nodes.");
-            }
-
-            for node in &nodes {
-                let is_output = clip.output_node_id == Some(node.id);
-                let title = if is_output {
-                    format!("{}  ·  Output", node.name)
-                } else {
-                    node.name.clone()
-                };
-                egui::CollapsingHeader::new(title)
-                    .id_salt(("inspector_clip_node", clip.id, node.id))
-                    .default_open(is_output || nodes.len() == 1)
-                    .show(ui, |ui| {
-                        render_node(
-                            ui,
-                            node,
-                            composition_id,
-                            track_id,
-                            local_time,
-                            fps,
-                            project_service,
-                            history_manager,
-                            editor_context,
-                            &mut needs_refresh,
-                        );
-                    });
-            }
         }
         InspectorSelection::Node {
             node,
@@ -247,30 +362,75 @@ fn inspector_panel_content(
     }
 }
 
-fn resolve_selection(project: &Project, selected_id: Uuid) -> Option<InspectorSelection> {
-    if let Some(clip) = project.get_clip(selected_id) {
-        let nodes = clip
-            .node_ids
-            .iter()
-            .filter_map(|node_id| project.get_node(*node_id).cloned())
-            .collect();
-        return Some(InspectorSelection::Clip {
-            clip: clip.clone(),
-            nodes,
-            track_id: project.find_track_for_clip(selected_id),
+fn resolve_selection(
+    project: &Project,
+    selected_entity_id: Option<Uuid>,
+    selected_track_id: Option<Uuid>,
+    composition_id: Uuid,
+) -> Option<InspectorSelection> {
+    if let Some(selected_id) = selected_entity_id {
+        if project.find_containing_composition(selected_id) == Some(composition_id) {
+            if let Some(clip) = project.get_clip(selected_id) {
+                let nodes = nodes_for_ids(project, &clip.node_ids);
+                return Some(InspectorSelection::Clip {
+                    clip: clip.clone(),
+                    connections: connections_for_nodes(project, &clip.node_ids),
+                    nodes,
+                    track_id: project.find_track_for_clip(selected_id),
+                });
+            }
+
+            if let Some(node) = project.get_node(selected_id) {
+                let containing_clip = project
+                    .find_parent_clip(selected_id)
+                    .and_then(|clip_id| project.get_clip(clip_id))
+                    .cloned();
+                return Some(InspectorSelection::Node {
+                    node: node.clone(),
+                    track_id: project.find_parent_track(selected_id),
+                    containing_clip,
+                });
+            }
+        }
+    }
+
+    if let Some(track) = selected_track_id
+        .filter(|id| project.find_composition_for_track(*id) == Some(composition_id))
+        .and_then(|id| project.get_track(id))
+    {
+        return Some(InspectorSelection::Track {
+            track: track.clone(),
+            nodes: nodes_for_ids(project, &track.node_ids),
+            connections: connections_for_nodes(project, &track.node_ids),
         });
     }
 
-    let node = project.get_node(selected_id)?.clone();
-    let containing_clip = project
-        .find_parent_clip(selected_id)
-        .and_then(|clip_id| project.get_clip(clip_id))
-        .cloned();
-    Some(InspectorSelection::Node {
-        node,
-        track_id: project.find_parent_track(selected_id),
-        containing_clip,
+    let composition = project.get_composition(composition_id)?;
+    Some(InspectorSelection::Composition {
+        composition: composition.clone(),
+        nodes: nodes_for_ids(project, &composition.node_ids),
+        connections: connections_for_nodes(project, &composition.node_ids),
     })
+}
+
+fn nodes_for_ids(project: &Project, node_ids: &[Uuid]) -> Vec<Node> {
+    node_ids
+        .iter()
+        .filter_map(|node_id| project.get_node(*node_id).cloned())
+        .collect()
+}
+
+fn connections_for_nodes(project: &Project, node_ids: &[Uuid]) -> Vec<ProjectConnection> {
+    let node_ids = node_ids.iter().copied().collect::<HashSet<_>>();
+    project
+        .connections
+        .iter()
+        .filter(|connection| {
+            matches!(connection.from.owner, PortOwner::Node(id) if node_ids.contains(&id))
+                || matches!(connection.to.owner, PortOwner::Node(id) if node_ids.contains(&id))
+        })
+        .cloned()
+        .collect()
 }
 
 fn render_multi_selection_notice(ui: &mut Ui, editor_context: &EditorContext) {
@@ -285,6 +445,687 @@ fn render_multi_selection_notice(ui: &mut Ui, editor_context: &EditorContext) {
             .small(),
     );
     ui.separator();
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the Timeline facade renders one authoritative graph snapshot with editing, timing, history, and QA context"
+)]
+fn render_semantic_graph_facade(
+    ui: &mut Ui,
+    output_label: &str,
+    owner_kind: FacadeOwnerKind,
+    nodes: &[Node],
+    connections: &[ProjectConnection],
+    output_node_id: Option<Uuid>,
+    composition_id: Uuid,
+    track_id: Option<Uuid>,
+    current_time: f64,
+    fps: f64,
+    project_service: &mut EditorService,
+    history_manager: &mut HistoryManager,
+    editor_context: &mut EditorContext,
+    needs_refresh: &mut bool,
+) {
+    let output_mode = owner_kind.output_mode(output_node_id);
+    let sources = nodes
+        .iter()
+        .filter(|node| {
+            !matches!(
+                node.content,
+                NodeContent::PluginOperation(_) | NodeContent::Merge
+            )
+        })
+        .collect::<Vec<_>>();
+    let merges = nodes
+        .iter()
+        .filter(|node| matches!(node.content, NodeContent::Merge))
+        .collect::<Vec<_>>();
+    let operations = nodes
+        .iter()
+        .filter(|node| matches!(node.content, NodeContent::PluginOperation(_)))
+        .collect::<Vec<_>>();
+
+    ui.heading("Source");
+    ui.separator();
+    if sources.is_empty() {
+        ui.label("Source comes from connected Timeline content.");
+    }
+    for source in sources {
+        let is_result = output_mode.explicit_node_id() == Some(source.id);
+        let reaches_result = reaches_result(source.id, output_mode, nodes, connections);
+        let outgoing = connections
+            .iter()
+            .filter(|connection| {
+                connection.from.owner == PortOwner::Node(source.id)
+                    && is_content_flow_connection(connection)
+            })
+            .collect::<Vec<_>>();
+        let title = if !source.enabled {
+            format!("{} · Disabled", source_semantic_label(source))
+        } else if is_result {
+            format!("{} · Result", source_semantic_label(source))
+        } else if reaches_result {
+            format!("{} · Used", source_semantic_label(source))
+        } else {
+            format!("{} · Not used", source_semantic_label(source))
+        };
+        let response = egui::CollapsingHeader::new(title)
+            .id_salt(("inspector_source", source.id))
+            .default_open(is_result || nodes.len() == 1)
+            .show(ui, |ui| {
+                render_node_properties(
+                    ui,
+                    source,
+                    composition_id,
+                    track_id,
+                    current_time,
+                    fps,
+                    project_service,
+                    history_manager,
+                    editor_context,
+                    needs_refresh,
+                );
+            });
+        let connection_metadata = outgoing
+            .iter()
+            .map(|connection| content_connection_metadata(connection))
+            .collect::<Vec<_>>();
+        crate::qa::register_component_with_metadata(
+            format!("inspector.source:{}", source.id),
+            "inspector_source_item",
+            response.header_response.rect,
+            true,
+            Some(serde_json::json!({
+                "source_id": source.id,
+                "source_kind": source_kind(source),
+                "is_result": is_result,
+                "reaches_result": reaches_result,
+                "enabled": source.enabled,
+                "connection_count": outgoing.len(),
+                "connections": connection_metadata,
+            })),
+        );
+    }
+
+    let category_sections = [
+        ("decorator", "Decorator", "Shape modifier"),
+        ("effector", "Effector", "Shape modifier"),
+        ("style", "Style", "Appearance"),
+        ("effect", "Effect", "Image effect"),
+    ];
+    let mut rendered_categories = HashSet::new();
+    for (category, title, meaning) in category_sections {
+        let matching = operations
+            .iter()
+            .copied()
+            .filter(|node| operation_category(node) == Some(category))
+            .collect::<Vec<_>>();
+        if matching.is_empty() {
+            continue;
+        }
+        rendered_categories.insert(category.to_string());
+        render_operation_category(
+            ui,
+            title,
+            meaning,
+            &matching,
+            nodes,
+            connections,
+            output_mode,
+            composition_id,
+            track_id,
+            current_time,
+            fps,
+            project_service,
+            history_manager,
+            editor_context,
+            needs_refresh,
+        );
+    }
+
+    let mut other_categories = operations
+        .iter()
+        .filter_map(|node| operation_category(node))
+        .filter(|category| !rendered_categories.contains(*category))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    other_categories.sort();
+    other_categories.dedup();
+    for category in other_categories {
+        let matching = operations
+            .iter()
+            .copied()
+            .filter(|node| operation_category(node) == Some(category.as_str()))
+            .collect::<Vec<_>>();
+        render_operation_category(
+            ui,
+            &category,
+            "Plug-in",
+            &matching,
+            nodes,
+            connections,
+            output_mode,
+            composition_id,
+            track_id,
+            current_time,
+            fps,
+            project_service,
+            history_manager,
+            editor_context,
+            needs_refresh,
+        );
+    }
+
+    render_merge_category(
+        ui,
+        &merges,
+        nodes,
+        connections,
+        output_mode,
+        composition_id,
+        track_id,
+        current_time,
+        fps,
+        project_service,
+        history_manager,
+        editor_context,
+        needs_refresh,
+    );
+
+    ui.add_space(10.0);
+    ui.heading(output_label);
+    ui.separator();
+    let output_text = facade_output_text(owner_kind, output_mode, nodes);
+    let output_response = ui.label(output_text);
+    crate::qa::register_component_with_metadata(
+        format!("inspector.output:{}", output_node_id.unwrap_or_default()),
+        "inspector_output",
+        output_response.rect,
+        true,
+        Some(facade_output_metadata(owner_kind, output_mode)),
+    );
+
+    if operations.is_empty() && merges.is_empty() {
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new("No appearance, animation, or compositing operations are applied.")
+                .weak(),
+        );
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a semantic operation category preserves graph connection metadata while sharing Inspector editing context"
+)]
+fn render_operation_category(
+    ui: &mut Ui,
+    title: &str,
+    meaning: &str,
+    operations: &[&Node],
+    all_nodes: &[Node],
+    connections: &[ProjectConnection],
+    output_mode: FacadeOutputMode,
+    composition_id: Uuid,
+    track_id: Option<Uuid>,
+    current_time: f64,
+    fps: f64,
+    project_service: &mut EditorService,
+    history_manager: &mut HistoryManager,
+    editor_context: &mut EditorContext,
+    needs_refresh: &mut bool,
+) {
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.heading(title);
+        ui.label(egui::RichText::new(meaning).small().weak());
+    });
+    ui.separator();
+
+    for node in operations {
+        let NodeContent::PluginOperation(operation) = &node.content else {
+            continue;
+        };
+        let descriptor = project_service.get_plugin_manager().operation_descriptor(
+            &operation.category,
+            &operation.component_id,
+            &operation.operation,
+        );
+        let available = descriptor.is_ok();
+        let label = descriptor.as_ref().map_or_else(
+            |_| operation.component_id.clone(),
+            |value| value.label().to_string(),
+        );
+        let outgoing = connections
+            .iter()
+            .filter(|connection| {
+                connection.from.owner == PortOwner::Node(node.id)
+                    && is_content_flow_connection(connection)
+            })
+            .collect::<Vec<_>>();
+        let is_result = output_mode.explicit_node_id() == Some(node.id);
+        let reaches_result = reaches_result(node.id, output_mode, all_nodes, connections);
+        let state = operation_state_label(
+            available,
+            node.enabled,
+            is_result,
+            reaches_result,
+            outgoing.as_slice(),
+        );
+        let response = egui::CollapsingHeader::new(format!("{label} · {state}"))
+            .id_salt(("inspector_operation", node.id))
+            .default_open(is_result || outgoing.len() == 1)
+            .show(ui, |ui| {
+                if !available {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "Plug-in unavailable; authored settings are preserved.",
+                    );
+                } else if !is_result && outgoing.is_empty() {
+                    ui.label(egui::RichText::new("Not connected to this result.").weak());
+                }
+                for connection in &outgoing {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Feeds {} · order {}",
+                            connection_target_label(connection, all_nodes),
+                            connection.order
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                }
+                render_node_properties(
+                    ui,
+                    node,
+                    composition_id,
+                    track_id,
+                    current_time,
+                    fps,
+                    project_service,
+                    history_manager,
+                    editor_context,
+                    needs_refresh,
+                );
+            });
+        let connection_metadata = outgoing
+            .iter()
+            .map(|connection| content_connection_metadata(connection))
+            .collect::<Vec<_>>();
+        crate::qa::register_component_with_metadata(
+            format!("inspector.operation:{}", node.id),
+            "inspector_operation_item",
+            response.header_response.rect,
+            true,
+            Some(serde_json::json!({
+                "operation_id": node.id,
+                "category": operation.category,
+                "component_id": operation.component_id,
+                "operation": operation.operation,
+                "available": available,
+                "enabled": node.enabled,
+                "is_result": is_result,
+                "reaches_result": reaches_result,
+                "connection_count": outgoing.len(),
+                "connections": connection_metadata,
+            })),
+        );
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Merge presentation preserves ordered graph inputs while sharing the Inspector editing context"
+)]
+fn render_merge_category(
+    ui: &mut Ui,
+    merges: &[&Node],
+    all_nodes: &[Node],
+    connections: &[ProjectConnection],
+    output_mode: FacadeOutputMode,
+    composition_id: Uuid,
+    track_id: Option<Uuid>,
+    current_time: f64,
+    fps: f64,
+    project_service: &mut EditorService,
+    history_manager: &mut HistoryManager,
+    editor_context: &mut EditorContext,
+    needs_refresh: &mut bool,
+) {
+    if merges.is_empty() {
+        return;
+    }
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.heading("Compositing");
+        ui.label(egui::RichText::new("Merge").small().weak());
+    });
+    ui.separator();
+
+    for merge in merges {
+        let incoming = connections
+            .iter()
+            .filter(|connection| {
+                connection.to.owner == PortOwner::Node(merge.id)
+                    && is_content_flow_connection(connection)
+            })
+            .collect::<Vec<_>>();
+        let outgoing = connections
+            .iter()
+            .filter(|connection| {
+                connection.from.owner == PortOwner::Node(merge.id)
+                    && is_content_flow_connection(connection)
+            })
+            .collect::<Vec<_>>();
+        let is_result = output_mode.explicit_node_id() == Some(merge.id);
+        let reaches_result = reaches_result(merge.id, output_mode, all_nodes, connections);
+        let state = operation_state_label(
+            true,
+            merge.enabled,
+            is_result,
+            reaches_result,
+            outgoing.as_slice(),
+        );
+        let response = egui::CollapsingHeader::new(format!("Merge · {state}"))
+            .id_salt(("inspector_merge", merge.id))
+            .default_open(is_result)
+            .show(ui, |ui| {
+                if incoming.is_empty() {
+                    ui.label(egui::RichText::new("No image inputs connected.").weak());
+                }
+                for connection in &incoming {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Input: {} · order {}",
+                            connection_source_label(connection, all_nodes),
+                            connection.order
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                }
+                for connection in &outgoing {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Feeds {} · order {}",
+                            connection_target_label(connection, all_nodes),
+                            connection.order
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                }
+                render_node_properties(
+                    ui,
+                    merge,
+                    composition_id,
+                    track_id,
+                    current_time,
+                    fps,
+                    project_service,
+                    history_manager,
+                    editor_context,
+                    needs_refresh,
+                );
+            });
+        let incoming_metadata = incoming
+            .iter()
+            .map(|connection| {
+                serde_json::json!({
+                    "connection_id": connection.id,
+                    "from_owner": connection.from.owner,
+                    "from_port": connection.from.port,
+                    "order": connection.order,
+                })
+            })
+            .collect::<Vec<_>>();
+        let outgoing_metadata = outgoing
+            .iter()
+            .map(|connection| {
+                serde_json::json!({
+                    "connection_id": connection.id,
+                    "to_owner": connection.to.owner,
+                    "to_port": connection.to.port,
+                    "order": connection.order,
+                })
+            })
+            .collect::<Vec<_>>();
+        crate::qa::register_component_with_metadata(
+            format!("inspector.merge:{}", merge.id),
+            "inspector_compositing_item",
+            response.header_response.rect,
+            true,
+            Some(serde_json::json!({
+                "operation_id": merge.id,
+                "category": "merge",
+                "available": true,
+                "enabled": merge.enabled,
+                "is_result": is_result,
+                "reaches_result": reaches_result,
+                "inputs": incoming_metadata,
+                "outputs": outgoing_metadata,
+            })),
+        );
+    }
+}
+
+fn facade_output_text(
+    owner_kind: FacadeOwnerKind,
+    output_mode: FacadeOutputMode,
+    nodes: &[Node],
+) -> String {
+    match output_mode {
+        FacadeOutputMode::Explicit(node_id) => {
+            nodes.iter().find(|node| node.id == node_id).map_or_else(
+                || "Explicit Result node is unavailable".to_string(),
+                |node| format!("Result: {}", source_semantic_label(node)),
+            )
+        }
+        FacadeOutputMode::DerivedChildren => format!(
+            "Derived from {}",
+            owner_kind
+                .derived_children_label()
+                .unwrap_or("ordered child containers")
+        ),
+        FacadeOutputMode::NoOutput => "No output selected (NoOutput)".to_string(),
+    }
+}
+
+fn facade_output_metadata(
+    owner_kind: FacadeOwnerKind,
+    output_mode: FacadeOutputMode,
+) -> serde_json::Value {
+    serde_json::json!({
+        "output_node_id": output_mode.explicit_node_id(),
+        "explicit": matches!(output_mode, FacadeOutputMode::Explicit(_)),
+        "owner_kind": owner_kind.qa_value(),
+        "output_mode": output_mode.qa_value(),
+    })
+}
+
+fn reaches_result(
+    start_node_id: Uuid,
+    output_mode: FacadeOutputMode,
+    nodes: &[Node],
+    connections: &[ProjectConnection],
+) -> bool {
+    let FacadeOutputMode::Explicit(output_node_id) = output_mode else {
+        return false;
+    };
+    if !has_active_content_input_path(start_node_id, nodes, connections, &mut HashSet::new()) {
+        return false;
+    }
+    let mut pending = vec![start_node_id];
+    let mut visited = HashSet::new();
+    while let Some(node_id) = pending.pop() {
+        if nodes
+            .iter()
+            .find(|node| node.id == node_id)
+            .is_some_and(|node| !node.enabled)
+        {
+            continue;
+        }
+        if output_node_id == node_id {
+            return true;
+        }
+        if !visited.insert(node_id) {
+            continue;
+        }
+        let outgoing = connections
+            .iter()
+            .filter(|connection| {
+                connection.from.owner == PortOwner::Node(node_id)
+                    && is_content_flow_connection(connection)
+            })
+            .collect::<Vec<_>>();
+        pending.extend(outgoing.into_iter().filter_map(|connection| {
+            let PortOwner::Node(target_id) = connection.to.owner else {
+                return None;
+            };
+            Some(target_id)
+        }));
+    }
+    false
+}
+
+fn has_active_content_input_path(
+    node_id: Uuid,
+    nodes: &[Node],
+    connections: &[ProjectConnection],
+    visited: &mut HashSet<Uuid>,
+) -> bool {
+    let Some(node) = nodes.iter().find(|node| node.id == node_id) else {
+        // A connection entering this facade from a different container is an
+        // authored external source. Its own facade reports its availability.
+        return true;
+    };
+    if !node.enabled || !visited.insert(node_id) {
+        return false;
+    }
+    if !matches!(
+        node.content,
+        NodeContent::PluginOperation(_) | NodeContent::Merge
+    ) {
+        return true;
+    }
+    connections.iter().any(|connection| {
+        if connection.to.owner != PortOwner::Node(node_id)
+            || !is_content_flow_connection(connection)
+        {
+            return false;
+        }
+        match connection.from.owner {
+            PortOwner::Node(source_id) => {
+                has_active_content_input_path(source_id, nodes, connections, visited)
+            }
+            PortOwner::Composition(_) | PortOwner::Track(_) | PortOwner::Clip(_) => true,
+        }
+    })
+}
+
+fn is_content_flow_connection(connection: &ProjectConnection) -> bool {
+    matches!(
+        (connection.from.port.as_str(), connection.to.port.as_str()),
+        (IMAGE_OUTPUT_PORT, IMAGE_INPUT_PORT | MERGE_IMAGES_PORT)
+            | (SHAPE_OUTPUT_PORT, SHAPE_INPUT_PORT)
+    )
+}
+
+fn content_connection_metadata(connection: &ProjectConnection) -> serde_json::Value {
+    serde_json::json!({
+        "connection_id": connection.id,
+        "from_owner": connection.from.owner,
+        "from_port": connection.from.port,
+        "to_owner": connection.to.owner,
+        "to_port": connection.to.port,
+        "order": connection.order,
+    })
+}
+
+fn operation_category(node: &Node) -> Option<&str> {
+    let NodeContent::PluginOperation(operation) = &node.content else {
+        return None;
+    };
+    Some(&operation.category)
+}
+
+fn operation_state_label(
+    available: bool,
+    enabled: bool,
+    is_result: bool,
+    reaches_result: bool,
+    outgoing: &[&ProjectConnection],
+) -> String {
+    if !available {
+        return "Unavailable".to_string();
+    }
+    if !enabled {
+        return "Disabled".to_string();
+    }
+    if is_result {
+        return "Result".to_string();
+    }
+    if !reaches_result {
+        return "Not applied".to_string();
+    }
+    match outgoing {
+        [] => "Applied".to_string(),
+        [connection] => format!("Applied · order {}", connection.order),
+        _ => format!("Applied on {} branches", outgoing.len()),
+    }
+}
+
+fn connection_target_label(connection: &ProjectConnection, nodes: &[Node]) -> String {
+    match connection.to.owner {
+        PortOwner::Node(id) => nodes
+            .iter()
+            .find(|node| node.id == id)
+            .map_or_else(|| "connected source".to_string(), source_semantic_label),
+        PortOwner::Composition(_) => "composition result".to_string(),
+        PortOwner::Track(_) => "track result".to_string(),
+        PortOwner::Clip(_) => "clip result".to_string(),
+    }
+}
+
+fn connection_source_label(connection: &ProjectConnection, nodes: &[Node]) -> String {
+    match connection.from.owner {
+        PortOwner::Node(id) => nodes
+            .iter()
+            .find(|node| node.id == id)
+            .map_or_else(|| "connected image".to_string(), source_semantic_label),
+        PortOwner::Composition(_) => "composition image".to_string(),
+        PortOwner::Track(_) => "track image".to_string(),
+        PortOwner::Clip(_) => "clip image".to_string(),
+    }
+}
+
+fn source_semantic_label(node: &Node) -> String {
+    let kind = source_kind(node);
+    if node.name.eq_ignore_ascii_case(kind) {
+        kind.to_string()
+    } else {
+        format!("{kind} · {}", node.name)
+    }
+}
+
+fn source_kind(node: &Node) -> &'static str {
+    match &node.content {
+        NodeContent::Media(_) => "Media",
+        NodeContent::Generator(GeneratorContent::Text) => "Text",
+        NodeContent::Generator(GeneratorContent::Shape) => "Shape",
+        NodeContent::Generator(GeneratorContent::Solid) => "Solid",
+        NodeContent::Generator(GeneratorContent::SkSL) => "Shader",
+        NodeContent::Reference(_) => "Reference",
+        NodeContent::PluginOperation(operation) => match operation.category.as_str() {
+            "decorator" => "Decorator",
+            "effector" => "Effector",
+            "style" => "Style",
+            "effect" => "Effect",
+            _ => "Plug-in",
+        },
+        NodeContent::Merge => "Composite",
+    }
 }
 
 #[allow(
@@ -308,6 +1149,41 @@ fn render_node(
         ui.label(node_display_type(node));
     });
 
+    render_node_properties(
+        ui,
+        node,
+        composition_id,
+        track_id,
+        current_time,
+        fps,
+        project_service,
+        history_manager,
+        editor_context,
+        needs_refresh,
+    );
+
+    // A directly selected Node is a focused view of that authoritative Node.
+    // Appearance and processing are separate operation Nodes and are exposed
+    // by the owning Clip/Track/Composition facade, never by legacy embedded
+    // arrays that would create a second write path.
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "property rendering requires the authoritative owner, timing, history, and UI context"
+)]
+fn render_node_properties(
+    ui: &mut Ui,
+    node: &Node,
+    composition_id: Uuid,
+    track_id: Option<Uuid>,
+    current_time: f64,
+    fps: f64,
+    project_service: &mut EditorService,
+    history_manager: &mut HistoryManager,
+    editor_context: &mut EditorContext,
+    needs_refresh: &mut bool,
+) {
     let descriptor_definitions =
         plugin_operation_property_definitions(project_service.get_plugin_manager().as_ref(), node);
     let mut definitions = descriptor_definitions.unwrap_or_else(|| {
@@ -343,54 +1219,6 @@ fn render_node(
             needs_refresh,
         );
     }
-
-    let is_text = matches!(node.content, NodeContent::Generator(GeneratorContent::Text));
-    let is_shape = matches!(
-        node.content,
-        NodeContent::Generator(GeneratorContent::Shape)
-    );
-
-    if is_text || is_shape {
-        render_styles_section(
-            ui,
-            project_service,
-            history_manager,
-            editor_context,
-            node.id,
-            current_time,
-            fps,
-            &node.styles,
-            needs_refresh,
-        );
-    }
-
-    if is_text {
-        ui.add_space(5.0);
-        render_ensemble_section(
-            ui,
-            project_service,
-            history_manager,
-            editor_context,
-            node.id,
-            current_time,
-            fps,
-            &node.effectors,
-            &node.decorators,
-            needs_refresh,
-        );
-    }
-
-    render_effects_section(
-        ui,
-        project_service,
-        history_manager,
-        editor_context,
-        PropertyOwner::Node(node.id),
-        &node.effects,
-        current_time,
-        fps,
-        needs_refresh,
-    );
 }
 
 fn plugin_operation_property_definitions(
@@ -776,10 +1604,16 @@ mod tests {
     use super::*;
     use library::model::project::NodeContainer;
     use library::model::property::Property;
+    use library::plugin::{EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY};
 
     #[test]
     fn clip_selection_keeps_every_contained_node_in_order() {
         let mut project = Project::new("inspector");
+        let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
         let first = Node::new("first", NodeContent::Merge);
         let second = Node::new("second", NodeContent::Merge);
         let mut clip = Clip::new("clip", 2.0, 4.0);
@@ -791,8 +1625,10 @@ mod tests {
         project.add_node(first);
         project.add_node(second);
         project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id).unwrap();
 
-        let Some(InspectorSelection::Clip { nodes, .. }) = resolve_selection(&project, clip_id)
+        let Some(InspectorSelection::Clip { nodes, .. }) =
+            resolve_selection(&project, Some(clip_id), None, composition_id)
         else {
             panic!("Clip selection should resolve");
         };
@@ -805,12 +1641,18 @@ mod tests {
     #[test]
     fn direct_node_selection_stays_node_owned_and_finds_clip_time_scope() {
         let mut project = Project::new("inspector");
+        let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
         let node = Node::new("leaf", NodeContent::Merge);
         let node_id = node.id;
         let clip = Clip::new("clip", 3.0, 5.0);
         let clip_id = clip.id;
         project.add_node(node);
         project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id).unwrap();
         project
             .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
             .unwrap();
@@ -819,12 +1661,263 @@ mod tests {
             node,
             containing_clip,
             ..
-        }) = resolve_selection(&project, node_id)
+        }) = resolve_selection(&project, Some(node_id), None, composition_id)
         else {
             panic!("Node selection should resolve");
         };
         assert_eq!(node.id, node_id);
         assert_eq!(containing_clip.unwrap().id, clip_id);
+    }
+
+    #[test]
+    fn timeline_track_and_composition_resolve_without_a_leaf_selection() {
+        let mut project = Project::new("timeline owner inspector");
+        let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 5.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
+
+        let Some(InspectorSelection::Track { track, .. }) =
+            resolve_selection(&project, None, Some(track_id), composition_id)
+        else {
+            panic!("Track selection should resolve");
+        };
+        assert_eq!(track.id, track_id);
+
+        let Some(InspectorSelection::Composition { composition, .. }) =
+            resolve_selection(&project, None, None, composition_id)
+        else {
+            panic!("Composition selection should resolve");
+        };
+        assert_eq!(composition.id, composition_id);
+    }
+
+    #[test]
+    fn stale_selection_from_another_composition_falls_back_to_the_active_composition() {
+        let mut project = Project::new("composition scoped inspector");
+        let (active, active_track) = Composition::new("active", 1920, 1080, 30.0, 5.0);
+        let active_id = active.id;
+        project.add_track(active_track);
+        project.add_composition(active);
+
+        let (other, other_track) = Composition::new("other", 1920, 1080, 30.0, 5.0);
+        let other_track_id = other_track.id;
+        let mut other_clip = Clip::new("other clip", 0.0, 1.0);
+        let other_clip_id = other_clip.id;
+        let other_node = Node::new("other node", NodeContent::Merge);
+        let other_node_id = other_node.id;
+        other_clip.node_ids.push(other_node_id);
+        project.add_track(other_track);
+        project.add_composition(other);
+        project.add_node(other_node);
+        project.add_clip(other_clip);
+        project
+            .attach_clip_to_track(other_track_id, other_clip_id)
+            .unwrap();
+
+        let Some(InspectorSelection::Composition { composition, .. }) = resolve_selection(
+            &project,
+            Some(other_node_id),
+            Some(other_track_id),
+            active_id,
+        ) else {
+            panic!("stale selections must resolve to the active Composition");
+        };
+        assert_eq!(composition.id, active_id);
+    }
+
+    #[test]
+    fn semantic_status_follows_canonical_branches_to_the_explicit_result() {
+        let source = Node::new("Title", NodeContent::Generator(GeneratorContent::Text));
+        let applied = PluginManager::default()
+            .create_style_operation_node("fill")
+            .unwrap();
+        let disconnected = PluginManager::default()
+            .create_effect_operation_node("blur")
+            .unwrap();
+        let result = Node::new("Composite", NodeContent::Merge);
+        let all_nodes = [
+            source.clone(),
+            applied.clone(),
+            disconnected.clone(),
+            result.clone(),
+        ];
+        let connections = vec![
+            ProjectConnection::new(
+                library::model::project::PortAddress::new(
+                    PortOwner::Node(source.id),
+                    SHAPE_OUTPUT_PORT,
+                ),
+                library::model::project::PortAddress::new(
+                    PortOwner::Node(applied.id),
+                    SHAPE_INPUT_PORT,
+                ),
+                0,
+            ),
+            ProjectConnection::new(
+                library::model::project::PortAddress::new(
+                    PortOwner::Node(applied.id),
+                    IMAGE_OUTPUT_PORT,
+                ),
+                library::model::project::PortAddress::new(
+                    PortOwner::Node(result.id),
+                    MERGE_IMAGES_PORT,
+                ),
+                3,
+            ),
+            ProjectConnection::new(
+                library::model::project::PortAddress::new(
+                    PortOwner::Node(applied.id),
+                    "property.opacity",
+                ),
+                library::model::project::PortAddress::new(
+                    PortOwner::Node(disconnected.id),
+                    "property.sigma_x",
+                ),
+                99,
+            ),
+        ];
+
+        assert!(reaches_result(
+            source.id,
+            FacadeOutputMode::Explicit(result.id),
+            &all_nodes,
+            &connections
+        ));
+        assert!(reaches_result(
+            applied.id,
+            FacadeOutputMode::Explicit(result.id),
+            &all_nodes,
+            &connections
+        ));
+        assert!(!reaches_result(
+            disconnected.id,
+            FacadeOutputMode::Explicit(result.id),
+            &all_nodes,
+            &connections
+        ));
+        let outgoing = connections
+            .iter()
+            .filter(|connection| {
+                connection.from.owner == PortOwner::Node(applied.id)
+                    && is_content_flow_connection(connection)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(outgoing.len(), 1, "scalar wires are not semantic branches");
+        let metadata = content_connection_metadata(outgoing[0]);
+        assert_eq!(metadata["connection_id"], serde_json::json!(outgoing[0].id));
+        assert_eq!(
+            metadata["from_owner"],
+            serde_json::json!(PortOwner::Node(applied.id))
+        );
+        assert_eq!(metadata["from_port"], IMAGE_OUTPUT_PORT);
+        assert_eq!(
+            metadata["to_owner"],
+            serde_json::json!(PortOwner::Node(result.id))
+        );
+        assert_eq!(metadata["to_port"], MERGE_IMAGES_PORT);
+        assert_eq!(metadata["order"], 3);
+        assert_eq!(
+            operation_state_label(true, true, false, true, &outgoing),
+            "Applied · order 3"
+        );
+        assert_eq!(
+            operation_state_label(true, true, false, false, &[]),
+            "Not applied"
+        );
+        assert_eq!(
+            operation_state_label(false, true, false, true, &outgoing),
+            "Unavailable"
+        );
+        assert_eq!(
+            operation_state_label(true, false, false, true, &outgoing),
+            "Disabled"
+        );
+        for owner_kind in [
+            FacadeOwnerKind::Composition,
+            FacadeOwnerKind::Track,
+            FacadeOwnerKind::Clip,
+        ] {
+            let output_mode = owner_kind.output_mode(None);
+            assert!(!reaches_result(
+                applied.id,
+                output_mode,
+                &all_nodes,
+                &connections
+            ));
+            assert!(!reaches_result(
+                result.id,
+                output_mode,
+                &all_nodes,
+                &connections
+            ));
+        }
+    }
+
+    #[test]
+    fn facade_output_mode_distinguishes_explicit_children_and_no_output() {
+        let result = Node::new("Composite", NodeContent::Merge);
+        let nodes = [result.clone()];
+
+        for owner_kind in [
+            FacadeOwnerKind::Composition,
+            FacadeOwnerKind::Track,
+            FacadeOwnerKind::Clip,
+        ] {
+            let output_mode = owner_kind.output_mode(Some(result.id));
+            assert_eq!(output_mode, FacadeOutputMode::Explicit(result.id));
+            assert_eq!(output_mode.qa_value(), "explicit");
+            assert_eq!(
+                facade_output_text(owner_kind, output_mode, &nodes),
+                "Result: Composite"
+            );
+            let metadata = facade_output_metadata(owner_kind, output_mode);
+            assert_eq!(metadata["owner_kind"], owner_kind.qa_value());
+            assert_eq!(metadata["output_mode"], "explicit");
+            assert_eq!(metadata["output_node_id"], serde_json::json!(result.id));
+            assert_eq!(metadata["explicit"], true);
+        }
+
+        let composition_mode = FacadeOwnerKind::Composition.output_mode(None);
+        assert_eq!(composition_mode, FacadeOutputMode::DerivedChildren);
+        assert_eq!(composition_mode.qa_value(), "derived_children");
+        assert_eq!(
+            facade_output_text(FacadeOwnerKind::Composition, composition_mode, &nodes,),
+            "Derived from ordered child Tracks"
+        );
+        let composition_metadata =
+            facade_output_metadata(FacadeOwnerKind::Composition, composition_mode);
+        assert_eq!(composition_metadata["output_mode"], "derived_children");
+        assert_eq!(
+            composition_metadata["output_node_id"],
+            serde_json::Value::Null
+        );
+        assert_eq!(composition_metadata["explicit"], false);
+
+        let track_mode = FacadeOwnerKind::Track.output_mode(None);
+        assert_eq!(track_mode, FacadeOutputMode::DerivedChildren);
+        assert_eq!(track_mode.qa_value(), "derived_children");
+        assert_eq!(
+            facade_output_text(FacadeOwnerKind::Track, track_mode, &nodes),
+            "Derived from ordered child Clips"
+        );
+        let track_metadata = facade_output_metadata(FacadeOwnerKind::Track, track_mode);
+        assert_eq!(track_metadata["owner_kind"], "track");
+        assert_eq!(track_metadata["output_mode"], "derived_children");
+
+        let clip_mode = FacadeOwnerKind::Clip.output_mode(None);
+        assert_eq!(clip_mode, FacadeOutputMode::NoOutput);
+        assert_eq!(clip_mode.qa_value(), "no_output");
+        assert_eq!(
+            facade_output_text(FacadeOwnerKind::Clip, clip_mode, &nodes),
+            "No output selected (NoOutput)"
+        );
+        let clip_metadata = facade_output_metadata(FacadeOwnerKind::Clip, clip_mode);
+        assert_eq!(clip_metadata["owner_kind"], "clip");
+        assert_eq!(clip_metadata["output_mode"], "no_output");
+        assert_eq!(clip_metadata["output_node_id"], serde_json::Value::Null);
+        assert_eq!(clip_metadata["explicit"], false);
     }
 
     #[test]
@@ -952,6 +2045,110 @@ mod tests {
     }
 
     #[test]
+    fn effector_descriptor_initializes_and_describes_transform_and_opacity_controls() {
+        let plugins = PluginManager::default();
+        for component_id in ["transform", "opacity"] {
+            let node = plugins
+                .create_effector_operation_node(component_id)
+                .unwrap();
+            let definitions = plugin_operation_property_definitions(&plugins, &node)
+                .expect("installed Effector descriptor");
+            assert_eq!(definitions.len(), node.properties.iter().count());
+            for definition in &definitions {
+                assert_eq!(
+                    node.properties
+                        .get(definition.name())
+                        .map(|property| property.evaluate_at(0.0)),
+                    Some(definition.default_value().clone()),
+                    "{component_id}.{} must be initialized by its descriptor factory",
+                    definition.name(),
+                );
+            }
+            let target = definitions
+                .iter()
+                .find(|definition| definition.name() == "target")
+                .expect("Effector target definition");
+            assert_eq!(
+                properties::property_definition_metadata(target),
+                serde_json::json!({
+                    "name": "target",
+                    "label": "Target",
+                    "default": "Block",
+                    "ui": {
+                        "kind": "dropdown",
+                        "options": ["Block", "Line", "Char"],
+                    },
+                })
+            );
+        }
+
+        let opacity = plugins.create_effector_operation_node("opacity").unwrap();
+        let definitions = plugin_operation_property_definitions(&plugins, &opacity).unwrap();
+        let mode = definitions
+            .iter()
+            .find(|definition| definition.name() == "mode")
+            .expect("Opacity mode definition");
+        assert_eq!(
+            properties::property_definition_metadata(mode),
+            serde_json::json!({
+                "name": "mode",
+                "label": "Mode",
+                "default": "Set",
+                "ui": {
+                    "kind": "dropdown",
+                    "options": ["Set", "Add", "Multiply"],
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn unknown_plugin_operation_roundtrips_and_falls_back_to_lossless_generic_controls() {
+        let plugins = PluginManager::default();
+        let mut node = plugins.create_effector_operation_node("opacity").unwrap();
+        let node_id = node.id;
+        let NodeContent::PluginOperation(operation) = &mut node.content else {
+            panic!("factory returned a PluginOperation")
+        };
+        operation.category = EFFECTOR_CATEGORY.to_string();
+        operation.component_id = "third.party.unavailable-opacity".to_string();
+        operation.operation = EFFECTOR_APPLY_OPERATION.to_string();
+        let expected_ports = operation.declared_ports.clone();
+        let expected_node = node.clone();
+
+        let mut project = Project::new("foreign plugin roundtrip");
+        project.add_node(node);
+        let encoded = serde_json::to_value(&project).unwrap();
+        let decoded: Project = serde_json::from_value(encoded).unwrap();
+        let restored = decoded
+            .get_node(node_id)
+            .expect("roundtripped operation Node");
+        assert_eq!(restored, &expected_node);
+        let NodeContent::PluginOperation(restored_operation) = &restored.content else {
+            panic!("roundtripped PluginOperation identity")
+        };
+        assert_eq!(restored_operation.declared_ports, expected_ports);
+        assert!(plugin_operation_property_definitions(&plugins, restored).is_none());
+        assert_eq!(
+            node_display_type(restored),
+            format!(
+                "Plugin Operation · {} / {}",
+                EFFECTOR_CATEGORY, EFFECTOR_APPLY_OPERATION
+            )
+        );
+        let fallback = inferred_property_definitions(&restored.properties, 0.0);
+        assert_eq!(fallback.len(), restored.properties.iter().count());
+        for property_name in ["opacity", "mode", "target"] {
+            assert!(
+                fallback
+                    .iter()
+                    .any(|definition| definition.name() == property_name),
+                "unknown plugin value {property_name} must remain generically inspectable"
+            );
+        }
+    }
+
+    #[test]
     fn node_and_inspector_timing_adapters_derive_from_the_same_clip_metadata() {
         let duration = Clip::timing_property_definition("duration").unwrap();
         let node = crate::ui::panels::node_editor::node_timing_drag_config(duration);
@@ -970,8 +2167,10 @@ mod tests {
         let stretch = Clip::timing_property_definition("time_stretch").unwrap();
         let node_stretch = crate::ui::panels::node_editor::node_timing_drag_config(stretch);
         assert_eq!(node_stretch.hard_min, Some(0.0));
-        assert!(stretch
-            .validate_value(&PropertyValue::Number(OrderedFloat(0.0)))
-            .is_ok());
+        assert!(
+            stretch
+                .validate_value(&PropertyValue::Number(OrderedFloat(0.0)))
+                .is_ok()
+        );
     }
 }

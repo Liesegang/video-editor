@@ -1,11 +1,11 @@
 use super::QA_PORT_ENV;
 use library::editor::ProjectService;
-use library::model::ensemble::{DecoratorInstance, EffectorInstance};
 use library::model::frame::color::Color;
 use library::model::project::{
-    PortAddress, PortOwner, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, TIME_PORT,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortAddress, PortOwner,
+    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
-use library::model::property::{Property, PropertyMap, PropertyValue, Vec2};
+use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{Clip, Composition, Node, NodeContent, Project, Track};
 use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
@@ -32,6 +32,7 @@ pub const E2E_BLUR_EFFECT_ID: Uuid = Uuid::from_u128(0x504);
 pub const E2E_TEXT_FILL_ID: Uuid = Uuid::from_u128(0x601);
 pub const E2E_SHAPE_FILL_ID: Uuid = Uuid::from_u128(0x602);
 pub const E2E_SHAPE_STROKE_ID: Uuid = Uuid::from_u128(0x603);
+pub const E2E_SHAPE_MERGE_ID: Uuid = Uuid::from_u128(0x604);
 
 #[derive(Clone, Debug)]
 pub struct FixtureInfo {
@@ -85,40 +86,52 @@ fn install_named(
     composition.id = E2E_COMPOSITION_ID;
     composition.track_ids = vec![E2E_TRACK_A_ID, E2E_TRACK_B_ID];
     composition.ui_position = [0.0, 0.0];
-    composition.ui_size = [1320.0, 1000.0];
+    composition.ui_size = [3300.0, 1500.0];
 
     let mut track_a = Track::new("QA Track A");
     track_a.id = E2E_TRACK_A_ID;
     track_a.clip_ids = vec![E2E_CLIP_A1_ID, E2E_CLIP_A2_ID];
-    track_a.ui_position = [170.0, 130.0];
-    track_a.ui_size = [980.0, 390.0];
+    track_a.ui_position = [120.0, 100.0];
+    track_a.ui_size = [3050.0, 600.0];
 
     let mut track_b = Track::new("QA Track B");
     track_b.id = E2E_TRACK_B_ID;
     track_b.clip_ids = vec![E2E_CLIP_B1_ID];
-    track_b.ui_position = [170.0, 590.0];
-    track_b.ui_size = [980.0, 310.0];
+    track_b.ui_position = [120.0, 780.0];
+    track_b.ui_size = [1800.0, 520.0];
 
     let mut clip_a1 = Clip::new("QA Clip A1", 1.0, 4.0);
     clip_a1.id = E2E_CLIP_A1_ID;
     clip_a1.node_ids = vec![E2E_SOLID_ID, E2E_MERGE_ID];
     clip_a1.output_node_id = Some(E2E_MERGE_ID);
-    clip_a1.ui_position = [300.0, 215.0];
-    clip_a1.ui_size = [700.0, 250.0];
+    clip_a1.ui_position = [2250.0, 180.0];
+    clip_a1.ui_size = [750.0, 380.0];
 
     let mut clip_a2 = Clip::new("QA Clip A2", 1.0, 8.0);
     clip_a2.id = E2E_CLIP_A2_ID;
-    clip_a2.node_ids = vec![E2E_AUX_A_ID];
-    clip_a2.output_node_id = Some(E2E_AUX_A_ID);
-    clip_a2.ui_position = [770.0, 215.0];
-    clip_a2.ui_size = [300.0, 250.0];
+    clip_a2.node_ids = vec![
+        E2E_AUX_A_ID,
+        E2E_EFFECTOR_TRANSFORM_ID,
+        E2E_EFFECTOR_OPACITY_ID,
+        E2E_DECORATOR_BACKPLATE_ID,
+        E2E_TEXT_FILL_ID,
+        E2E_BLUR_EFFECT_ID,
+    ];
+    clip_a2.output_node_id = Some(E2E_BLUR_EFFECT_ID);
+    clip_a2.ui_position = [250.0, 180.0];
+    clip_a2.ui_size = [1900.0, 380.0];
 
     let mut clip_b1 = Clip::new("QA Clip B1", 1.0, 8.0);
     clip_b1.id = E2E_CLIP_B1_ID;
-    clip_b1.node_ids = vec![E2E_AUX_B_ID];
-    clip_b1.output_node_id = Some(E2E_AUX_B_ID);
-    clip_b1.ui_position = [300.0, 665.0];
-    clip_b1.ui_size = [600.0, 220.0];
+    clip_b1.node_ids = vec![
+        E2E_AUX_B_ID,
+        E2E_SHAPE_FILL_ID,
+        E2E_SHAPE_STROKE_ID,
+        E2E_SHAPE_MERGE_ID,
+    ];
+    clip_b1.output_node_id = Some(E2E_SHAPE_MERGE_ID);
+    clip_b1.ui_position = [250.0, 860.0];
+    clip_b1.ui_size = [1600.0, 380.0];
 
     let mut solid = solid_node(
         &factory,
@@ -130,26 +143,136 @@ fn install_named(
             b: 40,
             a: 255,
         },
-        [480.0, 310.0],
+        [2350.0, 300.0],
     )?;
     solid.properties.set(
         "opacity".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
     );
-    let merge = Node {
-        id: E2E_MERGE_ID,
-        name: "QA Merge".to_string(),
-        content: NodeContent::Merge,
-        blend_mode: Default::default(),
-        properties: Default::default(),
-        styles: Vec::new(),
-        effects: Vec::new(),
-        effectors: Vec::new(),
-        decorators: Vec::new(),
-        ui_position: [760.0, 310.0],
-    };
-    let text = text_node(&factory, E2E_AUX_A_ID, [860.0, 310.0])?;
-    let shape = shape_node(&factory, E2E_AUX_B_ID, [500.0, 760.0])?;
+    let mut merge = Node::new("QA Merge", NodeContent::Merge);
+    merge.id = E2E_MERGE_ID;
+    merge.ui_position = [2670.0, 300.0];
+
+    let text = text_node(&factory, E2E_AUX_A_ID, [350.0, 300.0])?;
+    let mut transform = operation_node(
+        plugin_manager.create_effector_operation_node("transform"),
+        E2E_EFFECTOR_TRANSFORM_ID,
+        "QA Transform",
+        [650.0, 300.0],
+    )?;
+    for (name, value) in [
+        ("tx", 0.0),
+        ("ty", 0.0),
+        ("scale_x", 1.0),
+        ("scale_y", 1.0),
+        ("rotation", 0.0),
+    ] {
+        transform.properties.set(
+            name.to_string(),
+            Property::constant(PropertyValue::Number(OrderedFloat(value))),
+        );
+    }
+    let mut opacity = operation_node(
+        plugin_manager.create_effector_operation_node("opacity"),
+        E2E_EFFECTOR_OPACITY_ID,
+        "QA Opacity",
+        [950.0, 300.0],
+    )?;
+    opacity.properties.set(
+        "opacity".to_string(),
+        Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
+    );
+    let mut backplate = operation_node(
+        plugin_manager.create_decorator_operation_node("backplate"),
+        E2E_DECORATOR_BACKPLATE_ID,
+        "QA Backplate",
+        [1250.0, 300.0],
+    )?;
+    backplate.properties.set(
+        "target".to_string(),
+        Property::constant(PropertyValue::String("Block".to_string())),
+    );
+    backplate.properties.set(
+        "shape".to_string(),
+        Property::constant(PropertyValue::String("RoundRect".to_string())),
+    );
+    backplate.properties.set(
+        "color".to_string(),
+        Property::constant(PropertyValue::Color(Color {
+            r: 20,
+            g: 20,
+            b: 20,
+            a: 210,
+        })),
+    );
+    backplate.properties.set(
+        "padding".to_string(),
+        Property::constant(PropertyValue::Number(OrderedFloat(8.0))),
+    );
+    backplate.properties.set(
+        "radius".to_string(),
+        Property::constant(PropertyValue::Number(OrderedFloat(6.0))),
+    );
+    let mut text_fill = operation_node(
+        plugin_manager.create_style_operation_node("fill"),
+        E2E_TEXT_FILL_ID,
+        "QA Text Fill",
+        [1550.0, 300.0],
+    )?;
+    text_fill.properties.set(
+        "color".to_string(),
+        Property::constant(PropertyValue::Color(Color {
+            r: 250,
+            g: 245,
+            b: 90,
+            a: 255,
+        })),
+    );
+    let blur = operation_node(
+        plugin_manager.create_effect_operation_node("blur"),
+        E2E_BLUR_EFFECT_ID,
+        "QA Blur",
+        [1850.0, 300.0],
+    )?;
+
+    let shape = shape_node(&factory, E2E_AUX_B_ID, [350.0, 980.0])?;
+    let mut shape_fill = operation_node(
+        plugin_manager.create_style_operation_node("fill"),
+        E2E_SHAPE_FILL_ID,
+        "QA Shape Fill",
+        [680.0, 900.0],
+    )?;
+    shape_fill.properties.set(
+        "color".to_string(),
+        Property::constant(PropertyValue::Color(Color {
+            r: 54,
+            g: 209,
+            b: 122,
+            a: 255,
+        })),
+    );
+    let mut shape_stroke = operation_node(
+        plugin_manager.create_style_operation_node("stroke"),
+        E2E_SHAPE_STROKE_ID,
+        "QA Shape Stroke",
+        [680.0, 1060.0],
+    )?;
+    shape_stroke.properties.set(
+        "color".to_string(),
+        Property::constant(PropertyValue::Color(Color {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        })),
+    );
+    shape_stroke.properties.set(
+        "width".to_string(),
+        Property::constant(PropertyValue::Number(OrderedFloat(4.0))),
+    );
+    let mut shape_merge = Node::new("QA Shape Merge", NodeContent::Merge);
+    shape_merge.id = E2E_SHAPE_MERGE_ID;
+    shape_merge.ui_position = [1050.0, 980.0];
 
     project.add_track(track_a);
     project.add_track(track_b);
@@ -159,22 +282,111 @@ fn install_named(
     project.add_node(solid);
     project.add_node(merge);
     project.add_node(text);
+    project.add_node(transform);
+    project.add_node(opacity);
+    project.add_node(backplate);
+    project.add_node(text_fill);
+    project.add_node(blur);
     project.add_node(shape);
+    project.add_node(shape_fill);
+    project.add_node(shape_stroke);
+    project.add_node(shape_merge);
     project.add_composition(composition);
 
-    for source in [E2E_SOLID_ID, E2E_AUX_A_ID, E2E_AUX_B_ID] {
+    for (source_owner, source_port, target_node, target_port) in [
+        (
+            PortOwner::Node(E2E_AUX_A_ID),
+            SHAPE_OUTPUT_PORT,
+            E2E_EFFECTOR_TRANSFORM_ID,
+            SHAPE_INPUT_PORT,
+        ),
+        (
+            PortOwner::Node(E2E_EFFECTOR_TRANSFORM_ID),
+            SHAPE_OUTPUT_PORT,
+            E2E_EFFECTOR_OPACITY_ID,
+            SHAPE_INPUT_PORT,
+        ),
+        (
+            PortOwner::Node(E2E_EFFECTOR_OPACITY_ID),
+            SHAPE_OUTPUT_PORT,
+            E2E_DECORATOR_BACKPLATE_ID,
+            SHAPE_INPUT_PORT,
+        ),
+        (
+            PortOwner::Node(E2E_DECORATOR_BACKPLATE_ID),
+            SHAPE_OUTPUT_PORT,
+            E2E_TEXT_FILL_ID,
+            SHAPE_INPUT_PORT,
+        ),
+        (
+            PortOwner::Node(E2E_TEXT_FILL_ID),
+            IMAGE_OUTPUT_PORT,
+            E2E_BLUR_EFFECT_ID,
+            IMAGE_INPUT_PORT,
+        ),
+        (
+            PortOwner::Node(E2E_AUX_B_ID),
+            SHAPE_OUTPUT_PORT,
+            E2E_SHAPE_FILL_ID,
+            SHAPE_INPUT_PORT,
+        ),
+        (
+            PortOwner::Node(E2E_AUX_B_ID),
+            SHAPE_OUTPUT_PORT,
+            E2E_SHAPE_STROKE_ID,
+            SHAPE_INPUT_PORT,
+        ),
+        (
+            PortOwner::Node(E2E_SHAPE_FILL_ID),
+            IMAGE_OUTPUT_PORT,
+            E2E_SHAPE_MERGE_ID,
+            MERGE_IMAGES_PORT,
+        ),
+        (
+            PortOwner::Node(E2E_SHAPE_STROKE_ID),
+            IMAGE_OUTPUT_PORT,
+            E2E_SHAPE_MERGE_ID,
+            MERGE_IMAGES_PORT,
+        ),
+        (
+            PortOwner::Node(E2E_SOLID_ID),
+            IMAGE_OUTPUT_PORT,
+            E2E_MERGE_ID,
+            MERGE_IMAGES_PORT,
+        ),
+        (
+            PortOwner::Clip(E2E_CLIP_A2_ID),
+            IMAGE_OUTPUT_PORT,
+            E2E_MERGE_ID,
+            MERGE_IMAGES_PORT,
+        ),
+        (
+            PortOwner::Clip(E2E_CLIP_B1_ID),
+            IMAGE_OUTPUT_PORT,
+            E2E_MERGE_ID,
+            MERGE_IMAGES_PORT,
+        ),
+    ] {
         project
             .connect_ports(
-                PortAddress::new(PortOwner::Node(source), IMAGE_OUTPUT_PORT),
-                PortAddress::new(PortOwner::Node(E2E_MERGE_ID), MERGE_IMAGES_PORT),
+                PortAddress::new(source_owner, source_port),
+                PortAddress::new(PortOwner::Node(target_node), target_port),
             )
-            .map_err(|error| format!("cannot connect QA image graph: {error}"))?;
+            .map_err(|error| format!("cannot connect QA content graph: {error}"))?;
     }
     for (container, node) in [
         (E2E_CLIP_A1_ID, E2E_SOLID_ID),
         (E2E_CLIP_A1_ID, E2E_MERGE_ID),
         (E2E_CLIP_A2_ID, E2E_AUX_A_ID),
+        (E2E_CLIP_A2_ID, E2E_EFFECTOR_TRANSFORM_ID),
+        (E2E_CLIP_A2_ID, E2E_EFFECTOR_OPACITY_ID),
+        (E2E_CLIP_A2_ID, E2E_DECORATOR_BACKPLATE_ID),
+        (E2E_CLIP_A2_ID, E2E_TEXT_FILL_ID),
+        (E2E_CLIP_A2_ID, E2E_BLUR_EFFECT_ID),
         (E2E_CLIP_B1_ID, E2E_AUX_B_ID),
+        (E2E_CLIP_B1_ID, E2E_SHAPE_FILL_ID),
+        (E2E_CLIP_B1_ID, E2E_SHAPE_STROKE_ID),
+        (E2E_CLIP_B1_ID, E2E_SHAPE_MERGE_ID),
     ] {
         project
             .connect_ports(
@@ -182,6 +394,18 @@ fn install_named(
                 PortAddress::new(PortOwner::Node(node), TIME_PORT),
             )
             .map_err(|error| format!("cannot connect QA time metadata: {error}"))?;
+    }
+
+    let connection_errors = project.validate_connections();
+    if !connection_errors.is_empty() {
+        return Err(format!(
+            "QA fixture has invalid graph connections: {}",
+            connection_errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
     }
 
     drop(project);
@@ -229,86 +453,6 @@ fn text_node(factory: &ProjectService, id: Uuid, ui_position: [f32; 2]) -> Resul
         "size".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(64.0))),
     );
-    let fill = node
-        .styles
-        .iter_mut()
-        .find(|style| style.style_type == "fill")
-        .ok_or_else(|| "QA Text factory did not materialize a fill style".to_string())?;
-    fill.id = E2E_TEXT_FILL_ID;
-    fill.properties.set(
-        "color".to_string(),
-        Property::constant(PropertyValue::Color(Color {
-            r: 250,
-            g: 245,
-            b: 90,
-            a: 255,
-        })),
-    );
-
-    let plugin_manager = factory.get_plugin_manager();
-    let mut transform_properties =
-        PropertyMap::from_definitions(&plugin_manager.get_effector_properties("transform"));
-    for (name, value) in [
-        ("tx", 0.0),
-        ("ty", 0.0),
-        ("scale_x", 1.0),
-        ("scale_y", 1.0),
-        ("rotation", 0.0),
-    ] {
-        transform_properties.set(
-            name.to_string(),
-            Property::constant(PropertyValue::Number(OrderedFloat(value))),
-        );
-    }
-    let mut transform = EffectorInstance::new("transform", transform_properties);
-    transform.id = E2E_EFFECTOR_TRANSFORM_ID;
-
-    let mut opacity_properties =
-        PropertyMap::from_definitions(&plugin_manager.get_effector_properties("opacity"));
-    opacity_properties.set(
-        "opacity".to_string(),
-        Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
-    );
-    let mut opacity = EffectorInstance::new("opacity", opacity_properties);
-    opacity.id = E2E_EFFECTOR_OPACITY_ID;
-    node.effectors = vec![transform, opacity];
-
-    let mut decorator_properties =
-        PropertyMap::from_definitions(&plugin_manager.get_decorator_properties("backplate"));
-    decorator_properties.set(
-        "target".to_string(),
-        Property::constant(PropertyValue::String("Block".to_string())),
-    );
-    decorator_properties.set(
-        "shape".to_string(),
-        Property::constant(PropertyValue::String("RoundRect".to_string())),
-    );
-    decorator_properties.set(
-        "color".to_string(),
-        Property::constant(PropertyValue::Color(Color {
-            r: 20,
-            g: 20,
-            b: 20,
-            a: 210,
-        })),
-    );
-    decorator_properties.set(
-        "padding".to_string(),
-        Property::constant(PropertyValue::Number(OrderedFloat(8.0))),
-    );
-    decorator_properties.set(
-        "radius".to_string(),
-        Property::constant(PropertyValue::Number(OrderedFloat(6.0))),
-    );
-    let mut backplate = DecoratorInstance::new("backplate", decorator_properties);
-    backplate.id = E2E_DECORATOR_BACKPLATE_ID;
-    node.decorators = vec![backplate];
-
-    let mut blur = plugin_manager
-        .get_default_effect_config("blur")
-        .ok_or_else(|| "QA fixture could not materialize the blur Effect defaults".to_string())?;
-    blur.id = E2E_BLUR_EFFECT_ID;
-    node.effects = vec![blur];
     Ok(node)
 }
 
@@ -324,40 +468,19 @@ fn shape_node(factory: &ProjectService, id: Uuid, ui_position: [f32; 2]) -> Resu
         "opacity".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
     );
-    let fill = node
-        .styles
-        .iter_mut()
-        .find(|style| style.style_type == "fill")
-        .ok_or_else(|| "QA Shape factory did not materialize a fill style".to_string())?;
-    fill.id = E2E_SHAPE_FILL_ID;
-    fill.properties.set(
-        "color".to_string(),
-        Property::constant(PropertyValue::Color(Color {
-            r: 54,
-            g: 209,
-            b: 122,
-            a: 255,
-        })),
-    );
-    let stroke = node
-        .styles
-        .iter_mut()
-        .find(|style| style.style_type == "stroke")
-        .ok_or_else(|| "QA Shape factory did not materialize a stroke style".to_string())?;
-    stroke.id = E2E_SHAPE_STROKE_ID;
-    stroke.properties.set(
-        "color".to_string(),
-        Property::constant(PropertyValue::Color(Color {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 255,
-        })),
-    );
-    stroke.properties.set(
-        "width".to_string(),
-        Property::constant(PropertyValue::Number(OrderedFloat(4.0))),
-    );
+    Ok(node)
+}
+
+fn operation_node<E: std::fmt::Display>(
+    result: Result<Node, E>,
+    id: Uuid,
+    name: &str,
+    ui_position: [f32; 2],
+) -> Result<Node, String> {
+    let mut node = result.map_err(|error| format!("cannot create QA {name}: {error}"))?;
+    node.id = id;
+    node.name = name.to_string();
+    node.ui_position = ui_position;
     Ok(node)
 }
 
@@ -365,63 +488,251 @@ fn shape_node(factory: &ProjectService, id: Uuid, ui_position: [f32; 2]) -> Resu
 mod tests {
     use super::*;
 
-    #[test]
-    fn fixture_populates_the_supplied_shared_project_once() {
+    fn installed_fixture() -> (Arc<RwLock<Project>>, Arc<PluginManager>, FixtureInfo) {
         let project = Arc::new(RwLock::new(Project::new("empty")));
         let plugin_manager = Arc::new(PluginManager::default());
         let info = install_named(&project, NODE_EDITOR_E2E_FIXTURE, &plugin_manager).unwrap();
+        (project, plugin_manager, info)
+    }
+
+    fn assert_connection(
+        project: &Project,
+        from_owner: PortOwner,
+        from_port: &str,
+        to_owner: PortOwner,
+        to_port: &str,
+        order: i64,
+    ) {
+        let matching = project
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.from == PortAddress::new(from_owner, from_port)
+                    && connection.to == PortAddress::new(to_owner, to_port)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "missing or duplicate fixture wire");
+        assert_eq!(matching[0].order, order);
+    }
+
+    fn assert_operation(
+        project: &Project,
+        plugin_manager: &PluginManager,
+        node_id: Uuid,
+        category: &str,
+        component_id: &str,
+    ) {
+        let node = project.get_node(node_id).unwrap();
+        let NodeContent::PluginOperation(operation) = &node.content else {
+            panic!("{node_id} must be a PluginOperation Node");
+        };
+        assert_eq!(operation.category, category);
+        assert_eq!(operation.component_id, component_id);
+        let descriptor = plugin_manager
+            .operation_descriptor(
+                &operation.category,
+                &operation.component_id,
+                &operation.operation,
+            )
+            .unwrap();
+        assert_eq!(
+            operation.declared_ports.as_slice(),
+            descriptor.declared_ports()
+        );
+        for definition in descriptor.properties() {
+            assert!(
+                node.properties.get(definition.name()).is_some(),
+                "{} is missing {}",
+                node.name,
+                definition.name()
+            );
+        }
+    }
+
+    #[test]
+    fn fixture_uses_explicit_operation_nodes_and_output_bindings() {
+        let (project, plugin_manager, info) = installed_fixture();
         let read = project.read().unwrap();
         assert_eq!(info.composition_id, E2E_COMPOSITION_ID);
-        assert_eq!(read.compositions[0].track_ids, info.expanded_tracks);
-        assert_eq!(read.get_clip(E2E_CLIP_A1_ID).unwrap().node_ids.len(), 2);
+        let composition = &read.compositions[0];
+        assert_eq!(composition.track_ids, info.expanded_tracks);
+        assert!(composition.node_ids.is_empty());
+        assert!(composition.output_node_id.is_none());
+        assert_eq!(
+            read.get_track(E2E_TRACK_A_ID).unwrap().clip_ids,
+            vec![E2E_CLIP_A1_ID, E2E_CLIP_A2_ID]
+        );
+        assert_eq!(
+            read.get_track(E2E_TRACK_B_ID).unwrap().clip_ids,
+            vec![E2E_CLIP_B1_ID]
+        );
+
+        let clip_a1 = read.get_clip(E2E_CLIP_A1_ID).unwrap();
+        assert_eq!(clip_a1.node_ids, vec![E2E_SOLID_ID, E2E_MERGE_ID]);
+        assert_eq!(clip_a1.output_node_id, Some(E2E_MERGE_ID));
+        let clip_a2 = read.get_clip(E2E_CLIP_A2_ID).unwrap();
+        assert_eq!(
+            clip_a2.node_ids,
+            vec![
+                E2E_AUX_A_ID,
+                E2E_EFFECTOR_TRANSFORM_ID,
+                E2E_EFFECTOR_OPACITY_ID,
+                E2E_DECORATOR_BACKPLATE_ID,
+                E2E_TEXT_FILL_ID,
+                E2E_BLUR_EFFECT_ID,
+            ]
+        );
+        assert_eq!(clip_a2.output_node_id, Some(E2E_BLUR_EFFECT_ID));
+        let clip_b1 = read.get_clip(E2E_CLIP_B1_ID).unwrap();
+        assert_eq!(
+            clip_b1.node_ids,
+            vec![
+                E2E_AUX_B_ID,
+                E2E_SHAPE_FILL_ID,
+                E2E_SHAPE_STROKE_ID,
+                E2E_SHAPE_MERGE_ID,
+            ]
+        );
+        assert_eq!(clip_b1.output_node_id, Some(E2E_SHAPE_MERGE_ID));
+
         let text = read.get_node(E2E_AUX_A_ID).unwrap();
         assert!(matches!(
             text.content,
             NodeContent::Generator(library::model::GeneratorContent::Text)
         ));
-        assert_eq!(text.effectors.len(), 2);
-        assert_eq!(text.decorators.len(), 1);
-        assert_eq!(text.effects.len(), 1);
-        assert_eq!(text.effects[0].id, E2E_BLUR_EFFECT_ID);
-        assert_eq!(text.styles.len(), 1);
-        for (kind, properties, definitions) in [
-            (
-                "transform Effector",
-                &text.effectors[0].properties,
-                plugin_manager.get_effector_properties("transform"),
-            ),
-            (
-                "opacity Effector",
-                &text.effectors[1].properties,
-                plugin_manager.get_effector_properties("opacity"),
-            ),
-            (
-                "backplate Decorator",
-                &text.decorators[0].properties,
-                plugin_manager.get_decorator_properties("backplate"),
-            ),
-            (
-                "blur Effect",
-                &text.effects[0].properties,
-                plugin_manager.get_effect_properties("blur"),
-            ),
-        ] {
-            for definition in definitions {
-                assert!(
-                    properties.get(definition.name()).is_some(),
-                    "{kind} is missing {}",
-                    definition.name()
-                );
-            }
-        }
         assert!(matches!(
             read.get_node(E2E_AUX_B_ID).unwrap().content,
             NodeContent::Generator(library::model::GeneratorContent::Shape)
         ));
-        assert_eq!(read.get_node(E2E_AUX_B_ID).unwrap().styles.len(), 2);
-        assert_eq!(read.connections.len(), 7);
+
+        for (node_id, category, component_id) in [
+            (E2E_EFFECTOR_TRANSFORM_ID, "effector", "transform"),
+            (E2E_EFFECTOR_OPACITY_ID, "effector", "opacity"),
+            (E2E_DECORATOR_BACKPLATE_ID, "decorator", "backplate"),
+            (E2E_BLUR_EFFECT_ID, "effect", "blur"),
+            (E2E_TEXT_FILL_ID, "style", "fill"),
+            (E2E_SHAPE_FILL_ID, "style", "fill"),
+            (E2E_SHAPE_STROKE_ID, "style", "stroke"),
+        ] {
+            assert_operation(&read, &plugin_manager, node_id, category, component_id);
+        }
+
+        assert_eq!(read.nodes.len(), 12);
+        for node in read.nodes.values() {
+            assert!(node.styles.is_empty(), "{} has embedded Styles", node.name);
+            assert!(
+                node.effectors.is_empty(),
+                "{} has embedded Effectors",
+                node.name
+            );
+            assert!(
+                node.decorators.is_empty(),
+                "{} has embedded Decorators",
+                node.name
+            );
+            assert!(
+                node.effects.is_empty(),
+                "{} has embedded Effects",
+                node.name
+            );
+        }
+        for composition in &read.compositions {
+            assert!(composition.effects.is_empty());
+        }
+        for track in read.tracks.values() {
+            assert!(track.effects.is_empty());
+            assert!(track.output_node_id.is_none());
+            assert!(track.node_ids.is_empty());
+        }
+        for clip in read.clips.values() {
+            assert!(clip.effects.is_empty());
+        }
         assert!(read.validate_connections().is_empty());
+        assert!(read.validate_containment().is_empty());
         drop(read);
         assert!(install_named(&project, NODE_EDITOR_E2E_FIXTURE, &plugin_manager).is_err());
+    }
+
+    #[test]
+    fn fixture_wires_shape_and_image_flow_with_stable_merge_order() {
+        let (project, _plugin_manager, _info) = installed_fixture();
+        let read = project.read().unwrap();
+
+        for (from_node, to_node) in [
+            (E2E_AUX_A_ID, E2E_EFFECTOR_TRANSFORM_ID),
+            (E2E_EFFECTOR_TRANSFORM_ID, E2E_EFFECTOR_OPACITY_ID),
+            (E2E_EFFECTOR_OPACITY_ID, E2E_DECORATOR_BACKPLATE_ID),
+            (E2E_DECORATOR_BACKPLATE_ID, E2E_TEXT_FILL_ID),
+            (E2E_AUX_B_ID, E2E_SHAPE_FILL_ID),
+            (E2E_AUX_B_ID, E2E_SHAPE_STROKE_ID),
+        ] {
+            assert_connection(
+                &read,
+                PortOwner::Node(from_node),
+                SHAPE_OUTPUT_PORT,
+                PortOwner::Node(to_node),
+                SHAPE_INPUT_PORT,
+                0,
+            );
+        }
+        assert_connection(
+            &read,
+            PortOwner::Node(E2E_TEXT_FILL_ID),
+            IMAGE_OUTPUT_PORT,
+            PortOwner::Node(E2E_BLUR_EFFECT_ID),
+            IMAGE_INPUT_PORT,
+            0,
+        );
+        for (source_node, order) in [(E2E_SHAPE_FILL_ID, 0), (E2E_SHAPE_STROKE_ID, 1)] {
+            assert_connection(
+                &read,
+                PortOwner::Node(source_node),
+                IMAGE_OUTPUT_PORT,
+                PortOwner::Node(E2E_SHAPE_MERGE_ID),
+                MERGE_IMAGES_PORT,
+                order,
+            );
+        }
+        for (source_owner, order) in [
+            (PortOwner::Node(E2E_SOLID_ID), 0),
+            (PortOwner::Clip(E2E_CLIP_A2_ID), 1),
+            (PortOwner::Clip(E2E_CLIP_B1_ID), 2),
+        ] {
+            assert_connection(
+                &read,
+                source_owner,
+                IMAGE_OUTPUT_PORT,
+                PortOwner::Node(E2E_MERGE_ID),
+                MERGE_IMAGES_PORT,
+                order,
+            );
+        }
+
+        for (clip_id, node_id) in [
+            (E2E_CLIP_A1_ID, E2E_SOLID_ID),
+            (E2E_CLIP_A1_ID, E2E_MERGE_ID),
+            (E2E_CLIP_A2_ID, E2E_AUX_A_ID),
+            (E2E_CLIP_A2_ID, E2E_EFFECTOR_TRANSFORM_ID),
+            (E2E_CLIP_A2_ID, E2E_EFFECTOR_OPACITY_ID),
+            (E2E_CLIP_A2_ID, E2E_DECORATOR_BACKPLATE_ID),
+            (E2E_CLIP_A2_ID, E2E_TEXT_FILL_ID),
+            (E2E_CLIP_A2_ID, E2E_BLUR_EFFECT_ID),
+            (E2E_CLIP_B1_ID, E2E_AUX_B_ID),
+            (E2E_CLIP_B1_ID, E2E_SHAPE_FILL_ID),
+            (E2E_CLIP_B1_ID, E2E_SHAPE_STROKE_ID),
+            (E2E_CLIP_B1_ID, E2E_SHAPE_MERGE_ID),
+        ] {
+            assert_connection(
+                &read,
+                PortOwner::Clip(clip_id),
+                TIME_PORT,
+                PortOwner::Node(node_id),
+                TIME_PORT,
+                0,
+            );
+        }
+
+        assert_eq!(read.connections.len(), 24);
+        assert!(read.validate_connections().is_empty());
     }
 }

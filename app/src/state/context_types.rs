@@ -489,6 +489,11 @@ pub struct NodeEditorState {
     pub pending_navigation: Option<Uuid>,
     #[serde(skip)]
     pub layout_changed_during_drag: bool,
+    /// Nodes whose Snarl positions changed during the current pointer drag.
+    /// Membership is resolved once, at pointer release, from the final drop
+    /// position so geometry and containment share one history transaction.
+    #[serde(skip)]
+    pub moved_node_ids: std::collections::HashSet<Uuid>,
     /// Compositions whose legacy/fixture layout has already received its one
     /// automatic repair. Manual drags must remain exactly where the user left
     /// them on subsequent frames.
