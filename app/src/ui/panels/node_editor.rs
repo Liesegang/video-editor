@@ -2,8 +2,8 @@ use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use crate::state::context_types::{
     ContainerResizeEdge, ContainerResizeState, ContextMenuState, NodeEditorPendingEdit,
-    NodeEditorState, NodeEditorWireContextMenu, NodeEditorWireDragKind, NodeEditorWireGesture,
-    NodeEditorWireKnifeGesture,
+    NodeEditorNormalConnectGesture, NodeEditorState, NodeEditorWireContextMenu,
+    NodeEditorWireDragKind, NodeEditorWireGesture, NodeEditorWireKnifeGesture,
 };
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 use crate::ui::widgets::searchable_context_menu::{show_searchable_items_with_qa, SearchableItem};
@@ -2859,11 +2859,18 @@ fn rendered_normal_port_at_position(
     ports: &HashMap<RenderedPortKey, egui::Rect>,
     position: egui::Pos2,
     canvas_clip: egui::Rect,
-) -> bool {
-    canvas_clip.contains(position)
-        && ports
-            .values()
-            .any(|rect| rect.is_positive() && rect.contains(position))
+) -> Option<RenderedPortKey> {
+    canvas_clip.contains(position).then_some(())?;
+    ports
+        .iter()
+        .filter(|(_, rect)| rect.is_positive() && rect.contains(position))
+        .min_by(|left, right| {
+            left.1
+                .center()
+                .distance(position)
+                .total_cmp(&right.1.center().distance(position))
+        })
+        .map(|(key, _)| key.clone())
 }
 
 struct WireInteractionFrame<'a> {
@@ -3042,6 +3049,45 @@ fn paint_wire_interaction(
     ));
 }
 
+fn paint_normal_connect_interaction(
+    ui: &egui::Ui,
+    gesture: &NodeEditorNormalConnectGesture,
+    canvas_clip: egui::Rect,
+) {
+    let points = [
+        gesture.start,
+        gesture.start + egui::vec2(72.0, 0.0),
+        gesture.current - egui::vec2(72.0, 0.0),
+        gesture.current,
+    ];
+    let painter = ui
+        .ctx()
+        .layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("node_editor_normal_connect"),
+        ))
+        .with_clip_rect(canvas_clip);
+    painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+        points,
+        false,
+        Color32::TRANSPARENT,
+        egui::Stroke::new(3.0, Color32::from_rgb(255, 196, 72)),
+    ));
+    crate::qa::register_component_with_metadata(
+        "node_editor.normal_connect_gesture",
+        "node_editor_normal_connect_gesture",
+        egui::Rect::from_points(&points).expand(6.0),
+        true,
+        Some(serde_json::json!({
+            "action": "fan_out",
+            "from_owner": qa_container_key(gesture.from.owner),
+            "from_port": gesture.from.port,
+            "start": {"x": gesture.start.x, "y": gesture.start.y},
+            "current": {"x": gesture.current.x, "y": gesture.current.y},
+        })),
+    );
+}
+
 fn wire_interactions(
     ui: &mut egui::Ui,
     state: &mut NodeEditorState,
@@ -3066,15 +3112,68 @@ fn wire_interactions(
         state.wire_gesture = None;
     }
 
-    let (primary_pressed, primary_down, pointer) = ui.input(|input| {
-        (
-            input.pointer.primary_pressed(),
-            input.pointer.primary_down(),
-            input.pointer.interact_pos(),
-        )
-    });
-    if state.normal_wire_drag_active {
+    let (primary_pressed, primary_down, primary_released, pointer, escape_pressed) =
+        ui.input(|input| {
+            (
+                input.pointer.primary_pressed(),
+                input.pointer.primary_down(),
+                input.pointer.primary_released(),
+                input.pointer.interact_pos(),
+                input.key_pressed(egui::Key::Escape),
+            )
+        });
+    if state.normal_connect_cancel_pending_release {
         if !primary_down {
+            state.normal_connect_cancel_pending_release = false;
+        }
+        return Vec::new();
+    }
+    if let (Some(position), Some(gesture)) = (pointer, state.normal_connect_gesture.as_mut()) {
+        gesture.current = position;
+    }
+    if state.normal_connect_gesture.is_some() {
+        if primary_down && !escape_pressed {
+            if let Some(gesture) = state.normal_connect_gesture.as_ref() {
+                paint_normal_connect_interaction(ui, gesture, frame.canvas_clip);
+            }
+            ui.ctx().request_repaint();
+            return Vec::new();
+        }
+
+        let Some(gesture) = state.normal_connect_gesture.take() else {
+            return Vec::new();
+        };
+        if escape_pressed {
+            state.normal_connect_cancel_pending_release = primary_down;
+            return Vec::new();
+        }
+        if !primary_released
+            || gesture.current.distance(gesture.start) < WIRE_DRAG_THRESHOLD
+            || !frame
+                .project
+                .connections
+                .iter()
+                .any(|connection| connection.from == gesture.from)
+        {
+            return Vec::new();
+        }
+        let target = frame.rendered_ports.lock().ok().and_then(|ports| {
+            rendered_port_at_position(
+                &ports,
+                PortDirection::Input,
+                gesture.current,
+                frame.canvas_clip,
+            )
+        });
+        return target.map_or_else(Vec::new, |to| {
+            vec![QueuedNodeEdit::Atomic(NodeEdit::Connect {
+                from: gesture.from,
+                to,
+            })]
+        });
+    }
+    if state.normal_wire_drag_active {
+        if escape_pressed || !primary_down {
             state.normal_wire_drag_active = false;
         }
         return Vec::new();
@@ -3087,17 +3186,36 @@ fn wire_interactions(
         return Vec::new();
     }
 
-    let pointer_on_normal_port = node_editor_port_interactions_enabled(frame.to_global.scaling)
-        && pointer.is_some_and(|position| {
-            frame.rendered_ports.lock().is_ok_and(|ports| {
-                rendered_normal_port_at_position(&ports, position, frame.canvas_clip)
+    let normal_port = node_editor_port_interactions_enabled(frame.to_global.scaling)
+        .then(|| {
+            pointer.and_then(|position| {
+                frame.rendered_ports.lock().ok().and_then(|ports| {
+                    rendered_normal_port_at_position(&ports, position, frame.canvas_clip)
+                })
             })
-        });
-    if primary_pressed && pointer_on_normal_port {
-        // Snarl has already received this frame's press. Preserve that
-        // ownership until release; otherwise the next movement can leave the
-        // pin and enter an existing edge endpoint's reconnect radius.
-        state.normal_wire_drag_active = true;
+        })
+        .flatten();
+    let pointer_on_normal_port = normal_port.is_some();
+    if let (true, Some(port), Some(position)) = (primary_pressed, normal_port, pointer) {
+        if port.direction == PortDirection::Output
+            && frame
+                .project
+                .connections
+                .iter()
+                .any(|connection| connection.from == port.address)
+        {
+            state.normal_connect_gesture = Some(NodeEditorNormalConnectGesture {
+                from: port.address,
+                start: position,
+                current: position,
+                canvas_transform: frame.to_global,
+            });
+        } else {
+            // Snarl has already received this frame's press. Preserve that
+            // ownership until release so foreground wire surfaces cannot
+            // claim the rest of the physical gesture.
+            state.normal_wire_drag_active = true;
+        }
         return Vec::new();
     }
 
@@ -3700,11 +3818,19 @@ pub fn node_editor_panel(
             current_time,
             context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
             wire_context_request: &mut wire_context_request,
-            suppress_wire_connect: node_editor_state.wire_gesture.is_some(),
+            suppress_wire_connect: node_editor_state.wire_gesture.is_some()
+                || node_editor_state.normal_connect_gesture.is_some()
+                || node_editor_state.normal_connect_cancel_pending_release,
             locked_canvas_transform: node_editor_state
-                .wire_knife
+                .normal_connect_gesture
                 .as_ref()
-                .map(|gesture| gesture.canvas_transform),
+                .map(|gesture| gesture.canvas_transform)
+                .or_else(|| {
+                    node_editor_state
+                        .wire_knife
+                        .as_ref()
+                        .map(|gesture| gesture.canvas_transform)
+                }),
             to_global: &mut to_global,
             canvas_clip: &mut canvas_clip,
             rendered_ports: Arc::clone(&rendered_ports),
@@ -7421,7 +7547,7 @@ mod tests {
     }
 
     #[test]
-    fn real_snarl_drag_connects_container_time_to_value_without_reconnect_or_pan() {
+    fn real_snarl_connected_output_fans_out_to_time_value_without_reconnect_or_pan() {
         let (mut project, composition_id, _, clip_id, _, _) = fixture();
         let mut modulo = Node::new_time_modulo("Time Modulo");
         modulo.ui_position = [520.0, 620.0];
@@ -7430,6 +7556,15 @@ mod tests {
         project
             .attach_node_to_container(NodeContainer::Clip(clip_id), modulo_id)
             .unwrap();
+        let original_time_connection = project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from == PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT)
+                    && connection.to.port == TIME_PORT
+            })
+            .expect("fixture Time output is already connected")
+            .clone();
         let initial = project.clone();
         let (mut snarl, containers) = build_snarl(&project, composition_id);
         let context = egui::Context::default();
@@ -7454,7 +7589,7 @@ mod tests {
         // Let Snarl finish its initial look-at/layout pass before using the
         // published socket rectangles as physical input coordinates.
         for frame in 0..6 {
-            let _ = context.run(
+            drop(context.run(
                 egui::RawInput {
                     screen_rect: Some(screen),
                     time: Some(frame as f64 / 60.0),
@@ -7479,7 +7614,9 @@ mod tests {
                             current_time: 0.0,
                             context_menu_exclusion_rects: &mut exclusions,
                             wire_context_request: &mut wire_context_request,
-                            suppress_wire_connect: state.wire_gesture.is_some(),
+                            suppress_wire_connect: state.wire_gesture.is_some()
+                                || state.normal_connect_gesture.is_some()
+                                || state.normal_connect_cancel_pending_release,
                             locked_canvas_transform: None,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
@@ -7508,7 +7645,7 @@ mod tests {
                         ));
                     });
                 },
-            );
+            ));
         }
         assert!(queued.is_empty());
         let ports = rendered_ports.lock().unwrap();
@@ -7545,29 +7682,53 @@ mod tests {
 
         let source = source_rect.center();
         let target = target_rect.center();
-        let drag_start = target - egui::vec2(WIRE_DRAG_THRESHOLD + 2.0, 0.0);
-        let input_frames = [
-            vec![egui::Event::PointerMoved(target)],
+        let drag_start = source + egui::vec2(WIRE_DRAG_THRESHOLD + 2.0, 0.0);
+        let input_frames = vec![
+            // First cancel the forward fan-out. Snarl still owns internal
+            // drag state, so suppression must survive through release.
+            vec![egui::Event::PointerMoved(source)],
             vec![egui::Event::PointerButton {
-                pos: target,
+                pos: source,
                 button: egui::PointerButton::Primary,
                 pressed: true,
                 modifiers: egui::Modifiers::NONE,
             }],
-            // Cross egui's drag threshold while the captured value input is
-            // still nearby. A single endpoint-to-endpoint jump can enter the
-            // destination before Snarl has observed `drag_started_by`.
-            vec![egui::Event::PointerMoved(drag_start)],
+            vec![egui::Event::PointerMoved(target)],
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: Some(egui::Key::Escape),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![egui::Event::PointerButton {
+                pos: target,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            // Then perform the same connected-output fan-out successfully.
             vec![egui::Event::PointerMoved(source)],
             vec![egui::Event::PointerButton {
                 pos: source,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            // Cross egui's drag threshold while the captured Time output is
+            // still nearby. A single endpoint-to-endpoint jump can enter the
+            // destination before Snarl has observed `drag_started_by`.
+            vec![egui::Event::PointerMoved(drag_start)],
+            vec![egui::Event::PointerMoved(target)],
+            vec![egui::Event::PointerButton {
+                pos: target,
                 button: egui::PointerButton::Primary,
                 pressed: false,
                 modifiers: egui::Modifiers::NONE,
             }],
         ];
         for (frame, events) in input_frames.into_iter().enumerate() {
-            let _ = context.run(
+            drop(context.run(
                 egui::RawInput {
                     screen_rect: Some(screen),
                     time: Some((frame + 6) as f64 / 60.0),
@@ -7593,8 +7754,13 @@ mod tests {
                             current_time: 0.0,
                             context_menu_exclusion_rects: &mut exclusions,
                             wire_context_request: &mut wire_context_request,
-                            suppress_wire_connect: state.wire_gesture.is_some(),
-                            locked_canvas_transform: None,
+                            suppress_wire_connect: state.wire_gesture.is_some()
+                                || state.normal_connect_gesture.is_some()
+                                || state.normal_connect_cancel_pending_release,
+                            locked_canvas_transform: state
+                                .normal_connect_gesture
+                                .as_ref()
+                                .map(|gesture| gesture.canvas_transform),
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::clone(&rendered_ports),
@@ -7623,18 +7789,29 @@ mod tests {
                         gesture_transforms.push(to_global);
                     });
                 },
-            );
-            if (1..=3).contains(&frame) {
-                assert!(
-                    state.normal_wire_drag_active,
-                    "normal Snarl pin lost gesture ownership in frame {frame}"
-                );
-            } else {
-                assert!(
-                    !state.normal_wire_drag_active,
-                    "normal Snarl ownership outlived the physical gesture"
-                );
+            ));
+            match frame {
+                1 | 2 | 6..=8 => {
+                    assert!(state.normal_connect_gesture.is_some());
+                    assert!(!state.normal_connect_cancel_pending_release);
+                }
+                3 => {
+                    assert!(state.normal_connect_gesture.is_none());
+                    assert!(state.normal_connect_cancel_pending_release);
+                    assert!(queued.is_empty());
+                }
+                4 | 5 => {
+                    assert!(state.normal_connect_gesture.is_none());
+                    assert!(!state.normal_connect_cancel_pending_release);
+                    assert!(queued.is_empty());
+                }
+                0 | 9 => {
+                    assert!(state.normal_connect_gesture.is_none());
+                    assert!(!state.normal_connect_cancel_pending_release);
+                }
+                unexpected => panic!("unexpected input frame {unexpected}"),
             }
+            assert!(!state.normal_wire_drag_active);
         }
 
         assert!(gesture_transforms.windows(2).all(|pair| pair[0] == pair[1]));
@@ -7662,6 +7839,14 @@ mod tests {
         assert!(project.connections.iter().any(|connection| {
             connection.from == source_address && connection.to == target_address
         }));
+        assert_eq!(
+            project
+                .connections
+                .iter()
+                .find(|connection| connection.id == original_time_connection.id),
+            Some(&original_time_connection),
+            "fan-out must preserve the original Time wire byte-for-byte"
+        );
         let edited = project.clone();
         assert_single_gesture_undo_redo(&mut history, &initial, &edited);
     }
@@ -8046,6 +8231,109 @@ mod tests {
             "unexpected wire drag edits: {edits:?}; gesture: {:?}",
             state.wire_gesture
         );
+    }
+
+    #[test]
+    fn connected_output_invalid_drop_and_escape_leave_project_and_history_untouched() {
+        let (project, _, _, _, solid_id, merge_id) = fixture();
+        let connection = project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from.owner == PortOwner::Node(solid_id)
+                    && connection.to.owner == PortOwner::Node(merge_id)
+            })
+            .unwrap();
+        let source = egui::pos2(120.0, 180.0);
+        let invalid_target = egui::pos2(540.0, 340.0);
+        let edge = RenderedEdge {
+            connection_id: connection.id,
+            start: source,
+            control_a: egui::pos2(200.0, 180.0),
+            control_b: egui::pos2(300.0, 180.0),
+            end: egui::pos2(380.0, 180.0),
+        };
+        let rendered_ports = Arc::new(Mutex::new(HashMap::from([(
+            RenderedPortKey {
+                address: connection.from.clone(),
+                direction: PortDirection::Output,
+            },
+            egui::Rect::from_center_size(source, egui::vec2(13.0, 13.0)),
+        )])));
+
+        let invalid_drop = vec![
+            vec![egui::Event::PointerMoved(source)],
+            vec![egui::Event::PointerButton {
+                pos: source,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![egui::Event::PointerMoved(invalid_target)],
+            vec![egui::Event::PointerButton {
+                pos: invalid_target,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ];
+        let mut state = NodeEditorState::default();
+        let edits = run_wire_interaction_frames(
+            &project,
+            &edge,
+            &rendered_ports,
+            &mut state,
+            invalid_drop,
+        );
+        assert!(edits.is_empty());
+        assert!(state.normal_connect_gesture.is_none());
+        assert!(state.selected_connection_id.is_none());
+
+        let escaped = vec![
+            vec![egui::Event::PointerMoved(source)],
+            vec![egui::Event::PointerButton {
+                pos: source,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![egui::Event::PointerMoved(invalid_target)],
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: Some(egui::Key::Escape),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![egui::Event::PointerButton {
+                pos: invalid_target,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ];
+        let edits = run_wire_interaction_frames(
+            &project,
+            &edge,
+            &rendered_ports,
+            &mut state,
+            escaped,
+        );
+        assert!(edits.is_empty());
+        assert!(state.normal_connect_gesture.is_none());
+
+        let mut untouched = project.clone();
+        let mut history = HistoryManager::new();
+        history.push_project_state(project.clone());
+        let undo_depth = history.undo_depth();
+        assert!(!apply_queued_node_edits(
+            &mut untouched,
+            edits,
+            &mut history,
+            &mut state,
+        ));
+        assert_eq!(untouched, project);
+        assert_eq!(history.undo_depth(), undo_depth);
     }
 
     #[test]
@@ -9525,7 +9813,7 @@ mod tests {
             Some(address)
         );
         assert!(
-            !rendered_normal_port_at_position(&ports, position, canvas),
+            rendered_normal_port_at_position(&ports, position, canvas).is_none(),
             "overview reconnect drop targets must not steal normal Snarl connection gestures"
         );
         let detailed_ports = HashMap::from([(
@@ -9535,11 +9823,9 @@ mod tests {
             },
             egui::Rect::from_center_size(position, egui::vec2(13.0, 13.0)),
         )]);
-        assert!(rendered_normal_port_at_position(
-            &detailed_ports,
-            position,
-            canvas
-        ));
+        assert!(
+            rendered_normal_port_at_position(&detailed_ports, position, canvas).is_some()
+        );
 
         let offscreen = egui::Rect::from_center_size(
             egui::pos2(canvas.right() + 10.0, 400.0),
