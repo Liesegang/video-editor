@@ -66,7 +66,7 @@ fi
 RUVIE_TEST_PLUGIN_BUNDLE="$bundle" cargo test \
     --manifest-path "$repo_root/Cargo.toml" -p library \
     --test runtime_plugin_tests --target-dir "$host_target" --locked \
-    standalone_runtime_property_loads_describes_builds_and_invokes -- \
+    standalone_runtime_bundle_loads_builds_nodes_and_invokes -- \
     --ignored --exact
 
 host_after_plugin="$(cksum "$host_probe")"

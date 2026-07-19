@@ -5,13 +5,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use ruvie_plugin_api::{
-    ComponentDescriptorV1, InvokeRequestV1, PluginDescriptorV1, PropertyDefinitionV1,
-    PropertyEvaluateRequestV1, PropertyEvaluateResponseV1, PropertyUiV1, PropertyValueV1,
-    RuvieBuffer, RuvieBytesView, RuvieCallResult, RuviePluginApiV1, PROPERTY_CATEGORY,
-    PROPERTY_EVALUATE_V1, RUVIE_PLUGIN_ABI_V1, STATUS_INVALID_REQUEST, STATUS_PANIC,
+    BackplateShapeV1, ColorV1, ComponentDescriptorV1, DecoratorEvaluateRequestV1,
+    DecoratorOutputV1, DecoratorTargetV1, InsetsV1, InvokeRequestV1, PluginDescriptorV1,
+    PropertyDefinitionV1, PropertyEvaluateRequestV1, PropertyEvaluateResponseV1, PropertyUiV1,
+    PropertyValueV1, RuvieBuffer, RuvieBytesView, RuvieCallResult, RuviePluginApiV1, StrokeCapV1,
+    StrokeJoinV1, StyleEvaluateRequestV1, StyleOutputV1, DECORATOR_CATEGORY, DECORATOR_EVALUATE_V1,
+    PROPERTY_CATEGORY, PROPERTY_EVALUATE_V1, RUVIE_PLUGIN_ABI_V1, STATUS_INVALID_REQUEST,
+    STATUS_PANIC, STYLE_CATEGORY, STYLE_EVALUATE_V1,
 };
 
 const COMPONENT_ID: &str = "random_property";
+const FILL_COMPONENT_ID: &str = "runtime_fill_style";
+const STROKE_COMPONENT_ID: &str = "runtime_stroke_style";
+const BACKPLATE_COMPONENT_ID: &str = "runtime_backplate_decorator";
 const DESCRIPTOR_CALLS_OPERATION: &str = "random_property.descriptor_calls.v1";
 static DESCRIPTOR_CALLS: AtomicUsize = AtomicUsize::new(0);
 
@@ -20,45 +26,252 @@ fn descriptor() -> PluginDescriptorV1 {
         name: "Random Property".to_string(),
         vendor: "RuViE".to_string(),
         version: "0.1.0".to_string(),
-        components: vec![ComponentDescriptorV1 {
-            id: COMPONENT_ID.to_string(),
-            name: "Random Property".to_string(),
-            category: PROPERTY_CATEGORY.to_string(),
-            group: "Property".to_string(),
-            version: "0.1.0".to_string(),
-            operations: vec![
-                PROPERTY_EVALUATE_V1.to_string(),
-                DESCRIPTOR_CALLS_OPERATION.to_string(),
-            ],
-            properties: vec![
-                PropertyDefinitionV1 {
-                    name: "amplitude".to_string(),
-                    label: "Amplitude".to_string(),
-                    ui: PropertyUiV1::Float {
-                        min: 0.0,
-                        max: 1_000.0,
-                        step: 0.01,
-                        suffix: String::new(),
-                        min_hard_limit: false,
-                        max_hard_limit: false,
-                    },
-                    default: serde_json::json!(1.0),
+        components: vec![
+            property_descriptor(),
+            fill_descriptor(),
+            stroke_descriptor(),
+            backplate_descriptor(),
+        ],
+    }
+}
+
+fn property_descriptor() -> ComponentDescriptorV1 {
+    ComponentDescriptorV1 {
+        id: COMPONENT_ID.to_string(),
+        name: "Random Property".to_string(),
+        category: PROPERTY_CATEGORY.to_string(),
+        group: "Property".to_string(),
+        version: "0.1.0".to_string(),
+        operations: vec![
+            PROPERTY_EVALUATE_V1.to_string(),
+            DESCRIPTOR_CALLS_OPERATION.to_string(),
+        ],
+        properties: vec![
+            PropertyDefinitionV1 {
+                name: "amplitude".to_string(),
+                label: "Amplitude".to_string(),
+                ui: PropertyUiV1::Float {
+                    min: 0.0,
+                    max: 1_000.0,
+                    step: 0.01,
+                    suffix: String::new(),
+                    min_hard_limit: false,
+                    max_hard_limit: false,
                 },
-                PropertyDefinitionV1 {
-                    name: "seed".to_string(),
-                    label: "Seed".to_string(),
-                    ui: PropertyUiV1::Integer {
-                        min: 0,
-                        max: i64::MAX,
-                        suffix: String::new(),
-                        min_hard_limit: true,
-                        max_hard_limit: true,
-                    },
-                    default: serde_json::json!(0),
+                default: serde_json::json!(1.0),
+            },
+            PropertyDefinitionV1 {
+                name: "seed".to_string(),
+                label: "Seed".to_string(),
+                ui: PropertyUiV1::Integer {
+                    min: 0,
+                    max: i64::MAX,
+                    suffix: String::new(),
+                    min_hard_limit: true,
+                    max_hard_limit: true,
                 },
-            ],
-            output_default: Some(PropertyValueV1::Number { value: 0.0 }),
-        }],
+                default: serde_json::json!(0),
+            },
+        ],
+        output_default: Some(PropertyValueV1::Number { value: 0.0 }),
+    }
+}
+
+fn fill_descriptor() -> ComponentDescriptorV1 {
+    ComponentDescriptorV1 {
+        id: FILL_COMPONENT_ID.to_string(),
+        name: "Runtime Fill".to_string(),
+        category: STYLE_CATEGORY.to_string(),
+        group: "Style".to_string(),
+        version: "0.1.0".to_string(),
+        operations: vec![STYLE_EVALUATE_V1.to_string()],
+        properties: vec![
+            color_property(255, 128, 32, 255),
+            float_property(FloatPropertySpec {
+                name: "offset",
+                label: "Offset",
+                min: -100.0,
+                max: 100.0,
+                step: 1.0,
+                suffix: "px",
+                min_hard_limit: false,
+                max_hard_limit: false,
+                default: 2.0,
+            }),
+        ],
+        output_default: None,
+    }
+}
+
+fn stroke_descriptor() -> ComponentDescriptorV1 {
+    ComponentDescriptorV1 {
+        id: STROKE_COMPONENT_ID.to_string(),
+        name: "Runtime Stroke".to_string(),
+        category: STYLE_CATEGORY.to_string(),
+        group: "Style".to_string(),
+        version: "0.1.0".to_string(),
+        operations: vec![STYLE_EVALUATE_V1.to_string()],
+        properties: vec![
+            color_property(32, 128, 255, 255),
+            float_property(FloatPropertySpec {
+                name: "width",
+                label: "Width",
+                min: 0.0,
+                max: 100.0,
+                step: 0.5,
+                suffix: "px",
+                min_hard_limit: true,
+                max_hard_limit: false,
+                default: 3.0,
+            }),
+            float_property(FloatPropertySpec {
+                name: "offset",
+                label: "Offset",
+                min: -100.0,
+                max: 100.0,
+                step: 1.0,
+                suffix: "px",
+                min_hard_limit: false,
+                max_hard_limit: false,
+                default: 0.0,
+            }),
+            dropdown_property("cap", "Cap", &["Round", "Square", "Butt"], "Round"),
+            dropdown_property("join", "Join", &["Round", "Bevel", "Miter"], "Miter"),
+            float_property(FloatPropertySpec {
+                name: "miter",
+                label: "Miter",
+                min: 0.0,
+                max: 100.0,
+                step: 0.5,
+                suffix: "",
+                min_hard_limit: true,
+                max_hard_limit: false,
+                default: 4.0,
+            }),
+            PropertyDefinitionV1 {
+                name: "dash_array".to_string(),
+                label: "Dash Array".to_string(),
+                ui: PropertyUiV1::Text,
+                default: serde_json::json!("3 2"),
+            },
+            float_property(FloatPropertySpec {
+                name: "dash_offset",
+                label: "Dash Offset",
+                min: -1_000.0,
+                max: 1_000.0,
+                step: 1.0,
+                suffix: "px",
+                min_hard_limit: false,
+                max_hard_limit: false,
+                default: 1.0,
+            }),
+        ],
+        output_default: None,
+    }
+}
+
+fn backplate_descriptor() -> ComponentDescriptorV1 {
+    ComponentDescriptorV1 {
+        id: BACKPLATE_COMPONENT_ID.to_string(),
+        name: "Runtime Backplate".to_string(),
+        category: DECORATOR_CATEGORY.to_string(),
+        group: "Decorator".to_string(),
+        version: "0.1.0".to_string(),
+        operations: vec![DECORATOR_EVALUATE_V1.to_string()],
+        properties: vec![
+            dropdown_property("target", "Target", &["Block", "Line", "Char"], "Block"),
+            dropdown_property(
+                "shape",
+                "Shape",
+                &["Rect", "RoundedRect", "Circle"],
+                "RoundedRect",
+            ),
+            color_property(0, 0, 0, 192),
+            PropertyDefinitionV1 {
+                name: "padding".to_string(),
+                label: "Padding".to_string(),
+                ui: PropertyUiV1::Vec4 {
+                    suffix: "px".to_string(),
+                },
+                default: serde_json::json!({"x": 4.0, "y": 6.0, "z": 4.0, "w": 6.0}),
+            },
+            float_property(FloatPropertySpec {
+                name: "corner_radius",
+                label: "Corner Radius",
+                min: 0.0,
+                max: 100.0,
+                step: 1.0,
+                suffix: "px",
+                min_hard_limit: true,
+                max_hard_limit: false,
+                default: 3.0,
+            }),
+        ],
+        output_default: None,
+    }
+}
+
+fn color_property(r: u8, g: u8, b: u8, a: u8) -> PropertyDefinitionV1 {
+    PropertyDefinitionV1 {
+        name: "color".to_string(),
+        label: "Color".to_string(),
+        ui: PropertyUiV1::Color,
+        default: serde_json::json!({"r": r, "g": g, "b": b, "a": a}),
+    }
+}
+
+struct FloatPropertySpec<'a> {
+    name: &'a str,
+    label: &'a str,
+    min: f64,
+    max: f64,
+    step: f64,
+    suffix: &'a str,
+    min_hard_limit: bool,
+    max_hard_limit: bool,
+    default: f64,
+}
+
+fn float_property(spec: FloatPropertySpec<'_>) -> PropertyDefinitionV1 {
+    let FloatPropertySpec {
+        name,
+        label,
+        min,
+        max,
+        step,
+        suffix,
+        min_hard_limit,
+        max_hard_limit,
+        default,
+    } = spec;
+    PropertyDefinitionV1 {
+        name: name.to_string(),
+        label: label.to_string(),
+        ui: PropertyUiV1::Float {
+            min,
+            max,
+            step,
+            suffix: suffix.to_string(),
+            min_hard_limit,
+            max_hard_limit,
+        },
+        default: serde_json::json!(default),
+    }
+}
+
+fn dropdown_property(
+    name: &str,
+    label: &str,
+    options: &[&str],
+    default: &str,
+) -> PropertyDefinitionV1 {
+    PropertyDefinitionV1 {
+        name: name.to_string(),
+        label: label.to_string(),
+        ui: PropertyUiV1::Dropdown {
+            options: options.iter().map(|option| (*option).to_string()).collect(),
+        },
+        default: serde_json::json!(default),
     }
 }
 
@@ -93,44 +306,268 @@ unsafe extern "C" fn invoke_json(
                 return RuvieCallResult::error(STATUS_INVALID_REQUEST, error.to_string());
             }
         };
-        if request.component_id != COMPONENT_ID || request.category != PROPERTY_CATEGORY {
-            return RuvieCallResult::error(
-                STATUS_INVALID_REQUEST,
-                "unsupported component/category/operation",
-            );
-        }
-        if request.operation == DESCRIPTOR_CALLS_OPERATION {
-            return RuvieCallResult::ok_json(&serde_json::json!({
+        let InvokeRequestV1 {
+            component_id,
+            category,
+            operation,
+            payload,
+        } = request;
+        match (category.as_str(), component_id.as_str(), operation.as_str()) {
+            (PROPERTY_CATEGORY, COMPONENT_ID, DESCRIPTOR_CALLS_OPERATION) => {
+                RuvieCallResult::ok_json(&serde_json::json!({
                 "calls": DESCRIPTOR_CALLS.load(Ordering::Relaxed),
-            }));
-        }
-        if request.operation != PROPERTY_EVALUATE_V1 {
-            return RuvieCallResult::error(
+                }))
+            }
+            (PROPERTY_CATEGORY, COMPONENT_ID, PROPERTY_EVALUATE_V1) => evaluate_property(payload),
+            (STYLE_CATEGORY, FILL_COMPONENT_ID, STYLE_EVALUATE_V1) => evaluate_fill(payload),
+            (STYLE_CATEGORY, STROKE_COMPONENT_ID, STYLE_EVALUATE_V1) => evaluate_stroke(payload),
+            (DECORATOR_CATEGORY, BACKPLATE_COMPONENT_ID, DECORATOR_EVALUATE_V1) => {
+                evaluate_backplate(payload)
+            }
+            _ => RuvieCallResult::error(
                 STATUS_INVALID_REQUEST,
                 "unsupported component/category/operation",
-            );
+            ),
         }
-        let payload: PropertyEvaluateRequestV1 = match serde_json::from_value(request.payload) {
-            Ok(payload) => payload,
-            Err(error) => {
-                return RuvieCallResult::error(STATUS_INVALID_REQUEST, error.to_string());
-            }
-        };
-        let amplitude = match payload.properties.get("amplitude") {
-            Some(PropertyValueV1::Number { value }) if value.is_finite() => value.abs(),
-            _ => 1.0,
-        };
-        let seed = match payload.properties.get("seed") {
-            Some(PropertyValueV1::Integer { value }) => u64::try_from(*value).unwrap_or_default(),
-            _ => 0,
-        };
-        let time_bucket = (payload.time * 1000.0).round() as u64;
-        let mut rng = StdRng::seed_from_u64(seed ^ time_bucket);
-        let value = rng.gen_range(-amplitude..=amplitude);
-        RuvieCallResult::ok_json(&PropertyEvaluateResponseV1 {
-            value: PropertyValueV1::Number { value },
-        })
     })
+}
+
+fn evaluate_property(payload: serde_json::Value) -> RuvieCallResult {
+    let payload: PropertyEvaluateRequestV1 = match serde_json::from_value(payload) {
+        Ok(payload) => payload,
+        Err(error) => return invalid_request(error),
+    };
+    if !has_exact_properties(&payload.properties, &["amplitude", "seed"]) {
+        return invalid_request("property request does not match its descriptor");
+    }
+    let amplitude = match payload.properties.get("amplitude") {
+        Some(PropertyValueV1::Number { value }) if value.is_finite() => value.abs(),
+        _ => return invalid_request("amplitude must be a finite number"),
+    };
+    let seed = match payload.properties.get("seed") {
+        Some(PropertyValueV1::Integer { value }) => u64::try_from(*value).unwrap_or_default(),
+        _ => return invalid_request("seed must be an integer"),
+    };
+    let time_bucket = (payload.time * 1000.0).round() as u64;
+    let mut rng = StdRng::seed_from_u64(seed ^ time_bucket);
+    let value = rng.gen_range(-amplitude..=amplitude);
+    RuvieCallResult::ok_json(&PropertyEvaluateResponseV1 {
+        value: PropertyValueV1::Number { value },
+    })
+}
+
+fn evaluate_fill(payload: serde_json::Value) -> RuvieCallResult {
+    let payload: StyleEvaluateRequestV1 = match serde_json::from_value(payload) {
+        Ok(payload) => payload,
+        Err(error) => return invalid_request(error),
+    };
+    if !valid_config_metadata(payload.time, payload.fps)
+        || !has_exact_properties(&payload.properties, &["color", "offset"])
+    {
+        return invalid_request("Fill request does not match its descriptor");
+    }
+    let Some(color) = property_color(&payload.properties, "color") else {
+        return invalid_request("Fill color is invalid");
+    };
+    let Some(offset) = property_number(&payload.properties, "offset") else {
+        return invalid_request("Fill offset is invalid");
+    };
+    RuvieCallResult::ok_json(&StyleOutputV1::Fill { color, offset })
+}
+
+fn evaluate_stroke(payload: serde_json::Value) -> RuvieCallResult {
+    let payload: StyleEvaluateRequestV1 = match serde_json::from_value(payload) {
+        Ok(payload) => payload,
+        Err(error) => return invalid_request(error),
+    };
+    let expected = [
+        "color",
+        "width",
+        "offset",
+        "cap",
+        "join",
+        "miter",
+        "dash_array",
+        "dash_offset",
+    ];
+    if !valid_config_metadata(payload.time, payload.fps)
+        || !has_exact_properties(&payload.properties, &expected)
+    {
+        return invalid_request("Stroke request does not match its descriptor");
+    }
+    let Some(color) = property_color(&payload.properties, "color") else {
+        return invalid_request("Stroke color is invalid");
+    };
+    let Some(width) = property_number(&payload.properties, "width") else {
+        return invalid_request("Stroke width is invalid");
+    };
+    if width < 0.0 {
+        return invalid_request("Stroke width must be non-negative");
+    }
+    let Some(offset) = property_number(&payload.properties, "offset") else {
+        return invalid_request("Stroke offset is invalid");
+    };
+    let cap = match property_string(&payload.properties, "cap") {
+        Some("Round") => StrokeCapV1::Round,
+        Some("Square") => StrokeCapV1::Square,
+        Some("Butt") => StrokeCapV1::Butt,
+        _ => return invalid_request("Stroke cap is invalid"),
+    };
+    let join = match property_string(&payload.properties, "join") {
+        Some("Round") => StrokeJoinV1::Round,
+        Some("Bevel") => StrokeJoinV1::Bevel,
+        Some("Miter") => StrokeJoinV1::Miter,
+        _ => return invalid_request("Stroke join is invalid"),
+    };
+    let Some(miter) = property_number(&payload.properties, "miter") else {
+        return invalid_request("Stroke miter is invalid");
+    };
+    if miter < 0.0 {
+        return invalid_request("Stroke miter must be non-negative");
+    }
+    let Some(dash_array) = property_string(&payload.properties, "dash_array").and_then(|value| {
+        value
+            .split_whitespace()
+            .map(str::parse::<f64>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+    }) else {
+        return invalid_request("Stroke dash array is invalid");
+    };
+    if !dash_array.is_empty()
+        && (!dash_array.len().is_multiple_of(2)
+            || dash_array
+                .iter()
+                .any(|value| !value.is_finite() || *value <= 0.0))
+    {
+        return invalid_request("Stroke dash intervals must be positive pairs");
+    }
+    let Some(dash_offset) = property_number(&payload.properties, "dash_offset") else {
+        return invalid_request("Stroke dash offset is invalid");
+    };
+    RuvieCallResult::ok_json(&StyleOutputV1::Stroke {
+        color,
+        width,
+        offset,
+        cap,
+        join,
+        miter,
+        dash_array,
+        dash_offset,
+    })
+}
+
+fn evaluate_backplate(payload: serde_json::Value) -> RuvieCallResult {
+    let payload: DecoratorEvaluateRequestV1 = match serde_json::from_value(payload) {
+        Ok(payload) => payload,
+        Err(error) => return invalid_request(error),
+    };
+    let expected = ["target", "shape", "color", "padding", "corner_radius"];
+    if !valid_config_metadata(payload.time, payload.fps)
+        || !has_exact_properties(&payload.properties, &expected)
+    {
+        return invalid_request("Backplate request does not match its descriptor");
+    }
+    let target = match property_string(&payload.properties, "target") {
+        Some("Block") => DecoratorTargetV1::Block,
+        Some("Line") => DecoratorTargetV1::Line,
+        Some("Char") => DecoratorTargetV1::Char,
+        _ => return invalid_request("Backplate target is invalid"),
+    };
+    let shape = match property_string(&payload.properties, "shape") {
+        Some("Rect") => BackplateShapeV1::Rect,
+        Some("RoundedRect") => BackplateShapeV1::RoundedRect,
+        Some("Circle") => BackplateShapeV1::Circle,
+        _ => return invalid_request("Backplate shape is invalid"),
+    };
+    let Some(color) = property_color(&payload.properties, "color") else {
+        return invalid_request("Backplate color is invalid");
+    };
+    let padding = match payload.properties.get("padding") {
+        Some(PropertyValueV1::Vec4 { x, y, z, w }) => match (
+            finite_f32(*x),
+            finite_f32(*y),
+            finite_f32(*z),
+            finite_f32(*w),
+        ) {
+            (Some(top), Some(right), Some(bottom), Some(left)) => InsetsV1 {
+                top,
+                right,
+                bottom,
+                left,
+            },
+            _ => return invalid_request("Backplate padding is outside the f32 contract"),
+        },
+        _ => return invalid_request("Backplate padding is invalid"),
+    };
+    let Some(corner_radius) = property_number(&payload.properties, "corner_radius") else {
+        return invalid_request("Backplate corner radius is invalid");
+    };
+    let Some(corner_radius) = finite_f32(corner_radius).filter(|value| *value >= 0.0) else {
+        return invalid_request("Backplate corner radius must be a non-negative f32");
+    };
+    RuvieCallResult::ok_json(&DecoratorOutputV1::Backplate {
+        target,
+        shape,
+        color,
+        padding,
+        corner_radius,
+    })
+}
+
+fn valid_config_metadata(time: f64, fps: f64) -> bool {
+    time.is_finite() && fps.is_finite() && fps > 0.0
+}
+
+fn finite_f32(value: f64) -> Option<f32> {
+    let value = value as f32;
+    value.is_finite().then_some(value)
+}
+
+fn has_exact_properties(
+    properties: &std::collections::BTreeMap<String, PropertyValueV1>,
+    expected: &[&str],
+) -> bool {
+    properties.len() == expected.len() && expected.iter().all(|name| properties.contains_key(*name))
+}
+
+fn property_number(
+    properties: &std::collections::BTreeMap<String, PropertyValueV1>,
+    name: &str,
+) -> Option<f64> {
+    match properties.get(name) {
+        Some(PropertyValueV1::Number { value }) if value.is_finite() => Some(*value),
+        _ => None,
+    }
+}
+
+fn property_string<'a>(
+    properties: &'a std::collections::BTreeMap<String, PropertyValueV1>,
+    name: &str,
+) -> Option<&'a str> {
+    match properties.get(name) {
+        Some(PropertyValueV1::String { value }) => Some(value),
+        _ => None,
+    }
+}
+
+fn property_color(
+    properties: &std::collections::BTreeMap<String, PropertyValueV1>,
+    name: &str,
+) -> Option<ColorV1> {
+    match properties.get(name) {
+        Some(PropertyValueV1::Color { r, g, b, a }) => Some(ColorV1 {
+            r: *r,
+            g: *g,
+            b: *b,
+            a: *a,
+        }),
+        _ => None,
+    }
+}
+
+fn invalid_request(detail: impl std::fmt::Display) -> RuvieCallResult {
+    RuvieCallResult::error(STATUS_INVALID_REQUEST, detail.to_string())
 }
 
 unsafe extern "C" fn free_buffer(_context: *mut c_void, buffer: RuvieBuffer) {
@@ -157,6 +594,23 @@ pub extern "C" fn ruvie_plugin_entry_v1() -> *const RuviePluginApiV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn component<'a>(descriptor: &'a PluginDescriptorV1, id: &str) -> &'a ComponentDescriptorV1 {
+        descriptor
+            .components
+            .iter()
+            .find(|component| component.id == id)
+            .expect("test component is declared")
+    }
+
+    fn float_ui<'a>(component: &'a ComponentDescriptorV1, name: &str) -> &'a PropertyUiV1 {
+        &component
+            .properties
+            .iter()
+            .find(|property| property.name == name)
+            .expect("test property is declared")
+            .ui
+    }
 
     #[test]
     fn evaluator_is_deterministic_and_respects_amplitude() {
@@ -188,5 +642,45 @@ mod tests {
         let first = evaluate();
         assert_eq!(first, evaluate());
         assert!((-3.0..=3.0).contains(&first));
+    }
+
+    #[test]
+    fn config_descriptor_metadata_matches_runtime_safety_contracts() {
+        let descriptor = descriptor();
+        let stroke = component(&descriptor, STROKE_COMPONENT_ID);
+        let backplate = component(&descriptor, BACKPLATE_COMPONENT_ID);
+        for (component, name) in [
+            (stroke, "width"),
+            (stroke, "miter"),
+            (backplate, "corner_radius"),
+        ] {
+            assert!(matches!(
+                float_ui(component, name),
+                PropertyUiV1::Float {
+                    min: 0.0,
+                    min_hard_limit: true,
+                    ..
+                }
+            ));
+        }
+        for name in ["offset", "dash_offset"] {
+            assert!(matches!(
+                float_ui(stroke, name),
+                PropertyUiV1::Float {
+                    min_hard_limit: false,
+                    ..
+                }
+            ));
+        }
+        let backplate_target = backplate
+            .properties
+            .iter()
+            .find(|property| property.name == "target")
+            .expect("Backplate target is declared");
+        let PropertyUiV1::Dropdown { options } = &backplate_target.ui else {
+            panic!("Backplate target must be a dropdown")
+        };
+        assert_eq!(options, &["Block", "Line", "Char"]);
+        assert!(!options.iter().any(|option| option == "Parts"));
     }
 }
