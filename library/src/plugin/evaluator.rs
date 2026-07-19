@@ -19,8 +19,12 @@ impl PropertyEvaluatorRegistry {
         Self::default()
     }
 
-    pub fn register(&mut self, key: &str, evaluator: Arc<dyn PropertyEvaluator>) {
-        self.evaluators.insert(key.to_string(), evaluator);
+    pub fn register(
+        &mut self,
+        key: &str,
+        evaluator: Arc<dyn PropertyEvaluator>,
+    ) -> Option<Arc<dyn PropertyEvaluator>> {
+        self.evaluators.insert(key.to_string(), evaluator)
     }
 
     pub fn contains(&self, key: &str) -> bool {
