@@ -16,9 +16,9 @@ mod solid;
 mod text;
 mod video;
 
+pub use crate::model::frame::runtime_shape::measure_shape_visual_bounds;
 pub use image::ImageEntityConverterPlugin;
 pub use shape::ShapeEntityConverterPlugin;
-pub use shape::measure_shape_visual_bounds;
 pub use sksl::SkSLEntityConverterPlugin;
 pub use solid::SolidEntityConverterPlugin;
 pub use text::TextEntityConverterPlugin;

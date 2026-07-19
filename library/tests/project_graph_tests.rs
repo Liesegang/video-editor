@@ -135,6 +135,20 @@ fn first_content(items: &[FrameItem]) -> Option<&FrameContent> {
     })
 }
 
+fn object_source_ids(items: &[FrameItem]) -> Vec<Uuid> {
+    fn collect(items: &[FrameItem], ids: &mut Vec<Uuid>) {
+        for item in items {
+            match item {
+                FrameItem::Object(object) => ids.push(object.source_node_id),
+                FrameItem::Group(group) => collect(&group.items, ids),
+            }
+        }
+    }
+    let mut ids = Vec::new();
+    collect(items, &mut ids);
+    ids
+}
+
 #[test]
 fn direct_pre_v1_schema_roundtrips_without_version_or_legacy_node_timing() {
     let (mut project, _composition_id, track_id) = project_with_composition();
@@ -1659,6 +1673,40 @@ fn clip_does_not_adopt_direct_image_nodes_without_an_explicit_output() {
 }
 
 #[test]
+fn direct_track_and_composition_output_nodes_keep_their_interactive_source_identity() {
+    let (mut track_project, _composition_id, track_id) = project_with_composition();
+    let track_node_id = add_node(
+        &mut track_project,
+        NodeContainer::Track(track_id),
+        solid_node("direct track output"),
+    );
+    track_project
+        .set_output_node(NodeContainer::Track(track_id), Some(track_node_id))
+        .unwrap();
+    assert_eq!(
+        object_source_ids(&frame(&track_project, 0).items),
+        vec![track_node_id]
+    );
+
+    let (mut composition_project, composition_id, _track_id) = project_with_composition();
+    let composition_node_id = add_node(
+        &mut composition_project,
+        NodeContainer::Composition(composition_id),
+        solid_node("direct composition output"),
+    );
+    composition_project
+        .set_output_node(
+            NodeContainer::Composition(composition_id),
+            Some(composition_node_id),
+        )
+        .unwrap();
+    assert_eq!(
+        object_source_ids(&frame(&composition_project, 0).items),
+        vec![composition_node_id]
+    );
+}
+
+#[test]
 fn unbound_composition_and_track_outputs_use_only_ordered_child_containers() {
     let (mut project, composition_id, first_track_id) = project_with_composition();
     let first_clip_id = add_clip(&mut project, first_track_id, "first clip");
@@ -1955,6 +2003,7 @@ fn merge_evaluates_variadic_order_and_uses_each_source_blend_mode() {
             (second_connection, BlendMode::Add),
         ]
     );
+    assert_eq!(object_source_ids(&merge.items), vec![first_id, second_id]);
 
     project.reorder_connection(second_connection, 0).unwrap();
     let rendered = frame(&project, 0);
@@ -1974,6 +2023,7 @@ fn merge_evaluates_variadic_order_and_uses_each_source_blend_mode() {
             (first_connection, BlendMode::Multiply),
         ]
     );
+    assert_eq!(object_source_ids(&merge.items), vec![second_id, first_id]);
 }
 
 #[test]
@@ -2125,10 +2175,33 @@ fn merge_skips_an_inactive_first_input_and_keeps_a_later_produced_input() {
     };
     assert_eq!(active_wrapper.source_id, active_connection_id);
     assert!(find_group(&active_wrapper.items, active_node_id).is_some());
+    assert_eq!(object_source_ids(&merge.items), vec![active_node_id]);
 
     // At ten seconds both Clips are inactive, so Merge and the root
     // Composition materialize as an empty background-only frame.
     assert!(frame(&project, 300).items.is_empty());
+}
+
+#[test]
+fn disabled_and_out_of_range_nodes_never_expose_preview_source_identity() {
+    let (mut project, _composition_id, track_id) = project_with_composition();
+    let clip = Clip::new("short clip", 1.0, 1.0);
+    let clip_id = clip.id;
+    project.add_clip(clip);
+    project.attach_clip_to_track(track_id, clip_id).unwrap();
+    let node_id = add_node(
+        &mut project,
+        NodeContainer::Clip(clip_id),
+        solid_node("visual"),
+    );
+    project
+        .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
+        .unwrap();
+
+    assert!(object_source_ids(&frame(&project, 0).items).is_empty());
+    assert_eq!(object_source_ids(&frame(&project, 30).items), vec![node_id]);
+    project.get_node_mut(node_id).unwrap().enabled = false;
+    assert!(object_source_ids(&frame(&project, 30).items).is_empty());
 }
 
 #[test]

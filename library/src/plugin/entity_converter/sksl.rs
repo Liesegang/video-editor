@@ -1,5 +1,5 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
-use crate::model::frame::entity::{FrameContent, FrameObject};
+use crate::model::frame::entity::{FrameBounds, FrameContent, FrameObject};
 
 #[derive(Default)]
 pub struct SkSLEntityConverterPlugin;
@@ -162,6 +162,8 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
         let effects = evaluator.build_image_effects(&node.effects, eval_time);
 
         Some(FrameObject {
+            source_node_id: node.id,
+            content_bounds: Some(FrameBounds::new(0.0, 0.0, res_x as f32, res_y as f32)),
             content: FrameContent::SkSL {
                 shader,
                 resolution: (res_x as f32, res_y as f32),

@@ -131,6 +131,20 @@ fn find_group(items: &[FrameItem], source_id: Uuid) -> Option<&FrameGroup> {
     })
 }
 
+fn object_source_ids(items: &[FrameItem]) -> Vec<Uuid> {
+    fn collect(items: &[FrameItem], ids: &mut Vec<Uuid>) {
+        for item in items {
+            match item {
+                FrameItem::Object(object) => ids.push(object.source_node_id),
+                FrameItem::Group(group) => collect(&group.items, ids),
+            }
+        }
+    }
+    let mut ids = Vec::new();
+    collect(items, &mut ids);
+    ids
+}
+
 #[test]
 fn effect_descriptor_factory_materializes_defaults_and_distinct_image_ports() {
     let plugins = PluginManager::default();
@@ -253,6 +267,11 @@ fn effect_chain_uses_wiring_order_and_evaluates_keyframes_and_scalar_overrides()
     assert_eq!(
         inner.effects[0].properties["sigma_y"],
         PropertyValue::Number(OrderedFloat(0.5))
+    );
+    assert_eq!(
+        object_source_ids(&rendered.items),
+        vec![source_id],
+        "Effect sinks must preserve the actual visual source Node"
     );
 
     let saved = project.save().unwrap();
@@ -559,6 +578,12 @@ fn descriptor_effect_pixels_match_legacy_embedded_effect_pixels() {
         ),
         0.0,
         2.0,
+    );
+
+    assert_eq!(
+        object_source_ids(&evaluate(&graph_project, &plugins, 0).items),
+        vec![source_id],
+        "Style and Effect wrappers must not replace Shape source identity"
     );
 
     let legacy = preview(&legacy_project, &plugins, 0);

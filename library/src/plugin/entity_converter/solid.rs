@@ -1,6 +1,6 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext, ShapeEntityConverterPlugin};
 use crate::model::frame::draw_type::DrawStyle;
-use crate::model::frame::entity::{FrameContent, FrameObject, StyleConfig};
+use crate::model::frame::entity::{FrameBounds, FrameContent, FrameObject, StyleConfig};
 use crate::model::{GeneratorContent, NodeContent};
 
 #[derive(Default)]
@@ -75,6 +75,8 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
         let path = format!("M 0 0 H {width} V {height} H 0 Z");
 
         Some(FrameObject {
+            source_node_id: node.id,
+            content_bounds: Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32)),
             content: FrameContent::Shape {
                 path,
                 styles: vec![StyleConfig {
