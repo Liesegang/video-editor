@@ -48,6 +48,7 @@ use crate::plugin::{
 
 const BUNDLE_MANIFEST_NAME: &str = "ruvie-plugin.toml";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+const RUNTIME_EFFECT_TIME_PROPERTY: &str = "u_time";
 
 #[repr(C)]
 struct AbiTableHeader {
@@ -1058,7 +1059,7 @@ impl EffectPlugin for RuntimeEffectPlugin {
             )));
         };
         let input_view = rgba8_view(input)?;
-        let time = match params.get("u_time") {
+        let time = match params.get(RUNTIME_EFFECT_TIME_PROPERTY) {
             Some(PropertyValue::Number(value)) if value.is_finite() => value.into_inner(),
             Some(_) => {
                 return Err(LibraryError::Plugin(format!(
@@ -2548,6 +2549,16 @@ fn validate_descriptor(descriptor: &PluginDescriptorV1) -> Result<(), LibraryErr
                         component.id
                     )));
                 }
+                if component
+                    .properties
+                    .iter()
+                    .any(|property| property.name == RUNTIME_EFFECT_TIME_PROPERTY)
+                {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime Effect '{}' reserves property '{}' for per-frame render time and must not declare it as instance config",
+                        component.id, RUNTIME_EFFECT_TIME_PROPERTY
+                    )));
+                }
             }
             LOADER_CATEGORY => {
                 if !component
@@ -3871,6 +3882,79 @@ mod tests {
                 .to_string()
                 .contains("must not declare properties")
         );
+    }
+
+    #[test]
+    fn effect_time_transport_cannot_collide_with_instance_config()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut reserved = effect_component();
+        let property = reserved
+            .properties
+            .first_mut()
+            .ok_or_else(|| std::io::Error::other("effect fixture has no property"))?;
+        property.name = RUNTIME_EFFECT_TIME_PROPERTY.to_string();
+        let Err(error) = validate_descriptor(&descriptor_with(reserved)) else {
+            return Err(std::io::Error::other(
+                "u_time must be rejected during bundle descriptor preflight",
+            )
+            .into());
+        };
+        assert!(error.to_string().contains("per-frame render time"));
+
+        let descriptor = effect_component();
+        let definitions = property_definitions(&descriptor)?;
+        let plugin = RuntimeEffectPlugin::new(
+            RuntimeComponent {
+                descriptor,
+                library: Arc::new(RuntimeLibrary {
+                    api: RuviePluginApiV1 {
+                        abi_version: RUVIE_PLUGIN_ABI_V1,
+                        struct_size: size_of::<RuviePluginApiV1>(),
+                        context: std::ptr::null_mut(),
+                        descriptor_json: None,
+                        invoke_json: None,
+                        free_buffer: None,
+                        query_extension: None,
+                    },
+                    _library: current_process_library(),
+                }),
+            },
+            definitions,
+            RuvieEffectCpuRgba8ApiV1 {
+                abi_version: RUVIE_PLUGIN_ABI_V1,
+                struct_size: size_of::<RuvieEffectCpuRgba8ApiV1>(),
+                context: std::ptr::null_mut(),
+                create_instance: None,
+                process: None,
+                release_instance: None,
+                free_frame: None,
+            },
+        )?;
+        let mut first = HashMap::from([(
+            "amount".to_string(),
+            PropertyValue::Number(OrderedFloat(0.5)),
+        )]);
+        first.insert(
+            RUNTIME_EFFECT_TIME_PROPERTY.to_string(),
+            PropertyValue::Number(OrderedFloat(1.0)),
+        );
+        let mut second = first.clone();
+        second.insert(
+            RUNTIME_EFFECT_TIME_PROPERTY.to_string(),
+            PropertyValue::Number(OrderedFloat(9.0)),
+        );
+        let first_key = plugin.config_key(&first)?;
+        let second_key = plugin.config_key(&second)?;
+        assert_eq!(first_key, second_key);
+        assert_eq!(
+            first_key
+                .0
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["amount"]
+        );
+        Ok(())
     }
 
     #[test]
