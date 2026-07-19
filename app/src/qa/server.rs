@@ -486,6 +486,7 @@ fn route(
             "/v1/input/press" => parse_pointer(&request.body).map(InputAction::Press),
             "/v1/input/release" => parse_pointer(&request.body).map(InputAction::Release),
             "/v1/input/click" => parse_pointer(&request.body).map(InputAction::Click),
+            "/v1/input/double-click" => parse_pointer(&request.body).map(InputAction::DoubleClick),
             "/v1/input/drag" => serde_json::from_slice::<DragRequest>(&request.body)
                 .map(InputAction::Drag)
                 .map_err(|error| format!("invalid JSON body: {error}")),
@@ -679,6 +680,33 @@ mod tests {
         let command = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(command.id, 1);
         assert!(matches!(command.action, InputAction::Click(_)));
+        assert_eq!(tracker.get(1).unwrap().phase, ActionPhase::Queued);
+    }
+
+    #[test]
+    fn double_click_endpoint_queues_one_coordinate_action() {
+        let (sender, receiver) = mpsc::sync_channel(4);
+        let (state_sender, _state_receiver) = mpsc::sync_channel(1);
+        let tracker = Arc::new(ActionTracker::default());
+        let server = QaServer::start(
+            0,
+            sender,
+            state_sender,
+            Arc::clone(&tracker),
+            egui::Context::default(),
+        )
+        .unwrap();
+        let body = r#"{"x":12.5,"y":42.0,"button":"primary"}"#;
+        let http = format!(
+            "POST /v1/input/double-click HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let response = request(server.address(), &http);
+        assert!(response.starts_with("HTTP/1.1 202 Accepted"));
+        let command = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(command.id, 1);
+        assert!(matches!(command.action, InputAction::DoubleClick(_)));
         assert_eq!(tracker.get(1).unwrap().phase, ActionPhase::Queued);
     }
 

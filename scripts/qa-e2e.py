@@ -97,6 +97,15 @@ def expected_pointer_frames(endpoint, payload):
             {"kind": "press", "point": point},
             {"kind": "release", "point": point},
         ]
+    if endpoint == "double-click":
+        point = {"x": payload["x"], "y": payload["y"]}
+        return [
+            {"kind": "settle", "point": point},
+            {"kind": "press", "click": 1, "point": point},
+            {"kind": "release", "click": 1, "point": point},
+            {"kind": "press", "click": 2, "point": point},
+            {"kind": "release", "click": 2, "point": point},
+        ]
     if endpoint != "drag":
         return None
     start = payload["from"]
@@ -331,6 +340,27 @@ class QaClient:
         point = self.point(component["rect_points"], x_fraction, y_fraction)
         self.inject(
             "click",
+            {
+                "x": point["x"],
+                "y": point["y"],
+                "coordinate_space": "points",
+                "button": button,
+            },
+            {
+                "component_id": component_id,
+                "component_frame": snapshot["frame"],
+                "component_rect_points": component["rect_points"],
+            },
+        )
+        return point
+
+    def double_click_component(
+        self, component_id, button="primary", x_fraction=0.5, y_fraction=0.5
+    ):
+        snapshot, component = self.component(component_id)
+        point = self.point(component["rect_points"], x_fraction, y_fraction)
+        self.inject(
+            "double-click",
             {
                 "x": point["x"],
                 "y": point["y"],

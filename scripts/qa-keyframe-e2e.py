@@ -118,11 +118,7 @@ def coordinate_drag(client, component_id, dx, dy, steps=12):
 
 
 def coordinate_double_click(client, component_id):
-    # Each click resolves the component again immediately before injection.
-    # Keeping the two clicks adjacent lets egui's normal double-click timing
-    # and hit testing decide whether the curve should receive the gesture.
-    client.click_component(component_id)
-    client.click_component(component_id)
+    client.double_click_component(component_id)
 
 
 def shortcut_undo_redo(client, redo=False):
