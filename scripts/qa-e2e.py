@@ -101,10 +101,11 @@ def expected_pointer_frames(endpoint, payload):
         point = {"x": payload["x"], "y": payload["y"]}
         return [
             {"kind": "settle", "point": point},
-            {"kind": "press", "click": 1, "point": point},
-            {"kind": "release", "click": 1, "point": point},
-            {"kind": "press", "click": 2, "point": point},
-            {"kind": "release", "click": 2, "point": point},
+            {
+                "kind": "double_click",
+                "point": point,
+                "events": ["press", "release", "press", "release"],
+            },
         ]
     if endpoint != "drag":
         return None
