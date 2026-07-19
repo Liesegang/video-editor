@@ -41,8 +41,7 @@ def target_property(project, node_id, property_name):
 
 
 def only_keyframe(project, node_id, property_name):
-    prop = target_property(project, node_id, property_name)
-    keyframes = prop["properties"]["keyframes"]
+    keyframes = property_keyframes(project, node_id, property_name)
     if len(keyframes) != 1:
         raise QaFailure(
             "{}.{} has {} keyframes, expected one".format(
@@ -50,6 +49,22 @@ def only_keyframe(project, node_id, property_name):
             )
         )
     return keyframes[0]
+
+
+def property_keyframes(project, node_id, property_name):
+    prop = target_property(project, node_id, property_name)
+    return prop["properties"]["keyframes"]
+
+
+def keyframe_by_id(project, node_id, property_name, keyframe_id):
+    return next(
+        (
+            keyframe
+            for keyframe in property_keyframes(project, node_id, property_name)
+            if keyframe["id"] == keyframe_id
+        ),
+        None,
+    )
 
 
 def numeric_keyframe_value(project, node_id, property_name):
@@ -100,6 +115,133 @@ def coordinate_drag(client, component_id, dx, dy, steps=12):
             "component_rect_points": component["rect_points"],
         },
     )
+
+
+def coordinate_double_click(client, component_id):
+    # Each click resolves the component again immediately before injection.
+    # Keeping the two clicks adjacent lets egui's normal double-click timing
+    # and hit testing decide whether the curve should receive the gesture.
+    client.click_component(component_id)
+    client.click_component(component_id)
+
+
+def shortcut_undo_redo(client, redo=False):
+    client.key("z", True, command=True, shift=redo)
+    client.key("z", False, command=True, shift=redo)
+
+
+def graph_keyframe_component(property_name, keyframe_id):
+    return "graph.keyframe.{}:{}".format(property_name, keyframe_id)
+
+
+def graph_easing_component(keyframe_id, option):
+    return "graph.keyframe_menu.easing.{}:{}".format(option, keyframe_id)
+
+
+def set_graph_easing(client, property_name, keyframe_id, option, serialized_easing):
+    point_id = graph_keyframe_component(property_name, keyframe_id)
+    wait_component_settled(client, point_id)
+    client.click_component(point_id, button="secondary")
+    if option == "ease_in_out_cubic":
+        family_id = graph_easing_component(keyframe_id, "family.cubic")
+        client.wait_component(family_id)
+        client.click_component(family_id)
+    option_id = graph_easing_component(keyframe_id, option)
+    client.wait_component(option_id)
+    before = client.state()
+    client.click_component(option_id)
+    after = client.wait_project(
+        "Graph easing {}".format(option),
+        lambda project: keyframe_by_id(
+            project, TRANSFORM_EFFECTOR, "tx", keyframe_id
+        )["easing"]
+        == serialized_easing,
+    )
+    assert_history_delta(before, after, 1, "Graph easing {}".format(option))
+    return before, after
+
+
+def click_graph_time(client, global_time):
+    snapshot = client.component_snapshot()
+    components = {item["id"]: item for item in snapshot["components"]}
+    canvas = components["graph.canvas"]
+    ruler = components["graph.ruler"]
+    canvas_rect = canvas["rect_points"]
+    ruler_rect = ruler["rect_points"]
+    x = (
+        canvas_rect["min_x"]
+        + float(canvas["metadata"]["pan"]["x"])
+        + global_time * float(canvas["metadata"]["zoom_x"])
+    )
+    if not ruler_rect["min_x"] < x < ruler_rect["max_x"]:
+        raise QaFailure("Graph time {} is outside the visible ruler".format(global_time))
+    client.inject(
+        "click",
+        {
+            "x": x,
+            "y": ruler_rect["center_y"],
+            "coordinate_space": "points",
+            "button": "primary",
+        },
+        {
+            "component_id": "graph.ruler",
+            "component_frame": snapshot["frame"],
+            "component_rect_points": ruler_rect,
+            "target_global_time": global_time,
+        },
+    )
+
+    def reached_time():
+        state = client.state()
+        return (
+            state
+            if abs(float(state["editor"]["timeline"]["current_time"]) - global_time)
+            < 1.0e-3
+            else None
+        )
+
+    return client.wait_until("Graph ruler time {}".format(global_time), reached_time)
+
+
+def numeric_easing_value(start_value, end_value, fraction, easing):
+    if easing == "Linear":
+        eased = fraction
+    elif easing == "EaseInOutCubic":
+        if fraction < 0.5:
+            eased = 4.0 * fraction * fraction * fraction
+        else:
+            eased = 1.0 - ((-2.0 * fraction + 2.0) ** 3) / 2.0
+    else:
+        raise QaFailure("unsupported E2E easing {}".format(easing))
+    return start_value + (end_value - start_value) * eased
+
+
+def wait_inspector_numeric_value(client, component_id, expected, label):
+    def matches():
+        try:
+            _, component = client.component(component_id)
+            value = float(component["metadata"]["value"])
+        except (QaFailure, KeyError, TypeError, ValueError):
+            return None
+        return component if abs(value - expected) < 1.0e-4 else None
+
+    component = client.wait_until(label, matches)
+    approximately(float(component["metadata"]["value"]), expected, label)
+    return component
+
+
+def assert_undo_transition(before, after, operation):
+    if after["history"]["undo_depth"] != before["history"]["undo_depth"] - 1:
+        raise QaFailure("{} did not remove exactly one Undo state".format(operation))
+    if after["history"]["redo_depth"] != before["history"]["redo_depth"] + 1:
+        raise QaFailure("{} did not create exactly one Redo state".format(operation))
+
+
+def assert_redo_transition(before, after, operation):
+    if after["history"]["undo_depth"] != before["history"]["undo_depth"] + 1:
+        raise QaFailure("{} did not restore exactly one Undo state".format(operation))
+    if after["history"]["redo_depth"] != before["history"]["redo_depth"] - 1:
+        raise QaFailure("{} did not consume exactly one Redo state".format(operation))
 
 
 def wait_component_settled(client, component_id, consecutive_frames=2):
@@ -274,7 +416,6 @@ def run_suite(client):
     old_tx = numeric_keyframe_value(
         before_update["project"], TRANSFORM_EFFECTOR, "tx"
     )
-    preview_before = before_update["editor"]["preview"]
     coordinate_drag(client, tx_control, 22.0, 0.0)
     updated = client.wait_project(
         "Transform direct keyframe value update",
@@ -283,9 +424,7 @@ def run_suite(client):
     )
     edited_tx = numeric_keyframe_value(updated["project"], TRANSFORM_EFFECTOR, "tx")
     assert_history_delta(before_update, updated, 1, "Transform keyframe value update")
-    client.wait_preview_change(
-        preview_before["pixel_hash"], preview_before["render_revision"]
-    )
+    client.wait_preview_render_after(before_update, "Inspector keyframe value update")
 
     before_remove = client.state()
     client.click_component(tx_key)
@@ -336,8 +475,8 @@ def run_suite(client):
     client.wait_component("graph.canvas")
     current = client.state()
     tx_frame = only_keyframe(current["project"], TRANSFORM_EFFECTOR, "tx")
-    tx_property = "direct:tx"
-    tx_point = "graph.keyframe.{}:{}".format(tx_property, tx_frame["id"])
+    tx_property = "node:tx"
+    tx_point = graph_keyframe_component(tx_property, tx_frame["id"])
     client.wait_component(tx_point)
     modified_click(client, tx_point)
 
@@ -349,9 +488,72 @@ def run_suite(client):
         else None,
     )
 
+    # Add a second keyframe with the Graph's actual curve double-click path.
+    # The component center is one sampled point on the rendered tx curve and
+    # deliberately avoids every existing keyframe hit rectangle.
+    curve_id = "graph.curve_hit." + tx_property
+    _, curve_component = wait_component_settled(client, curve_id)
+    curve_metadata = curve_component["metadata"]
+    graph_add_before = client.state()
+    existing_ids = {
+        keyframe["id"]
+        for keyframe in property_keyframes(
+            graph_add_before["project"], TRANSFORM_EFFECTOR, "tx"
+        )
+    }
+    coordinate_double_click(client, curve_id)
+    graph_added = client.wait_project(
+        "Graph curve double-click keyframe add",
+        lambda project: len(property_keyframes(project, TRANSFORM_EFFECTOR, "tx"))
+        == 2,
+    )
+    assert_history_delta(graph_add_before, graph_added, 1, "Graph double-click add")
+    added_keys = [
+        keyframe
+        for keyframe in property_keyframes(
+            graph_added["project"], TRANSFORM_EFFECTOR, "tx"
+        )
+        if keyframe["id"] not in existing_ids
+    ]
+    if len(added_keys) != 1:
+        raise QaFailure("Graph double-click did not add exactly one new keyframe")
+    added_key = added_keys[0]
+    approximately(
+        float(added_key["time"]),
+        float(curve_metadata["source_time"]),
+        "Graph added source time",
+        tolerance=2.0e-3,
+    )
+    approximately(
+        float(added_key["value"]),
+        float(curve_metadata["value"]),
+        "Graph added curve value",
+        tolerance=2.0e-3,
+    )
+    client.wait_preview_render_after(graph_add_before, "Graph keyframe add")
+
+    # Context-menu easing is also a real coordinate path. Easing belongs to
+    # the segment's start keyframe, so select the earlier of the two keys.
+    segment_start = min(
+        property_keyframes(graph_added["project"], TRANSFORM_EFFECTOR, "tx"),
+        key=lambda keyframe: float(keyframe["time"]),
+    )
+    cubic_before, _ = set_graph_easing(
+        client,
+        tx_property,
+        segment_start["id"],
+        "ease_in_out_cubic",
+        "EaseInOutCubic",
+    )
+    client.wait_preview_render_after(cubic_before, "Graph cubic easing")
+
+    # Preserve the existing coordinate drag regression, now with two keys in
+    # the same authoritative property.
     graph_before = client.state()
     preview_before = graph_before["editor"]["preview"]
-    tx_before_key = only_keyframe(graph_before["project"], TRANSFORM_EFFECTOR, "tx")
+    tx_before_key = keyframe_by_id(
+        graph_before["project"], TRANSFORM_EFFECTOR, "tx", tx_frame["id"]
+    )
     _, canvas = client.component("graph.canvas")
     zoom_x = float(canvas["metadata"]["zoom_x"])
     zoom_y = float(canvas["metadata"]["zoom_y"])
@@ -360,10 +562,14 @@ def run_suite(client):
     coordinate_drag(client, tx_point, dx, dy, steps=12)
     graph_after = client.wait_project(
         "direct Transform Graph coordinate drag",
-        lambda project: only_keyframe(project, TRANSFORM_EFFECTOR, "tx")["time"]
+        lambda project: keyframe_by_id(
+            project, TRANSFORM_EFFECTOR, "tx", tx_frame["id"]
+        )["time"]
         != tx_before_key["time"],
     )
-    tx_after_key = only_keyframe(graph_after["project"], TRANSFORM_EFFECTOR, "tx")
+    tx_after_key = keyframe_by_id(
+        graph_after["project"], TRANSFORM_EFFECTOR, "tx", tx_frame["id"]
+    )
     approximately(
         float(tx_after_key["time"]) - float(tx_before_key["time"]),
         dx / zoom_x,
@@ -385,21 +591,181 @@ def run_suite(client):
     # by Graph Editor for the same direct operation Node.
     direct_tx_control = "inspector.property.node:{}:tx".format(TRANSFORM_EFFECTOR)
     ensure_in_inspector(client, direct_tx_control)
-    inspector_component = client.wait_until(
-        "Inspector value reflecting Graph",
-        lambda: client.component(direct_tx_control)[1]
-        if abs(
-            float(client.component(direct_tx_control)[1]["metadata"]["value"])
-            - float(tx_after_key["value"])
-        )
-        < 1.0e-4
-        else None,
-    )
-    approximately(
-        float(inspector_component["metadata"]["value"]),
+    wait_inspector_numeric_value(
+        client,
+        direct_tx_control,
         float(tx_after_key["value"]),
         "Inspector authoritative value",
     )
+
+    # Move the playhead to a non-symmetric point within the two-key segment.
+    # Linear and EaseInOutCubic differ at 30%, so both Inspector metadata and
+    # the rendered Preview hash independently expose the easing mutation.
+    keys = sorted(
+        property_keyframes(graph_after["project"], TRANSFORM_EFFECTOR, "tx"),
+        key=lambda keyframe: float(keyframe["time"]),
+    )
+    start_key, end_key = keys
+    if abs(float(end_key["value"]) - float(start_key["value"])) < 1.0e-4:
+        raise QaFailure("Graph move did not create a visible easing value range")
+    if start_key["easing"] != "EaseInOutCubic":
+        cubic_before, _ = set_graph_easing(
+            client,
+            tx_property,
+            start_key["id"],
+            "ease_in_out_cubic",
+            "EaseInOutCubic",
+        )
+        client.wait_preview_render_after(cubic_before, "segment cubic easing")
+
+    fraction = 0.3
+    source_time = float(start_key["time"]) + (
+        float(end_key["time"]) - float(start_key["time"])
+    ) * fraction
+    easing_global_time = source_time + 1.0
+    seek_before = client.state()
+    click_graph_time(client, easing_global_time)
+    cubic_render = client.wait_preview_render_after(seek_before, "Graph ruler seek")
+    cubic_expected = numeric_easing_value(
+        float(start_key["value"]),
+        float(end_key["value"]),
+        fraction,
+        "EaseInOutCubic",
+    )
+    wait_inspector_numeric_value(
+        client,
+        direct_tx_control,
+        cubic_expected,
+        "Inspector cubic value",
+    )
+
+    set_graph_easing(
+        client,
+        tx_property,
+        start_key["id"],
+        "linear",
+        "Linear",
+    )
+    linear_render = client.wait_preview_change(
+        cubic_render["editor"]["preview"]["pixel_hash"],
+        cubic_render["editor"]["preview"]["render_revision"],
+    )
+    linear_expected = numeric_easing_value(
+        float(start_key["value"]),
+        float(end_key["value"]),
+        fraction,
+        "Linear",
+    )
+    wait_inspector_numeric_value(
+        client,
+        direct_tx_control,
+        linear_expected,
+        "Inspector linear value",
+    )
+
+    undo_before = client.state()
+    shortcut_undo_redo(client)
+    cubic_undo = client.wait_project(
+        "Undo Graph linear easing",
+        lambda project: keyframe_by_id(
+            project, TRANSFORM_EFFECTOR, "tx", start_key["id"]
+        )["easing"]
+        == "EaseInOutCubic",
+    )
+    assert_undo_transition(undo_before, cubic_undo, "Graph easing Undo")
+    cubic_undo_render = client.wait_preview_change(
+        linear_render["editor"]["preview"]["pixel_hash"],
+        linear_render["editor"]["preview"]["render_revision"],
+    )
+    wait_inspector_numeric_value(
+        client,
+        direct_tx_control,
+        cubic_expected,
+        "Inspector easing Undo value",
+    )
+
+    redo_before = client.state()
+    shortcut_undo_redo(client, redo=True)
+    linear_redo = client.wait_project(
+        "Redo Graph linear easing",
+        lambda project: keyframe_by_id(
+            project, TRANSFORM_EFFECTOR, "tx", start_key["id"]
+        )["easing"]
+        == "Linear",
+    )
+    assert_redo_transition(redo_before, linear_redo, "Graph easing Redo")
+    linear_redo_render = client.wait_preview_change(
+        cubic_undo_render["editor"]["preview"]["pixel_hash"],
+        cubic_undo_render["editor"]["preview"]["render_revision"],
+    )
+
+    set_graph_easing(
+        client,
+        tx_property,
+        start_key["id"],
+        "ease_in_out_cubic",
+        "EaseInOutCubic",
+    )
+    cubic_again_render = client.wait_preview_change(
+        linear_redo_render["editor"]["preview"]["pixel_hash"],
+        linear_redo_render["editor"]["preview"]["render_revision"],
+    )
+
+    # Delete the key added by double-click through its rendered context item.
+    # Undo/Redo must restore/remove that exact stable KeyframeId.
+    added_point = graph_keyframe_component(tx_property, added_key["id"])
+    wait_component_settled(client, added_point)
+    client.click_component(added_point, button="secondary")
+    delete_item = "graph.keyframe_menu.delete:" + added_key["id"]
+    client.wait_component(delete_item)
+    delete_before = client.state()
+    client.click_component(delete_item)
+    deleted = client.wait_project(
+        "Graph context keyframe delete",
+        lambda project: keyframe_by_id(
+            project, TRANSFORM_EFFECTOR, "tx", added_key["id"]
+        )
+        is None,
+    )
+    assert_history_delta(delete_before, deleted, 1, "Graph keyframe delete")
+    delete_render = client.wait_preview_change(
+        cubic_again_render["editor"]["preview"]["pixel_hash"],
+        cubic_again_render["editor"]["preview"]["render_revision"],
+    )
+
+    delete_undo_before = client.state()
+    shortcut_undo_redo(client)
+    delete_undone = client.wait_project(
+        "Undo Graph keyframe delete",
+        lambda project: keyframe_by_id(
+            project, TRANSFORM_EFFECTOR, "tx", added_key["id"]
+        )
+        is not None,
+    )
+    assert_undo_transition(delete_undo_before, delete_undone, "Graph delete Undo")
+    delete_undo_render = client.wait_preview_change(
+        delete_render["editor"]["preview"]["pixel_hash"],
+        delete_render["editor"]["preview"]["render_revision"],
+    )
+
+    delete_redo_before = client.state()
+    shortcut_undo_redo(client, redo=True)
+    delete_redone = client.wait_project(
+        "Redo Graph keyframe delete",
+        lambda project: keyframe_by_id(
+            project, TRANSFORM_EFFECTOR, "tx", added_key["id"]
+        )
+        is None,
+    )
+    assert_redo_transition(delete_redo_before, delete_redone, "Graph delete Redo")
+    client.wait_preview_change(
+        delete_undo_render["editor"]["preview"]["pixel_hash"],
+        delete_undo_render["editor"]["preview"]["render_revision"],
+    )
+
+    final_tx_key = only_keyframe(delete_redone["project"], TRANSFORM_EFFECTOR, "tx")
+    if final_tx_key["id"] != tx_after_key["id"]:
+        raise QaFailure("Graph delete removed the pre-existing Transform keyframe")
 
     # The fixture Clip starts at global 1s with trim=0/stretch=1, so the dialog
     # maps source time to global time by exactly +1.
@@ -466,6 +832,30 @@ def run_suite(client):
         "final_history": final["history"],
         "final_preview": final["editor"]["preview"],
         "final_selection": final["editor"]["selection"],
+        "graph_crud": {
+            "property": tx_property,
+            "curve_component_id": curve_id,
+            "existing_keyframe_id": tx_frame["id"],
+            "added_keyframe_id": added_key["id"],
+            "added_source_time": added_key["time"],
+            "moved_source_time": tx_after_key["time"],
+            "sample_global_time": easing_global_time,
+            "cubic_inspector_value": cubic_expected,
+            "linear_inspector_value": linear_expected,
+            "cubic_preview_hash": cubic_again_render["editor"]["preview"][
+                "pixel_hash"
+            ],
+            "linear_preview_hash": linear_redo_render["editor"]["preview"][
+                "pixel_hash"
+            ],
+            "delete_redo_removed_added_keyframe": keyframe_by_id(
+                delete_redone["project"],
+                TRANSFORM_EFFECTOR,
+                "tx",
+                added_key["id"],
+            )
+            is None,
+        },
         "actions": client.evidence,
         "health_frame": health["frame"],
     }
