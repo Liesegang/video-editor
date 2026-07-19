@@ -884,11 +884,6 @@ impl PropertyValue {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum PropertyTarget {
-    Direct,
-}
-
 #[derive(Serialize, Deserialize, Clone, Default, PartialEq, Eq, Debug)] // Added Debug
 #[serde(transparent)]
 pub struct PropertyMap {

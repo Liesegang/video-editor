@@ -2,7 +2,7 @@ use crate::error::LibraryError;
 
 use super::property_ops::{PropertyOwner, property_map, property_map_mut};
 use crate::model::project::Project;
-use crate::model::property::{KeyframeId, KeyframeUpdate, Property, PropertyTarget, PropertyValue};
+use crate::model::property::{KeyframeId, KeyframeUpdate, Property, PropertyValue};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{Arc, RwLock};
 
@@ -10,14 +10,13 @@ pub struct KeyframeHandler;
 
 /// One keyframe mutation within an atomic batch.
 ///
-/// The owner, nested target, property key, and persistent keyframe ID together
+/// The owner, property key, and persistent keyframe ID together
 /// form the complete address. This deliberately carries no detached Project
 /// state: [`KeyframeHandler`] resolves every address against the authoritative
 /// model while holding one write lock.
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyframeBatchUpdate {
     pub owner: PropertyOwner,
-    pub target: PropertyTarget,
     pub property_key: String,
     pub keyframe_id: KeyframeId,
     pub update: KeyframeUpdate,
@@ -26,29 +25,26 @@ pub struct KeyframeBatchUpdate {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct PropertyAddress {
     owner: PropertyOwner,
-    target: PropertyTarget,
     property_key: String,
 }
 
 impl KeyframeHandler {
-    /// Add a keyframe to an explicitly owned direct/effect/style property.
+    /// Add a keyframe to an explicitly owned property.
     pub fn add_keyframe(
         project: &Arc<RwLock<Project>>,
         owner: PropertyOwner,
-        target: PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        Self::add_keyframe_with_id(project, owner, target, property_key, time, value, easing)
+        Self::add_keyframe_with_id(project, owner, property_key, time, value, easing)
             .map(|_| ())
     }
 
     pub fn add_keyframe_with_id(
         project: &Arc<RwLock<Project>>,
         owner: PropertyOwner,
-        target: PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
@@ -58,7 +54,7 @@ impl KeyframeHandler {
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
-        let prop_map = property_map_mut(&mut proj, owner, target)?;
+        let prop_map = property_map_mut(&mut proj, owner)?;
 
         prop_map
             .upsert_keyframe_with_id(property_key, time, value, easing)
@@ -72,7 +68,6 @@ impl KeyframeHandler {
     pub fn update_keyframe_by_id(
         project: &Arc<RwLock<Project>>,
         owner: PropertyOwner,
-        target: PropertyTarget,
         property_key: &str,
         keyframe_id: KeyframeId,
         update: KeyframeUpdate,
@@ -81,7 +76,7 @@ impl KeyframeHandler {
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
-        let prop_map = property_map_mut(&mut proj, owner, target)?;
+        let prop_map = property_map_mut(&mut proj, owner)?;
         let property = prop_map
             .get_mut(property_key)
             .ok_or_else(|| LibraryError::Project(format!("Property {} not found", property_key)))?;
@@ -95,7 +90,7 @@ impl KeyframeHandler {
         Ok(())
     }
 
-    /// Atomically update keyframes across direct and nested property targets.
+    /// Atomically update keyframes across property owners.
     ///
     /// Only the affected [`Property`] values are cloned. Every update is
     /// validated and applied to those staged properties first; the
@@ -119,20 +114,19 @@ impl KeyframeHandler {
         for update in updates {
             let address = PropertyAddress {
                 owner: update.owner,
-                target: update.target,
                 property_key: update.property_key.clone(),
             };
             let property = match staged.entry(address) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => {
                     let address = entry.key();
-                    let property = property_map(&project, address.owner, address.target)?
+                    let property = property_map(&project, address.owner)?
                         .get(&address.property_key)
                         .cloned()
                         .ok_or_else(|| {
                             LibraryError::Project(format!(
-                                "Property {} not found on {:?} {:?}",
-                                address.property_key, address.owner, address.target
+                                "Property {} not found on {:?}",
+                                address.property_key, address.owner
                             ))
                         })?;
                     entry.insert(property)
@@ -140,8 +134,8 @@ impl KeyframeHandler {
             };
             if !property.update_keyframe_by_id(update.keyframe_id, update.update.clone()) {
                 return Err(LibraryError::Project(format!(
-                    "Failed to update keyframe {} for property {} on {:?} {:?}",
-                    update.keyframe_id, update.property_key, update.owner, update.target
+                    "Failed to update keyframe {} for property {} on {:?}",
+                    update.keyframe_id, update.property_key, update.owner
                 )));
             }
         }
@@ -150,24 +144,22 @@ impl KeyframeHandler {
         // makes the following replacement pass infallible under the same lock:
         // replacing a Property cannot remove an owner or nested target.
         for address in staged.keys() {
-            if property_map(&project, address.owner, address.target)?
+            if property_map(&project, address.owner)?
                 .get(&address.property_key)
                 .is_none()
             {
                 return Err(LibraryError::Project(format!(
-                    "Property {} disappeared from {:?} {:?}",
-                    address.property_key, address.owner, address.target
+                    "Property {} disappeared from {:?}",
+                    address.property_key, address.owner
                 )));
             }
         }
         for (address, property) in staged {
-            let map =
-                property_map_mut(&mut project, address.owner, address.target).map_err(|_| {
-                    LibraryError::Runtime(
-                        "Validated property target changed while its write lock was held"
-                            .to_string(),
-                    )
-                })?;
+            let map = property_map_mut(&mut project, address.owner).map_err(|_| {
+                LibraryError::Runtime(
+                    "Validated property owner changed while its write lock was held".to_string(),
+                )
+            })?;
             map.set(address.property_key, property);
         }
 
@@ -178,7 +170,6 @@ impl KeyframeHandler {
     pub fn remove_keyframe_by_id(
         project: &Arc<RwLock<Project>>,
         owner: PropertyOwner,
-        target: PropertyTarget,
         property_key: &str,
         keyframe_id: KeyframeId,
     ) -> Result<(), LibraryError> {
@@ -186,7 +177,7 @@ impl KeyframeHandler {
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
 
-        let prop_map = property_map_mut(&mut proj, owner, target)?;
+        let prop_map = property_map_mut(&mut proj, owner)?;
         let property = prop_map
             .get_mut(property_key)
             .ok_or_else(|| LibraryError::Project(format!("Property {} not found", property_key)))?;
@@ -231,7 +222,6 @@ mod tests {
         let moving_id = KeyframeHandler::add_keyframe_with_id(
             &project,
             owner,
-            PropertyTarget::Direct,
             "opacity",
             1.0,
             number(10.0),
@@ -241,7 +231,6 @@ mod tests {
         let stationary_id = KeyframeHandler::add_keyframe_with_id(
             &project,
             owner,
-            PropertyTarget::Direct,
             "opacity",
             2.0,
             number(20.0),
@@ -252,7 +241,6 @@ mod tests {
         KeyframeHandler::update_keyframe_by_id(
             &project,
             owner,
-            PropertyTarget::Direct,
             "opacity",
             moving_id,
             KeyframeUpdate {
@@ -265,7 +253,6 @@ mod tests {
         KeyframeHandler::update_keyframe_by_id(
             &project,
             owner,
-            PropertyTarget::Direct,
             "opacity",
             moving_id,
             KeyframeUpdate {
@@ -325,7 +312,6 @@ mod tests {
             .iter()
             .map(|(owner, keyframe_id, value)| KeyframeBatchUpdate {
                 owner: *owner,
-                target: PropertyTarget::Direct,
                 property_key: "amount".to_string(),
                 keyframe_id: *keyframe_id,
                 update: KeyframeUpdate {
@@ -343,8 +329,7 @@ mod tests {
             let keyframe = read
                 .get_node(owner.id())
                 .unwrap()
-                .property_map(PropertyTarget::Direct)
-                .unwrap()
+                .properties
                 .get("amount")
                 .unwrap()
                 .keyframe_by_id(*keyframe_id)
@@ -360,7 +345,6 @@ mod tests {
         let rejected = [
             KeyframeBatchUpdate {
                 owner: first_owner,
-                target: PropertyTarget::Direct,
                 property_key: "amount".to_string(),
                 keyframe_id: first_keyframe_id,
                 update: KeyframeUpdate {
@@ -370,7 +354,6 @@ mod tests {
             },
             KeyframeBatchUpdate {
                 owner: second_owner,
-                target: PropertyTarget::Direct,
                 property_key: "amount".to_string(),
                 keyframe_id: KeyframeId::new(),
                 update: KeyframeUpdate {

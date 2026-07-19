@@ -9,7 +9,7 @@ use crate::error::LibraryError;
 use crate::model::asset::Asset;
 use crate::model::frame::color::Color;
 use crate::model::project::{Composition, NodeGraphBundle, Project};
-use crate::model::property::{KeyframeId, KeyframeUpdate, PropertyTarget, PropertyValue};
+use crate::model::property::{KeyframeId, KeyframeUpdate, PropertyValue};
 use crate::model::{Node, Track};
 use crate::plugin::PluginManager;
 use std::rc::Rc;
@@ -452,7 +452,6 @@ impl EditorService {
     ) -> Result<(), LibraryError> {
         self.project_manager.update_property_or_keyframe(
             PropertyOwner::Clip(clip_id),
-            PropertyTarget::Direct,
             property_key,
             0.0,
             value,
@@ -510,27 +509,25 @@ impl EditorService {
     pub fn add_keyframe(
         &self,
         owner: PropertyOwner,
-        target: PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
         self.project_manager
-            .add_keyframe(owner, target, property_key, time, value, easing)
+            .add_keyframe(owner, property_key, time, value, easing)
     }
 
     pub fn add_keyframe_with_id(
         &self,
         owner: PropertyOwner,
-        target: PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<KeyframeId, LibraryError> {
         self.project_manager
-            .add_keyframe_with_id(owner, target, property_key, time, value, easing)
+            .add_keyframe_with_id(owner, property_key, time, value, easing)
     }
 
     // Aliases & Sequences
@@ -576,7 +573,6 @@ impl EditorService {
     pub fn update_property_or_keyframe(
         &self,
         owner: PropertyOwner,
-        target: PropertyTarget,
         property_key: &str,
         time: f64,
         value: PropertyValue,
@@ -584,7 +580,6 @@ impl EditorService {
     ) -> Result<(), LibraryError> {
         self.project_manager.update_property_or_keyframe(
             owner,
-            target,
             property_key,
             time,
             value,
@@ -595,13 +590,12 @@ impl EditorService {
     pub fn update_keyframe_by_id(
         &self,
         owner: PropertyOwner,
-        target: PropertyTarget,
         property_key: &str,
         keyframe_id: KeyframeId,
         update: KeyframeUpdate,
     ) -> Result<(), LibraryError> {
         self.project_manager
-            .update_keyframe_by_id(owner, target, property_key, keyframe_id, update)
+            .update_keyframe_by_id(owner, property_key, keyframe_id, update)
     }
 
     pub fn update_keyframes_batch(
@@ -614,12 +608,11 @@ impl EditorService {
     pub fn remove_keyframe_by_id(
         &self,
         owner: PropertyOwner,
-        target: PropertyTarget,
         property_key: &str,
         keyframe_id: KeyframeId,
     ) -> Result<(), LibraryError> {
         self.project_manager
-            .remove_keyframe_by_id(owner, target, property_key, keyframe_id)
+            .remove_keyframe_by_id(owner, property_key, keyframe_id)
     }
 
     pub fn has_asset_with_path(&self, path: &str) -> bool {
@@ -647,14 +640,12 @@ impl EditorService {
     pub fn set_property_attribute(
         &self,
         owner: PropertyOwner,
-        target: PropertyTarget,
         property_key: &str,
         attribute_key: &str,
         attribute_value: PropertyValue,
     ) -> Result<(), LibraryError> {
         self.project_manager.set_property_attribute(
             owner,
-            target,
             property_key,
             attribute_key,
             attribute_value,
@@ -670,7 +661,6 @@ impl EditorService {
     ) -> Result<(), LibraryError> {
         self.project_manager.set_property_attribute(
             PropertyOwner::Clip(clip_id),
-            PropertyTarget::Direct,
             property_key,
             attribute_key,
             attribute_value,

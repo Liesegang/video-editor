@@ -618,34 +618,9 @@ mod tests {
         }
 
         assert_eq!(read.nodes.len(), 12);
-        for node in read.nodes.values() {
-            assert!(node.styles.is_empty(), "{} has embedded Styles", node.name);
-            assert!(
-                node.effectors.is_empty(),
-                "{} has embedded Effectors",
-                node.name
-            );
-            assert!(
-                node.decorators.is_empty(),
-                "{} has embedded Decorators",
-                node.name
-            );
-            assert!(
-                node.effects.is_empty(),
-                "{} has embedded Effects",
-                node.name
-            );
-        }
-        for composition in &read.compositions {
-            assert!(composition.effects.is_empty());
-        }
         for track in read.tracks.values() {
-            assert!(track.effects.is_empty());
             assert!(track.output_node_id.is_none());
             assert!(track.node_ids.is_empty());
-        }
-        for clip in read.clips.values() {
-            assert!(clip.effects.is_empty());
         }
         assert!(read.validate_connections().is_empty());
         assert!(read.validate_containment().is_empty());

@@ -6,7 +6,7 @@ use library::model::project::{
     Composition, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
     PortAddress, PortOwner, Project, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
-use library::model::property::{Property, PropertyTarget, PropertyValue, Vec2};
+use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{Clip, GeneratorContent, Node, NodeContent};
 use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
@@ -249,7 +249,6 @@ fn inspector_mutation_immediately_reaches_timeline_preview_save_and_export_snaps
     manager
         .update_property_or_keyframe(
             library::editor::handlers::property_ops::PropertyOwner::Node(node_id),
-            PropertyTarget::Direct,
             "position",
             0.0,
             PropertyValue::Vec2(Vec2 {

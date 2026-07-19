@@ -7,7 +7,7 @@ use crate::model::vector::VectorEditorState;
 use library::PropertyOwner;
 use library::animation::EasingFunction; // Added import
 use library::model::project::PortOwner;
-use library::model::property::{KeyframeId, PropertyTarget};
+use library::model::property::KeyframeId;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum KeyframeValueComponent {
@@ -59,8 +59,6 @@ pub struct KeyframeDialogState {
     pub property_name: String,
     #[serde(skip)]
     pub owner: Option<PropertyOwner>,
-    #[serde(skip)]
-    pub target: Option<PropertyTarget>,
     pub property_key: String,
     #[serde(skip)]
     pub keyframe_id: Option<KeyframeId>,
@@ -101,7 +99,6 @@ impl Default for KeyframeDialogState {
             entity_id: None,
             property_name: String::new(),
             owner: None,
-            target: None,
             property_key: String::new(),
             keyframe_id: None,
             component: KeyframeValueComponent::Scalar,

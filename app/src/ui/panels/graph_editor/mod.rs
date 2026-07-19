@@ -7,9 +7,9 @@ pub use utils::PropertyComponent;
 use utils::*;
 
 use egui::{Color32, Sense, Ui, Vec2};
-use library::EditorService;
 use library::model::project::Project;
-use library::model::property::{Property, PropertyMap, PropertyTarget, PropertyValue};
+use library::model::property::{Property, PropertyMap, PropertyValue};
+use library::EditorService;
 use std::sync::{Arc, RwLock};
 
 use crate::action::HistoryManager;
@@ -62,13 +62,12 @@ fn numeric_components(property: &Property) -> Vec<PropertyComponent> {
 
 fn append_property_map<'a>(
     output: &mut Vec<(String, &'a Property, &'a PropertyMap, PropertyComponent)>,
-    target: PropertyTarget,
     properties: &'a PropertyMap,
 ) {
     for (property_key, property) in properties.iter() {
         for component in numeric_components(property) {
             output.push((
-                scoped_property_name(target, property_key, component),
+                graph_property_name(property_key, component),
                 property,
                 properties,
                 component,
@@ -142,60 +141,7 @@ pub fn graph_editor_panel(
 
         let mut properties_to_plot: Vec<(String, &Property, &PropertyMap, PropertyComponent)> =
             Vec::new();
-
-        for (k, p) in entity.properties.iter() {
-            let mut components = Vec::new();
-
-            match p.evaluator.as_str() {
-                "keyframe" => {
-                    // Check first keyframe to determine type
-                    if let Some(first) = p.keyframes().first() {
-                        match &first.value {
-                            PropertyValue::Number(_) => {
-                                components.push(PropertyComponent::Scalar);
-                            }
-                            PropertyValue::Vec2(_) => {
-                                components.push(PropertyComponent::X);
-                                components.push(PropertyComponent::Y);
-                            }
-                            _ => {
-                                log::trace!(
-                                    "GraphEditor: Skipping keyframe property {} with non-numeric type {:?}",
-                                    k,
-                                    first.value
-                                );
-                            }
-                        }
-                    }
-                }
-                "constant" => match p.value() {
-                    Some(PropertyValue::Number(_)) => {
-                        components.push(PropertyComponent::Scalar);
-                    }
-                    Some(PropertyValue::Vec2(_)) => {
-                        components.push(PropertyComponent::X);
-                        components.push(PropertyComponent::Y);
-                    }
-                    _ => {
-                        log::trace!(
-                            "GraphEditor: Skipping constant property {} with non-numeric value {:?}",
-                            k,
-                            p.value()
-                        );
-                    }
-                },
-                _ => {}
-            }
-
-            for comp in components {
-                properties_to_plot.push((
-                    scoped_property_name(PropertyTarget::Direct, k, comp),
-                    p,
-                    &entity.properties,
-                    comp,
-                ));
-            }
-        }
+        append_property_map(&mut properties_to_plot, &entity.properties);
 
         // Capture clip range for visualization
         let containing_clip = proj_read
@@ -210,130 +156,6 @@ pub fn graph_editor_panel(
                 .unwrap_or(composition.duration);
             Some((start, start + duration))
         };
-        for effect in &entity.effects {
-            for (prop_key, prop) in effect.properties.iter() {
-                let mut components = Vec::new();
-                match prop.evaluator.as_str() {
-                    "keyframe" => {
-                        if let Some(first) = prop.keyframes().first() {
-                            match &first.value {
-                                PropertyValue::Number(_) => {
-                                    components.push(PropertyComponent::Scalar);
-                                }
-                                PropertyValue::Vec2(_) => {
-                                    components.push(PropertyComponent::X);
-                                    components.push(PropertyComponent::Y);
-                                }
-                                _ => {
-                                    log::trace!(
-                                        "GraphEditor: Skipping effect property {} with non-numeric type {:?}",
-                                        prop_key,
-                                        first.value
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    "constant" => match prop.value() {
-                        Some(PropertyValue::Number(_)) => {
-                            components.push(PropertyComponent::Scalar);
-                        }
-                        Some(PropertyValue::Vec2(_)) => {
-                            components.push(PropertyComponent::X);
-                            components.push(PropertyComponent::Y);
-                        }
-                        _ => {
-                            log::trace!(
-                                "GraphEditor: Skipping effect property {} with non-numeric value {:?}",
-                                prop_key,
-                                prop.value()
-                            );
-                        }
-                    },
-                    _ => {}
-                }
-
-                for comp in components {
-                    properties_to_plot.push((
-                        scoped_property_name(PropertyTarget::Effect(effect.id), prop_key, comp),
-                        prop,
-                        &effect.properties,
-                        comp,
-                    ));
-                }
-            }
-        }
-
-        for style in &entity.styles {
-            for (prop_key, prop) in style.properties.iter() {
-                let mut components = Vec::new();
-                match prop.evaluator.as_str() {
-                    "keyframe" => {
-                        if let Some(first) = prop.keyframes().first() {
-                            match &first.value {
-                                PropertyValue::Number(_) => {
-                                    components.push(PropertyComponent::Scalar);
-                                }
-                                PropertyValue::Vec2(_) => {
-                                    components.push(PropertyComponent::X);
-                                    components.push(PropertyComponent::Y);
-                                }
-                                _ => {
-                                    log::trace!(
-                                        "GraphEditor: Skipping style property {} with non-numeric type {:?}",
-                                        prop_key,
-                                        first.value
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    "constant" => match prop.value() {
-                        Some(PropertyValue::Number(_)) => {
-                            components.push(PropertyComponent::Scalar);
-                        }
-                        Some(PropertyValue::Vec2(_)) => {
-                            components.push(PropertyComponent::X);
-                            components.push(PropertyComponent::Y);
-                        }
-                        _ => {
-                            log::trace!(
-                                "GraphEditor: Skipping style property {} with non-numeric value {:?}",
-                                prop_key,
-                                prop.value()
-                            );
-                        }
-                    },
-                    _ => {}
-                }
-
-                for comp in components {
-                    properties_to_plot.push((
-                        scoped_property_name(PropertyTarget::Style(style.id), prop_key, comp),
-                        prop,
-                        &style.properties,
-                        comp,
-                    ));
-                }
-            }
-        }
-
-        for effector in &entity.effectors {
-            append_property_map(
-                &mut properties_to_plot,
-                PropertyTarget::Effector(effector.id),
-                &effector.properties,
-            );
-        }
-
-        for decorator in &entity.decorators {
-            append_property_map(
-                &mut properties_to_plot,
-                PropertyTarget::Decorator(decorator.id),
-                &decorator.properties,
-            );
-        }
-
         if properties_to_plot.is_empty() {
             ui.label("No animatable properties found.");
             return;

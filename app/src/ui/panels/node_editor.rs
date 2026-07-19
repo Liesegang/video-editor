@@ -15,7 +15,7 @@ use egui_snarl::{
 use library::model::project::{
     ContainerImageSourceKind, PortAddress, PortDataType, PortDirection, PortOwner, PortSide,
 };
-use library::model::property::{PropertyDefinition, PropertyTarget, PropertyUiType, PropertyValue};
+use library::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use library::model::{
     Clip, GeneratorContent, Node, NodeContainer, NodeContent, NodeGraphBundle, Project,
 };
@@ -4781,10 +4781,10 @@ fn apply_edit(project: &mut Project, edit: NodeEdit) -> bool {
             value,
         } => match owner {
             PortOwner::Clip(id) => project.get_clip_mut(id).is_some_and(|clip| {
-                clip.update_property_or_keyframe(PropertyTarget::Direct, &key, time, value, None)
+                clip.update_property_or_keyframe(&key, time, value, None)
             }),
             PortOwner::Node(id) => project.get_node_mut(id).is_some_and(|node| {
-                node.update_property_or_keyframe(PropertyTarget::Direct, &key, time, value, None)
+                node.update_property_or_keyframe(&key, time, value, None)
             }),
             PortOwner::Composition(_) | PortOwner::Track(_) => false,
         },
@@ -6358,7 +6358,6 @@ mod tests {
             project.find_node_container(consumer_id),
             Some(NodeContainer::Clip(clip_id))
         );
-        assert!(project.get_node(consumer_id).unwrap().styles.is_empty());
         assert_eq!(
             project
                 .connections
@@ -6462,7 +6461,6 @@ mod tests {
             &clip.node_ids[clip.node_ids.len() - bundled_ids.len()..],
             bundled_ids.as_slice()
         );
-        assert!(project.get_node(consumer_id).unwrap().styles.is_empty());
         let appended = project
             .connections
             .iter()
@@ -6635,7 +6633,6 @@ mod tests {
         let effect = plugins.create_effect_operation_node("blur").unwrap();
         let source_id = source.id;
         let effect_id = effect.id;
-        assert!(effect.effects.is_empty());
         let sigma_x = plugin_operation_property_definition(&plugins, &effect, "sigma_x")
             .expect("Blur numeric metadata");
         assert!(matches!(

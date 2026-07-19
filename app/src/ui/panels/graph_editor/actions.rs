@@ -1,13 +1,11 @@
-use super::PropertyComponent;
 use super::utils::time_mapper_for_entity;
+use super::PropertyComponent;
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use library::animation::EasingFunction;
-use library::model::Node;
 use library::model::project::Project;
-use library::model::property::{
-    KeyframeId, KeyframeUpdate, PropertyMap, PropertyTarget, PropertyValue,
-};
+use library::model::property::{KeyframeId, KeyframeUpdate, PropertyValue};
+use library::model::Node;
 use library::{EditorService, KeyframeBatchUpdate, PropertyOwner};
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
@@ -32,44 +30,22 @@ pub struct KeyframeMove {
     pub value: f64,
 }
 
-pub fn scoped_property_name(
-    target: PropertyTarget,
+pub fn graph_property_name(
     property_key: &str,
     component: PropertyComponent,
 ) -> String {
-    let scope = match target {
-        PropertyTarget::Direct => "direct".to_string(),
-        PropertyTarget::Effect(id) => format!("effect:{id}"),
-        PropertyTarget::Style(id) => format!("style:{id}"),
-        PropertyTarget::Effector(id) => format!("effector:{id}"),
-        PropertyTarget::Decorator(id) => format!("decorator:{id}"),
-    };
     let suffix = match component {
         PropertyComponent::Scalar => "",
         PropertyComponent::X => ".x",
         PropertyComponent::Y => ".y",
     };
-    format!("{scope}:{property_key}{suffix}")
+    format!("node:{property_key}{suffix}")
 }
 
-fn parse_target(name: &str) -> Option<(PropertyTarget, String, Option<PropertyComponent>)> {
+fn parse_property_name(name: &str) -> Option<(String, Option<PropertyComponent>)> {
     let (base_name, component) = split_component(name);
-    let parts = base_name.split(':').collect::<Vec<_>>();
-    match parts.as_slice() {
-        ["direct", property] if !property.is_empty() => {
-            Some((PropertyTarget::Direct, (*property).to_string(), component))
-        }
-        [scope, id, property] if !property.is_empty() => {
-            let id = id.parse().ok()?;
-            let target = match *scope {
-                "effect" => PropertyTarget::Effect(id),
-                "style" => PropertyTarget::Style(id),
-                "effector" => PropertyTarget::Effector(id),
-                "decorator" => PropertyTarget::Decorator(id),
-                _ => return None,
-            };
-            Some((target, (*property).to_string(), component))
-        }
+    match base_name.split(':').collect::<Vec<_>>().as_slice() {
+        ["node", property] if !property.is_empty() => Some(((*property).to_string(), component)),
         _ => None,
     }
 }
@@ -84,17 +60,12 @@ fn split_component(name: &str) -> (&str, Option<PropertyComponent>) {
     }
 }
 
-fn property_map(node: &Node, target: PropertyTarget) -> Option<&PropertyMap> {
-    node.property_map(target)
-}
-
 fn current_keyframe_value(
     node: &Node,
-    target: PropertyTarget,
     property_key: &str,
     keyframe_id: KeyframeId,
 ) -> Option<PropertyValue> {
-    let property = property_map(node, target)?.get(property_key)?;
+    let property = node.properties.get(property_key)?;
     property
         .keyframe_by_id(keyframe_id)
         .map(|keyframe| keyframe.value)
@@ -124,7 +95,6 @@ fn merge_component(
 
 #[derive(Clone)]
 struct PreparedMove {
-    target: PropertyTarget,
     property_key: String,
     keyframe_id: KeyframeId,
     source_time: f64,
@@ -149,25 +119,24 @@ fn prepare_move_batch(
                 movement.keyframe_id
             ));
         }
-        let (target, property_key, component) =
-            parse_target(&movement.property_name).ok_or_else(|| {
+        let (property_key, component) =
+            parse_property_name(&movement.property_name).ok_or_else(|| {
                 format!(
                     "invalid scoped Graph property name {:?}",
                     movement.property_name
                 )
             })?;
         let existing_index = prepared.iter().position(|candidate| {
-            candidate.target == target
-                && candidate.property_key == property_key
+            candidate.property_key == property_key
                 && candidate.keyframe_id == movement.keyframe_id
         });
         let current = existing_index
             .map(|index| prepared[index].value.clone())
-            .or_else(|| current_keyframe_value(node, target, &property_key, movement.keyframe_id))
+            .or_else(|| current_keyframe_value(node, &property_key, movement.keyframe_id))
             .ok_or_else(|| {
                 format!(
-                    "Graph keyframe {} was not found in {:?}.{}",
-                    movement.keyframe_id, target, property_key
+                    "Graph keyframe {} was not found in property {}",
+                    movement.keyframe_id, property_key
                 )
             })?;
         if matches!(component, Some(PropertyComponent::X | PropertyComponent::Y))
@@ -185,7 +154,6 @@ fn prepare_move_batch(
             prepared[index].value = value;
         } else {
             prepared.push(PreparedMove {
-                target,
                 property_key,
                 keyframe_id: movement.keyframe_id,
                 source_time,
@@ -250,7 +218,6 @@ pub fn process_action(
                     .into_iter()
                     .map(|movement| KeyframeBatchUpdate {
                         owner,
-                        target: movement.target,
                         property_key: movement.property_key,
                         keyframe_id: movement.keyframe_id,
                         update: KeyframeUpdate {
@@ -276,7 +243,7 @@ pub fn process_action(
             finish_pending_move(editor_context, project, history_manager);
         }
         Action::Add(name, time, value) => {
-            let Some((target, property_key, component)) = parse_target(&name) else {
+            let Some((property_key, component)) = parse_property_name(&name) else {
                 log::error!("Graph Editor rejected invalid scoped property name {name:?}");
                 return;
             };
@@ -284,15 +251,13 @@ pub fn process_action(
                 let composition = project.get_composition(comp_id)?;
                 let node = project.get_node(entity_id)?;
                 let source_time = time_mapper_for_entity(&project, entity_id).to_source_time(time);
-                let current = property_map(node, target).and_then(|properties| {
-                    properties.get(&property_key).map(|property| {
+                let current = node.properties.get(&property_key).map(|property| {
                         project_service.evaluate_property_value(
                             property,
-                            properties,
+                            &node.properties,
                             source_time,
                             composition.fps,
                         )
-                    })
                 });
                 Some((
                     PropertyOwner::Node(entity_id),
@@ -302,7 +267,7 @@ pub fn process_action(
             });
             if let Some((owner, source_time, value)) = prepared {
                 if project_service
-                    .add_keyframe(owner, target, &property_key, source_time, value, None)
+                    .add_keyframe(owner, &property_key, source_time, value, None)
                     .is_ok()
                 {
                     push_history(project, history_manager);
@@ -310,7 +275,7 @@ pub fn process_action(
             }
         }
         Action::SetEasing(name, keyframe_id, easing) => {
-            let Some((target, property_key, _)) = parse_target(&name) else {
+            let Some((property_key, _)) = parse_property_name(&name) else {
                 log::error!("Graph Editor rejected invalid scoped property name {name:?}");
                 return;
             };
@@ -323,7 +288,6 @@ pub fn process_action(
                 if project_service
                     .update_keyframe_by_id(
                         owner,
-                        target,
                         &property_key,
                         keyframe_id,
                         KeyframeUpdate {
@@ -338,7 +302,7 @@ pub fn process_action(
             }
         }
         Action::Remove(name, keyframe_id) => {
-            let Some((target, property_key, _)) = parse_target(&name) else {
+            let Some((property_key, _)) = parse_property_name(&name) else {
                 log::error!("Graph Editor rejected invalid scoped property name {name:?}");
                 return;
             };
@@ -349,7 +313,7 @@ pub fn process_action(
             });
             if let Some(owner) = owner {
                 if project_service
-                    .remove_keyframe_by_id(owner, target, &property_key, keyframe_id)
+                    .remove_keyframe_by_id(owner, &property_key, keyframe_id)
                     .is_ok()
                 {
                     push_history(project, history_manager);
@@ -357,13 +321,13 @@ pub fn process_action(
             }
         }
         Action::EditKeyframe(name, keyframe_id) => {
-            let Some((target, property_key, component)) = parse_target(&name) else {
+            let Some((property_key, component)) = parse_property_name(&name) else {
                 log::error!("Graph Editor rejected invalid scoped property name {name:?}");
                 return;
             };
             let keyframe = project.read().ok().and_then(|project| {
                 let node = project.get_node(entity_id)?;
-                let property = property_map(node, target)?.get(&property_key)?;
+                let property = node.properties.get(&property_key)?;
                 if property.evaluator != "keyframe" {
                     return None;
                 }
@@ -380,7 +344,6 @@ pub fn process_action(
                 editor_context.keyframe_dialog.entity_id = Some(entity_id);
                 editor_context.keyframe_dialog.property_name = name;
                 editor_context.keyframe_dialog.owner = owner;
-                editor_context.keyframe_dialog.target = Some(target);
                 editor_context.keyframe_dialog.property_key = property_key;
                 editor_context.keyframe_dialog.keyframe_id = Some(keyframe_id);
                 editor_context.keyframe_dialog.component = match component {
@@ -423,10 +386,8 @@ mod tests {
     use super::*;
     use crate::state::context_types::{GraphKeyframeDragOrigin, GraphKeyframeDragState};
     use library::cache::CacheManager;
-    use library::model::ensemble::{DecoratorInstance, EffectorInstance};
     use library::model::property::{Keyframe, Property, Vec2};
-    use library::model::style::StyleInstance;
-    use library::model::{Clip, Composition, EffectConfig, Node, NodeContent};
+    use library::model::{Clip, Composition, Node, NodeContent};
     use library::plugin::PluginManager;
 
     fn number(value: f64) -> PropertyValue {
@@ -442,15 +403,13 @@ mod tests {
     fn property_value(
         project: &Project,
         node_id: Uuid,
-        target: PropertyTarget,
         property_key: &str,
         keyframe_id: KeyframeId,
     ) -> (f64, PropertyValue) {
         let keyframe = project
             .get_node(node_id)
             .unwrap()
-            .property_map(target)
-            .unwrap()
+            .properties
             .get(property_key)
             .unwrap()
             .keyframe_by_id(keyframe_id)
@@ -459,38 +418,18 @@ mod tests {
     }
 
     #[test]
-    fn scoped_names_are_unambiguous_for_every_property_target() {
-        let ids = [
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-        ];
-        let targets = [
-            PropertyTarget::Direct,
-            PropertyTarget::Effect(ids[0]),
-            PropertyTarget::Style(ids[1]),
-            PropertyTarget::Effector(ids[2]),
-            PropertyTarget::Decorator(ids[3]),
-        ];
-        for target in targets {
-            let name = scoped_property_name(target, "amount", PropertyComponent::X);
-            let parsed = parse_target(&name).unwrap();
-            assert_eq!(
-                parsed,
-                (target, "amount".to_string(), Some(PropertyComponent::X))
-            );
-        }
-        assert!(parse_target("amount").is_none());
-        assert!(parse_target("effect:not-a-uuid:amount").is_none());
+    fn scoped_names_address_only_the_selected_nodes_direct_properties() {
+        let name = graph_property_name("amount", PropertyComponent::X);
+        assert_eq!(
+            parse_property_name(&name),
+            Some(("amount".to_string(), Some(PropertyComponent::X)))
+        );
+        assert!(parse_property_name("amount").is_none());
+        assert!(parse_property_name("effect:obsolete:amount").is_none());
     }
 
     #[test]
-    fn absolute_multi_target_drag_does_not_overshoot_and_commits_one_history_state() {
-        let effect_id = Uuid::new_v4();
-        let style_id = Uuid::new_v4();
-        let effector_id = Uuid::new_v4();
-        let decorator_id = Uuid::new_v4();
+    fn absolute_direct_property_drag_does_not_overshoot_and_commits_one_history_state() {
         let source_time = 2.0;
 
         let (direct_property, direct_id) = keyframed_number(source_time, 10.0);
@@ -503,11 +442,6 @@ mod tests {
             EasingFunction::Linear,
         );
         let position_id = position_keyframe.id;
-        let (effect_property, effect_keyframe_id) = keyframed_number(source_time, 20.0);
-        let (style_property, style_keyframe_id) = keyframed_number(source_time, 30.0);
-        let (effector_property, effector_keyframe_id) = keyframed_number(source_time, 40.0);
-        let (decorator_property, decorator_keyframe_id) = keyframed_number(source_time, 50.0);
-
         let mut node = Node::new("graph target", NodeContent::Merge);
         let node_id = node.id;
         node.properties.set("amount".to_string(), direct_property);
@@ -515,29 +449,6 @@ mod tests {
             "position".to_string(),
             Property::keyframe(vec![position_keyframe]),
         );
-        let mut effect_properties = PropertyMap::new();
-        effect_properties.set("amount".to_string(), effect_property);
-        node.effects.push(EffectConfig {
-            id: effect_id,
-            effect_type: "test".to_string(),
-            properties: effect_properties,
-        });
-        let mut style_properties = PropertyMap::new();
-        style_properties.set("amount".to_string(), style_property);
-        let mut style = StyleInstance::new("test", style_properties);
-        style.id = style_id;
-        node.styles.push(style);
-        let mut effector_properties = PropertyMap::new();
-        effector_properties.set("amount".to_string(), effector_property);
-        let mut effector = EffectorInstance::new("test", effector_properties);
-        effector.id = effector_id;
-        node.effectors.push(effector);
-        let mut decorator_properties = PropertyMap::new();
-        decorator_properties.set("amount".to_string(), decorator_property);
-        let mut decorator = DecoratorInstance::new("test", decorator_properties);
-        decorator.id = decorator_id;
-        node.decorators.push(decorator);
-
         let (mut composition, track) = Composition::new("main", 640, 360, 30.0, 10.0);
         let composition_id = composition.id;
         let track_id = track.id;
@@ -561,8 +472,7 @@ mod tests {
         )
         .unwrap();
         let mut context = EditorContext::new(composition_id);
-        let anchor_name =
-            scoped_property_name(PropertyTarget::Direct, "amount", PropertyComponent::Scalar);
+        let anchor_name = graph_property_name("amount", PropertyComponent::Scalar);
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
             entity_id: node_id,
             anchor: (anchor_name.clone(), direct_id),
@@ -586,8 +496,7 @@ mod tests {
                     value: 10.0 + offset,
                 },
                 KeyframeMove {
-                    property_name: scoped_property_name(
-                        PropertyTarget::Direct,
+                    property_name: graph_property_name(
                         "position",
                         PropertyComponent::X,
                     ),
@@ -596,54 +505,13 @@ mod tests {
                     value: 20.0 + offset,
                 },
                 KeyframeMove {
-                    property_name: scoped_property_name(
-                        PropertyTarget::Direct,
+                    property_name: graph_property_name(
                         "position",
                         PropertyComponent::Y,
                     ),
                     keyframe_id: position_id,
                     global_time,
                     value: 30.0 + offset,
-                },
-                KeyframeMove {
-                    property_name: scoped_property_name(
-                        PropertyTarget::Effect(effect_id),
-                        "amount",
-                        PropertyComponent::Scalar,
-                    ),
-                    keyframe_id: effect_keyframe_id,
-                    global_time,
-                    value: 20.0 + offset,
-                },
-                KeyframeMove {
-                    property_name: scoped_property_name(
-                        PropertyTarget::Style(style_id),
-                        "amount",
-                        PropertyComponent::Scalar,
-                    ),
-                    keyframe_id: style_keyframe_id,
-                    global_time,
-                    value: 30.0 + offset,
-                },
-                KeyframeMove {
-                    property_name: scoped_property_name(
-                        PropertyTarget::Effector(effector_id),
-                        "amount",
-                        PropertyComponent::Scalar,
-                    ),
-                    keyframe_id: effector_keyframe_id,
-                    global_time,
-                    value: 40.0 + offset,
-                },
-                KeyframeMove {
-                    property_name: scoped_property_name(
-                        PropertyTarget::Decorator(decorator_id),
-                        "amount",
-                        PropertyComponent::Scalar,
-                    ),
-                    keyframe_id: decorator_keyframe_id,
-                    global_time,
-                    value: 50.0 + offset,
                 },
             ]
         };
@@ -678,13 +546,12 @@ mod tests {
 
         let read = project.read().unwrap();
         assert_eq!(
-            property_value(&read, node_id, PropertyTarget::Direct, "amount", direct_id),
+            property_value(&read, node_id, "amount", direct_id),
             (2.8, number(14.0))
         );
         let (_, position) = property_value(
             &read,
             node_id,
-            PropertyTarget::Direct,
             "position",
             position_id,
         );
@@ -695,25 +562,6 @@ mod tests {
                 y: OrderedFloat(34.0),
             })
         );
-        for (target, keyframe_id, expected) in [
-            (PropertyTarget::Effect(effect_id), effect_keyframe_id, 24.0),
-            (PropertyTarget::Style(style_id), style_keyframe_id, 34.0),
-            (
-                PropertyTarget::Effector(effector_id),
-                effector_keyframe_id,
-                44.0,
-            ),
-            (
-                PropertyTarget::Decorator(decorator_id),
-                decorator_keyframe_id,
-                54.0,
-            ),
-        ] {
-            assert_eq!(
-                property_value(&read, node_id, target, "amount", keyframe_id),
-                (2.8, number(expected))
-            );
-        }
         drop(read);
 
         process_action(
@@ -755,8 +603,8 @@ mod tests {
                     value: 99.0,
                 },
                 KeyframeMove {
-                    property_name: "effect:not-a-uuid:amount".to_string(),
-                    keyframe_id: effect_keyframe_id,
+                    property_name: "effect:obsolete:amount".to_string(),
+                    keyframe_id: direct_id,
                     global_time: 3.0,
                     value: 99.0,
                 },
@@ -793,10 +641,10 @@ mod tests {
         assert!(state.begin_entity(first));
         state
             .selected_keyframes
-            .insert(("direct:amount".to_string(), keyframe_id));
+            .insert(("node:amount".to_string(), keyframe_id));
         state.keyframe_drag = Some(GraphKeyframeDragState {
             entity_id: first,
-            anchor: ("direct:amount".to_string(), keyframe_id),
+            anchor: ("node:amount".to_string(), keyframe_id),
             origins: Vec::new(),
             changed: true,
         });
@@ -819,7 +667,7 @@ mod tests {
         let mut context = EditorContext::new(composition_id);
         context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
             entity_id,
-            anchor: ("direct:amount".to_string(), keyframe_id),
+            anchor: ("node:amount".to_string(), keyframe_id),
             origins: Vec::new(),
             changed: true,
         });
