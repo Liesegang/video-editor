@@ -5,7 +5,6 @@ use std::sync::{Arc, RwLock};
 
 use library::EditorService;
 use library::RenderServer;
-use library::model::asset::AssetKind; // Added Import
 use library::model::project::Project;
 
 use crate::command::{CommandId, CommandRegistry};
@@ -14,7 +13,6 @@ use crate::state::context_types::{
 };
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 use crate::{action::HistoryManager, state::context::EditorContext};
-use library::model::property::Vec2;
 
 mod action;
 pub mod clip;
@@ -215,6 +213,8 @@ fn invalidate_preview_output(editor_context: &mut EditorContext) {
     editor_context.preview_texture_width = 0;
     editor_context.preview_texture_height = 0;
     editor_context.preview_region = None;
+    editor_context.preview_frame_info = None;
+    editor_context.interaction.preview_selected_instance_path = None;
 }
 
 fn clear_preview_render_error(editor_context: &mut EditorContext) {
@@ -265,6 +265,45 @@ fn dispatch_preview_frame(
             }
             invalidate_preview_output(editor_context);
             false
+        }
+    }
+}
+
+fn apply_preview_actions(
+    actions: Vec<PreviewAction>,
+    project_service: &EditorService,
+    project: &Arc<RwLock<Project>>,
+    history_manager: &mut HistoryManager,
+) {
+    let mut history_commit_requested = false;
+    for action in actions {
+        match action {
+            PreviewAction::UpdateProperty {
+                node_id,
+                prop_name,
+                time,
+                value,
+            } => {
+                if let Err(error) = crate::utils::property::update_node_property(
+                    project_service,
+                    node_id,
+                    &prop_name,
+                    time,
+                    value,
+                ) {
+                    log::error!("Failed to update Preview property: {error}");
+                }
+            }
+            PreviewAction::CommitHistory => history_commit_requested = true,
+        }
+    }
+    if history_commit_requested {
+        // A release-only frame is valid after updates from preceding drag
+        // frames. HistoryManager deduplicates a true no-op (including a frame
+        // with no evaluated visual source) instead of creating history-only
+        // edits.
+        if let Ok(project) = project.read() {
+            history_manager.push_project_state(project.clone());
         }
     }
 }
@@ -536,8 +575,7 @@ pub fn preview_panel(
                     * ui.ctx().pixels_per_point()
                     * editor_context.view.preview_resolution)
                     as f64)
-                    .max(0.01)
-                    .min(1.0);
+                    .clamp(0.01, 1.0);
 
                 // ROI Calculation
                 let visible_min_world = to_world(rect.min);
@@ -636,6 +674,7 @@ pub fn preview_panel(
                     }
                     editor_context.preview_render_revision =
                         editor_context.preview_render_revision.wrapping_add(1);
+                    editor_context.preview_frame_info = Some(result.frame_info);
                 }
                 Err(error) => {
                     report_preview_render_error(&error, editor_context);
@@ -780,233 +819,17 @@ pub fn preview_panel(
             ui.painter().add(callback);
         }
 
-        let mut gui_clips: Vec<clip::PreviewClip> = Vec::new();
-
-        if let Some(comp) = editor_context.get_current_composition(&proj_read) {
-            // Project order is authoritative: Composition -> Track -> Clip.
-            // Preview properties/content come from each Clip's output Node.
-            let mut layers = Vec::new();
-            for track_id in &comp.track_ids {
-                let Some(track) = proj_read.get_track(*track_id) else {
-                    continue;
-                };
-                for clip_id in &track.clip_ids {
-                    let Some(clip) = proj_read.get_clip(*clip_id) else {
-                        continue;
-                    };
-                    let node = clip
-                        .output_node_id
-                        .and_then(|node_id| proj_read.get_node(node_id))
-                        .or_else(|| {
-                            clip.node_ids
-                                .iter()
-                                .find_map(|node_id| proj_read.get_node(*node_id))
-                        });
-                    if let Some(node) = node {
-                        layers.push((clip, node, track.id));
-                    }
-                }
-            }
-
-            for (timeline_clip, entity, track_id) in layers {
-                let current_time = editor_context.timeline.current_time as f64;
-                let local_time = timeline_clip.local_time(current_time);
-                let asset_opt = match &entity.content {
-                    library::model::NodeContent::Media(media) => {
-                        proj_read.get_asset(media.asset_id)
-                    }
-                    _ => None,
-                };
-
-                let mut width = asset_opt.and_then(|a| a.width.map(|w| w as f32));
-                let mut height = asset_opt.and_then(|a| a.height.map(|h| h as f32));
-                let mut content_point: Option<[f32; 2]> = None;
-
-                // If dimensions are missing (e.g. Text, Shape), calculate them
-                if width.is_none() || height.is_none() {
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-
-                    let mut hasher = DefaultHasher::new();
-                    entity.properties.hash(&mut hasher);
-                    entity.styles.hash(&mut hasher);
-                    entity.effects.hash(&mut hasher);
-                    entity.effectors.hash(&mut hasher);
-                    entity.decorators.hash(&mut hasher);
-                    local_time.to_bits().hash(&mut hasher);
-                    let hash = hasher.finish();
-
-                    // Check cache
-                    let mut cached = None;
-                    if let Some((cached_hash, bounds)) = editor_context
-                        .interaction
-                        .bounds_cache
-                        .bounds
-                        .get(&entity.id)
-                    {
-                        if *cached_hash == hash {
-                            cached = Some(*bounds);
-                        }
-                    }
-
-                    if let Some((x, y, w, h)) = cached {
-                        width = Some(w);
-                        height = Some(h);
-                        content_point = Some([x, y]);
-                    } else {
-                        // Calculate
-                        let plugin_manager = project_service.get_plugin_manager();
-                        let property_evaluators = plugin_manager.get_property_evaluators();
-
-                        let ctx = library::plugin::entity_converter::FrameEvaluationContext {
-                            project: &proj_read,
-                            composition: comp,
-                            property_evaluators: &property_evaluators,
-                            plugin_manager: &plugin_manager,
-                            resolved_inputs: None,
-                        };
-
-                        let kind_str = match &entity.content {
-                            library::model::NodeContent::Media(m) => {
-                                if let Some(asset) =
-                                    proj_read.assets.iter().find(|a| a.id == m.asset_id)
-                                {
-                                    match asset.kind {
-                                        AssetKind::Audio => "Audio",
-                                        AssetKind::Video => "Video",
-                                        AssetKind::Image => "Image",
-                                        _ => "Media",
-                                    }
-                                } else {
-                                    "Media"
-                                }
-                            }
-                            library::model::NodeContent::Generator(g) => match g {
-                                library::model::GeneratorContent::Shape => "shape",
-                                library::model::GeneratorContent::Text => "text",
-                                library::model::GeneratorContent::SkSL => "sksl",
-                                _ => "generator",
-                            },
-                            library::model::NodeContent::Reference(_) => "Reference",
-                            library::model::NodeContent::PluginOperation(operation) => {
-                                operation.operation.as_str()
-                            }
-                            library::model::NodeContent::Merge => "Merge",
-                        };
-
-                        if let Some(converter) = plugin_manager.get_entity_converter(kind_str) {
-                            if let Some((x, y, w, h)) =
-                                converter.get_bounds(&ctx, entity, local_time)
-                            {
-                                width = Some(w);
-                                height = Some(h);
-                                content_point = Some([x, y]);
-                                // Update Cache
-                                editor_context
-                                    .interaction
-                                    .bounds_cache
-                                    .bounds
-                                    .insert(entity.id, (hash, (x, y, w, h)));
-                            }
-                        }
-                    }
-                }
-
-                // Log Gizmo Time Calculation (throttle slightly if possible, or just spam per user request)
-                if editor_context.timeline.current_time.fract() < 0.1 {
-                    log::info!(
-                        "[Gizmo] Entity: {} | CurrentTime: {:.4} | LocalTime: {:.4}",
-                        entity.id,
-                        current_time,
-                        local_time
-                    );
-                }
-
-                let get_val = |key: &str, default: f32| {
-                    entity
-                        .properties
-                        .get(key)
-                        .map(|p| {
-                            project_service.evaluate_property_value(
-                                p,
-                                &entity.properties,
-                                local_time,
-                                comp.fps,
-                            )
-                        })
-                        .and_then(|pv| pv.get_as::<f32>())
-                        .unwrap_or(default)
-                };
-
-                let get_vec2 = |key: &str, default: [f32; 2]| {
-                    entity
-                        .properties
-                        .get(key)
-                        .map(|p| {
-                            let val = project_service.evaluate_property_value(
-                                p,
-                                &entity.properties,
-                                local_time,
-                                comp.fps,
-                            );
-                            val.get_as::<Vec2>()
-                                .map(|v| [v.x.into_inner() as f32, v.y.into_inner() as f32])
-                                .unwrap_or(default)
-                        })
-                        .unwrap_or(default)
-                };
-
-                let position = get_vec2("position", [960.0, 540.0]);
-                let scale = get_vec2("scale", [100.0, 100.0]);
-                let anchor = get_vec2("anchor", [0.0, 0.0]);
-                let rotation = get_val("rotation", 0.0);
-                let opacity = get_val("opacity", 100.0);
-
-                let transform = library::model::frame::transform::Transform {
-                    position: library::model::frame::transform::Position {
-                        x: position[0] as f64,
-                        y: position[1] as f64,
-                    },
-                    scale: library::model::frame::transform::Scale {
-                        x: scale[0] as f64,
-                        y: scale[1] as f64,
-                    },
-                    rotation: rotation as f64,
-                    anchor: library::model::frame::transform::Position {
-                        x: anchor[0] as f64,
-                        y: anchor[1] as f64,
-                    },
-                    opacity: opacity as f64,
-                };
-
-                let content_bounds = if let (Some(w), Some(h)) = (width, height) {
-                    let (cx, cy) = if let Some(pt) = content_point {
-                        (pt[0], pt[1])
-                    } else {
-                        (0.0, 0.0)
-                    };
-                    Some((cx, cy, w, h))
-                } else {
-                    None
-                };
-
-                let gc = clip::PreviewClip {
-                    clip: timeline_clip,
-                    node: entity,
-                    track_id,
-                    transform,
-                    content_bounds,
-                };
-                gui_clips.push(gc);
-            }
-        }
+        let gui_clips = editor_context
+            .preview_frame_info
+            .as_ref()
+            .map(|frame| clip::from_evaluated_frame(&proj_read, frame))
+            .unwrap_or_default();
 
         // Interactions
         {
             let mut interactions = interaction::PreviewInteractions::new(
                 ui,
                 editor_context,
-                &project,
                 &gui_clips,
                 to_screen,
                 to_world,
@@ -1027,7 +850,6 @@ pub fn preview_panel(
             gizmo::draw_gizmo(
                 ui,
                 editor_context,
-                &project,
                 &gui_clips,
                 to_screen,
                 !gesture_decision.pan_owned,
@@ -1035,14 +857,21 @@ pub fn preview_panel(
         } else if editor_context.view.active_tool == PreviewTool::Shape {
             if let Some(state) = &editor_context.interaction.vector_editor_state {
                 if let Some(id) = editor_context.selection.selected_entities.iter().next() {
-                    if let Some(gc) = gui_clips.iter().find(|c| c.id() == *id) {
+                    if let Some(gc) = clip::visual_for_selection(
+                        &gui_clips,
+                        *id,
+                        editor_context
+                            .interaction
+                            .preview_selected_instance_path
+                            .as_deref(),
+                    ) {
                         if let Some(path) = gc.node.properties.get_string("path") {
                             match crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path) {
                                 Ok(path) => {
                                     let renderer = crate::ui::panels::preview::vector_editor::renderer::VectorEditorRenderer {
                                         state,
                                         path: &path,
-                                        transform: gc.transform.clone(),
+                                        transform: gc.world_transform,
                                         to_screen: Box::new(to_screen),
                                     };
                                     renderer.draw(ui.painter());
@@ -1088,42 +917,7 @@ pub fn preview_panel(
         }
     }
 
-    // Execute pending actions
-    let mut history_commit_requested = false;
-    for action in pending_actions {
-        match action {
-            PreviewAction::UpdateProperty {
-                comp_id,
-                track_id,
-                entity_id,
-                prop_name,
-                time,
-                value,
-            } => {
-                match crate::utils::property::update_property(
-                    project_service,
-                    comp_id,
-                    track_id,
-                    entity_id,
-                    &prop_name,
-                    time,
-                    value,
-                ) {
-                    Ok(()) => {}
-                    Err(error) => log::error!("Failed to update Preview property: {error}"),
-                }
-            }
-            PreviewAction::CommitHistory => history_commit_requested = true,
-        }
-    }
-    if history_commit_requested {
-        // Drag updates are applied on preceding frames, so the release frame
-        // can contain only CommitHistory. Deduplication keeps this a no-op when
-        // no Project value changed.
-        if let Ok(project) = project.read() {
-            history_manager.push_project_state(project.clone());
-        }
-    }
+    apply_preview_actions(pending_actions, project_service, project, history_manager);
 
     // Info text
     let info_text = format!(
@@ -1273,7 +1067,7 @@ mod tests {
     fn run_preview_interaction_frame(
         context: &egui::Context,
         editor_context: &mut EditorContext,
-        project: &Arc<RwLock<Project>>,
+        _project: &Arc<RwLock<Project>>,
         pending_actions: &mut Vec<PreviewAction>,
         frame: usize,
         events: Vec<egui::Event>,
@@ -1330,7 +1124,6 @@ mod tests {
                     let mut interactions = interaction::PreviewInteractions::new(
                         ui,
                         editor_context,
-                        project,
                         &[],
                         |position| position,
                         |position| position,
@@ -1346,6 +1139,117 @@ mod tests {
             },
         );
         decision
+    }
+
+    fn run_transformed_visual_frame(
+        context: &egui::Context,
+        editor_context: &mut EditorContext,
+        visual: &clip::PreviewClip,
+        pending_actions: &mut Vec<PreviewAction>,
+        frame: usize,
+        events: Vec<egui::Event>,
+    ) {
+        let _ = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(640.0, 480.0),
+                )),
+                time: Some(frame as f64 / 60.0),
+                events,
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    let viewport = ui.available_rect_before_wrap();
+                    let response = ui.interact(
+                        viewport,
+                        ui.make_persistent_id("preview-transformed-visual"),
+                        egui::Sense::click_and_drag(),
+                    );
+                    let visuals = std::slice::from_ref(visual);
+                    let mut interactions = interaction::PreviewInteractions::new(
+                        ui,
+                        editor_context,
+                        visuals,
+                        |position| position,
+                        |position| position,
+                    );
+                    interactions.handle(&response, viewport, false, pending_actions);
+                    drop(interactions);
+                    gizmo::draw_gizmo(ui, editor_context, visuals, |position| position, true);
+                });
+            },
+        );
+    }
+
+    fn raw_pointer_drag(
+        context: &egui::Context,
+        editor_context: &mut EditorContext,
+        visual: &clip::PreviewClip,
+        pending_actions: &mut Vec<PreviewAction>,
+        start: egui::Pos2,
+        threshold: egui::Pos2,
+        end: egui::Pos2,
+    ) {
+        run_transformed_visual_frame(
+            context,
+            editor_context,
+            visual,
+            pending_actions,
+            0,
+            Vec::new(),
+        );
+        run_transformed_visual_frame(
+            context,
+            editor_context,
+            visual,
+            pending_actions,
+            1,
+            vec![egui::Event::PointerMoved(start)],
+        );
+        run_transformed_visual_frame(
+            context,
+            editor_context,
+            visual,
+            pending_actions,
+            2,
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        run_transformed_visual_frame(
+            context,
+            editor_context,
+            visual,
+            pending_actions,
+            3,
+            vec![egui::Event::PointerMoved(threshold)],
+        );
+        run_transformed_visual_frame(
+            context,
+            editor_context,
+            visual,
+            pending_actions,
+            4,
+            vec![egui::Event::PointerMoved(end)],
+        );
+        run_transformed_visual_frame(
+            context,
+            editor_context,
+            visual,
+            pending_actions,
+            5,
+            vec![egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
     }
 
     #[test]
@@ -1395,6 +1299,10 @@ mod tests {
             original_scale_x: 100.0,
             original_scale_y: 100.0,
             original_rotation: 0.0,
+            original_visual_position: [12.0, 34.0],
+            original_visual_scale_x: 100.0,
+            original_visual_scale_y: 100.0,
+            original_visual_rotation: 0.0,
             original_anchor_x: 0.0,
             original_anchor_y: 0.0,
             original_width: 100.0,
@@ -1479,18 +1387,204 @@ mod tests {
         );
         assert!(!editor_context.interaction.is_moving_selected_entity);
         assert!(editor_context.interaction.body_drag_state.is_none());
-        assert!(editor_context
-            .interaction
-            .preview_selection_drag_start
-            .is_none());
+        assert!(
+            editor_context
+                .interaction
+                .preview_selection_drag_start
+                .is_none()
+        );
         assert!(editor_context.interaction.gizmo_state.is_none());
-        assert!(editor_context
-            .interaction
-            .vector_editor_state
-            .as_ref()
-            .is_some_and(|state| state.selected_handle.is_none()));
+        assert!(
+            editor_context
+                .interaction
+                .vector_editor_state
+                .as_ref()
+                .is_some_and(|state| state.selected_handle.is_none())
+        );
         assert!(pending_actions.is_empty());
         assert_eq!(*project.read().unwrap(), project_before);
+    }
+
+    #[test]
+    fn raw_input_parent_transform_drags_edit_source_space_without_baking_downstream_transform() {
+        use library::cache::CacheManager;
+        use library::model::frame::transform::{Position, Scale, Transform};
+        use library::model::property::{Property, PropertyValue, Vec2 as PropertyVec2};
+        use library::model::{GeneratorContent, Node, NodeContent};
+        use library::plugin::PluginManager;
+        use library::rendering::renderer::Affine2D;
+        use ordered_float::OrderedFloat;
+
+        fn source_node() -> Node {
+            let mut source = Node::new(
+                "Transformed source",
+                NodeContent::Generator(GeneratorContent::SkSL),
+            );
+            source.properties.set(
+                "position".to_string(),
+                Property::constant(PropertyValue::Vec2(PropertyVec2 {
+                    x: OrderedFloat(7.0),
+                    y: OrderedFloat(11.0),
+                })),
+            );
+            source.properties.set(
+                "scale".to_string(),
+                Property::constant(PropertyValue::Vec2(PropertyVec2 {
+                    x: OrderedFloat(100.0),
+                    y: OrderedFloat(100.0),
+                })),
+            );
+            source.properties.set(
+                "rotation".to_string(),
+                Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
+            );
+            source
+        }
+
+        fn transformed_visual(source: &Node) -> clip::PreviewClip {
+            let source_transform = Transform {
+                position: Position { x: 7.0, y: 11.0 },
+                ..Transform::default()
+            };
+            // This is the final value after a downstream Transform Effector.
+            // It deliberately differs from the directly editable source.
+            let transform = Transform {
+                position: Position { x: 20.0, y: 30.0 },
+                scale: Scale { x: 2.0, y: 1.0 },
+                ..Transform::default()
+            };
+            let parent_transform = Affine2D::from(&Transform {
+                position: Position { x: 300.0, y: 150.0 },
+                scale: Scale { x: 2.0, y: 0.5 },
+                rotation: 90.0,
+                ..Transform::default()
+            });
+            clip::PreviewClip {
+                node: source.clone(),
+                track_id: None,
+                source_transform,
+                world_transform: parent_transform.compose(Affine2D::from(&transform)),
+                parent_transform,
+                transform,
+                content_bounds: Some((-20.0, -20.0, 40.0, 40.0)),
+                instance_path: vec![source.id],
+            }
+        }
+
+        fn apply_actions(source: Node, actions: Vec<PreviewAction>) -> Node {
+            let source_id = source.id;
+            let mut model = Project::new("transformed preview edit");
+            model.add_node(source);
+            let project = Arc::new(RwLock::new(model));
+            let service = EditorService::new(
+                Arc::clone(&project),
+                Arc::new(PluginManager::default()),
+                Arc::new(CacheManager::new()),
+            )
+            .unwrap();
+            let mut history = HistoryManager::new();
+            history.push_project_state(project.read().unwrap().clone());
+            apply_preview_actions(actions, &service, &project, &mut history);
+            let edited = project.read().unwrap().get_node(source_id).unwrap().clone();
+            edited
+        }
+
+        fn vector_property(node: &Node, key: &str) -> (f64, f64) {
+            let Some(PropertyValue::Vec2(value)) =
+                node.properties.get(key).and_then(Property::value)
+            else {
+                panic!("{key} must remain a Vec2 property")
+            };
+            (value.x.into_inner(), value.y.into_inner())
+        }
+
+        // Body drag: the final screen delta (3, 8) maps through the inverse
+        // parent matrix to source-local (4, -6). It must be added to the
+        // source position (7, 11), not the downstream position (20, 30).
+        let source = source_node();
+        let visual = transformed_visual(&source);
+        let context = egui::Context::default();
+        let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
+        editor_context.view.zoom = 1.0;
+        editor_context.select_entity(source.id, None);
+        editor_context.interaction.preview_selected_instance_path =
+            Some(visual.instance_path.clone());
+        let (center_x, center_y) = visual.world_transform.map_point(0.0, 0.0);
+        let center = egui::pos2(center_x as f32, center_y as f32);
+        let mut actions = Vec::new();
+        raw_pointer_drag(
+            &context,
+            &mut editor_context,
+            &visual,
+            &mut actions,
+            center,
+            center + egui::vec2(0.0, 8.0),
+            center + egui::vec2(3.0, 16.0),
+        );
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            PreviewAction::UpdateProperty { node_id, prop_name, .. }
+                if *node_id == source.id && prop_name == "position"
+        )));
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, PreviewAction::CommitHistory))
+        );
+        let body_positions = actions
+            .iter()
+            .filter_map(|action| match action {
+                PreviewAction::UpdateProperty {
+                    prop_name,
+                    value: PropertyValue::Vec2(value),
+                    ..
+                } if prop_name == "position" => Some((value.x.into_inner(), value.y.into_inner())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(body_positions.last(), Some(&(11.0, 5.0)));
+        let edited = apply_actions(source, actions);
+        assert_eq!(vector_property(&edited, "position"), (11.0, 5.0));
+        assert_eq!(vector_property(&edited, "scale"), (100.0, 100.0));
+
+        // Right-handle drag captures at pointer press, so its complete screen
+        // delta (0, 28) maps to +14 on the local X axis. The displayed width
+        // is 80 after the downstream 2x scale, so the source scale becomes
+        // 117.5% and source position moves by +7. Neither downstream 200% nor
+        // its (20, 30) position is baked.
+        let source = source_node();
+        let visual = transformed_visual(&source);
+        let context = egui::Context::default();
+        let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
+        editor_context.view.zoom = 1.0;
+        editor_context.select_entity(source.id, None);
+        editor_context.interaction.preview_selected_instance_path =
+            Some(visual.instance_path.clone());
+        let (right_x, right_y) = visual.world_transform.map_point(20.0, 0.0);
+        let right_handle = egui::pos2(right_x as f32, right_y as f32);
+        let mut actions = Vec::new();
+        raw_pointer_drag(
+            &context,
+            &mut editor_context,
+            &visual,
+            &mut actions,
+            right_handle,
+            right_handle + egui::vec2(0.0, 8.0),
+            right_handle + egui::vec2(0.0, 28.0),
+        );
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            PreviewAction::UpdateProperty { node_id, prop_name, .. }
+                if *node_id == source.id && prop_name == "scale"
+        )));
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, PreviewAction::CommitHistory))
+        );
+        let edited = apply_actions(source, actions);
+        assert_eq!(vector_property(&edited, "position"), (14.0, 11.0));
+        assert_eq!(vector_property(&edited, "scale"), (117.5, 100.0));
     }
 
     #[test]
@@ -1652,5 +1746,89 @@ mod tests {
         );
         assert!(!modifier_changed.pan_owned);
         assert_eq!(content_owner, PreviewPrimaryGesture::Content);
+    }
+
+    #[test]
+    fn preview_actions_edit_the_evaluated_source_not_the_output_sink_or_history_alone() {
+        use library::cache::CacheManager;
+        use library::model::property::{Property, PropertyValue, Vec2};
+        use library::model::{GeneratorContent, Node, NodeContent};
+        use library::plugin::PluginManager;
+        use ordered_float::OrderedFloat;
+
+        let mut source = Node::new(
+            "Text source",
+            NodeContent::Generator(GeneratorContent::Text),
+        );
+        let source_id = source.id;
+        source.properties.set(
+            "position".to_string(),
+            Property::constant(PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(10.0),
+                y: OrderedFloat(20.0),
+            })),
+        );
+        let plugins = Arc::new(PluginManager::default());
+        let sink = plugins.create_style_operation_node("fill").unwrap();
+        let sink_id = sink.id;
+        let mut model = Project::new("preview target");
+        model.add_node(source);
+        model.add_node(sink);
+        let project = Arc::new(RwLock::new(model));
+        let service =
+            EditorService::new(Arc::clone(&project), plugins, Arc::new(CacheManager::new()))
+                .unwrap();
+        let mut history = HistoryManager::new();
+        history.push_project_state(project.read().unwrap().clone());
+
+        apply_preview_actions(
+            vec![PreviewAction::CommitHistory],
+            &service,
+            &project,
+            &mut history,
+        );
+        assert_eq!(history.undo_depth(), 1, "a no-output frame is not an edit");
+
+        apply_preview_actions(
+            vec![
+                PreviewAction::UpdateProperty {
+                    node_id: source_id,
+                    prop_name: "position".to_string(),
+                    time: 0.0,
+                    value: PropertyValue::Vec2(Vec2 {
+                        x: OrderedFloat(30.0),
+                        y: OrderedFloat(40.0),
+                    }),
+                },
+                PreviewAction::CommitHistory,
+            ],
+            &service,
+            &project,
+            &mut history,
+        );
+
+        let model = project.read().unwrap();
+        assert_eq!(
+            model
+                .get_node(source_id)
+                .unwrap()
+                .properties
+                .get("position")
+                .and_then(Property::value),
+            Some(&PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(30.0),
+                y: OrderedFloat(40.0),
+            }))
+        );
+        assert!(
+            model
+                .get_node(sink_id)
+                .unwrap()
+                .properties
+                .get("position")
+                .is_none(),
+            "the output sink must not receive a guessed transform property"
+        );
+        assert_eq!(history.undo_depth(), 2);
     }
 }

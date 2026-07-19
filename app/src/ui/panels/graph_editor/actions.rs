@@ -1,13 +1,13 @@
-use super::utils::time_mapper_for_entity;
 use super::PropertyComponent;
+use super::utils::time_mapper_for_entity;
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use library::animation::EasingFunction;
+use library::model::Node;
 use library::model::project::Project;
 use library::model::property::{
     KeyframeId, KeyframeUpdate, PropertyMap, PropertyTarget, PropertyValue,
 };
-use library::model::Node;
 use library::{EditorService, KeyframeBatchUpdate, PropertyOwner};
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
@@ -136,11 +136,9 @@ fn prepare_move_batch(
     entity_id: Uuid,
     moves: &[KeyframeMove],
 ) -> Result<(PropertyOwner, Vec<PreparedMove>), String> {
-    let node_id = crate::utils::property::visual_node_id(project, entity_id)
-        .ok_or_else(|| format!("Graph owner {entity_id} has no visual Node"))?;
     let node = project
-        .get_node(node_id)
-        .ok_or_else(|| format!("Graph Node {node_id} does not exist"))?;
+        .get_node(entity_id)
+        .ok_or_else(|| format!("Graph Node {entity_id} does not exist"))?;
     let mapper = time_mapper_for_entity(project, entity_id);
     let mut prepared: Vec<PreparedMove> = Vec::new();
 
@@ -199,7 +197,7 @@ fn prepare_move_batch(
     if prepared.is_empty() {
         return Err("Graph move batch is empty".to_string());
     }
-    Ok((PropertyOwner::Node(node_id), prepared))
+    Ok((PropertyOwner::Node(entity_id), prepared))
 }
 
 fn push_history(project: &Arc<RwLock<Project>>, history_manager: &mut HistoryManager) {
@@ -284,8 +282,7 @@ pub fn process_action(
             };
             let prepared = project.read().ok().and_then(|project| {
                 let composition = project.get_composition(comp_id)?;
-                let node_id = crate::utils::property::visual_node_id(&project, entity_id)?;
-                let node = project.get_node(node_id)?;
+                let node = project.get_node(entity_id)?;
                 let source_time = time_mapper_for_entity(&project, entity_id).to_source_time(time);
                 let current = property_map(node, target).and_then(|properties| {
                     properties.get(&property_key).map(|property| {
@@ -298,7 +295,7 @@ pub fn process_action(
                     })
                 });
                 Some((
-                    PropertyOwner::Node(node_id),
+                    PropertyOwner::Node(entity_id),
                     source_time,
                     merge_component(current, value, component),
                 ))
@@ -318,7 +315,9 @@ pub fn process_action(
                 return;
             };
             let owner = project.read().ok().and_then(|project| {
-                crate::utils::property::visual_node_id(&project, entity_id).map(PropertyOwner::Node)
+                project
+                    .get_node(entity_id)
+                    .map(|_| PropertyOwner::Node(entity_id))
             });
             if let Some(owner) = owner {
                 if project_service
@@ -344,7 +343,9 @@ pub fn process_action(
                 return;
             };
             let owner = project.read().ok().and_then(|project| {
-                crate::utils::property::visual_node_id(&project, entity_id).map(PropertyOwner::Node)
+                project
+                    .get_node(entity_id)
+                    .map(|_| PropertyOwner::Node(entity_id))
             });
             if let Some(owner) = owner {
                 if project_service
@@ -361,8 +362,7 @@ pub fn process_action(
                 return;
             };
             let keyframe = project.read().ok().and_then(|project| {
-                let node_id = crate::utils::property::visual_node_id(&project, entity_id)?;
-                let node = project.get_node(node_id)?;
+                let node = project.get_node(entity_id)?;
                 let property = property_map(node, target)?.get(&property_key)?;
                 if property.evaluator != "keyframe" {
                     return None;
@@ -371,8 +371,9 @@ pub fn process_action(
             });
             if let Some(keyframe) = keyframe {
                 let owner = project.read().ok().and_then(|project| {
-                    crate::utils::property::visual_node_id(&project, entity_id)
-                        .map(PropertyOwner::Node)
+                    project
+                        .get_node(entity_id)
+                        .map(|_| PropertyOwner::Node(entity_id))
                 });
                 editor_context.keyframe_dialog.is_open = true;
                 editor_context.keyframe_dialog.track_id = Some(track_id);

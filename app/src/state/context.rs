@@ -49,6 +49,11 @@ pub struct EditorContext {
     pub preview_pixel_hash: Option<u64>,
     #[serde(skip)]
     pub preview_region: Option<Region>,
+    /// Authoritative evaluation that produced the currently displayed
+    /// preview. Interaction is derived from this exact frame, never by
+    /// resolving the Project graph a second time in the UI.
+    #[serde(skip)]
+    pub preview_frame_info: Option<library::model::frame::frame::FrameInfo>,
 
     #[serde(skip)]
     pub available_fonts: Vec<String>,
@@ -80,6 +85,7 @@ impl EditorContext {
             preview_nontransparent_pixels: None,
             preview_pixel_hash: None,
             preview_region: None,
+            preview_frame_info: None,
             available_fonts: Vec::new(),
         }
     }
@@ -156,6 +162,7 @@ impl EditorContext {
         self.interaction.body_drag_state = None;
         self.interaction.timeline_selection_drag_start = None;
         self.interaction.preview_selection_drag_start = None;
+        self.interaction.preview_selected_instance_path = None;
         self.interaction.handled_hand_tool_drag = false;
         self.interaction.preview_viewport.primary_gesture =
             crate::state::context_types::PreviewPrimaryGesture::Idle;
@@ -177,13 +184,19 @@ impl EditorContext {
         self.preview_nontransparent_pixels = None;
         self.preview_pixel_hash = None;
         self.preview_region = None;
+        self.preview_frame_info = None;
     }
 
     pub fn select_clip(&mut self, entity_id: Uuid, track_id: Uuid) {
+        self.select_entity(entity_id, Some(track_id));
+    }
+
+    pub fn select_entity(&mut self, entity_id: Uuid, track_id: Option<Uuid>) {
         self.selection.selected_entities.clear();
         self.selection.selected_entities.insert(entity_id);
         self.selection.last_selected_entity_id = Some(entity_id);
-        self.selection.last_selected_track_id = Some(track_id);
+        self.selection.last_selected_track_id = track_id;
+        self.interaction.preview_selected_instance_path = None;
     }
 
     #[allow(
@@ -194,9 +207,14 @@ impl EditorContext {
         self.selection.selected_entities.insert(entity_id);
         self.selection.last_selected_entity_id = Some(entity_id);
         self.selection.last_selected_track_id = Some(track_id);
+        self.interaction.preview_selected_instance_path = None;
     }
 
     pub fn toggle_selection(&mut self, entity_id: Uuid, track_id: Uuid) {
+        self.toggle_entity_selection(entity_id, Some(track_id));
+    }
+
+    pub fn toggle_entity_selection(&mut self, entity_id: Uuid, track_id: Option<Uuid>) {
         if self.selection.selected_entities.contains(&entity_id) {
             self.selection.selected_entities.remove(&entity_id);
             if self.selection.last_selected_entity_id == Some(entity_id) {
@@ -208,11 +226,13 @@ impl EditorContext {
                 // We lose track_id context if we pick random.
                 // It's acceptable for "last selected" to be None if the primary was deselected.
                 self.selection.last_selected_track_id = None;
+                self.interaction.preview_selected_instance_path = None;
             }
         } else {
             self.selection.selected_entities.insert(entity_id);
             self.selection.last_selected_entity_id = Some(entity_id);
-            self.selection.last_selected_track_id = Some(track_id);
+            self.selection.last_selected_track_id = track_id;
+            self.interaction.preview_selected_instance_path = None;
         }
     }
 
@@ -224,8 +244,8 @@ impl EditorContext {
 #[cfg(test)]
 mod tests {
     use super::EditorContext;
-    use library::model::project::{Composition, Project};
     use library::model::Clip;
+    use library::model::project::{Composition, Project};
 
     #[test]
     fn project_replacement_removes_stale_selection_and_edit_state() {
@@ -247,6 +267,8 @@ mod tests {
         context.timeline.current_time = 9.0;
         context.interaction.editing_text_entity_id = Some(old_clip_id);
         context.interaction.text_edit_buffer = "stale".to_string();
+        context.interaction.preview_selected_instance_path =
+            Some(vec![old_composition_id, old_track_id, old_clip_id]);
 
         let mut replacement = Project::new("replacement");
         let (new_composition, new_track) = Composition::new("new", 1920, 1080, 30.0, 2.0);
@@ -263,5 +285,6 @@ mod tests {
         assert_eq!(context.timeline.current_time, 2.0);
         assert_eq!(context.interaction.editing_text_entity_id, None);
         assert!(context.interaction.text_edit_buffer.is_empty());
+        assert!(context.interaction.preview_selected_instance_path.is_none());
     }
 }
