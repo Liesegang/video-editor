@@ -163,7 +163,7 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
 
         Some(FrameObject {
             source_node_id: node.id,
-            source_transform: transform.clone(),
+            source_transform: Box::new(transform.clone()),
             content_bounds: Some(FrameBounds::new(0.0, 0.0, res_x as f32, res_y as f32)),
             content: FrameContent::SkSL {
                 shader,
@@ -171,7 +171,6 @@ impl EntityConverterPlugin for SkSLEntityConverterPlugin {
                 effects,
                 transform,
             },
-            properties: props.clone(),
         })
     }
 

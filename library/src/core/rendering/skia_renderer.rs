@@ -3,6 +3,9 @@ use crate::error::LibraryError;
 use crate::model::frame::Image;
 use crate::model::frame::color::Color;
 use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
+use crate::model::frame::runtime_shape::{
+    evaluate_text_element_transforms, transformed_text_element_bounds,
+};
 use crate::rendering::renderer::{
     Affine2D, RenderOutput, Renderer, ShapeRasterRequest, TextRasterRequest, TextureInfo,
 };
@@ -453,9 +456,6 @@ impl SkiaRenderer {
         ensemble_data: &crate::core::ensemble::EnsembleData,
     ) -> Result<RenderOutput, LibraryError> {
         use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
-        use crate::core::ensemble::effectors::{
-            EffectorElementContext, evaluate_configured_transform,
-        };
         use crate::core::ensemble::target::EffectorTarget;
         use crate::core::ensemble::types::{DecoratorConfig, EffectorConfig};
 
@@ -524,68 +524,15 @@ impl SkiaRenderer {
                 })?;
             let font = skia_safe::Font::from_typeface(typeface, size as f32);
             let runtime_text = layout_runtime_text_shape(text, font_name, size as f32);
-            let elements = runtime_text.elements;
+            let elements = &runtime_text.elements;
 
-            let mut character_transforms = Vec::with_capacity(elements.len());
-            for element in &elements {
-                let center = Point::new(
-                    element.bounds.left + element.advance / 2.0,
-                    (element.bounds.top + element.bounds.bottom) / 2.0,
-                );
-                let line_element_count = runtime_text
-                    .lines
-                    .get(element.line_index)
-                    .map(|line| line.element_range.len())
-                    .unwrap_or_default();
-                let mut character_transform = evaluate_configured_transform(
-                    &ensemble_data.effector_configs,
-                    current_time,
-                    EffectorElementContext {
-                        global_index: element.block_element_index,
-                        stable_id: element.element_group_id,
-                        block_group_id: element.block_group_id,
-                        line_group_id: element.line_group_id,
-                        line_index: element.line_index,
-                        line_char_index: element.line_element_index,
-                        total_chars: elements.len(),
-                        line_char_count: line_element_count,
-                        char_center: center,
-                    },
-                )?;
-                if let Some(patch) = ensemble_data.patches.get(&element.block_element_index) {
-                    character_transform = character_transform.combine(patch);
-                }
-                character_transforms.push(character_transform);
-            }
+            let character_transforms =
+                evaluate_text_element_transforms(&runtime_text, ensemble_data, current_time)?;
 
             let transformed_bounds = |element: &crate::model::frame::runtime_shape::RuntimeTextElement,
                                       character_transform: &crate::core::ensemble::types::TransformData| {
-                let center = Point::new(
-                    element.bounds.left + element.advance / 2.0,
-                    (element.bounds.top + element.bounds.bottom) / 2.0,
-                );
-                let radians = character_transform.rotate.to_radians();
-                let (sin, cos) = radians.sin_cos();
-                let mut left = f32::INFINITY;
-                let mut top = f32::INFINITY;
-                let mut right = f32::NEG_INFINITY;
-                let mut bottom = f32::NEG_INFINITY;
-                for (x, y) in [
-                    (element.bounds.left, element.bounds.top),
-                    (element.bounds.right, element.bounds.top),
-                    (element.bounds.right, element.bounds.bottom),
-                    (element.bounds.left, element.bounds.bottom),
-                ] {
-                    let x = (x - center.x) * character_transform.scale.0;
-                    let y = (y - center.y) * character_transform.scale.1;
-                    let mapped_x = center.x + character_transform.translate.0 + x * cos - y * sin;
-                    let mapped_y = center.y + character_transform.translate.1 + x * sin + y * cos;
-                    left = left.min(mapped_x);
-                    top = top.min(mapped_y);
-                    right = right.max(mapped_x);
-                    bottom = bottom.max(mapped_y);
-                }
-                skia_safe::Rect::new(left, top, right, bottom)
+                let bounds = transformed_text_element_bounds(element, character_transform);
+                skia_safe::Rect::new(bounds.left, bounds.top, bounds.right, bounds.bottom)
             };
 
             let union_bounds = |indices: &[usize]| {

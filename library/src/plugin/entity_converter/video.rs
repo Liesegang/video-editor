@@ -163,7 +163,7 @@ impl EntityConverterPlugin for VideoEntityConverterPlugin {
 
         Some(FrameObject {
             source_node_id: node.id,
-            source_transform: transform,
+            source_transform: Box::new(transform),
             content_bounds: asset.and_then(|asset| match (asset.width, asset.height) {
                 (Some(width), Some(height)) => {
                     Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32))
@@ -175,7 +175,6 @@ impl EntityConverterPlugin for VideoEntityConverterPlugin {
                 source_time: eval_time,
                 stream_index,
             },
-            properties: props.clone(),
         })
     }
 }
