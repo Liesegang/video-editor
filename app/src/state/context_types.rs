@@ -554,6 +554,10 @@ pub struct NodeEditorWireGesture {
 pub struct NodeEditorWireKnifeGesture {
     pub points: Vec<egui::Pos2>,
     pub crossed_connection_ids: std::collections::HashSet<Uuid>,
+    /// Freeze the Snarl scene for the lifetime of the stroke. Snarl normally
+    /// pans blank-canvas primary drags; without this snapshot the wires move
+    /// away from the knife in screen space while the gesture is in progress.
+    pub canvas_transform: egui::emath::TSTransform,
 }
 
 #[derive(Clone, Debug)]

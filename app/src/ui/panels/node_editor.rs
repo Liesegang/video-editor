@@ -56,6 +56,10 @@ const PROPERTY_LABEL_WIDTH: f32 = 58.0;
 const INLINE_CONTROL_WIDTH: f32 = 126.0;
 const WIRE_HIT_RADIUS: f32 = 8.0;
 const WIRE_ENDPOINT_RADIUS: f32 = 12.0;
+/// The custom endpoint-reconnect path accepts a drop this many screen points
+/// around a rendered port, including at overview zoom where Snarl's normal
+/// port interaction is deliberately disabled.
+const WIRE_PORT_DROP_RADIUS: f32 = 5.0;
 const WIRE_DRAG_THRESHOLD: f32 = 6.0;
 const MIN_CONTAINER_SIZE: egui::Vec2 = egui::vec2(360.0, 220.0);
 const AUTO_LAYOUT_COLUMN_GAP: f32 = 112.0;
@@ -290,7 +294,12 @@ impl SnarlPin for QaPin {
         let rect =
             egui::Rect::from_center_size(center, egui::vec2(interaction_size, interaction_size));
         let unclipped_global_rect = self.to_global * rect;
-        let global_rect = clipped_qa_rect(unclipped_global_rect, self.canvas_clip);
+        // QA publishes the real custom reconnect drop target, not only
+        // Snarl's normal wire-start target. The latter intentionally becomes
+        // a point at overview zoom, while `rendered_port_at_position` still
+        // accepts endpoint drops in this screen-space radius.
+        let unclipped_drop_rect = wire_port_drop_rect(unclipped_global_rect);
+        let drop_rect = clipped_qa_rect(unclipped_drop_rect, self.canvas_clip);
         if let Some(address) = &self.address {
             if let Ok(mut ports) = self.rendered_ports.lock() {
                 ports.insert(
@@ -303,20 +312,22 @@ impl SnarlPin for QaPin {
             }
         }
         #[cfg(test)]
-        capture_test_rect(&self.component_id, global_rect);
+        capture_test_rect(&self.component_id, drop_rect);
         crate::qa::register_component_with_metadata(
             self.component_id.clone(),
             "node_port",
-            global_rect,
+            drop_rect,
             true,
             Some(serde_json::json!({
+                "action": "connect_or_reconnect",
                 "connected": self.connected,
                 "direction": match self.direction {
                     PortDirection::Input => "input",
                     PortDirection::Output => "output",
                 },
-                "unclipped_rect": qa_rect_metadata(unclipped_global_rect),
-                "visible_in_canvas": global_rect.is_positive(),
+                "normal_interaction_enabled": interaction_size > 0.0,
+                "unclipped_rect": qa_rect_metadata(unclipped_drop_rect),
+                "visible_in_canvas": drop_rect.is_positive(),
             })),
         );
         rect
@@ -488,6 +499,7 @@ struct ProjectNodeViewer<'a> {
     context_menu_exclusion_rects: &'a mut Vec<egui::Rect>,
     wire_context_request: &'a mut Option<Uuid>,
     suppress_wire_connect: bool,
+    locked_canvas_transform: Option<egui::emath::TSTransform>,
     to_global: &'a mut egui::emath::TSTransform,
     canvas_clip: &'a mut egui::Rect,
     rendered_ports: Arc<Mutex<HashMap<RenderedPortKey, egui::Rect>>>,
@@ -1318,9 +1330,19 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         to_global: &mut egui::emath::TSTransform,
         _snarl: &mut Snarl<GraphItem>,
     ) {
-        sanitize_node_editor_transform(to_global);
+        resolve_node_editor_transform(to_global, self.locked_canvas_transform);
         *self.to_global = *to_global;
     }
+}
+
+fn resolve_node_editor_transform(
+    transform: &mut egui::emath::TSTransform,
+    locked: Option<egui::emath::TSTransform>,
+) {
+    if let Some(locked) = locked {
+        *transform = locked;
+    }
+    sanitize_node_editor_transform(transform);
 }
 
 impl ProjectNodeViewer<'_> {
@@ -2054,6 +2076,10 @@ fn clipped_qa_rect(rect: egui::Rect, canvas_clip: egui::Rect) -> egui::Rect {
     }
 }
 
+fn wire_port_drop_rect(rendered_port_rect: egui::Rect) -> egui::Rect {
+    rendered_port_rect.expand(WIRE_PORT_DROP_RADIUS)
+}
+
 fn qa_rect_metadata(rect: egui::Rect) -> serde_json::Value {
     serde_json::json!({
         "min_x": rect.min.x,
@@ -2062,6 +2088,21 @@ fn qa_rect_metadata(rect: egui::Rect) -> serde_json::Value {
         "max_y": rect.max.y,
         "width": rect.width(),
         "height": rect.height(),
+    })
+}
+
+fn edge_endpoint_qa_metadata(
+    connection_id: Uuid,
+    role: &str,
+    position: egui::Pos2,
+    unclipped_rect: egui::Rect,
+) -> serde_json::Value {
+    serde_json::json!({
+        "action": "reconnect",
+        "connection_id": connection_id,
+        "endpoint": role,
+        "position": {"x": position.x, "y": position.y},
+        "unclipped_rect": qa_rect_metadata(unclipped_rect),
     })
 }
 
@@ -2622,20 +2663,19 @@ fn register_edge_component(
         ("from_handle", "source", start),
         ("to_handle", "target", end),
     ] {
-        let rect = clipped_qa_rect(
-            egui::Rect::from_center_size(position, egui::vec2(18.0, 18.0)),
-            canvas_clip,
-        );
+        let unclipped_rect = egui::Rect::from_center_size(position, egui::vec2(18.0, 18.0));
+        let rect = clipped_qa_rect(unclipped_rect, canvas_clip);
         crate::qa::register_component_with_metadata(
             format!("node_editor.edge:{connection_id}.{suffix}"),
             "node_edge_endpoint",
             rect,
             true,
-            Some(serde_json::json!({
-                "action": "reconnect",
-                "connection_id": connection_id,
-                "endpoint": role,
-            })),
+            Some(edge_endpoint_qa_metadata(
+                connection_id,
+                role,
+                position,
+                unclipped_rect,
+            )),
         );
     }
     Some(RenderedEdge {
@@ -2778,9 +2818,13 @@ fn rendered_edge_at_position(
 }
 
 fn rendered_wire_drag_kind(edge: &RenderedEdge, position: egui::Pos2) -> NodeEditorWireDragKind {
-    if position.distance(edge.start) <= WIRE_ENDPOINT_RADIUS {
+    // At overview zoom a whole wire can be shorter than two fixed endpoint
+    // radii. Reserve at most the outer quarter on either side so the rendered
+    // curve midpoint always remains a genuine body/disconnect target.
+    let endpoint_radius = WIRE_ENDPOINT_RADIUS.min(edge.start.distance(edge.end) * 0.25);
+    if position.distance(edge.start) <= endpoint_radius {
         NodeEditorWireDragKind::ReconnectSource
-    } else if position.distance(edge.end) <= WIRE_ENDPOINT_RADIUS {
+    } else if position.distance(edge.end) <= endpoint_radius {
         NodeEditorWireDragKind::ReconnectTarget
     } else {
         NodeEditorWireDragKind::Disconnect
@@ -2798,7 +2842,7 @@ fn rendered_port_at_position(
         .filter(|(key, rect)| {
             key.direction == direction
                 && canvas_clip.contains(position)
-                && rect.expand(5.0).contains(position)
+                && wire_port_drop_rect(**rect).contains(position)
         })
         .min_by(|left, right| {
             left.1
@@ -2849,6 +2893,13 @@ fn wire_knife_interaction(
             "action": "knife",
             "gesture": "alt_primary_drag_from_empty_canvas",
             "active": state.wire_knife.is_some(),
+            "canvas_transform": {
+                "scale": frame.to_global.scaling,
+                "translation": {
+                    "x": frame.to_global.translation.x,
+                    "y": frame.to_global.translation.y,
+                },
+            },
         })),
     );
     let (primary_pressed, primary_down, primary_released, pointer, alt) = ui.input(|input| {
@@ -2875,6 +2926,7 @@ fn wire_knife_interaction(
                 state.wire_knife = Some(NodeEditorWireKnifeGesture {
                     points: vec![position],
                     crossed_connection_ids: HashSet::new(),
+                    canvas_transform: frame.to_global,
                 });
             }
         }
@@ -2907,6 +2959,14 @@ fn wire_knife_interaction(
                 "action": "knife",
                 "crossed_connection_ids": gesture.crossed_connection_ids,
                 "point_count": gesture.points.len(),
+                "start_accepted": true,
+                "canvas_transform": {
+                    "scale": frame.to_global.scaling,
+                    "translation": {
+                        "x": frame.to_global.translation.x,
+                        "y": frame.to_global.translation.y,
+                    },
+                },
             })),
         );
     }
@@ -2997,6 +3057,12 @@ fn wire_interactions(
     let knife_edits = wire_knife_interaction(ui, state, &frame);
     if knife_was_active || state.wire_knife.is_some() || !knife_edits.is_empty() {
         return knife_edits;
+    }
+    // The foreground menu owns pointer input while open. A menu button can
+    // overlap the underlying Bezier; starting a curve gesture on its press
+    // would close the menu before egui can deliver the button release/click.
+    if state.wire_context_menu.is_some() {
+        return Vec::new();
     }
 
     let pointer = ui.input(|input| input.pointer.interact_pos());
@@ -3587,6 +3653,10 @@ pub fn node_editor_panel(
             context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
             wire_context_request: &mut wire_context_request,
             suppress_wire_connect: node_editor_state.wire_gesture.is_some(),
+            locked_canvas_transform: node_editor_state
+                .wire_knife
+                .as_ref()
+                .map(|gesture| gesture.canvas_transform),
             to_global: &mut to_global,
             canvas_clip: &mut canvas_clip,
             rendered_ports: Arc::clone(&rendered_ports),
@@ -7585,6 +7655,29 @@ mod tests {
     }
 
     #[test]
+    fn overview_wire_midpoint_remains_a_body_target_when_endpoint_radii_overlap() {
+        let edge = RenderedEdge {
+            connection_id: Uuid::new_v4(),
+            start: egui::pos2(100.0, 100.0),
+            control_a: egui::pos2(106.0, 100.0),
+            control_b: egui::pos2(114.0, 100.0),
+            end: egui::pos2(120.0, 100.0),
+        };
+        assert_eq!(
+            rendered_wire_drag_kind(&edge, egui::pos2(110.0, 100.0)),
+            NodeEditorWireDragKind::Disconnect
+        );
+        assert_eq!(
+            rendered_wire_drag_kind(&edge, edge.start),
+            NodeEditorWireDragKind::ReconnectSource
+        );
+        assert_eq!(
+            rendered_wire_drag_kind(&edge, edge.end),
+            NodeEditorWireDragKind::ReconnectTarget
+        );
+    }
+
+    #[test]
     fn endpoint_drag_reconnects_through_real_pointer_frames_without_changing_wire_identity() {
         let (mut project, _, _, clip_id, solid_id, merge_id) = fixture();
         let mut alternate = Node::new("Alternate", NodeContent::Generator(GeneratorContent::Solid));
@@ -7981,6 +8074,7 @@ mod tests {
                         context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
                         wire_context_request: &mut wire_context_request,
                         suppress_wire_connect: false,
+                        locked_canvas_transform: None,
                         to_global: &mut to_global,
                         canvas_clip: &mut canvas_clip,
                         rendered_ports: Arc::clone(&rendered_ports),
@@ -8577,6 +8671,7 @@ mod tests {
                             context_menu_exclusion_rects: &mut exclusions,
                             wire_context_request: &mut wire_context_request,
                             suppress_wire_connect: false,
+                            locked_canvas_transform: None,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
@@ -8644,6 +8739,7 @@ mod tests {
                             context_menu_exclusion_rects: &mut exclusions,
                             wire_context_request: &mut wire_context_request,
                             suppress_wire_connect: false,
+                            locked_canvas_transform: None,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
@@ -8933,6 +9029,7 @@ mod tests {
                             context_menu_exclusion_rects: &mut exclusions,
                             wire_context_request: &mut wire_context_request,
                             suppress_wire_connect: false,
+                            locked_canvas_transform: None,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports,
@@ -8990,6 +9087,86 @@ mod tests {
         assert_eq!(metadata["detail_enabled"], false);
         assert_eq!(metadata["port_interaction_enabled"], false);
         assert_eq!(metadata["resize_interaction_enabled"], false);
+    }
+
+    #[test]
+    fn active_knife_owns_the_canvas_transform_instead_of_panning_the_scene() {
+        let locked = egui::emath::TSTransform::new(egui::vec2(120.0, 240.0), 0.25);
+        let mut scene_pan =
+            egui::emath::TSTransform::new(egui::vec2(1_920.0, -480.0), locked.scaling);
+        resolve_node_editor_transform(&mut scene_pan, Some(locked));
+        assert_eq!(scene_pan, locked);
+
+        let mut normal_pan =
+            egui::emath::TSTransform::new(egui::vec2(1_920.0, -480.0), locked.scaling);
+        resolve_node_editor_transform(&mut normal_pan, None);
+        assert_eq!(normal_pan.translation, egui::vec2(1_920.0, -480.0));
+    }
+
+    #[test]
+    fn overview_port_qa_rect_matches_the_real_reconnect_drop_hit_test() {
+        let scale = NODE_EDITOR_DETAIL_SCALE * 0.5;
+        assert!(!node_editor_port_interactions_enabled(scale));
+        let to_global = egui::emath::TSTransform::new(egui::vec2(410.0, 290.0), scale);
+        let graph_position = egui::pos2(120.0, 80.0);
+        let rendered_port_rect =
+            to_global * egui::Rect::from_center_size(graph_position, egui::Vec2::ZERO);
+        let drop_rect = wire_port_drop_rect(rendered_port_rect);
+        let position = rendered_port_rect.center();
+        assert_eq!(drop_rect.size(), egui::vec2(10.0, 10.0));
+        assert!(drop_rect.contains(position));
+
+        let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0));
+        assert!(clipped_qa_rect(drop_rect, canvas).is_positive());
+        let address = PortAddress::new(PortOwner::Node(Uuid::new_v4()), IMAGE_OUTPUT_PORT);
+        let ports = HashMap::from([(
+            RenderedPortKey {
+                address: address.clone(),
+                direction: PortDirection::Output,
+            },
+            rendered_port_rect,
+        )]);
+        assert_eq!(
+            rendered_port_at_position(&ports, PortDirection::Output, position, canvas),
+            Some(address)
+        );
+
+        let offscreen = egui::Rect::from_center_size(
+            egui::pos2(canvas.right() + 10.0, 400.0),
+            egui::Vec2::ZERO,
+        );
+        assert!(!clipped_qa_rect(wire_port_drop_rect(offscreen), canvas).is_positive());
+        let offscreen_ports = HashMap::from([(
+            RenderedPortKey {
+                address: PortAddress::new(PortOwner::Node(Uuid::new_v4()), IMAGE_OUTPUT_PORT),
+                direction: PortDirection::Output,
+            },
+            offscreen,
+        )]);
+        assert!(rendered_port_at_position(
+            &offscreen_ports,
+            PortDirection::Output,
+            offscreen.center(),
+            canvas,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn edge_endpoint_qa_metadata_exposes_screen_position_and_unclipped_rect() {
+        let connection_id = Uuid::from_u128(0xE_D6_E);
+        let position = egui::pos2(321.5, 654.25);
+        let rect = egui::Rect::from_center_size(position, egui::vec2(18.0, 18.0));
+        let metadata = edge_endpoint_qa_metadata(connection_id, "source", position, rect);
+        assert_eq!(metadata["action"], "reconnect");
+        assert_eq!(metadata["connection_id"], connection_id.to_string());
+        assert_eq!(metadata["endpoint"], "source");
+        assert_eq!(metadata["position"]["x"], position.x);
+        assert_eq!(metadata["position"]["y"], position.y);
+        assert_eq!(metadata["unclipped_rect"]["min_x"], rect.min.x);
+        assert_eq!(metadata["unclipped_rect"]["min_y"], rect.min.y);
+        assert_eq!(metadata["unclipped_rect"]["max_x"], rect.max.x);
+        assert_eq!(metadata["unclipped_rect"]["max_y"], rect.max.y);
     }
 
     #[test]
@@ -10453,6 +10630,7 @@ mod tests {
                         context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
                         wire_context_request: &mut wire_context_request,
                         suppress_wire_connect: false,
+                        locked_canvas_transform: None,
                         to_global: &mut to_global,
                         canvas_clip: &mut canvas_clip,
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
