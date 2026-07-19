@@ -927,10 +927,58 @@ impl Plugin for FfmpegVideoLoader {
     }
 }
 
+fn has_known_ffmpeg_media_extension(path: &str) -> bool {
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    matches!(
+        extension.as_deref(),
+        Some(
+            "mp4"
+                | "mov"
+                | "m4v"
+                | "avi"
+                | "mkv"
+                | "webm"
+                | "mpg"
+                | "mpeg"
+                | "m2v"
+                | "ts"
+                | "m2ts"
+                | "mts"
+                | "wmv"
+                | "flv"
+                | "ogv"
+                | "3gp"
+                | "3g2"
+                | "mxf"
+                | "mp3"
+                | "wav"
+                | "ogg"
+                | "oga"
+                | "aac"
+                | "m4a"
+                | "flac"
+                | "opus"
+                | "aiff"
+                | "aif"
+                | "caf"
+                | "wma"
+        )
+    )
+}
+
 impl LoadPlugin for FfmpegVideoLoader {
     fn open(&self, path: &str) -> LoadPluginResult<Vec<crate::plugin::AssetMetadata>> {
         ffmpeg::init().map_err(LibraryError::from)?;
-        let input_context = ffmpeg::format::input(path).map_err(LibraryError::from)?;
+        let input_context = match ffmpeg::format::input(path) {
+            Ok(input) => input,
+            Err(_) if !has_known_ffmpeg_media_extension(path) => {
+                return Err(LoadPluginError::Unsupported);
+            }
+            Err(error) => return Err(LibraryError::from(error).into()),
+        };
         let streams = collect_asset_metadata(&input_context);
 
         if streams.is_empty() {
@@ -997,5 +1045,28 @@ mod tests {
         assert!(may_use_first_frame_at_start(500, 500));
         assert!(!may_use_first_frame_at_start(501, 500));
         assert!(!may_use_first_frame_at_start(900, 500));
+    }
+
+    #[test]
+    fn unknown_probe_failure_is_unsupported_but_known_media_failure_is_preserved()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let stem =
+            std::env::temp_dir().join(format!("ffmpeg-probe-routing-{}", uuid::Uuid::new_v4()));
+        let custom_path = stem.with_extension("rgba-fixture");
+        let media_path = stem.with_extension("mp4");
+        std::fs::write(&custom_path, b"not an ffmpeg container")?;
+        std::fs::write(&media_path, b"not an ffmpeg container")?;
+        let loader = FfmpegVideoLoader::new();
+        assert!(matches!(
+            loader.open(&custom_path.to_string_lossy()),
+            Err(LoadPluginError::Unsupported)
+        ));
+        assert!(matches!(
+            loader.open(&media_path.to_string_lossy()),
+            Err(LoadPluginError::Failed(_))
+        ));
+        std::fs::remove_file(custom_path)?;
+        std::fs::remove_file(media_path)?;
+        Ok(())
     }
 }
