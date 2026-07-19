@@ -282,12 +282,18 @@ fn arbitrate_primary_gesture(
 
 fn apply_owned_primary_pan(
     pan_owned: bool,
+    primary_pressed: bool,
     primary_down: bool,
+    primary_released: bool,
     pointer_delta: egui::Vec2,
     pan: &mut egui::Vec2,
     handled_hand_tool_drag: &mut bool,
 ) -> bool {
-    if !pan_owned || !primary_down || pointer_delta == egui::Vec2::ZERO {
+    if !pan_owned
+        || primary_pressed
+        || (!primary_down && !primary_released)
+        || pointer_delta == egui::Vec2::ZERO
+    {
         return false;
     }
 
@@ -596,7 +602,9 @@ pub fn preview_panel(
     };
     viewport_changed |= apply_owned_primary_pan(
         gesture_decision.pan_owned,
+        gesture_input.primary_pressed,
         gesture_input.primary_down,
+        gesture_input.primary_released,
         pointer_delta,
         &mut editor_context.view.pan,
         &mut editor_context.interaction.handled_hand_tool_drag,
@@ -1274,7 +1282,9 @@ mod tests {
                     };
                     viewport_changed |= apply_owned_primary_pan(
                         decision.pan_owned,
+                        input.primary_pressed,
                         input.primary_down,
+                        input.primary_released,
                         pointer_delta,
                         &mut editor_context.view.pan,
                         &mut editor_context.interaction.handled_hand_tool_drag,
@@ -1434,6 +1444,7 @@ mod tests {
             .insert(selected_id);
         editor_context.selection.last_selected_entity_id = Some(selected_id);
         let mut pending_actions = Vec::new();
+        let hover = egui::pos2(40.0, 40.0);
 
         // Warm egui's widget memory before the real key/pointer sequence.
         assert!(
@@ -1443,7 +1454,7 @@ mod tests {
                 &project,
                 &mut pending_actions,
                 0,
-                Vec::new(),
+                vec![egui::Event::PointerMoved(hover)],
             )
             .pan_owned
         );
@@ -1506,6 +1517,7 @@ mod tests {
             ],
         );
         assert!(pressed.pan_owned);
+        assert_eq!(editor_context.view.pan, pan_before);
 
         let dragged = run_preview_interaction_frame(
             &context,
@@ -1536,26 +1548,12 @@ mod tests {
         assert!(modifier_released.pan_owned);
         assert!(!modifier_released.finish_after_frame);
 
-        let dragged_after_modifier_release = run_preview_interaction_frame(
-            &context,
-            &mut editor_context,
-            &project,
-            &mut pending_actions,
-            4,
-            vec![egui::Event::PointerMoved(end)],
-        );
-        assert!(dragged_after_modifier_release.pan_owned);
-        assert_near(editor_context.view.pan.x, pan_before.x + end.x - start.x);
-        assert_near(editor_context.view.pan.y, pan_before.y + end.y - start.y);
-        assert_eq!(editor_context.view.zoom, zoom_before);
-        assert!(!editor_context.interaction.preview_viewport.auto_fit);
-
         let released = run_preview_interaction_frame(
             &context,
             &mut editor_context,
             &project,
             &mut pending_actions,
-            5,
+            4,
             vec![egui::Event::PointerButton {
                 pos: end,
                 button: egui::PointerButton::Primary,
@@ -1565,6 +1563,10 @@ mod tests {
         );
         assert!(released.pan_owned);
         assert!(released.finish_after_frame);
+        assert_near(editor_context.view.pan.x, pan_before.x + end.x - start.x);
+        assert_near(editor_context.view.pan.y, pan_before.y + end.y - start.y);
+        assert_eq!(editor_context.view.zoom, zoom_before);
+        assert!(!editor_context.interaction.preview_viewport.auto_fit);
         assert_eq!(
             editor_context.interaction.preview_viewport.primary_gesture,
             PreviewPrimaryGesture::Idle
