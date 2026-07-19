@@ -520,6 +520,48 @@ pub struct NodeEditorState {
     /// changes.
     #[serde(skip)]
     pub pending_continuous_edit: Option<NodeEditorPendingEdit>,
+    /// Canonical connection selected through a real wire hit in the canvas.
+    #[serde(skip)]
+    pub selected_connection_id: Option<Uuid>,
+    /// Pointer gesture captured by a wire or one of its endpoint handles.
+    #[serde(skip)]
+    pub wire_gesture: Option<NodeEditorWireGesture>,
+    /// Alt+primary stroke started on empty canvas; every intersected canonical
+    /// wire is removed in one history transaction when the stroke ends.
+    #[serde(skip)]
+    pub wire_knife: Option<NodeEditorWireKnifeGesture>,
+    /// Persistent right-click menu for a canonical wire.
+    #[serde(skip)]
+    pub wire_context_menu: Option<NodeEditorWireContextMenu>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeEditorWireDragKind {
+    Disconnect,
+    ReconnectSource,
+    ReconnectTarget,
+}
+
+#[derive(Clone, Debug)]
+pub struct NodeEditorWireGesture {
+    pub connection_id: Uuid,
+    pub kind: NodeEditorWireDragKind,
+    pub start: egui::Pos2,
+    pub current: egui::Pos2,
+}
+
+#[derive(Clone, Debug)]
+pub struct NodeEditorWireKnifeGesture {
+    pub points: Vec<egui::Pos2>,
+    pub crossed_connection_ids: std::collections::HashSet<Uuid>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NodeEditorWireContextMenu {
+    pub connection_id: Uuid,
+    pub position: egui::Pos2,
+    pub open_time: f64,
+    pub inserting: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

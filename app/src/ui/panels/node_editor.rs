@@ -1,7 +1,8 @@
 use crate::action::HistoryManager;
 use crate::state::context_types::{
     ContainerResizeEdge, ContainerResizeState, ContextMenuState, NodeEditorPendingEdit,
-    NodeEditorState, SelectionState,
+    NodeEditorState, NodeEditorWireContextMenu, NodeEditorWireDragKind, NodeEditorWireGesture,
+    NodeEditorWireKnifeGesture, SelectionState,
 };
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 use crate::ui::widgets::searchable_context_menu::{show_searchable_items_with_qa, SearchableItem};
@@ -14,7 +15,8 @@ use egui_snarl::{
     InPin, OutPin, Snarl,
 };
 use library::model::project::{
-    ContainerImageSourceKind, PortAddress, PortDataType, PortDirection, PortOwner, PortSide,
+    ContainerImageSourceKind, PortAddress, PortDataType, PortDirection, PortMultiplicity,
+    PortOwner, PortSide,
 };
 use library::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use library::model::{
@@ -50,6 +52,9 @@ const PORT_LABEL_WIDTH: f32 = 96.0;
 const PORT_ROW_HEIGHT: f32 = 22.0;
 const PROPERTY_LABEL_WIDTH: f32 = 58.0;
 const INLINE_CONTROL_WIDTH: f32 = 126.0;
+const WIRE_HIT_RADIUS: f32 = 8.0;
+const WIRE_ENDPOINT_RADIUS: f32 = 12.0;
+const WIRE_DRAG_THRESHOLD: f32 = 6.0;
 const MIN_CONTAINER_SIZE: egui::Vec2 = egui::vec2(360.0, 220.0);
 const AUTO_LAYOUT_COLUMN_GAP: f32 = 112.0;
 const AUTO_LAYOUT_ROW_GAP: f32 = 52.0;
@@ -243,6 +248,24 @@ struct RenderedPortKey {
     direction: PortDirection,
 }
 
+#[derive(Clone, Debug)]
+struct RenderedEdge {
+    connection_id: Uuid,
+    start: egui::Pos2,
+    control_a: egui::Pos2,
+    control_b: egui::Pos2,
+    end: egui::Pos2,
+}
+
+struct EdgeComponent<'a> {
+    id: String,
+    kind: &'a str,
+    from: &'a PortAddress,
+    to: &'a PortAddress,
+    connection_id: Option<Uuid>,
+    wire_color: Color32,
+}
+
 #[derive(Clone, Copy)]
 struct OverviewWirePainter<'a> {
     painter: &'a egui::Painter,
@@ -346,6 +369,27 @@ enum NodeEdit {
         from: PortAddress,
         to: PortAddress,
     },
+    DisconnectConnection {
+        connection_id: Uuid,
+    },
+    DisconnectConnections {
+        connection_ids: Vec<Uuid>,
+    },
+    ReconnectConnection {
+        connection_id: Uuid,
+        from: PortAddress,
+        to: PortAddress,
+    },
+    SpliceExistingNode {
+        connection_id: Uuid,
+        node_id: Uuid,
+    },
+    InsertNodeOnConnection {
+        connection_id: Uuid,
+        node: Node,
+        position: egui::Pos2,
+        composition_id: Uuid,
+    },
     SetOutputNode {
         owner: PortOwner,
         node_id: Option<Uuid>,
@@ -440,6 +484,8 @@ struct ProjectNodeViewer<'a> {
     pending_selection: &'a mut Option<PortOwner>,
     current_time: f64,
     context_menu_exclusion_rects: &'a mut Vec<egui::Rect>,
+    wire_context_request: &'a mut Option<Uuid>,
+    suppress_wire_connect: bool,
     to_global: &'a mut egui::emath::TSTransform,
     canvas_clip: &'a mut egui::Rect,
     rendered_ports: Arc<Mutex<HashMap<RenderedPortKey, egui::Rect>>>,
@@ -1152,6 +1198,9 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     }
 
     fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<GraphItem>) {
+        if self.suppress_wire_connect {
+            return;
+        }
         if let Some(edit) = edit_for_wire(
             self.project,
             snarl,
@@ -1167,7 +1216,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     }
 
     fn disconnect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<GraphItem>) {
-        if let Some(edit) = edit_for_wire(
+        let edit = edit_for_wire(
             self.project,
             snarl,
             from.id.node,
@@ -1175,7 +1224,19 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             to.id.node,
             to.id.input,
             false,
-        ) {
+        );
+        if let Some(NodeEdit::Disconnect { from, to }) = &edit {
+            if let Some(connection) = self
+                .project
+                .connections
+                .iter()
+                .find(|connection| connection.from == *from && connection.to == *to)
+            {
+                *self.wire_context_request = Some(connection.id);
+                return;
+            }
+        }
+        if let Some(edit) = edit {
             self.edits.push(QueuedNodeEdit::Atomic(edit));
         }
         snarl.disconnect(from.id, to.id);
@@ -2381,27 +2442,33 @@ fn register_rendered_edges(
     rendered_ports: &Arc<Mutex<HashMap<RenderedPortKey, egui::Rect>>>,
     canvas_clip: egui::Rect,
     overview: Option<OverviewWirePainter<'_>>,
-) {
+) -> Vec<RenderedEdge> {
     let Ok(ports) = rendered_ports.lock() else {
-        return;
+        return Vec::new();
     };
+    let mut rendered_edges = Vec::new();
     for connection in &project.connections {
-        register_edge_component(
-            format!("node_editor.edge:{}", connection.id),
-            "explicit",
-            &connection.from,
-            &connection.to,
+        let edge = register_edge_component(
+            EdgeComponent {
+                id: format!("node_editor.edge:{}", connection.id),
+                kind: "explicit",
+                from: &connection.from,
+                to: &connection.to,
+                connection_id: Some(connection.id),
+                wire_color: project
+                    .port_definition(&connection.from, PortDirection::Output)
+                    .map_or_else(
+                        || pin_color(PortDataType::Any),
+                        |definition| pin_color(definition.data_type),
+                    ),
+            },
             &ports,
-            Some(connection.id),
             canvas_clip,
-            project
-                .port_definition(&connection.from, PortDirection::Output)
-                .map_or_else(
-                    || pin_color(PortDataType::Any),
-                    |definition| pin_color(definition.data_type),
-                ),
             overview,
         );
+        if let Some(edge) = edge {
+            rendered_edges.push(edge);
+        }
     }
     for owner in project
         .compositions
@@ -2439,43 +2506,41 @@ fn register_rendered_edges(
                     "derived_output",
                 ),
             };
-            register_edge_component(
-                id,
-                kind,
-                &from,
-                &sink,
+            let _ = register_edge_component(
+                EdgeComponent {
+                    id,
+                    kind,
+                    from: &from,
+                    to: &sink,
+                    connection_id: None,
+                    wire_color: pin_color(PortDataType::Image),
+                },
                 &ports,
-                None,
                 canvas_clip,
-                pin_color(PortDataType::Image),
                 overview,
             );
         }
     }
+    rendered_edges
 }
 
 fn register_edge_component(
-    id: String,
-    kind: &str,
-    from: &PortAddress,
-    to: &PortAddress,
+    edge: EdgeComponent<'_>,
     ports: &HashMap<RenderedPortKey, egui::Rect>,
-    connection_id: Option<Uuid>,
     canvas_clip: egui::Rect,
-    wire_color: Color32,
     overview: Option<OverviewWirePainter<'_>>,
-) {
+) -> Option<RenderedEdge> {
     let Some(from_rect) = ports.get(&RenderedPortKey {
-        address: from.clone(),
+        address: edge.from.clone(),
         direction: PortDirection::Output,
     }) else {
-        return;
+        return None;
     };
     let Some(to_rect) = ports.get(&RenderedPortKey {
-        address: to.clone(),
+        address: edge.to.clone(),
         direction: PortDirection::Input,
     }) else {
-        return;
+        return None;
     };
     let start = from_rect.center();
     let end = to_rect.center();
@@ -2483,7 +2548,7 @@ fn register_edge_component(
         .iter()
         .all(|position| position.x.is_finite() && position.y.is_finite())
     {
-        return;
+        return None;
     }
     let min_frame = if overview.is_some() { 2.0 } else { 36.0 };
     let frame = ((end.x - start.x).abs() * 0.45).clamp(min_frame, 110.0);
@@ -2492,7 +2557,11 @@ fn register_edge_component(
     let screen_points = [start, control_a, control_b, end];
     if let Some(overview) = overview {
         if let Some(graph_points) = overview_wire_graph_points(screen_points, overview.to_global) {
-            let width = if kind == "derived_output" { 1.15 } else { 1.65 };
+            let width = if edge.kind == "derived_output" {
+                1.15
+            } else {
+                1.65
+            };
             overview
                 .painter
                 .add(egui::epaint::CubicBezierShape::from_points_stroke(
@@ -2501,41 +2570,571 @@ fn register_edge_component(
                     Color32::TRANSPARENT,
                     egui::Stroke::new(
                         screen_stroke_in_graph_units(width, overview.to_global.scaling),
-                        wire_color.gamma_multiply(0.9),
+                        edge.wire_color.gamma_multiply(0.9),
                     ),
                 ));
         }
     }
     let unclipped_bbox = egui::Rect::from_points(&[start, control_a, control_b, end]).expand(7.0);
     let bbox = clipped_qa_rect(unclipped_bbox, canvas_clip);
+    let midpoint = cubic_bezier_point(start, control_a, control_b, end, 0.5);
+    let unclipped_hit_rect = egui::Rect::from_center_size(midpoint, egui::vec2(16.0, 16.0));
+    let hit_rect = clipped_qa_rect(unclipped_hit_rect, canvas_clip);
+    let qa_rect = if edge.connection_id.is_some() {
+        hit_rect
+    } else {
+        bbox
+    };
     #[cfg(test)]
-    capture_test_rect(&id, bbox);
+    capture_test_rect(&edge.id, qa_rect);
     crate::qa::register_component_with_metadata(
-        id,
+        edge.id,
         "node_edge",
-        bbox,
+        qa_rect,
         true,
         Some(serde_json::json!({
-            "kind": kind,
-            "connection_id": connection_id,
+            "kind": edge.kind,
+            "connection_id": edge.connection_id,
+            "action": edge.connection_id.map(|_| "select"),
             "from": {
-                "owner": qa_container_key(from.owner),
-                "port": from.port,
+                "owner": qa_container_key(edge.from.owner),
+                "port": edge.from.port,
                 "x": start.x,
                 "y": start.y,
             },
             "to": {
-                "owner": qa_container_key(to.owner),
-                "port": to.port,
+                "owner": qa_container_key(edge.to.owner),
+                "port": edge.to.port,
                 "x": end.x,
                 "y": end.y,
             },
             "ltr": start.x <= end.x,
-            "visible": bbox.is_positive(),
+            "visible": qa_rect.is_positive(),
             "overview_painted": overview.is_some(),
             "unclipped_rect": qa_rect_metadata(unclipped_bbox),
+            "hit_point": {"x": midpoint.x, "y": midpoint.y},
         })),
     );
+    let connection_id = edge.connection_id?;
+    for (suffix, role, position) in [
+        ("from_handle", "source", start),
+        ("to_handle", "target", end),
+    ] {
+        let rect = clipped_qa_rect(
+            egui::Rect::from_center_size(position, egui::vec2(18.0, 18.0)),
+            canvas_clip,
+        );
+        crate::qa::register_component_with_metadata(
+            format!("node_editor.edge:{connection_id}.{suffix}"),
+            "node_edge_endpoint",
+            rect,
+            true,
+            Some(serde_json::json!({
+                "action": "reconnect",
+                "connection_id": connection_id,
+                "endpoint": role,
+            })),
+        );
+    }
+    Some(RenderedEdge {
+        connection_id,
+        start,
+        control_a,
+        control_b,
+        end,
+    })
+}
+
+fn cubic_bezier_point(
+    start: egui::Pos2,
+    control_a: egui::Pos2,
+    control_b: egui::Pos2,
+    end: egui::Pos2,
+    t: f32,
+) -> egui::Pos2 {
+    let one_minus_t = 1.0 - t;
+    let weights = [
+        one_minus_t.powi(3),
+        3.0 * one_minus_t.powi(2) * t,
+        3.0 * one_minus_t * t.powi(2),
+        t.powi(3),
+    ];
+    egui::pos2(
+        start.x * weights[0]
+            + control_a.x * weights[1]
+            + control_b.x * weights[2]
+            + end.x * weights[3],
+        start.y * weights[0]
+            + control_a.y * weights[1]
+            + control_b.y * weights[2]
+            + end.y * weights[3],
+    )
+}
+
+fn distance_to_segment(point: egui::Pos2, start: egui::Pos2, end: egui::Pos2) -> f32 {
+    let segment = end - start;
+    let length_squared = segment.length_sq();
+    if length_squared <= f32::EPSILON {
+        return point.distance(start);
+    }
+    let t = ((point - start).dot(segment) / length_squared).clamp(0.0, 1.0);
+    point.distance(start + segment * t)
+}
+
+fn distance_to_rendered_edge(point: egui::Pos2, edge: &RenderedEdge) -> f32 {
+    let mut previous = edge.start;
+    let mut distance = f32::INFINITY;
+    for sample in 1..=32 {
+        let current = cubic_bezier_point(
+            edge.start,
+            edge.control_a,
+            edge.control_b,
+            edge.end,
+            sample as f32 / 32.0,
+        );
+        distance = distance.min(distance_to_segment(point, previous, current));
+        previous = current;
+    }
+    distance
+}
+
+fn segment_orientation(start: egui::Pos2, end: egui::Pos2, point: egui::Pos2) -> f32 {
+    let segment = end - start;
+    let offset = point - start;
+    segment.x * offset.y - segment.y * offset.x
+}
+
+fn point_on_segment(point: egui::Pos2, start: egui::Pos2, end: egui::Pos2) -> bool {
+    const EPSILON: f32 = 1.0e-4;
+    segment_orientation(start, end, point).abs() <= EPSILON
+        && point.x >= start.x.min(end.x) - EPSILON
+        && point.x <= start.x.max(end.x) + EPSILON
+        && point.y >= start.y.min(end.y) - EPSILON
+        && point.y <= start.y.max(end.y) + EPSILON
+}
+
+fn segments_intersect(
+    left_start: egui::Pos2,
+    left_end: egui::Pos2,
+    right_start: egui::Pos2,
+    right_end: egui::Pos2,
+) -> bool {
+    let left_to_right_start = segment_orientation(left_start, left_end, right_start);
+    let left_to_right_end = segment_orientation(left_start, left_end, right_end);
+    let right_to_left_start = segment_orientation(right_start, right_end, left_start);
+    let right_to_left_end = segment_orientation(right_start, right_end, left_end);
+    let crosses_both_lines = left_to_right_start * left_to_right_end < 0.0
+        && right_to_left_start * right_to_left_end < 0.0;
+    if crosses_both_lines {
+        return true;
+    }
+
+    const EPSILON: f32 = 1.0e-4;
+    (left_to_right_start.abs() <= EPSILON && point_on_segment(right_start, left_start, left_end))
+        || (left_to_right_end.abs() <= EPSILON && point_on_segment(right_end, left_start, left_end))
+        || (right_to_left_start.abs() <= EPSILON
+            && point_on_segment(left_start, right_start, right_end))
+        || (right_to_left_end.abs() <= EPSILON
+            && point_on_segment(left_end, right_start, right_end))
+}
+
+fn knife_segment_hits_edge(start: egui::Pos2, end: egui::Pos2, edge: &RenderedEdge) -> bool {
+    let mut previous = edge.start;
+    for sample in 1..=48 {
+        let current = cubic_bezier_point(
+            edge.start,
+            edge.control_a,
+            edge.control_b,
+            edge.end,
+            sample as f32 / 48.0,
+        );
+        let within_tolerance = segments_intersect(start, end, previous, current)
+            || distance_to_segment(start, previous, current) <= 3.0
+            || distance_to_segment(end, previous, current) <= 3.0
+            || distance_to_segment(previous, start, end) <= 3.0
+            || distance_to_segment(current, start, end) <= 3.0;
+        if within_tolerance {
+            return true;
+        }
+        previous = current;
+    }
+    false
+}
+
+fn rendered_edge_at_position(
+    edges: &[RenderedEdge],
+    position: egui::Pos2,
+) -> Option<&RenderedEdge> {
+    edges
+        .iter()
+        .filter_map(|edge| {
+            let distance = distance_to_rendered_edge(position, edge);
+            (distance <= WIRE_HIT_RADIUS).then_some((edge, distance))
+        })
+        .min_by(|left, right| left.1.total_cmp(&right.1))
+        .map(|(edge, _)| edge)
+}
+
+fn rendered_wire_drag_kind(edge: &RenderedEdge, position: egui::Pos2) -> NodeEditorWireDragKind {
+    if position.distance(edge.start) <= WIRE_ENDPOINT_RADIUS {
+        NodeEditorWireDragKind::ReconnectSource
+    } else if position.distance(edge.end) <= WIRE_ENDPOINT_RADIUS {
+        NodeEditorWireDragKind::ReconnectTarget
+    } else {
+        NodeEditorWireDragKind::Disconnect
+    }
+}
+
+fn rendered_port_at_position(
+    ports: &HashMap<RenderedPortKey, egui::Rect>,
+    direction: PortDirection,
+    position: egui::Pos2,
+    canvas_clip: egui::Rect,
+) -> Option<PortAddress> {
+    ports
+        .iter()
+        .filter(|(key, rect)| {
+            key.direction == direction
+                && canvas_clip.contains(position)
+                && rect.expand(5.0).contains(position)
+        })
+        .min_by(|left, right| {
+            left.1
+                .center()
+                .distance(position)
+                .total_cmp(&right.1.center().distance(position))
+        })
+        .map(|(key, _)| key.address.clone())
+}
+
+struct WireInteractionFrame<'a> {
+    project: &'a Project,
+    edges: &'a [RenderedEdge],
+    rendered_ports: &'a Arc<Mutex<HashMap<RenderedPortKey, egui::Rect>>>,
+    canvas_clip: egui::Rect,
+    graph_item_rects: &'a [egui::Rect],
+    to_global: egui::emath::TSTransform,
+}
+
+fn paint_wire_knife(ui: &egui::Ui, gesture: &NodeEditorWireKnifeGesture, canvas_clip: egui::Rect) {
+    if gesture.points.len() < 2 {
+        return;
+    }
+    let painter = ui
+        .ctx()
+        .layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("node_editor_wire_knife"),
+        ))
+        .with_clip_rect(canvas_clip);
+    painter.add(egui::Shape::line(
+        gesture.points.clone(),
+        egui::Stroke::new(2.5, Color32::from_rgb(255, 88, 88)),
+    ));
+}
+
+fn wire_knife_interaction(
+    ui: &mut egui::Ui,
+    state: &mut NodeEditorState,
+    frame: &WireInteractionFrame<'_>,
+) -> Vec<QueuedNodeEdit> {
+    crate::qa::register_component_with_metadata(
+        "node_editor.knife_surface",
+        "node_editor_knife_surface",
+        frame.canvas_clip,
+        true,
+        Some(serde_json::json!({
+            "action": "knife",
+            "gesture": "alt_primary_drag_from_empty_canvas",
+            "active": state.wire_knife.is_some(),
+        })),
+    );
+    let (primary_pressed, primary_down, primary_released, pointer, alt) = ui.input(|input| {
+        (
+            input.pointer.primary_pressed(),
+            input.pointer.primary_down(),
+            input.pointer.primary_released(),
+            input.pointer.interact_pos(),
+            input.modifiers.alt,
+        )
+    });
+
+    if state.wire_knife.is_none() && alt && primary_pressed {
+        if let Some(position) = pointer.filter(|position| frame.canvas_clip.contains(*position)) {
+            let graph_position = frame.to_global.inverse() * position;
+            let over_item = frame
+                .graph_item_rects
+                .iter()
+                .any(|rect| rect.contains(graph_position));
+            let over_wire = rendered_edge_at_position(frame.edges, position).is_some();
+            if !over_item && !over_wire {
+                state.wire_gesture = None;
+                state.wire_context_menu = None;
+                state.wire_knife = Some(NodeEditorWireKnifeGesture {
+                    points: vec![position],
+                    crossed_connection_ids: HashSet::new(),
+                });
+            }
+        }
+    }
+
+    if primary_down {
+        if let (Some(position), Some(gesture)) = (pointer, state.wire_knife.as_mut()) {
+            let previous = gesture.points.last().copied().unwrap_or(position);
+            if previous.distance(position) > 0.5 {
+                for edge in frame.edges {
+                    if knife_segment_hits_edge(previous, position, edge) {
+                        gesture.crossed_connection_ids.insert(edge.connection_id);
+                    }
+                }
+                gesture.points.push(position);
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+
+    if let Some(gesture) = state.wire_knife.as_ref() {
+        paint_wire_knife(ui, gesture, frame.canvas_clip);
+        let rect = egui::Rect::from_points(&gesture.points).expand(6.0);
+        crate::qa::register_component_with_metadata(
+            "node_editor.knife_gesture",
+            "node_editor_knife_gesture",
+            rect,
+            true,
+            Some(serde_json::json!({
+                "action": "knife",
+                "crossed_connection_ids": gesture.crossed_connection_ids,
+                "point_count": gesture.points.len(),
+            })),
+        );
+    }
+
+    if primary_released {
+        if let Some(gesture) = state.wire_knife.take() {
+            let mut connection_ids = gesture
+                .crossed_connection_ids
+                .into_iter()
+                .collect::<Vec<_>>();
+            connection_ids.sort_unstable();
+            if !connection_ids.is_empty() {
+                if state
+                    .selected_connection_id
+                    .is_some_and(|selected| connection_ids.contains(&selected))
+                {
+                    state.selected_connection_id = None;
+                }
+                return vec![QueuedNodeEdit::Atomic(NodeEdit::DisconnectConnections {
+                    connection_ids,
+                })];
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn paint_wire_interaction(
+    ui: &egui::Ui,
+    edge: &RenderedEdge,
+    gesture: Option<&NodeEditorWireGesture>,
+    canvas_clip: egui::Rect,
+) {
+    let mut points = [edge.start, edge.control_a, edge.control_b, edge.end];
+    if let Some(gesture) = gesture {
+        match gesture.kind {
+            NodeEditorWireDragKind::ReconnectSource => {
+                points[0] = gesture.current;
+                points[1] = gesture.current + egui::vec2(72.0, 0.0);
+            }
+            NodeEditorWireDragKind::ReconnectTarget => {
+                points[2] = gesture.current - egui::vec2(72.0, 0.0);
+                points[3] = gesture.current;
+            }
+            NodeEditorWireDragKind::Disconnect => {}
+        }
+    }
+    let painter = ui
+        .ctx()
+        .layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("node_editor_wire_interaction"),
+        ))
+        .with_clip_rect(canvas_clip);
+    painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+        points,
+        false,
+        Color32::TRANSPARENT,
+        egui::Stroke::new(5.0, Color32::from_rgb(255, 196, 72)),
+    ));
+}
+
+fn wire_interactions(
+    ui: &mut egui::Ui,
+    state: &mut NodeEditorState,
+    frame: WireInteractionFrame<'_>,
+) -> Vec<QueuedNodeEdit> {
+    if state.selected_connection_id.is_some_and(|connection_id| {
+        !frame
+            .project
+            .connections
+            .iter()
+            .any(|connection| connection.id == connection_id)
+    }) {
+        state.selected_connection_id = None;
+    }
+    if state.wire_gesture.as_ref().is_some_and(|gesture| {
+        !frame
+            .project
+            .connections
+            .iter()
+            .any(|connection| connection.id == gesture.connection_id)
+    }) {
+        state.wire_gesture = None;
+    }
+
+    let knife_was_active = state.wire_knife.is_some();
+    let knife_edits = wire_knife_interaction(ui, state, &frame);
+    if knife_was_active || state.wire_knife.is_some() || !knife_edits.is_empty() {
+        return knife_edits;
+    }
+
+    let pointer = ui.input(|input| input.pointer.interact_pos());
+    let active_id = state
+        .wire_gesture
+        .as_ref()
+        .map(|gesture| gesture.connection_id);
+    let hovered = pointer.and_then(|position| {
+        let edge = rendered_edge_at_position(frame.edges, position)?;
+        let endpoint = rendered_wire_drag_kind(edge, position);
+        let graph_position = frame.to_global.inverse() * position;
+        let over_graph_item = frame
+            .graph_item_rects
+            .iter()
+            .any(|rect| rect.contains(graph_position));
+        (!over_graph_item || endpoint != NodeEditorWireDragKind::Disconnect).then_some(edge)
+    });
+    let interaction_edge = active_id
+        .and_then(|connection_id| {
+            frame
+                .edges
+                .iter()
+                .find(|edge| edge.connection_id == connection_id)
+        })
+        .or(hovered);
+    let mut edits = Vec::new();
+
+    if let Some(edge) = interaction_edge {
+        let response = ui.interact(
+            frame.canvas_clip,
+            ui.make_persistent_id(("node_editor_wire", edge.connection_id)),
+            egui::Sense::click_and_drag(),
+        );
+        if response.clicked_by(egui::PointerButton::Primary) {
+            state.selected_connection_id = Some(edge.connection_id);
+        }
+        let (primary_pressed, primary_down, primary_released, pointer_position) =
+            ui.input(|input| {
+                (
+                    input.pointer.primary_pressed(),
+                    input.pointer.primary_down(),
+                    input.pointer.primary_released(),
+                    input.pointer.interact_pos(),
+                )
+            });
+        let pointer_started_on_edge =
+            hovered.is_some_and(|hovered_edge| hovered_edge.connection_id == edge.connection_id);
+        if primary_pressed && pointer_started_on_edge {
+            if let Some(position) = pointer_position {
+                state.selected_connection_id = Some(edge.connection_id);
+                state.wire_context_menu = None;
+                state.wire_gesture = Some(NodeEditorWireGesture {
+                    connection_id: edge.connection_id,
+                    kind: rendered_wire_drag_kind(edge, position),
+                    start: position,
+                    current: position,
+                });
+            }
+        }
+        if primary_down {
+            if let (Some(position), Some(gesture)) = (pointer_position, state.wire_gesture.as_mut())
+            {
+                gesture.current = position;
+                ui.ctx().request_repaint();
+            }
+        }
+        if primary_released {
+            if let Some(gesture) = state.wire_gesture.take() {
+                if gesture.connection_id == edge.connection_id
+                    && gesture.current.distance(gesture.start) >= WIRE_DRAG_THRESHOLD
+                {
+                    match gesture.kind {
+                        NodeEditorWireDragKind::Disconnect => {
+                            edits.push(QueuedNodeEdit::Atomic(NodeEdit::DisconnectConnection {
+                                connection_id: gesture.connection_id,
+                            }));
+                        }
+                        endpoint_kind => {
+                            let direction =
+                                if endpoint_kind == NodeEditorWireDragKind::ReconnectSource {
+                                    PortDirection::Output
+                                } else {
+                                    PortDirection::Input
+                                };
+                            let ports = frame.rendered_ports.lock().ok().and_then(|ports| {
+                                rendered_port_at_position(
+                                    &ports,
+                                    direction,
+                                    gesture.current,
+                                    frame.canvas_clip,
+                                )
+                            });
+                            if let (Some(port), Some(connection)) = (
+                                ports,
+                                frame
+                                    .project
+                                    .connections
+                                    .iter()
+                                    .find(|connection| connection.id == gesture.connection_id),
+                            ) {
+                                let (from, to) =
+                                    if endpoint_kind == NodeEditorWireDragKind::ReconnectSource {
+                                        (port, connection.to.clone())
+                                    } else {
+                                        (connection.from.clone(), port)
+                                    };
+                                edits.push(QueuedNodeEdit::Atomic(NodeEdit::ReconnectConnection {
+                                    connection_id: gesture.connection_id,
+                                    from,
+                                    to,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let delete_pressed = ui.input(|input| {
+        input.key_pressed(egui::Key::Delete) || input.key_pressed(egui::Key::Backspace)
+    });
+    if delete_pressed && !ui.ctx().wants_keyboard_input() {
+        if let Some(connection_id) = state.selected_connection_id.take() {
+            edits.push(QueuedNodeEdit::Atomic(NodeEdit::DisconnectConnection {
+                connection_id,
+            }));
+        }
+    }
+
+    if let Some(connection_id) = state.selected_connection_id {
+        if let Some(edge) = frame
+            .edges
+            .iter()
+            .find(|edge| edge.connection_id == connection_id)
+        {
+            paint_wire_interaction(ui, edge, state.wire_gesture.as_ref(), frame.canvas_clip);
+        }
+    }
+    edits
 }
 
 fn overview_wire_graph_points(
@@ -2958,9 +3557,11 @@ pub fn node_editor_panel(
 
     let mut snarl;
     let layout_edits;
+    let rendered_edges;
     let mut edits = Vec::new();
     let mut pending_selection = None;
     let mut context_menu_exclusion_rects = Vec::new();
+    let mut wire_context_request = None;
     let mut to_global = egui::emath::TSTransform::default();
     let mut canvas_clip = canvas_rect;
     let rendered_ports = Arc::new(Mutex::new(HashMap::new()));
@@ -2982,6 +3583,8 @@ pub fn node_editor_panel(
             pending_selection: &mut pending_selection,
             current_time,
             context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
+            wire_context_request: &mut wire_context_request,
+            suppress_wire_connect: node_editor_state.wire_gesture.is_some(),
             to_global: &mut to_global,
             canvas_clip: &mut canvas_clip,
             rendered_ports: Arc::clone(&rendered_ports),
@@ -3022,7 +3625,7 @@ pub fn node_editor_panel(
                 painter: &foreground,
                 to_global,
             });
-        register_rendered_edges(&project, &rendered_ports, canvas_clip, overview);
+        rendered_edges = register_rendered_edges(&project, &rendered_ports, canvas_clip, overview);
         for container in &containers {
             paint_container_foreground(
                 &foreground,
@@ -3032,6 +3635,45 @@ pub fn node_editor_panel(
                 to_global.scaling,
             );
             register_container_chrome(container, to_global, canvas_clip, &project, current_time);
+        }
+
+        if let Some(connection_id) = wire_context_request {
+            let (position, open_time) = ui.input(|input| {
+                (
+                    input.pointer.interact_pos().unwrap_or(canvas_clip.center()),
+                    input.time,
+                )
+            });
+            node_editor_state.selected_connection_id = Some(connection_id);
+            node_editor_state.wire_context_menu = Some(NodeEditorWireContextMenu {
+                connection_id,
+                position,
+                open_time,
+                inserting: false,
+            });
+            *context_menu_state = None;
+        }
+        edits.extend(wire_interactions(
+            ui,
+            node_editor_state,
+            WireInteractionFrame {
+                project: &project,
+                edges: &rendered_edges,
+                rendered_ports: &rendered_ports,
+                canvas_clip,
+                graph_item_rects: &context_menu_exclusion_rects,
+                to_global,
+            },
+        ));
+        if let Some(edit) = show_wire_context_menu(
+            ui,
+            node_editor_state,
+            &project,
+            plugin_manager.as_ref(),
+            comp_id,
+            to_global,
+        ) {
+            edits.push(edit);
         }
 
         let mut collected = collect_layout_edits(&project, &snarl);
@@ -3100,6 +3742,25 @@ pub fn node_editor_panel(
                 layout_changed |=
                     reparent_nodes_at_drop(&mut project, comp_id, &moved_node_ids, position);
             }
+            let dropped_wire = ui
+                .input(|input| input.pointer.interact_pos())
+                .and_then(|position| rendered_edge_at_position(&rendered_edges, position))
+                .map(|edge| edge.connection_id);
+            if moved_node_ids.len() == 1 {
+                if let (Some(connection_id), Some(node_id)) =
+                    (dropped_wire, moved_node_ids.iter().next().copied())
+                {
+                    if node_can_splice_connection(&project, connection_id, node_id) {
+                        layout_changed |= apply_edit(
+                            &mut project,
+                            NodeEdit::SpliceExistingNode {
+                                connection_id,
+                                node_id,
+                            },
+                        );
+                    }
+                }
+            }
         }
     }
     if selection_changed {
@@ -3128,6 +3789,7 @@ pub fn node_editor_panel(
         comp_id,
         &context_menu_exclusion_rects,
         to_global,
+        wire_context_request.is_some(),
     );
     // Creation already places its item in a free slot and grows only the
     // necessary ancestors. Connections change dependency semantics, not
@@ -4751,6 +5413,130 @@ fn set_container_geometry(
     }
 }
 
+fn node_can_splice_connection(project: &Project, connection_id: Uuid, node_id: Uuid) -> bool {
+    splice_ports_for_node(project, connection_id, node_id).is_some()
+}
+
+fn splice_ports_for_node(
+    project: &Project,
+    connection_id: Uuid,
+    node_id: Uuid,
+) -> Option<(PortAddress, PortAddress)> {
+    let node = project.get_node(node_id)?;
+    if !matches!(
+        node.content,
+        NodeContent::PluginOperation(_) | NodeContent::Merge
+    ) {
+        return None;
+    }
+    let connection = project
+        .connections
+        .iter()
+        .find(|connection| connection.id == connection_id)?;
+    if [connection.from.owner, connection.to.owner].contains(&PortOwner::Node(node_id)) {
+        return None;
+    }
+    let source = project.port_definition(&connection.from, PortDirection::Output)?;
+    let target = project.port_definition(&connection.to, PortDirection::Input)?;
+    let definitions = project.port_definitions(PortOwner::Node(node_id));
+
+    let mut inputs = definitions
+        .iter()
+        .filter(|definition| {
+            if definition.direction != PortDirection::Input
+                || !definition.data_type.accepts(source.data_type)
+            {
+                return false;
+            }
+            let address = PortAddress::new(PortOwner::Node(node_id), definition.key.clone());
+            definition.multiplicity == PortMultiplicity::Variadic
+                || !project
+                    .connections
+                    .iter()
+                    .any(|connection| connection.to == address)
+        })
+        .collect::<Vec<_>>();
+    inputs.sort_by_key(|definition| {
+        (
+            definition.data_type != source.data_type,
+            !matches!(definition.key.as_str(), "image" | "shape" | "input"),
+            definition.key.clone(),
+        )
+    });
+
+    let mut outputs = definitions
+        .iter()
+        .filter(|definition| {
+            definition.direction == PortDirection::Output
+                && target.data_type.accepts(definition.data_type)
+        })
+        .collect::<Vec<_>>();
+    outputs.sort_by_key(|definition| {
+        (
+            definition.data_type != target.data_type,
+            !matches!(definition.key.as_str(), "image" | "shape" | "output"),
+            definition.key.clone(),
+        )
+    });
+
+    Some((
+        PortAddress::new(PortOwner::Node(node_id), inputs.first()?.key.clone()),
+        PortAddress::new(PortOwner::Node(node_id), outputs.first()?.key.clone()),
+    ))
+}
+
+fn splice_existing_node_on_connection(
+    project: &mut Project,
+    connection_id: Uuid,
+    node_id: Uuid,
+) -> bool {
+    let Some((via_input, via_output)) = splice_ports_for_node(project, connection_id, node_id)
+    else {
+        return false;
+    };
+    match project.splice_connection(connection_id, via_input, via_output) {
+        Ok(_) => true,
+        Err(error) => {
+            log::warn!("Cannot splice Node {node_id} into wire {connection_id}: {error}");
+            false
+        }
+    }
+}
+
+fn insert_node_on_connection(
+    project: &mut Project,
+    connection_id: Uuid,
+    mut node: Node,
+    position: egui::Pos2,
+    composition_id: Uuid,
+) -> bool {
+    if !project
+        .connections
+        .iter()
+        .any(|connection| connection.id == connection_id)
+    {
+        return false;
+    }
+    let mut candidate = project.clone();
+    node.ui_position = [position.x, position.y];
+    let node_id = node.id;
+    candidate.add_node(node);
+    let Some(container) =
+        attach_node_at_position(&mut candidate, node_id, composition_id, position)
+    else {
+        return false;
+    };
+    place_node_in_free_slot(&mut candidate, node_id, container, position, &[]);
+    if !splice_existing_node_on_connection(&mut candidate, connection_id, node_id) {
+        return false;
+    }
+    if let Some(rect) = estimated_node_rect(&candidate, node_id) {
+        ensure_container_hierarchy_contains(&mut candidate, container, rect);
+    }
+    *project = candidate;
+    true
+}
+
 fn apply_edit(project: &mut Project, edit: NodeEdit) -> bool {
     match edit {
         NodeEdit::Connect { from, to } => match project.connect_ports(from, to) {
@@ -4761,6 +5547,33 @@ fn apply_edit(project: &mut Project, edit: NodeEdit) -> bool {
             }
         },
         NodeEdit::Disconnect { from, to } => project.disconnect_ports(&from, &to),
+        NodeEdit::DisconnectConnection { connection_id } => {
+            project.disconnect_connection(connection_id)
+        }
+        NodeEdit::DisconnectConnections { connection_ids } => {
+            project.disconnect_connections(connection_ids) != 0
+        }
+        NodeEdit::ReconnectConnection {
+            connection_id,
+            from,
+            to,
+        } => match project.reconnect_connection(connection_id, from, to) {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("Cannot reconnect project wire {connection_id}: {error}");
+                false
+            }
+        },
+        NodeEdit::SpliceExistingNode {
+            connection_id,
+            node_id,
+        } => splice_existing_node_on_connection(project, connection_id, node_id),
+        NodeEdit::InsertNodeOnConnection {
+            connection_id,
+            node,
+            position,
+            composition_id,
+        } => insert_node_on_connection(project, connection_id, node, position, composition_id),
         NodeEdit::SetOutputNode { owner, node_id } => {
             let container = match owner {
                 PortOwner::Composition(id) => NodeContainer::Composition(id),
@@ -5124,6 +5937,187 @@ fn node_create_menu_items(
     items
 }
 
+fn create_operation_node_for_request(
+    request: &NodeCreateRequest,
+    plugin_manager: &PluginManager,
+) -> Option<Node> {
+    let result = match request {
+        NodeCreateRequest::Style(component_id) => {
+            plugin_manager.create_style_operation_node(component_id)
+        }
+        NodeCreateRequest::Effector(component_id) => {
+            plugin_manager.create_effector_operation_node(component_id)
+        }
+        NodeCreateRequest::Effect(effect_id) => {
+            plugin_manager.create_effect_operation_node(effect_id)
+        }
+        NodeCreateRequest::Merge => return Some(Node::new("Merge", NodeContent::Merge)),
+        NodeCreateRequest::Text
+        | NodeCreateRequest::Solid
+        | NodeCreateRequest::Shape
+        | NodeCreateRequest::Clip
+        | NodeCreateRequest::Track
+        | NodeCreateRequest::Composition => return None,
+    };
+    match result {
+        Ok(node) => Some(node),
+        Err(error) => {
+            log::warn!("Cannot prepare operation Node for wire insertion: {error}");
+            None
+        }
+    }
+}
+
+fn wire_splice_menu_items(
+    project: &Project,
+    connection_id: Uuid,
+    plugin_manager: &PluginManager,
+) -> Vec<SearchableItem<NodeCreateRequest>> {
+    node_create_menu_items(plugin_manager)
+        .into_iter()
+        .filter_map(|mut item| {
+            let node = create_operation_node_for_request(&item.value, plugin_manager)?;
+            let node_id = node.id;
+            let mut probe = project.clone();
+            probe.add_node(node);
+            if !node_can_splice_connection(&probe, connection_id, node_id) {
+                return None;
+            }
+            let suffix = item
+                .qa_id
+                .as_deref()
+                .and_then(|id| id.strip_prefix("node_editor.menu.create."))
+                .unwrap_or(item.value.qa_kind());
+            item.qa_id = Some(format!("node_editor.wire_menu.operation.{suffix}"));
+            item.qa_metadata = Some(serde_json::json!({
+                "action": "splice",
+                "connection_id": connection_id,
+                "kind": item.value.qa_kind(),
+            }));
+            Some(item)
+        })
+        .collect()
+}
+
+fn show_wire_context_menu(
+    ui: &mut egui::Ui,
+    state: &mut NodeEditorState,
+    project: &Project,
+    plugin_manager: &PluginManager,
+    composition_id: Uuid,
+    to_global: egui::emath::TSTransform,
+) -> Option<QueuedNodeEdit> {
+    let context = state.wire_context_menu.as_mut()?;
+    if !project
+        .connections
+        .iter()
+        .any(|connection| connection.id == context.connection_id)
+    {
+        state.wire_context_menu = None;
+        return None;
+    }
+
+    let connection_id = context.connection_id;
+    let position = context.position;
+    let graph_position = to_global.inverse() * position;
+    let mut edit = None;
+    let mut should_close = false;
+    let response = egui::Area::new(egui::Id::new(("node_wire_context_menu", connection_id)))
+        .order(egui::Order::Foreground)
+        .fixed_pos(position)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::menu(ui.style()).show(ui, |ui| {
+                ui.set_min_width(240.0);
+                if context.inserting {
+                    let items = wire_splice_menu_items(project, connection_id, plugin_manager);
+                    if items.is_empty() {
+                        non_selectable_label(ui, "No compatible operations");
+                    } else if let Some(request) = show_searchable_items_with_qa(
+                        ui,
+                        &format!(
+                            "node_editor_wire_insert_menu:{connection_id}:{}",
+                            context.open_time.to_bits()
+                        ),
+                        Some("node_editor.wire_menu.search"),
+                        &items,
+                    ) {
+                        if let Some(node) =
+                            create_operation_node_for_request(&request, plugin_manager)
+                        {
+                            edit = Some(QueuedNodeEdit::Atomic(NodeEdit::InsertNodeOnConnection {
+                                connection_id,
+                                node,
+                                position: graph_position,
+                                composition_id,
+                            }));
+                        }
+                        should_close = true;
+                    }
+                    return;
+                }
+
+                let delete = ui.button("Delete Wire");
+                crate::qa::register_component_with_metadata(
+                    format!("node_editor.wire_menu.delete:{connection_id}"),
+                    "node_editor_menu_item",
+                    delete.rect,
+                    delete.enabled(),
+                    Some(serde_json::json!({
+                        "action": "delete",
+                        "connection_id": connection_id,
+                    })),
+                );
+                if delete.clicked() {
+                    edit = Some(QueuedNodeEdit::Atomic(NodeEdit::DisconnectConnection {
+                        connection_id,
+                    }));
+                    should_close = true;
+                }
+
+                let insert = ui.button("Insert Operation…");
+                crate::qa::register_component_with_metadata(
+                    format!("node_editor.wire_menu.insert:{connection_id}"),
+                    "node_editor_menu_item",
+                    insert.rect,
+                    insert.enabled(),
+                    Some(serde_json::json!({
+                        "action": "open_splice_menu",
+                        "connection_id": connection_id,
+                    })),
+                );
+                if insert.clicked() {
+                    context.inserting = true;
+                }
+            });
+        });
+    crate::qa::register_component_with_metadata(
+        format!("node_editor.wire_menu:{connection_id}"),
+        "node_editor_wire_menu",
+        response.response.rect,
+        true,
+        Some(serde_json::json!({
+            "connection_id": connection_id,
+            "mode": if context.inserting { "insert" } else { "commands" },
+        })),
+    );
+
+    if ui.input(|input| input.pointer.any_click())
+        && ui.input(|input| input.time) - context.open_time > 0.2
+        && ui
+            .input(|input| input.pointer.interact_pos())
+            .is_some_and(|pointer| !response.response.rect.contains(pointer))
+    {
+        should_close = true;
+    }
+    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        should_close = true;
+    }
+    if should_close {
+        state.wire_context_menu = None;
+    }
+    edit
+}
+
 type CreateAction = Box<dyn FnOnce(&mut Project) -> bool>;
 
 fn create_action_for_request(
@@ -5253,6 +6247,7 @@ fn handle_context_menu(
     comp_id: Uuid,
     context_menu_exclusion_rects: &[egui::Rect],
     to_global: egui::emath::TSTransform,
+    suppress_secondary_click: bool,
 ) -> bool {
     let canvas_size = project_lock
         .read()
@@ -5273,7 +6268,7 @@ fn handle_context_menu(
     });
     update_global_context_menu_for_secondary_click(
         state,
-        secondary_clicked,
+        secondary_clicked && !suppress_secondary_click,
         pointer_position,
         ui.min_rect(),
         context_menu_exclusion_rects,
@@ -5803,8 +6798,7 @@ fn reparent_nodes_at_drop(
     node_ids: &HashSet<Uuid>,
     position: egui::Pos2,
 ) -> bool {
-    let Some(destination) = node_container_at_position(project, composition_id, position)
-    else {
+    let Some(destination) = node_container_at_position(project, composition_id, position) else {
         return false;
     };
     let mut candidate = project.clone();
@@ -6113,6 +7107,45 @@ mod tests {
         )
     }
 
+    fn run_wire_interaction_frames(
+        project: &Project,
+        edge: &RenderedEdge,
+        rendered_ports: &Arc<Mutex<HashMap<RenderedPortKey, egui::Rect>>>,
+        state: &mut NodeEditorState,
+        frames: Vec<Vec<egui::Event>>,
+    ) -> Vec<QueuedNodeEdit> {
+        let context = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 420.0));
+        let mut queued = Vec::new();
+        for (frame, events) in frames.into_iter().enumerate() {
+            let _ = context.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(frame as f64 / 60.0),
+                    events,
+                    ..Default::default()
+                },
+                |context| {
+                    egui::CentralPanel::default().show(context, |ui| {
+                        queued.extend(wire_interactions(
+                            ui,
+                            state,
+                            WireInteractionFrame {
+                                project,
+                                edges: std::slice::from_ref(edge),
+                                rendered_ports,
+                                canvas_clip: screen,
+                                graph_item_rects: &[],
+                                to_global: egui::emath::TSTransform::IDENTITY,
+                            },
+                        ));
+                    });
+                },
+            );
+        }
+        queued
+    }
+
     fn plugin_operation_component(node: &Node) -> Option<&str> {
         match &node.content {
             NodeContent::PluginOperation(operation) => Some(&operation.component_id),
@@ -6225,6 +7258,228 @@ mod tests {
         assert!(!project.get_node(node_id).unwrap().enabled);
         let edited = project.clone();
         assert_single_gesture_undo_redo(&mut history, &initial, &edited);
+    }
+
+    #[test]
+    fn real_egui_wire_hit_selects_and_dragging_the_body_queues_disconnect() {
+        let (project, _, _, _, solid_id, merge_id) = fixture();
+        let connection = project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from.owner == PortOwner::Node(solid_id)
+                    && connection.to.owner == PortOwner::Node(merge_id)
+            })
+            .unwrap();
+        let edge = RenderedEdge {
+            connection_id: connection.id,
+            start: egui::pos2(120.0, 180.0),
+            control_a: egui::pos2(200.0, 180.0),
+            control_b: egui::pos2(300.0, 180.0),
+            end: egui::pos2(380.0, 180.0),
+        };
+        let midpoint =
+            cubic_bezier_point(edge.start, edge.control_a, edge.control_b, edge.end, 0.5);
+        let rendered_ports = Arc::new(Mutex::new(HashMap::new()));
+        let mut state = NodeEditorState::default();
+        let click = vec![
+            vec![egui::Event::PointerMoved(midpoint)],
+            vec![egui::Event::PointerButton {
+                pos: midpoint,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![egui::Event::PointerButton {
+                pos: midpoint,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ];
+        assert!(
+            run_wire_interaction_frames(&project, &edge, &rendered_ports, &mut state, click,)
+                .is_empty()
+        );
+        assert_eq!(state.selected_connection_id, Some(connection.id));
+
+        let dragged = midpoint + egui::vec2(0.0, 48.0);
+        let drag = vec![
+            vec![egui::Event::PointerMoved(midpoint)],
+            vec![egui::Event::PointerButton {
+                pos: midpoint,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![egui::Event::PointerMoved(dragged)],
+            vec![egui::Event::PointerButton {
+                pos: dragged,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ];
+        let edits = run_wire_interaction_frames(&project, &edge, &rendered_ports, &mut state, drag);
+        assert!(
+            matches!(
+                edits.as_slice(),
+                [QueuedNodeEdit::Atomic(NodeEdit::DisconnectConnection { connection_id })]
+                    if *connection_id == connection.id
+            ),
+            "unexpected wire drag edits: {edits:?}; gesture: {:?}",
+            state.wire_gesture
+        );
+    }
+
+    #[test]
+    fn endpoint_drag_reconnects_through_real_pointer_frames_without_changing_wire_identity() {
+        let (mut project, _, _, clip_id, solid_id, merge_id) = fixture();
+        let mut alternate = Node::new("Alternate", NodeContent::Generator(GeneratorContent::Solid));
+        alternate.ui_position = [250.0, 520.0];
+        let alternate_id = alternate.id;
+        project.add_node(alternate);
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), alternate_id)
+            .unwrap();
+        let connection = project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from.owner == PortOwner::Node(solid_id)
+                    && connection.to.owner == PortOwner::Node(merge_id)
+            })
+            .unwrap()
+            .clone();
+        let edge = RenderedEdge {
+            connection_id: connection.id,
+            start: egui::pos2(120.0, 180.0),
+            control_a: egui::pos2(200.0, 180.0),
+            control_b: egui::pos2(300.0, 180.0),
+            end: egui::pos2(380.0, 180.0),
+        };
+        let alternate_position = egui::pos2(480.0, 260.0);
+        let rendered_ports = Arc::new(Mutex::new(HashMap::from([(
+            RenderedPortKey {
+                address: PortAddress::new(PortOwner::Node(alternate_id), IMAGE_OUTPUT_PORT),
+                direction: PortDirection::Output,
+            },
+            egui::Rect::from_center_size(alternate_position, egui::vec2(14.0, 14.0)),
+        )])));
+        let mut state = NodeEditorState::default();
+        let edits = run_wire_interaction_frames(
+            &project,
+            &edge,
+            &rendered_ports,
+            &mut state,
+            vec![
+                vec![egui::Event::PointerMoved(edge.start)],
+                vec![egui::Event::PointerButton {
+                    pos: edge.start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                vec![egui::Event::PointerMoved(alternate_position)],
+                vec![egui::Event::PointerButton {
+                    pos: alternate_position,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            ],
+        );
+        let [QueuedNodeEdit::Atomic(NodeEdit::ReconnectConnection {
+            connection_id,
+            from,
+            to,
+        })] = edits.as_slice()
+        else {
+            panic!("endpoint drag did not queue one reconnect: {edits:?}");
+        };
+        assert_eq!(*connection_id, connection.id);
+        assert_eq!(from.owner, PortOwner::Node(alternate_id));
+        assert_eq!(*to, connection.to);
+        assert!(apply_edit(
+            &mut project,
+            NodeEdit::ReconnectConnection {
+                connection_id: *connection_id,
+                from: from.clone(),
+                to: to.clone(),
+            },
+        ));
+        let reconnected = project
+            .connections
+            .iter()
+            .find(|candidate| candidate.id == connection.id)
+            .unwrap();
+        assert_eq!(reconnected.from.owner, PortOwner::Node(alternate_id));
+        assert_eq!(reconnected.to, connection.to);
+        assert_eq!(reconnected.order, connection.order);
+    }
+
+    #[test]
+    fn operation_node_splice_preserves_downstream_uuid_order_and_target() {
+        let (mut project, composition_id, _, clip_id, solid_id, merge_id) = fixture();
+        let connection = project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from.owner == PortOwner::Node(solid_id)
+                    && connection.to.owner == PortOwner::Node(merge_id)
+            })
+            .unwrap()
+            .clone();
+        let plugins = PluginManager::default();
+        let mut blur = plugins.create_effect_operation_node("blur").unwrap();
+        blur.ui_position = [610.0, 500.0];
+        let blur_id = blur.id;
+        project.add_node(blur);
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), blur_id)
+            .unwrap();
+        assert!(splice_existing_node_on_connection(
+            &mut project,
+            connection.id,
+            blur_id,
+        ));
+        let downstream = project
+            .connections
+            .iter()
+            .find(|candidate| candidate.id == connection.id)
+            .unwrap();
+        assert_eq!(downstream.from.owner, PortOwner::Node(blur_id));
+        assert_eq!(downstream.to, connection.to);
+        assert_eq!(downstream.order, connection.order);
+
+        let second_connection = project
+            .connections
+            .iter()
+            .find(|candidate| candidate.to.owner == PortOwner::Node(blur_id))
+            .unwrap()
+            .clone();
+        let second_blur = plugins.create_effect_operation_node("blur").unwrap();
+        let second_blur_id = second_blur.id;
+        assert!(insert_node_on_connection(
+            &mut project,
+            second_connection.id,
+            second_blur,
+            egui::pos2(560.0, 440.0),
+            composition_id,
+        ));
+        assert_eq!(
+            project
+                .connections
+                .iter()
+                .find(|candidate| candidate.id == second_connection.id)
+                .unwrap()
+                .to,
+            second_connection.to
+        );
+        assert_eq!(
+            project.find_node_container(second_blur_id),
+            Some(NodeContainer::Clip(clip_id))
+        );
     }
 
     fn queued_property_edit(
@@ -6458,6 +7713,7 @@ mod tests {
                     let mut edits = Vec::new();
                     let mut navigation = None;
                     let mut selection = None;
+                    let mut wire_context_request = None;
                     let mut context_menu_exclusion_rects = Vec::new();
                     let mut to_global = egui::emath::TSTransform::default();
                     let mut canvas_clip = ui.clip_rect();
@@ -6471,6 +7727,8 @@ mod tests {
                         pending_selection: &mut selection,
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
+                        wire_context_request: &mut wire_context_request,
+                        suppress_wire_connect: false,
                         to_global: &mut to_global,
                         canvas_clip: &mut canvas_clip,
                         rendered_ports: Arc::clone(&rendered_ports),
@@ -6529,12 +7787,7 @@ mod tests {
         let source_id = graph
             .nodes
             .iter()
-            .find(|node| {
-                matches!(
-                    node.content,
-                    NodeContent::Generator(GeneratorContent::Text)
-                )
-            })
+            .find(|node| matches!(node.content, NodeContent::Generator(GeneratorContent::Text)))
             .unwrap()
             .id;
         let fill_id = graph
@@ -6690,10 +7943,7 @@ mod tests {
             .filter(|connection| {
                 connection_ids.contains(&connection.id)
                     && connection.to
-                        == PortAddress::new(
-                            PortOwner::Node(consumer_id),
-                            MERGE_IMAGES_PORT,
-                        )
+                        == PortAddress::new(PortOwner::Node(consumer_id), MERGE_IMAGES_PORT)
             })
             .collect::<Vec<_>>();
         assert_eq!(
@@ -7060,6 +8310,7 @@ mod tests {
                         let mut edits = Vec::new();
                         let mut navigation = None;
                         let mut selection = None;
+                        let mut wire_context_request = None;
                         let mut exclusions = Vec::new();
                         let mut to_global = egui::emath::TSTransform::IDENTITY;
                         let mut canvas_clip = ui.clip_rect();
@@ -7072,6 +8323,8 @@ mod tests {
                             pending_selection: &mut selection,
                             current_time: 0.0,
                             context_menu_exclusion_rects: &mut exclusions,
+                            wire_context_request: &mut wire_context_request,
+                            suppress_wire_connect: false,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
@@ -7124,6 +8377,7 @@ mod tests {
                         let mut edits = Vec::new();
                         let mut navigation = None;
                         let mut selection = None;
+                        let mut wire_context_request = None;
                         let mut exclusions = Vec::new();
                         let mut to_global = egui::emath::TSTransform::IDENTITY;
                         let mut canvas_clip = ui.clip_rect();
@@ -7136,6 +8390,8 @@ mod tests {
                             pending_selection: &mut selection,
                             current_time: 0.0,
                             context_menu_exclusion_rects: &mut exclusions,
+                            wire_context_request: &mut wire_context_request,
+                            suppress_wire_connect: false,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
@@ -7296,15 +8552,17 @@ mod tests {
                 context.set_transform_layer(layer, to_global);
                 let painter =
                     egui::Painter::new(context.clone(), layer, to_global.inverse() * canvas);
-                register_edge_component(
-                    "node_editor.edge:overview-wire-transform-test".to_string(),
-                    "explicit",
-                    &from,
-                    &to,
+                let _ = register_edge_component(
+                    EdgeComponent {
+                        id: "node_editor.edge:overview-wire-transform-test".to_string(),
+                        kind: "explicit",
+                        from: &from,
+                        to: &to,
+                        connection_id: None,
+                        wire_color: pin_color(PortDataType::Image),
+                    },
                     &ports,
-                    None,
                     canvas,
-                    pin_color(PortDataType::Image),
                     Some(OverviewWirePainter {
                         painter: &painter,
                         to_global,
@@ -7407,6 +8665,7 @@ mod tests {
                         let mut edits = Vec::new();
                         let mut navigation = None;
                         let mut selection = None;
+                        let mut wire_context_request = None;
                         let mut exclusions = Vec::new();
                         let mut to_global = egui::emath::TSTransform::IDENTITY;
                         let mut canvas_clip = ui.clip_rect();
@@ -7420,6 +8679,8 @@ mod tests {
                             pending_selection: &mut selection,
                             current_time: 0.0,
                             context_menu_exclusion_rects: &mut exclusions,
+                            wire_context_request: &mut wire_context_request,
+                            suppress_wire_connect: false,
                             to_global: &mut to_global,
                             canvas_clip: &mut canvas_clip,
                             rendered_ports,
@@ -7815,39 +9076,23 @@ mod tests {
         assert!(clip_is_active(clip, 5.999));
         assert!(!clip_is_active(clip, 6.0));
         assert_eq!(
-            graph_item_inactive_reason(
-                &project,
-                GraphItem::Node(solid_id),
-                0.5
-            ),
+            graph_item_inactive_reason(&project, GraphItem::Node(solid_id), 0.5),
             Some(GraphItemInactiveReason::OutsideClipRange)
         );
         assert_eq!(
-            graph_item_inactive_reason(
-                &project,
-                GraphItem::Node(solid_id),
-                1.0
-            ),
+            graph_item_inactive_reason(&project, GraphItem::Node(solid_id), 1.0),
             None
         );
 
         project.get_node_mut(solid_id).unwrap().enabled = false;
         assert_eq!(
-            graph_item_inactive_reason(
-                &project,
-                GraphItem::Node(solid_id),
-                1.0
-            ),
+            graph_item_inactive_reason(&project, GraphItem::Node(solid_id), 1.0),
             Some(GraphItemInactiveReason::Disabled)
         );
         // Disabled is the primary authored reason even when the Clip is also
         // outside its half-open active range.
         assert_eq!(
-            graph_item_inactive_reason(
-                &project,
-                GraphItem::Node(solid_id),
-                0.5
-            ),
+            graph_item_inactive_reason(&project, GraphItem::Node(solid_id), 0.5),
             Some(GraphItemInactiveReason::Disabled)
         );
         assert!(graph_item_inactive(
@@ -7855,6 +9100,222 @@ mod tests {
             GraphItem::Node(solid_id),
             0.5
         ));
+    }
+
+    #[test]
+    fn wire_knife_detects_midspan_intersection_of_long_segments() {
+        let knife_start = egui::pos2(10.0, -1_000.0);
+        let knife_end = egui::pos2(10.0, 1_000.0);
+        let edge = RenderedEdge {
+            connection_id: Uuid::new_v4(),
+            start: egui::pos2(-1_000.0, 0.0),
+            control_a: egui::pos2(-333.333_34, 0.0),
+            control_b: egui::pos2(333.333_34, 0.0),
+            end: egui::pos2(1_000.0, 0.0),
+        };
+
+        assert!(segments_intersect(
+            knife_start,
+            knife_end,
+            edge.start,
+            edge.end,
+        ));
+        assert!(knife_segment_hits_edge(knife_start, knife_end, &edge));
+    }
+
+    #[test]
+    fn alt_drag_knife_crosses_multiple_beziers_and_commits_one_atomic_history_edit() {
+        let (mut project, _, _, _, _, _) = fixture();
+        let connection_ids = project
+            .connections
+            .iter()
+            .map(|connection| connection.id)
+            .take(2)
+            .collect::<Vec<_>>();
+        assert_eq!(connection_ids.len(), 2);
+        let edges = vec![
+            RenderedEdge {
+                connection_id: connection_ids[0],
+                start: egui::pos2(100.0, 160.0),
+                control_a: egui::pos2(180.0, 120.0),
+                control_b: egui::pos2(320.0, 200.0),
+                end: egui::pos2(400.0, 160.0),
+            },
+            RenderedEdge {
+                connection_id: connection_ids[1],
+                start: egui::pos2(100.0, 230.0),
+                control_a: egui::pos2(180.0, 190.0),
+                control_b: egui::pos2(320.0, 270.0),
+                end: egui::pos2(400.0, 230.0),
+            },
+        ];
+        assert!(knife_segment_hits_edge(
+            egui::pos2(250.0, 100.0),
+            egui::pos2(250.0, 290.0),
+            &edges[0],
+        ));
+        assert!(!knife_segment_hits_edge(
+            egui::pos2(460.0, 100.0),
+            egui::pos2(460.0, 290.0),
+            &edges[0],
+        ));
+
+        let context = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 420.0));
+        let start = egui::pos2(250.0, 100.0);
+        let end = egui::pos2(250.0, 290.0);
+        let alt = egui::Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        let frames = vec![
+            vec![egui::Event::PointerMoved(start)],
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: alt,
+            }],
+            vec![egui::Event::PointerMoved(egui::pos2(250.0, 195.0))],
+            vec![egui::Event::PointerMoved(end)],
+            vec![egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: alt,
+            }],
+        ];
+        let ports = Arc::new(Mutex::new(HashMap::new()));
+        let mut state = NodeEditorState::default();
+        let mut queued = Vec::new();
+        for (frame, events) in frames.into_iter().enumerate() {
+            let _ = context.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(frame as f64 / 60.0),
+                    events,
+                    modifiers: alt,
+                    ..Default::default()
+                },
+                |context| {
+                    egui::CentralPanel::default().show(context, |ui| {
+                        queued.extend(wire_interactions(
+                            ui,
+                            &mut state,
+                            WireInteractionFrame {
+                                project: &project,
+                                edges: &edges,
+                                rendered_ports: &ports,
+                                canvas_clip: screen,
+                                graph_item_rects: &[],
+                                to_global: egui::emath::TSTransform::IDENTITY,
+                            },
+                        ));
+                    });
+                },
+            );
+        }
+        let [QueuedNodeEdit::Atomic(NodeEdit::DisconnectConnections {
+            connection_ids: crossed,
+        })] = queued.as_slice()
+        else {
+            panic!("knife did not emit one batch: {queued:?}");
+        };
+        let mut expected = connection_ids.clone();
+        expected.sort_unstable();
+        assert_eq!(crossed, &expected);
+        let initial = project.clone();
+        let mut history = HistoryManager::new();
+        history.push_project_state(initial.clone());
+        assert!(apply_queued_node_edits(
+            &mut project,
+            queued,
+            &mut history,
+            &mut state,
+        ));
+        assert!(project
+            .connections
+            .iter()
+            .all(|connection| !connection_ids.contains(&connection.id)));
+        let edited = project.clone();
+        assert_single_gesture_undo_redo(&mut history, &initial, &edited);
+    }
+
+    #[test]
+    fn zero_hit_knife_stroke_emits_no_edit_and_keeps_history_clean() {
+        let (project, _, _, _, solid_id, merge_id) = fixture();
+        let connection_id = project
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from.owner == PortOwner::Node(solid_id)
+                    && connection.to.owner == PortOwner::Node(merge_id)
+            })
+            .unwrap()
+            .id;
+        let edge = RenderedEdge {
+            connection_id,
+            start: egui::pos2(100.0, 180.0),
+            control_a: egui::pos2(200.0, 180.0),
+            control_b: egui::pos2(300.0, 180.0),
+            end: egui::pos2(400.0, 180.0),
+        };
+        let context = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 420.0));
+        let alt = egui::Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        let start = egui::pos2(500.0, 80.0);
+        let end = egui::pos2(560.0, 120.0);
+        let frames = vec![
+            vec![egui::Event::PointerMoved(start)],
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: alt,
+            }],
+            vec![egui::Event::PointerMoved(end)],
+            vec![egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: alt,
+            }],
+        ];
+        let ports = Arc::new(Mutex::new(HashMap::new()));
+        let mut state = NodeEditorState::default();
+        let mut queued = Vec::new();
+        for (frame, events) in frames.into_iter().enumerate() {
+            let _ = context.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(frame as f64 / 60.0),
+                    events,
+                    modifiers: alt,
+                    ..Default::default()
+                },
+                |context| {
+                    egui::CentralPanel::default().show(context, |ui| {
+                        queued.extend(wire_interactions(
+                            ui,
+                            &mut state,
+                            WireInteractionFrame {
+                                project: &project,
+                                edges: std::slice::from_ref(&edge),
+                                rendered_ports: &ports,
+                                canvas_clip: screen,
+                                graph_item_rects: &[],
+                                to_global: egui::emath::TSTransform::IDENTITY,
+                            },
+                        ));
+                    });
+                },
+            );
+        }
+        assert!(queued.is_empty());
+        assert!(state.wire_knife.is_none());
     }
 
     #[test]
@@ -8725,6 +10186,7 @@ mod tests {
                     let mut edits = Vec::new();
                     let mut navigation = None;
                     let mut selection = None;
+                    let mut wire_context_request = None;
                     let mut context_menu_exclusion_rects = Vec::new();
                     let mut to_global = egui::emath::TSTransform::default();
                     let mut canvas_clip = ui.clip_rect();
@@ -8737,6 +10199,8 @@ mod tests {
                         pending_selection: &mut selection,
                         current_time: 0.0,
                         context_menu_exclusion_rects: &mut context_menu_exclusion_rects,
+                        wire_context_request: &mut wire_context_request,
+                        suppress_wire_connect: false,
                         to_global: &mut to_global,
                         canvas_clip: &mut canvas_clip,
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
