@@ -34,6 +34,54 @@ SHAPE = "00000000-0000-0000-0000-000000000404"
 TRANSFORM_EFFECTOR = "00000000-0000-0000-0000-000000000501"
 OPACITY_EFFECTOR = "00000000-0000-0000-0000-000000000502"
 BACKPLATE_DECORATOR = "00000000-0000-0000-0000-000000000503"
+BLUR_EFFECT = "00000000-0000-0000-0000-000000000504"
+TEXT_FILL = "00000000-0000-0000-0000-000000000601"
+SHAPE_FILL = "00000000-0000-0000-0000-000000000602"
+SHAPE_STROKE = "00000000-0000-0000-0000-000000000603"
+SHAPE_MERGE = "00000000-0000-0000-0000-000000000604"
+
+EXPECTED_FIXTURE_NODES = frozenset(
+    {
+        SOLID,
+        MERGE,
+        TEXT,
+        SHAPE,
+        TRANSFORM_EFFECTOR,
+        OPACITY_EFFECTOR,
+        BACKPLATE_DECORATOR,
+        BLUR_EFFECT,
+        TEXT_FILL,
+        SHAPE_FILL,
+        SHAPE_STROKE,
+        SHAPE_MERGE,
+    }
+)
+EXPECTED_CLIP_NODES = {
+    CLIP_A1: [SOLID, MERGE],
+    CLIP_A2: [
+        TEXT,
+        TRANSFORM_EFFECTOR,
+        OPACITY_EFFECTOR,
+        BACKPLATE_DECORATOR,
+        TEXT_FILL,
+        BLUR_EFFECT,
+    ],
+    CLIP_B1: [SHAPE, SHAPE_FILL, SHAPE_STROKE, SHAPE_MERGE],
+}
+EXPECTED_CLIP_OUTPUTS = {
+    CLIP_A1: MERGE,
+    CLIP_A2: BLUR_EFFECT,
+    CLIP_B1: SHAPE_MERGE,
+}
+EXPECTED_OPERATIONS = {
+    TRANSFORM_EFFECTOR: ("effector", "transform", "effector.apply.v1"),
+    OPACITY_EFFECTOR: ("effector", "opacity", "effector.apply.v1"),
+    BACKPLATE_DECORATOR: ("decorator", "backplate", "decorator.apply.v1"),
+    BLUR_EFFECT: ("effect", "blur", "effect.apply.v1"),
+    TEXT_FILL: ("style", "fill", "style.apply.v1"),
+    SHAPE_FILL: ("style", "fill", "style.apply.v1"),
+    SHAPE_STROKE: ("style", "stroke", "style.apply.v1"),
+}
 
 
 class QaFailure(RuntimeError):
@@ -283,7 +331,12 @@ class QaClient:
         point = self.point(component["rect_points"], x_fraction, y_fraction)
         self.inject(
             "click",
-            {"x": point["x"], "y": point["y"], "button": button},
+            {
+                "x": point["x"],
+                "y": point["y"],
+                "coordinate_space": "points",
+                "button": button,
+            },
             {
                 "component_id": component_id,
                 "component_frame": snapshot["frame"],
@@ -330,7 +383,13 @@ class QaClient:
         end = self.point(target["rect_points"], *target_fraction)
         self.inject(
             "drag",
-            {"from": start, "to": end, "steps": steps, "button": "primary"},
+            {
+                "from": start,
+                "to": end,
+                "coordinate_space": "points",
+                "steps": steps,
+                "button": "primary",
+            },
             {
                 "source_component_id": source_id,
                 "target_component_id": target_id,
@@ -347,7 +406,13 @@ class QaClient:
         end = {"x": start["x"] + dx, "y": start["y"] + dy}
         self.inject(
             "drag",
-            {"from": start, "to": end, "steps": steps, "button": "primary"},
+            {
+                "from": start,
+                "to": end,
+                "coordinate_space": "points",
+                "steps": steps,
+                "button": "primary",
+            },
             {
                 "source_component_id": component_id,
                 "component_frame": snapshot["frame"],
@@ -392,7 +457,13 @@ class QaClient:
         end = {"x": start["x"], "y": target_rect["center_y"]}
         self.inject(
             "drag",
-            {"from": start, "to": end, "steps": steps, "button": "primary"},
+            {
+                "from": start,
+                "to": end,
+                "coordinate_space": "points",
+                "steps": steps,
+                "button": "primary",
+            },
             {
                 "source_component_id": source_id,
                 "target_component_id": target_id,
@@ -733,7 +804,12 @@ def open_create_menu(client):
     snapshot, point = find_free_canvas_point(client)
     client.inject(
         "click",
-        {"x": point["x"], "y": point["y"], "button": "secondary"},
+        {
+            "x": point["x"],
+            "y": point["y"],
+            "coordinate_space": "points",
+            "button": "secondary",
+        },
         {
             "component_id": "node_editor.canvas",
             "component_frame": snapshot["frame"],
@@ -797,6 +873,7 @@ def reveal_node_editor_component(client, component_id, max_drags=20):
             {
                 "from": start,
                 "to": end,
+                "coordinate_space": "points",
                 "steps": 6,
                 "button": "middle",
             },
@@ -872,6 +949,7 @@ def reveal_node_editor_components(client, component_ids, max_drags=20, margin=12
             {
                 "from": {"x": x, "y": start_y},
                 "to": {"x": x, "y": start_y + vertical_step},
+                "coordinate_space": "points",
                 "steps": 6,
                 "button": "middle",
             },
@@ -890,6 +968,88 @@ def reveal_node_editor_components(client, component_ids, max_drags=20, margin=12
     )
 
 
+def validate_explicit_operation_fixture(project):
+    """Reject the retired four-Node/embedded-operation QA fixture."""
+    actual_nodes = set(project["nodes"])
+    if actual_nodes != EXPECTED_FIXTURE_NODES:
+        missing = sorted(EXPECTED_FIXTURE_NODES - actual_nodes)
+        extra = sorted(actual_nodes - EXPECTED_FIXTURE_NODES)
+        raise QaFailure(
+            "fixture must contain the 12 explicit Nodes; missing={}, extra={}".format(
+                missing, extra
+            )
+        )
+
+    for clip_id, expected_nodes in EXPECTED_CLIP_NODES.items():
+        clip = project["clips"].get(clip_id)
+        if clip is None:
+            raise QaFailure("fixture is missing Clip {}".format(clip_id))
+        if clip.get("node_ids") != expected_nodes:
+            raise QaFailure(
+                "Clip {} Node order is {}, expected {}".format(
+                    clip_id, clip.get("node_ids"), expected_nodes
+                )
+            )
+        expected_output = EXPECTED_CLIP_OUTPUTS[clip_id]
+        if clip.get("output_node_id") != expected_output:
+            raise QaFailure(
+                "Clip {} output is {}, expected {}".format(
+                    clip_id, clip.get("output_node_id"), expected_output
+                )
+            )
+
+    for node_id, expected_identity in EXPECTED_OPERATIONS.items():
+        content = project["nodes"][node_id].get("content", {})
+        if content.get("type") != "PluginOperation":
+            raise QaFailure("{} is not an explicit PluginOperation Node".format(node_id))
+        operation = content.get("data", {})
+        actual_identity = (
+            operation.get("category"),
+            operation.get("component_id"),
+            operation.get("operation"),
+        )
+        if actual_identity != expected_identity:
+            raise QaFailure(
+                "operation {} identity is {}, expected {}".format(
+                    node_id, actual_identity, expected_identity
+                )
+            )
+        if not operation.get("declared_ports"):
+            raise QaFailure("operation {} has no persisted port contract".format(node_id))
+
+    for node_id, expected_generator in (
+        (SOLID, "Solid"),
+        (TEXT, "Text"),
+        (SHAPE, "Shape"),
+    ):
+        content = project["nodes"][node_id].get("content", {})
+        if (content.get("type"), content.get("data")) != (
+            "Generator",
+            expected_generator,
+        ):
+            raise QaFailure(
+                "{} is not the expected {} source Node".format(
+                    node_id, expected_generator
+                )
+            )
+    for node_id in (MERGE, SHAPE_MERGE):
+        if project["nodes"][node_id].get("content", {}).get("type") != "Merge":
+            raise QaFailure("{} is not an explicit Merge Node".format(node_id))
+
+    for node_id, node in project["nodes"].items():
+        for collection in ("styles", "effects", "effectors", "decorators"):
+            if node.get(collection):
+                raise QaFailure(
+                    "{} still contains embedded {}".format(node_id, collection)
+                )
+    if len(project.get("connections", ())) != 24:
+        raise QaFailure(
+            "explicit fixture has {} connections, expected 24".format(
+                len(project.get("connections", ()))
+            )
+        )
+
+
 def assert_fresh_fixture(initial):
     project = initial["project"]
     if project.get("name") != "RuViE QA E2E":
@@ -897,8 +1057,7 @@ def assert_fresh_fixture(initial):
             "the deterministic fixture is required; start with "
             "RUVIE_QA_FIXTURE=node_editor_e2e"
         )
-    if set(project["nodes"]) != {SOLID, MERGE, TEXT, SHAPE}:
-        raise QaFailure("fixture Project is not fresh")
+    validate_explicit_operation_fixture(project)
     validate_canonical_ownership(project)
     preview = initial["editor"]["preview"]
     if not (
@@ -928,6 +1087,48 @@ def wait_fresh_fixture(client):
     initial = client.wait_until("the initial fixture Preview render", ready)
     assert_fresh_fixture(initial)
     return initial
+
+
+def ensure_operation_property(client, operation_id, property_name):
+    """Expose one descriptor-driven direct Node property in the Clip facade."""
+    header_id = "inspector.operation:" + operation_id
+    control_id = "inspector.property.node:{}:{}".format(operation_id, property_name)
+    client.ensure_in_scroll_area(header_id)
+    _, header = client.component(header_id)
+    header_metadata = header.get("metadata") or {}
+    expected = EXPECTED_OPERATIONS.get(operation_id)
+    if expected is not None and (
+        header_metadata.get("category"), header_metadata.get("component_id")
+    ) != expected[:2]:
+        raise QaFailure("Inspector operation header has stale plugin identity")
+    if header_metadata.get("available") is not True:
+        raise QaFailure("fixture operation is unavailable to the Inspector")
+    snapshot = client.component_snapshot()
+    if control_id not in {item["id"] for item in snapshot["components"]}:
+        # The operation section is collapsed. Resolve the header again after
+        # scrolling and use that fresh logical-point rectangle for the click.
+        client.click_component(header_id)
+        def registered():
+            current = client.component_snapshot()
+            return (
+                current
+                if control_id in {item["id"] for item in current["components"]}
+                else None
+            )
+
+        client.wait_until(
+            "{} operation property registration".format(property_name), registered
+        )
+    client.ensure_in_scroll_area(control_id)
+    snapshot, component = client.component(control_id)
+    metadata = component.get("metadata") or {}
+    if metadata.get("scope") != "node:" + operation_id:
+        raise QaFailure("Inspector property is not scoped to its operation Node")
+    if metadata.get("property") != property_name:
+        raise QaFailure("Inspector property metadata names the wrong property")
+    if not metadata.get("definition"):
+        raise QaFailure("Inspector property omitted descriptor metadata")
+    return snapshot, component
 
 
 def run_timeline_scenario(client):
@@ -1105,12 +1306,9 @@ def assert_node_editor_reflection(client, timeline_state):
         "node_editor.container.clip:" + CLIP_A1,
         "node_editor.container.clip:" + CLIP_A2,
         "node_editor.container.clip:" + CLIP_B1,
-        "node_editor.node:" + SOLID,
-        "node_editor.node:" + MERGE,
-        "node_editor.node:" + TEXT,
-        "node_editor.node:" + SHAPE,
         "node_editor.edge.derived:track:{}:clip:{}".format(TRACK_B, CLIP_A2),
     }
+    required.update("node_editor.node:" + node_id for node_id in EXPECTED_FIXTURE_NODES)
 
     def reflected_snapshot():
         snapshot = client.component_snapshot()
@@ -1125,7 +1323,7 @@ def assert_node_editor_reflection(client, timeline_state):
     if stale_edge in components:
         raise QaFailure("Node Editor retained the old cross-Track derived edge")
 
-    expected_outputs = {CLIP_A1: MERGE, CLIP_A2: TEXT, CLIP_B1: SHAPE}
+    expected_outputs = EXPECTED_CLIP_OUTPUTS
     for clip_id, output_node_id in expected_outputs.items():
         component = components["node_editor.container.clip:" + clip_id]
         metadata = component.get("metadata") or {}
@@ -1149,7 +1347,7 @@ def assert_node_editor_reflection(client, timeline_state):
     # Prove the reflected Node is still hit-testable through a real coordinate
     # click, not merely present in registry metadata.
     header_id = None
-    for node_id in (MERGE, SOLID, TEXT, SHAPE):
+    for node_id in EXPECTED_FIXTURE_NODES:
         candidate = components.get("node_editor.node_header:" + node_id)
         if candidate and candidate.get("visible") and candidate.get("enabled"):
             header_id = candidate["id"]
@@ -1208,7 +1406,7 @@ def run_timeline_suite(client):
 
 
 def run_smoke_suite(client, capture_path):
-    """Short real-coordinate gate for click, Project drag, render, and capture."""
+    """Edit a descriptor-driven operation through fresh screen coordinates."""
     health = client.wait_health()
     initial = wait_fresh_fixture(client)
 
@@ -1220,61 +1418,59 @@ def run_smoke_suite(client, capture_path):
         if "Node Editor" in client.state()["dock"]["active_tabs"]
         else None,
     )
-    source_port = (
-        "node_editor.container_port.clip:{}.internal_output:frame".format(CLIP_A1)
-    )
-    target_port = "node_editor.port.node:{}.input:frame".format(SOLID)
-    reveal_node_editor_components(client, (source_port, target_port))
-    connection_before = client.state()
-    connection_count = len(connection_before["project"]["connections"])
-    client.drag_components(source_port, target_port, steps=8)
-    connected = client.wait_project(
-        "smoke metadata connection",
-        lambda project: len(project["connections"]) == connection_count + 1,
-    )
-    assert_history_delta(connection_before, connected, 1, "smoke metadata connection")
-    validate_canonical_ownership(connected["project"])
-    client.wait_preview_render_after(connected, "smoke metadata connection")
-
-    client.wait_component_settled("dock.tab:timeline")
-    client.click_component("dock.tab:timeline")
+    clip_header = "node_editor.container_header.clip:" + CLIP_A2
+    reveal_node_editor_component(client, clip_header)
+    client.click_component(clip_header)
     client.wait_until(
-        "Timeline dock activation",
+        "Clip A2 coordinate selection",
         lambda: client.state()
-        if "Timeline" in client.state()["dock"]["active_tabs"]
+        if client.state()["editor"]["selection"]["last_selected_entity_id"] == CLIP_A2
         else None,
     )
+    client.wait_component("inspector.owner.clip:" + CLIP_A2)
 
-    client.click_component("timeline.clip:" + CLIP_A1)
-    client.wait_until(
-        "Timeline Clip selection",
-        lambda: client.state()
-        if client.state()["editor"]["selection"]["last_selected_entity_id"] == CLIP_A1
-        else None,
-    )
+    tx_control = "inspector.property.node:{}:tx".format(TRANSFORM_EFFECTOR)
+    _, control = ensure_operation_property(client, TRANSFORM_EFFECTOR, "tx")
+    definition = (control.get("metadata") or {}).get("definition", {})
+    if definition.get("ui", {}).get("kind") != "float":
+        raise QaFailure("Transform tx did not use its descriptor Float UI")
 
     before = client.state()
-    old_clip = before["project"]["clips"][CLIP_A1]
-    client.drag_component_by("timeline.clip:" + CLIP_A1, 45.0, 0.0, steps=8)
-    edited = wait_timeline_edit(
-        client,
-        before,
-        "smoke Timeline Clip move",
-        lambda project: project["clips"][CLIP_A1]["start_time"]
-        != old_clip["start_time"],
+    old_tx = property_value(before["project"]["nodes"][TRANSFORM_EFFECTOR], "tx")
+    old_opacity = property_value(
+        before["project"]["nodes"][OPACITY_EFFECTOR], "opacity"
     )
-    assert_timeline_integrity(before["project"], edited["project"], "smoke Clip move")
-    assert_history_delta(before, edited, 1, "smoke Clip move")
-    rendered = client.wait_preview_render_after(edited, "smoke Clip move")
+    preview_before = before["editor"]["preview"]
+    # `drag_component_by` re-fetches the latest rect immediately before input,
+    # emits a multi-frame egui drag in logical points, and polls `injected`.
+    client.drag_component_by(tx_control, 32.0, 0.0, steps=10)
+    edited = client.wait_project(
+        "Transform operation tx coordinate edit",
+        lambda project: property_value(project["nodes"][TRANSFORM_EFFECTOR], "tx")
+        != old_tx,
+    )
+    if (
+        property_value(edited["project"]["nodes"][OPACITY_EFFECTOR], "opacity")
+        != old_opacity
+    ):
+        raise QaFailure("Transform tx edit mutated the independent Opacity operation")
+    assert_history_delta(before, edited, 1, "Transform operation tx edit")
+    validate_explicit_operation_fixture(edited["project"])
+    rendered = client.wait_preview_change(
+        preview_before["pixel_hash"], preview_before["render_revision"]
+    )
+
+    # End with a normal coordinate gesture as an independent hit-testing
+    # check, then capture the viewport that reflects the authored edit.
     final = verify_final_preview_drag(client)
     capture = client.capture(capture_path)
-    print("[qa-e2e] smoke click/drag/capture/Project reflection passed")
+    print("[qa-e2e] smoke Clip A2 -> Transform tx -> Project/Preview passed")
     return {
         "ok": True,
         "suite": "smoke",
         "health_frame": health["frame"],
         "initial_frame": initial["frame"],
-        "connection_frame": connected["frame"],
+        "edited_frame": edited["frame"],
         "rendered_frame": rendered["frame"],
         "final_frame": final["frame"],
         "final_history": final["history"],
@@ -1374,27 +1570,8 @@ def run_suite(client):
     # composition. Return to the fixture Nodes through real middle-button pan.
     reveal_node_editor_component(client, "node_editor.node_header:" + TEXT)
 
-    # Connect a previously unbound internal metadata pin and verify both the
-    # Project and a subsequent Preview render. The fixture's image wires are
-    # already canonical, so re-dragging one would only test de-duplication.
-    before_connection = client.state()
-    connection_count = len(before_connection["project"]["connections"])
-    source_port = "node_editor.container_port.clip:{}.internal_output:frame".format(
-        CLIP_A1
-    )
-    target_port = "node_editor.port.node:{}.input:frame".format(SOLID)
-    reveal_node_editor_components(client, (source_port, target_port))
-    client.drag_components(
-        source_port,
-        target_port,
-    )
-    connected = client.wait_project(
-        "canonical Node connection",
-        lambda current: len(current["connections"]) == connection_count + 1,
-    )
-    client.wait_preview_render_after(connected, "Node metadata connection")
-    assert_history_delta(before_connection, connected, 1, "Node connection")
-    print("[qa-e2e] pin drag -> Project connection -> Preview passed")
+    validate_explicit_operation_fixture(client.state()["project"])
+    print("[qa-e2e] explicit Shape/Image operation graph contract passed")
 
     # Text edit through the Inspector. Commit by clicking the owner heading.
     reveal_node_editor_component(client, "node_editor.node_header:" + TEXT)
@@ -1439,51 +1616,45 @@ def run_suite(client):
     assert_history_delta(shape_before, shape_after, 1, "Shape edit")
     print("[qa-e2e] Shape UI -> Project -> Preview passed")
 
-    # Reorder independent Effector instances, then edit/keyframe the Transform
-    # instance by UUID-scoped controls (never by ambiguous legacy IDs).
-    reveal_node_editor_component(client, "node_editor.node_header:" + TEXT)
-    client.click_component("node_editor.node_header:" + TEXT)
-    first_handle = "inspector.ensemble.effector_handle:" + TRANSFORM_EFFECTOR
-    second_handle = "inspector.ensemble.effector_handle:" + OPACITY_EFFECTOR
-    client.ensure_in_scroll_area(first_handle)
-    client.ensure_in_scroll_area(second_handle)
-    ensemble_before = client.state()
-    client.drag_components(first_handle, second_handle, target_fraction=(0.5, 0.9))
-    ensemble_after = client.wait_project(
-        "Effector reorder",
-        lambda current: [item["id"] for item in current["nodes"][TEXT]["effectors"]]
-        == [OPACITY_EFFECTOR, TRANSFORM_EFFECTOR],
+    # Select Clip A2 itself, then edit its explicit Transform operation through
+    # the semantic Inspector facade. The property belongs directly to Node 501.
+    clip_header = "node_editor.container_header.clip:" + CLIP_A2
+    reveal_node_editor_component(client, clip_header)
+    client.click_component(clip_header)
+    client.wait_until(
+        "Clip A2 selection for operation editing",
+        lambda: client.state()
+        if client.state()["editor"]["selection"]["last_selected_entity_id"] == CLIP_A2
+        else None,
     )
-    assert_history_delta(ensemble_before, ensemble_after, 1, "Effector reorder")
-
-    tx_id = "inspector.property.node:{}.effector:{}:tx".format(TEXT, TRANSFORM_EFFECTOR)
-    client.ensure_in_scroll_area(tx_id)
+    tx_id = "inspector.property.node:{}:tx".format(TRANSFORM_EFFECTOR)
+    ensure_operation_property(client, TRANSFORM_EFFECTOR, "tx")
     tx_before = client.state()
-    opacity_before = property_value(
-        tx_before["project"]["nodes"][TEXT]["effectors"][0], "opacity"
-    )
+    old_tx = property_value(tx_before["project"]["nodes"][TRANSFORM_EFFECTOR], "tx")
+    opacity_before = property_value(tx_before["project"]["nodes"][OPACITY_EFFECTOR], "opacity")
+    preview_before = tx_before["editor"]["preview"]
     client.drag_component_by(tx_id, 24.0, 0.0)
     tx_after = client.wait_project(
-        "Transform Effector property edit",
-        lambda current: property_value(current["nodes"][TEXT]["effectors"][1], "tx") != 0.0,
+        "Transform operation property edit",
+        lambda current: property_value(current["nodes"][TRANSFORM_EFFECTOR], "tx")
+        != old_tx,
     )
-    if property_value(tx_after["project"]["nodes"][TEXT]["effectors"][0], "opacity") != opacity_before:
-        raise QaFailure("editing Transform Effector changed the Opacity Effector")
-    assert_history_delta(tx_before, tx_after, 1, "Effector property drag")
+    if property_value(tx_after["project"]["nodes"][OPACITY_EFFECTOR], "opacity") != opacity_before:
+        raise QaFailure("editing Transform changed the independent Opacity operation")
+    assert_history_delta(tx_before, tx_after, 1, "Transform property drag")
+    client.wait_preview_change(preview_before["pixel_hash"], preview_before["render_revision"])
 
-    keyframe_id = "inspector.keyframe.node:{}.effector:{}:tx".format(
-        TEXT, TRANSFORM_EFFECTOR
-    )
+    keyframe_id = "inspector.keyframe.node:{}:tx".format(TRANSFORM_EFFECTOR)
     client.ensure_in_scroll_area(keyframe_id)
     key_before = client.state()
     client.click_component(keyframe_id)
     key_after = client.wait_project(
-        "Transform Effector keyframe",
-        lambda current: current["nodes"][TEXT]["effectors"][1]["properties"]["tx"]["type"]
+        "Transform operation keyframe",
+        lambda current: current["nodes"][TRANSFORM_EFFECTOR]["properties"]["tx"]["type"]
         == "keyframe",
     )
-    assert_history_delta(key_before, key_after, 1, "Effector keyframe")
-    print("[qa-e2e] Ensemble reorder/property/keyframe passed")
+    assert_history_delta(key_before, key_after, 1, "Transform keyframe")
+    print("[qa-e2e] Clip facade -> direct operation property/keyframe passed")
 
     timeline_state = run_timeline_scenario(client)
     assert_node_editor_reflection(client, timeline_state)

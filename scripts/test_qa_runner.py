@@ -25,6 +25,16 @@ E2E = importlib.util.module_from_spec(E2E_SPEC)
 sys.modules[E2E_SPEC.name] = E2E
 E2E_SPEC.loader.exec_module(E2E)
 
+KEYFRAME_PATH = pathlib.Path(__file__).with_name("qa-keyframe-e2e.py")
+KEYFRAME_SPEC = importlib.util.spec_from_file_location(
+    "ruvie_qa_keyframe_e2e", KEYFRAME_PATH
+)
+if KEYFRAME_SPEC is None or KEYFRAME_SPEC.loader is None:
+    raise RuntimeError("cannot load qa-keyframe-e2e.py")
+KEYFRAME = importlib.util.module_from_spec(KEYFRAME_SPEC)
+sys.modules[KEYFRAME_SPEC.name] = KEYFRAME
+KEYFRAME_SPEC.loader.exec_module(KEYFRAME)
+
 
 class EmptyCaptureHandler(http.server.BaseHTTPRequestHandler):
     bodies = []
@@ -92,6 +102,71 @@ class InjectingQaClient(E2E.QaClient):
 
 
 class QaRunnerTests(unittest.TestCase):
+    def test_e2e_fixture_contract_names_all_twelve_explicit_nodes(self):
+        self.assertEqual(len(E2E.EXPECTED_FIXTURE_NODES), 12)
+        self.assertEqual(
+            E2E.EXPECTED_CLIP_OUTPUTS,
+            {
+                E2E.CLIP_A1: E2E.MERGE,
+                E2E.CLIP_A2: E2E.BLUR_EFFECT,
+                E2E.CLIP_B1: E2E.SHAPE_MERGE,
+            },
+        )
+        self.assertEqual(
+            set(E2E.EXPECTED_OPERATIONS),
+            {
+                E2E.TRANSFORM_EFFECTOR,
+                E2E.OPACITY_EFFECTOR,
+                E2E.BACKPLATE_DECORATOR,
+                E2E.BLUR_EFFECT,
+                E2E.TEXT_FILL,
+                E2E.SHAPE_FILL,
+                E2E.SHAPE_STROKE,
+            },
+        )
+
+    def test_retired_four_node_fixture_is_rejected(self):
+        project = {
+            "nodes": {
+                node_id: {}
+                for node_id in (E2E.SOLID, E2E.MERGE, E2E.TEXT, E2E.SHAPE)
+            },
+            "clips": {},
+            "connections": [],
+        }
+        with self.assertRaisesRegex(E2E.QaFailure, "12 explicit Nodes"):
+            E2E.validate_explicit_operation_fixture(project)
+
+    def test_keyframe_suite_uses_direct_operation_node_ids_only(self):
+        source = KEYFRAME_PATH.read_text(encoding="utf-8")
+        for retired_component_fragment in (
+            "inspector.ensemble.",
+            "inspector.style.node:",
+            "inspector.effect.node:",
+            ".effector:{}",
+            ".decorator:{}",
+            '"effectors"',
+            '"decorators"',
+            '"styles"',
+            '"effects"',
+        ):
+            self.assertNotIn(retired_component_fragment, source)
+        self.assertIn(
+            'tx_control = "inspector.property.node:{}:tx".format(TRANSFORM_EFFECTOR)',
+            source,
+        )
+        project = {
+            "nodes": {
+                E2E.TRANSFORM_EFFECTOR: {
+                    "properties": {"tx": {"type": "constant"}}
+                }
+            }
+        }
+        self.assertEqual(
+            KEYFRAME.target_property(project, E2E.TRANSFORM_EFFECTOR, "tx"),
+            {"type": "constant"},
+        )
+
     def test_capture_clients_send_an_explicit_empty_body_post(self):
         EmptyCaptureHandler.bodies = []
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), EmptyCaptureHandler)
