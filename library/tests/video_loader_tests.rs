@@ -1,6 +1,7 @@
+use library::LibraryError;
 use library::cache::CacheManager;
 use library::plugin::loaders::ffmpeg_video::{FfmpegVideoLoader, VideoReader};
-use library::plugin::{LoadPlugin, LoadPluginError, LoadRequest, PluginManager};
+use library::plugin::{LoadPlugin, LoadPluginError, LoadRequest, Plugin, PluginManager};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -137,6 +138,12 @@ fn late_random_access_seeks_near_the_requested_frame_and_reuses_decoder_state() 
             .expect("random tail frame should decode after a bounded seek");
         let stats = direct_reader.last_decode_stats();
         assert_eq!(stats.seek_count, 1);
+        assert_eq!(stats.target_pts, random_target as i64);
+        assert_eq!(
+            stats.selected_pts,
+            Some(random_target as i64),
+            "a backward seek must return the requested CFR frame, not stale state"
+        );
         assert!(stats.frames_decoded <= maximum_reasonable_preroll);
         assert!(stats.video_packets_read <= maximum_reasonable_preroll * 2);
     }
@@ -296,11 +303,32 @@ fn first_last_and_out_of_range_frames_have_distinct_results() {
         .into_owned();
     let mut reader = VideoReader::new(&path).expect("Failed to create VideoReader");
     let frame_count = reader.get_frame_count().expect("fixture frame count");
+    let duration = reader.get_duration().expect("fixture stream duration");
+    let fps = reader.get_fps();
 
     reader.decode_frame(0).expect("first frame must decode");
     reader
         .decode_frame(frame_count - 1)
         .expect("last valid frame must decode");
+
+    for source_time in [duration, duration + 1.0 / fps] {
+        let error = reader
+            .decode_at_time(source_time)
+            .expect_err("the stream end and later timestamps are outside the half-open range");
+        assert!(matches!(
+            error,
+            LibraryError::VideoTimestampOutOfRange {
+                stream_index: 0,
+                duration: Some(error_duration),
+                ..
+            } if (error_duration - duration).abs() < f64::EPSILON
+        ));
+        let stats = reader.last_decode_stats();
+        assert_eq!(stats.seek_count, 0);
+        assert_eq!(stats.video_packets_read, 0);
+        assert_eq!(stats.frames_decoded, 0);
+    }
+
     let error = reader
         .decode_frame(frame_count)
         .expect_err("frame_count is outside the valid half-open range");
@@ -315,22 +343,101 @@ fn first_last_and_out_of_range_frames_have_distinct_results() {
     ));
 
     let manager = PluginManager::default();
+    for source_time in [duration, duration + 1.0 / fps] {
+        let error = manager
+            .load_resource(
+                &LoadRequest::VideoFrame {
+                    path: path.clone(),
+                    source_time,
+                    stream_index: Some(0),
+                    input_color_space: None,
+                    output_color_space: None,
+                },
+                &CacheManager::new(),
+            )
+            .expect_err("manager must preserve loader out-of-range errors");
+        assert!(matches!(
+            error,
+            LibraryError::VideoTimestampOutOfRange { .. }
+        ));
+    }
+}
+
+struct ClaimingFailureLoader;
+
+impl Plugin for ClaimingFailureLoader {
+    fn id(&self) -> &str {
+        "claiming_failure"
+    }
+
+    fn name(&self) -> String {
+        "Claiming failure fixture".to_string()
+    }
+
+    fn category(&self) -> String {
+        "Test".to_string()
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 0, 0)
+    }
+}
+
+impl LoadPlugin for ClaimingFailureLoader {
+    fn open(&self, _path: &str) -> Result<Vec<library::plugin::AssetMetadata>, LoadPluginError> {
+        Err(LoadPluginError::Unsupported)
+    }
+
+    fn load(
+        &self,
+        request: &LoadRequest,
+        _cache: &CacheManager,
+    ) -> Result<library::plugin::LoadResponse, LoadPluginError> {
+        let LoadRequest::VideoFrame {
+            path, source_time, ..
+        } = request
+        else {
+            return Err(LoadPluginError::Unsupported);
+        };
+        Err(LibraryError::VideoTimestampDecode {
+            path: path.clone(),
+            stream_index: 0,
+            source_time: *source_time,
+            source: Box::new(LibraryError::FfmpegOther(
+                "synthetic valid-frame decode failure".to_string(),
+            )),
+        }
+        .into())
+    }
+}
+
+#[test]
+fn manager_preserves_a_claimed_decode_failure_instead_of_reporting_no_plugin() {
+    let manager = PluginManager::new();
+    manager.register_load_plugin(Arc::new(ClaimingFailureLoader));
     let error = manager
         .load_resource(
             &LoadRequest::VideoFrame {
-                path,
-                source_time: frame_count as f64 / reader.get_fps(),
+                path: "claimed.mp4".to_string(),
+                source_time: 42.0,
                 stream_index: Some(0),
                 input_color_space: None,
                 output_color_space: None,
             },
             &CacheManager::new(),
         )
-        .expect_err("manager must preserve loader out-of-range errors");
+        .expect_err("a loader-owned decode failure must remain an error");
+    let message = error.to_string();
     assert!(matches!(
         error,
-        library::LibraryError::VideoTimestampOutOfRange { .. }
+        LibraryError::VideoTimestampDecode {
+            stream_index: 0,
+            source_time: 42.0,
+            ..
+        }
     ));
+    assert!(message.contains("synthetic valid-frame decode failure"));
+    assert!(!message.contains("No compatible load plugin"));
 }
 
 #[test]
