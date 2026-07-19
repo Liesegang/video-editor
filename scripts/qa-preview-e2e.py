@@ -211,6 +211,18 @@ def assert_space_pan(before, after, expected_delta=PAN_DELTA, tolerance=1.0):
     return actual_delta
 
 
+def pan_matches(origin, value, expected_delta, tolerance=1.0):
+    return all(
+        abs(
+            value["pan"][axis]
+            - origin["pan"][axis]
+            - expected_delta[axis]
+        )
+        <= tolerance
+        for axis in ("x", "y")
+    )
+
+
 def assert_navigation_state_unchanged(initial, final):
     if final["project"] != initial["project"]:
         raise QaFailure("Preview navigation mutated the authoritative Project")
@@ -329,7 +341,11 @@ def run_suite(client):
         client,
         "Preview content translated to the drag midpoint",
         after_frame=move_snapshot["frame"],
-        predicate=lambda value: value["pan"] != press_geometry["pan"],
+        predicate=lambda value: pan_matches(
+            initial_geometry,
+            value,
+            {"x": PAN_DELTA["x"] * 0.5, "y": PAN_DELTA["y"] * 0.5},
+        ),
     )
     partial_delta = {"x": PAN_DELTA["x"] * 0.5, "y": PAN_DELTA["y"] * 0.5}
     assert_space_pan(initial_geometry, moved_geometry, partial_delta)
@@ -364,7 +380,8 @@ def run_suite(client):
         client,
         "Preview content translated by the coordinate delta",
         after_frame=release_snapshot["frame"],
-        predicate=lambda value: value["pan"] != initial_geometry["pan"],
+        predicate=lambda value: value["primary_gesture"] == "Idle"
+        and pan_matches(initial_geometry, value, PAN_DELTA),
     )
     actual_delta = assert_space_pan(initial_geometry, final_geometry)
     if final_geometry["primary_gesture"] != "Idle":
