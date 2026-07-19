@@ -9,12 +9,8 @@ use super::{NodeContainer, Project, ProjectGraphError};
 pub const IMAGE_OUTPUT_PORT: &str = "image";
 pub const IMAGE_INPUT_PORT: &str = "image_in";
 pub const MERGE_IMAGES_PORT: &str = "images";
-pub const STYLE_OUTPUT_PORT: &str = "style";
-pub const STYLES_INPUT_PORT: &str = "styles";
-pub const EFFECTOR_OUTPUT_PORT: &str = "effector";
-pub const EFFECTORS_INPUT_PORT: &str = "effectors";
-pub const DECORATOR_OUTPUT_PORT: &str = "decorator";
-pub const DECORATORS_INPUT_PORT: &str = "decorators";
+pub const SHAPE_OUTPUT_PORT: &str = "shape";
+pub const SHAPE_INPUT_PORT: &str = "shape_in";
 pub const TIME_PORT: &str = "time";
 pub const FRAME_PORT: &str = "frame";
 pub const FPS_PORT: &str = "fps";
@@ -128,10 +124,10 @@ pub enum PortMultiplicity {
 pub enum PortDataType {
     Any,
     Image,
+    /// Render-time vector/typographic value. This is distinct from `Path`,
+    /// which is only an authored scalar SVG path string.
+    Shape,
     Audio,
-    Style,
-    Effector,
-    Decorator,
     Number,
     Integer,
     Boolean,
@@ -223,24 +219,36 @@ impl ProjectConnection {
 }
 
 fn metadata_catalog(direction: PortDirection, exposure: PortExposure) -> Vec<PortDefinition> {
-    [
-        (TIME_PORT, "Time", PortDataType::Number),
-        (FRAME_PORT, "Frame", PortDataType::Integer),
-        (FPS_PORT, "FPS", PortDataType::Number),
-        (DURATION_PORT, "Duration", PortDataType::Number),
-        (RESOLUTION_PORT, "Resolution", PortDataType::Vec2),
-    ]
-    .into_iter()
-    .map(|(key, label, data_type)| match direction {
-        PortDirection::Input => PortDefinition {
-            exposure,
-            ..PortDefinition::input(key, label, data_type)
-        },
-        PortDirection::Output => {
-            PortDefinition::output(key, label, data_type, PortSide::Left, exposure)
-        }
-    })
-    .collect()
+    let ports: &[(&str, &str, PortDataType)] = match direction {
+        // Time, Duration, and Resolution remain the authored container
+        // overrides. FPS and Frame are derived, read-only context values.
+        PortDirection::Input => &[
+            (TIME_PORT, "Time", PortDataType::Number),
+            (DURATION_PORT, "Duration", PortDataType::Number),
+            (RESOLUTION_PORT, "Resolution", PortDataType::Vec2),
+        ],
+        PortDirection::Output => &[
+            (TIME_PORT, "Time", PortDataType::Number),
+            (FRAME_PORT, "Frame", PortDataType::Integer),
+            (FPS_PORT, "FPS", PortDataType::Number),
+            (DURATION_PORT, "Duration", PortDataType::Number),
+            (RESOLUTION_PORT, "Resolution", PortDataType::Vec2),
+        ],
+    };
+    ports
+        .iter()
+        .cloned()
+        .into_iter()
+        .map(|(key, label, data_type)| match direction {
+            PortDirection::Input => PortDefinition {
+                exposure,
+                ..PortDefinition::input(key, label, data_type)
+            },
+            PortDirection::Output => {
+                PortDefinition::output(key, label, data_type, PortSide::Left, exposure)
+            }
+        })
+        .collect()
 }
 
 fn container_ports() -> Vec<PortDefinition> {
@@ -260,7 +268,8 @@ fn container_ports() -> Vec<PortDefinition> {
 }
 
 fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
-    let mut ports = metadata_catalog(PortDirection::Input, PortExposure::Graph);
+    let mut ports = Vec::new();
+    let time_input = || PortDefinition::input(TIME_PORT, "Time", PortDataType::Number);
     let image_output = || {
         PortDefinition::output(
             IMAGE_OUTPUT_PORT,
@@ -274,31 +283,39 @@ fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
     match &node.content {
         NodeContent::Generator(GeneratorContent::Text) => {
             ports.extend([
+                time_input(),
                 PortDefinition::input("text", "Text", PortDataType::String),
                 PortDefinition::input("font_family", "Font", PortDataType::String),
                 PortDefinition::input("size", "Size", PortDataType::Number),
-                PortDefinition::input(STYLES_INPUT_PORT, "Styles", PortDataType::Style).variadic(),
-                PortDefinition::input(EFFECTORS_INPUT_PORT, "Effectors", PortDataType::Effector)
-                    .variadic(),
-                PortDefinition::input(DECORATORS_INPUT_PORT, "Decorators", PortDataType::Decorator)
-                    .variadic(),
             ]);
-            ports.push(image_output());
+            ports.push(PortDefinition::output(
+                SHAPE_OUTPUT_PORT,
+                "Shape",
+                PortDataType::Shape,
+                PortSide::Right,
+                PortExposure::Graph,
+            ));
         }
         NodeContent::Generator(GeneratorContent::Solid) => {
+            ports.push(time_input());
             ports.push(PortDefinition::input("color", "Color", PortDataType::Color));
             ports.push(image_output());
         }
         NodeContent::Generator(GeneratorContent::Shape) => {
             ports.extend([
+                time_input(),
                 PortDefinition::input("path", "Path", PortDataType::Path),
-                PortDefinition::input(STYLES_INPUT_PORT, "Styles", PortDataType::Style).variadic(),
-                PortDefinition::input(EFFECTORS_INPUT_PORT, "Effectors", PortDataType::Effector)
-                    .variadic(),
             ]);
-            ports.push(image_output());
+            ports.push(PortDefinition::output(
+                SHAPE_OUTPUT_PORT,
+                "Shape",
+                PortDataType::Shape,
+                PortSide::Right,
+                PortExposure::Graph,
+            ));
         }
         NodeContent::Generator(GeneratorContent::SkSL) => {
+            ports.push(time_input());
             ports.push(PortDefinition::input(
                 "shader",
                 "Shader",
@@ -308,12 +325,14 @@ fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
         }
         NodeContent::Media(_) => {
             ports.extend([
+                time_input(),
                 PortDefinition::input("opacity", "Opacity", PortDataType::Number),
                 PortDefinition::input("audio", "Audio", PortDataType::Audio),
             ]);
             ports.push(image_output());
         }
         NodeContent::Reference(_) => {
+            ports.push(time_input());
             ports.push(PortDefinition::input(
                 IMAGE_INPUT_PORT,
                 "Image",
@@ -326,6 +345,7 @@ fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
             ports.extend(operation.declared_ports.iter().cloned());
         }
         NodeContent::Merge => {
+            ports.push(time_input());
             ports.push(
                 PortDefinition::input(MERGE_IMAGES_PORT, "Images", PortDataType::Image).variadic(),
             );
@@ -390,12 +410,10 @@ impl Project {
     /// Return the authoritative, ordered image dependencies for a container.
     ///
     /// An explicit output binding always replaces fallback composition. Without
-    /// one, Composition order is Tracks then direct Nodes, Track order is Clips
-    /// then direct Nodes, and Clip order is its direct Nodes. Only direct image
-    /// graph sinks participate: a candidate feeding another direct child image
-    /// input in the same container is intermediate and therefore omitted.
-    /// Cross-container consumers do not suppress the source container's own
-    /// fallback result. Missing owners and leaf Nodes have no container sources.
+    /// one, a Composition derives from its ordered Tracks and a Track derives
+    /// from its ordered Clips. Direct Nodes are an internal graph implementation
+    /// detail and never become an implicit image output; a Clip therefore needs
+    /// an explicit output binding. Missing owners and leaf Nodes have no sources.
     pub fn container_image_sources(&self, owner: PortOwner) -> Vec<ContainerImageSource> {
         self.container_image_sources_with_connections(owner, &self.connections)
     }
@@ -403,7 +421,7 @@ impl Project {
     fn container_image_sources_with_connections(
         &self,
         owner: PortOwner,
-        connections: &[ProjectConnection],
+        _connections: &[ProjectConnection],
     ) -> Vec<ContainerImageSource> {
         let derived = |source| ContainerImageSource {
             source,
@@ -444,7 +462,6 @@ impl Project {
         self.direct_child_owners(container)
             .into_iter()
             .filter(|source| self.owner_has_image_output(*source))
-            .filter(|source| !self.image_output_feeds_direct_child(container, *source, connections))
             .map(derived)
             .collect()
     }
@@ -469,7 +486,6 @@ impl Project {
                         .iter()
                         .copied()
                         .map(PortOwner::Track)
-                        .chain(composition.node_ids.iter().copied().map(PortOwner::Node))
                         .collect()
                 })
                 .unwrap_or_default(),
@@ -481,14 +497,10 @@ impl Project {
                         .iter()
                         .copied()
                         .map(PortOwner::Clip)
-                        .chain(track.node_ids.iter().copied().map(PortOwner::Node))
                         .collect()
                 })
                 .unwrap_or_default(),
-            NodeContainer::Clip(id) => self
-                .get_clip(id)
-                .map(|clip| clip.node_ids.iter().copied().map(PortOwner::Node).collect())
-                .unwrap_or_default(),
+            NodeContainer::Clip(_) => Vec::new(),
         }
     }
 
@@ -496,38 +508,6 @@ impl Project {
         let address = PortAddress::new(owner, IMAGE_OUTPUT_PORT);
         self.port_definition(&address, PortDirection::Output)
             .is_some_and(|port| port.data_type == PortDataType::Image)
-    }
-
-    fn image_output_feeds_direct_child(
-        &self,
-        container: NodeContainer,
-        source: PortOwner,
-        connections: &[ProjectConnection],
-    ) -> bool {
-        connections.iter().any(|connection| {
-            connection.from.owner == source
-                && connection.to.owner != source
-                && self.is_direct_child_owner(container, connection.to.owner)
-                && self
-                    .port_definition(&connection.from, PortDirection::Output)
-                    .is_some_and(|port| port.data_type == PortDataType::Image)
-                && self
-                    .port_definition(&connection.to, PortDirection::Input)
-                    .is_some_and(|port| port.data_type == PortDataType::Image)
-        })
-    }
-
-    fn is_direct_child_owner(&self, container: NodeContainer, owner: PortOwner) -> bool {
-        match (container, owner) {
-            (NodeContainer::Composition(composition_id), PortOwner::Track(track_id)) => self
-                .get_composition(composition_id)
-                .is_some_and(|composition| composition.track_ids.contains(&track_id)),
-            (NodeContainer::Track(track_id), PortOwner::Clip(clip_id)) => self
-                .get_track(track_id)
-                .is_some_and(|track| track.clip_ids.contains(&clip_id)),
-            (_, PortOwner::Node(node_id)) => self.find_node_container(node_id) == Some(container),
-            _ => false,
-        }
     }
 
     pub fn port_definition(
@@ -772,10 +752,11 @@ impl Project {
             }
 
             let mut port_keys = HashSet::new();
-            for port in metadata_catalog(PortDirection::Input, PortExposure::Graph)
-                .into_iter()
-                .chain(operation.declared_ports.iter().cloned())
-            {
+            // PluginOperation ports are a complete persisted execution
+            // contract. Metadata such as Time must be declared explicitly by
+            // the operation; injecting a hidden catalog here would create a
+            // second port authority and duplicate the persisted Time input.
+            for port in operation.declared_ports.iter().cloned() {
                 if port.key.trim().is_empty() {
                     errors.push(ProjectGraphError::EmptyNodePortKey {
                         node_id: node.id,
@@ -907,7 +888,7 @@ impl Project {
     fn descendant_scope_override_is_cyclic(&self, connection: &ProjectConnection) -> bool {
         if !matches!(
             connection.to.port.as_str(),
-            TIME_PORT | FRAME_PORT | FPS_PORT | DURATION_PORT | RESOLUTION_PORT
+            TIME_PORT | DURATION_PORT | RESOLUTION_PORT
         ) {
             return false;
         }
@@ -1051,7 +1032,7 @@ mod tests {
             "composition node",
         );
         let track_node = add_node(&mut project, NodeContainer::Track(track_id), "track node");
-        let first_clip_node = add_node(
+        let _first_clip_node = add_node(
             &mut project,
             NodeContainer::Clip(clip_id),
             "first clip node",
@@ -1064,42 +1045,52 @@ mod tests {
         let derived = ContainerImageSourceKind::DerivedChild;
         assert_eq!(
             project.container_image_sources(PortOwner::Composition(composition_id)),
-            vec![
-                ContainerImageSource {
-                    source: PortOwner::Track(track_id),
-                    kind: derived,
-                },
-                ContainerImageSource {
-                    source: PortOwner::Node(composition_node),
-                    kind: derived,
-                },
-            ]
+            vec![ContainerImageSource {
+                source: PortOwner::Track(track_id),
+                kind: derived,
+            }]
         );
         assert_eq!(
             project.container_image_sources(PortOwner::Track(track_id)),
-            vec![
-                ContainerImageSource {
-                    source: PortOwner::Clip(clip_id),
-                    kind: derived,
-                },
-                ContainerImageSource {
-                    source: PortOwner::Node(track_node),
-                    kind: derived,
-                },
-            ]
+            vec![ContainerImageSource {
+                source: PortOwner::Clip(clip_id),
+                kind: derived,
+            }]
+        );
+        assert!(
+            project
+                .container_image_sources(PortOwner::Clip(clip_id))
+                .is_empty(),
+            "Clip nodes are internal graph values until an output is bound"
+        );
+
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Clip(clip_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(track_node), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Track(track_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(composition_node), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
+        assert_eq!(
+            project.container_image_sources(PortOwner::Track(track_id)),
+            vec![ContainerImageSource {
+                source: PortOwner::Clip(clip_id),
+                kind: derived,
+            }],
+            "wiring a child Clip to an unbound helper Node must not suppress natural composition"
         );
         assert_eq!(
-            project.container_image_sources(PortOwner::Clip(clip_id)),
-            vec![
-                ContainerImageSource {
-                    source: PortOwner::Node(first_clip_node),
-                    kind: derived,
-                },
-                ContainerImageSource {
-                    source: PortOwner::Node(second_clip_node),
-                    kind: derived,
-                },
-            ]
+            project.container_image_sources(PortOwner::Composition(composition_id)),
+            vec![ContainerImageSource {
+                source: PortOwner::Track(track_id),
+                kind: derived,
+            }],
+            "wiring a child Track to an unbound helper Node must not suppress natural composition"
         );
 
         project

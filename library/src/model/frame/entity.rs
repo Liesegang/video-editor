@@ -66,6 +66,8 @@ pub enum FrameContent {
         path_effects: Vec<PathEffect>,
         #[serde(default)]
         effects: Vec<ImageEffect>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ensemble: Option<crate::core::ensemble::EnsembleData>,
         #[serde(flatten)]
         transform: Transform,
     },
@@ -128,12 +130,14 @@ impl Hash for FrameContent {
                 styles,
                 path_effects,
                 effects,
+                ensemble,
                 transform,
             } => {
                 path.hash(state);
                 styles.hash(state);
                 path_effects.hash(state);
                 effects.hash(state);
+                ensemble.hash(state);
                 transform.hash(state);
             }
             FrameContent::SkSL {
@@ -202,6 +206,7 @@ impl PartialEq for FrameContent {
                     styles: st1,
                     path_effects: pe1,
                     effects: e1,
+                    ensemble: en1,
                     transform: tr1,
                 },
                 FrameContent::Shape {
@@ -209,9 +214,12 @@ impl PartialEq for FrameContent {
                     styles: st2,
                     path_effects: pe2,
                     effects: e2,
+                    ensemble: en2,
                     transform: tr2,
                 },
-            ) => p1 == p2 && st1 == st2 && pe1 == pe2 && e1 == e2 && tr1 == tr2,
+            ) => {
+                p1 == p2 && st1 == st2 && pe1 == pe2 && e1 == e2 && en1 == en2 && tr1 == tr2
+            }
             (
                 FrameContent::SkSL {
                     shader: s1,

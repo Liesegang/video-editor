@@ -10,6 +10,7 @@ pub mod entity;
 )]
 pub mod frame;
 pub mod image;
+pub mod runtime_shape;
 pub mod transform;
 
 pub use image::Image;

@@ -1,14 +1,11 @@
 use crate::model::EffectConfig;
 use crate::model::Node;
 use crate::model::Project;
-use crate::model::frame::entity::{FrameObject, StyleConfig};
+use crate::model::frame::entity::FrameObject;
+use crate::model::frame::runtime_shape::RuntimeShape;
 use crate::model::frame::transform::{Position, Scale, Transform};
-use crate::model::project::Composition;
-use crate::model::project::{
-    DECORATORS_INPUT_PORT, EFFECTORS_INPUT_PORT, EvalOutput, STYLES_INPUT_PORT,
-};
+use crate::model::project::{Composition, EvalOutput};
 use crate::model::property::{PropertyMap, PropertyValue, Vec2};
-use crate::model::style::StyleInstance;
 use crate::plugin::{EvaluationContext, PluginManager, PropertyEvaluatorRegistry};
 use std::collections::HashMap;
 
@@ -37,9 +34,6 @@ pub struct ResolvedNodeInputs {
     pub metadata: HashMap<String, EvalOutput<PropertyValue>>,
     /// Explicit scalar/property wires keyed by their logical PropertyMap key.
     pub properties: HashMap<String, EvalOutput<PropertyValue>>,
-    pub styles: HashMap<String, Vec<EvalOutput<StyleConfig>>>,
-    pub effectors: HashMap<String, Vec<EvalOutput<crate::core::ensemble::types::EffectorConfig>>>,
-    pub decorators: HashMap<String, Vec<EvalOutput<crate::core::ensemble::types::DecoratorConfig>>>,
 }
 
 impl ResolvedNodeInputs {
@@ -47,9 +41,6 @@ impl ResolvedNodeInputs {
         Self {
             metadata,
             properties: HashMap::new(),
-            styles: HashMap::new(),
-            effectors: HashMap::new(),
-            decorators: HashMap::new(),
         }
     }
 }
@@ -66,19 +57,6 @@ pub struct FrameEvaluationContext<'a> {
 }
 
 impl<'a> FrameEvaluationContext<'a> {
-    /// Return a context for an independently owned nested PropertyMap.
-    /// Node graph inputs must not override an identically named style,
-    /// effector, or decorator property (for example `duration`).
-    pub fn without_resolved_inputs(&self) -> FrameEvaluationContext<'a> {
-        FrameEvaluationContext {
-            project: self.project,
-            composition: self.composition,
-            property_evaluators: self.property_evaluators,
-            plugin_manager: self.plugin_manager,
-            resolved_inputs: None,
-        }
-    }
-
     pub fn connected_input(&self, key: &str) -> Option<&PropertyValue> {
         match self
             .resolved_inputs
@@ -339,123 +317,6 @@ impl<'a> FrameEvaluationContext<'a> {
         })
     }
 
-    pub fn build_styles(
-        &self,
-        styles: &[StyleInstance],
-        time: f64,
-    ) -> Vec<crate::model::frame::entity::StyleConfig> {
-        styles
-            .iter()
-            .filter_map(|s| {
-                if let Some(plugin) = self.plugin_manager.get_style_plugin(&s.style_type) {
-                    plugin.convert_legacy(&self.without_resolved_inputs(), s, time)
-                } else {
-                    log::warn!("Unknown style type: {}", s.style_type);
-                    None
-                }
-            })
-            .collect()
-    }
-
-    /// Resolves the variadic graph Style input when at least one wire exists;
-    /// otherwise retains isolated legacy Node::styles behavior. NoOutput and
-    /// unavailable Style producers are normal skipped items, never frame
-    /// errors and never a reason to fall back to embedded state.
-    pub fn resolved_styles_or_legacy(
-        &self,
-        legacy_styles: &[StyleInstance],
-        time: f64,
-    ) -> Vec<StyleConfig> {
-        let Some(wired) = self
-            .resolved_inputs
-            .and_then(|inputs| inputs.styles.get(STYLES_INPUT_PORT))
-        else {
-            return self.build_styles(legacy_styles, time);
-        };
-        wired
-            .iter()
-            .filter_map(|value| match value {
-                EvalOutput::Produced(style) => Some(style.clone()),
-                EvalOutput::NoOutput => None,
-            })
-            .collect()
-    }
-
-    fn build_effectors(
-        &self,
-        effectors: &[crate::model::ensemble::EffectorInstance],
-        time: f64,
-    ) -> Vec<crate::core::ensemble::types::EffectorConfig> {
-        let nested_context = self.without_resolved_inputs();
-        effectors
-            .iter()
-            .filter_map(|instance| {
-                self.plugin_manager
-                    .convert_effector_instance(&nested_context, instance, time)
-            })
-            .collect()
-    }
-
-    /// Resolves the variadic graph Effector input when at least one wire
-    /// exists; otherwise retains read-only compatibility with embedded
-    /// `Node::effectors`. An all-NoOutput wire set never restores legacy state.
-    pub fn resolved_effectors_or_legacy(
-        &self,
-        legacy_effectors: &[crate::model::ensemble::EffectorInstance],
-        time: f64,
-    ) -> Vec<crate::core::ensemble::types::EffectorConfig> {
-        let Some(wired) = self
-            .resolved_inputs
-            .and_then(|inputs| inputs.effectors.get(EFFECTORS_INPUT_PORT))
-        else {
-            return self.build_effectors(legacy_effectors, time);
-        };
-        wired
-            .iter()
-            .filter_map(|value| match value {
-                EvalOutput::Produced(effector) => Some(effector.clone()),
-                EvalOutput::NoOutput => None,
-            })
-            .collect()
-    }
-
-    fn build_decorators(
-        &self,
-        decorators: &[crate::model::ensemble::DecoratorInstance],
-        time: f64,
-    ) -> Vec<crate::core::ensemble::types::DecoratorConfig> {
-        let nested_context = self.without_resolved_inputs();
-        decorators
-            .iter()
-            .filter_map(|instance| {
-                self.plugin_manager
-                    .convert_decorator_instance(&nested_context, instance, time)
-            })
-            .collect()
-    }
-
-    /// Resolves the variadic graph Decorator input when wired, otherwise
-    /// retains read-only compatibility with embedded `Node::decorators`.
-    pub fn resolved_decorators_or_legacy(
-        &self,
-        legacy_decorators: &[crate::model::ensemble::DecoratorInstance],
-        time: f64,
-    ) -> Vec<crate::core::ensemble::types::DecoratorConfig> {
-        let Some(wired) = self
-            .resolved_inputs
-            .and_then(|inputs| inputs.decorators.get(DECORATORS_INPUT_PORT))
-        else {
-            return self.build_decorators(legacy_decorators, time);
-        };
-        wired
-            .iter()
-            .filter_map(|value| match value {
-                EvalOutput::Produced(decorator) => Some(decorator.clone()),
-                EvalOutput::NoOutput => None,
-            })
-            .collect()
-    }
-
     pub fn parse_path_effects(
         &self,
         props: &PropertyMap,
@@ -615,6 +476,17 @@ pub trait EntityConverterPlugin: crate::plugin::Plugin + Send + Sync {
         layer: &Node,
         time: f64,
     ) -> Option<FrameObject>;
+
+    /// Evaluate a vector/typographic generator without rasterizing it. Only
+    /// Shape-producing converters override this; Image producers return None.
+    fn convert_shape(
+        &self,
+        _evaluator: &FrameEvaluationContext,
+        _node: &Node,
+        _time: f64,
+    ) -> Option<RuntimeShape> {
+        None
+    }
 
     fn get_bounds(
         &self,

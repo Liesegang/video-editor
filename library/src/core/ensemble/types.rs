@@ -117,6 +117,9 @@ pub struct EffectorContext {
     /// Stable identity for deterministic per-element variation. Unlike
     /// `index`, this never resets merely because the target scope is Char.
     pub element_index: usize,
+    pub element_identity: u64,
+    pub block_group_id: u64,
+    pub line_group_id: u64,
     pub line_index: usize,
     pub char_center: Point,
 }

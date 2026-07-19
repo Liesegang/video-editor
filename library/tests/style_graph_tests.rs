@@ -5,12 +5,13 @@ use library::animation::EasingFunction;
 use library::editor::project_service::ProjectManager;
 use library::framing::get_frame_from_project;
 use library::model::frame::color::Color;
-use library::model::frame::draw_type::{CapType, DrawStyle, JoinType};
+use library::model::frame::draw_type::DrawStyle;
 use library::model::frame::entity::{FrameContent, FrameItem, StyleConfig};
+use library::model::frame::runtime_shape::RuntimeShapeGeometry;
 use library::model::project::{
-    Composition, EvalOutput, NodeContainer, NodeGraphBundle, PortAddress, PortDataType,
-    PortDefinition, PortDirection, PortExposure, PortOwner, PortSide, Project, STYLE_OUTPUT_PORT,
-    STYLES_INPUT_PORT, TIME_PORT,
+    Composition, EvalOutput, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, NodeGraphBundle,
+    PortAddress, PortDataType, PortDefinition, PortDirection, PortExposure, PortOwner, PortSide,
+    Project, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{
     Keyframe, Property, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue, Vec2,
@@ -18,7 +19,7 @@ use library::model::property::{
 use library::model::{Clip, GeneratorContent, Node, NodeContent};
 use library::plugin::{
     FrameEvaluationContext, OperationDescriptor, OperationDescriptorError, Plugin, PluginManager,
-    ResolvedNodeInputs, STYLE_CATEGORY, STYLE_PRODUCE_OPERATION, StylePlugin, property_port_key,
+    ResolvedNodeInputs, STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin, property_port_key,
     property_ui_type_to_port_data_type,
 };
 use ordered_float::OrderedFloat;
@@ -91,10 +92,21 @@ fn draw_styles(
     frame_number: u64,
 ) -> Vec<DrawStyle> {
     let rendered = frame(project, plugins, frame_number);
-    content_styles(first_content(&rendered.items).expect("consumer should render"))
-        .iter()
-        .map(|style| style.style.clone())
-        .collect()
+    fn collect(items: &[FrameItem], styles: &mut Vec<DrawStyle>) {
+        for item in items {
+            match item {
+                FrameItem::Object(object) => styles.extend(
+                    content_styles(&object.content)
+                        .iter()
+                        .map(|style| style.style.clone()),
+                ),
+                FrameItem::Group(group) => collect(&group.items, styles),
+            }
+        }
+    }
+    let mut styles = Vec::new();
+    collect(&rendered.items, &mut styles);
+    styles
 }
 
 fn style_kinds(styles: &[DrawStyle]) -> Vec<&'static str> {
@@ -124,7 +136,7 @@ fn style_descriptors_materialize_all_defaults_and_namespaced_typed_ports() {
     let plugins = PluginManager::default();
     for component_id in ["fill", "stroke"] {
         let descriptor = plugins
-            .operation_descriptor(STYLE_CATEGORY, component_id, STYLE_PRODUCE_OPERATION)
+            .operation_descriptor(STYLE_CATEGORY, component_id, STYLE_APPLY_OPERATION)
             .unwrap();
         let node = plugins.create_style_operation_node(component_id).unwrap();
         let NodeContent::PluginOperation(operation) = &node.content else {
@@ -132,7 +144,7 @@ fn style_descriptors_materialize_all_defaults_and_namespaced_typed_ports() {
         };
         assert_eq!(operation.category, STYLE_CATEGORY);
         assert_eq!(operation.component_id, component_id);
-        assert_eq!(operation.operation, STYLE_PRODUCE_OPERATION);
+        assert_eq!(operation.operation, STYLE_APPLY_OPERATION);
         assert_eq!(operation.declared_ports, descriptor.declared_ports());
         assert_eq!(node.name, descriptor.label());
 
@@ -162,14 +174,21 @@ fn style_descriptors_materialize_all_defaults_and_namespaced_typed_ports() {
                 "unprefixed property aliases are forbidden"
             );
         }
-        let style_output = operation
+        let shape_input = operation
             .declared_ports
             .iter()
-            .find(|port| port.key == STYLE_OUTPUT_PORT)
+            .find(|port| port.key == SHAPE_INPUT_PORT)
             .unwrap();
-        assert_eq!(style_output.direction, PortDirection::Output);
-        assert_eq!(style_output.data_type, PortDataType::Style);
-        assert_eq!(style_output.side, PortSide::Right);
+        assert_eq!(shape_input.direction, PortDirection::Input);
+        assert_eq!(shape_input.data_type, PortDataType::Shape);
+        let image_output = operation
+            .declared_ports
+            .iter()
+            .find(|port| port.key == IMAGE_OUTPUT_PORT)
+            .unwrap();
+        assert_eq!(image_output.direction, PortDirection::Output);
+        assert_eq!(image_output.data_type, PortDataType::Image);
+        assert_eq!(image_output.side, PortSide::Right);
     }
 }
 
@@ -247,7 +266,10 @@ fn operation_descriptor_rejects_malformed_properties_and_terminal_ports() {
     assert!(matches!(
         make(
             Vec::new(),
-            vec![output_port(TIME_PORT, "Result", PortDataType::Number)]
+            vec![
+                output_port("result", "Result", PortDataType::Number),
+                output_port("result", "Duplicate", PortDataType::Number),
+            ]
         ),
         Err(OperationDescriptorError::PortCollision { .. })
     ));
@@ -313,13 +335,13 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
         .find(|node| operation_component(node) == Some("fill"))
         .unwrap();
     assert!(text_consumer.styles.is_empty());
-    assert_eq!(fill.ui_position, [0.0, 0.0]);
-    assert_eq!(text_consumer.ui_position, [360.0, 0.0]);
-    assert_eq!(text.output_node_id, Some(text_consumer.id));
+    assert_eq!(text_consumer.ui_position, [0.0, 0.0]);
+    assert_eq!(fill.ui_position, [360.0, 0.0]);
+    assert_eq!(text.output_node_id, Some(fill.id));
     assert_eq!(text.connections.len(), 1);
     assert_eq!(text.connections[0].order, 0);
-    assert_eq!(text.connections[0].from.port, STYLE_OUTPUT_PORT);
-    assert_eq!(text.connections[0].to.port, STYLES_INPUT_PORT);
+    assert_eq!(text.connections[0].from.port, SHAPE_OUTPUT_PORT);
+    assert_eq!(text.connections[0].to.port, SHAPE_INPUT_PORT);
 
     let shape = manager
         .create_shape_graph("M0 0 L10 0 L10 10 Z", WIDTH, HEIGHT, 10, 10)
@@ -335,9 +357,20 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
         })
         .unwrap();
     assert!(shape_consumer.styles.is_empty());
-    assert_eq!(shape_consumer.ui_position, [360.0, 110.0]);
-    assert_eq!(shape.output_node_id, Some(shape_consumer.id));
-    let mut ordered = shape.connections.iter().collect::<Vec<_>>();
+    assert_eq!(shape_consumer.ui_position, [0.0, 110.0]);
+    let merge = shape
+        .nodes
+        .iter()
+        .find(|node| matches!(node.content, NodeContent::Merge))
+        .unwrap();
+    assert_eq!(shape.output_node_id, Some(merge.id));
+    assert_eq!(shape.nodes.len(), 4);
+    assert_eq!(shape.connections.len(), 4);
+    let mut ordered = shape
+        .connections
+        .iter()
+        .filter(|connection| connection.to.port == MERGE_IMAGES_PORT)
+        .collect::<Vec<_>>();
     ordered.sort_by_key(|connection| connection.order);
     assert_eq!(
         ordered
@@ -378,7 +411,9 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
 
     let mut swapped_order = shape;
     for connection in &mut swapped_order.connections {
-        connection.order = 1 - connection.order;
+        if connection.to.port == MERGE_IMAGES_PORT {
+            connection.order = 1 - connection.order;
+        }
     }
     let rendered = draw_styles(
         &project_with_graph(swapped_order, 0.0, 2.0),
@@ -389,7 +424,7 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
 }
 
 #[test]
-fn text_and_shape_clip_graphs_roundtrip_and_legacy_nodes_still_render_identically() {
+fn text_and_shape_clip_graphs_roundtrip_with_explicit_raster_boundaries() {
     let plugins = Arc::new(PluginManager::default());
     let shared = Arc::new(RwLock::new(setup_project().0));
     let manager = ProjectManager::new(shared.clone(), plugins.clone());
@@ -416,34 +451,28 @@ fn text_and_shape_clip_graphs_roundtrip_and_legacy_nodes_still_render_identicall
     assert!(loaded.validation_issues().is_empty());
     assert_eq!(loaded, *shared.read().unwrap());
 
-    let legacy_text = manager
-        .create_text_node("hello", "Arial", WIDTH, HEIGHT)
-        .unwrap();
     let graph_text = manager
         .create_text_graph("hello", "Arial", WIDTH, HEIGHT)
         .unwrap();
     assert_eq!(
-        draw_styles(
-            &project_with_graph(NodeGraphBundle::with_output_node(legacy_text), 0.0, 2.0),
+        style_kinds(&draw_styles(
+            &project_with_graph(graph_text, 0.0, 2.0),
             &plugins,
             0
-        ),
-        draw_styles(&project_with_graph(graph_text, 0.0, 2.0), &plugins, 0)
+        )),
+        vec!["fill"]
     );
 
-    let legacy_shape = manager
-        .create_shape_node("M0 0 L10 0 L10 10 Z", WIDTH, HEIGHT, 10, 10)
-        .unwrap();
     let graph_shape = manager
         .create_shape_graph("M0 0 L10 0 L10 10 Z", WIDTH, HEIGHT, 10, 10)
         .unwrap();
     assert_eq!(
-        draw_styles(
-            &project_with_graph(NodeGraphBundle::with_output_node(legacy_shape), 0.0, 2.0),
+        style_kinds(&draw_styles(
+            &project_with_graph(graph_shape, 0.0, 2.0),
             &plugins,
             0
-        ),
-        draw_styles(&project_with_graph(graph_shape, 0.0, 2.0), &plugins, 0)
+        )),
+        vec!["fill", "stroke"]
     );
 }
 
@@ -463,7 +492,12 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
         .find(|node| operation_component(node) == Some("fill"))
         .unwrap()
         .id;
-    let consumer = graph.output_node().unwrap().clone();
+    let source = graph
+        .nodes
+        .iter()
+        .find(|node| matches!(node.content, NodeContent::Generator(GeneratorContent::Text)))
+        .unwrap()
+        .clone();
     let mut project = project_with_graph(graph, 0.0, 2.0);
     let clip_id = project.find_node_container(fill_id).unwrap().id();
 
@@ -526,61 +560,46 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
             ..
         }]
     ));
-    assert_eq!(project.get_node(consumer.id), Some(&consumer));
+    assert_eq!(project.get_node(source.id), Some(&source));
 }
 
 #[test]
-fn wired_styles_drive_conversion_and_bounds_from_the_same_values() {
+fn text_converter_exposes_grapheme_source_ranges_without_claiming_glyph_metadata() {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
         plugins.clone(),
     );
     let graph = manager
-        .create_text_graph("bounds", "Arial", WIDTH, HEIGHT)
+        .create_text_graph("A日e\u{301}", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let node = graph.output_node().unwrap();
+    let node = graph
+        .nodes
+        .iter()
+        .find(|node| matches!(node.content, NodeContent::Generator(GeneratorContent::Text)))
+        .unwrap();
     let (composition, _) = Composition::new("main", WIDTH, HEIGHT, FPS, 2.0);
     let project = Project::new("bounds");
     let evaluators = plugins.get_property_evaluators();
-    let style = StyleConfig {
-        id: Uuid::new_v4(),
-        style: DrawStyle::Stroke {
-            color: Color::white(),
-            width: 20.0,
-            offset: 0.0,
-            join: JoinType::Round,
-            cap: CapType::Round,
-            miter: 4.0,
-            dash_array: Vec::new(),
-            dash_offset: 0.0,
-        },
-    };
-    let mut resolved = ResolvedNodeInputs::default();
-    resolved.styles.insert(
-        STYLES_INPUT_PORT.into(),
-        vec![EvalOutput::Produced(style.clone())],
-    );
     let context = FrameEvaluationContext {
         project: &project,
         composition: &composition,
         property_evaluators: &evaluators,
         plugin_manager: &plugins,
-        resolved_inputs: Some(&resolved),
+        resolved_inputs: None,
     };
     let converter = plugins.get_entity_converter("text").unwrap();
-    let object = converter.convert_entity(&context, node, 0.0).unwrap();
-    assert_eq!(content_styles(&object.content), [style]);
-    let wired_bounds = converter.get_bounds(&context, node, 0.0).unwrap();
-
-    let fallback_context = FrameEvaluationContext {
-        resolved_inputs: None,
-        ..context
+    let shape = converter.convert_shape(&context, node, 0.0).unwrap();
+    let RuntimeShapeGeometry::Text(text) = shape.geometry else {
+        panic!("text converter must produce RuntimeShapeGeometry::Text")
     };
-    let legacy_bounds = converter.get_bounds(&fallback_context, node, 0.0).unwrap();
-    assert!(wired_bounds.0 < legacy_bounds.0);
-    assert!(wired_bounds.2 > legacy_bounds.2);
-    assert!(wired_bounds.3 > legacy_bounds.3);
+    assert_eq!(text.elements.len(), 3);
+    assert_eq!(text.elements[0].utf8_range, 0..1);
+    assert_eq!(text.elements[1].utf8_range, 1..4);
+    assert_eq!(text.elements[2].source, "e\u{301}");
+    assert_eq!(text.elements[2].utf8_range, 4..7);
+    assert_eq!(text.elements[2].utf16_range, 2..4);
+    assert!(text.elements.iter().all(|element| element.advance > 0.0));
 }
 
 #[test]
@@ -607,7 +626,7 @@ fn unknown_missing_invalid_and_scalar_no_output_styles_are_safe() {
     };
     operation.component_id = "unavailable-style".into();
     let rendered = frame(&project, &plugins, 0);
-    assert!(content_styles(first_content(&rendered.items).unwrap()).is_empty());
+    assert!(rendered.items.is_empty());
     let saved = project.save().unwrap();
     assert_eq!(Project::load(&saved).unwrap(), project);
 
@@ -754,7 +773,8 @@ fn inactive_clip_style_plugin_is_not_evaluated() {
     let counting = plugins.create_style_operation_node("counting").unwrap();
     let counting_id = counting.id;
     graph.nodes[old_fill] = counting;
-    graph.connections[0].from = PortAddress::new(PortOwner::Node(counting_id), STYLE_OUTPUT_PORT);
+    graph.output_node_id = Some(counting_id);
+    graph.connections[0].to = PortAddress::new(PortOwner::Node(counting_id), SHAPE_INPUT_PORT);
     let project = project_with_graph(graph, 5.0, 2.0);
 
     assert!(frame(&project, &plugins, 0).items.is_empty());

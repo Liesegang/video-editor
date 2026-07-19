@@ -401,6 +401,9 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() {
     project
         .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
         .unwrap();
+    project
+        .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
+        .unwrap();
 
     let plugin_manager = Arc::new(PluginManager::default());
     let late_composition_frame = 17_893;

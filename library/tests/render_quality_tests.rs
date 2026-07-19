@@ -308,6 +308,7 @@ fn vector_object(is_text: bool, transform: Transform, styles: &[StyleConfig]) ->
             styles: styles.to_vec(),
             path_effects: Vec::new(),
             effects: Vec::new(),
+            ensemble: None,
             transform,
         }
     };
@@ -424,6 +425,7 @@ fn transparent_text_and_shape_layers_use_clean_straight_rgba() {
                 path_data: "M 12 12 L 92 12 L 92 62 L 12 62 Z",
                 styles: &shape_styles,
                 path_effects: &[],
+                ensemble: None,
                 transform: Affine2D::from(&shape_transform),
             })
             .unwrap(),
@@ -555,6 +557,7 @@ fn transformed_shape_pixels_fit_stroke_aware_selection_bounds() {
                 path_data: path,
                 styles: &styles,
                 path_effects: &[],
+                ensemble: None,
                 transform: Affine2D::from(&transform),
             })
             .unwrap(),

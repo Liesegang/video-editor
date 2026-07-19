@@ -11,7 +11,7 @@ use crate::rendering::skia_utils::{
     GpuContext, create_gpu_context, create_image_from_texture, create_surface, image_to_skia,
     surface_to_image,
 };
-use crate::rendering::text_layout::{build_text_paragraph, layout_text_characters};
+use crate::rendering::text_layout::{build_text_paragraph, layout_runtime_text_shape};
 use crate::util::timing::ScopedTimer;
 use log::{debug, trace};
 use skia_safe::path_effect::PathEffect as SkPathEffect;
@@ -107,7 +107,7 @@ impl SkiaRenderer {
     }
 
     /// Build the Skia paint used by every text rendering path. Ensemble text
-    /// only changes glyph layout and per-character transforms; enabling it
+    /// changes grapheme drawing and per-element transforms; enabling it
     /// must not silently discard the node's authored Fill/Stroke stack.
     fn create_text_paint(style: &DrawStyle, opacity: f32, color_override: Option<&Color>) -> Paint {
         let apply_opacity = |color: &Color| {
@@ -523,37 +523,46 @@ impl SkiaRenderer {
                     ))
                 })?;
             let font = skia_safe::Font::from_typeface(typeface, size as f32);
-            let characters = layout_text_characters(text, font_name, size as f32);
+            let runtime_text = layout_runtime_text_shape(text, font_name, size as f32);
+            let elements = runtime_text.elements;
 
-            let mut character_transforms = Vec::with_capacity(characters.len());
-            for (global_index, character) in characters.iter().enumerate() {
+            let mut character_transforms = Vec::with_capacity(elements.len());
+            for element in &elements {
                 let center = Point::new(
-                    character.x + character.advance / 2.0,
-                    (character.top + character.bottom) / 2.0,
+                    element.bounds.left + element.advance / 2.0,
+                    (element.bounds.top + element.bounds.bottom) / 2.0,
                 );
+                let line_element_count = runtime_text
+                    .lines
+                    .get(element.line_index)
+                    .map(|line| line.element_range.len())
+                    .unwrap_or_default();
                 let mut character_transform = evaluate_configured_transform(
                     &ensemble_data.effector_configs,
                     current_time,
                     EffectorElementContext {
-                        global_index,
-                        line_index: character.line_index,
-                        line_char_index: character.line_char_index,
-                        total_chars: characters.len(),
-                        line_char_count: character.line_char_count,
+                        global_index: element.block_element_index,
+                        stable_id: element.element_group_id,
+                        block_group_id: element.block_group_id,
+                        line_group_id: element.line_group_id,
+                        line_index: element.line_index,
+                        line_char_index: element.line_element_index,
+                        total_chars: elements.len(),
+                        line_char_count: line_element_count,
                         char_center: center,
                     },
                 )?;
-                if let Some(patch) = ensemble_data.patches.get(&global_index) {
+                if let Some(patch) = ensemble_data.patches.get(&element.block_element_index) {
                     character_transform = character_transform.combine(patch);
                 }
                 character_transforms.push(character_transform);
             }
 
-            let transformed_bounds = |character: &crate::rendering::text_layout::TextCharacterLayout,
+            let transformed_bounds = |element: &crate::model::frame::runtime_shape::RuntimeTextElement,
                                       character_transform: &crate::core::ensemble::types::TransformData| {
                 let center = Point::new(
-                    character.x + character.advance / 2.0,
-                    (character.top + character.bottom) / 2.0,
+                    element.bounds.left + element.advance / 2.0,
+                    (element.bounds.top + element.bounds.bottom) / 2.0,
                 );
                 let radians = character_transform.rotate.to_radians();
                 let (sin, cos) = radians.sin_cos();
@@ -562,10 +571,10 @@ impl SkiaRenderer {
                 let mut right = f32::NEG_INFINITY;
                 let mut bottom = f32::NEG_INFINITY;
                 for (x, y) in [
-                    (character.x, character.top),
-                    (character.x + character.advance, character.top),
-                    (character.x + character.advance, character.bottom),
-                    (character.x, character.bottom),
+                    (element.bounds.left, element.bounds.top),
+                    (element.bounds.right, element.bounds.top),
+                    (element.bounds.right, element.bounds.bottom),
+                    (element.bounds.left, element.bounds.bottom),
                 ] {
                     let x = (x - center.x) * character_transform.scale.0;
                     let y = (y - center.y) * character_transform.scale.1;
@@ -582,8 +591,7 @@ impl SkiaRenderer {
             let union_bounds = |indices: &[usize]| {
                 let mut bounds: Option<skia_safe::Rect> = None;
                 for index in indices {
-                    let rect =
-                        transformed_bounds(&characters[*index], &character_transforms[*index]);
+                    let rect = transformed_bounds(&elements[*index], &character_transforms[*index]);
                     bounds = Some(match bounds {
                         Some(current) => skia_safe::Rect::new(
                             current.left.min(rect.left),
@@ -651,11 +659,11 @@ impl SkiaRenderer {
                         match target {
                             BackplateTarget::Char => {
                                 for (character, character_transform) in
-                                    characters.iter().zip(&character_transforms)
+                                    elements.iter().zip(&character_transforms)
                                 {
                                     let center = Point::new(
-                                        character.x + character.advance / 2.0,
-                                        (character.top + character.bottom) / 2.0,
+                                        character.bounds.left + character.advance / 2.0,
+                                        (character.bounds.top + character.bounds.bottom) / 2.0,
                                     );
                                     canvas.save();
                                     canvas.translate((center.x, center.y));
@@ -666,10 +674,10 @@ impl SkiaRenderer {
                                     draw_backplate(
                                         canvas,
                                         padded(
-                                            character.x,
-                                            character.top,
-                                            character.x + character.advance,
-                                            character.bottom,
+                                            character.bounds.left,
+                                            character.bounds.top,
+                                            character.bounds.right,
+                                            character.bounds.bottom,
                                         ),
                                         character_transform.opacity,
                                     );
@@ -678,7 +686,7 @@ impl SkiaRenderer {
                             }
                             BackplateTarget::Line => {
                                 for line_index in 0..text.split('\n').count() {
-                                    let indices = characters
+                                    let indices = elements
                                         .iter()
                                         .enumerate()
                                         .filter_map(|(index, character)| {
@@ -705,7 +713,7 @@ impl SkiaRenderer {
                                 }
                             }
                             BackplateTarget::Block => {
-                                let indices = (0..characters.len()).collect::<Vec<_>>();
+                                let indices = (0..elements.len()).collect::<Vec<_>>();
                                 if let Some(bounds) = union_bounds(&indices) {
                                     let opacity = character_transforms
                                         .iter()
@@ -734,10 +742,10 @@ impl SkiaRenderer {
                 }
             }
 
-            for (character, character_transform) in characters.iter().zip(&character_transforms) {
+            for (character, character_transform) in elements.iter().zip(&character_transforms) {
                 let center = Point::new(
-                    character.x + character.advance / 2.0,
-                    (character.top + character.bottom) / 2.0,
+                    character.bounds.left + character.advance / 2.0,
+                    (character.bounds.top + character.bounds.bottom) / 2.0,
                 );
                 canvas.save();
                 canvas.translate((center.x, center.y));
@@ -752,9 +760,12 @@ impl SkiaRenderer {
                         character_transform.opacity,
                         character_transform.color_override.as_ref(),
                     );
+                    // TODO: draw SkParagraph shaping runs with source mapping.
+                    // Per-grapheme draw_str cannot preserve cross-element
+                    // ligatures or contextual forms in complex scripts.
                     canvas.draw_str(
-                        character.value.to_string(),
-                        (character.x, character.baseline),
+                        &character.source,
+                        (character.bounds.left, character.baseline),
                         &font,
                         &paint,
                     );
@@ -1068,6 +1079,7 @@ impl Renderer for SkiaRenderer {
             path_data,
             styles,
             path_effects,
+            ensemble,
             transform,
         } = request;
         let (target_width, target_height) = self.current_target_dimensions();
@@ -1086,6 +1098,64 @@ impl Renderer for SkiaRenderer {
             let matrix = build_transform_matrix(&transform);
             canvas.save();
             canvas.concat(&matrix);
+            if let Some(ensemble) = ensemble
+                && ensemble.enabled
+            {
+                use crate::core::ensemble::decorators::{BackplateShape, BackplateTarget};
+                use crate::core::ensemble::types::DecoratorConfig;
+
+                let bounds = path.compute_tight_bounds();
+                for decorator in &ensemble.decorator_configs {
+                    match decorator {
+                        DecoratorConfig::Backplate {
+                            target,
+                            shape,
+                            color,
+                            padding,
+                            corner_radius,
+                        } => {
+                            if *target == BackplateTarget::Parts {
+                                return Err(LibraryError::Render(
+                                    "Ensemble BackplateTarget::Parts is not supported".to_string(),
+                                ));
+                            }
+                            // A RuntimePathShape is one stable element, so
+                            // Char/Line/Block all address the same tight bounds.
+                            let rect = skia_safe::Rect::new(
+                                bounds.left - padding.3,
+                                bounds.top - padding.0,
+                                bounds.right + padding.1,
+                                bounds.bottom + padding.2,
+                            );
+                            let mut paint = Paint::default();
+                            paint.set_color(skia_safe::Color::from_argb(
+                                color.a, color.r, color.g, color.b,
+                            ));
+                            paint.set_anti_alias(true);
+                            match shape {
+                                BackplateShape::Rect => {
+                                    canvas.draw_rect(rect, &paint);
+                                }
+                                BackplateShape::RoundedRect => {
+                                    let rounded = skia_safe::RRect::new_rect_xy(
+                                        rect,
+                                        *corner_radius,
+                                        *corner_radius,
+                                    );
+                                    canvas.draw_rrect(rounded, &paint);
+                                }
+                                BackplateShape::Circle => {
+                                    canvas.draw_circle(
+                                        (rect.center_x(), rect.center_y()),
+                                        (rect.width().min(rect.height()) * 0.5).max(0.0),
+                                        &paint,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             for config in styles {
                 let style = &config.style;
                 match style {

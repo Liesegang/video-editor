@@ -8,7 +8,8 @@ use library::model::project::{
     Composition, CompositionSettingsError, DURATION_PORT, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT,
     IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, NodeGraphBundle, PortAddress,
     PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner,
-    PortSide, Project, ProjectConnection, ProjectGraphError, RESOLUTION_PORT, TIME_PORT,
+    PortSide, Project, ProjectConnection, ProjectGraphError, RESOLUTION_PORT, SHAPE_INPUT_PORT,
+    SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{Keyframe, Property, PropertyValue};
 use library::model::{
@@ -179,14 +180,18 @@ fn unknown_plugin_operation_roundtrips_identity_ports_properties_keyframes_and_w
     let (mut project, _composition_id, track_id) = project_with_composition();
     let clip_id = add_clip(&mut project, track_id, "unknown operation graph");
 
-    let mut style = plugin_operation_node(
-        "Future Fill",
-        "future_style_category",
-        "dev.example.future-style",
-        "style.produce.v47",
-        vec![graph_output("style", "Style", PortDataType::Style)],
+    let mut shape = plugin_operation_node(
+        "Future Shape",
+        "future_shape_category",
+        "dev.example.future-shape",
+        "shape.produce.v47",
+        vec![graph_output(
+            SHAPE_OUTPUT_PORT,
+            "Shape",
+            PortDataType::Shape,
+        )],
     );
-    style.properties.set(
+    shape.properties.set(
         "strength".to_string(),
         Property::keyframe(vec![
             Keyframe::new(
@@ -201,7 +206,7 @@ fn unknown_plugin_operation_roundtrips_identity_ports_properties_keyframes_and_w
             ),
         ]),
     );
-    let style_id = style.id;
+    let shape_id = shape.id;
 
     let consumer = plugin_operation_node(
         "Future Consumer",
@@ -209,14 +214,14 @@ fn unknown_plugin_operation_roundtrips_identity_ports_properties_keyframes_and_w
         "dev.example.future-consumer",
         "image.produce.v103",
         vec![
-            PortDefinition::input("styles", "Styles", PortDataType::Style).variadic(),
+            PortDefinition::input(SHAPE_INPUT_PORT, "Shapes", PortDataType::Shape).variadic(),
             graph_output(IMAGE_OUTPUT_PORT, "Image", PortDataType::Image),
         ],
     );
     let consumer_id = consumer.id;
     let connection = ProjectConnection::new(
-        address(PortOwner::Node(style_id), "style"),
-        address(PortOwner::Node(consumer_id), "styles"),
+        address(PortOwner::Node(shape_id), SHAPE_OUTPUT_PORT),
+        address(PortOwner::Node(consumer_id), SHAPE_INPUT_PORT),
         7,
     );
     let connection_id = connection.id;
@@ -224,37 +229,41 @@ fn unknown_plugin_operation_roundtrips_identity_ports_properties_keyframes_and_w
     project
         .insert_node_graph(
             NodeContainer::Clip(clip_id),
-            NodeGraphBundle::new(vec![style, consumer], vec![connection], Some(consumer_id)),
+            NodeGraphBundle::new(vec![shape, consumer], vec![connection], Some(consumer_id)),
         )
         .unwrap();
     assert!(project.validate_connections().is_empty());
 
     let json = project.save().unwrap();
     let serialized: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let operation_data = &serialized["nodes"][style_id.to_string()]["content"]["data"];
+    let operation_data = &serialized["nodes"][shape_id.to_string()]["content"]["data"];
     assert_eq!(
         operation_data["component_id"],
-        serde_json::Value::String("dev.example.future-style".to_string())
+        serde_json::Value::String("dev.example.future-shape".to_string())
     );
     assert!(operation_data.get("plugin_id").is_none());
     let loaded = Project::load(&json).unwrap();
     assert_eq!(loaded, project);
     assert_eq!(loaded.connections[0].id, connection_id);
     assert_eq!(loaded.connections[0].order, 7);
-    let loaded_style = loaded.get_node(style_id).unwrap();
-    let NodeContent::PluginOperation(operation) = &loaded_style.content else {
+    let loaded_shape = loaded.get_node(shape_id).unwrap();
+    let NodeContent::PluginOperation(operation) = &loaded_shape.content else {
         panic!("unknown operation must remain a PluginOperation");
     };
-    assert_eq!(operation.category, "future_style_category");
-    assert_eq!(operation.component_id, "dev.example.future-style");
-    assert_eq!(operation.operation, "style.produce.v47");
+    assert_eq!(operation.category, "future_shape_category");
+    assert_eq!(operation.component_id, "dev.example.future-shape");
+    assert_eq!(operation.operation, "shape.produce.v47");
     assert_eq!(
         operation.declared_ports,
-        vec![graph_output("style", "Style", PortDataType::Style)]
+        vec![graph_output(
+            SHAPE_OUTPUT_PORT,
+            "Shape",
+            PortDataType::Shape,
+        )]
     );
     assert_eq!(
-        loaded_style.properties,
-        project.get_node(style_id).unwrap().properties
+        loaded_shape.properties,
+        project.get_node(shape_id).unwrap().properties
     );
     assert!(loaded.validate_connections().is_empty());
     assert!(
@@ -298,15 +307,19 @@ fn plugin_operation_declared_ports_are_required_persisted_project_data() {
 }
 
 #[test]
-fn plugin_operation_uses_only_declared_ports_plus_common_metadata_inputs() {
+fn plugin_and_leaf_nodes_expose_only_declared_or_consumed_ports() {
     let (mut project, _composition_id, track_id) = project_with_composition();
     let clip_id = add_clip(&mut project, track_id, "non-image helper");
+    let declared_ports = vec![
+        PortDefinition::input("amount", "Amount", PortDataType::Number),
+        graph_output(SHAPE_OUTPUT_PORT, "Shape", PortDataType::Shape),
+    ];
     let mut operation = plugin_operation_node(
-        "Style helper",
-        "style",
-        "dev.example.style",
-        "style.produce",
-        vec![graph_output("style", "Style", PortDataType::Style)],
+        "Shape helper",
+        "utility",
+        "dev.example.shape-helper",
+        "shape.produce",
+        declared_ports.clone(),
     );
     operation.properties.set(
         "authored_but_not_connectable".to_string(),
@@ -321,61 +334,78 @@ fn plugin_operation_uses_only_declared_ports_plus_common_metadata_inputs() {
         .unwrap();
 
     let ports = project.port_definitions(PortOwner::Node(operation_id));
-    assert!(ports.iter().any(|port| {
-        port.key == "style"
-            && port.direction == PortDirection::Output
-            && port.data_type == PortDataType::Style
+    assert_eq!(ports, declared_ports);
+    assert!(!ports.iter().any(|port| {
+        matches!(
+            port.key.as_str(),
+            TIME_PORT | FRAME_PORT | FPS_PORT | DURATION_PORT | RESOLUTION_PORT
+        )
     }));
-    assert!(!ports.iter().any(|port| port.key == IMAGE_OUTPUT_PORT));
     assert!(
         !ports
             .iter()
             .any(|port| port.key == "authored_but_not_connectable")
     );
-    for key in [
-        TIME_PORT,
-        FRAME_PORT,
-        FPS_PORT,
-        DURATION_PORT,
-        RESOLUTION_PORT,
-    ] {
-        assert!(ports.iter().any(|port| {
-            port.key == key
-                && port.direction == PortDirection::Input
-                && port.exposure == PortExposure::Graph
-        }));
-    }
     assert!(
         project
             .container_image_sources(PortOwner::Clip(clip_id))
             .is_empty(),
         "a non-image operation must not become an implicit container image source"
     );
+
+    let leaf_id = add_node(
+        &mut project,
+        NodeContainer::Clip(clip_id),
+        solid_node("leaf"),
+    );
+    let leaf_ports = project.port_definitions(PortOwner::Node(leaf_id));
+    for (required, direction) in [
+        (TIME_PORT, PortDirection::Input),
+        ("color", PortDirection::Input),
+        (IMAGE_OUTPUT_PORT, PortDirection::Output),
+    ] {
+        assert!(
+            leaf_ports
+                .iter()
+                .any(|port| port.key == required && port.direction == direction)
+        );
+    }
+    assert!(!leaf_ports.iter().any(|port| {
+        matches!(
+            port.key.as_str(),
+            FRAME_PORT | FPS_PORT | DURATION_PORT | RESOLUTION_PORT
+        )
+    }));
+    assert!(
+        project
+            .container_image_sources(PortOwner::Clip(clip_id))
+            .is_empty()
+    );
 }
 
 #[test]
-fn typed_plugin_operation_connections_reject_cycles() {
+fn typed_shape_plugin_connections_reject_cycles() {
     let (mut project, _composition_id, track_id) = project_with_composition();
     let clip_id = add_clip(&mut project, track_id, "typed cycle");
     let ports = || {
         vec![
-            PortDefinition::input("styles", "Styles", PortDataType::Style).variadic(),
-            graph_output("style", "Style", PortDataType::Style),
+            PortDefinition::input(SHAPE_INPUT_PORT, "Shapes", PortDataType::Shape).variadic(),
+            graph_output(SHAPE_OUTPUT_PORT, "Shape", PortDataType::Shape),
         ]
     };
     let first = plugin_operation_node(
-        "First Style",
-        "style",
+        "First Shape",
+        "effector",
         "dev.example.first",
-        "style.produce",
+        "shape.transform",
         ports(),
     );
     let first_id = first.id;
     let second = plugin_operation_node(
-        "Second Style",
-        "style",
+        "Second Shape",
+        "decorator",
         "dev.example.second",
-        "style.produce",
+        "shape.decorate",
         ports(),
     );
     let second_id = second.id;
@@ -388,14 +418,14 @@ fn typed_plugin_operation_connections_reject_cycles() {
 
     project
         .connect_ports(
-            address(PortOwner::Node(first_id), "style"),
-            address(PortOwner::Node(second_id), "styles"),
+            address(PortOwner::Node(first_id), SHAPE_OUTPUT_PORT),
+            address(PortOwner::Node(second_id), SHAPE_INPUT_PORT),
         )
         .unwrap();
     assert_eq!(
         project.connect_ports(
-            address(PortOwner::Node(second_id), "style"),
-            address(PortOwner::Node(first_id), "styles"),
+            address(PortOwner::Node(second_id), SHAPE_OUTPUT_PORT),
+            address(PortOwner::Node(first_id), SHAPE_INPUT_PORT),
         ),
         Err(ProjectGraphError::ConnectionCycle {
             from: PortOwner::Node(second_id),
@@ -415,7 +445,10 @@ fn descendant_value_cannot_override_ancestor_scope_but_internal_metadata_can_fee
         "utility",
         "dev.example.scope-value",
         "number.produce",
-        vec![graph_output("value", "Value", PortDataType::Number)],
+        vec![
+            PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+            graph_output("value", "Value", PortDataType::Number),
+        ],
     );
     let operation_id = operation.id;
     project
@@ -428,7 +461,7 @@ fn descendant_value_cannot_override_ancestor_scope_but_internal_metadata_can_fee
     let source = address(PortOwner::Node(operation_id), "value");
     for target in [
         address(PortOwner::Clip(clip_id), TIME_PORT),
-        address(PortOwner::Track(track_id), FPS_PORT),
+        address(PortOwner::Track(track_id), DURATION_PORT),
         address(PortOwner::Composition(composition_id), DURATION_PORT),
     ] {
         assert_eq!(
@@ -441,9 +474,19 @@ fn descendant_value_cannot_override_ancestor_scope_but_internal_metadata_can_fee
     }
     assert!(project.connections.is_empty());
 
+    for read_only in [
+        address(PortOwner::Track(track_id), FPS_PORT),
+        address(PortOwner::Composition(composition_id), FRAME_PORT),
+    ] {
+        assert_eq!(
+            project.connect_ports(source.clone(), read_only.clone()),
+            Err(ProjectGraphError::PortNotFound(read_only))
+        );
+    }
+
     project
         .connect_ports(
-            address(PortOwner::Clip(clip_id), TIME_PORT),
+            address(PortOwner::Clip(clip_id), FPS_PORT),
             address(PortOwner::Node(operation_id), TIME_PORT),
         )
         .unwrap();
@@ -458,12 +501,12 @@ fn node_graph_bundle_commit_and_structural_failure_are_atomic() {
 
     let invalid = plugin_operation_node(
         "Duplicate ports",
-        "style",
+        "effector",
         "dev.example.invalid",
-        "style.produce",
+        "shape.transform",
         vec![
-            graph_output("style", "First", PortDataType::Style),
-            graph_output("style", "Second", PortDataType::Style),
+            graph_output(SHAPE_OUTPUT_PORT, "First", PortDataType::Shape),
+            graph_output(SHAPE_OUTPUT_PORT, "Second", PortDataType::Shape),
         ],
     );
     let invalid_id = invalid.id;
@@ -475,7 +518,7 @@ fn node_graph_bundle_commit_and_structural_failure_are_atomic() {
         ),
         Err(ProjectGraphError::DuplicateNodePort {
             node_id: invalid_id,
-            key: "style".to_string(),
+            key: SHAPE_OUTPUT_PORT.to_string(),
             direction: PortDirection::Output,
         })
     );
@@ -794,11 +837,14 @@ fn track_and_clip_reparent_remap_only_direct_parent_metadata_and_still_render() 
     project.add_composition(second_composition);
 
     let clip_id = add_clip(&mut project, first_track_id, "movable clip");
-    add_node(
+    let node_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
         solid_node("render after move"),
     );
+    project
+        .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
+        .unwrap();
 
     let track_connection_id = project
         .connect_ports(
@@ -814,8 +860,11 @@ fn track_and_clip_reparent_remap_only_direct_parent_metadata_and_still_render() 
         .unwrap();
     let unrelated_connection_id = project
         .connect_ports(
-            address(PortOwner::Composition(second_composition_id), FPS_PORT),
-            address(PortOwner::Track(second_track_id), FPS_PORT),
+            address(
+                PortOwner::Composition(second_composition_id),
+                RESOLUTION_PORT,
+            ),
+            address(PortOwner::Track(second_track_id), RESOLUTION_PORT),
         )
         .unwrap();
     let original_track_connection = project
@@ -1095,6 +1144,9 @@ fn node_reparent_preserves_graph_image_wires_ids_orders_targets_and_rendering() 
     project
         .attach_node_to_container(NodeContainer::Track(second_track_id), merge_id)
         .unwrap();
+    project
+        .set_output_node(NodeContainer::Track(second_track_id), Some(merge_id))
+        .unwrap();
 
     for original in &original_connections {
         let current = project
@@ -1125,7 +1177,17 @@ fn cycle_created_by_reparent_rolls_back_containment_output_and_all_wires() {
     let node_id = add_node(
         &mut project,
         NodeContainer::Track(track_id),
-        Node::new("cycle merge", NodeContent::Merge),
+        plugin_operation_node(
+            "cycle value",
+            "utility",
+            "dev.example.cycle-value",
+            "value.produce",
+            vec![
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                graph_output("value", "Value", PortDataType::Number),
+                graph_output(IMAGE_OUTPUT_PORT, "Image", PortDataType::Image),
+            ],
+        ),
     );
     project
         .set_output_node(NodeContainer::Track(track_id), Some(node_id))
@@ -1138,8 +1200,8 @@ fn cycle_created_by_reparent_rolls_back_containment_output_and_all_wires() {
         .unwrap();
     project
         .connect_ports(
-            address(PortOwner::Clip(clip_id), IMAGE_OUTPUT_PORT),
-            address(PortOwner::Node(node_id), MERGE_IMAGES_PORT),
+            address(PortOwner::Node(node_id), "value"),
+            address(PortOwner::Clip(clip_id), DURATION_PORT),
         )
         .unwrap();
     assert!(project.validate_connections().is_empty());
@@ -1179,7 +1241,7 @@ fn unremappable_direct_parent_source_fails_without_mutating_project() {
 }
 
 #[test]
-fn container_ports_expose_external_inputs_internal_left_outputs_and_one_right_image() {
+fn container_ports_separate_authored_inputs_from_read_only_runtime_outputs() {
     let (mut project, composition_id, track_id) = project_with_composition();
     let clip_id = add_clip(&mut project, track_id, "clip");
 
@@ -1189,11 +1251,9 @@ fn container_ports_expose_external_inputs_internal_left_outputs_and_one_right_im
         PortOwner::Clip(clip_id),
     ] {
         let ports = project.port_definitions(owner);
-        assert_eq!(ports.len(), 11);
+        assert_eq!(ports.len(), 9);
         for (key, data_type) in [
             (TIME_PORT, PortDataType::Number),
-            (FRAME_PORT, PortDataType::Integer),
-            (FPS_PORT, PortDataType::Number),
             (DURATION_PORT, PortDataType::Number),
             (RESOLUTION_PORT, PortDataType::Vec2),
         ] {
@@ -1204,6 +1264,18 @@ fn container_ports_expose_external_inputs_internal_left_outputs_and_one_right_im
             assert_eq!(input.side, PortSide::Left);
             assert_eq!(input.exposure, PortExposure::External);
             assert_eq!(input.data_type, data_type);
+        }
+        assert!(!ports.iter().any(|port| {
+            port.direction == PortDirection::Input
+                && matches!(port.key.as_str(), FRAME_PORT | FPS_PORT)
+        }));
+        for (key, data_type) in [
+            (TIME_PORT, PortDataType::Number),
+            (FRAME_PORT, PortDataType::Integer),
+            (FPS_PORT, PortDataType::Number),
+            (DURATION_PORT, PortDataType::Number),
+            (RESOLUTION_PORT, PortDataType::Vec2),
+        ] {
             let output = ports
                 .iter()
                 .find(|port| port.key == key && port.direction == PortDirection::Output)
@@ -1442,6 +1514,51 @@ fn image_cycles_include_connections_containment_and_explicit_outputs() {
 }
 
 #[test]
+fn setting_an_output_rejects_a_preexisting_reverse_edge_atomically() {
+    let (mut project, _composition_id, track_id) = project_with_composition();
+    let clip_id = add_clip(&mut project, track_id, "clip");
+    let feedback_id = add_node(
+        &mut project,
+        NodeContainer::Clip(clip_id),
+        Node::new("feedback merge", NodeContent::Merge),
+    );
+    let valid_output_id = add_node(
+        &mut project,
+        NodeContainer::Clip(clip_id),
+        Node::new("valid output", NodeContent::Merge),
+    );
+
+    project
+        .connect_ports(
+            address(PortOwner::Clip(clip_id), IMAGE_OUTPUT_PORT),
+            address(PortOwner::Node(feedback_id), MERGE_IMAGES_PORT),
+        )
+        .unwrap();
+    let before = project.clone();
+
+    assert_eq!(
+        project.set_output_node(NodeContainer::Clip(clip_id), Some(feedback_id)),
+        Err(ProjectGraphError::ConnectionCycle {
+            from: PortOwner::Clip(clip_id),
+            to: PortOwner::Node(feedback_id),
+        })
+    );
+    assert_eq!(project, before, "a rejected output binding must not mutate");
+
+    project
+        .set_output_node(NodeContainer::Clip(clip_id), Some(valid_output_id))
+        .unwrap();
+    assert_eq!(
+        project.get_clip(clip_id).unwrap().output_node_id,
+        Some(valid_output_id)
+    );
+    project
+        .set_output_node(NodeContainer::Clip(clip_id), None)
+        .unwrap();
+    assert_eq!(project.get_clip(clip_id).unwrap().output_node_id, None);
+}
+
+#[test]
 fn clip_is_the_only_timing_owner_and_metadata_connection_overrides_authored_property() {
     let (mut project, _composition_id, track_id) = project_with_composition();
     let mut asset = Asset::new("video", "fixture.mp4", AssetKind::Video);
@@ -1469,6 +1586,9 @@ fn clip_is_the_only_timing_owner_and_metadata_connection_overrides_authored_prop
     );
     let node_id = add_node(&mut project, NodeContainer::Clip(clip_id), node);
     project
+        .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
+        .unwrap();
+    project
         .connect_ports(
             address(PortOwner::Clip(clip_id), TIME_PORT),
             address(PortOwner::Node(node_id), "opacity"),
@@ -1494,7 +1614,7 @@ fn clip_is_the_only_timing_owner_and_metadata_connection_overrides_authored_prop
 }
 
 #[test]
-fn fallback_uses_stable_node_order_and_explicit_output_selects_one_node() {
+fn clip_does_not_adopt_direct_image_nodes_without_an_explicit_output() {
     let (mut project, _composition_id, track_id) = project_with_composition();
     let clip_id = add_clip(&mut project, track_id, "clip");
     let first_id = add_node(
@@ -1508,19 +1628,20 @@ fn fallback_uses_stable_node_order_and_explicit_output_selects_one_node() {
         solid_node("second"),
     );
 
-    let rendered = frame(&project, 0);
-    let clip_group = find_group(&rendered.items, clip_id).unwrap();
     assert_eq!(
-        clip_group
-            .items
-            .iter()
-            .map(|item| match item {
-                FrameItem::Group(group) => group.source_id,
-                FrameItem::Object(_) => Uuid::nil(),
-            })
-            .collect::<Vec<_>>(),
+        project.get_clip(clip_id).unwrap().node_ids,
         vec![first_id, second_id]
     );
+    assert_eq!(
+        project
+            .container_image_sources(PortOwner::Clip(clip_id))
+            .iter()
+            .map(|source| source.source)
+            .collect::<Vec<_>>(),
+        Vec::<PortOwner>::new(),
+        "ordered graph membership must not choose a Clip image output"
+    );
+    assert_eq!(frame(&project, 0).object_count(), 0);
 
     project
         .set_output_node(NodeContainer::Clip(clip_id), Some(second_id))
@@ -1538,59 +1659,147 @@ fn fallback_uses_stable_node_order_and_explicit_output_selects_one_node() {
 }
 
 #[test]
-fn fallback_uses_only_ordered_direct_image_sinks_and_explicit_output_still_wins() {
+fn unbound_composition_and_track_outputs_use_only_ordered_child_containers() {
+    let (mut project, composition_id, first_track_id) = project_with_composition();
+    let first_clip_id = add_clip(&mut project, first_track_id, "first clip");
+    let second_clip_id = add_clip(&mut project, first_track_id, "second clip");
+    for (clip_id, name) in [
+        (first_clip_id, "first clip image"),
+        (second_clip_id, "second clip image"),
+    ] {
+        let node_id = add_node(&mut project, NodeContainer::Clip(clip_id), solid_node(name));
+        project
+            .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
+            .unwrap();
+    }
+    let direct_track_node_id = add_node(
+        &mut project,
+        NodeContainer::Track(first_track_id),
+        solid_node("track graph helper"),
+    );
+
+    let second_track = Track::new("second track");
+    let second_track_id = second_track.id;
+    project.add_track(second_track);
+    project
+        .attach_track_to_composition(composition_id, second_track_id)
+        .unwrap();
+    let third_clip_id = add_clip(&mut project, second_track_id, "third clip");
+    let third_clip_node_id = add_node(
+        &mut project,
+        NodeContainer::Clip(third_clip_id),
+        solid_node("third clip image"),
+    );
+    project
+        .set_output_node(NodeContainer::Clip(third_clip_id), Some(third_clip_node_id))
+        .unwrap();
+    let direct_composition_node_id = add_node(
+        &mut project,
+        NodeContainer::Composition(composition_id),
+        solid_node("composition graph helper"),
+    );
+
+    assert_eq!(
+        project
+            .container_image_sources(PortOwner::Track(first_track_id))
+            .into_iter()
+            .map(|source| source.source)
+            .collect::<Vec<_>>(),
+        vec![
+            PortOwner::Clip(first_clip_id),
+            PortOwner::Clip(second_clip_id)
+        ]
+    );
+    assert_eq!(
+        project
+            .container_image_sources(PortOwner::Composition(composition_id))
+            .into_iter()
+            .map(|source| source.source)
+            .collect::<Vec<_>>(),
+        vec![
+            PortOwner::Track(first_track_id),
+            PortOwner::Track(second_track_id)
+        ]
+    );
+    assert!(
+        !project
+            .container_image_sources(PortOwner::Track(first_track_id))
+            .iter()
+            .any(|source| source.source == PortOwner::Node(direct_track_node_id))
+    );
+    assert!(
+        !project
+            .container_image_sources(PortOwner::Composition(composition_id))
+            .iter()
+            .any(|source| source.source == PortOwner::Node(direct_composition_node_id))
+    );
+}
+
+#[test]
+fn text_and_shape_require_style_before_the_clip_can_output_an_image() {
     let (mut project, _composition_id, track_id) = project_with_composition();
-    let clip_id = add_clip(&mut project, track_id, "sink graph");
+    let clip_id = add_clip(&mut project, track_id, "shape graph");
     let text = Node::new("Text", NodeContent::Generator(GeneratorContent::Text));
     let text_id = text.id;
-    let effect = plugin_operation_node(
-        "Effect",
-        "effect",
-        "builtin.effect",
-        "effect.apply",
-        vec![
-            PortDefinition::input(IMAGE_INPUT_PORT, "Image", PortDataType::Image),
-            graph_output(IMAGE_OUTPUT_PORT, "Image", PortDataType::Image),
-        ],
-    );
-    let effect_id = effect.id;
+    let shape = Node::new("Shape", NodeContent::Generator(GeneratorContent::Shape));
+    let shape_id = shape.id;
     let style = plugin_operation_node(
         "Style",
         "style",
         "builtin.style",
-        "style.produce",
-        vec![graph_output("style", "Style", PortDataType::Style)],
+        "style.apply",
+        vec![
+            PortDefinition::input(SHAPE_INPUT_PORT, "Shape", PortDataType::Shape),
+            graph_output(IMAGE_OUTPUT_PORT, "Image", PortDataType::Image),
+        ],
     );
-    let parallel = solid_node("Parallel Image Sink");
-    let parallel_id = parallel.id;
-    let text_to_effect = ProjectConnection::new(
-        address(PortOwner::Node(text_id), IMAGE_OUTPUT_PORT),
-        address(PortOwner::Node(effect_id), IMAGE_INPUT_PORT),
+    let style_id = style.id;
+    let text_to_style = ProjectConnection::new(
+        address(PortOwner::Node(text_id), SHAPE_OUTPUT_PORT),
+        address(PortOwner::Node(style_id), SHAPE_INPUT_PORT),
         0,
     );
     project
         .insert_node_graph(
             NodeContainer::Clip(clip_id),
-            NodeGraphBundle::new(
-                vec![text, effect, style, parallel],
-                vec![text_to_effect],
-                None,
-            ),
+            NodeGraphBundle::new(vec![text, shape, style], vec![text_to_style], None),
         )
         .unwrap();
 
-    assert_eq!(
+    for source_id in [text_id, shape_id] {
+        let ports = project.port_definitions(PortOwner::Node(source_id));
+        assert!(ports.iter().any(|port| {
+            port.key == SHAPE_OUTPUT_PORT
+                && port.direction == PortDirection::Output
+                && port.data_type == PortDataType::Shape
+        }));
+        assert!(!ports.iter().any(|port| {
+            port.key == IMAGE_OUTPUT_PORT && port.direction == PortDirection::Output
+        }));
+    }
+    assert!(
+        project
+            .port_definition(
+                &address(PortOwner::Node(style_id), IMAGE_OUTPUT_PORT),
+                PortDirection::Output,
+            )
+            .is_some_and(|port| port.data_type == PortDataType::Image)
+    );
+    assert!(
         project
             .container_image_sources(PortOwner::Clip(clip_id))
-            .into_iter()
-            .map(|source| source.source)
-            .collect::<Vec<_>>(),
-        vec![PortOwner::Node(effect_id), PortOwner::Node(parallel_id)],
-        "Text is intermediate, Style is non-image, and parallel sinks preserve node order"
+            .is_empty()
+    );
+    assert_eq!(
+        project.set_output_node(NodeContainer::Clip(clip_id), Some(text_id)),
+        Err(ProjectGraphError::OutputNodeHasNoImagePort {
+            node_id: text_id,
+            container: NodeContainer::Clip(clip_id),
+        })
     );
 
     project
-        .set_output_node(NodeContainer::Clip(clip_id), Some(text_id))
+        .set_output_node(NodeContainer::Clip(clip_id), Some(style_id))
         .unwrap();
     assert_eq!(
         project
@@ -1598,8 +1807,8 @@ fn fallback_uses_only_ordered_direct_image_sinks_and_explicit_output_still_wins(
             .into_iter()
             .map(|source| source.source)
             .collect::<Vec<_>>(),
-        vec![PortOwner::Node(text_id)],
-        "an explicit output binding always overrides derived sink selection"
+        vec![PortOwner::Node(style_id)],
+        "only the explicitly bound post-Style Image is the Clip output"
     );
 }
 
@@ -1607,11 +1816,14 @@ fn fallback_uses_only_ordered_direct_image_sinks_and_explicit_output_still_wins(
 fn child_container_images_feeding_a_direct_parent_sink_are_not_double_composed() {
     let (mut project, composition_id, track_id) = project_with_composition();
     let clip_id = add_clip(&mut project, track_id, "child source");
-    add_node(
+    let clip_node_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
         solid_node("clip image"),
     );
+    project
+        .set_output_node(NodeContainer::Clip(clip_id), Some(clip_node_id))
+        .unwrap();
     let track_merge_id = add_node(
         &mut project,
         NodeContainer::Track(track_id),
@@ -1623,6 +1835,9 @@ fn child_container_images_feeding_a_direct_parent_sink_are_not_double_composed()
             address(PortOwner::Node(track_merge_id), MERGE_IMAGES_PORT),
         )
         .unwrap();
+    project
+        .set_output_node(NodeContainer::Track(track_id), Some(track_merge_id))
+        .unwrap();
     let composition_merge_id = add_node(
         &mut project,
         NodeContainer::Composition(composition_id),
@@ -1632,6 +1847,12 @@ fn child_container_images_feeding_a_direct_parent_sink_are_not_double_composed()
         .connect_ports(
             address(PortOwner::Track(track_id), IMAGE_OUTPUT_PORT),
             address(PortOwner::Node(composition_merge_id), MERGE_IMAGES_PORT),
+        )
+        .unwrap();
+    project
+        .set_output_node(
+            NodeContainer::Composition(composition_id),
+            Some(composition_merge_id),
         )
         .unwrap();
 

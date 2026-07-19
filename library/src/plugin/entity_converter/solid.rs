@@ -83,6 +83,7 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
                 }],
                 path_effects: Vec::new(),
                 effects,
+                ensemble: None,
                 transform,
             },
             properties: node.properties.clone(),

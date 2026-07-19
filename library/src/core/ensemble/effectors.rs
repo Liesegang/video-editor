@@ -7,6 +7,9 @@ use skia_safe::Point;
 #[derive(Clone, Copy, Debug)]
 pub struct EffectorElementContext {
     pub global_index: usize,
+    pub stable_id: u64,
+    pub block_group_id: u64,
+    pub line_group_id: u64,
     pub line_index: usize,
     pub line_char_index: usize,
     pub total_chars: usize,
@@ -44,6 +47,9 @@ pub fn evaluate_configured_transform(
             index,
             total,
             element_index: element.global_index,
+            element_identity: element.stable_id,
+            block_group_id: element.block_group_id,
+            line_group_id: element.line_group_id,
             line_index: element.line_index,
             char_center: element.char_center,
         };
@@ -286,10 +292,10 @@ impl RandomizeEffector {
     /// Deterministically mix user seed, stable element identity, and transform
     /// component. SplitMix64's avalanche avoids the nearly identical adjacent
     /// values produced by running one LCG step on `seed + index + component`.
-    fn random(&self, element_index: usize, component: u32) -> f32 {
+    fn random(&self, element_identity: u64, component: u32) -> f32 {
         let mut value = self
             .seed
-            .wrapping_add((element_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            .wrapping_add(element_identity.wrapping_mul(0x9E37_79B9_7F4A_7C15))
             .wrapping_add(
                 u64::from(component)
                     .wrapping_add(1)
@@ -306,11 +312,11 @@ impl RandomizeEffector {
 
 impl Effector for RandomizeEffector {
     fn apply(&self, ctx: &EffectorContext, transform: &mut TransformData) {
-        let tx = self.random(ctx.element_index, 0) * 2.0 - 1.0; // -1.0 ~ 1.0
-        let ty = self.random(ctx.element_index, 1) * 2.0 - 1.0;
-        let rot = self.random(ctx.element_index, 2) * 2.0 - 1.0;
-        let sx = self.random(ctx.element_index, 3) * 2.0 - 1.0;
-        let sy = self.random(ctx.element_index, 4) * 2.0 - 1.0;
+        let tx = self.random(ctx.element_identity, 0) * 2.0 - 1.0; // -1.0 ~ 1.0
+        let ty = self.random(ctx.element_identity, 1) * 2.0 - 1.0;
+        let rot = self.random(ctx.element_identity, 2) * 2.0 - 1.0;
+        let sx = self.random(ctx.element_identity, 3) * 2.0 - 1.0;
+        let sy = self.random(ctx.element_identity, 4) * 2.0 - 1.0;
 
         transform.translate.0 += tx * self.translate_range.0;
         transform.translate.1 += ty * self.translate_range.1;
@@ -334,6 +340,9 @@ mod tests {
     fn element(global_index: usize, line_char_index: usize) -> EffectorElementContext {
         EffectorElementContext {
             global_index,
+            stable_id: 0x1000 + global_index as u64,
+            block_group_id: 0x10,
+            line_group_id: 0x11,
             line_index: 1,
             line_char_index,
             total_chars: 6,
@@ -358,6 +367,9 @@ mod tests {
             index: 0,
             total: 10,
             element_index: 0,
+            element_identity: 0x1000,
+            block_group_id: 0x10,
+            line_group_id: 0x11,
             line_index: 0,
             char_center: Point::new(0.0, 0.0),
         };
@@ -385,6 +397,9 @@ mod tests {
             index: 0,
             total: 10,
             element_index: 0,
+            element_identity: 0x1000,
+            block_group_id: 0x10,
+            line_group_id: 0x11,
             line_index: 0,
             char_center: Point::new(0.0, 0.0),
         };
@@ -402,6 +417,9 @@ mod tests {
             index: 0,
             total: 10,
             element_index: 0,
+            element_identity: 0x1000,
+            block_group_id: 0x10,
+            line_group_id: 0x11,
             line_index: 0,
             char_center: Point::new(0.0, 0.0),
         };
@@ -419,6 +437,9 @@ mod tests {
             index: 0,
             total: 10,
             element_index: 0,
+            element_identity: 0x1000,
+            block_group_id: 0x10,
+            line_group_id: 0x11,
             line_index: 0,
             char_center: Point::new(0.0, 0.0),
         };

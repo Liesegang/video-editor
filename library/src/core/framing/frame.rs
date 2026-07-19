@@ -6,22 +6,21 @@ use uuid::Uuid;
 
 use crate::error::LibraryError;
 use crate::model::frame::color::Color;
-use crate::model::frame::entity::{
-    FrameGroup, FrameGroupKind, FrameItem, FrameObject, StyleConfig,
-};
+use crate::model::frame::entity::{FrameGroup, FrameGroupKind, FrameItem, FrameObject};
 use crate::model::frame::frame::{FrameInfo, Region};
+use crate::model::frame::runtime_shape::RuntimeShape;
 use crate::model::project::{
-    Composition, DECORATOR_OUTPUT_PORT, DURATION_PORT, EFFECTOR_OUTPUT_PORT, EvalOutput,
-    EvalResult, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
-    PortAddress, PortDataType, PortDirection, PortMultiplicity, PortOwner, Project,
-    ProjectConnection, RESOLUTION_PORT, TIME_PORT,
+    Composition, DURATION_PORT, EvalOutput, EvalResult, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT,
+    MERGE_IMAGES_PORT, NodeContainer, PortAddress, PortDataType, PortDirection, PortMultiplicity,
+    PortOwner, Project, ProjectConnection, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+    TIME_PORT,
 };
 use crate::model::property::{PropertyValue, Vec2};
 use crate::model::{GeneratorContent, Node, NodeContent};
 use crate::plugin::{
-    DECORATOR_CATEGORY, DECORATOR_PRODUCE_OPERATION, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
-    EFFECTOR_CATEGORY, EFFECTOR_PRODUCE_OPERATION, FrameEvaluationContext, PluginManager,
-    PropertyEvaluatorRegistry, ResolvedNodeInputs, STYLE_CATEGORY, STYLE_PRODUCE_OPERATION,
+    DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
+    EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, FrameEvaluationContext, PluginManager,
+    PropertyEvaluatorRegistry, ResolvedNodeInputs, STYLE_APPLY_OPERATION, STYLE_CATEGORY,
     property_name_from_port,
 };
 use crate::util::timing::ScopedTimer;
@@ -272,6 +271,9 @@ impl<'a> FrameEvaluator<'a> {
             .project
             .get_node(node_id)
             .ok_or_else(|| missing_error(owner))?;
+        if !node.enabled {
+            return Ok(EvalOutput::NoOutput);
+        }
         if !path.insert(owner) {
             return Err(cycle_error(owner));
         }
@@ -280,6 +282,10 @@ impl<'a> FrameEvaluator<'a> {
                 && operation.operation == EFFECT_APPLY_OPERATION
             {
                 self.collect_effect_operation(node, operation, scope, global_time, path)?
+            } else if operation.category == STYLE_CATEGORY
+                && operation.operation == STYLE_APPLY_OPERATION
+            {
+                self.collect_style_operation(node, operation, scope, global_time, path)?
             } else {
                 log::warn!(
                     "Plugin operation node {} ({}/{}/{}) has no image evaluator; producing NoOutput",
@@ -422,6 +428,305 @@ impl<'a> FrameEvaluator<'a> {
             effects: vec![effect],
             items: vec![source],
         })))
+    }
+
+    /// Style is the only Shape -> Image boundary. It pulls one RuntimeShape,
+    /// resolves its own properties at the Style node's explicit Time, and
+    /// materializes exactly one renderer object for this branch.
+    fn collect_style_operation(
+        &self,
+        node: &Node,
+        operation: &crate::model::PluginOperationContent,
+        scope: EvaluationScope,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<FrameItem> {
+        let descriptor = match self.plugin_manager.operation_descriptor(
+            &operation.category,
+            &operation.component_id,
+            &operation.operation,
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                log::warn!(
+                    "Unavailable Style operation {}/{}/{} on Node {}: {}; producing NoOutput",
+                    operation.category,
+                    operation.component_id,
+                    operation.operation,
+                    node.id,
+                    error
+                );
+                return Ok(EvalOutput::NoOutput);
+            }
+        };
+        if !descriptor.is_execution_compatible_with_ports(&operation.declared_ports) {
+            log::warn!(
+                "Style operation contract mismatch on Node {}; producing NoOutput",
+                node.id
+            );
+            return Ok(EvalOutput::NoOutput);
+        }
+
+        let inputs = self.resolve_node_inputs(node.id, scope, global_time)?;
+        if inputs
+            .properties
+            .values()
+            .any(|value| value == &EvalOutput::NoOutput)
+        {
+            return Ok(EvalOutput::NoOutput);
+        }
+        let shape_input = PortAddress::new(PortOwner::Node(node.id), SHAPE_INPUT_PORT);
+        let connection = match self.single_connection_to(&shape_input)? {
+            EvalOutput::Produced(connection) => connection,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let shape = match self.evaluate_shape_output(&connection.from, global_time, path)? {
+            EvalOutput::Produced(shape) => shape,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let composition = self
+            .composition_for_owner(PortOwner::Node(node.id))
+            .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
+        let context = self.context(composition, Some(&inputs));
+        let style = match self.plugin_manager.evaluate_style_operation(
+            &context,
+            descriptor.component_id(),
+            node.id,
+            &node.properties,
+            scope.time,
+        ) {
+            EvalOutput::Produced(style) => style,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let object = shape.into_styled_object(style);
+        Ok(EvalOutput::Produced(FrameItem::Group(FrameGroup {
+            source_id: node.id,
+            kind: FrameGroupKind::Node,
+            width: scope.width,
+            height: scope.height,
+            background_color: transparent(),
+            transform: Default::default(),
+            blend_mode: node.blend_mode,
+            effect_time: OrderedFloat(scope.time),
+            effects: context.build_image_effects(&node.effects, scope.time),
+            items: vec![FrameItem::Object(object)],
+        })))
+    }
+
+    /// Pull a transient Shape value from an exact output address. Shape values
+    /// are never persisted and are cloned only by real graph fan-out.
+    fn evaluate_shape_output(
+        &self,
+        source: &PortAddress,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<RuntimeShape> {
+        let definition = self
+            .project
+            .port_definition(source, PortDirection::Output)
+            .ok_or_else(|| LibraryError::Validation(format!("Missing output port {source:?}")))?;
+        if definition.data_type != PortDataType::Shape {
+            return Err(LibraryError::Validation(format!(
+                "Port {source:?} does not produce Shape"
+            )));
+        }
+        let PortOwner::Node(node_id) = source.owner else {
+            return Ok(EvalOutput::NoOutput);
+        };
+        if source.port != SHAPE_OUTPUT_PORT {
+            return Ok(EvalOutput::NoOutput);
+        }
+        let owner = PortOwner::Node(node_id);
+        let node = self
+            .project
+            .get_node(node_id)
+            .ok_or_else(|| missing_error(owner))?;
+        // Disabled is a graph gate. It is checked before cycle detection,
+        // scope/Time evaluation, descriptor lookup, properties, or upstream.
+        if !node.enabled {
+            return Ok(EvalOutput::NoOutput);
+        }
+        if !path.insert(owner) {
+            return Err(cycle_error(owner));
+        }
+        let result = (|| {
+            let scope = match self.scope_for_node(node_id, global_time)? {
+                EvalOutput::Produced(scope) => scope,
+                EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+            };
+            match &node.content {
+                NodeContent::Generator(GeneratorContent::Text | GeneratorContent::Shape) => {
+                    self.convert_shape_node(node, scope, global_time)
+                }
+                NodeContent::PluginOperation(operation)
+                    if operation.category == EFFECTOR_CATEGORY
+                        && operation.operation == EFFECTOR_APPLY_OPERATION =>
+                {
+                    self.apply_effector_to_shape(node, operation, scope, global_time, path)
+                }
+                NodeContent::PluginOperation(operation)
+                    if operation.category == DECORATOR_CATEGORY
+                        && operation.operation == DECORATOR_APPLY_OPERATION =>
+                {
+                    self.apply_decorator_to_shape(node, operation, scope, global_time, path)
+                }
+                _ => Ok(EvalOutput::NoOutput),
+            }
+        })();
+        path.remove(&owner);
+        result
+    }
+
+    fn convert_shape_node(
+        &self,
+        node: &Node,
+        scope: EvaluationScope,
+        global_time: f64,
+    ) -> EvalResult<RuntimeShape> {
+        let kind = match node.content {
+            NodeContent::Generator(GeneratorContent::Text) => "text",
+            NodeContent::Generator(GeneratorContent::Shape) => "shape",
+            _ => return Ok(EvalOutput::NoOutput),
+        };
+        let inputs = self.resolve_node_inputs(node.id, scope, global_time)?;
+        if inputs
+            .properties
+            .values()
+            .any(|value| value == &EvalOutput::NoOutput)
+        {
+            return Ok(EvalOutput::NoOutput);
+        }
+        let composition = self
+            .composition_for_owner(PortOwner::Node(node.id))
+            .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
+        let converter = self
+            .plugin_manager
+            .get_entity_converter(kind)
+            .ok_or_else(|| LibraryError::Plugin(format!("No entity converter for {kind}")))?;
+        let context = self.context(composition, Some(&inputs));
+        Ok(match converter.convert_shape(&context, node, scope.time) {
+            Some(shape) => EvalOutput::Produced(shape),
+            None => EvalOutput::NoOutput,
+        })
+    }
+
+    fn apply_effector_to_shape(
+        &self,
+        node: &Node,
+        operation: &crate::model::PluginOperationContent,
+        scope: EvaluationScope,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<RuntimeShape> {
+        if !self.operation_contract_matches(operation)? {
+            return Ok(EvalOutput::NoOutput);
+        }
+        let inputs = self.resolve_node_inputs(node.id, scope, global_time)?;
+        if inputs
+            .properties
+            .values()
+            .any(|value| value == &EvalOutput::NoOutput)
+        {
+            return Ok(EvalOutput::NoOutput);
+        }
+        let mut shape = match self.pull_shape_input(node.id, global_time, path)? {
+            EvalOutput::Produced(shape) => shape,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let composition = self
+            .composition_for_owner(PortOwner::Node(node.id))
+            .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
+        let context = self.context(composition, Some(&inputs));
+        let config = match self.plugin_manager.evaluate_effector_operation(
+            &context,
+            &operation.component_id,
+            node.id,
+            &node.properties,
+            scope.time,
+        ) {
+            EvalOutput::Produced(config) => config,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        shape.apply_effector(config, scope.time as f32)?;
+        Ok(EvalOutput::Produced(shape))
+    }
+
+    fn apply_decorator_to_shape(
+        &self,
+        node: &Node,
+        operation: &crate::model::PluginOperationContent,
+        scope: EvaluationScope,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<RuntimeShape> {
+        if !self.operation_contract_matches(operation)? {
+            return Ok(EvalOutput::NoOutput);
+        }
+        let inputs = self.resolve_node_inputs(node.id, scope, global_time)?;
+        if inputs
+            .properties
+            .values()
+            .any(|value| value == &EvalOutput::NoOutput)
+        {
+            return Ok(EvalOutput::NoOutput);
+        }
+        let mut shape = match self.pull_shape_input(node.id, global_time, path)? {
+            EvalOutput::Produced(shape) => shape,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let composition = self
+            .composition_for_owner(PortOwner::Node(node.id))
+            .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
+        let context = self.context(composition, Some(&inputs));
+        let config = match self.plugin_manager.evaluate_decorator_operation(
+            &context,
+            &operation.component_id,
+            node.id,
+            &node.properties,
+            scope.time,
+        ) {
+            EvalOutput::Produced(config) => config,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        shape.push_decorator(config);
+        Ok(EvalOutput::Produced(shape))
+    }
+
+    fn operation_contract_matches(
+        &self,
+        operation: &crate::model::PluginOperationContent,
+    ) -> Result<bool, LibraryError> {
+        let descriptor = match self.plugin_manager.operation_descriptor(
+            &operation.category,
+            &operation.component_id,
+            &operation.operation,
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                log::warn!(
+                    "Unavailable operation {}/{}/{}: {error}; producing NoOutput",
+                    operation.category,
+                    operation.component_id,
+                    operation.operation
+                );
+                return Ok(false);
+            }
+        };
+        Ok(descriptor.is_execution_compatible_with_ports(&operation.declared_ports))
+    }
+
+    fn pull_shape_input(
+        &self,
+        node_id: Uuid,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<RuntimeShape> {
+        let target = PortAddress::new(PortOwner::Node(node_id), SHAPE_INPUT_PORT);
+        let connection = match self.single_connection_to(&target)? {
+            EvalOutput::Produced(connection) => connection,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        self.evaluate_shape_output(&connection.from, global_time, path)
     }
 
     fn collect_reference(
@@ -636,10 +941,19 @@ impl<'a> FrameEvaluator<'a> {
             }
             PortOwner::Track(id) => self.collect_track(id, global_time, path),
             PortOwner::Clip(id) => self.collect_clip(id, global_time, path),
-            PortOwner::Node(id) => match self.scope_for_node(id, global_time)? {
-                EvalOutput::Produced(scope) => self.collect_node(id, scope, global_time, path),
-                EvalOutput::NoOutput => Ok(EvalOutput::NoOutput),
-            },
+            PortOwner::Node(id) => {
+                let node = self
+                    .project
+                    .get_node(id)
+                    .ok_or_else(|| missing_error(owner))?;
+                if !node.enabled {
+                    return Ok(EvalOutput::NoOutput);
+                }
+                match self.scope_for_node(id, global_time)? {
+                    EvalOutput::Produced(scope) => self.collect_node(id, scope, global_time, path),
+                    EvalOutput::NoOutput => Ok(EvalOutput::NoOutput),
+                }
+            }
         }
     }
 
@@ -727,51 +1041,7 @@ impl<'a> FrameEvaluator<'a> {
                     LibraryError::Validation(format!("Missing input port {target:?}"))
                 })?;
             match target_definition.data_type {
-                PortDataType::Image => continue,
-                PortDataType::Style => {
-                    let connections = self.ordered_variadic_connections_to(&target)?;
-                    if connections.is_empty() {
-                        // No map entry is the legacy fallback signal. A map
-                        // entry with one or more NoOutput values is not.
-                        continue;
-                    }
-                    let mut styles = Vec::with_capacity(connections.len());
-                    for connection in connections {
-                        styles.push(self.evaluate_style_source(&connection.from, global_time)?);
-                    }
-                    // The entry itself records wire presence. An all-NoOutput
-                    // vector must not fall back to legacy Node::styles.
-                    values.styles.insert(target.port, styles);
-                    continue;
-                }
-                PortDataType::Effector => {
-                    let connections = self.ordered_variadic_connections_to(&target)?;
-                    if connections.is_empty() {
-                        continue;
-                    }
-                    let mut effectors = Vec::with_capacity(connections.len());
-                    for connection in connections {
-                        effectors
-                            .push(self.evaluate_effector_source(&connection.from, global_time)?);
-                    }
-                    // Wire presence remains authoritative even when every
-                    // producer yields NoOutput.
-                    values.effectors.insert(target.port, effectors);
-                    continue;
-                }
-                PortDataType::Decorator => {
-                    let connections = self.ordered_variadic_connections_to(&target)?;
-                    if connections.is_empty() {
-                        continue;
-                    }
-                    let mut decorators = Vec::with_capacity(connections.len());
-                    for connection in connections {
-                        decorators
-                            .push(self.evaluate_decorator_source(&connection.from, global_time)?);
-                    }
-                    values.decorators.insert(target.port, decorators);
-                    continue;
-                }
+                PortDataType::Image | PortDataType::Shape => continue,
                 _ => {}
             }
             let connection = match self.single_connection_to(&target)? {
@@ -784,305 +1054,6 @@ impl<'a> FrameEvaluator<'a> {
             values.properties.insert(logical_key.to_string(), value);
         }
         Ok(values)
-    }
-
-    fn ordered_variadic_connections_to<'b>(
-        &'b self,
-        target: &PortAddress,
-    ) -> Result<Vec<&'b ProjectConnection>, LibraryError> {
-        let definition = self
-            .project
-            .port_definition(target, PortDirection::Input)
-            .ok_or_else(|| LibraryError::Validation(format!("Missing input port {target:?}")))?;
-        if definition.multiplicity != PortMultiplicity::Variadic {
-            return Err(LibraryError::Validation(format!(
-                "Expected variadic input {target:?}"
-            )));
-        }
-        let mut connections = self
-            .project
-            .connections
-            .iter()
-            .filter(|connection| &connection.to == target)
-            .collect::<Vec<_>>();
-        connections.sort_by_key(|connection| (connection.order, connection.id));
-        for pair in connections.windows(2) {
-            if pair[0].order == pair[1].order {
-                return Err(LibraryError::Validation(format!(
-                    "Variadic input {target:?} has duplicate order {}",
-                    pair[0].order
-                )));
-            }
-        }
-        for connection in &connections {
-            let errors = self.project.validate_connection(connection);
-            if !errors.is_empty() {
-                return Err(LibraryError::Validation(
-                    errors
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                ));
-            }
-        }
-        Ok(connections)
-    }
-
-    fn evaluate_style_source(
-        &self,
-        source: &PortAddress,
-        global_time: f64,
-    ) -> EvalResult<StyleConfig> {
-        let PortOwner::Node(node_id) = source.owner else {
-            log::warn!("Style source {source:?} is not a Node; producing NoOutput");
-            return Ok(EvalOutput::NoOutput);
-        };
-        let scope = match self.scope_for_node(node_id, global_time)? {
-            EvalOutput::Produced(scope) => scope,
-            // Activity is checked before any plugin descriptor or authored
-            // property evaluation.
-            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-        };
-        let Some(node) = self.project.get_node(node_id) else {
-            log::warn!("Style source Node {node_id} is unavailable; producing NoOutput");
-            return Ok(EvalOutput::NoOutput);
-        };
-        let NodeContent::PluginOperation(operation) = &node.content else {
-            log::warn!("Style source Node {node_id} is not a plugin operation; producing NoOutput");
-            return Ok(EvalOutput::NoOutput);
-        };
-        if operation.category != STYLE_CATEGORY || operation.operation != STYLE_PRODUCE_OPERATION {
-            log::warn!(
-                "Unknown Style operation {}/{}/{} on Node {}; producing NoOutput",
-                operation.category,
-                operation.component_id,
-                operation.operation,
-                node.id
-            );
-            return Ok(EvalOutput::NoOutput);
-        }
-        let descriptor = match self.plugin_manager.operation_descriptor(
-            &operation.category,
-            &operation.component_id,
-            &operation.operation,
-        ) {
-            Ok(descriptor) => descriptor,
-            Err(error) => {
-                log::warn!(
-                    "Unavailable Style operation {}/{}/{} on Node {}: {}; producing NoOutput",
-                    operation.category,
-                    operation.component_id,
-                    operation.operation,
-                    node.id,
-                    error
-                );
-                return Ok(EvalOutput::NoOutput);
-            }
-        };
-        if !descriptor.is_execution_compatible_with_ports(&operation.declared_ports) {
-            log::warn!(
-                "Style operation contract mismatch on Node {}; producing NoOutput",
-                node.id
-            );
-            return Ok(EvalOutput::NoOutput);
-        }
-        let inputs = self.resolve_node_inputs(node.id, scope, global_time)?;
-        let Some(composition) = self.composition_for_owner(source.owner) else {
-            log::warn!(
-                "Style source Node {} has no containing Composition; producing NoOutput",
-                node.id
-            );
-            return Ok(EvalOutput::NoOutput);
-        };
-        let context = self.context(composition, Some(&inputs));
-        match self.plugin_manager.evaluate_style_operation(
-            &context,
-            &operation.component_id,
-            node.id,
-            &node.properties,
-            scope.time,
-        ) {
-            EvalOutput::Produced(style) => Ok(EvalOutput::Produced(style)),
-            EvalOutput::NoOutput => {
-                log::warn!(
-                    "Style operation {}/{}/{} on Node {} produced NoOutput",
-                    operation.category,
-                    operation.component_id,
-                    operation.operation,
-                    node.id
-                );
-                Ok(EvalOutput::NoOutput)
-            }
-        }
-    }
-
-    fn evaluate_effector_source(
-        &self,
-        source: &PortAddress,
-        global_time: f64,
-    ) -> EvalResult<crate::core::ensemble::types::EffectorConfig> {
-        let PortOwner::Node(node_id) = source.owner else {
-            log::warn!("Effector source {source:?} is not a Node; producing NoOutput");
-            return Ok(EvalOutput::NoOutput);
-        };
-        if source.port != EFFECTOR_OUTPUT_PORT {
-            log::warn!(
-                "Effector source {source:?} is not the canonical output; producing NoOutput"
-            );
-            return Ok(EvalOutput::NoOutput);
-        }
-        let scope = match self.scope_for_node(node_id, global_time)? {
-            EvalOutput::Produced(scope) => scope,
-            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-        };
-        let Some(node) = self.project.get_node(node_id) else {
-            log::warn!("Effector source Node {node_id} is unavailable; producing NoOutput");
-            return Ok(EvalOutput::NoOutput);
-        };
-        let NodeContent::PluginOperation(operation) = &node.content else {
-            log::warn!(
-                "Effector source Node {node_id} is not a plugin operation; producing NoOutput"
-            );
-            return Ok(EvalOutput::NoOutput);
-        };
-        if operation.category != EFFECTOR_CATEGORY
-            || operation.operation != EFFECTOR_PRODUCE_OPERATION
-        {
-            log::warn!(
-                "Unknown Effector operation {}/{}/{} on Node {}; producing NoOutput",
-                operation.category,
-                operation.component_id,
-                operation.operation,
-                node.id
-            );
-            return Ok(EvalOutput::NoOutput);
-        }
-        let descriptor = match self.plugin_manager.operation_descriptor(
-            &operation.category,
-            &operation.component_id,
-            &operation.operation,
-        ) {
-            Ok(descriptor) => descriptor,
-            Err(error) => {
-                log::warn!(
-                    "Unavailable Effector operation {}/{}/{} on Node {}: {}; producing NoOutput",
-                    operation.category,
-                    operation.component_id,
-                    operation.operation,
-                    node.id,
-                    error
-                );
-                return Ok(EvalOutput::NoOutput);
-            }
-        };
-        if !descriptor.is_execution_compatible_with_ports(&operation.declared_ports) {
-            log::warn!(
-                "Effector operation contract mismatch on Node {}; producing NoOutput",
-                node.id
-            );
-            return Ok(EvalOutput::NoOutput);
-        }
-        let inputs = self.resolve_node_inputs(node.id, scope, global_time)?;
-        let Some(composition) = self.composition_for_owner(source.owner) else {
-            log::warn!(
-                "Effector source Node {} has no containing Composition; producing NoOutput",
-                node.id
-            );
-            return Ok(EvalOutput::NoOutput);
-        };
-        let context = self.context(composition, Some(&inputs));
-        Ok(self.plugin_manager.evaluate_effector_operation(
-            &context,
-            &operation.component_id,
-            node.id,
-            &node.properties,
-            scope.time,
-        ))
-    }
-
-    fn evaluate_decorator_source(
-        &self,
-        source: &PortAddress,
-        global_time: f64,
-    ) -> EvalResult<crate::core::ensemble::types::DecoratorConfig> {
-        let PortOwner::Node(node_id) = source.owner else {
-            log::warn!("Decorator source {source:?} is not a Node; producing NoOutput");
-            return Ok(EvalOutput::NoOutput);
-        };
-        if source.port != DECORATOR_OUTPUT_PORT {
-            log::warn!(
-                "Decorator source {source:?} is not the canonical output; producing NoOutput"
-            );
-            return Ok(EvalOutput::NoOutput);
-        }
-        let scope = match self.scope_for_node(node_id, global_time)? {
-            EvalOutput::Produced(scope) => scope,
-            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-        };
-        let Some(node) = self.project.get_node(node_id) else {
-            log::warn!("Decorator source Node {node_id} is unavailable; producing NoOutput");
-            return Ok(EvalOutput::NoOutput);
-        };
-        let NodeContent::PluginOperation(operation) = &node.content else {
-            log::warn!(
-                "Decorator source Node {node_id} is not a plugin operation; producing NoOutput"
-            );
-            return Ok(EvalOutput::NoOutput);
-        };
-        if operation.category != DECORATOR_CATEGORY
-            || operation.operation != DECORATOR_PRODUCE_OPERATION
-        {
-            log::warn!(
-                "Unknown Decorator operation {}/{}/{} on Node {}; producing NoOutput",
-                operation.category,
-                operation.component_id,
-                operation.operation,
-                node.id
-            );
-            return Ok(EvalOutput::NoOutput);
-        }
-        let descriptor = match self.plugin_manager.operation_descriptor(
-            &operation.category,
-            &operation.component_id,
-            &operation.operation,
-        ) {
-            Ok(descriptor) => descriptor,
-            Err(error) => {
-                log::warn!(
-                    "Unavailable Decorator operation {}/{}/{} on Node {}: {}; producing NoOutput",
-                    operation.category,
-                    operation.component_id,
-                    operation.operation,
-                    node.id,
-                    error
-                );
-                return Ok(EvalOutput::NoOutput);
-            }
-        };
-        if !descriptor.is_execution_compatible_with_ports(&operation.declared_ports) {
-            log::warn!(
-                "Decorator operation contract mismatch on Node {}; producing NoOutput",
-                node.id
-            );
-            return Ok(EvalOutput::NoOutput);
-        }
-        let inputs = self.resolve_node_inputs(node.id, scope, global_time)?;
-        let Some(composition) = self.composition_for_owner(source.owner) else {
-            log::warn!(
-                "Decorator source Node {} has no containing Composition; producing NoOutput",
-                node.id
-            );
-            return Ok(EvalOutput::NoOutput);
-        };
-        let context = self.context(composition, Some(&inputs));
-        Ok(self.plugin_manager.evaluate_decorator_operation(
-            &context,
-            &operation.component_id,
-            node.id,
-            &node.properties,
-            scope.time,
-        ))
     }
 
     fn scope_for_node(&self, node_id: Uuid, global_time: f64) -> EvalResult<EvaluationScope> {
@@ -1202,13 +1173,7 @@ impl<'a> FrameEvaluator<'a> {
         path: &mut HashSet<PortOwner>,
         scope: &mut EvaluationScope,
     ) -> EvalResult<()> {
-        for port in [
-            FPS_PORT,
-            DURATION_PORT,
-            RESOLUTION_PORT,
-            FRAME_PORT,
-            TIME_PORT,
-        ] {
+        for port in [DURATION_PORT, RESOLUTION_PORT, TIME_PORT] {
             let target = PortAddress::new(owner, port);
             let connection = match self.single_connection_to(&target)? {
                 EvalOutput::Produced(connection) => connection,
@@ -1221,17 +1186,6 @@ impl<'a> FrameEvaluator<'a> {
             match (port, value) {
                 (TIME_PORT, value) => {
                     scope.time = required_number(value, port)?;
-                }
-                (FRAME_PORT, value) => {
-                    let frame = value.get_as::<i64>().ok_or_else(|| invalid_value(port))?;
-                    scope.time = frame as f64 / scope.fps;
-                }
-                (FPS_PORT, value) => {
-                    let fps = required_number(value, port)?;
-                    if !fps.is_finite() || fps <= 0.0 {
-                        return Err(invalid_value(port));
-                    }
-                    scope.fps = fps;
                 }
                 (DURATION_PORT, value) => scope.duration = required_number(value, port)?,
                 (RESOLUTION_PORT, PropertyValue::Vec2(value)) => {

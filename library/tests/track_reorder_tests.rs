@@ -45,6 +45,9 @@ fn project_with_tracks(track_names: &[&str]) -> (Project, Uuid, Vec<Uuid>) {
         project
             .attach_node_to_container(NodeContainer::Track(track_id), node_id)
             .unwrap();
+        project
+            .set_output_node(NodeContainer::Track(track_id), Some(node_id))
+            .unwrap();
     }
 
     (project, composition_id, track_ids)

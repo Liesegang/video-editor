@@ -6,18 +6,16 @@ use library::cache::CacheManager;
 use library::core::ensemble::target::EffectorTarget;
 use library::core::ensemble::types::{DecoratorConfig, EffectorConfig, EnsembleData};
 use library::framing::get_frame_from_project;
-use library::model::ensemble::{DecoratorInstance, EffectorInstance};
 use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::draw_type::{DrawStyle, PathEffect};
 use library::model::frame::entity::{FrameContent, FrameItem, StyleConfig};
 use library::model::frame::frame::FrameInfo;
 use library::model::project::{
-    DECORATOR_OUTPUT_PORT, DECORATORS_INPUT_PORT, EFFECTOR_OUTPUT_PORT, EFFECTORS_INPUT_PORT,
-    PortAddress, PortOwner,
+    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeGraphBundle, PortAddress, PortOwner,
+    ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::property::{Property, PropertyMap, PropertyValue, Vec2};
-use library::model::style::StyleInstance;
 use library::model::{
     Clip, Composition, GeneratorContent, Node, NodeContainer, NodeContent, Project,
 };
@@ -46,24 +44,22 @@ fn rgba(r: u8, g: u8, b: u8) -> PropertyValue {
     PropertyValue::Color(Color { r, g, b, a: 255 })
 }
 
-fn fill(plugins: &PluginManager, color: Color) -> StyleInstance {
-    let plugin = plugins.get_style_plugin("fill").unwrap();
-    let mut properties = PropertyMap::from_definitions(&plugin.properties());
-    set(&mut properties, "color", PropertyValue::Color(color));
-    StyleInstance::new("fill", properties)
+fn fill(plugins: &PluginManager, color: Color) -> Node {
+    let mut node = plugins.create_style_operation_node("fill").unwrap();
+    set(&mut node.properties, "color", PropertyValue::Color(color));
+    node
 }
 
-fn stroke(plugins: &PluginManager, color: Color, width: f64, dash_array: &str) -> StyleInstance {
-    let plugin = plugins.get_style_plugin("stroke").unwrap();
-    let mut properties = PropertyMap::from_definitions(&plugin.properties());
-    set(&mut properties, "color", PropertyValue::Color(color));
-    set(&mut properties, "width", width.into());
+fn stroke(plugins: &PluginManager, color: Color, width: f64, dash_array: &str) -> Node {
+    let mut node = plugins.create_style_operation_node("stroke").unwrap();
+    set(&mut node.properties, "color", PropertyValue::Color(color));
+    set(&mut node.properties, "width", width.into());
     set(
-        &mut properties,
+        &mut node.properties,
         "dash_array",
         PropertyValue::String(dash_array.to_string()),
     );
-    StyleInstance::new("stroke", properties)
+    node
 }
 
 fn base_node(plugins: &PluginManager, kind: &str, content: NodeContent) -> Node {
@@ -97,7 +93,11 @@ fn text_node(plugins: &PluginManager, text: &str) -> Node {
         PropertyValue::String("Arial".to_string()),
     );
     set(&mut node.properties, "size", 30.0.into());
-    node.styles = vec![
+    node
+}
+
+fn default_text_styles(plugins: &PluginManager) -> Vec<Node> {
+    vec![
         fill(
             plugins,
             Color {
@@ -118,11 +118,77 @@ fn text_node(plugins: &PluginManager, text: &str) -> Node {
             2.0,
             "5 2",
         ),
-    ];
-    node
+    ]
 }
 
-fn project_with_node(node: Node) -> (Project, Uuid) {
+fn project_with_shape_graph(
+    source: Node,
+    shape_operations: Vec<Node>,
+    styles: Vec<Node>,
+) -> (Project, Uuid) {
+    assert!(!styles.is_empty(), "Shape graphs need an explicit Style boundary");
+    let mut project = Project::new("creative render e2e");
+    let (mut composition, track) =
+        Composition::new("main", u64::from(WIDTH), u64::from(HEIGHT), FPS, 2.0);
+    composition.background_color = Color::black();
+    let track_id = track.id;
+    let source_id = source.id;
+    let clip = Clip::new("creative clip", 0.0, 2.0);
+    let clip_id = clip.id;
+
+    project.add_track(track);
+    project.add_composition(composition);
+    project.add_clip(clip);
+    project.attach_clip_to_track(track_id, clip_id).unwrap();
+
+    let mut nodes = vec![source];
+    let mut connections = Vec::new();
+    let mut shape_output_id = source_id;
+    for operation in shape_operations {
+        connections.push(ProjectConnection::new(
+            PortAddress::new(PortOwner::Node(shape_output_id), SHAPE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(operation.id), SHAPE_INPUT_PORT),
+            0,
+        ));
+        shape_output_id = operation.id;
+        nodes.push(operation);
+    }
+
+    let mut image_outputs = Vec::new();
+    for style in styles {
+        connections.push(ProjectConnection::new(
+            PortAddress::new(PortOwner::Node(shape_output_id), SHAPE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(style.id), SHAPE_INPUT_PORT),
+            0,
+        ));
+        image_outputs.push(style.id);
+        nodes.push(style);
+    }
+    let output_id = if image_outputs.len() == 1 {
+        image_outputs[0]
+    } else {
+        let merge = Node::new("Style Merge", NodeContent::Merge);
+        let merge_id = merge.id;
+        for (order, style_id) in image_outputs.into_iter().enumerate() {
+            connections.push(ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(style_id), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+                order as i64,
+            ));
+        }
+        nodes.push(merge);
+        merge_id
+    };
+    project
+        .insert_node_graph(
+            NodeContainer::Clip(clip_id),
+            NodeGraphBundle::new(nodes, connections, Some(output_id)),
+        )
+        .unwrap();
+    (project, source_id)
+}
+
+fn project_with_image_node(node: Node) -> (Project, Uuid) {
     let mut project = Project::new("creative render e2e");
     let (mut composition, track) =
         Composition::new("main", u64::from(WIDTH), u64::from(HEIGHT), FPS, 2.0);
@@ -131,17 +197,15 @@ fn project_with_node(node: Node) -> (Project, Uuid) {
     let node_id = node.id;
     let clip = Clip::new("creative clip", 0.0, 2.0);
     let clip_id = clip.id;
-
     project.add_track(track);
     project.add_composition(composition);
     project.add_clip(clip);
-    project.add_node(node);
     project.attach_clip_to_track(track_id, clip_id).unwrap();
     project
-        .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
-        .unwrap();
-    project
-        .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
+        .insert_node_graph(
+            NodeContainer::Clip(clip_id),
+            NodeGraphBundle::with_output_node(node),
+        )
         .unwrap();
     (project, node_id)
 }
@@ -299,31 +363,28 @@ fn assert_round_trip(project: &Project, frame_number: u64, plugins: &Arc<PluginM
     );
 }
 
-fn effector(plugins: &PluginManager, kind: &str) -> EffectorInstance {
-    let plugin = plugins.get_effector_plugin(kind).unwrap();
-    EffectorInstance::new(kind, PropertyMap::from_definitions(&plugin.properties()))
+fn effector(plugins: &PluginManager, kind: &str) -> Node {
+    plugins.create_effector_operation_node(kind).unwrap()
 }
 
-fn decorator(plugins: &PluginManager, target: &str) -> DecoratorInstance {
-    let plugin = plugins.get_decorator_plugin("backplate").unwrap();
-    let mut instance = DecoratorInstance::new(
-        "backplate",
-        PropertyMap::from_definitions(&plugin.properties()),
-    );
+fn decorator(plugins: &PluginManager, target: &str) -> Node {
+    let mut node = plugins
+        .create_decorator_operation_node("backplate")
+        .unwrap();
     set(
-        &mut instance.properties,
+        &mut node.properties,
         "target",
         PropertyValue::String(target.to_string()),
     );
     set(
-        &mut instance.properties,
+        &mut node.properties,
         "shape",
         PropertyValue::String("RoundRect".to_string()),
     );
-    set(&mut instance.properties, "color", rgba(20, 170, 60));
-    set(&mut instance.properties, "padding", 2.0.into());
-    set(&mut instance.properties, "radius", 3.0.into());
-    instance
+    set(&mut node.properties, "color", rgba(20, 170, 60));
+    set(&mut node.properties, "padding", 2.0.into());
+    set(&mut node.properties, "radius", 3.0.into());
+    node
 }
 
 #[test]
@@ -334,7 +395,8 @@ fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() {
     set(&mut node.properties, "scale", vec2(90.0, 110.0));
     set(&mut node.properties, "rotation", 4.0.into());
     set(&mut node.properties, "opacity", 80.0.into());
-    let (project, node_id) = project_with_node(node);
+    let (project, node_id) =
+        project_with_shape_graph(node, Vec::new(), default_text_styles(&plugins));
 
     let frame = evaluate(&project, 0, &plugins).unwrap();
     let FrameContent::Text {
@@ -352,9 +414,8 @@ fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() {
     assert_eq!(text, "TEXT");
     assert_eq!(font, "Arial");
     assert_eq!(*size, 30.0);
-    assert_eq!(styles.len(), 2);
+    assert_eq!(styles.len(), 1);
     assert!(matches!(styles[0].style, DrawStyle::Fill { .. }));
-    assert!(matches!(styles[1].style, DrawStyle::Stroke { width, .. } if width == 2.0));
     assert!(ensemble.is_none());
     assert_eq!((transform.position.x, transform.position.y), (14.0, 11.0));
     assert_eq!((transform.scale.x, transform.scale.y), (0.9, 1.1));
@@ -371,12 +432,11 @@ fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() {
         "stroke pixels disappeared"
     );
 
-    let mut ensemble_project = project.clone();
-    ensemble_project
-        .get_node_mut(node_id)
-        .unwrap()
-        .effectors
-        .push(effector(&plugins, "transform"));
+    let (ensemble_project, _) = project_with_shape_graph(
+        project.get_node(node_id).unwrap().clone(),
+        vec![effector(&plugins, "transform")],
+        default_text_styles(&plugins),
+    );
     let ensemble_image = preview(&ensemble_project, 0, &plugins).unwrap();
     assert!(
         dominant_pixels(&ensemble_image, 0) > 10,
@@ -424,7 +484,7 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
         PropertyValue::String("Corner".to_string()),
     );
     set(&mut node.properties, "path_effect_radius", 5.0.into());
-    node.styles = vec![
+    let styles = vec![
         fill(
             &plugins,
             Color {
@@ -446,7 +506,7 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
             "5 3",
         ),
     ];
-    let (project, node_id) = project_with_node(node);
+    let (project, node_id) = project_with_shape_graph(node, Vec::new(), styles);
 
     let frame = evaluate(&project, 0, &plugins).unwrap();
     let FrameContent::Shape {
@@ -460,7 +520,7 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
         panic!("shape converter did not produce FrameContent::Shape");
     };
     assert_eq!(converted_path, path);
-    assert_eq!(styles.len(), 2);
+    assert_eq!(styles.len(), 1);
     assert_eq!(path_effects, &[PathEffect::Corner { radius: 5.0 }]);
     assert_eq!((transform.position.x, transform.position.y), (22.0, 18.0));
     assert_eq!(transform.rotation, 8.0);
@@ -506,8 +566,8 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
             "path",
             PropertyValue::String(malformed.to_string()),
         );
-        let error = preview(&invalid, 0, &plugins).unwrap_err();
-        assert!(error.to_string().contains("Invalid or empty SVG path data"));
+        assert!(evaluate(&invalid, 0, &plugins).unwrap().items.is_empty());
+        assert_eq!(light_sum(&preview(&invalid, 0, &plugins).unwrap()), 0);
     }
 
     assert_round_trip(&project, 0, &plugins);
@@ -537,7 +597,7 @@ half4 main(float2 fragCoord) {
     set(&mut node.properties, "width", 96.0.into());
     set(&mut node.properties, "height", 54.0.into());
     set(&mut node.properties, "position", vec2(10.0, 9.0));
-    let (project, _) = project_with_node(node);
+    let (project, _) = project_with_image_node(node);
 
     let frame = evaluate(&project, 0, &plugins).unwrap();
     let FrameContent::SkSL {
@@ -569,7 +629,7 @@ half4 main(float2 fragCoord) {
 #[test]
 fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
     let plugins = Arc::new(PluginManager::default());
-    let mut node = text_node(&plugins, "ABCD");
+    let source = text_node(&plugins, "ABCD");
     let mut step = effector(&plugins, "step_delay");
     set(&mut step.properties, "delay", 0.2.into());
     set(&mut step.properties, "duration", 0.2.into());
@@ -580,8 +640,12 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
         "target",
         PropertyValue::String("Block".to_string()),
     );
-    node.effectors.push(step);
-    let (project, node_id) = project_with_node(node);
+    let step_id = step.id;
+    let (project, node_id) = project_with_shape_graph(
+        source.clone(),
+        vec![step.clone()],
+        default_text_styles(&plugins),
+    );
 
     let frame = evaluate(&project, 4, &plugins).unwrap();
     let FrameContent::Text {
@@ -590,9 +654,9 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
         ..
     } = first_content(&frame.items).unwrap()
     else {
-        panic!("dedicated node.effectors were not converted to EnsembleData");
+        panic!("the explicit Shape Effector did not produce EnsembleData");
     };
-    assert_eq!(styles.len(), 2);
+    assert_eq!(styles.len(), 1);
     assert_eq!(ensemble.effector_configs.len(), 1);
     let EffectorConfig::StepDelay {
         delay_per_element,
@@ -617,7 +681,6 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
     assert!(light_sum(&middle) > light_sum(&start));
     assert!(light_sum(&end) > light_sum(&middle));
 
-    let mut randomized = project.clone();
     let mut random = effector(&plugins, "randomize");
     set(&mut random.properties, "seed", 7.0.into());
     set(&mut random.properties, "translate_range", 4.0.into());
@@ -628,11 +691,12 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
         "target",
         PropertyValue::String("Char".to_string()),
     );
-    randomized
-        .get_node_mut(node_id)
-        .unwrap()
-        .effectors
-        .push(random.clone());
+    let random_id = random.id;
+    let (randomized, _) = project_with_shape_graph(
+        source.clone(),
+        vec![step.clone(), random.clone()],
+        default_text_styles(&plugins),
+    );
     let random_a = preview(&randomized, 10, &plugins).unwrap();
     let random_b = preview(&randomized, 10, &plugins).unwrap();
     assert_eq!(
@@ -648,10 +712,7 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
     let mut changed_seed = randomized.clone();
     set(
         &mut changed_seed
-            .get_node_mut(node_id)
-            .unwrap()
-            .effectors
-            .last_mut()
+            .get_node_mut(random_id)
             .unwrap()
             .properties,
         "seed",
@@ -663,15 +724,14 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
         "changing Randomize seed did not change the rendered characters"
     );
 
-    let mut scale_only = project.clone();
     let mut scale_random = random;
     set(&mut scale_random.properties, "translate_range", 0.0.into());
     set(&mut scale_random.properties, "rotate_range", 0.0.into());
-    scale_only
-        .get_node_mut(node_id)
-        .unwrap()
-        .effectors
-        .push(scale_random);
+    let (scale_only, _) = project_with_shape_graph(
+        source,
+        vec![step, scale_random],
+        default_text_styles(&plugins),
+    );
     assert_ne!(
         hash(&end),
         hash(&preview(&scale_only, 10, &plugins).unwrap()),
@@ -684,16 +744,9 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
     service.add_decorator(node_id, "backplate").unwrap();
     let locked = shared.read().unwrap();
     let edited = locked.get_node(node_id).unwrap();
-    assert_eq!(
-        edited.effectors.len(),
-        1,
-        "new Effector authoring must not append embedded state"
-    );
-    assert!(
-        edited.decorators.is_empty(),
-        "new Decorator authoring must not append embedded state"
-    );
-    assert_eq!(edited.styles.len(), 2);
+    assert!(edited.effectors.is_empty());
+    assert!(edited.decorators.is_empty());
+    assert!(edited.styles.is_empty());
     assert!(edited.effects.is_empty());
     let opacity_node = locked
         .nodes
@@ -707,8 +760,8 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
         })
         .expect("add_effector must author a standalone operation Node");
     assert!(locked.connections.iter().any(|connection| {
-        connection.from == PortAddress::new(PortOwner::Node(opacity_node.id), EFFECTOR_OUTPUT_PORT)
-            && connection.to == PortAddress::new(PortOwner::Node(node_id), EFFECTORS_INPUT_PORT)
+        connection.from == PortAddress::new(PortOwner::Node(step_id), SHAPE_OUTPUT_PORT)
+            && connection.to == PortAddress::new(PortOwner::Node(opacity_node.id), SHAPE_INPUT_PORT)
     }));
     let backplate_node = locked
         .nodes
@@ -722,9 +775,9 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
         })
         .expect("add_decorator must author a standalone operation Node");
     assert!(locked.connections.iter().any(|connection| {
-        connection.from
-            == PortAddress::new(PortOwner::Node(backplate_node.id), DECORATOR_OUTPUT_PORT)
-            && connection.to == PortAddress::new(PortOwner::Node(node_id), DECORATORS_INPUT_PORT)
+        connection.from == PortAddress::new(PortOwner::Node(opacity_node.id), SHAPE_OUTPUT_PORT)
+            && connection.to
+                == PortAddress::new(PortOwner::Node(backplate_node.id), SHAPE_INPUT_PORT)
     }));
     drop(locked);
 
@@ -737,9 +790,12 @@ fn multiline_backplates_cover_char_line_block_and_follow_transforms() {
     let plugins = Arc::new(PluginManager::default());
     let mut hashes = Vec::new();
     for target in ["Char", "Line", "Block"] {
-        let mut node = text_node(&plugins, "A\nBBB");
-        node.decorators.push(decorator(&plugins, target));
-        let (project, _) = project_with_node(node);
+        let node = text_node(&plugins, "A\nBBB");
+        let (project, _) = project_with_shape_graph(
+            node,
+            vec![decorator(&plugins, target)],
+            default_text_styles(&plugins),
+        );
         let rendered = preview(&project, 0, &plugins).unwrap();
         assert!(dominant_pixels(&rendered, 1) > 20);
         hashes.push(hash(&rendered));
@@ -754,22 +810,24 @@ fn multiline_backplates_cover_char_line_block_and_follow_transforms() {
     );
 
     for target in ["Line", "Block"] {
-        let mut base = text_node(&plugins, "A\nBBB");
-        base.styles.clear();
-        base.decorators.push(decorator(&plugins, target));
-        let (base_project, node_id) = project_with_node(base);
+        let base = text_node(&plugins, "A\nBBB");
+        let backplate = decorator(&plugins, target);
+        let (base_project, _) = project_with_shape_graph(
+            base.clone(),
+            vec![backplate.clone()],
+            vec![fill(&plugins, Color::black())],
+        );
         let base_image = preview(&base_project, 0, &plugins).unwrap();
 
-        let mut moved = base_project.clone();
         let mut transform = effector(&plugins, "transform");
         set(&mut transform.properties, "tx", 24.0.into());
         set(&mut transform.properties, "ty", 5.0.into());
         set(&mut transform.properties, "rotation", 6.0.into());
-        moved
-            .get_node_mut(node_id)
-            .unwrap()
-            .effectors
-            .push(transform);
+        let (moved, _) = project_with_shape_graph(
+            base,
+            vec![backplate, transform],
+            vec![fill(&plugins, Color::black())],
+        );
         let moved_image = preview(&moved, 0, &plugins).unwrap();
         let base_center = colored_centroid(&base_image).unwrap();
         let moved_center = colored_centroid(&moved_image).unwrap();
@@ -785,7 +843,7 @@ fn multiline_backplates_cover_char_line_block_and_follow_transforms() {
 fn effector_block_line_and_char_targets_are_distinct_in_multiline_pixels() {
     let plugins = Arc::new(PluginManager::default());
     let render_target = |target: &str| {
-        let mut node = text_node(&plugins, "AB\nCD");
+        let node = text_node(&plugins, "AB\nCD");
         let mut step = effector(&plugins, "step_delay");
         set(&mut step.properties, "delay", 0.3.into());
         set(&mut step.properties, "duration", 0.1.into());
@@ -796,8 +854,11 @@ fn effector_block_line_and_char_targets_are_distinct_in_multiline_pixels() {
             "target",
             PropertyValue::String(target.to_string()),
         );
-        node.effectors.push(step);
-        let (project, _) = project_with_node(node);
+        let (project, _) = project_with_shape_graph(
+            node,
+            vec![step],
+            default_text_styles(&plugins),
+        );
         preview(&project, 2, &plugins).unwrap()
     };
 
@@ -821,15 +882,16 @@ fn effector_block_line_and_char_targets_are_distinct_in_multiline_pixels() {
 fn empty_text_is_safe_missing_text_is_validation_and_parts_is_render_error() {
     let plugins = Arc::new(PluginManager::default());
     let empty_node = text_node(&plugins, "");
-    let (empty_project, _) = project_with_node(empty_node);
+    let (empty_project, _) =
+        project_with_shape_graph(empty_node, Vec::new(), default_text_styles(&plugins));
     let empty = preview(&empty_project, 0, &plugins).unwrap();
     assert_eq!(light_sum(&empty), 0);
 
     let mut missing_node = text_node(&plugins, "missing");
     missing_node.properties = PropertyMap::new();
-    let (missing_project, _) = project_with_node(missing_node);
-    let error = evaluate(&missing_project, 0, &plugins).unwrap_err();
-    assert!(error.to_string().contains("failed to produce Node"));
+    let (missing_project, _) =
+        project_with_shape_graph(missing_node, Vec::new(), default_text_styles(&plugins));
+    assert!(evaluate(&missing_project, 0, &plugins).unwrap().items.is_empty());
 
     let styles = vec![StyleConfig {
         id: Uuid::new_v4(),

@@ -89,18 +89,29 @@ impl ClipHandler {
         }
         if bundle.graph.nodes.is_empty() {
             return Err(LibraryError::Project(
-                "A factory Clip must contain a primary leaf Node".to_string(),
+                "A factory Clip must contain an explicit image output Node".to_string(),
             ));
         }
 
         let clip_id = bundle.clip.id;
-        let primary_node_id = bundle
-            .clip
-            .output_node_id
-            .filter(|output| node_ids.contains(output))
-            .or(bundle.graph.output_node_id)
-            .filter(|output| node_ids.contains(output))
-            .unwrap_or(bundle.graph.nodes[0].id);
+        let primary_node_id = match (bundle.clip.output_node_id, bundle.graph.output_node_id) {
+            (Some(clip_output), Some(graph_output)) if clip_output != graph_output => {
+                return Err(LibraryError::Project(format!(
+                    "Clip and graph disagree on explicit image output: {clip_output} != {graph_output}"
+                )));
+            }
+            (Some(output), _) | (_, Some(output)) if node_ids.contains(&output) => output,
+            (Some(output), _) | (_, Some(output)) => {
+                return Err(LibraryError::Project(format!(
+                    "Explicit image output Node {output} is not bundled"
+                )));
+            }
+            (None, None) => {
+                return Err(LibraryError::Project(
+                    "A factory Clip requires an explicit image output Node".to_string(),
+                ));
+            }
+        };
         bundle.clip.node_ids.clear();
         bundle.clip.output_node_id = None;
         bundle.graph.output_node_id = Some(primary_node_id);
@@ -531,6 +542,58 @@ mod tests {
             project.find_node_container(node_id),
             Some(NodeContainer::Clip(clip_id))
         );
+    }
+
+    #[test]
+    fn bundle_without_explicit_image_output_is_rejected_atomically() {
+        let (project, composition_id, track_id) = project_with_composition("missing output");
+        let baseline = project.clone();
+        let clip = Clip::new("clip", 0.0, 1.0);
+        let solid = Node::new(
+            "solid",
+            NodeContent::Generator(crate::model::GeneratorContent::Solid),
+        );
+        let project = Arc::new(RwLock::new(project));
+        let error = ClipHandler::add_clip_to_track(
+            &project,
+            composition_id,
+            track_id,
+            ClipBundle {
+                clip,
+                graph: NodeGraphBundle::new(vec![solid], Vec::new(), None),
+            },
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("explicit image output"));
+        assert_eq!(*project.read().unwrap(), baseline);
+    }
+
+    #[test]
+    fn shape_only_clip_output_is_rejected_atomically() {
+        let (project, composition_id, track_id) = project_with_composition("shape output");
+        let baseline = project.clone();
+        let clip = Clip::new("clip", 0.0, 1.0);
+        let shape = Node::new(
+            "shape",
+            NodeContent::Generator(crate::model::GeneratorContent::Shape),
+        );
+        let project = Arc::new(RwLock::new(project));
+        let error = ClipHandler::add_clip_to_track(
+            &project,
+            composition_id,
+            track_id,
+            ClipBundle {
+                clip,
+                graph: NodeGraphBundle::with_output_node(shape),
+            },
+            None,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("does not declare an image output port"));
+        assert_eq!(*project.read().unwrap(), baseline);
     }
 
     #[test]
