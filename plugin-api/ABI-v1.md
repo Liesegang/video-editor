@@ -72,13 +72,16 @@ strictly decoded and must match the selected UI type:
 - hard numeric bounds and dropdown membership apply to defaults. Dropdown
   options must be non-empty, non-empty strings, and unique.
 
-ABI v1 integrates the `effector` and `property` categories. A property
+ABI v1 integrates the `effector`, `property`, `style`, and `decorator`
+categories. A property
 component must declare `property.evaluate.v1` and an `output_default` in its
 component descriptor. The default uses the same explicitly tagged value wire
 format as evaluation responses and is the host's safe result when invocation
 fails. Its tag also declares the component's output type; a successful response
 with another value variant is rejected and falls back to this declared value.
-Effector components omit `output_default`.
+Effector, Style, and Decorator components omit `output_default`: invocation or
+response failure produces `no_output` in the graph instead of inventing a
+render config.
 
 If any component in a bundle declares another category, RuViE rejects the
 entire bundle before registering its descriptor or exposing generic
@@ -159,7 +162,60 @@ time, and fps. ABI v1 deliberately does not expose RuViE's sibling Project
 cross-property/project traversal requires a future explicitly versioned host
 service extension rather than relying on RuViE implementation layouts.
 
-Do not transport video frames, decoded audio, GPU objects, or other hot-path
+- category `style`, operation `style.evaluate.v1`
+- request:
+
+  ```json
+  {
+    "time": 1.25,
+    "fps": 30.0,
+    "properties": {
+      "color": {"type":"color","r":255,"g":128,"b":0,"a":255},
+      "width": {"type":"number","value":2.0}
+    }
+  }
+  ```
+
+- response, one of:
+  - `{"type":"no_output"}`
+  - `{"type":"fill","color":{"r":255,"g":128,"b":0,"a":255},
+    "offset":0.0}`
+  - `{"type":"stroke","color":{"r":255,"g":255,"b":255,"a":255},
+    "width":2.0,"offset":0.0,"cap":"round","join":"miter",
+    "miter":4.0,"dash_array":[3.0,2.0],"dash_offset":0.0}`
+
+Fill and Stroke are the complete set of host `DrawStyle` variants at the time
+this operation was defined. Every numeric field must be finite. Stroke width
+and miter must be non-negative. An empty dash array means a solid stroke;
+a non-empty dash array must have even length and every interval must be
+strictly positive. Cap values are `round`,
+`square`, and `butt`; join values are `round`, `bevel`, and `miter`. The host
+assigns the resulting config the authored operation Node's ID; plugins neither
+receive nor choose Project identity.
+
+- category `decorator`, operation `decorator.evaluate.v1`
+- request has the same `time`, `fps`, and explicitly tagged resolved
+  `properties` shape as Style.
+- response, one of:
+  - `{"type":"no_output"}`
+  - `{"type":"backplate","target":"block","shape":"rounded_rect",
+    "color":{"r":0,"g":0,"b":0,"a":255},
+    "padding":{"top":4.0,"right":6.0,"bottom":4.0,"left":6.0},
+    "corner_radius":3.0}`
+
+Backplate is the complete set of host `DecoratorConfig` variants at the time
+this operation was defined. Targets are `block`, `line`, and `char`; `parts`
+is intentionally absent because the host renderer does not implement it.
+Shapes are `rect`, `rounded_rect`, and `circle`. Padding fields may be any
+finite values and corner radius must be finite and non-negative.
+
+Style and Decorator requests contain only resolved declared properties and
+scalar metadata. They never transport source shapes, raster frames, paths,
+Project types, or renderer/GPU state. Unknown output variants or fields,
+non-finite values, invalid enum strings, and fields that violate the rules
+above are rejected as `no_output`; they are never partially adapted.
+
+Do not transport video frames, decoded audio, GPU objects, Project objects, or other hot-path
 resources as JSON. Such categories use `query_extension` with a separately
 named/versioned C table and host-owned opaque resource handles or an explicit
 pixel/audio buffer contract. No high-bandwidth extension is standardized in

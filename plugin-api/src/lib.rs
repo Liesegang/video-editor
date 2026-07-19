@@ -235,6 +235,10 @@ pub const EFFECTOR_CATEGORY: &str = "effector";
 pub const EFFECTOR_EVALUATE_V1: &str = "effector.evaluate.v1";
 pub const PROPERTY_CATEGORY: &str = "property";
 pub const PROPERTY_EVALUATE_V1: &str = "property.evaluate.v1";
+pub const STYLE_CATEGORY: &str = "style";
+pub const STYLE_EVALUATE_V1: &str = "style.evaluate.v1";
+pub const DECORATOR_CATEGORY: &str = "decorator";
+pub const DECORATOR_EVALUATE_V1: &str = "decorator.evaluate.v1";
 
 /// Explicit value wire format for runtime property evaluators.
 ///
@@ -264,6 +268,117 @@ pub struct PropertyEvaluateRequestV1 {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PropertyEvaluateResponseV1 {
     pub value: PropertyValueV1,
+}
+
+/// Resolved, evaluator-local inputs for one runtime Style operation.
+///
+/// The host resolves authored properties and scalar graph wires before this
+/// request crosses the ABI. No Project, frame, path, or GPU object is exposed.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StyleEvaluateRequestV1 {
+    pub time: f64,
+    pub fps: f64,
+    pub properties: std::collections::BTreeMap<String, PropertyValueV1>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ColorV1 {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeCapV1 {
+    Round,
+    Square,
+    Butt,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeJoinV1 {
+    Round,
+    Bevel,
+    Miter,
+}
+
+/// Complete ABI-v1 Style config output.
+///
+/// These variants intentionally mirror every current host `DrawStyle`
+/// variant. A future host style requires a new explicitly versioned contract.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum StyleOutputV1 {
+    NoOutput,
+    Fill {
+        color: ColorV1,
+        offset: f64,
+    },
+    Stroke {
+        color: ColorV1,
+        width: f64,
+        offset: f64,
+        cap: StrokeCapV1,
+        join: StrokeJoinV1,
+        miter: f64,
+        dash_array: Vec<f64>,
+        dash_offset: f64,
+    },
+}
+
+/// Resolved, evaluator-local inputs for one runtime Decorator operation.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DecoratorEvaluateRequestV1 {
+    pub time: f64,
+    pub fps: f64,
+    pub properties: std::collections::BTreeMap<String, PropertyValueV1>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DecoratorTargetV1 {
+    Block,
+    Line,
+    Char,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BackplateShapeV1 {
+    Rect,
+    RoundedRect,
+    Circle,
+}
+
+/// Backplate padding in top, right, bottom, left order.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct InsetsV1 {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+/// Complete ABI-v1 Decorator config output.
+///
+/// `parts` is deliberately absent from [`DecoratorTargetV1`] because the
+/// current host renderer cannot execute it safely.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DecoratorOutputV1 {
+    NoOutput,
+    Backplate {
+        target: DecoratorTargetV1,
+        shape: BackplateShapeV1,
+        color: ColorV1,
+        padding: InsetsV1,
+        corner_radius: f32,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -362,5 +477,66 @@ mod tests {
         let decoded: PropertyEvaluateRequestV1 =
             serde_json::from_value(json).expect("property request parses");
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn style_and_decorator_outputs_are_tagged_and_strict() {
+        let style = StyleOutputV1::Stroke {
+            color: ColorV1 {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 4,
+            },
+            width: 2.0,
+            offset: 0.5,
+            cap: StrokeCapV1::Round,
+            join: StrokeJoinV1::Miter,
+            miter: 4.0,
+            dash_array: vec![3.0, 2.0],
+            dash_offset: 1.0,
+        };
+        let encoded = serde_json::to_value(&style).expect("style output serializes");
+        assert_eq!(encoded["type"], "stroke");
+        assert_eq!(
+            serde_json::from_value::<StyleOutputV1>(encoded).expect("style output parses"),
+            style
+        );
+
+        let unknown_field = serde_json::json!({
+            "type": "backplate",
+            "target": "block",
+            "shape": "rect",
+            "color": {"r": 0, "g": 0, "b": 0, "a": 255},
+            "padding": {"top": 1.0, "right": 1.0, "bottom": 1.0, "left": 1.0},
+            "corner_radius": 0.0,
+            "unsupported": true
+        });
+        assert!(serde_json::from_value::<DecoratorOutputV1>(unknown_field).is_err());
+    }
+
+    #[test]
+    fn decorator_parts_target_is_not_exposed_by_abi_v1() {
+        assert!(serde_json::from_str::<DecoratorTargetV1>(r#""parts""#).is_err());
+    }
+
+    #[test]
+    fn config_requests_ignore_future_fields_but_outputs_remain_strict() {
+        let request = serde_json::json!({
+            "time": 1.0,
+            "fps": 30.0,
+            "properties": {},
+            "future_host_hint": {"version": 2}
+        });
+        assert!(serde_json::from_value::<StyleEvaluateRequestV1>(request.clone()).is_ok());
+        assert!(serde_json::from_value::<DecoratorEvaluateRequestV1>(request).is_ok());
+
+        let output = serde_json::json!({
+            "type": "fill",
+            "color": {"r": 0, "g": 0, "b": 0, "a": 255},
+            "offset": 0.0,
+            "future_plugin_field": true
+        });
+        assert!(serde_json::from_value::<StyleOutputV1>(output).is_err());
     }
 }
