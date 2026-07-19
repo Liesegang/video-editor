@@ -198,7 +198,7 @@ fn semantic_source_for_result<'a>(
         return None;
     }
 
-    let result = match &node.content {
+    let result = match node.content() {
         NodeContent::Media(_) | NodeContent::Generator(_) | NodeContent::Reference(_) => Some(node),
         NodeContent::PluginOperation(_) | NodeContent::Merge => {
             let mut incoming = project
@@ -239,7 +239,7 @@ fn is_content_flow_connection(connection: &ProjectConnection) -> bool {
 }
 
 fn semantic_source_kind(node: &Node) -> &'static str {
-    match &node.content {
+    match node.content() {
         NodeContent::Media(_) => "Media",
         NodeContent::Generator(library::model::GeneratorContent::Text) => "Text",
         NodeContent::Generator(library::model::GeneratorContent::Shape) => "Shape",
@@ -253,7 +253,7 @@ fn semantic_source_kind(node: &Node) -> &'static str {
 
 fn semantic_source_label(node: &Node) -> String {
     let kind = semantic_source_kind(node);
-    match &node.content {
+    match node.content() {
         NodeContent::Generator(library::model::GeneratorContent::Text)
         | NodeContent::Generator(library::model::GeneratorContent::Shape) => {
             if node.name.eq_ignore_ascii_case(kind) {
@@ -267,7 +267,7 @@ fn semantic_source_label(node: &Node) -> String {
 }
 
 fn get_clip_color(source: Option<&Node>, project: &Project) -> (u8, u8, u8) {
-    match source.map(|node| &node.content) {
+    match source.map(Node::content) {
         Some(NodeContent::Media(m)) => {
             if let Some(asset) = project.assets.iter().find(|a| a.id == m.asset_id) {
                 match asset.kind {
@@ -1213,7 +1213,7 @@ fn draw_single_clip(
     painter.rect_filled(drawing_clip_rect, 4.0, transparent_color);
 
     // Draw Audio Waveform
-    if let Some(NodeContent::Media(m)) = graph_nodes.semantic_source.map(|node| &node.content) {
+    if let Some(NodeContent::Media(m)) = graph_nodes.semantic_source.map(Node::content) {
         if let Some(asset) = project.assets.iter().find(|asset| {
             asset.id == m.asset_id && matches!(asset.kind, AssetKind::Audio | AssetKind::Video)
         }) {
@@ -1381,11 +1381,11 @@ pub(super) fn get_clips_in_box(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::generator_node;
-    use library::editor::project_service::GeneratorNodeRequest;
+    use crate::test_support::{generator_node, media_node_for_canvas};
+    use library::editor::project_service::{GeneratorNodeRequest, MediaNodeRequest};
     use library::model::frame::color::Color;
     use library::model::project::{NodeContainer, PortAddress};
-    use library::model::{Asset, MediaContent};
+    use library::model::Asset;
     use library::plugin::PluginManager;
 
     fn project_with_clip(name: &str) -> (Project, Uuid) {
@@ -1491,13 +1491,18 @@ mod tests {
         asset.stream_index = Some(2);
         let asset_id = asset.id;
         project.assets.push(asset);
-        let media = Node::new_media(
+        let media = media_node_for_canvas(
             "Dialog",
-            MediaContent {
+            MediaNodeRequest::Video {
                 asset_id,
+                file_path: "dialog.mov".to_string(),
                 stream_index: Some(2),
                 audio_stream_index: Some(7),
             },
+            1920,
+            1080,
+            1920,
+            1080,
         );
         let media_id = attach_node(&mut project, clip_id, media);
         let effect = PluginManager::default()
@@ -1521,7 +1526,7 @@ mod tests {
             get_clip_color(graph.semantic_source, &project),
             (100, 100, 200)
         );
-        let NodeContent::Media(media) = &graph.semantic_source.unwrap().content else {
+        let NodeContent::Media(media) = graph.semantic_source.unwrap().content() else {
             panic!("Effect result must resolve to its Media source")
         };
         assert_eq!(
@@ -1794,7 +1799,10 @@ mod tests {
             editor_context.selection.last_selected_entity_id,
             Some(clip_id)
         );
-        assert!(editor_context.selection.selected_entities.contains(&clip_id));
+        assert!(editor_context
+            .selection
+            .selected_entities
+            .contains(&clip_id));
 
         editor_context.select_clip(clip_id, source_track_id);
         let mut failed_commit = ClipMutationCommit::default();

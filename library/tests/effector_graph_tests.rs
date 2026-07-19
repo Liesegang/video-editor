@@ -39,8 +39,7 @@ const HEIGHT: u64 = 80;
 const FPS: f64 = 10.0;
 
 fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
-    node.properties
-        .set(key.to_string(), Property::constant(value));
+    node.set_property(key.to_string(), Property::constant(value));
 }
 
 fn shape_wire(from: Uuid, to: Uuid) -> ProjectConnection {
@@ -57,7 +56,7 @@ fn insert_effector_chain(graph: &mut NodeGraphBundle, effector_ids: &[Uuid]) {
         .iter()
         .find(|node| {
             matches!(
-                node.content,
+                node.content(),
                 NodeContent::Generator(
                     library::model::GeneratorContent::Text
                         | library::model::GeneratorContent::Shape
@@ -305,7 +304,7 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
         let node = plugins
             .create_effector_operation_node(&component_id)
             .unwrap();
-        let NodeContent::PluginOperation(operation) = &node.content else {
+        let NodeContent::PluginOperation(operation) = node.content() else {
             panic!("Effector factory must create a plugin operation")
         };
         assert_eq!(operation.category, EFFECTOR_CATEGORY);
@@ -314,7 +313,7 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
         assert_eq!(operation.declared_ports, descriptor.declared_ports());
         for definition in descriptor.properties() {
             assert_eq!(
-                node.properties
+                node.properties()
                     .get(definition.name())
                     .and_then(Property::value),
                 Some(definition.default_value())
@@ -350,11 +349,11 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
 
     let transform = plugins.create_effector_operation_node("transform").unwrap();
     for key in ["tx", "ty", "scale_x", "scale_y", "rotation", "target"] {
-        assert!(transform.properties.get(key).is_some(), "missing {key}");
+        assert!(transform.properties().get(key).is_some(), "missing {key}");
     }
     let opacity = plugins.create_effector_operation_node("opacity").unwrap();
     for key in ["opacity", "mode", "target"] {
-        assert!(opacity.properties.get(key).is_some(), "missing {key}");
+        assert!(opacity.properties().get(key).is_some(), "missing {key}");
     }
 
     let manager = ProjectManager::new(Arc::new(RwLock::new(Project::new("factory"))), plugins);
@@ -399,7 +398,7 @@ fn graph_order_keyframes_and_scalar_overrides_produce_one_ensemble_and_roundtrip
         .create_text_graph("ORDER", "Arial", WIDTH, HEIGHT)
         .unwrap();
     let mut transform = plugins.create_effector_operation_node("transform").unwrap();
-    transform.properties.set(
+    transform.set_property(
         "tx".into(),
         Property::keyframe(vec![
             Keyframe::new(0.0, 0.0.into(), EasingFunction::Linear),
@@ -486,7 +485,7 @@ fn missing_invalid_unknown_and_scalar_no_output_never_restore_embedded_effectors
         EvalOutput::NoOutput
     );
 
-    let mut invalid_mode = opacity.properties.clone();
+    let mut invalid_mode = opacity.properties().clone();
     invalid_mode.set(
         "mode".into(),
         Property::keyframe(vec![Keyframe::new(
@@ -513,7 +512,7 @@ fn missing_invalid_unknown_and_scalar_no_output_never_restore_embedded_effectors
             &scalar_context,
             "opacity",
             opacity.id,
-            &opacity.properties,
+            opacity.properties(),
             0.0
         ),
         EvalOutput::NoOutput
@@ -526,12 +525,12 @@ fn missing_invalid_unknown_and_scalar_no_output_never_restore_embedded_effectors
     let mut graph = manager
         .create_text_graph("unknown", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let mut unknown = plugins.create_effector_operation_node("opacity").unwrap();
+    let unknown = plugins.create_effector_operation_node("opacity").unwrap();
     let unknown_id = unknown.id;
-    let NodeContent::PluginOperation(operation) = &mut unknown.content else {
-        panic!()
-    };
-    operation.component_id = "unavailable-effector".into();
+    let mut persisted = serde_json::to_value(unknown).unwrap();
+    persisted["content"]["data"]["component_id"] =
+        serde_json::Value::String("unavailable-effector".into());
+    let unknown: Node = serde_json::from_value(persisted).unwrap();
     graph.nodes.push(unknown);
     insert_effector_chain(&mut graph, &[unknown_id]);
     let (project, _) = project_with_graph(graph, 0.0, 2.0);
@@ -725,7 +724,7 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
         .iter()
         .find(|node| {
             matches!(
-                node.content,
+                node.content(),
                 NodeContent::Generator(library::model::GeneratorContent::Text)
             )
         })
@@ -817,7 +816,7 @@ fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds
         .iter()
         .find(|node| {
             matches!(
-                node.content,
+                node.content(),
                 NodeContent::Generator(library::model::GeneratorContent::Shape)
             )
         })
@@ -855,7 +854,7 @@ fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds
     set_constant(source, "rotation", 21.0.into());
 
     for node in &mut graph.nodes {
-        let NodeContent::PluginOperation(operation) = &node.content else {
+        let NodeContent::PluginOperation(operation) = node.content() else {
             continue;
         };
         match operation.component_id.as_str() {
@@ -948,7 +947,7 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
         .iter()
         .find(|node| {
             matches!(
-                node.content,
+                node.content(),
                 NodeContent::Generator(library::model::GeneratorContent::Text)
             )
         })
@@ -1051,7 +1050,7 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
         .iter()
         .find(|node| {
             matches!(
-                node.content,
+                node.content(),
                 NodeContent::Generator(library::model::GeneratorContent::Shape)
             )
         })
@@ -1114,7 +1113,7 @@ fn style_local_scope_time_drives_ensemble_bounds_and_pixels() {
         .iter()
         .find(|node| {
             matches!(
-                node.content,
+                node.content(),
                 NodeContent::Generator(library::model::GeneratorContent::Text)
             )
         })
@@ -1125,7 +1124,7 @@ fn style_local_scope_time_drives_ensemble_bounds_and_pixels() {
         .iter()
         .find(|node| {
             matches!(
-                &node.content,
+                node.content(),
                 NodeContent::PluginOperation(operation) if operation.category == "style"
             )
         })
@@ -1217,7 +1216,7 @@ fn shape_variadic_effector_input_applies_single_element_transform() {
         .iter()
         .find(|node| {
             matches!(
-                node.content,
+                node.content(),
                 NodeContent::Generator(library::model::GeneratorContent::Shape)
             )
         })

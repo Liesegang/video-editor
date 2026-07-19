@@ -1,6 +1,9 @@
+mod support;
+
 use std::sync::Arc;
 
 use library::animation::EasingFunction;
+use library::editor::project_service::MediaNodeRequest;
 use library::framing::get_frame_from_project;
 use library::model::asset::{Asset, AssetKind};
 use library::model::frame::entity::{FrameContent, FrameGroup, FrameItem, FrameObject};
@@ -10,12 +13,12 @@ use library::model::project::{
     PortOwner, Project, ProjectGraphError, TIME_PORT, VALUE_INPUT_PORT, VALUE_OUTPUT_PORT,
 };
 use library::model::property::{Keyframe, Property, PropertyValue};
-use library::model::{
-    Clip, MediaContent, Node, NodeContent, TIME_MODULO_PERIOD_PROPERTY, ValueContent,
-};
+use library::model::{Clip, Node, NodeContent, TIME_MODULO_PERIOD_PROPERTY, ValueContent};
 use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
+
+use support::media_node_for_canvas;
 
 const FPS: f64 = 10.0;
 
@@ -52,13 +55,18 @@ fn time_graph_fixture(
 
     let modulo = Node::new_time_modulo("Time Modulo");
     let modulo_id = modulo.id;
-    let media = Node::new_media(
+    let media = media_node_for_canvas(
         "Video",
-        MediaContent {
+        MediaNodeRequest::Video {
             asset_id,
+            file_path: "virtual.mp4".to_string(),
             stream_index: None,
             audio_stream_index: None,
         },
+        320,
+        180,
+        320,
+        180,
     );
     let media_id = media.id;
     for node in [modulo, media] {
@@ -157,7 +165,7 @@ fn operation_and_merge_paths_use_the_same_source_node_time_remap() {
     let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true);
     let plugins = PluginManager::default();
     let mut effect = plugins.create_effect_operation_node("blur").unwrap();
-    effect.properties.set(
+    effect.set_property(
         "sigma_x".to_string(),
         Property::keyframe(vec![
             Keyframe::new(0.0, 0.0.into(), EasingFunction::Linear),
@@ -261,8 +269,7 @@ fn missing_invalid_and_disabled_modulo_inputs_produce_no_output() {
             .project
             .get_node_mut(fixture.modulo_id)
             .unwrap()
-            .properties
-            .set(
+            .set_property(
                 TIME_MODULO_PERIOD_PROPERTY.to_string(),
                 Property::constant(PropertyValue::Number(OrderedFloat(period))),
             );
@@ -321,9 +328,12 @@ fn modulo_wraps_negative_time_into_the_positive_loop_interval() {
 fn time_modulo_factory_ports_and_roundtrip_are_authoritative() {
     let fixture = time_graph_fixture(0.0, 0.0, 1.0, true);
     let node = fixture.project.get_node(fixture.modulo_id).unwrap();
-    assert_eq!(node.content, NodeContent::Value(ValueContent::TimeModulo));
     assert_eq!(
-        node.properties
+        node.content(),
+        &NodeContent::Value(ValueContent::TimeModulo)
+    );
+    assert_eq!(
+        node.properties()
             .get(TIME_MODULO_PERIOD_PROPERTY)
             .and_then(Property::value),
         Some(&PropertyValue::Number(OrderedFloat(1.0)))

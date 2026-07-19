@@ -59,6 +59,28 @@ pub enum GeneratorNodeRequest {
     SkSL { shader: String },
 }
 
+/// Creation-only values for a Media Node. Every public authoring path enters
+/// through `ProjectManager::create_media_node`; persisted pre-v1 Nodes still
+/// deserialize directly without being repaired or rejected.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MediaNodeRequest {
+    Audio {
+        asset_id: Uuid,
+        file_path: String,
+        audio_stream_index: Option<usize>,
+    },
+    Video {
+        asset_id: Uuid,
+        file_path: String,
+        stream_index: Option<usize>,
+        audio_stream_index: Option<usize>,
+    },
+    Image {
+        asset_id: Uuid,
+        file_path: String,
+    },
+}
+
 pub struct ProjectManager {
     project: Arc<RwLock<Project>>,
     plugin_manager: Arc<PluginManager>,
@@ -202,6 +224,84 @@ impl ProjectManager {
 
         Node::new_generator(name, content, &definitions, properties)
             .map_err(LibraryError::Validation)
+    }
+
+    /// Builds a detached Media Node with the converter defaults and source
+    /// identity materialized atomically. Callers cannot construct a half-
+    /// initialized Media Node and fill its property map later.
+    pub fn create_media_node(
+        &self,
+        name: &str,
+        request: MediaNodeRequest,
+        canvas_width: u64,
+        canvas_height: u64,
+        media_width: u64,
+        media_height: u64,
+    ) -> Result<Node, LibraryError> {
+        let (converter_kind, converter_required, content, file_path) = match request {
+            MediaNodeRequest::Audio {
+                asset_id,
+                file_path,
+                audio_stream_index,
+            } => (
+                "audio",
+                false,
+                MediaContent {
+                    asset_id,
+                    stream_index: None,
+                    audio_stream_index,
+                },
+                file_path,
+            ),
+            MediaNodeRequest::Video {
+                asset_id,
+                file_path,
+                stream_index,
+                audio_stream_index,
+            } => (
+                "video",
+                true,
+                MediaContent {
+                    asset_id,
+                    stream_index,
+                    audio_stream_index,
+                },
+                file_path,
+            ),
+            MediaNodeRequest::Image {
+                asset_id,
+                file_path,
+            } => (
+                "image",
+                true,
+                MediaContent {
+                    asset_id,
+                    stream_index: None,
+                    audio_stream_index: None,
+                },
+                file_path,
+            ),
+        };
+        let definitions = match self.plugin_manager.get_entity_converter(converter_kind) {
+            Some(converter) => converter.get_property_definitions(
+                canvas_width,
+                canvas_height,
+                media_width,
+                media_height,
+            ),
+            None if converter_required => {
+                return Err(LibraryError::Plugin(format!(
+                    "{converter_kind} converter plugin not found"
+                )));
+            }
+            None => Vec::new(),
+        };
+        let mut properties = PropertyMap::from_definitions(&definitions);
+        properties.set(
+            "file_path".to_string(),
+            Property::constant(PropertyValue::String(file_path)),
+        );
+        Ok(Node::new_media(name, content, properties))
     }
 
     /// Builds a detached Text -> Fill graph. Text produces only Shape; Fill is
@@ -398,28 +498,18 @@ impl ProjectManager {
             PropertyValue::Number(OrderedFloat(speed)),
         )
         .map_err(LibraryError::Project)?;
-        let mut node = Node::new_media(
+        let node = self.create_media_node(
             "Audio",
-            MediaContent {
+            MediaNodeRequest::Audio {
                 asset_id: reference_id,
-                stream_index: None,
                 audio_stream_index: None,
+                file_path: file_path.to_string(),
             },
-        );
-
-        // Properties
-        let defs = self
-            .plugin_manager
-            .get_entity_converter("audio")
-            .map(|p| p.get_property_definitions(0, 0, 0, 0)) // Dimensions irrelevant for audio
-            .unwrap_or_default();
-        node.properties = crate::model::property::PropertyMap::from_definitions(&defs);
-        node.properties.set(
-            "file_path".to_string(),
-            crate::model::property::Property::constant(PropertyValue::String(
-                file_path.to_string(),
-            )),
-        );
+            0,
+            0,
+            0,
+            0,
+        )?;
 
         Ok(ClipBundle::with_primary_node(clip, node))
     }
@@ -439,30 +529,10 @@ impl ProjectManager {
         canvas_width: u32,
         canvas_height: u32,
     ) -> Result<ClipBundle, LibraryError> {
-        let plugin = self
-            .plugin_manager
-            .get_entity_converter("video")
-            .ok_or_else(|| LibraryError::Plugin("Video converter plugin not found".to_string()))?;
-
         // Calculate media dimensions (placeholder or fetch from asset if available via reference_id? For now just use defaults or props)
         // Ideally we fetch asset metadata, but avoiding async or lock here if possible. ProjectService usually has asset info.
         let media_width = canvas_width as u64; // Fallback
         let media_height = canvas_height as u64;
-
-        let defs = plugin.get_property_definitions(
-            canvas_width as u64,
-            canvas_height as u64,
-            media_width,
-            media_height,
-        );
-        let mut props = crate::model::property::PropertyMap::from_definitions(&defs);
-
-        props.set(
-            "file_path".to_string(),
-            crate::model::property::Property::constant(PropertyValue::String(
-                file_path.to_string(),
-            )),
-        );
 
         let mut clip = Clip::new("Video Clip", start_time, duration);
         clip.update_timing_property(
@@ -485,15 +555,19 @@ impl ProjectManager {
             PropertyValue::Number(OrderedFloat(speed)),
         )
         .map_err(LibraryError::Project)?;
-        let mut node = Node::new_media(
+        let node = self.create_media_node(
             "Video",
-            MediaContent {
+            MediaNodeRequest::Video {
                 asset_id: reference_id,
+                file_path: file_path.to_string(),
                 stream_index: None,
                 audio_stream_index: None,
             },
-        );
-        node.properties = props;
+            u64::from(canvas_width),
+            u64::from(canvas_height),
+            media_width,
+            media_height,
+        )?;
 
         Ok(ClipBundle::with_primary_node(clip, node))
     }
@@ -507,35 +581,17 @@ impl ProjectManager {
         canvas_width: u32,
         canvas_height: u32,
     ) -> Result<ClipBundle, LibraryError> {
-        let plugin = self
-            .plugin_manager
-            .get_entity_converter("image")
-            .ok_or_else(|| LibraryError::Plugin("Image converter plugin not found".to_string()))?;
-
-        let defs = plugin.get_property_definitions(
-            canvas_width as u64,
-            canvas_height as u64,
-            canvas_width as u64,
-            canvas_height as u64,
-        );
-        let mut props = crate::model::property::PropertyMap::from_definitions(&defs);
-
-        props.set(
-            "file_path".to_string(),
-            crate::model::property::Property::constant(PropertyValue::String(
-                file_path.to_string(),
-            )),
-        );
-
-        let mut node = Node::new_media(
+        let node = self.create_media_node(
             "Image",
-            MediaContent {
+            MediaNodeRequest::Image {
                 asset_id: reference_id,
-                stream_index: None,
-                audio_stream_index: None,
+                file_path: file_path.to_string(),
             },
-        );
-        node.properties = props;
+            u64::from(canvas_width),
+            u64::from(canvas_height),
+            u64::from(canvas_width),
+            u64::from(canvas_height),
+        )?;
 
         Ok(ClipBundle::with_primary_node(
             Clip::new("Image Clip", start_time, duration),
@@ -1361,7 +1417,7 @@ mod keyframe_tests {
         );
         for definition in definitions {
             assert!(
-                node.properties.get(definition.name()).is_some(),
+                node.properties().get(definition.name()).is_some(),
                 "{} factory omitted converter property {}",
                 converter_kind,
                 definition.name()
@@ -1371,7 +1427,10 @@ mod keyframe_tests {
 
     fn assert_property_value(node: &Node, key: &str, expected: PropertyValue) {
         assert_eq!(
-            node.properties.get(key).and_then(Property::value).cloned(),
+            node.properties()
+                .get(key)
+                .and_then(Property::value)
+                .cloned(),
             Some(expected),
             "authoritative property {key} must match GeneratorContent"
         );
@@ -1418,7 +1477,7 @@ mod keyframe_tests {
             let read = shared.read().expect("project should remain readable");
             let keyframe = read
                 .get_node(node_id)
-                .and_then(|node| node.properties.get("opacity"))
+                .and_then(|node| node.properties().get("opacity"))
                 .and_then(|property| property.keyframe_by_id(id))
                 .expect("identified key should exist");
             assert_eq!(keyframe.time, OrderedFloat(2.0));
@@ -1433,7 +1492,7 @@ mod keyframe_tests {
         let loaded = Project::load(&saved).expect("project should deserialize");
         let loaded_keyframe = loaded
             .get_node(node_id)
-            .and_then(|node| node.properties.get("opacity"))
+            .and_then(|node| node.properties().get("opacity"))
             .and_then(|property| property.keyframe_by_id(id))
             .expect("save/load should preserve keyframe identity");
         assert_eq!(loaded_keyframe.time, OrderedFloat(2.0));
@@ -1448,12 +1507,98 @@ mod keyframe_tests {
         let read = shared.read().expect("project should remain readable");
         let property = read
             .get_node(node_id)
-            .and_then(|node| node.properties.get("opacity"))
+            .and_then(|node| node.properties().get("opacity"))
             .expect("property should remain as a constant");
         assert_eq!(property.evaluator, "constant");
         assert_eq!(
             property.value(),
             Some(&PropertyValue::Number(OrderedFloat(75.0)))
+        );
+    }
+
+    struct AudioDefaultsProbe;
+
+    impl crate::plugin::Plugin for AudioDefaultsProbe {
+        fn id(&self) -> &str {
+            "test.audio-defaults-probe"
+        }
+
+        fn name(&self) -> String {
+            "Audio Defaults Probe".to_string()
+        }
+
+        fn category(&self) -> String {
+            "Converter".to_string()
+        }
+
+        fn version(&self) -> (u32, u32, u32) {
+            (0, 1, 0)
+        }
+    }
+
+    impl crate::plugin::EntityConverterPlugin for AudioDefaultsProbe {
+        fn supports_kind(&self, kind: &str) -> bool {
+            kind == "audio"
+        }
+
+        fn convert_entity(
+            &self,
+            _evaluator: &crate::plugin::FrameEvaluationContext,
+            _layer: &Node,
+            _time: f64,
+        ) -> Option<crate::model::frame::entity::FrameObject> {
+            None
+        }
+
+        fn get_property_definitions(
+            &self,
+            _canvas_width: u64,
+            _canvas_height: u64,
+            _clip_width: u64,
+            _clip_height: u64,
+        ) -> Vec<PropertyDefinition> {
+            vec![PropertyDefinition::new(
+                "probe_profile",
+                PropertyUiType::Text,
+                "Probe Profile",
+                PropertyValue::String("registered-default".to_string()),
+            )]
+        }
+    }
+
+    #[test]
+    fn audio_media_factory_materializes_registered_optional_converter_defaults() {
+        let plugins = Arc::new(PluginManager::default());
+        plugins.register_entity_converter_plugin(Arc::new(AudioDefaultsProbe));
+        let manager = ProjectManager::new(
+            Arc::new(RwLock::new(Project::new("audio media factory"))),
+            plugins,
+        );
+
+        let node = manager
+            .create_media_node(
+                "Audio",
+                MediaNodeRequest::Audio {
+                    asset_id: Uuid::new_v4(),
+                    file_path: "sound.wav".to_string(),
+                    audio_stream_index: Some(2),
+                },
+                1920,
+                1080,
+                0,
+                0,
+            )
+            .expect("an optional registered audio converter should participate in authoring");
+
+        assert_eq!(
+            node.properties()
+                .get("probe_profile")
+                .and_then(Property::value),
+            Some(&PropertyValue::String("registered-default".to_string()))
+        );
+        assert_eq!(
+            node.properties().get("file_path").and_then(Property::value),
+            Some(&PropertyValue::String("sound.wav".to_string()))
         );
     }
 
@@ -1470,8 +1615,8 @@ mod keyframe_tests {
             panic!("text node factory should succeed");
         };
         assert_eq!(
-            text_node.content,
-            NodeContent::Generator(GeneratorContent::Text)
+            text_node.content(),
+            &NodeContent::Generator(GeneratorContent::Text)
         );
         assert_converter_properties(
             &manager,
@@ -1491,8 +1636,8 @@ mod keyframe_tests {
             panic!("shape node factory should succeed");
         };
         assert_eq!(
-            shape_node.content,
-            NodeContent::Generator(GeneratorContent::Shape)
+            shape_node.content(),
+            &NodeContent::Generator(GeneratorContent::Shape)
         );
         assert_converter_properties(
             &manager,
@@ -1507,8 +1652,8 @@ mod keyframe_tests {
             panic!("SkSL node factory should succeed");
         };
         assert_eq!(
-            sksl_node.content,
-            NodeContent::Generator(GeneratorContent::SkSL)
+            sksl_node.content(),
+            &NodeContent::Generator(GeneratorContent::SkSL)
         );
         assert_converter_properties(
             &manager,
@@ -1532,8 +1677,8 @@ mod keyframe_tests {
             panic!("solid node factory should succeed");
         };
         assert_eq!(
-            solid_node.content,
-            NodeContent::Generator(GeneratorContent::Solid)
+            solid_node.content(),
+            &NodeContent::Generator(GeneratorContent::Solid)
         );
         assert_converter_properties(
             &manager,
@@ -1546,7 +1691,7 @@ mod keyframe_tests {
         for node in [&text_node, &shape_node, &sksl_node, &solid_node] {
             for required_transform in ["position", "scale", "rotation", "anchor", "opacity"] {
                 assert!(
-                    node.properties.get(required_transform).is_some(),
+                    node.properties().get(required_transform).is_some(),
                     "{} omitted {required_transform}",
                     node.name
                 );

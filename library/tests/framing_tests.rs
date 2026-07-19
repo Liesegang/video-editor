@@ -1,12 +1,14 @@
+use library::model::Project;
 use library::model::asset::{Asset, AssetKind};
 use library::model::frame::entity::FrameContent;
 use library::model::project::Composition;
 use library::model::property::{Property, PropertyValue};
-use library::model::{MediaContent, Node, Project};
 use library::plugin::entity_converter::{FrameEvaluationContext, VideoEntityConverterPlugin};
 use library::plugin::properties::ConstantEvaluator;
 use library::plugin::{EntityConverterPlugin, PropertyEvaluatorRegistry};
 use std::sync::Arc;
+
+use support::media_node_for_canvas;
 
 #[test]
 fn video_converter_preserves_clip_local_source_time_and_stream() {
@@ -22,15 +24,20 @@ fn video_converter_preserves_clip_local_source_time_and_stream() {
     let asset_id = asset.id;
     project.assets.push(asset);
 
-    let mut node = Node::new_media(
+    let mut node = media_node_for_canvas(
         "Test Layer",
-        MediaContent {
+        MediaNodeRequest::Video {
             asset_id,
+            file_path: "test.mp4".to_string(),
             stream_index: None,
             audio_stream_index: None,
         },
+        1920,
+        1080,
+        1920,
+        1080,
     );
-    node.properties.set(
+    node.set_property(
         "file_path".to_string(),
         Property::constant(PropertyValue::String(
             "stale-path-is-not-used.mp4".to_string(),
@@ -60,3 +67,6 @@ fn video_converter_preserves_clip_local_source_time_and_stream() {
         } if surface.file_path == "test.mp4"
     ));
 }
+mod support;
+
+use library::editor::project_service::MediaNodeRequest;

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use library::animation::EasingFunction;
 use library::cache::CacheManager;
-use library::editor::project_service::GeneratorNodeRequest;
+use library::editor::project_service::{GeneratorNodeRequest, MediaNodeRequest};
 use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
@@ -18,8 +18,7 @@ use library::model::project::{
 };
 use library::model::property::{Keyframe, Property, PropertyValue};
 use library::model::{
-    Asset, AssetKind, BlendMode, Clip, MediaContent, Node, NodeContent, PluginOperationContent,
-    ReferenceContent, Track,
+    Asset, AssetKind, BlendMode, Clip, Node, NodeContent, ReferenceContent, Track,
 };
 use library::plugin::PluginManager;
 use library::rendering::renderer::RenderOutput;
@@ -27,7 +26,7 @@ use library::{RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
-use support::generator_node_for_canvas;
+use support::{generator_node_for_canvas, media_node_for_canvas};
 
 fn project_with_composition() -> (Project, Uuid, Uuid) {
     let mut project = Project::new("direct graph");
@@ -62,7 +61,7 @@ fn solid_node(name: &str) -> Node {
 
 fn colored_solid_node(name: &str, color: Color) -> Node {
     let mut node = solid_node(name);
-    node.properties.set(
+    node.set_property(
         "color".to_string(),
         Property::constant(PropertyValue::Color(color)),
     );
@@ -80,15 +79,17 @@ fn plugin_operation_node(
     operation: &str,
     declared_ports: Vec<PortDefinition>,
 ) -> Node {
-    Node {
-        content: NodeContent::PluginOperation(PluginOperationContent {
-            category: category.to_string(),
-            component_id: component_id.to_string(),
-            operation: operation.to_string(),
-            declared_ports,
-        }),
-        ..Node::new_merge(name)
-    }
+    let mut persisted = serde_json::to_value(Node::new_merge(name)).unwrap();
+    persisted["content"] = serde_json::json!({
+        "type": "PluginOperation",
+        "data": {
+            "category": category,
+            "component_id": component_id,
+            "operation": operation,
+            "declared_ports": declared_ports,
+        }
+    });
+    serde_json::from_value(persisted).unwrap()
 }
 
 fn add_node(project: &mut Project, container: NodeContainer, node: Node) -> Uuid {
@@ -323,7 +324,7 @@ fn unknown_plugin_operation_roundtrips_identity_ports_properties_keyframes_and_w
             PortDataType::Shape,
         )],
     );
-    shape.properties.set(
+    shape.set_property(
         "strength".to_string(),
         Property::keyframe(vec![
             Keyframe::new(
@@ -379,7 +380,7 @@ fn unknown_plugin_operation_roundtrips_identity_ports_properties_keyframes_and_w
     assert_eq!(loaded.connections[0].id, connection_id);
     assert_eq!(loaded.connections[0].order, 7);
     let loaded_shape = loaded.get_node(shape_id).unwrap();
-    let NodeContent::PluginOperation(operation) = &loaded_shape.content else {
+    let NodeContent::PluginOperation(operation) = loaded_shape.content() else {
         panic!("unknown operation must remain a PluginOperation");
     };
     assert_eq!(operation.category, "future_shape_category");
@@ -394,8 +395,8 @@ fn unknown_plugin_operation_roundtrips_identity_ports_properties_keyframes_and_w
         )]
     );
     assert_eq!(
-        loaded_shape.properties,
-        project.get_node(shape_id).unwrap().properties
+        loaded_shape.properties(),
+        project.get_node(shape_id).unwrap().properties()
     );
     assert!(loaded.validate_connections().is_empty());
     assert!(
@@ -453,7 +454,7 @@ fn plugin_and_leaf_nodes_expose_only_declared_or_consumed_ports() {
         "shape.produce",
         declared_ports.clone(),
     );
-    operation.properties.set(
+    operation.set_property(
         "authored_but_not_connectable".to_string(),
         Property::constant(PropertyValue::Boolean(true)),
     );
@@ -1707,15 +1708,20 @@ fn clip_is_the_only_timing_owner_and_metadata_connection_overrides_authored_prop
     let clip_id = clip.id;
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id).unwrap();
-    let mut node = Node::new_media(
+    let mut node = media_node_for_canvas(
         "video",
-        MediaContent {
+        MediaNodeRequest::Video {
             asset_id,
+            file_path: "fixture.mp4".to_string(),
             stream_index: None,
             audio_stream_index: None,
         },
+        320,
+        180,
+        320,
+        180,
     );
-    node.properties.set(
+    node.set_property(
         "opacity".into(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
     );

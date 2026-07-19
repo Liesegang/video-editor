@@ -532,7 +532,7 @@ pub fn show_track_list(
                                     .find_map(|node_id| project.get_node(*node_id))
                             })
                     })
-                    .map(|node| match &node.content {
+                    .map(|node| match node.content() {
                         library::model::NodeContent::Media(media) => asset_names
                             .get(&media.asset_id)
                             .cloned()

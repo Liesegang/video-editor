@@ -18,7 +18,7 @@ use library::model::project::{
     IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeGraphBundle, PortAddress, PortOwner,
     ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
-use library::model::property::{Property, PropertyMap, PropertyValue, Vec2};
+use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{Clip, Composition, Node, NodeContainer, NodeContent, Project};
 use library::plugin::{ExportSettings, LoadPlugin, LoadRequest, NativeImageLoader, PluginManager};
 use library::rendering::renderer::{Affine2D, RenderOutput, Renderer, TextRasterRequest};
@@ -32,8 +32,8 @@ const WIDTH: u32 = 128;
 const HEIGHT: u32 = 80;
 const FPS: f64 = 10.0;
 
-fn set(map: &mut PropertyMap, key: &str, value: PropertyValue) {
-    map.set(key.to_string(), Property::constant(value));
+fn set(node: &mut Node, key: &str, value: PropertyValue) {
+    node.set_property(key.to_string(), Property::constant(value));
 }
 
 fn vec2(x: f64, y: f64) -> PropertyValue {
@@ -49,16 +49,16 @@ fn rgba(r: u8, g: u8, b: u8) -> PropertyValue {
 
 fn fill(plugins: &PluginManager, color: Color) -> Node {
     let mut node = plugins.create_style_operation_node("fill").unwrap();
-    set(&mut node.properties, "color", PropertyValue::Color(color));
+    set(&mut node, "color", PropertyValue::Color(color));
     node
 }
 
 fn stroke(plugins: &PluginManager, color: Color, width: f64, dash_array: &str) -> Node {
     let mut node = plugins.create_style_operation_node("stroke").unwrap();
-    set(&mut node.properties, "color", PropertyValue::Color(color));
-    set(&mut node.properties, "width", width.into());
+    set(&mut node, "color", PropertyValue::Color(color));
+    set(&mut node, "width", width.into());
     set(
-        &mut node.properties,
+        &mut node,
         "dash_array",
         PropertyValue::String(dash_array.to_string()),
     );
@@ -74,8 +74,8 @@ fn base_node(name: &str, request: GeneratorNodeRequest) -> Node {
         u64::from(WIDTH),
         u64::from(HEIGHT),
     );
-    set(&mut node.properties, "position", vec2(8.0, 8.0));
-    set(&mut node.properties, "anchor", vec2(0.0, 0.0));
+    set(&mut node, "position", vec2(8.0, 8.0));
+    set(&mut node, "anchor", vec2(0.0, 0.0));
     node
 }
 
@@ -87,17 +87,13 @@ fn text_node(text: &str) -> Node {
             font: "Arial".to_string(),
         },
     );
+    set(&mut node, "text", PropertyValue::String(text.to_string()));
     set(
-        &mut node.properties,
-        "text",
-        PropertyValue::String(text.to_string()),
-    );
-    set(
-        &mut node.properties,
+        &mut node,
         "font_family",
         PropertyValue::String("Arial".to_string()),
     );
-    set(&mut node.properties, "size", 30.0.into());
+    set(&mut node, "size", 30.0.into());
     node
 }
 
@@ -380,18 +376,18 @@ fn decorator(plugins: &PluginManager, target: &str) -> Node {
         .create_decorator_operation_node("backplate")
         .unwrap();
     set(
-        &mut node.properties,
+        &mut node,
         "target",
         PropertyValue::String(target.to_string()),
     );
     set(
-        &mut node.properties,
+        &mut node,
         "shape",
         PropertyValue::String("RoundRect".to_string()),
     );
-    set(&mut node.properties, "color", rgba(20, 170, 60));
-    set(&mut node.properties, "padding", 2.0.into());
-    set(&mut node.properties, "radius", 3.0.into());
+    set(&mut node, "color", rgba(20, 170, 60));
+    set(&mut node, "padding", 2.0.into());
+    set(&mut node, "radius", 3.0.into());
     node
 }
 
@@ -399,10 +395,10 @@ fn decorator(plugins: &PluginManager, target: &str) -> Node {
 fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() {
     let plugins = Arc::new(PluginManager::default());
     let mut node = text_node("TEXT");
-    set(&mut node.properties, "position", vec2(14.0, 11.0));
-    set(&mut node.properties, "scale", vec2(90.0, 110.0));
-    set(&mut node.properties, "rotation", 4.0.into());
-    set(&mut node.properties, "opacity", 80.0.into());
+    set(&mut node, "position", vec2(14.0, 11.0));
+    set(&mut node, "scale", vec2(90.0, 110.0));
+    set(&mut node, "rotation", 4.0.into());
+    set(&mut node, "opacity", 80.0.into());
     let (project, node_id) =
         project_with_shape_graph(node, Vec::new(), default_text_styles(&plugins));
 
@@ -457,7 +453,7 @@ fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() {
 
     let mut moved = project.clone();
     set(
-        &mut moved.get_node_mut(node_id).unwrap().properties,
+        moved.get_node_mut(node_id).unwrap(),
         "position",
         vec2(30.0, 16.0),
     );
@@ -479,20 +475,16 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
             path: path.to_string(),
         },
     );
+    set(&mut node, "path", PropertyValue::String(path.to_string()));
+    set(&mut node, "position", vec2(22.0, 18.0));
+    set(&mut node, "rotation", 8.0.into());
+    set(&mut node, "opacity", 90.0.into());
     set(
-        &mut node.properties,
-        "path",
-        PropertyValue::String(path.to_string()),
-    );
-    set(&mut node.properties, "position", vec2(22.0, 18.0));
-    set(&mut node.properties, "rotation", 8.0.into());
-    set(&mut node.properties, "opacity", 90.0.into());
-    set(
-        &mut node.properties,
+        &mut node,
         "path_effect",
         PropertyValue::String("Corner".to_string()),
     );
-    set(&mut node.properties, "path_effect_radius", 5.0.into());
+    set(&mut node, "path_effect_radius", 5.0.into());
     let styles = vec![
         fill(
             &plugins,
@@ -546,7 +538,7 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
 
     let mut no_effect = project.clone();
     set(
-        &mut no_effect.get_node_mut(node_id).unwrap().properties,
+        no_effect.get_node_mut(node_id).unwrap(),
         "path_effect",
         PropertyValue::String("None".to_string()),
     );
@@ -558,7 +550,7 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
 
     let mut moved = project.clone();
     set(
-        &mut moved.get_node_mut(node_id).unwrap().properties,
+        moved.get_node_mut(node_id).unwrap(),
         "position",
         vec2(44.0, 28.0),
     );
@@ -571,7 +563,7 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
     for malformed in ["", "this is not SVG path data"] {
         let mut invalid = project.clone();
         set(
-            &mut invalid.get_node_mut(node_id).unwrap().properties,
+            invalid.get_node_mut(node_id).unwrap(),
             "path",
             PropertyValue::String(malformed.to_string()),
         );
@@ -600,13 +592,13 @@ half4 main(float2 fragCoord) {
         },
     );
     set(
-        &mut node.properties,
+        &mut node,
         "shader",
         PropertyValue::String(shader.to_string()),
     );
-    set(&mut node.properties, "width", 96.0.into());
-    set(&mut node.properties, "height", 54.0.into());
-    set(&mut node.properties, "position", vec2(10.0, 9.0));
+    set(&mut node, "width", 96.0.into());
+    set(&mut node, "height", 54.0.into());
+    set(&mut node, "position", vec2(10.0, 9.0));
     let (project, _) = project_with_image_node(node);
 
     let frame = evaluate(&project, 0, &plugins).unwrap();
@@ -641,12 +633,12 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
     let plugins = Arc::new(PluginManager::default());
     let source = text_node("ABCD");
     let mut step = effector(&plugins, "step_delay");
-    set(&mut step.properties, "delay", 0.2.into());
-    set(&mut step.properties, "duration", 0.2.into());
-    set(&mut step.properties, "from_opacity", 0.0.into());
-    set(&mut step.properties, "to_opacity", 100.0.into());
+    set(&mut step, "delay", 0.2.into());
+    set(&mut step, "duration", 0.2.into());
+    set(&mut step, "from_opacity", 0.0.into());
+    set(&mut step, "to_opacity", 100.0.into());
     set(
-        &mut step.properties,
+        &mut step,
         "target",
         PropertyValue::String("Block".to_string()),
     );
@@ -692,12 +684,12 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
     assert!(light_sum(&end) > light_sum(&middle));
 
     let mut random = effector(&plugins, "randomize");
-    set(&mut random.properties, "seed", 7.0.into());
-    set(&mut random.properties, "translate_range", 4.0.into());
-    set(&mut random.properties, "rotate_range", 8.0.into());
-    set(&mut random.properties, "scale_range", 0.35.into());
+    set(&mut random, "seed", 7.0.into());
+    set(&mut random, "translate_range", 4.0.into());
+    set(&mut random, "rotate_range", 8.0.into());
+    set(&mut random, "scale_range", 0.35.into());
     set(
-        &mut random.properties,
+        &mut random,
         "target",
         PropertyValue::String("Char".to_string()),
     );
@@ -721,7 +713,7 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
 
     let mut changed_seed = randomized.clone();
     set(
-        &mut changed_seed.get_node_mut(random_id).unwrap().properties,
+        changed_seed.get_node_mut(random_id).unwrap(),
         "seed",
         8.0.into(),
     );
@@ -732,8 +724,8 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
     );
 
     let mut scale_random = random;
-    set(&mut scale_random.properties, "translate_range", 0.0.into());
-    set(&mut scale_random.properties, "rotate_range", 0.0.into());
+    set(&mut scale_random, "translate_range", 0.0.into());
+    set(&mut scale_random, "rotate_range", 0.0.into());
     let (scale_only, _) = project_with_shape_graph(
         source,
         vec![step, scale_random],
@@ -756,7 +748,7 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
         .values()
         .find(|node| {
             matches!(
-                &node.content,
+                node.content(),
                 NodeContent::PluginOperation(operation)
                     if operation.category == "effector" && operation.component_id == "opacity"
             )
@@ -771,7 +763,7 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
         .values()
         .find(|node| {
             matches!(
-                &node.content,
+                node.content(),
                 NodeContent::PluginOperation(operation)
                     if operation.category == "decorator" && operation.component_id == "backplate"
             )
@@ -823,9 +815,9 @@ fn multiline_backplates_cover_char_line_block_and_follow_transforms() {
         let base_image = preview(&base_project, 0, &plugins).unwrap();
 
         let mut transform = effector(&plugins, "transform");
-        set(&mut transform.properties, "tx", 24.0.into());
-        set(&mut transform.properties, "ty", 5.0.into());
-        set(&mut transform.properties, "rotation", 6.0.into());
+        set(&mut transform, "tx", 24.0.into());
+        set(&mut transform, "ty", 5.0.into());
+        set(&mut transform, "rotation", 6.0.into());
         let (moved, _) = project_with_shape_graph(
             base,
             vec![backplate, transform],
@@ -848,12 +840,12 @@ fn effector_block_line_and_char_targets_are_distinct_in_multiline_pixels() {
     let render_target = |target: &str| {
         let node = text_node("AB\nCD");
         let mut step = effector(&plugins, "step_delay");
-        set(&mut step.properties, "delay", 0.3.into());
-        set(&mut step.properties, "duration", 0.1.into());
-        set(&mut step.properties, "from_opacity", 0.0.into());
-        set(&mut step.properties, "to_opacity", 100.0.into());
+        set(&mut step, "delay", 0.3.into());
+        set(&mut step, "duration", 0.1.into());
+        set(&mut step, "from_opacity", 0.0.into());
+        set(&mut step, "to_opacity", 100.0.into());
         set(
-            &mut step.properties,
+            &mut step,
             "target",
             PropertyValue::String(target.to_string()),
         );
@@ -887,8 +879,10 @@ fn empty_text_is_safe_missing_text_is_validation_and_parts_is_render_error() {
     let empty = preview(&empty_project, 0, &plugins).unwrap();
     assert_eq!(light_sum(&empty), 0);
 
-    let mut missing_node = text_node("missing");
-    missing_node.properties = PropertyMap::new();
+    let complete_node = text_node("missing");
+    let mut missing_json = serde_json::to_value(complete_node).unwrap();
+    missing_json["properties"] = serde_json::json!({});
+    let missing_node: Node = serde_json::from_value(missing_json).unwrap();
     let (missing_project, _) =
         project_with_shape_graph(missing_node, Vec::new(), default_text_styles(&plugins));
     assert!(

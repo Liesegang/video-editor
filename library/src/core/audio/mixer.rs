@@ -625,7 +625,7 @@ pub fn render_samples(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::property::{Property, PropertyValue};
+    use crate::model::property::{Property, PropertyMap, PropertyValue};
     use crate::model::{MediaContent, NodeContainer};
     use ordered_float::OrderedFloat;
     use std::path::PathBuf;
@@ -709,6 +709,7 @@ mod tests {
                 stream_index: is_video.then_some(0),
                 audio_stream_index,
             },
+            PropertyMap::new(),
         );
         node.enabled = enabled;
         let node_id = node.id;
@@ -1017,6 +1018,7 @@ mod tests {
                 stream_index: Some(0),
                 audio_stream_index: Some(2),
             },
+            PropertyMap::new(),
         );
         let node_id = node.id;
         project.add_node(node);

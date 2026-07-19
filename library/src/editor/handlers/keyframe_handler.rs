@@ -38,8 +38,7 @@ impl KeyframeHandler {
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        Self::add_keyframe_with_id(project, owner, property_key, time, value, easing)
-            .map(|_| ())
+        Self::add_keyframe_with_id(project, owner, property_key, time, value, easing).map(|_| ())
     }
 
     pub fn add_keyframe_with_id(
@@ -198,7 +197,7 @@ mod tests {
     use crate::animation::EasingFunction;
     use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
     use crate::model::frame::color::Color;
-    use crate::model::property::{Keyframe, PropertyValue};
+    use crate::model::property::{Keyframe, PropertyMap, PropertyValue};
     use crate::model::{Node, PluginOperationContent};
     use ordered_float::OrderedFloat;
 
@@ -301,7 +300,9 @@ mod tests {
             ("decorator", 40.0, 41.0),
         ] {
             let (property, keyframe_id) = keyframed(initial);
-            let mut node = Node::new_plugin_operation(
+            let mut properties = PropertyMap::new();
+            properties.set("amount".to_string(), property);
+            let node = Node::new_plugin_operation(
                 category,
                 PluginOperationContent {
                     category: category.to_string(),
@@ -309,8 +310,8 @@ mod tests {
                     operation: "test.apply.v1".to_string(),
                     declared_ports: Vec::new(),
                 },
+                properties,
             );
-            node.properties.set("amount".to_string(), property);
             addresses.push((PropertyOwner::Node(node.id), keyframe_id, updated));
             model.add_node(node);
         }

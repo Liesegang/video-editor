@@ -180,7 +180,7 @@ mod tests {
     }
 
     fn node_property(project: &Project, node_id: Uuid, key: &str) -> Option<Property> {
-        project.get_node(node_id)?.properties.get(key).cloned()
+        project.get_node(node_id)?.properties().get(key).cloned()
     }
 
     #[test]
@@ -192,12 +192,9 @@ mod tests {
         let mut project = Project::new("inspector keyframes");
         project.add_node(node);
         let project = Arc::new(RwLock::new(project));
-        let mut service = EditorService::new(
-            Arc::clone(&project),
-            plugins,
-            Arc::new(CacheManager::new()),
-        )
-        .unwrap();
+        let mut service =
+            EditorService::new(Arc::clone(&project), plugins, Arc::new(CacheManager::new()))
+                .unwrap();
         let mut history = HistoryManager::new();
         history.push_project_state(project.read().unwrap().clone());
 
@@ -209,9 +206,7 @@ mod tests {
             PropertyOwner::Node(node_id),
             2.5,
         );
-        assert!(context.handle_toggle_keyframe("sigma_x", number(10.0), |_| {
-            property.clone()
-        }));
+        assert!(context.handle_toggle_keyframe("sigma_x", number(10.0), |_| { property.clone() }));
         assert_eq!(history.undo_depth(), initial_depth + 1);
 
         let keyframed = node_property(&project.read().unwrap(), node_id, "sigma_x")
@@ -246,9 +241,7 @@ mod tests {
             PropertyOwner::Node(node_id),
             2.5,
         );
-        assert!(context.handle_toggle_keyframe("sigma_x", number(0.0), |_| {
-            property.clone()
-        }));
+        assert!(context.handle_toggle_keyframe("sigma_x", number(0.0), |_| { property.clone() }));
         let restored = node_property(&project.read().unwrap(), node_id, "sigma_x").unwrap();
         assert_eq!(restored.evaluator, "constant");
         assert_eq!(restored.value(), Some(&number(20.0)));
@@ -276,11 +269,7 @@ mod tests {
             1.25,
         );
 
-        assert!(context.handle_toggle_keyframe(
-            "new_amount",
-            number(7.5),
-            |_| None,
-        ));
+        assert!(context.handle_toggle_keyframe("new_amount", number(7.5), |_| None,));
         let property = node_property(&project.read().unwrap(), node_id, "new_amount").unwrap();
         assert_eq!(property.evaluator, "keyframe");
         assert_eq!(property.keyframes()[0].value, number(7.5));

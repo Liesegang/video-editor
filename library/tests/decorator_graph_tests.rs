@@ -34,8 +34,7 @@ const HEIGHT: u64 = 80;
 const FPS: f64 = 10.0;
 
 fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
-    node.properties
-        .set(key.to_string(), Property::constant(value));
+    node.set_property(key.to_string(), Property::constant(value));
 }
 
 fn shape_wire(from: Uuid, to: Uuid) -> ProjectConnection {
@@ -52,7 +51,7 @@ fn shape_source_id(graph: &NodeGraphBundle) -> Uuid {
         .iter()
         .find(|node| {
             matches!(
-                node.content,
+                node.content(),
                 NodeContent::Generator(
                     library::model::GeneratorContent::Text
                         | library::model::GeneratorContent::Shape
@@ -162,7 +161,7 @@ fn descriptor_factory_and_text_shape_sources_have_complete_typed_contracts() {
     let decorator = plugins
         .create_decorator_operation_node("backplate")
         .unwrap();
-    let NodeContent::PluginOperation(operation) = &decorator.content else {
+    let NodeContent::PluginOperation(operation) = decorator.content() else {
         panic!()
     };
     assert_eq!(operation.category, DECORATOR_CATEGORY);
@@ -180,7 +179,7 @@ fn descriptor_factory_and_text_shape_sources_have_complete_typed_contracts() {
     for definition in descriptor.properties() {
         assert_eq!(
             decorator
-                .properties
+                .properties()
                 .get(definition.name())
                 .and_then(Property::value),
             Some(definition.default_value())
@@ -257,7 +256,7 @@ fn graph_order_keyframes_and_scalar_overrides_build_decorators_and_roundtrip() {
     let mut first = plugins
         .create_decorator_operation_node("backplate")
         .unwrap();
-    first.properties.set(
+    first.set_property(
         "padding".into(),
         Property::keyframe(vec![
             Keyframe::new(0.0, 0.0.into(), EasingFunction::Linear),
@@ -354,7 +353,7 @@ fn missing_invalid_unknown_and_scalar_no_output_do_not_restore_legacy_decorators
         EvalOutput::NoOutput
     );
 
-    let mut invalid_shape = backplate.properties.clone();
+    let mut invalid_shape = backplate.properties().clone();
     invalid_shape.set(
         "shape".into(),
         Property::keyframe(vec![Keyframe::new(
@@ -387,7 +386,7 @@ fn missing_invalid_unknown_and_scalar_no_output_do_not_restore_legacy_decorators
             &scalar_context,
             "backplate",
             backplate.id,
-            &backplate.properties,
+            backplate.properties(),
             0.0
         ),
         EvalOutput::NoOutput
@@ -400,14 +399,14 @@ fn missing_invalid_unknown_and_scalar_no_output_do_not_restore_legacy_decorators
     let mut graph = manager
         .create_text_graph("unknown", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let mut unknown = plugins
+    let unknown = plugins
         .create_decorator_operation_node("backplate")
         .unwrap();
     let unknown_id = unknown.id;
-    let NodeContent::PluginOperation(operation) = &mut unknown.content else {
-        panic!()
-    };
-    operation.component_id = "unavailable-decorator".into();
+    let mut unknown_json = serde_json::to_value(unknown).unwrap();
+    unknown_json["content"]["data"]["component_id"] =
+        serde_json::Value::String("unavailable-decorator".to_string());
+    let unknown: Node = serde_json::from_value(unknown_json).unwrap();
     graph.nodes.push(unknown);
     insert_decorator_chain(&mut graph, &[unknown_id]);
     let (project, _) = project_with_graph(graph, 0.0, 2.0);
@@ -528,16 +527,16 @@ fn graph_backplate_pixels_are_stable_across_project_roundtrip() {
         Arc::new(RwLock::new(Project::new("factory"))),
         plugins.clone(),
     );
-    let configure = |properties: &mut PropertyMap| {
-        properties.set(
+    let configure = |node: &mut Node| {
+        node.set_property(
             "target".into(),
             Property::constant(PropertyValue::String("Char".into())),
         );
-        properties.set(
+        node.set_property(
             "shape".into(),
             Property::constant(PropertyValue::String("RoundRect".into())),
         );
-        properties.set(
+        node.set_property(
             "color".into(),
             Property::constant(PropertyValue::Color(Color {
                 r: 20,
@@ -546,8 +545,8 @@ fn graph_backplate_pixels_are_stable_across_project_roundtrip() {
                 a: 255,
             })),
         );
-        properties.set("padding".into(), Property::constant(3.0.into()));
-        properties.set("radius".into(), Property::constant(2.0.into()));
+        node.set_property("padding".into(), Property::constant(3.0.into()));
+        node.set_property("radius".into(), Property::constant(2.0.into()));
     };
 
     let mut graph = manager
@@ -556,7 +555,7 @@ fn graph_backplate_pixels_are_stable_across_project_roundtrip() {
     let mut backplate = plugins
         .create_decorator_operation_node("backplate")
         .unwrap();
-    configure(&mut backplate.properties);
+    configure(&mut backplate);
     let backplate_id = backplate.id;
     graph.nodes.push(backplate);
     insert_decorator_chain(&mut graph, &[backplate_id]);

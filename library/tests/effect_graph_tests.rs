@@ -42,8 +42,7 @@ fn output_port(key: &str, data_type: PortDataType) -> PortDefinition {
 }
 
 fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
-    node.properties
-        .set(key.to_string(), Property::constant(value));
+    node.set_property(key.to_string(), Property::constant(value));
 }
 
 fn vec2(x: f64, y: f64) -> PropertyValue {
@@ -145,7 +144,7 @@ fn effect_descriptor_factory_materializes_defaults_and_distinct_image_ports() {
             .operation_descriptor(EFFECT_CATEGORY, &component_id, EFFECT_APPLY_OPERATION)
             .unwrap();
         let node = plugins.create_effect_operation_node(&component_id).unwrap();
-        let NodeContent::PluginOperation(operation) = &node.content else {
+        let NodeContent::PluginOperation(operation) = node.content() else {
             panic!("Effect factory must create a plugin operation");
         };
         assert_eq!(operation.category, EFFECT_CATEGORY);
@@ -153,7 +152,7 @@ fn effect_descriptor_factory_materializes_defaults_and_distinct_image_ports() {
         assert_eq!(operation.component_id, component_id);
         for definition in descriptor.properties() {
             assert_eq!(
-                node.properties
+                node.properties()
                     .get(definition.name())
                     .and_then(Property::value),
                 Some(definition.default_value())
@@ -218,7 +217,7 @@ fn effect_chain_uses_wiring_order_and_evaluates_keyframes_and_scalar_overrides()
         .unwrap();
     let mut blur = plugins.create_effect_operation_node("blur").unwrap();
     let dilate = plugins.create_effect_operation_node("dilate").unwrap();
-    blur.properties.set(
+    blur.set_property(
         "sigma_x".into(),
         Property::keyframe(vec![
             Keyframe::new(0.0, 0.0.into(), EasingFunction::Linear),
@@ -290,13 +289,13 @@ fn unknown_missing_input_and_scalar_no_output_effects_are_safe_no_output() {
     let source = manager
         .create_solid_node(Color::white(), WIDTH, HEIGHT)
         .unwrap();
-    let mut unknown = plugins.create_effect_operation_node("blur").unwrap();
+    let unknown = plugins.create_effect_operation_node("blur").unwrap();
     let source_id = source.id;
     let unknown_id = unknown.id;
-    let NodeContent::PluginOperation(operation) = &mut unknown.content else {
-        panic!()
-    };
-    operation.component_id = "unavailable-effect".into();
+    let mut unknown_json = serde_json::to_value(unknown).unwrap();
+    unknown_json["content"]["data"]["component_id"] =
+        serde_json::Value::String("unavailable-effect".to_string());
+    let unknown: Node = serde_json::from_value(unknown_json).unwrap();
     let (project, _) = project_with_graph(
         NodeGraphBundle::new(
             vec![source, unknown],
@@ -326,7 +325,7 @@ fn unknown_missing_input_and_scalar_no_output_effects_are_safe_no_output() {
             plugin_manager: &plugins,
             resolved_inputs: Some(&inputs),
         };
-        context.build_operation_effect("blur", descriptor.properties(), &blur.properties, 0.0)
+        context.build_operation_effect("blur", descriptor.properties(), blur.properties(), 0.0)
     };
     assert!(operation_effect("sigma_x", EvalOutput::NoOutput).is_none());
     assert!(
@@ -345,7 +344,7 @@ fn unknown_missing_input_and_scalar_no_output_effects_are_safe_no_output() {
         .is_none()
     );
 
-    let mut invalid_keyframe = blur.properties.clone();
+    let mut invalid_keyframe = blur.properties().clone();
     invalid_keyframe.set(
         "tile_mode".into(),
         Property::keyframe(vec![Keyframe::new(

@@ -26,10 +26,7 @@ impl PropertyOwner {
     }
 }
 
-pub fn property_map(
-    project: &Project,
-    owner: PropertyOwner,
-) -> Result<&PropertyMap, LibraryError> {
+pub fn property_map(project: &Project, owner: PropertyOwner) -> Result<&PropertyMap, LibraryError> {
     match owner {
         PropertyOwner::Clip(clip_id) => project
             .get_clip(clip_id)
@@ -37,7 +34,7 @@ pub fn property_map(
             .ok_or_else(|| LibraryError::Project(format!("Clip {clip_id} not found"))),
         PropertyOwner::Node(node_id) => project
             .get_node(node_id)
-            .map(|node| &node.properties)
+            .map(|node| node.properties())
             .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found"))),
     }
 }
@@ -53,7 +50,7 @@ pub fn property_map_mut(
             .ok_or_else(|| LibraryError::Project(format!("Clip {clip_id} not found"))),
         PropertyOwner::Node(node_id) => project
             .get_node_mut(node_id)
-            .map(|node| &mut node.properties)
+            .map(|node| node.properties_mut())
             .ok_or_else(|| LibraryError::Project(format!("Node {node_id} not found"))),
     }
 }

@@ -29,7 +29,7 @@ fn prepare_keyframe_dialog_update(
     let entity_id = state.entity_id?;
     let current_value = match owner {
         library::PropertyOwner::Node(node_id) => {
-            project.get_node(node_id).map(|node| &node.properties)
+            project.get_node(node_id).map(|node| node.properties())
         }
         library::PropertyOwner::Clip(clip_id) => {
             project.get_clip(clip_id).map(|clip| &clip.properties)
@@ -466,8 +466,7 @@ mod tests {
         let keyframe_id = keyframe.id;
         let mut node = Node::new_merge("dialog");
         let node_id = node.id;
-        node.properties
-            .set("position".to_string(), Property::keyframe(vec![keyframe]));
+        node.set_property("position".to_string(), Property::keyframe(vec![keyframe]));
         let mut clip = Clip::new("mapped", 4.0, 8.0);
         clip.trim_in = OrderedFloat(1.5);
         clip.time_stretch = OrderedFloat(0.5);
@@ -514,8 +513,7 @@ mod tests {
         let keyframe_id = keyframe.id;
         let mut node = Node::new_merge("dialog history");
         let node_id = node.id;
-        node.properties
-            .set("amount".to_string(), Property::keyframe(vec![keyframe]));
+        node.set_property("amount".to_string(), Property::keyframe(vec![keyframe]));
         let mut initial = Project::new("dialog history");
         initial.add_node(node);
         let project = Arc::new(RwLock::new(initial.clone()));
@@ -603,7 +601,7 @@ mod tests {
         let keyframe = after_value
             .get_node(node_id)
             .unwrap()
-            .properties
+            .properties()
             .get("amount")
             .unwrap()
             .keyframe_by_id(keyframe_id)

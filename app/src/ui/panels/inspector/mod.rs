@@ -7,15 +7,11 @@ use library::model::node::{
     CLIP_TRIM_IN_PROPERTY,
 };
 use library::model::project::{
-    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortOwner, Project, ProjectConnection,
+    PortOwner, Project, ProjectConnection, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
-use library::model::property::{
-    PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
-};
-use library::model::{
-    Clip, Composition, GeneratorContent, Node, NodeContent, Track, ValueContent,
-};
+use library::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
+use library::model::{Clip, Composition, GeneratorContent, Node, NodeContent, Track, ValueContent};
 use library::plugin::PluginManager;
 use library::{EditorService, PropertyOwner};
 use ordered_float::OrderedFloat;
@@ -28,7 +24,7 @@ pub mod action_handler;
 pub mod properties;
 
 use action_handler::ActionContext;
-use properties::{PropertyRenderContext, render_property_rows};
+use properties::{render_property_rows, PropertyRenderContext};
 
 #[derive(Clone, Debug)]
 #[allow(
@@ -463,11 +459,11 @@ fn render_semantic_graph_facade(
     let values = native_value_nodes(nodes);
     let merges = nodes
         .iter()
-        .filter(|node| matches!(node.content, NodeContent::Merge))
+        .filter(|node| matches!(node.content(), NodeContent::Merge))
         .collect::<Vec<_>>();
     let operations = nodes
         .iter()
-        .filter(|node| matches!(node.content, NodeContent::PluginOperation(_)))
+        .filter(|node| matches!(node.content(), NodeContent::PluginOperation(_)))
         .collect::<Vec<_>>();
 
     ui.heading("Source");
@@ -648,8 +644,7 @@ fn render_semantic_graph_facade(
     if operations.is_empty() && merges.is_empty() {
         ui.add_space(8.0);
         ui.label(
-            egui::RichText::new("No explicit appearance, animation, or compositing Nodes.")
-                .weak(),
+            egui::RichText::new("No explicit appearance, animation, or compositing Nodes.").weak(),
         );
     }
 }
@@ -659,7 +654,7 @@ fn semantic_visual_sources(nodes: &[Node]) -> Vec<&Node> {
         .iter()
         .filter(|node| {
             matches!(
-                node.content,
+                node.content(),
                 NodeContent::Media(_) | NodeContent::Generator(_) | NodeContent::Reference(_)
             )
         })
@@ -669,7 +664,7 @@ fn semantic_visual_sources(nodes: &[Node]) -> Vec<&Node> {
 fn native_value_nodes(nodes: &[Node]) -> Vec<&Node> {
     nodes
         .iter()
-        .filter(|node| matches!(node.content, NodeContent::Value(_)))
+        .filter(|node| matches!(node.content(), NodeContent::Value(_)))
         .collect()
 }
 
@@ -715,7 +710,7 @@ fn render_value_category(
     ui.separator();
 
     for node in values {
-        let label = match node.content {
+        let label = match node.content() {
             NodeContent::Value(ValueContent::TimeModulo) => "Time Modulo / Loop",
             _ => continue,
         };
@@ -824,7 +819,7 @@ fn render_operation_category(
     ui.separator();
 
     for node in operations {
-        let NodeContent::PluginOperation(operation) = &node.content else {
+        let NodeContent::PluginOperation(operation) = node.content() else {
             continue;
         };
         let descriptor = project_service.get_plugin_manager().operation_descriptor(
@@ -1141,7 +1136,7 @@ fn content_connection_metadata(connection: &ProjectConnection) -> serde_json::Va
 }
 
 fn operation_category(node: &Node) -> Option<&str> {
-    let NodeContent::PluginOperation(operation) = &node.content else {
+    let NodeContent::PluginOperation(operation) = node.content() else {
         return None;
     };
     Some(&operation.category)
@@ -1207,7 +1202,7 @@ fn source_semantic_label(node: &Node) -> String {
 }
 
 fn source_kind(node: &Node) -> &'static str {
-    match &node.content {
+    match node.content() {
         NodeContent::Media(_) => "Media",
         NodeContent::Generator(GeneratorContent::Text) => "Text",
         NodeContent::Generator(GeneratorContent::Shape) => "Shape",
@@ -1297,7 +1292,7 @@ fn render_node_properties(
         .map(|definition| definition.name().to_owned())
         .collect();
     definitions.extend(
-        inferred_property_definitions(&node.properties, current_time)
+        inferred_property_definitions(node.properties(), current_time)
             .into_iter()
             .filter(|definition| !known_names.contains(definition.name())),
     );
@@ -1311,7 +1306,7 @@ fn render_node_properties(
             history_manager,
             editor_context,
             PropertyOwner::Node(node.id),
-            &node.properties,
+            node.properties(),
             definitions,
             current_time,
             fps,
@@ -1321,7 +1316,7 @@ fn render_node_properties(
 }
 
 fn canonical_value_property_definitions(node: &Node) -> Option<Vec<PropertyDefinition>> {
-    let NodeContent::Value(value) = &node.content else {
+    let NodeContent::Value(value) = node.content() else {
         return None;
     };
     Some(value.property_definitions().to_vec())
@@ -1331,7 +1326,7 @@ fn plugin_operation_property_definitions(
     plugin_manager: &PluginManager,
     node: &Node,
 ) -> Option<Vec<PropertyDefinition>> {
-    let NodeContent::PluginOperation(operation) = &node.content else {
+    let NodeContent::PluginOperation(operation) = node.content() else {
         return None;
     };
     match plugin_manager.operation_descriptor(
@@ -1452,9 +1447,7 @@ fn render_property_map(
         };
 
         let mut context = ActionContext::new(project_service, history_manager, owner, current_time);
-        if context.handle_actions(actions, |name| {
-            properties.get(name).cloned()
-        }) {
+        if context.handle_actions(actions, |name| properties.get(name).cloned()) {
             *needs_refresh = true;
         }
     }
@@ -1702,7 +1695,7 @@ fn commit_timing_edit(
 }
 
 fn node_display_type(node: &Node) -> String {
-    match &node.content {
+    match node.content() {
         NodeContent::Media(_) => "Media".to_string(),
         NodeContent::Generator(generator) => match generator {
             GeneratorContent::Shape => "Shape".to_string(),
@@ -2178,7 +2171,7 @@ mod tests {
             &PropertyValue::String("Round".to_string())
         );
 
-        let inferred = inferred_property_definitions(&node.properties, 0.0);
+        let inferred = inferred_property_definitions(node.properties(), 0.0);
         let inferred_width = inferred
             .iter()
             .find(|definition| definition.name() == "width")
@@ -2216,7 +2209,7 @@ mod tests {
             } if suffix == " s"
         ));
 
-        let inferred = inferred_property_definitions(&node.properties, 0.0);
+        let inferred = inferred_property_definitions(node.properties(), 0.0);
         assert_ne!(inferred[0].ui_type(), period.ui_type());
     }
 
@@ -2305,10 +2298,10 @@ mod tests {
                 .unwrap();
             let definitions = plugin_operation_property_definitions(&plugins, &node)
                 .expect("installed Effector descriptor");
-            assert_eq!(definitions.len(), node.properties.iter().count());
+            assert_eq!(definitions.len(), node.properties().iter().count());
             for definition in &definitions {
                 assert_eq!(
-                    node.properties
+                    node.properties()
                         .get(definition.name())
                         .map(|property| property.evaluate_at(0.0)),
                     Some(definition.default_value().clone()),
@@ -2357,15 +2350,29 @@ mod tests {
     #[test]
     fn unknown_plugin_operation_roundtrips_and_falls_back_to_lossless_generic_controls() {
         let plugins = PluginManager::default();
-        let mut node = plugins.create_effector_operation_node("opacity").unwrap();
+        let node = plugins.create_effector_operation_node("opacity").unwrap();
         let node_id = node.id;
-        let NodeContent::PluginOperation(operation) = &mut node.content else {
+        let NodeContent::PluginOperation(operation) = node.content() else {
             panic!("factory returned a PluginOperation")
         };
-        operation.category = EFFECTOR_CATEGORY.to_string();
-        operation.component_id = "third.party.unavailable-opacity".to_string();
-        operation.operation = EFFECTOR_APPLY_OPERATION.to_string();
         let expected_ports = operation.declared_ports.clone();
+        let mut encoded_node = serde_json::to_value(node).unwrap();
+        let operation = encoded_node["content"]["data"]
+            .as_object_mut()
+            .expect("serialized PluginOperation content");
+        operation.insert(
+            "category".to_string(),
+            serde_json::Value::String(EFFECTOR_CATEGORY.to_string()),
+        );
+        operation.insert(
+            "component_id".to_string(),
+            serde_json::Value::String("third.party.unavailable-opacity".to_string()),
+        );
+        operation.insert(
+            "operation".to_string(),
+            serde_json::Value::String(EFFECTOR_APPLY_OPERATION.to_string()),
+        );
+        let node: Node = serde_json::from_value(encoded_node).unwrap();
         let expected_node = node.clone();
 
         let mut project = Project::new("foreign plugin roundtrip");
@@ -2376,7 +2383,7 @@ mod tests {
             .get_node(node_id)
             .expect("roundtripped operation Node");
         assert_eq!(restored, &expected_node);
-        let NodeContent::PluginOperation(restored_operation) = &restored.content else {
+        let NodeContent::PluginOperation(restored_operation) = restored.content() else {
             panic!("roundtripped PluginOperation identity")
         };
         assert_eq!(restored_operation.declared_ports, expected_ports);
@@ -2388,8 +2395,8 @@ mod tests {
                 EFFECTOR_CATEGORY, EFFECTOR_APPLY_OPERATION
             )
         );
-        let fallback = inferred_property_definitions(&restored.properties, 0.0);
-        assert_eq!(fallback.len(), restored.properties.iter().count());
+        let fallback = inferred_property_definitions(restored.properties(), 0.0);
+        assert_eq!(fallback.len(), restored.properties().iter().count());
         for property_name in ["opacity", "mode", "target"] {
             assert!(
                 fallback
@@ -2420,10 +2427,8 @@ mod tests {
         let node_stretch =
             crate::ui::panels::node_editor::node_timing_drag_config(stretch).unwrap();
         assert_eq!(node_stretch.hard_min, Some(0.0));
-        assert!(
-            stretch
-                .validate_value(&PropertyValue::Number(OrderedFloat(0.0)))
-                .is_ok()
-        );
+        assert!(stretch
+            .validate_value(&PropertyValue::Number(OrderedFloat(0.0)))
+            .is_ok());
     }
 }
