@@ -127,6 +127,60 @@ fn preview_content_rect(
     ))
 }
 
+fn register_preview_qa_components(
+    preview_rect: egui::Rect,
+    composition: Option<(uuid::Uuid, u64, u64)>,
+    editor_context: &EditorContext,
+) {
+    if !crate::qa::is_enabled() {
+        return;
+    }
+
+    let preview_content = composition.and_then(|(composition_id, width, height)| {
+        preview_content_rect(
+            preview_rect,
+            editor_context.view.pan,
+            editor_context.view.zoom,
+            egui::vec2(width as f32, height as f32),
+        )
+        .map(|rect| (composition_id, width, height, rect))
+    });
+    crate::qa::register_component_with_metadata(
+        "preview.canvas",
+        "preview_canvas",
+        preview_rect,
+        true,
+        Some(serde_json::json!({
+            "pan": {"x": editor_context.view.pan.x, "y": editor_context.view.pan.y},
+            "zoom": editor_context.view.zoom,
+            "auto_fit": editor_context.interaction.preview_viewport.auto_fit,
+            "primary_gesture": format!(
+                "{:?}",
+                editor_context.interaction.preview_viewport.primary_gesture
+            ),
+            "composition_id": preview_content.map(|content| content.0),
+            "texture_width": editor_context.preview_texture_width,
+            "texture_height": editor_context.preview_texture_height,
+        })),
+    );
+    if let Some((composition_id, width, height, content_rect)) = preview_content {
+        crate::qa::register_component_with_metadata(
+            "preview.content",
+            "preview_composition_content",
+            content_rect,
+            true,
+            Some(serde_json::json!({
+                "composition_id": composition_id,
+                "canvas_width": width,
+                "canvas_height": height,
+                "pan": {"x": editor_context.view.pan.x, "y": editor_context.view.pan.y},
+                "zoom": editor_context.view.zoom,
+                "auto_fit": editor_context.interaction.preview_viewport.auto_fit,
+            })),
+        );
+    }
+}
+
 /// Keep the derived Preview camera fitted without putting presentation state
 /// into the authoritative Project.
 ///
@@ -531,53 +585,6 @@ pub fn preview_panel(
 
     if viewport_changed {
         editor_context.interaction.preview_viewport.auto_fit = false;
-    }
-
-    let preview_content =
-        current_composition_view
-            .as_ref()
-            .and_then(|(composition_id, width, height)| {
-                preview_content_rect(
-                    preview_rect,
-                    editor_context.view.pan,
-                    editor_context.view.zoom,
-                    egui::vec2(*width as f32, *height as f32),
-                )
-                .map(|rect| (*composition_id, *width, *height, rect))
-            });
-    crate::qa::register_component_with_metadata(
-        "preview.canvas",
-        "preview_canvas",
-        preview_rect,
-        true,
-        Some(serde_json::json!({
-            "pan": {"x": editor_context.view.pan.x, "y": editor_context.view.pan.y},
-            "zoom": editor_context.view.zoom,
-            "auto_fit": editor_context.interaction.preview_viewport.auto_fit,
-            "primary_gesture": format!(
-                "{:?}",
-                editor_context.interaction.preview_viewport.primary_gesture
-            ),
-            "composition_id": preview_content.map(|content| content.0),
-            "texture_width": editor_context.preview_texture_width,
-            "texture_height": editor_context.preview_texture_height,
-        })),
-    );
-    if let Some((composition_id, width, height, content_rect)) = preview_content {
-        crate::qa::register_component_with_metadata(
-            "preview.content",
-            "preview_composition_content",
-            content_rect,
-            true,
-            Some(serde_json::json!({
-                "composition_id": composition_id,
-                "canvas_width": width,
-                "canvas_height": height,
-                "pan": {"x": editor_context.view.pan.x, "y": editor_context.view.pan.y},
-                "zoom": editor_context.view.zoom,
-                "auto_fit": editor_context.interaction.preview_viewport.auto_fit,
-            })),
-        );
     }
 
     // Legacy logic (removed lines 36-64)
@@ -994,6 +1001,11 @@ pub fn preview_panel(
             editor_context.interaction.handled_hand_tool_drag = false;
         }
     }
+
+    // Publish the completed frame after gesture cleanup so component metadata
+    // and `/v1/state` describe the same camera and owner. The helper exits
+    // before allocating JSON in normal, QA-disabled builds.
+    register_preview_qa_components(preview_rect, current_composition_view, editor_context);
 
     apply_preview_actions(pending_actions, project_service, project, history_manager);
 
