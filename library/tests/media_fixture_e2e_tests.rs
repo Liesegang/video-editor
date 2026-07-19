@@ -578,11 +578,13 @@ fn explicit_global_audio_stream_ordinals_decode_distinct_signals() {
         .unwrap()
     };
 
-    assert!(AudioLoader::decode_chunk(&AudioChunkKey {
-        source: AudioSourceKey::read(&path, Some(0), format).unwrap(),
-        chunk_index: 0,
-    })
-    .is_err());
+    assert!(
+        AudioLoader::decode_chunk(&AudioChunkKey {
+            source: AudioSourceKey::read(&path, Some(0), format).unwrap(),
+            chunk_index: 0,
+        })
+        .is_err()
+    );
     let default_audio = decode(None);
     let stream_one = decode(Some(1));
     let stream_two = decode(Some(2));

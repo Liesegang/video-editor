@@ -237,3 +237,27 @@ impl AudioEngine {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flush_remains_pending_until_the_audio_callback_acknowledges_it() {
+        let state = AudioFlushState::default();
+        assert!(!state.pending());
+
+        let first = state.request();
+        assert!(state.pending());
+        state.acknowledge(first.saturating_sub(1));
+        assert!(state.pending());
+        state.acknowledge(first);
+        assert!(!state.pending());
+
+        let second = state.request();
+        assert!(state.pending());
+        assert!(second > first);
+        state.acknowledge(second);
+        assert!(!state.pending());
+    }
+}

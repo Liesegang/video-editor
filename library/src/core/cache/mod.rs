@@ -132,10 +132,8 @@ mod tests {
 
     impl TempSource {
         fn create(contents: &[u8]) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "ruvie-audio-cache-{}.source",
-                uuid::Uuid::new_v4()
-            ));
+            let path = std::env::temp_dir()
+                .join(format!("ruvie-audio-cache-{}.source", uuid::Uuid::new_v4()));
             std::fs::write(&path, contents).unwrap();
             Self(path)
         }
@@ -143,7 +141,7 @@ mod tests {
 
     impl Drop for TempSource {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
+            drop(std::fs::remove_file(&self.0));
         }
     }
 
@@ -189,6 +187,9 @@ mod tests {
 
         assert_ne!(old_key, new_key);
         assert!(cache.get_audio_chunk(&new_key).is_none());
-        assert_eq!(cache.get_audio_chunk(&old_key).unwrap().samples(), &[0.25; 4]);
+        assert_eq!(
+            cache.get_audio_chunk(&old_key).unwrap().samples(),
+            &[0.25; 4]
+        );
     }
 }

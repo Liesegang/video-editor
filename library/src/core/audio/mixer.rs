@@ -86,12 +86,8 @@ fn mix_samples_with_policy(
     // and Track Nodes must become NoOutput at the same boundary as Clips;
     // limiting the work here also prevents cold export from decoding source
     // chunks that cannot contribute to the authoritative output.
-    let frames_to_mix = frames_inside_composition(
-        composition,
-        start_sample,
-        frames_to_mix,
-        sample_rate,
-    );
+    let frames_to_mix =
+        frames_inside_composition(composition, start_sample, frames_to_mix, sample_rate);
     if frames_to_mix == 0 {
         return mix_buffer;
     }
@@ -320,7 +316,7 @@ fn audio_source_for_node(
     }
     let channels = u16::try_from(channels).ok()?;
     let format = AudioDecodeFormat::new(sample_rate, channels)?;
-    let stream_index = audio_stream_index(asset, media);
+    let stream_index = audio_stream_index_for_media(asset, media);
     AudioSourceKey::read(&asset.path, stream_index, format)
         .inspect_err(|error| {
             log::trace!(
@@ -331,7 +327,10 @@ fn audio_source_for_node(
         .ok()
 }
 
-fn audio_stream_index(asset: &Asset, media: &crate::model::MediaContent) -> Option<usize> {
+pub fn audio_stream_index_for_media(
+    asset: &Asset,
+    media: &crate::model::MediaContent,
+) -> Option<usize> {
     media.audio_stream_index.or_else(|| {
         // For an Audio Asset, its primary stream is itself an audio stream. A
         // Video Asset's primary stream is visual and must never be reused as
@@ -539,7 +538,7 @@ fn collect_node_windows(
         requests.insert(AudioWindowRequest {
             source: AudioSourceSpec {
                 path: asset.path.clone(),
-                stream_index: audio_stream_index(asset, media),
+                stream_index: audio_stream_index_for_media(asset, media),
             },
             first_source_frame,
             last_source_frame,
@@ -558,8 +557,8 @@ fn source_frame_bounds(
             return None;
         }
         let window_last = start_sample.saturating_add(frames.saturating_sub(1) as u64);
-        let clip_first = (clip.start_time.into_inner().max(0.0) * f64::from(sample_rate)).ceil()
-            as u64;
+        let clip_first =
+            (clip.start_time.into_inner().max(0.0) * f64::from(sample_rate)).ceil() as u64;
         let clip_end_exclusive = (clip.end_time().max(0.0) * f64::from(sample_rate)).ceil() as u64;
         let first_global = start_sample.max(clip_first);
         let last_global = window_last.min(clip_end_exclusive.saturating_sub(1));
@@ -576,10 +575,7 @@ fn source_frame_bounds(
         return Some((minimum, maximum.saturating_add(1)));
     }
 
-    Some((
-        start_sample,
-        start_sample.saturating_add(frames as u64),
-    ))
+    Some((start_sample, start_sample.saturating_add(frames as u64)))
 }
 
 /// Synchronous cold-cache path used by export/offline rendering. Decoding is
@@ -884,6 +880,26 @@ mod tests {
     }
 
     #[test]
+    fn visual_stream_is_never_reused_as_embedded_audio_selection() {
+        let mut video = Asset::new("video", "/fixture/video.mkv", AssetKind::Video);
+        video.stream_index = Some(0);
+        let mut audio = Asset::new("audio", "/fixture/audio.mka", AssetKind::Audio);
+        audio.stream_index = Some(2);
+        let mut media = MediaContent {
+            asset_id: video.id,
+            stream_index: Some(0),
+            audio_stream_index: None,
+        };
+
+        assert_eq!(audio_stream_index_for_media(&video, &media), None);
+        media.audio_stream_index = Some(1);
+        assert_eq!(audio_stream_index_for_media(&video, &media), Some(1));
+        media.asset_id = audio.id;
+        media.audio_stream_index = None;
+        assert_eq!(audio_stream_index_for_media(&audio, &media), Some(2));
+    }
+
+    #[test]
     fn composition_range_is_half_open_for_direct_and_scheduled_audio() {
         let mut project = Project::new("composition audio range");
         let (composition, track) = Composition::new("main", 16, 16, 4.0, 1.0);
@@ -892,27 +908,13 @@ mod tests {
         project.add_composition(composition);
         let cache = CacheManager::new();
         let mut files = TestAudioFiles::default();
-        let node_id = add_audio_node(
-            &mut project,
-            &cache,
-            &mut files,
-            vec![1.0; 8],
-        );
+        let node_id = add_audio_node(&mut project, &cache, &mut files, vec![1.0; 8]);
         project
             .attach_node_to_container(NodeContainer::Composition(composition_id), node_id)
             .unwrap();
         let composition = project.get_composition(composition_id).unwrap();
 
-        let mixed = mix_samples(
-            &project.assets,
-            &project,
-            composition,
-            &cache,
-            2,
-            4,
-            4,
-            1,
-        );
+        let mixed = mix_samples(&project.assets, &project, composition, &cache, 2, 4, 4, 1);
         assert_eq!(mixed, vec![1.0, 1.0, 0.0, 0.0]);
         assert!(audio_window_requests_for_composition(&project, composition, 4, 4, 4).is_empty());
     }

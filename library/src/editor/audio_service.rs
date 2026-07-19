@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 const SCRUB_PREVIEW_SECONDS: f64 = 0.05;
 const MAX_MIX_SAMPLES_PER_PUMP: usize = 16_384;
+const MAX_CONCURRENT_AUDIO_DECODES: usize = 4;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct PendingAudioLoad {
@@ -44,17 +45,13 @@ impl AudioService {
         audio_engine: Rc<AudioEngine>,
         cache_manager: Arc<CacheManager>,
     ) -> Self {
-        let active_composition_id = project.read().ok().and_then(|project| {
-            project
-                .compositions
-                .first()
-                .map(|composition| composition.id)
-        });
         Self {
             project,
             audio_engine,
             cache_manager,
-            active_composition_id: Mutex::new(active_composition_id),
+            // Selection is supplied explicitly by the view layer. An absent
+            // selection is mute, never an implicit compositions[0] fallback.
+            active_composition_id: Mutex::new(None),
             generation: Arc::new(AtomicU64::new(0)),
             pending: Arc::new(Mutex::new(HashSet::new())),
             source_failures: Arc::new(Mutex::new(HashSet::new())),
@@ -104,6 +101,9 @@ impl AudioService {
             // scrubbing, so pausing it is not what stops queued audio. Drop
             // the producer backlog exactly once on the playing -> paused
             // transition instead.
+            if let Ok(mut scrub) = self.pending_scrub.lock() {
+                *scrub = None;
+            }
             self.audio_engine.flush();
         });
     }
@@ -169,10 +169,12 @@ impl AudioService {
         if chunk_size < channels_usize {
             return;
         }
-        let frames_to_write = chunk_size / channels_usize;
+        let requested_frames = chunk_size / channels_usize;
         let start_sample = self.next_write_sample.load(Ordering::Relaxed);
 
-        if !self.schedule_window(start_sample, frames_to_write, sample_rate, channels) {
+        let (frames_to_write, all_ready) =
+            self.prepare_window(start_sample, requested_frames, sample_rate, channels);
+        if !all_ready {
             // Already-buffered samples remain valid while the next chunk is
             // decoding. Hold only once the consumer catches the producer
             // cursor; flushing earlier would discard valid, unplayed audio.
@@ -235,19 +237,31 @@ impl AudioService {
         let Some((sample_pos, frames)) = request else {
             return true;
         };
-        if !self.schedule_window(sample_pos, frames, sample_rate, channels) {
+        let (prepared_frames, all_ready) =
+            self.prepare_window(sample_pos, frames, sample_rate, channels);
+        if !all_ready {
             return false;
         }
-        let samples = self.mix_active(sample_pos, frames, sample_rate, u32::from(channels));
-        self.audio_engine.push_samples(&samples);
-        self.next_write_sample
-            .store(sample_pos.saturating_add(frames as u64), Ordering::Relaxed);
+        let samples = self.mix_active(
+            sample_pos,
+            prepared_frames,
+            sample_rate,
+            u32::from(channels),
+        );
+        let written = self.audio_engine.push_samples(&samples);
+        let written_frames = written / usize::from(channels);
+        self.next_write_sample.store(
+            sample_pos.saturating_add(written_frames as u64),
+            Ordering::Relaxed,
+        );
         if let Ok(mut scrub) = self.pending_scrub.lock()
             && *scrub == request
         {
-            *scrub = None;
+            let remaining = frames.saturating_sub(written_frames);
+            *scrub = (remaining > 0)
+                .then_some((sample_pos.saturating_add(written_frames as u64), remaining));
         }
-        true
+        written_frames == frames
     }
 
     fn mix_active(
@@ -281,22 +295,62 @@ impl AudioService {
         )
     }
 
-    fn schedule_window(
+    fn prepare_window(
+        &self,
+        start_frame: u64,
+        requested_frames: usize,
+        sample_rate: u32,
+        channels: u16,
+    ) -> (usize, bool) {
+        if requested_frames == 0 {
+            return (0, true);
+        }
+        let Some(format) = AudioDecodeFormat::new(sample_rate, channels) else {
+            return (requested_frames, true);
+        };
+        let generation = self.generation.load(Ordering::Acquire);
+        let capacity = self.cache_manager.audio_chunk_cache_capacity().max(1);
+        let mut frame_count = requested_frames;
+        let keys = loop {
+            let keys = self.window_keys(start_frame, frame_count, sample_rate, format, generation);
+            if keys.len() <= capacity || frame_count <= 1 {
+                break keys;
+            }
+            frame_count = (frame_count / 2).max(1);
+        };
+
+        let mut all_ready = true;
+        let worker_limit = capacity.min(MAX_CONCURRENT_AUDIO_DECODES);
+        let mut available_workers = worker_limit.saturating_sub(
+            self.pending
+                .lock()
+                .map_or(worker_limit, |pending| pending.len()),
+        );
+        for key in keys {
+            if self.cache_manager.get_audio_chunk(&key).is_some()
+                || self.cache_manager.audio_chunk_failed(&key)
+            {
+                continue;
+            }
+            all_ready = false;
+            if available_workers > 0 && self.schedule_chunk(key) {
+                available_workers -= 1;
+            }
+        }
+        (frame_count, all_ready)
+    }
+
+    fn window_keys(
         &self,
         start_frame: u64,
         frame_count: usize,
         sample_rate: u32,
-        channels: u16,
-    ) -> bool {
-        if frame_count == 0 {
-            return true;
-        }
-        let Some(format) = AudioDecodeFormat::new(sample_rate, channels) else {
-            return true;
-        };
+        format: AudioDecodeFormat,
+        generation: u64,
+    ) -> HashSet<AudioChunkKey> {
         let sources = {
             let Ok(project) = self.project.read() else {
-                return true;
+                return HashSet::new();
             };
             let composition_id = self
                 .active_composition_id
@@ -304,7 +358,7 @@ impl AudioService {
                 .ok()
                 .and_then(|active| *active);
             let Some(composition) = active_composition(&project, composition_id) else {
-                return true;
+                return HashSet::new();
             };
             audio_window_requests_for_composition(
                 &project,
@@ -314,8 +368,6 @@ impl AudioService {
                 sample_rate,
             )
         };
-        let generation = self.generation.load(Ordering::Acquire);
-        let mut all_ready = true;
         let mut keys = HashSet::new();
         for request in sources {
             let source = request.source;
@@ -349,23 +401,14 @@ impl AudioService {
                 });
             }
         }
-        for key in keys {
-            if self.cache_manager.get_audio_chunk(&key).is_some()
-                || self.cache_manager.audio_chunk_failed(&key)
-            {
-                continue;
-            }
-            all_ready = false;
-            self.schedule_chunk(key);
-        }
-        all_ready
+        keys
     }
 
-    fn schedule_chunk(&self, key: AudioChunkKey) {
+    fn schedule_chunk(&self, key: AudioChunkKey) -> bool {
         if self.cache_manager.get_audio_chunk(&key).is_some()
             || self.cache_manager.audio_chunk_failed(&key)
         {
-            return;
+            return false;
         }
         let generation = self.generation.load(Ordering::Acquire);
         let pending_load = PendingAudioLoad {
@@ -378,7 +421,7 @@ impl AudioService {
             .map(|mut pending| pending.insert(pending_load.clone()))
             .unwrap_or(false);
         if !inserted {
-            return;
+            return false;
         }
 
         let cache = Arc::clone(&self.cache_manager);
@@ -396,6 +439,7 @@ impl AudioService {
                 result,
             );
         });
+        true
     }
 
     pub fn get_cache_manager(&self) -> Arc<CacheManager> {
@@ -409,10 +453,7 @@ impl AudioService {
 
     pub fn has_pending_work(&self) -> bool {
         self.audio_engine.flush_pending()
-            || self
-                .pending_scrub
-                .lock()
-                .is_ok_and(|scrub| scrub.is_some())
+            || self.pending_scrub.lock().is_ok_and(|scrub| scrub.is_some())
             || self.pending.lock().is_ok_and(|pending| !pending.is_empty())
     }
 }
@@ -465,15 +506,14 @@ fn seconds_to_sample(time: f64, sample_rate: u32) -> u64 {
     (time * f64::from(sample_rate)).round() as u64
 }
 
-fn active_composition(project: &Project, active_id: Option<Uuid>) -> Option<&crate::model::Composition> {
+fn active_composition(
+    project: &Project,
+    active_id: Option<Uuid>,
+) -> Option<&crate::model::Composition> {
     active_id.and_then(|id| project.get_composition(id))
 }
 
-fn update_playback_state(
-    state: &AtomicBool,
-    is_playing: bool,
-    on_pause: impl FnOnce(),
-) {
+fn update_playback_state(state: &AtomicBool, is_playing: bool, on_pause: impl FnOnce()) {
     let was_playing = state.swap(is_playing, Ordering::AcqRel);
     if was_playing && !is_playing {
         on_pause();
@@ -510,7 +550,7 @@ mod tests {
 
     impl Drop for TempAudioIdentity {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
+            drop(std::fs::remove_file(&self.0));
         }
     }
 
@@ -518,8 +558,10 @@ mod tests {
     fn pause_transition_flushes_once_without_flushing_idle_frames() {
         let state = AtomicBool::new(false);
         let flushes = AtomicUsize::new(0);
+        let pending_scrub = Mutex::new(Some((10_u64, 50_usize)));
         let set = |playing| {
             update_playback_state(&state, playing, || {
+                *pending_scrub.lock().unwrap() = None;
                 flushes.fetch_add(1, Ordering::Relaxed);
             });
         };
@@ -530,6 +572,7 @@ mod tests {
         set(false);
         set(false);
         assert_eq!(flushes.load(Ordering::Relaxed), 1);
+        assert_eq!(*pending_scrub.lock().unwrap(), None);
     }
 
     #[test]
@@ -544,7 +587,10 @@ mod tests {
         project.add_composition(first);
         project.add_composition(second);
 
-        assert_eq!(active_composition(&project, Some(second_id)).unwrap().id, second_id);
+        assert_eq!(
+            active_composition(&project, Some(second_id)).unwrap().id,
+            second_id
+        );
         assert!(active_composition(&project, None).is_none());
         assert!(active_composition(&project, Some(Uuid::new_v4())).is_none());
         assert_ne!(first_id, second_id);
@@ -563,14 +609,7 @@ mod tests {
         let pending = Mutex::new(HashSet::from([load.clone()]));
         let flush = AudioFlushHandle::for_test();
 
-        finish_audio_decode(
-            &cache,
-            &generation,
-            &pending,
-            &flush,
-            load,
-            Ok(chunk),
-        );
+        finish_audio_decode(&cache, &generation, &pending, &flush, load, Ok(chunk));
 
         assert!(cache.get_audio_chunk(&key).is_none());
         assert!(!cache.audio_chunk_failed(&key));

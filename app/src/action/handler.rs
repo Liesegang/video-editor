@@ -235,10 +235,9 @@ fn handle_view_command(action: CommandId, context: ActionContext) {
                     log::error!("Failed to play audio: {}", e);
                 }
             } else {
-                // Flush the buffer immediately to stop sound
-                context
-                    .project_service
-                    .reset_audio_pump(context.editor_context.timeline.current_time as f64);
+                // The frame-level AudioService playing -> paused transition
+                // clears queued audio exactly once. Do not turn pause into a
+                // seek/scrub request here.
                 if let Err(e) = context.project_service.get_audio_engine().pause() {
                     log::error!("Failed to pause audio: {}", e);
                 }
