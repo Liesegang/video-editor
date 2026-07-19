@@ -27,6 +27,23 @@ def rect(min_x, min_y, max_x, max_y):
 
 
 class NodeWireQaTests(unittest.TestCase):
+    def test_free_canvas_wire_distance_uses_rendered_bezier_not_only_midpoint(self):
+        wire = {
+            "metadata": {
+                "kind": "output_binding",
+                "overview_painted": False,
+                "from": {"x": 100.0, "y": 80.0},
+                "to": {"x": 300.0, "y": 160.0},
+            }
+        }
+
+        self.assertTrue(
+            QA.point_near_node_wire({"x": 120.0, "y": 82.0}, wire)
+        )
+        self.assertFalse(
+            QA.point_near_node_wire({"x": 200.0, "y": 20.0}, wire)
+        )
+
     def test_node_editor_reveal_plans_a_bounded_two_axis_pan(self):
         canvas = rect(0.0, 0.0, 300.0, 200.0)
         targets = [rect(330.0, 220.0, 350.0, 240.0)]
@@ -154,6 +171,68 @@ class NodeWireQaTests(unittest.TestCase):
         }
 
         self.assertEqual(QA.explicit_wire_connection_ids(snapshot), {"wire"})
+
+    def test_mixed_knife_planner_targets_binding_and_explicit_wire(self):
+        canvas = rect(0.0, 0.0, 300.0, 200.0)
+        binding_id = "node_editor.edge.output_binding:clip:owner:result"
+        snapshot = {
+            "frame": 10,
+            "components": [
+                {
+                    "id": "node_editor.canvas",
+                    "visible": True,
+                    "rect_points": canvas,
+                },
+                {
+                    "id": binding_id,
+                    "visible": True,
+                    "rect_points": rect(82.0, 62.0, 98.0, 78.0),
+                    "metadata": {
+                        "kind": "output_binding",
+                        "editable": True,
+                        "action": "delete_output_binding",
+                        "binding_owner": "clip:owner",
+                        "binding_node_id": "result",
+                        "hit_point": {"x": 90.0, "y": 70.0},
+                    },
+                },
+                {
+                    "id": "node_editor.edge:wire",
+                    "visible": True,
+                    "rect_points": rect(202.0, 122.0, 218.0, 138.0),
+                    "metadata": {
+                        "kind": "explicit",
+                        "connection_id": "wire",
+                        "hit_point": {"x": 210.0, "y": 130.0},
+                    },
+                },
+                {
+                    "id": "node_editor.edge.derived:track:clip",
+                    "visible": True,
+                    "rect_points": rect(130.0, 20.0, 160.0, 35.0),
+                    "metadata": {
+                        "kind": "derived_output",
+                        "editable": False,
+                        "edit_blocked_reason": "authoritative containment",
+                    },
+                },
+            ],
+        }
+
+        start, end, planned = QA.find_mixed_wire_knife_gesture(
+            snapshot, binding_id
+        )
+
+        self.assertEqual(planned["binding_edge_id"], binding_id)
+        self.assertEqual(planned["binding_owner"], "clip:owner")
+        self.assertEqual(planned["binding_node_id"], "result")
+        self.assertEqual(planned["connection_id"], "wire")
+        self.assertTrue(QA.point_in_component_rect(start, canvas))
+        self.assertTrue(QA.point_in_component_rect(end, canvas))
+        for component in snapshot["components"][1:]:
+            self.assertFalse(
+                QA.point_in_component_rect(start, component["rect_points"], 5.0)
+            )
 
 
 if __name__ == "__main__":

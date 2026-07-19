@@ -979,6 +979,66 @@ def wait_timeline_edit(client, before, description, predicate):
     )
 
 
+def point_near_node_wire(point, component, radius=12.0):
+    metadata = component.get("metadata") or {}
+    source = metadata.get("from") or {}
+    target = metadata.get("to") or {}
+    if not all(key in source and key in target for key in ("x", "y")):
+        return False
+    start = (float(source["x"]), float(source["y"]))
+    end = (float(target["x"]), float(target["y"]))
+    minimum_frame = 2.0 if metadata.get("overview_painted") else 36.0
+    frame = min(110.0, max(minimum_frame, abs(end[0] - start[0]) * 0.45))
+    control_a = (start[0] + frame, start[1])
+    control_b = (end[0] - frame, end[1])
+
+    def bezier(factor):
+        inverse = 1.0 - factor
+        weights = (
+            inverse**3,
+            3.0 * inverse**2 * factor,
+            3.0 * inverse * factor**2,
+            factor**3,
+        )
+        return (
+            start[0] * weights[0]
+            + control_a[0] * weights[1]
+            + control_b[0] * weights[2]
+            + end[0] * weights[3],
+            start[1] * weights[0]
+            + control_a[1] * weights[1]
+            + control_b[1] * weights[2]
+            + end[1] * weights[3],
+        )
+
+    def segment_distance(left, right):
+        dx = right[0] - left[0]
+        dy = right[1] - left[1]
+        length_squared = dx * dx + dy * dy
+        if length_squared <= 1.0e-12:
+            return ((point["x"] - left[0]) ** 2 + (point["y"] - left[1]) ** 2) ** 0.5
+        factor = min(
+            1.0,
+            max(
+                0.0,
+                ((point["x"] - left[0]) * dx + (point["y"] - left[1]) * dy)
+                / length_squared,
+            ),
+        )
+        nearest = (left[0] + factor * dx, left[1] + factor * dy)
+        return (
+            (point["x"] - nearest[0]) ** 2 + (point["y"] - nearest[1]) ** 2
+        ) ** 0.5
+
+    previous = start
+    for sample in range(1, 33):
+        current = bezier(sample / 32.0)
+        if segment_distance(previous, current) <= radius:
+            return True
+        previous = current
+    return False
+
+
 def find_free_canvas_point(client, scope_component_id=None):
     snapshot = client.component_snapshot()
     components = snapshot["components"]
@@ -996,6 +1056,16 @@ def find_free_canvas_point(client, scope_component_id=None):
         for item in components
         if item["id"].startswith("node_editor.node:")
         or item["id"].startswith("node_editor.container_header.")
+        or (
+            item["id"].startswith(("node_editor.edge:", "node_editor.edge."))
+            and (item.get("metadata") or {}).get("editable") is True
+        )
+    ]
+    wires = [
+        item
+        for item in components
+        if (item.get("metadata") or {}).get("kind")
+        in ("explicit", "output_binding", "derived_output")
     ]
     for y_step in range(1, 10):
         for x_step in range(1, 14):
@@ -1014,12 +1084,12 @@ def find_free_canvas_point(client, scope_component_id=None):
                     and rect["min_y"] - 5.0 <= point["y"] <= rect["max_y"] + 5.0
                 )
                 for rect in obstacles
-            ):
+            ) and all(not point_near_node_wire(point, wire) for wire in wires):
                 return snapshot, point
     raise QaFailure("no unobstructed point was found in the Node Editor canvas")
 
 
-def open_create_menu(client, scope_component_id=None):
+def open_create_menu(client, scope_component_id=None, operation="Node Editor create menu"):
     snapshot, point = find_free_canvas_point(client, scope_component_id)
     client.inject(
         "click",
@@ -1036,7 +1106,7 @@ def open_create_menu(client, scope_component_id=None):
         },
     )
     client.wait_until(
-        "Node Editor create menu",
+        operation,
         lambda: client.state()
         if client.state()["editor"]["node_editor"]["context_menu_open"]
         else None,
@@ -1095,6 +1165,12 @@ def undo_project_edit(client, description, predicate):
     client.key("z", True, command=True)
     client.key("z", False, command=True)
     return client.wait_project(description + " undo", predicate)
+
+
+def redo_project_edit(client, description, predicate):
+    client.key("z", True, command=True, shift=True)
+    client.key("z", False, command=True, shift=True)
+    return client.wait_project(description + " redo", predicate)
 
 
 def wait_preview_hash_after(client, expected_hash, previous_revision, operation):
@@ -1159,7 +1235,11 @@ def click_disabled_component(client, component_id):
 def create_node_from_add_search(client, query, item_id, scope_component_id=None):
     before = client.state()
     node_ids_before = set(before["project"]["nodes"])
-    open_create_menu(client, scope_component_id)
+    open_create_menu(
+        client,
+        scope_component_id,
+        "Node Editor create menu for {}".format(query),
+    )
     client.wait_component("node_editor.menu.search")
     client.replace_component_text("node_editor.menu.search", query)
     _, item = client.wait_component_settled(item_id)
@@ -1261,6 +1341,7 @@ def find_wire_knife_gesture(snapshot):
         "node_editor.container_port.",
         "node_editor.resize_edge.",
         "node_editor.edge:",
+        "node_editor.edge.",
     )
     obstacles = [
         item["rect_points"]
@@ -1289,6 +1370,100 @@ def find_wire_knife_gesture(snapshot):
                         right["metadata"]["connection_id"],
                     ]
     raise QaFailure("no two visible explicit wires admit a blank-origin knife gesture")
+
+
+def find_mixed_wire_knife_gesture(snapshot, binding_edge_id):
+    """Plan one blank-origin stroke through an output binding and explicit wire."""
+    components = snapshot["components"]
+    canvas = next(
+        (item for item in components if item["id"] == "node_editor.canvas"), None
+    )
+    if canvas is None:
+        raise QaFailure("Node Editor canvas is absent while planning a mixed knife")
+    binding = next(
+        (item for item in components if item["id"] == binding_edge_id), None
+    )
+    if binding is None:
+        raise QaFailure("output binding edge {!r} is absent".format(binding_edge_id))
+    binding_metadata = binding.get("metadata") or {}
+    if not (
+        binding.get("visible", False)
+        and binding_metadata.get("kind") == "output_binding"
+        and binding_metadata.get("editable") is True
+        and binding_metadata.get("action") == "delete_output_binding"
+        and binding_metadata.get("hit_point") is not None
+    ):
+        raise QaFailure("output binding edge is not a stable editable QA target")
+
+    canvas_rect = canvas["rect_points"]
+    hit_margin = 18.0
+
+    def hit_point_is_inside_stroke(point):
+        return (
+            canvas_rect["min_x"] + hit_margin
+            <= point["x"]
+            <= canvas_rect["max_x"] - hit_margin
+            and canvas_rect["min_y"] + hit_margin
+            <= point["y"]
+            <= canvas_rect["max_y"] - hit_margin
+        )
+
+    binding_point = binding_metadata["hit_point"]
+    if not hit_point_is_inside_stroke(binding_point):
+        raise QaFailure("output binding midpoint is clipped at the Node Editor boundary")
+    explicit_edges = [
+        item
+        for item in components
+        if item["id"].startswith("node_editor.edge:")
+        and item.get("visible", False)
+        and (item.get("metadata") or {}).get("kind") == "explicit"
+        and (item.get("metadata") or {}).get("hit_point") is not None
+        and hit_point_is_inside_stroke(item["metadata"]["hit_point"])
+    ]
+    obstacle_prefixes = (
+        "node_editor.node:",
+        "node_editor.node_header:",
+        "node_editor.port.",
+        "node_editor.container_header.",
+        "node_editor.container_port.",
+        "node_editor.resize_edge.",
+        "node_editor.edge:",
+        "node_editor.edge.",
+    )
+    obstacles = [
+        item["rect_points"]
+        for item in components
+        if item.get("visible", False)
+        and item["id"].startswith(obstacle_prefixes)
+        and item["rect_points"]["width"] > 0.0
+        and item["rect_points"]["height"] > 0.0
+    ]
+    for explicit in explicit_edges:
+        explicit_point = explicit["metadata"]["hit_point"]
+        if (
+            abs(binding_point["x"] - explicit_point["x"]) < 1.0
+            and abs(binding_point["y"] - explicit_point["y"]) < 1.0
+        ):
+            continue
+        span = line_span_inside_rect(
+            binding_point, explicit_point, canvas_rect, margin=14.0
+        )
+        if span is None:
+            continue
+        for start, end in (span, tuple(reversed(span))):
+            if all(
+                not point_in_component_rect(start, obstacle, 5.0)
+                for obstacle in obstacles
+            ):
+                return start, end, {
+                    "binding_edge_id": binding_edge_id,
+                    "binding_owner": binding_metadata.get("binding_owner"),
+                    "binding_node_id": binding_metadata.get("binding_node_id"),
+                    "connection_id": explicit["metadata"]["connection_id"],
+                }
+    raise QaFailure(
+        "no visible explicit wire and output binding admit a blank-origin knife gesture"
+    )
 
 
 def explicit_wire_connection_ids(snapshot):
@@ -2660,6 +2835,95 @@ def run_node_wire_suite(client):
         lambda project: project_connection(project, connection_id) == original,
     )
 
+    # A container output binding is authored state, but not a ProjectConnection.
+    # Its visible curve owns the same coordinate context-menu workflow. Clear
+    # only output_node_id, prove the Preview changes, then exercise both Undo
+    # and Redo before restoring the fixture for the remaining scenarios.
+    binding_owner_key = "clip:" + CLIP_A1
+    binding_edge_id = "node_editor.edge.output_binding:{}:{}".format(
+        binding_owner_key, MERGE
+    )
+    reveal_node_editor_components(
+        client,
+        ["node_editor.node_header:" + MERGE, binding_edge_id],
+    )
+    _, binding_component = client.wait_component(binding_edge_id)
+    binding_metadata = binding_component.get("metadata") or {}
+    if not (
+        binding_metadata.get("kind") == "output_binding"
+        and binding_metadata.get("editable") is True
+        and binding_metadata.get("action") == "delete_output_binding"
+        and binding_metadata.get("binding_owner") == binding_owner_key
+        and binding_metadata.get("binding_node_id") == MERGE
+        and binding_metadata.get("connection_id") is None
+    ):
+        raise QaFailure("output binding edge omitted typed editable QA metadata")
+    binding_before = client.state()
+    binding_connections = list(binding_before["project"]["connections"])
+    binding_preview = dict(binding_before["editor"]["preview"])
+    client.click_component(binding_edge_id, button="secondary")
+    binding_stable_key = "output_binding:{}:{}".format(binding_owner_key, MERGE)
+    binding_delete_id = "node_editor.wire_menu.delete:" + binding_stable_key
+    _, binding_delete = client.wait_component(binding_delete_id)
+    if (binding_delete.get("metadata") or {}).get("action") != "clear_output_binding":
+        raise QaFailure("output binding Delete menu omitted canonical action metadata")
+    client.click_component(binding_delete_id)
+    binding_deleted = client.wait_project(
+        "output binding context Delete",
+        lambda project: (
+            project["clips"][CLIP_A1]["output_node_id"] is None
+            and project["connections"] == binding_connections
+        ),
+    )
+    assert_history_delta(
+        binding_before, binding_deleted, 1, "output binding context Delete"
+    )
+    binding_deleted_rendered = client.wait_preview_change(
+        binding_preview["pixel_hash"], binding_preview["render_revision"]
+    )
+    binding_restored = undo_project_edit(
+        client,
+        "output binding context Delete",
+        lambda project: (
+            project["clips"][CLIP_A1]["output_node_id"] == MERGE
+            and project["connections"] == binding_connections
+        ),
+    )
+    binding_restored_rendered = wait_preview_hash_after(
+        client,
+        binding_preview["pixel_hash"],
+        binding_deleted_rendered["editor"]["preview"]["render_revision"],
+        "output binding context Delete Undo",
+    )
+    binding_redone = redo_project_edit(
+        client,
+        "output binding context Delete",
+        lambda project: (
+            project["clips"][CLIP_A1]["output_node_id"] is None
+            and project["connections"] == binding_connections
+        ),
+    )
+    binding_redone_rendered = wait_preview_hash_after(
+        client,
+        binding_deleted_rendered["editor"]["preview"]["pixel_hash"],
+        binding_restored_rendered["editor"]["preview"]["render_revision"],
+        "output binding context Delete Redo",
+    )
+    binding_final_restore = undo_project_edit(
+        client,
+        "output binding context Delete after Redo",
+        lambda project: (
+            project["clips"][CLIP_A1]["output_node_id"] == MERGE
+            and project["connections"] == binding_connections
+        ),
+    )
+    wait_preview_hash_after(
+        client,
+        binding_preview["pixel_hash"],
+        binding_redone_rendered["editor"]["preview"]["render_revision"],
+        "output binding final Undo",
+    )
+
     # A normal primary drag from the actual curve midpoint is disconnect, not
     # a test-only command. It uses the same canonical operation and undo path.
     reveal_node_editor_components(
@@ -2847,6 +3111,111 @@ def run_node_wire_suite(client):
         lambda project: project["connections"] == connections_before_knife,
     )
 
+    # One Alt stroke may cross heterogeneous authored wires. The output
+    # binding and every explicit connection are committed as one Project
+    # snapshot, while derived containment wires remain display-only.
+    reveal_node_editor_components(client, [edge_id, binding_edge_id])
+    mixed_before = client.state()
+    mixed_connections_before = list(mixed_before["project"]["connections"])
+    mixed_preview_before = dict(mixed_before["editor"]["preview"])
+    mixed_snapshot = wait_wire_snapshot_for_project(
+        client, {connection["id"] for connection in mixed_connections_before}
+    )
+    derived_edges = [
+        item
+        for item in mixed_snapshot["components"]
+        if (item.get("metadata") or {}).get("kind") == "derived_output"
+    ]
+    if not derived_edges or any(
+        (item.get("metadata") or {}).get("editable") is not False
+        or not (item.get("metadata") or {}).get("edit_blocked_reason")
+        or (item.get("metadata") or {}).get("action") is not None
+        for item in derived_edges
+    ):
+        raise QaFailure("derived wires did not publish display-only QA semantics")
+    mixed_start, mixed_end, mixed_planned = find_mixed_wire_knife_gesture(
+        mixed_snapshot, binding_edge_id
+    )
+    client.inject(
+        "drag",
+        {
+            "from": mixed_start,
+            "to": mixed_end,
+            "coordinate_space": "points",
+            "steps": 18,
+            "button": "primary",
+            "modifiers": {"alt": True},
+        },
+        {
+            "component_id": "node_editor.knife_surface",
+            "component_frame": mixed_snapshot["frame"],
+            "target_wires": mixed_planned,
+            "coordinate_reason": "blank-origin line through explicit and output-binding hit points",
+        },
+    )
+    mixed_knifed = client.wait_project(
+        "mixed explicit/output-binding knife",
+        lambda project: (
+            project["clips"][CLIP_A1]["output_node_id"] is None
+            and project_connection(project, mixed_planned["connection_id"]) is None
+        ),
+    )
+    mixed_remaining_ids = {
+        connection["id"] for connection in mixed_knifed["project"]["connections"]
+    }
+    mixed_removed_ids = {
+        connection["id"] for connection in mixed_connections_before
+    } - mixed_remaining_ids
+    if mixed_planned["connection_id"] not in mixed_removed_ids:
+        raise QaFailure("mixed knife did not remove its planned explicit wire")
+    validate_canonical_ownership(mixed_knifed["project"])
+    assert_history_delta(mixed_before, mixed_knifed, 1, "mixed wire knife")
+    mixed_knifed_rendered = client.wait_preview_change(
+        mixed_preview_before["pixel_hash"], mixed_preview_before["render_revision"]
+    )
+    mixed_restored = undo_project_edit(
+        client,
+        "mixed wire knife",
+        lambda project: (
+            project["connections"] == mixed_connections_before
+            and project["clips"][CLIP_A1]["output_node_id"] == MERGE
+        ),
+    )
+    mixed_restored_rendered = wait_preview_hash_after(
+        client,
+        mixed_preview_before["pixel_hash"],
+        mixed_knifed_rendered["editor"]["preview"]["render_revision"],
+        "mixed wire knife Undo",
+    )
+    mixed_redone = redo_project_edit(
+        client,
+        "mixed wire knife",
+        lambda project: (
+            project["clips"][CLIP_A1]["output_node_id"] is None
+            and project_connection(project, mixed_planned["connection_id"]) is None
+        ),
+    )
+    mixed_redone_rendered = wait_preview_hash_after(
+        client,
+        mixed_knifed_rendered["editor"]["preview"]["pixel_hash"],
+        mixed_restored_rendered["editor"]["preview"]["render_revision"],
+        "mixed wire knife Redo",
+    )
+    undo_project_edit(
+        client,
+        "mixed wire knife after Redo",
+        lambda project: (
+            project["connections"] == mixed_connections_before
+            and project["clips"][CLIP_A1]["output_node_id"] == MERGE
+        ),
+    )
+    wait_preview_hash_after(
+        client,
+        mixed_preview_before["pixel_hash"],
+        mixed_redone_rendered["editor"]["preview"]["render_revision"],
+        "mixed wire knife final Undo",
+    )
+
     final = client.state()
     validate_explicit_operation_fixture(final["project"])
     validate_canonical_ownership(final["project"])
@@ -2860,6 +3229,23 @@ def run_node_wire_suite(client):
         "initial_frame": initial["frame"],
         "final_frame": final["frame"],
         "removed_by_knife": sorted(removed_ids),
+        "output_binding_wire": {
+            "edge_id": binding_edge_id,
+            "owner": binding_owner_key,
+            "node_id": MERGE,
+            "preview_hashes": {
+                "bound": binding_preview["pixel_hash"],
+                "cleared": binding_deleted_rendered["editor"]["preview"]["pixel_hash"],
+            },
+        },
+        "mixed_knife": {
+            "planned": mixed_planned,
+            "removed_connection_ids": sorted(mixed_removed_ids),
+            "preview_hashes": {
+                "bound": mixed_preview_before["pixel_hash"],
+                "cut": mixed_knifed_rendered["editor"]["preview"]["pixel_hash"],
+            },
+        },
         "merge_wire": {
             "connection_id": connection_id,
             "back_to_front_ids": [item["id"] for item in original_layers],
