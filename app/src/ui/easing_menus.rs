@@ -1,18 +1,61 @@
 use eframe::egui::Ui;
 use library::animation::EasingFunction;
 
+#[derive(Clone, Copy)]
+pub struct EasingMenuQaScope<'a> {
+    id_prefix: &'a str,
+    id_suffix: &'a str,
+}
+
+impl<'a> EasingMenuQaScope<'a> {
+    pub const fn new(id_prefix: &'a str, id_suffix: &'a str) -> Self {
+        Self {
+            id_prefix,
+            id_suffix,
+        }
+    }
+
+    fn component_id(self, option: &str) -> String {
+        format!("{}.{}:{}", self.id_prefix, option, self.id_suffix)
+    }
+}
+
+fn qa_option(easing: &EasingFunction) -> Option<&'static str> {
+    match easing {
+        EasingFunction::Linear => Some("linear"),
+        EasingFunction::Constant => Some("constant"),
+        EasingFunction::EaseInCubic => Some("ease_in_cubic"),
+        EasingFunction::EaseOutCubic => Some("ease_out_cubic"),
+        EasingFunction::EaseInOutCubic => Some("ease_in_out_cubic"),
+        _ => None,
+    }
+}
+
 pub fn show_easing_menu(
     ui: &mut Ui,
     current_easing: Option<&EasingFunction>,
+    qa_scope: Option<EasingMenuQaScope<'_>>,
     mut on_select: impl FnMut(EasingFunction),
 ) {
     let mut item = |ui: &mut Ui, label: &str, easing: EasingFunction| {
         let selected = current_easing
             .is_some_and(|c| std::mem::discriminant(c) == std::mem::discriminant(&easing));
-        // Use selectable_label for highlighting if selected, but regular button behavior mostly
-        if ui.selectable_label(selected, label).clicked() {
+        let response = ui.selectable_label(selected, label);
+        if let (Some(scope), Some(option)) = (qa_scope, qa_option(&easing)) {
+            crate::qa::register_component_with_metadata(
+                scope.component_id(option),
+                "easing_menu_option",
+                response.rect,
+                response.enabled(),
+                Some(serde_json::json!({
+                    "option": option,
+                    "label": label,
+                    "selected": selected,
+                })),
+            );
+        }
+        if response.clicked() {
             on_select(easing);
-            // Caller handles closing menu if needed
         }
     };
 
@@ -33,11 +76,23 @@ pub fn show_easing_menu(
         item(ui, "Ease In Out", EasingFunction::EaseInOutQuad);
     });
 
-    ui.menu_button("Cubic", |ui| {
+    let cubic = ui.menu_button("Cubic", |ui| {
         item(ui, "Ease In", EasingFunction::EaseInCubic);
         item(ui, "Ease Out", EasingFunction::EaseOutCubic);
         item(ui, "Ease In Out", EasingFunction::EaseInOutCubic);
     });
+    if let Some(scope) = qa_scope {
+        crate::qa::register_component_with_metadata(
+            scope.component_id("family.cubic"),
+            "easing_menu_family",
+            cubic.response.rect,
+            cubic.response.enabled(),
+            Some(serde_json::json!({
+                "family": "cubic",
+                "label": "Cubic",
+            })),
+        );
+    }
 
     ui.menu_button("Quart", |ui| {
         item(ui, "Ease In", EasingFunction::EaseInQuart);

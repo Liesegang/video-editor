@@ -349,6 +349,51 @@ pub fn draw_properties(
                     }
                 }
 
+                let keyframe_points = property
+                    .keyframes()
+                    .into_iter()
+                    .filter_map(|keyframe| {
+                        keyframe_component_value(&keyframe.value, component).map(|value| {
+                            transform.to_screen(
+                                time_mapper.to_global_time(keyframe.time.into_inner()),
+                                value,
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let curve_hit = path_points
+                    .iter()
+                    .copied()
+                    .filter(|point| {
+                        graph_rect.shrink(8.0).contains(*point)
+                            && keyframe_points
+                                .iter()
+                                .all(|keyframe| keyframe.distance(*point) >= 24.0)
+                    })
+                    .min_by(|left, right| {
+                        (left.x - graph_rect.center().x)
+                            .abs()
+                            .total_cmp(&(right.x - graph_rect.center().x).abs())
+                    });
+                if let Some(curve_hit) = curve_hit {
+                    let (global_time, value) = transform.screen_to_graph(curve_hit);
+                    crate::qa::register_component_with_metadata(
+                        format!("graph.curve_hit.{name}"),
+                        "graph_curve_hit",
+                        Rect::from_center_size(curve_hit, Vec2::splat(12.0)),
+                        true,
+                        Some(serde_json::json!({
+                            "property": name,
+                            "component": format!("{component:?}"),
+                            "entity_id": entity_id,
+                            "global_time": global_time,
+                            "source_time": time_mapper.to_source_time(global_time),
+                            "value": value,
+                            "evaluator": property.evaluator,
+                        })),
+                    );
+                }
+
                 if path_points.len() > 1 {
                     painter.add(egui::Shape::line(path_points, Stroke::new(2.0, color)));
                 }
@@ -472,9 +517,18 @@ pub fn draw_properties(
                             ui.label(format!("Keyframe {} - {}", i, name_for_menu));
                             ui.separator();
                             let mut chosen_easing = None;
-                            crate::ui::easing_menus::show_easing_menu(ui, None, |easing| {
-                                chosen_easing = Some(easing);
-                            });
+                            let keyframe_id = kf.id.to_string();
+                            crate::ui::easing_menus::show_easing_menu(
+                                ui,
+                                Some(&kf.easing),
+                                Some(crate::ui::easing_menus::EasingMenuQaScope::new(
+                                    "graph.keyframe_menu.easing",
+                                    &keyframe_id,
+                                )),
+                                |easing| {
+                                    chosen_easing = Some(easing);
+                                },
+                            );
 
                             if let Some(easing) = chosen_easing {
                                 actions.push(Action::SetEasing(
@@ -594,7 +648,8 @@ pub fn draw_properties(
                                 let curve_pos = transform.to_screen(t, val_at_t);
 
                                 // Distance check
-                                if (pointer_pos.y - curve_pos.y).abs() < 10.0 {
+                                if actions.is_empty() && (pointer_pos.y - curve_pos.y).abs() < 10.0
+                                {
                                     actions.push(Action::Add(name.clone(), t.max(0.0), val_at_t));
                                 }
                             }
