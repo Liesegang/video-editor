@@ -8,7 +8,7 @@ pub mod vector;
 
 pub use node::{
     BlendMode, Clip, GeneratorContent, MediaContent, Node, NodeContent, PluginOperationContent,
-    ReferenceContent, Track,
+    ReferenceContent, TIME_MODULO_PERIOD_PROPERTY, Track, ValueContent,
 };
 pub use project::asset::{self, Asset, AssetKind};
 pub use project::property;

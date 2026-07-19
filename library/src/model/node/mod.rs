@@ -11,6 +11,7 @@ pub const CLIP_START_TIME_PROPERTY: &str = "start_time";
 pub const CLIP_DURATION_PROPERTY: &str = "duration";
 pub const CLIP_TRIM_IN_PROPERTY: &str = "trim_in";
 pub const CLIP_TIME_STRETCH_PROPERTY: &str = "time_stretch";
+pub const TIME_MODULO_PERIOD_PROPERTY: &str = "period";
 
 static CLIP_TIMING_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 4]> = LazyLock::new(|| {
     [
@@ -67,6 +68,22 @@ static CLIP_TIMING_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 4]> = Laz
             PropertyValue::Number(OrderedFloat(1.0)),
         ),
     ]
+});
+
+static TIME_MODULO_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> = LazyLock::new(|| {
+    [PropertyDefinition::new(
+        TIME_MODULO_PERIOD_PROPERTY,
+        PropertyUiType::Float {
+            min: 0.001,
+            max: 86_400.0,
+            step: 0.001,
+            suffix: " s".to_string(),
+            min_hard_limit: true,
+            max_hard_limit: false,
+        },
+        "Period",
+        PropertyValue::Number(OrderedFloat(1.0)),
+    )]
 });
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
@@ -280,17 +297,33 @@ pub struct Node {
 
 impl Node {
     pub fn new(name: &str, content: NodeContent) -> Self {
+        let properties = match &content {
+            NodeContent::Value(value) => {
+                PropertyMap::from_definitions(value.property_definitions())
+            }
+            _ => PropertyMap::new(),
+        };
         Self {
             id: Uuid::new_v4(),
             name: name.to_string(),
             content,
             enabled: true,
             blend_mode: BlendMode::Normal,
-            properties: PropertyMap::new(),
+            properties,
             ui_position: [0.0, 0.0],
             ui_size: [240.0, 160.0],
             ui_collapsed: false,
         }
+    }
+
+    /// Creates a native scalar node for explicit timeline-time remapping.
+    ///
+    /// The dividend is deliberately not implicit: callers must wire a Number
+    /// source (normally a container's internal Time output) to the `value`
+    /// input. The authored period is initialized in the authoritative
+    /// [`PropertyMap`] by [`Node::new`].
+    pub fn new_time_modulo(name: &str) -> Self {
+        Self::new(name, NodeContent::Value(ValueContent::TimeModulo))
     }
 
     pub fn update_property_or_keyframe(
@@ -317,9 +350,30 @@ pub enum NodeContent {
     /// [`Node::properties`]. Loading and validating a Project never requires
     /// the referenced plugin to be installed.
     PluginOperation(PluginOperationContent),
+    /// Native, typed scalar operations. Inputs and outputs remain canonical
+    /// Project ports; this variant does not introduce a parallel value model.
+    Value(ValueContent),
     /// Ordered variadic image compositor. Input ordering lives on canonical
     /// ProjectConnection::order, never on a UI pin index.
     Merge,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ValueContent {
+    /// Floating-point remainder used for explicit looping/time remapping.
+    /// The `value` input is required and `period` may be wired or read from
+    /// [`Node::properties`]. Invalid inputs produce graph `NoOutput`.
+    TimeModulo,
+}
+
+impl ValueContent {
+    /// Canonical authored-property metadata for this native scalar operation.
+    /// Factories and inspectors consume this same definition list.
+    pub fn property_definitions(self) -> &'static [PropertyDefinition] {
+        match self {
+            Self::TimeModulo => TIME_MODULO_PROPERTY_DEFINITIONS.as_slice(),
+        }
+    }
 }
 
 /// Stable, model-side identity and graph contract for a plugin operation.

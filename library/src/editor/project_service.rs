@@ -1283,10 +1283,16 @@ impl ProjectManager {
 
         let converter = self.plugin_manager.get_entity_converter(kind_key);
 
-        let mut definitions = if let Some(converter) = converter {
-            converter.get_property_definitions(canvas_width, canvas_height, clip_width, clip_height)
-        } else {
-            Vec::new()
+        let mut definitions = match &node.content {
+            NodeContent::Value(value) => value.property_definitions().to_vec(),
+            _ => converter.map_or_else(Vec::new, |converter| {
+                converter.get_property_definitions(
+                    canvas_width,
+                    canvas_height,
+                    clip_width,
+                    clip_height,
+                )
+            }),
         };
 
         if kind_key == "video" {

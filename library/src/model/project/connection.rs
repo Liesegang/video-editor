@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-use crate::model::{BlendMode, GeneratorContent, NodeContent};
+use crate::model::{BlendMode, GeneratorContent, NodeContent, ValueContent};
 
 use super::{NodeContainer, Project, ProjectGraphError};
 
@@ -16,6 +16,9 @@ pub const FRAME_PORT: &str = "frame";
 pub const FPS_PORT: &str = "fps";
 pub const DURATION_PORT: &str = "duration";
 pub const RESOLUTION_PORT: &str = "resolution";
+pub const VALUE_INPUT_PORT: &str = "value";
+pub const PERIOD_INPUT_PORT: &str = "period";
+pub const VALUE_OUTPUT_PORT: &str = "result";
 
 /// The normal result of evaluating a graph port. `NoOutput` is not an error
 /// and is deliberately distinct from transparent pixels, zero, false, and
@@ -347,6 +350,20 @@ fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
         NodeContent::PluginOperation(operation) => {
             include_property_inputs = false;
             ports.extend(operation.declared_ports.iter().cloned());
+        }
+        NodeContent::Value(ValueContent::TimeModulo) => {
+            include_property_inputs = false;
+            ports.extend([
+                PortDefinition::input(VALUE_INPUT_PORT, "Value", PortDataType::Number),
+                PortDefinition::input(PERIOD_INPUT_PORT, "Period", PortDataType::Number),
+                PortDefinition::output(
+                    VALUE_OUTPUT_PORT,
+                    "Result",
+                    PortDataType::Number,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ]);
         }
         NodeContent::Merge => {
             ports.push(time_input());
