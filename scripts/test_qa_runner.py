@@ -101,6 +101,58 @@ class InjectingQaClient(E2E.QaClient):
         return {"frame": next(self.state_frames)}
 
 
+class TimelineGeometryQaClient(E2E.QaClient):
+    def __init__(self):
+        super().__init__("http://127.0.0.1", timeout=0.2)
+        self.injected = None
+
+    def component_snapshot(self):
+        def component(component_id, rect, metadata=None):
+            return {
+                "id": component_id,
+                "enabled": True,
+                "visible": True,
+                "rect_points": rect,
+                "metadata": metadata,
+            }
+
+        clip_rect = {
+            "min_x": 100.0,
+            "min_y": 40.0,
+            "max_x": 300.0,
+            "max_y": 70.0,
+            "width": 200.0,
+            "height": 30.0,
+            "center_x": 200.0,
+            "center_y": 55.0,
+        }
+        edge_rect = {
+            "min_x": 100.0,
+            "min_y": 40.0,
+            "max_x": 105.0,
+            "max_y": 70.0,
+            "width": 5.0,
+            "height": 30.0,
+            "center_x": 102.5,
+            "center_y": 55.0,
+        }
+        return {
+            "frame": 42,
+            "components": [
+                component(
+                    "timeline.clip:" + E2E.CLIP_A1,
+                    clip_rect,
+                    {"duration": 4.0},
+                ),
+                component("timeline.clip_edge.left:" + E2E.CLIP_A1, edge_rect),
+            ],
+        }
+
+    def inject(self, endpoint, payload, evidence=None):
+        self.injected = (endpoint, payload, evidence)
+        return 7
+
+
 class QaRunnerTests(unittest.TestCase):
     def test_e2e_fixture_contract_names_all_twelve_explicit_nodes(self):
         self.assertEqual(len(E2E.EXPECTED_FIXTURE_NODES), 12)
@@ -286,6 +338,24 @@ class QaRunnerTests(unittest.TestCase):
         self.assertEqual(action_id, 7)
         self.assertEqual(client.evidence[0]["phase"], "injected")
         self.assertEqual(client.evidence[0]["completed_frame"], 21)
+
+    def test_timeline_drag_seconds_comes_from_one_fresh_clip_rectangle(self):
+        client = TimelineGeometryQaClient()
+
+        geometry = client.drag_timeline_by_seconds(
+            E2E.CLIP_A1,
+            "timeline.clip_edge.left:" + E2E.CLIP_A1,
+            1.25,
+            steps=12,
+        )
+
+        endpoint, payload, evidence = client.injected
+        self.assertEqual(endpoint, "drag")
+        self.assertEqual(geometry["pixels_per_second"], 50.0)
+        self.assertEqual(payload["from"], {"x": 102.5, "y": 55.0})
+        self.assertEqual(payload["to"], {"x": 165.0, "y": 55.0})
+        self.assertEqual(evidence["component_frame"], 42)
+        self.assertEqual(evidence["expected_delta_seconds"], 1.25)
 
     def test_modes_expand_to_the_expected_independent_suites(self):
         self.assertEqual([item.name for item in RUNNER.suite_specs("smoke")], ["smoke"])

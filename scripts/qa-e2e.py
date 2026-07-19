@@ -452,6 +452,72 @@ class QaClient:
         )
         return start, end
 
+    def drag_timeline_by_seconds(self, clip_id, target_id, seconds, steps=12):
+        """Drag a Clip body/edge by an exact time delta from fresh geometry."""
+        snapshot = self.component_snapshot()
+        components = {item["id"]: item for item in snapshot["components"]}
+        clip_component_id = "timeline.clip:" + clip_id
+        try:
+            clip_component = components[clip_component_id]
+            target = components[target_id]
+        except KeyError as error:
+            raise QaFailure(
+                "timeline drag component {} absent in frame {}".format(
+                    error, snapshot["frame"]
+                )
+            ) from error
+        for component_id, component in (
+            (clip_component_id, clip_component),
+            (target_id, target),
+        ):
+            rect = component["rect_points"]
+            if (
+                not component.get("enabled", False)
+                or not component.get("visible", False)
+                or rect["width"] <= 0.0
+                or rect["height"] <= 0.0
+            ):
+                raise QaFailure(
+                    "timeline drag component {!r} is not interactive".format(
+                        component_id
+                    )
+                )
+        clip_metadata = clip_component.get("metadata") or {}
+        duration = float(clip_metadata.get("duration", 0.0))
+        clip_width = float(clip_component["rect_points"]["width"])
+        if duration <= 0.0 or clip_width <= 1.0:
+            raise QaFailure("Timeline Clip omitted usable time geometry")
+        pixels_per_second = clip_width / duration
+        dx = float(seconds) * pixels_per_second
+        start = self.point(target["rect_points"])
+        end = {"x": start["x"] + dx, "y": start["y"]}
+        self.inject(
+            "drag",
+            {
+                "from": start,
+                "to": end,
+                "coordinate_space": "points",
+                "steps": steps,
+                "button": "primary",
+            },
+            {
+                "source_component_id": target_id,
+                "geometry_component_id": clip_component_id,
+                "component_frame": snapshot["frame"],
+                "source_rect_points": target["rect_points"],
+                "geometry_rect_points": clip_component["rect_points"],
+                "expected_delta_seconds": float(seconds),
+                "pixels_per_second": pixels_per_second,
+                "coordinate_reason": "Clip width / authoritative duration",
+            },
+        )
+        return {
+            "start": start,
+            "end": end,
+            "pixels_per_second": pixels_per_second,
+            "delta_seconds": float(seconds),
+        }
+
     def drag_component_to_row(self, source_id, target_id, steps=12):
         """Drag to a target row while preserving the source's screen x.
 
@@ -608,6 +674,32 @@ class QaClient:
             "a valid Preview render after {}".format(operation), rendered
         )
 
+    def wait_preview_settled(self, operation, consecutive_frames=2):
+        observed = {"frame": None, "signature": None, "stable": 0}
+
+        def settled():
+            state = self.state()
+            if state["frame"] == observed["frame"]:
+                return None
+            preview = state["editor"]["preview"]
+            signature = (
+                preview["pixel_hash"],
+                preview["nontransparent_pixels"],
+                preview["modal_error"],
+            )
+            if signature == observed["signature"]:
+                observed["stable"] += 1
+            else:
+                observed["stable"] = 0
+            observed["frame"] = state["frame"]
+            observed["signature"] = signature
+            if observed["stable"] < consecutive_frames:
+                return None
+            assert_valid_preview(state, operation)
+            return state
+
+        return self.wait_until("settled Preview after {}".format(operation), settled)
+
 
 def property_value(node, name):
     return node["properties"][name]["properties"]["value"]
@@ -648,6 +740,100 @@ def assert_close(actual, expected, description, tolerance=1.0e-5):
         raise QaFailure(
             "{} was {}, expected {}".format(description, actual, expected)
         )
+
+
+def assert_selection(state, entity_id, track_id, operation):
+    selection = state["editor"]["selection"]
+    if selection["last_selected_entity_id"] != entity_id:
+        raise QaFailure("{} selected the wrong entity".format(operation))
+    if selection["last_selected_track_id"] != track_id:
+        raise QaFailure("{} retained the wrong Track owner".format(operation))
+    if entity_id not in selection["selected_entities"]:
+        raise QaFailure("{} omitted the selected entity from selection".format(operation))
+
+
+def assert_valid_preview(state, operation):
+    preview = state["editor"]["preview"]
+    if (
+        preview["render_revision"] <= 0
+        or preview["pixel_hash"] is None
+        or preview["nontransparent_pixels"] is None
+        or preview["nontransparent_pixels"] <= 0
+        or preview["modal_error"] is not None
+    ):
+        raise QaFailure("{} did not leave a valid Preview".format(operation))
+    return preview
+
+
+def activate_dock_tab(client, tab_id, tab_name, operation):
+    client.wait_component_settled(tab_id)
+    client.click_component(tab_id)
+    return client.wait_until(
+        "{} dock activation".format(operation),
+        lambda: state
+        if tab_name in (state := client.state())["dock"]["active_tabs"]
+        else None,
+    )
+
+
+def assert_inspector_clip_timing(client, clip_id, track_id, expected_clip):
+    """Read Clip timing/owner UI derived from the authoritative Project."""
+    owner_id = "inspector.owner.clip:" + clip_id
+    _, owner = client.wait_component(owner_id)
+    owner_metadata = owner.get("metadata") or {}
+    if not (
+        owner_metadata.get("owner") == "clip"
+        and owner_metadata.get("id") == clip_id
+        and owner_metadata.get("track_id") == track_id
+    ):
+        raise QaFailure("Inspector Clip owner metadata is stale")
+
+    fps = None
+    for property_name in ("start_time", "duration", "trim_in", "time_stretch"):
+        component_id = "inspector.property.clip:{}:{}".format(
+            clip_id, property_name
+        )
+        _, component = client.wait_component(component_id)
+        metadata = component.get("metadata") or {}
+        if metadata.get("scope") != "clip:" + clip_id:
+            raise QaFailure("Inspector timing control has stale scope")
+        if metadata.get("property") != property_name:
+            raise QaFailure("Inspector timing control names the wrong property")
+        assert_close(
+            float(metadata.get("value")),
+            float(expected_clip[property_name]),
+            "Inspector {} value".format(property_name),
+        )
+        definition = metadata.get("definition") or {}
+        if definition.get("name") != property_name:
+            raise QaFailure("Inspector timing control omitted authoritative metadata")
+        component_fps = float(metadata.get("fps", 0.0))
+        if component_fps <= 0.0:
+            raise QaFailure("Inspector timing control has invalid FPS metadata")
+        if fps is None:
+            fps = component_fps
+        else:
+            assert_close(component_fps, fps, "Inspector timing FPS")
+
+        if property_name == "duration":
+            expected_display = (
+                expected_clip["start_time"] + expected_clip["duration"]
+            ) * component_fps
+            expected_semantics = "out_frame"
+        elif property_name in ("start_time", "trim_in"):
+            expected_display = expected_clip[property_name] * component_fps
+            expected_semantics = "frame"
+        else:
+            expected_display = expected_clip[property_name]
+            expected_semantics = "ratio"
+        assert_close(
+            float(metadata.get("display_value")),
+            float(expected_display),
+            "Inspector {} display value".format(property_name),
+        )
+        if metadata.get("display_semantics") != expected_semantics:
+            raise QaFailure("Inspector timing display semantics are stale")
+    return fps
 
 
 def composition_map(project):
@@ -1513,29 +1699,152 @@ def ensure_operation_property(client, operation_id, property_name):
     return snapshot, component
 
 
-def run_timeline_scenario(client):
-    """Exercise Timeline mutations solely through fresh screen coordinates."""
-    client.wait_component_settled("dock.tab:timeline")
-    client.click_component("dock.tab:timeline")
-    client.wait_until(
-        "Timeline dock activation",
-        lambda: client.state()
-        if "Timeline" in client.state()["dock"]["active_tabs"]
+def assert_only_node_enabled_changed(before_project, after_project, node_id, expected):
+    before = json.loads(json.dumps(before_project))
+    after = json.loads(json.dumps(after_project))
+    before_enabled = before["nodes"][node_id].pop("enabled")
+    after_enabled = after["nodes"][node_id].pop("enabled")
+    if before_enabled == expected or after_enabled != expected:
+        raise QaFailure("Node enabled transition has the wrong direction")
+    if before != after:
+        raise QaFailure("Node enabled command changed unrelated Project data")
+    validate_canonical_ownership(after_project)
+
+
+def assert_timeline_semantic_source(client, clip_id, output_node_id, source_node_id):
+    _, component = client.wait_component("timeline.clip:" + clip_id)
+    metadata = component.get("metadata") or {}
+    if metadata.get("output_node_id") != output_node_id:
+        raise QaFailure("Timeline lost the Clip's explicit output binding")
+    if metadata.get("semantic_source_node_id") != source_node_id:
+        raise QaFailure("Timeline semantic source did not reflect Node enabled state")
+    return metadata
+
+
+def run_node_toggle_cross_view_scenario(client):
+    """Prove Node authored state reaches Timeline, Inspector, and Preview."""
+    activate_dock_tab(
+        client, "dock.tab:node_editor", "Node Editor", "Node toggle cross-view"
+    )
+    text_header = "node_editor.node_header:" + TEXT
+    reveal_node_editor_component(client, text_header)
+    _, enabled_component = client.component("node_editor.node:" + TEXT)
+    enabled_metadata = enabled_component.get("metadata") or {}
+    if enabled_metadata.get("inactive") or enabled_metadata.get("inactive_reason") is not None:
+        raise QaFailure("active Text Node is rendered inactive before Disable")
+
+    disable_before = client.state()
+    selection_before = dict(disable_before["editor"]["selection"])
+    preview_before = assert_valid_preview(disable_before, "Node Disable baseline")
+    client.click_component(text_header, button="secondary")
+    toggle_id = "node_editor.menu.toggle_enabled.node:" + TEXT
+    client.wait_component(toggle_id)
+    client.click_component(toggle_id)
+    disabled = client.wait_project(
+        "Text Node Disable", lambda project: not project["nodes"][TEXT]["enabled"]
+    )
+    assert_history_delta(disable_before, disabled, 1, "Text Node Disable")
+    assert_only_node_enabled_changed(
+        disable_before["project"], disabled["project"], TEXT, False
+    )
+    if disabled["editor"]["selection"] != selection_before:
+        raise QaFailure("Node Disable unexpectedly changed selection")
+    disabled_rendered = client.wait_preview_change(
+        preview_before["pixel_hash"], preview_before["render_revision"]
+    )
+    disabled_preview = assert_valid_preview(disabled_rendered, "Text Node Disable")
+
+    activate_dock_tab(
+        client, "dock.tab:timeline", "Timeline", "disabled Node Timeline reflection"
+    )
+    assert_timeline_semantic_source(client, CLIP_A2, BLUR_EFFECT, None)
+    client.click_component("timeline.clip:" + CLIP_A2)
+    selected_clip = client.wait_until(
+        "disabled Clip coordinate selection",
+        lambda: state
+        if (state := client.state())["editor"]["selection"][
+            "last_selected_entity_id"
+        ]
+        == CLIP_A2
         else None,
     )
+    assert_selection(selected_clip, CLIP_A2, TRACK_A, "disabled Clip selection")
+    assert_inspector_clip_timing(
+        client, CLIP_A2, TRACK_A, selected_clip["project"]["clips"][CLIP_A2]
+    )
+
+    activate_dock_tab(
+        client, "dock.tab:node_editor", "Node Editor", "Node Enable cross-view"
+    )
+    reveal_node_editor_component(client, text_header)
+    _, disabled_component = client.component("node_editor.node:" + TEXT)
+    disabled_metadata = disabled_component.get("metadata") or {}
+    if not (
+        disabled_metadata.get("inactive") is True
+        and disabled_metadata.get("inactive_reason") == "disabled"
+    ):
+        raise QaFailure("Node Editor did not expose the authored disabled state")
+
+    enable_before = client.state()
+    client.click_component(text_header, button="secondary")
+    client.wait_component(toggle_id)
+    client.click_component(toggle_id)
+    enabled = client.wait_project(
+        "Text Node Enable", lambda project: project["nodes"][TEXT]["enabled"]
+    )
+    assert_history_delta(enable_before, enabled, 1, "Text Node Enable")
+    assert_only_node_enabled_changed(
+        enable_before["project"], enabled["project"], TEXT, True
+    )
+    if enabled["editor"]["selection"] != enable_before["editor"]["selection"]:
+        raise QaFailure("Node Enable unexpectedly changed selection")
+    restored = wait_preview_hash_after(
+        client,
+        preview_before["pixel_hash"],
+        disabled_preview["render_revision"],
+        "Text Node Enable",
+    )
+    assert_valid_preview(restored, "Text Node Enable")
+
+    activate_dock_tab(
+        client, "dock.tab:timeline", "Timeline", "enabled Node Timeline reflection"
+    )
+    source = assert_timeline_semantic_source(client, CLIP_A2, BLUR_EFFECT, TEXT)
+    if source.get("semantic_source_kind") != "Text":
+        raise QaFailure("Timeline restored the wrong semantic source kind")
+    assert_selection(restored, CLIP_A2, TRACK_A, "Node Enable")
+    print("[qa-e2e] Node enabled state -> Timeline/Inspector/Preview passed")
+    return restored
+
+
+def run_timeline_scenario(client):
+    """Exercise Timeline mutations solely through fresh screen coordinates."""
+    activate_dock_tab(client, "dock.tab:timeline", "Timeline", "Timeline edit")
 
     move_before = client.state()
     clip_before = move_before["project"]["clips"][CLIP_A1]
     order_before = list(move_before["project"]["tracks"][TRACK_A]["clip_ids"])
-    client.drag_component_by("timeline.clip:" + CLIP_A1, 60.0, 0.0)
+    move_delta = 1.25
+    client.drag_timeline_by_seconds(
+        CLIP_A1, "timeline.clip:" + CLIP_A1, move_delta
+    )
     move_after = wait_timeline_edit(
         client,
         move_before,
         "Timeline Clip time move",
-        lambda current: current["clips"][CLIP_A1]["start_time"]
-        != clip_before["start_time"],
+        lambda current: abs(
+            current["clips"][CLIP_A1]["start_time"]
+            - (clip_before["start_time"] + move_delta)
+        )
+        < 1.0e-4,
     )
     moved = move_after["project"]["clips"][CLIP_A1]
+    assert_close(
+        moved["start_time"],
+        clip_before["start_time"] + move_delta,
+        "moved Clip start_time",
+        tolerance=1.0e-4,
+    )
     if move_after["project"]["tracks"][TRACK_A]["clip_ids"] != order_before:
         raise QaFailure("horizontal Clip move changed canonical Clip order")
     assert_close(moved["duration"], clip_before["duration"], "moved Clip duration")
@@ -1547,20 +1856,34 @@ def run_timeline_scenario(client):
         move_before["project"], move_after["project"], "Clip time move"
     )
     assert_history_delta(move_before, move_after, 1, "Clip time move")
-    client.wait_preview_render_after(move_after, "Clip time move")
+    assert_selection(move_after, CLIP_A1, TRACK_A, "Clip time move")
+    assert_inspector_clip_timing(client, CLIP_A1, TRACK_A, moved)
+    move_rendered = client.wait_preview_render_after(move_before, "Clip time move")
+    if (
+        move_rendered["editor"]["preview"]["pixel_hash"]
+        == move_before["editor"]["preview"]["pixel_hash"]
+    ):
+        raise QaFailure("moving Clip outside the playhead did not change Preview hash")
 
     left_before = client.state()
     old = left_before["project"]["clips"][CLIP_A1]
-    client.drag_component_by("timeline.clip_edge.left:" + CLIP_A1, 30.0, 0.0)
+    left_delta = 0.25
+    client.drag_timeline_by_seconds(
+        CLIP_A1, "timeline.clip_edge.left:" + CLIP_A1, left_delta
+    )
     left_after = wait_timeline_edit(
         client,
         left_before,
         "left-edge trim",
-        lambda current: current["clips"][CLIP_A1]["start_time"]
-        > old["start_time"],
+        lambda current: abs(
+            current["clips"][CLIP_A1]["start_time"]
+            - (old["start_time"] + left_delta)
+        )
+        < 1.0e-4,
     )
     new = left_after["project"]["clips"][CLIP_A1]
     delta = new["start_time"] - old["start_time"]
+    assert_close(delta, left_delta, "left trim delta", tolerance=1.0e-4)
     assert_close(
         new["duration"], old["duration"] - delta, "left-trimmed Clip duration"
     )
@@ -1578,25 +1901,42 @@ def run_timeline_scenario(client):
         left_before["project"], left_after["project"], "left-edge trim"
     )
     assert_history_delta(left_before, left_after, 1, "left-edge trim")
-    client.wait_preview_render_after(left_after, "left-edge trim")
+    assert_selection(left_after, CLIP_A1, TRACK_A, "left-edge trim")
+    assert_inspector_clip_timing(client, CLIP_A1, TRACK_A, new)
+    client.wait_preview_render_after(left_before, "left-edge trim")
 
     right_before = client.state()
     old = right_before["project"]["clips"][CLIP_A1]
-    client.drag_component_by("timeline.clip_edge.right:" + CLIP_A1, -25.0, 0.0)
+    right_delta = -0.25
+    client.drag_timeline_by_seconds(
+        CLIP_A1, "timeline.clip_edge.right:" + CLIP_A1, right_delta
+    )
     right_after = wait_timeline_edit(
         client,
         right_before,
         "right-edge trim",
-        lambda current: current["clips"][CLIP_A1]["duration"] < old["duration"],
+        lambda current: abs(
+            current["clips"][CLIP_A1]["duration"]
+            - (old["duration"] + right_delta)
+        )
+        < 1.0e-4,
     )
     new = right_after["project"]["clips"][CLIP_A1]
     assert_close(new["start_time"], old["start_time"], "right trim start time")
     assert_close(new["trim_in"], old["trim_in"], "right trim trim_in")
+    assert_close(
+        new["duration"],
+        old["duration"] + right_delta,
+        "right trim duration",
+        tolerance=1.0e-4,
+    )
     assert_timeline_integrity(
         right_before["project"], right_after["project"], "right-edge trim"
     )
     assert_history_delta(right_before, right_after, 1, "right-edge trim")
-    client.wait_preview_render_after(right_after, "right-edge trim")
+    assert_selection(right_after, CLIP_A1, TRACK_A, "right-edge trim")
+    assert_inspector_clip_timing(client, CLIP_A1, TRACK_A, new)
+    client.wait_preview_render_after(right_before, "right-edge trim")
 
     reorder_before = client.state()
     reordered_timing = dict(reorder_before["project"]["clips"][CLIP_A1])
@@ -1622,7 +1962,9 @@ def run_timeline_scenario(client):
         reorder_before["project"], reorder_after["project"], "same-Track Clip reorder"
     )
     assert_history_delta(reorder_before, reorder_after, 1, "same-Track Clip reorder")
-    client.wait_preview_render_after(reorder_after, "same-Track Clip reorder")
+    assert_selection(reorder_after, CLIP_A1, TRACK_A, "same-Track Clip reorder")
+    assert_inspector_clip_timing(client, CLIP_A1, TRACK_A, reordered)
+    client.wait_preview_render_after(reorder_before, "same-Track Clip reorder")
 
     cross_before = client.state()
     cross_timing = dict(cross_before["project"]["clips"][CLIP_A2])
@@ -1651,7 +1993,9 @@ def run_timeline_scenario(client):
         {CLIP_A2: TRACK_B},
     )
     assert_history_delta(cross_before, cross_after, 1, "cross-Track Clip move")
-    client.wait_preview_render_after(cross_after, "cross-Track Clip move")
+    assert_selection(cross_after, CLIP_A2, TRACK_B, "cross-Track Clip move")
+    assert_inspector_clip_timing(client, CLIP_A2, TRACK_B, moved_across)
+    client.wait_preview_render_after(cross_before, "cross-Track Clip move")
 
     track_before = client.state()
     client.drag_component_to_row(
@@ -1669,9 +2013,13 @@ def run_timeline_scenario(client):
         track_before["project"], track_after["project"], "Track reorder"
     )
     assert_history_delta(track_before, track_after, 1, "Track reorder")
-    client.wait_preview_render_after(track_after, "Track reorder")
+    assert_selection(track_after, CLIP_A2, TRACK_B, "Track reorder")
+    assert_inspector_clip_timing(
+        client, CLIP_A2, TRACK_B, track_after["project"]["clips"][CLIP_A2]
+    )
+    track_rendered = client.wait_preview_render_after(track_before, "Track reorder")
     print("[qa-e2e] Timeline move/trim/Clip reorder/Track reorder passed")
-    return track_after
+    return track_rendered
 
 
 def assert_node_editor_reflection(client, timeline_state):
@@ -1704,6 +2052,20 @@ def assert_node_editor_reflection(client, timeline_state):
     stale_edge = "node_editor.edge.derived:track:{}:clip:{}".format(TRACK_A, CLIP_A2)
     if stale_edge in components:
         raise QaFailure("Node Editor retained the old cross-Track derived edge")
+    derived_edge_id = "node_editor.edge.derived:track:{}:clip:{}".format(
+        TRACK_B, CLIP_A2
+    )
+    derived_metadata = components[derived_edge_id].get("metadata") or {}
+    if not (
+        derived_metadata.get("kind") == "derived_output"
+        and (derived_metadata.get("from") or {}).get("owner") == "clip:" + CLIP_A2
+        and (derived_metadata.get("to") or {}).get("owner") == "track:" + TRACK_B
+    ):
+        raise QaFailure("Node Editor cross-Track derived wire has stale endpoints")
+
+    owners = validate_canonical_ownership(timeline_state["project"])
+    if owners["clip_owners"].get(CLIP_A2) != TRACK_B:
+        raise QaFailure("Node Editor reflection read a non-canonical Clip owner")
 
     expected_outputs = EXPECTED_CLIP_OUTPUTS
     for clip_id, output_node_id in expected_outputs.items():
@@ -1719,9 +2081,14 @@ def assert_node_editor_reflection(client, timeline_state):
     expected_inactive = not (
         clip["start_time"] <= current_time < clip["start_time"] + clip["duration"]
     )
+    if not expected_inactive:
+        raise QaFailure("Timeline scenario did not move Clip A1 outside the playhead")
     for node_id in (SOLID, MERGE):
         metadata = components["node_editor.node:" + node_id].get("metadata") or {}
-        if metadata.get("inactive") != expected_inactive:
+        if not (
+            metadata.get("inactive") == expected_inactive
+            and metadata.get("inactive_reason") == "outside_clip_range"
+        ):
             raise QaFailure(
                 "Node Editor Node activity did not reflect Timeline Clip timing"
             )
@@ -1737,34 +2104,50 @@ def assert_node_editor_reflection(client, timeline_state):
     if header_id is None:
         raise QaFailure("no reflected Node header is visible for coordinate verification")
     selected_node = header_id.rsplit(":", 1)[-1]
+    selection_before = client.state()
     client.click_component(header_id)
     selected = client.wait_until(
         "reflected Node coordinate selection",
-        lambda: client.state()
-        if client.state()["editor"]["selection"]["last_selected_entity_id"]
+        lambda: state
+        if (state := client.state())["editor"]["selection"][
+            "last_selected_entity_id"
+        ]
         == selected_node
         else None,
     )
     validate_canonical_ownership(selected["project"])
+    if selected["project"] != timeline_state["project"]:
+        raise QaFailure("Node coordinate selection mutated the authoritative Project")
+    if history_depth(selected) != history_depth(selection_before):
+        raise QaFailure("Node coordinate selection unexpectedly changed history")
+    assert_valid_preview(selected, "Timeline -> Node Editor reflection")
     print("[qa-e2e] Timeline -> Node Editor graph/activity reflection passed")
     return selected
 
 
 def verify_final_preview_drag(client):
     # This final gesture intentionally traverses normal egui arbitration.
-    pan_before = client.state()
+    pan_before = client.wait_preview_settled("cross-view edits")
     client.key("space", True)
     client.drag_component_by("preview.canvas", 54.0, 32.0)
     client.key("space", False)
-    pan_after = client.wait_until(
+    client.wait_until(
         "Preview hand-tool pan",
-        lambda: client.state()
-        if client.state()["editor"]["preview"]["pan"]
+        lambda: state
+        if (state := client.state())["editor"]["preview"]["pan"]
         != pan_before["editor"]["preview"]["pan"]
         else None,
     )
+    pan_after = client.wait_preview_render_after(pan_before, "Preview hand-tool pan")
     if pan_after["editor"]["preview"]["primary_gesture"] != "Idle":
         raise QaFailure("Preview gesture owner did not return to Idle")
+    if pan_after["project"] != pan_before["project"]:
+        raise QaFailure("Preview hand-tool pan mutated the authoritative Project")
+    if pan_after["editor"]["selection"] != pan_before["editor"]["selection"]:
+        raise QaFailure("Preview hand-tool pan changed selection")
+    if pan_after["history"] != pan_before["history"]:
+        raise QaFailure("Preview hand-tool pan changed Project history")
+    assert_valid_preview(pan_after, "Preview hand-tool pan")
     print("[qa-e2e] final real coordinate Preview drag passed")
     return pan_after
 
@@ -1773,6 +2156,7 @@ def run_timeline_suite(client):
     health = client.wait_health()
     initial = wait_fresh_fixture(client)
     print("[qa-e2e] bridge healthy at frame {}".format(health["frame"]))
+    run_node_toggle_cross_view_scenario(client)
     timeline_state = run_timeline_scenario(client)
     assert_node_editor_reflection(client, timeline_state)
     final = verify_final_preview_drag(client)
