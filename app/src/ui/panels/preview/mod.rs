@@ -8,7 +8,9 @@ use library::EditorService;
 use library::RenderServer;
 
 use crate::command::{CommandId, CommandRegistry};
-use crate::state::context_types::{PreviewPrimaryGesture, PreviewTool};
+use crate::state::context_types::{
+    PreviewPrimaryGesture, PreviewTool, PreviewViewportRuntimeState,
+};
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 use crate::{action::HistoryManager, state::context::EditorContext};
 use library::model::property::Vec2;
@@ -82,6 +84,52 @@ fn fit_canvas_to_viewport(
     let pan = (viewport_size - canvas_size * zoom) * 0.5;
 
     Some(FittedPreviewView { pan, zoom })
+}
+
+/// Keep the derived Preview camera fitted without putting presentation state
+/// into the authoritative Project.
+///
+/// A composition change or an explicit [`PreviewViewportRuntimeState::request_fit`]
+/// applies a new centered fit. Viewport resizes continue to refit only while
+/// the user has not panned or zoomed away from that default view.
+fn update_preview_fit(
+    runtime: &mut PreviewViewportRuntimeState,
+    pan: &mut egui::Vec2,
+    zoom: &mut f32,
+    composition: Option<(uuid::Uuid, u64, u64)>,
+    viewport_rect: egui::Rect,
+) -> bool {
+    let Some((composition_id, width, height)) = composition else {
+        runtime.fitted_composition_id = None;
+        runtime.fitted_canvas_size = [0, 0];
+        runtime.last_viewport_size = viewport_rect.size();
+        runtime.auto_fit = true;
+        return false;
+    };
+
+    let composition_changed = runtime.fitted_composition_id != Some(composition_id)
+        || runtime.fitted_canvas_size != [width, height];
+    if composition_changed {
+        runtime.fitted_composition_id = Some(composition_id);
+        runtime.fitted_canvas_size = [width, height];
+        runtime.auto_fit = true;
+    }
+
+    let viewport_resized = (runtime.last_viewport_size - viewport_rect.size()).length_sq() > 0.25;
+    let fitted = if runtime.auto_fit && (composition_changed || viewport_resized) {
+        fit_canvas_to_viewport(viewport_rect, egui::vec2(width as f32, height as f32))
+    } else {
+        None
+    };
+    runtime.last_viewport_size = viewport_rect.size();
+
+    if let Some(fitted) = fitted {
+        *pan = fitted.pan;
+        *zoom = fitted.zoom;
+        true
+    } else {
+        false
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -335,34 +383,13 @@ pub fn preview_panel(
     // view remains untouched, keep it centered through dock and DPI-driven
     // logical-size changes. Once the user pans or zooms, resizing preserves
     // their chosen camera.
-    if let Some((composition_id, width, height)) = current_composition_view {
-        let runtime = &mut editor_context.interaction.preview_viewport;
-        let composition_changed = runtime.fitted_composition_id != Some(composition_id)
-            || runtime.fitted_canvas_size != [width, height];
-        if composition_changed {
-            runtime.fitted_composition_id = Some(composition_id);
-            runtime.fitted_canvas_size = [width, height];
-            runtime.auto_fit = true;
-        }
-
-        let viewport_resized =
-            (runtime.last_viewport_size - preview_rect.size()).length_sq() > 0.25;
-        if runtime.auto_fit && (composition_changed || viewport_resized) {
-            if let Some(fitted) =
-                fit_canvas_to_viewport(preview_rect, egui::vec2(width as f32, height as f32))
-            {
-                editor_context.view.pan = fitted.pan;
-                editor_context.view.zoom = fitted.zoom;
-            }
-        }
-        runtime.last_viewport_size = preview_rect.size();
-    } else {
-        let runtime = &mut editor_context.interaction.preview_viewport;
-        runtime.fitted_composition_id = None;
-        runtime.fitted_canvas_size = [0, 0];
-        runtime.last_viewport_size = preview_rect.size();
-        runtime.auto_fit = true;
-    }
+    update_preview_fit(
+        &mut editor_context.interaction.preview_viewport,
+        &mut editor_context.view.pan,
+        &mut editor_context.view.zoom,
+        current_composition_view,
+        preview_rect,
+    );
 
     // Viewport Controller Integration
     let hand_tool_key = registry
@@ -1131,6 +1158,279 @@ mod tests {
             assert_near(physical_canvas_center.x, physical_viewport_center.x);
             assert_near(physical_canvas_center.y, physical_viewport_center.y);
         }
+    }
+
+    #[test]
+    fn initial_and_requested_fit_center_content_without_touching_project() {
+        let composition_id = uuid::Uuid::new_v4();
+        let composition = Some((composition_id, 1920, 1080));
+        let viewport = egui::Rect::from_min_size(egui::pos2(91.0, 57.0), egui::vec2(900.0, 620.0));
+        let canvas_size = egui::vec2(1920.0, 1080.0);
+        let mut runtime = PreviewViewportRuntimeState::default();
+        let mut pan = egui::vec2(-400.0, 900.0);
+        let mut zoom = 7.0;
+
+        assert!(update_preview_fit(
+            &mut runtime,
+            &mut pan,
+            &mut zoom,
+            composition,
+            viewport,
+        ));
+        let initially_fitted = egui::Rect::from_min_size(viewport.min + pan, canvas_size * zoom);
+        assert_near(initially_fitted.center().x, viewport.center().x);
+        assert_near(initially_fitted.center().y, viewport.center().y);
+
+        // A user-authored camera survives ordinary frames and resizes once
+        // auto-fit has been disabled by an interaction.
+        runtime.auto_fit = false;
+        pan = egui::vec2(13.0, 29.0);
+        zoom = 1.75;
+        let resized = viewport.expand(80.0);
+        assert!(!update_preview_fit(
+            &mut runtime,
+            &mut pan,
+            &mut zoom,
+            composition,
+            resized,
+        ));
+        assert_eq!(pan, egui::vec2(13.0, 29.0));
+        assert_eq!(zoom, 1.75);
+
+        runtime.request_fit();
+        assert!(update_preview_fit(
+            &mut runtime,
+            &mut pan,
+            &mut zoom,
+            composition,
+            resized,
+        ));
+        let reset_fit = egui::Rect::from_min_size(resized.min + pan, canvas_size * zoom);
+        assert_near(reset_fit.center().x, resized.center().x);
+        assert_near(reset_fit.center().y, resized.center().y);
+    }
+
+    fn run_preview_interaction_frame(
+        context: &egui::Context,
+        editor_context: &mut EditorContext,
+        project: &Arc<RwLock<Project>>,
+        pending_actions: &mut Vec<PreviewAction>,
+        frame: usize,
+        events: Vec<egui::Event>,
+    ) -> PreviewGestureDecision {
+        let mut decision = PreviewGestureDecision::default();
+        let _ = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(640.0, 480.0),
+                )),
+                time: Some(frame as f64 / 60.0),
+                events,
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    let viewport = ui.available_rect_before_wrap().shrink(24.0);
+                    let pan_requested = ui.input(|input| input.key_down(egui::Key::Space));
+                    let input = ui.input(|input| PreviewGestureInput {
+                        primary_pressed: input.pointer.button_pressed(egui::PointerButton::Primary),
+                        primary_down: input.pointer.button_down(egui::PointerButton::Primary),
+                        primary_released: input
+                            .pointer
+                            .button_released(egui::PointerButton::Primary),
+                        primary_dragging: input.pointer.is_decidedly_dragging(),
+                        press_started_in_viewport: input
+                            .pointer
+                            .press_origin()
+                            .is_some_and(|position| viewport.contains(position)),
+                        pan_requested,
+                    });
+                    decision = arbitrate_primary_gesture(
+                        &mut editor_context.interaction.preview_viewport.primary_gesture,
+                        input,
+                    );
+
+                    let mut viewport_state = PreviewViewportState {
+                        pan: &mut editor_context.view.pan,
+                        zoom: &mut editor_context.view.zoom,
+                    };
+                    let mut controller = ViewportController::new(
+                        ui,
+                        ui.make_persistent_id("preview-space-pan-real-events"),
+                        None,
+                    )
+                    .with_pan_tool_active(decision.pan_owned);
+                    let (_, response) = controller.interact_with_rect(
+                        viewport,
+                        &mut viewport_state,
+                        &mut editor_context.interaction.handled_hand_tool_drag,
+                    );
+
+                    let mut interactions = interaction::PreviewInteractions::new(
+                        ui,
+                        editor_context,
+                        project,
+                        &[],
+                        |position| position,
+                        |position| position,
+                    );
+                    interactions.handle(&response, viewport, decision.pan_owned, pending_actions);
+                    drop(interactions);
+
+                    if decision.finish_after_frame {
+                        editor_context.interaction.preview_viewport.primary_gesture =
+                            PreviewPrimaryGesture::Idle;
+                    }
+                });
+            },
+        );
+        decision
+    }
+
+    #[test]
+    fn real_space_primary_drag_pans_without_content_selection_or_drag_updates() {
+        use crate::model::ui_types::GizmoHandle;
+        use crate::model::vector::VectorEditorState;
+        use crate::state::context_types::{BodyDragState, GizmoState};
+        use library::model::vector::HandleType;
+        use std::collections::HashMap;
+
+        let context = egui::Context::default();
+        let composition_id = uuid::Uuid::new_v4();
+        let selected_id = uuid::Uuid::new_v4();
+        let project = Arc::new(RwLock::new(Project::new("preview gesture")));
+        let project_before = project.read().unwrap().clone();
+        let mut editor_context = EditorContext::new(composition_id);
+        editor_context
+            .selection
+            .selected_entities
+            .insert(selected_id);
+        editor_context.selection.last_selected_entity_id = Some(selected_id);
+        let mut pending_actions = Vec::new();
+
+        // Warm egui's widget memory before the real key/pointer sequence.
+        assert!(
+            !run_preview_interaction_frame(
+                &context,
+                &mut editor_context,
+                &project,
+                &mut pending_actions,
+                0,
+                Vec::new(),
+            )
+            .pan_owned
+        );
+
+        editor_context.interaction.is_moving_selected_entity = true;
+        editor_context.interaction.preview_selection_drag_start = Some(egui::pos2(4.0, 5.0));
+        editor_context.interaction.body_drag_state = Some(BodyDragState {
+            start_mouse_pos: egui::pos2(4.0, 5.0),
+            original_positions: HashMap::from([(selected_id, [12.0, 34.0])]),
+        });
+        editor_context.interaction.gizmo_state = Some(GizmoState {
+            start_mouse_pos: egui::pos2(4.0, 5.0),
+            active_handle: GizmoHandle::Rotation,
+            original_position: [12.0, 34.0],
+            original_scale_x: 100.0,
+            original_scale_y: 100.0,
+            original_rotation: 0.0,
+            original_anchor_x: 0.0,
+            original_anchor_y: 0.0,
+            original_width: 100.0,
+            original_height: 100.0,
+        });
+        editor_context.interaction.vector_editor_state = Some(VectorEditorState {
+            selected_handle: Some((0, HandleType::Vertex)),
+            ..Default::default()
+        });
+
+        let pan_before = editor_context.view.pan;
+        let start = egui::pos2(180.0, 160.0);
+        let end = egui::pos2(330.0, 245.0);
+        let key_event = |pressed| egui::Event::Key {
+            key: egui::Key::Space,
+            physical_key: Some(egui::Key::Space),
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        let pressed = run_preview_interaction_frame(
+            &context,
+            &mut editor_context,
+            &project,
+            &mut pending_actions,
+            1,
+            vec![
+                key_event(true),
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert!(pressed.pan_owned);
+
+        let dragged = run_preview_interaction_frame(
+            &context,
+            &mut editor_context,
+            &project,
+            &mut pending_actions,
+            2,
+            vec![egui::Event::PointerMoved(end)],
+        );
+        assert!(dragged.pan_owned);
+        assert_ne!(editor_context.view.pan, pan_before);
+
+        let released = run_preview_interaction_frame(
+            &context,
+            &mut editor_context,
+            &project,
+            &mut pending_actions,
+            3,
+            vec![
+                egui::Event::PointerButton {
+                    pos: end,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                key_event(false),
+            ],
+        );
+        assert!(released.pan_owned);
+        assert!(released.finish_after_frame);
+        assert_eq!(
+            editor_context.interaction.preview_viewport.primary_gesture,
+            PreviewPrimaryGesture::Idle
+        );
+
+        assert_eq!(
+            editor_context.selection.selected_entities,
+            [selected_id].into_iter().collect()
+        );
+        assert_eq!(
+            editor_context.selection.last_selected_entity_id,
+            Some(selected_id)
+        );
+        assert!(!editor_context.interaction.is_moving_selected_entity);
+        assert!(editor_context.interaction.body_drag_state.is_none());
+        assert!(editor_context
+            .interaction
+            .preview_selection_drag_start
+            .is_none());
+        assert!(editor_context.interaction.gizmo_state.is_none());
+        assert!(editor_context
+            .interaction
+            .vector_editor_state
+            .as_ref()
+            .is_some_and(|state| state.selected_handle.is_none()));
+        assert!(pending_actions.is_empty());
+        assert_eq!(*project.read().unwrap(), project_before);
     }
 
     #[test]
