@@ -11,12 +11,14 @@ use crate::model::frame::frame::{FrameInfo, Region};
 use crate::model::frame::runtime_shape::RuntimeShape;
 use crate::model::project::{
     Composition, DURATION_PORT, EvalOutput, EvalResult, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT,
-    MERGE_IMAGES_PORT, NodeContainer, PortAddress, PortDataType, PortDirection, PortMultiplicity,
-    PortOwner, Project, ProjectConnection, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
-    TIME_PORT,
+    MERGE_IMAGES_PORT, NodeContainer, PERIOD_INPUT_PORT, PortAddress, PortDataType, PortDirection,
+    PortMultiplicity, PortOwner, Project, ProjectConnection, RESOLUTION_PORT, SHAPE_INPUT_PORT,
+    SHAPE_OUTPUT_PORT, TIME_PORT, VALUE_INPUT_PORT, VALUE_OUTPUT_PORT,
 };
 use crate::model::property::{PropertyValue, Vec2};
-use crate::model::{GeneratorContent, Node, NodeContent};
+use crate::model::{
+    GeneratorContent, Node, NodeContent, TIME_MODULO_PERIOD_PROPERTY, ValueContent,
+};
 use crate::plugin::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
     EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, FrameEvaluationContext, PluginManager,
@@ -131,14 +133,14 @@ impl<'a> FrameEvaluator<'a> {
         if !path.insert(owner) {
             return Err(cycle_error(owner));
         }
-        let scope = match self.scope_for_owner(owner, global_time, &mut HashSet::new())? {
-            EvalOutput::Produced(scope) => scope,
+        match self.scope_for_owner(owner, global_time, &mut HashSet::new())? {
+            EvalOutput::Produced(_) => {}
             EvalOutput::NoOutput => {
                 path.remove(&owner);
                 return Ok(EvalOutput::NoOutput);
             }
-        };
-        let items = self.collect_container_image_items(owner, scope, global_time, path);
+        }
+        let items = self.collect_container_image_items(owner, global_time, path);
         path.remove(&owner);
         items
     }
@@ -164,7 +166,7 @@ impl<'a> FrameEvaluator<'a> {
                 return Ok(EvalOutput::NoOutput);
             }
         };
-        let items = match self.collect_container_image_items(owner, scope, global_time, path)? {
+        let items = match self.collect_container_image_items(owner, global_time, path)? {
             EvalOutput::Produced(items) => items,
             EvalOutput::NoOutput => {
                 path.remove(&owner);
@@ -214,7 +216,7 @@ impl<'a> FrameEvaluator<'a> {
                 return Ok(EvalOutput::NoOutput);
             }
         };
-        let items = match self.collect_container_image_items(owner, scope, global_time, path)? {
+        let items = match self.collect_container_image_items(owner, global_time, path)? {
             EvalOutput::Produced(items) => items,
             EvalOutput::NoOutput => {
                 path.remove(&owner);
@@ -246,16 +248,16 @@ impl<'a> FrameEvaluator<'a> {
     fn collect_container_image_items(
         &self,
         owner: PortOwner,
-        scope: EvaluationScope,
         global_time: f64,
         path: &mut HashSet<PortOwner>,
     ) -> EvalResult<Vec<FrameItem>> {
         let mut candidates = Vec::new();
         for source in self.project.container_image_sources(owner) {
-            let item = match source.source {
-                PortOwner::Node(node_id) => self.collect_node(node_id, scope, global_time, path)?,
-                source_owner => self.collect_owner_output(source_owner, global_time, path)?,
-            };
+            // Every child, including an explicitly bound direct Node, goes
+            // through its own authoritative owner scope. Passing the
+            // container scope directly here used to bypass the Node's Time
+            // input only for direct output bindings.
+            let item = self.collect_owner_output(source.source, global_time, path)?;
             candidates.push(item);
         }
         Ok(aggregate_outputs(candidates))
@@ -315,6 +317,7 @@ impl<'a> FrameEvaluator<'a> {
                 self.collect_reference(node, reference, scope, global_time, path, &inputs)?
             }
             NodeContent::Merge => self.collect_merge(node, scope, global_time, path, &inputs)?,
+            NodeContent::Value(_) => EvalOutput::NoOutput,
             _ => self.convert_node(node, scope, &inputs)?.map(|object| {
                 FrameItem::Group(FrameGroup {
                     source_id: node.id,
@@ -989,6 +992,7 @@ impl<'a> FrameEvaluator<'a> {
             },
             NodeContent::Reference(_) => "reference",
             NodeContent::PluginOperation(_) => return Ok(EvalOutput::NoOutput),
+            NodeContent::Value(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::Merge => "merge",
         };
         let converter = self
@@ -1046,6 +1050,16 @@ impl<'a> FrameEvaluator<'a> {
                 PortDataType::Image | PortDataType::Shape => continue,
                 _ => {}
             }
+            if matches!(
+                target.port.as_str(),
+                TIME_PORT | DURATION_PORT | RESOLUTION_PORT
+            ) {
+                // Authored scope overrides have already been applied by
+                // scope_for_owner. Keeping a second copy in the property map
+                // both re-evaluates the graph and obscures which Time is
+                // authoritative.
+                continue;
+            }
             let connection = match self.single_connection_to(&target)? {
                 EvalOutput::Produced(connection) => connection,
                 EvalOutput::NoOutput => continue,
@@ -1059,16 +1073,7 @@ impl<'a> FrameEvaluator<'a> {
     }
 
     fn scope_for_node(&self, node_id: Uuid, global_time: f64) -> EvalResult<EvaluationScope> {
-        let container = self
-            .project
-            .find_node_container(node_id)
-            .ok_or_else(|| missing_error(PortOwner::Node(node_id)))?;
-        let owner = match container {
-            NodeContainer::Composition(id) => PortOwner::Composition(id),
-            NodeContainer::Track(id) => PortOwner::Track(id),
-            NodeContainer::Clip(id) => PortOwner::Clip(id),
-        };
-        self.scope_for_owner(owner, global_time, &mut HashSet::new())
+        self.scope_for_owner(PortOwner::Node(node_id), global_time, &mut HashSet::new())
     }
 
     fn scope_for_owner(
@@ -1215,6 +1220,14 @@ impl<'a> FrameEvaluator<'a> {
                 "Image port {source:?} cannot be resolved as a value"
             )));
         }
+        if let PortOwner::Node(node_id) = source.owner
+            && matches!(
+                self.project.get_node(node_id).map(|node| &node.content),
+                Some(NodeContent::Value(_))
+            )
+        {
+            return self.evaluate_value_node_output(node_id, &source.port, global_time, path);
+        }
         match self.scope_for_owner(source.owner, global_time, path)? {
             EvalOutput::Produced(scope) => scope
                 .value(&source.port)
@@ -1223,6 +1236,124 @@ impl<'a> FrameEvaluator<'a> {
                     LibraryError::Validation(format!("Unsupported value output port {source:?}"))
                 }),
             EvalOutput::NoOutput => Ok(EvalOutput::NoOutput),
+        }
+    }
+
+    fn evaluate_value_node_output(
+        &self,
+        node_id: Uuid,
+        output_port: &str,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<PropertyValue> {
+        let owner = PortOwner::Node(node_id);
+        let node = self
+            .project
+            .get_node(node_id)
+            .ok_or_else(|| missing_error(owner))?;
+        if !node.enabled {
+            return Ok(EvalOutput::NoOutput);
+        }
+        if output_port != VALUE_OUTPUT_PORT {
+            return Err(LibraryError::Validation(format!(
+                "Unsupported value output port {owner:?}.{output_port}"
+            )));
+        }
+        let scope = match self.scope_for_owner(owner, global_time, path)? {
+            EvalOutput::Produced(scope) => scope,
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        if !path.insert(owner) {
+            return Err(cycle_error(owner));
+        }
+        let result = match &node.content {
+            NodeContent::Value(ValueContent::TimeModulo) => {
+                self.evaluate_time_modulo(node, scope, global_time, path)
+            }
+            _ => Ok(EvalOutput::NoOutput),
+        };
+        path.remove(&owner);
+        result
+    }
+
+    fn evaluate_time_modulo(
+        &self,
+        node: &Node,
+        scope: EvaluationScope,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<PropertyValue> {
+        let value = match self.resolve_value_input(
+            node,
+            VALUE_INPUT_PORT,
+            None,
+            scope,
+            global_time,
+            path,
+        )? {
+            EvalOutput::Produced(value) => match value.get_as::<f64>() {
+                Some(value) if value.is_finite() => value,
+                _ => return Ok(EvalOutput::NoOutput),
+            },
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        let period = match self.resolve_value_input(
+            node,
+            PERIOD_INPUT_PORT,
+            Some(TIME_MODULO_PERIOD_PROPERTY),
+            scope,
+            global_time,
+            path,
+        )? {
+            EvalOutput::Produced(period) => match period.get_as::<f64>() {
+                Some(period) if period.is_finite() && period > 0.0 => period,
+                _ => return Ok(EvalOutput::NoOutput),
+            },
+            EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
+        };
+        // Looping is the primary use case, so negative authored/remapped time
+        // wraps into the same stable half-open interval as positive time.
+        let result = value.rem_euclid(period);
+        if !result.is_finite() {
+            return Ok(EvalOutput::NoOutput);
+        }
+        Ok(EvalOutput::Produced(PropertyValue::Number(OrderedFloat(
+            result,
+        ))))
+    }
+
+    fn resolve_value_input(
+        &self,
+        node: &Node,
+        port: &str,
+        property_fallback: Option<&str>,
+        scope: EvaluationScope,
+        global_time: f64,
+        path: &mut HashSet<PortOwner>,
+    ) -> EvalResult<PropertyValue> {
+        let target = PortAddress::new(PortOwner::Node(node.id), port);
+        match self.single_connection_to(&target)? {
+            EvalOutput::Produced(connection) => {
+                self.resolve_metadata_value(&connection.from, global_time, path)
+            }
+            EvalOutput::NoOutput => {
+                let Some(property_key) = property_fallback else {
+                    return Ok(EvalOutput::NoOutput);
+                };
+                let Some(property) = node.properties.get(property_key) else {
+                    return Ok(EvalOutput::NoOutput);
+                };
+                let composition = self
+                    .composition_for_owner(PortOwner::Node(node.id))
+                    .ok_or_else(|| missing_error(PortOwner::Node(node.id)))?;
+                let inputs = ResolvedNodeInputs::from_metadata(scope.as_inputs());
+                let context = self.context(composition, Some(&inputs));
+                Ok(EvalOutput::Produced(context.evaluate_property_value(
+                    property,
+                    &node.properties,
+                    scope.time,
+                )))
+            }
         }
     }
 
@@ -1391,4 +1522,72 @@ pub fn get_frame_from_project(
         frame.object_count()
     );
     Ok(frame)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::project::Composition;
+    use crate::model::{Clip, Node};
+
+    #[test]
+    fn value_resolver_detects_a_cycle_even_when_called_without_project_validation() {
+        let mut project = Project::new("direct value resolver cycle");
+        let (composition, track) = Composition::new("main", 32, 32, 30.0, 1.0);
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let clip = Clip::new("clip", 0.0, 1.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id).unwrap();
+
+        let first = Node::new_time_modulo("first");
+        let first_id = first.id;
+        let second = Node::new_time_modulo("second");
+        let second_id = second.id;
+        for node in [first, second] {
+            let id = node.id;
+            project.add_node(node);
+            project
+                .attach_node_to_container(NodeContainer::Clip(clip_id), id)
+                .unwrap();
+        }
+
+        // Push malformed cyclic state directly to exercise the runtime guard;
+        // normal Project::connect_ports rejects either self/cyclic edge first.
+        project.connections.extend([
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(second_id), VALUE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(first_id), VALUE_INPUT_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(first_id), VALUE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(second_id), VALUE_INPUT_PORT),
+                0,
+            ),
+        ]);
+        assert!(!project.validate_connections().is_empty());
+
+        let plugin_manager = Arc::new(PluginManager::default());
+        let evaluator = FrameEvaluator::new(
+            &project,
+            &project.compositions[0],
+            plugin_manager.get_property_evaluators(),
+            plugin_manager,
+        );
+        let error = evaluator
+            .resolve_metadata_value(
+                &PortAddress::new(PortOwner::Node(first_id), VALUE_OUTPUT_PORT),
+                0.0,
+                &mut HashSet::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LibraryError::Validation(message)
+                if message.to_ascii_lowercase().contains("cycle")
+        ));
+    }
 }
