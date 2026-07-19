@@ -1398,6 +1398,17 @@ mod tests {
             .set_connection_blend_mode(connection_id, BlendMode::Multiply)
             .unwrap();
         project.reorder_connection(connection_id, 0).unwrap();
+        let reordered = project
+            .connections
+            .iter()
+            .find(|connection| connection.id == connection_id)
+            .unwrap();
+        assert_eq!(
+            reordered.from,
+            PortAddress::new(PortOwner::Node(source), IMAGE_OUTPUT_PORT)
+        );
+        assert_eq!(reordered.to, target_address);
+        assert_eq!(reordered.blend_mode, BlendMode::Multiply);
         let original_order = project
             .connections
             .iter()
@@ -1714,7 +1725,7 @@ mod tests {
             .connections
             .iter()
             .filter(|connection| connection.to == target_b_input)
-            .map(|connection| (connection.id, connection.order, connection.blend_mode))
+            .cloned()
             .collect::<Vec<_>>();
         let first_target_a = project
             .connections
@@ -1729,10 +1740,10 @@ mod tests {
                 .connections
                 .iter()
                 .filter(|connection| connection.to == target_b_input)
-                .map(|connection| (connection.id, connection.order, connection.blend_mode))
+                .cloned()
                 .collect::<Vec<_>>(),
             unaffected_before,
-            "unaffected target UUID/order/blend tuples must be byte-for-byte stable",
+            "unaffected wires must be byte-for-byte stable",
         );
 
         let remaining_a = project
@@ -1741,8 +1752,8 @@ mod tests {
             .find(|connection| connection.to == target_a_input)
             .unwrap()
             .id;
-        let first_b = unaffected_before[0].0;
-        let surviving_b_blend = unaffected_before[1].2;
+        let first_b = unaffected_before[0].id;
+        let surviving_b_blend = unaffected_before[1].blend_mode;
         assert_eq!(project.disconnect_connections([remaining_a, first_b]), 2);
         assert!(orders(&project, &target_a_input).is_empty());
         assert_eq!(orders(&project, &target_b_input), vec![0]);
