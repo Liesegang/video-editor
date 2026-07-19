@@ -108,11 +108,15 @@ Effect and Loader use the exact `ruvie.effect.cpu-rgba8.v1` and
 `ruvie.loader.cpu-rgba8.v1` extension tables obtained through
 `query_extension`. Resolved Effect properties create an opaque cached instance;
 the per-frame callback receives only the handle, time, and a bounded typed
-frame. Loader metadata is written to bounded host-owned records, while decoded
-pixels use plugin-owned frames with an explicit `free_frame`. Both contracts
-validate dimensions, checked stride/length, straight alpha, sRGB, and callback
-status. They never pass frames through JSON. Exporter, entity-converter, GPU,
-and audio hot paths still need their own versioned typed extensions.
+frame. `u_time` is reserved for that transport and is rejected as an authored
+Effect property, so time changes never churn cached configuration handles.
+Loader metadata is written to bounded host-owned records, while decoded pixels
+use plugin-owned frames with an explicit `free_frame`. Loader cache keys include
+canonical path and platform file identity, and metadata-open failures preserve
+the claiming plugin's path and cause. Both contracts validate aligned tables,
+dimensions, checked stride/length, straight alpha, sRGB, and callback status.
+They never pass frames through JSON. Exporter, entity-converter, GPU, and audio
+hot paths still need their own versioned typed extensions.
 
 A category becomes legal only together with its real host adapter.
 Performance-sensitive built-ins may intentionally remain statically linked

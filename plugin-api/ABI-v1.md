@@ -8,7 +8,9 @@ ABI field: native ABI versioning and Project serialization are separate.
 
 - A bundle library exports `ruvie_plugin_entry_v1`. It returns a non-null
   pointer to a static `RuviePluginApiV1` table with `abi_version == 1` and
-  `struct_size >= sizeof(RuviePluginApiV1)`.
+  `struct_size >= sizeof(RuviePluginApiV1)`. Base and extension tables must be
+  naturally aligned for their declared C structs; the host rejects a
+  misaligned pointer before copying the table or invoking any table callback.
 - `context` is opaque plugin-owned state. RuViE never dereferences it.
 - RuViE can call `descriptor_json`, `invoke_json`, and future extension-table
   callbacks concurrently. The table, context, and returned extension tables
@@ -284,6 +286,10 @@ operation, and exact resolved config; eviction/drop calls `release_instance`
 once. Concurrent cache misses may create a duplicate, but the unused handle is
 released rather than leaked.
 
+`u_time` is reserved transport metadata and cannot be declared as an Effect
+property. It is passed only to `process`; changing time does not create a new
+configuration handle or enter the authoritative instance-config map.
+
 `process` receives only that handle, finite evaluation time, and a typed
 borrowed frame. There is no per-frame JSON and no Project/renderer/GPU object.
 The current host adapter accepts CPU `Image` input; a GPU texture must first be
@@ -301,12 +307,14 @@ and zero time-base terms.
 `load` receives a typed image or video-frame request containing path,
 source-local time, optional stream index, and optional color-space names. A
 successful callback returns the same owned RGBA8 frame contract. Loader cache
-identity includes plugin/component operation, source path/file identity,
-stream/color config, and exact source-time bits for video. The manager clones
-the selected plugin `Arc` and releases registry locks before `open`, `load`, or
-Effect callbacks. `Unsupported` permits trying the next loader; once a loader
-claims a request and returns a failure, its component ID, path, and original
-cause are returned instead of a misleading “no plugin registered” error.
+identity includes plugin/component operation, canonical source path, file size
+and modification time, platform file identity (device/inode/change time on
+Unix), stream/color config, and exact source-time bits for video. The manager
+clones the selected plugin `Arc` and releases registry locks before `open`,
+`load`, or Effect callbacks. `Unsupported` permits trying the next loader;
+once a loader claims either metadata inspection or decode and returns a
+failure, its component ID, path, and original cause are returned instead of a
+misleading “no plugin registered” error.
 
 Do not transport decoded audio, GPU objects, Project objects, or other
 hot-path resources as JSON. They require another explicitly named/versioned
