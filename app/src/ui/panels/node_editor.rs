@@ -6,13 +6,12 @@ use crate::state::context_types::{
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 use eframe::egui::{self, Color32};
 use egui_snarl::{
-    InPin, OutPin, Snarl,
     ui::{
         BackgroundPattern, NodeLayout, PinInfo, PinPlacement, PinWireInfo, SnarlPin, SnarlStyle,
         SnarlViewer, WireLayer, WireStyle,
     },
+    InPin, OutPin, Snarl,
 };
-use library::EditorService;
 use library::model::project::{
     ContainerImageSourceKind, PortAddress, PortDataType, PortDirection, PortOwner, PortSide,
 };
@@ -21,8 +20,9 @@ use library::model::{
     Clip, GeneratorContent, Node, NodeContainer, NodeContent, NodeGraphBundle, Project,
 };
 use library::plugin::{
-    EFFECTOR_CATEGORY, EFFECTOR_PRODUCE_OPERATION, PluginManager, property_name_from_port,
+    property_name_from_port, PluginManager, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY,
 };
+use library::EditorService;
 use ordered_float::OrderedFloat;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
@@ -578,15 +578,14 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         egui::Sense::hover(),
                     )
                 };
-                let response = if graph_item_inactive(
+                let response = graph_item_inactive_reason(
                     self.project,
                     GraphItem::Node(project_node_id),
                     self.current_time,
-                ) {
-                    response.on_hover_text("No output (outside Clip range)")
-                } else {
-                    response
-                };
+                )
+                .map_or(response.clone(), |reason| {
+                    response.on_hover_text(reason.tooltip())
+                });
                 let unclipped_header_rect = *self.to_global * response.rect;
                 let header_rect = clipped_qa_rect(unclipped_header_rect, *self.canvas_clip);
                 let coordinate_clicked = ui.input(|input| {
@@ -1080,6 +1079,11 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                             GraphItem::Node(id),
                             self.current_time,
                         ),
+                        "inactive_reason": graph_item_inactive_reason(
+                            self.project,
+                            GraphItem::Node(id),
+                            self.current_time,
+                        ).map(GraphItemInactiveReason::as_str),
                         "unclipped_rect": qa_rect_metadata(unclipped_rect),
                         "visible_in_canvas": rect.is_positive(),
                     })),
@@ -1857,10 +1861,8 @@ fn paint_container_foreground(
 fn pin_color(data_type: PortDataType) -> Color32 {
     match data_type {
         PortDataType::Image => Color32::from_rgb(238, 207, 109),
+        PortDataType::Shape => Color32::from_rgb(142, 132, 246),
         PortDataType::Audio => Color32::from_rgb(100, 200, 100),
-        PortDataType::Style => Color32::from_rgb(221, 122, 217),
-        PortDataType::Effector => Color32::from_rgb(244, 154, 86),
-        PortDataType::Decorator => Color32::from_rgb(91, 205, 195),
         PortDataType::String => Color32::from_rgb(100, 220, 220),
         PortDataType::Path => Color32::from_rgb(100, 150, 255),
         PortDataType::Number | PortDataType::Integer => Color32::from_rgb(255, 100, 100),
@@ -2084,16 +2086,53 @@ fn container_inactive(project: &Project, owner: PortOwner, current_time: f64) ->
     }
 }
 
-fn graph_item_inactive(project: &Project, item: GraphItem, current_time: f64) -> bool {
-    match item {
-        GraphItem::Node(node_id) => project
-            .find_parent_clip(node_id)
-            .and_then(|clip_id| project.get_clip(clip_id))
-            .is_some_and(|clip| !clip_is_active(clip, current_time)),
-        GraphItem::Container(owner) | GraphItem::PortAnchor { owner, .. } => {
-            container_inactive(project, owner, current_time)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GraphItemInactiveReason {
+    Disabled,
+    OutsideClipRange,
+}
+
+impl GraphItemInactiveReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::OutsideClipRange => "outside_clip_range",
         }
     }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            Self::Disabled => "No output (Node disabled)",
+            Self::OutsideClipRange => "No output (outside Clip range)",
+        }
+    }
+}
+
+fn graph_item_inactive_reason(
+    project: &Project,
+    item: GraphItem,
+    current_time: f64,
+) -> Option<GraphItemInactiveReason> {
+    match item {
+        GraphItem::Node(node_id) => {
+            if project.get_node(node_id).is_some_and(|node| !node.enabled) {
+                return Some(GraphItemInactiveReason::Disabled);
+            }
+            project
+                .find_parent_clip(node_id)
+                .and_then(|clip_id| project.get_clip(clip_id))
+                .filter(|clip| !clip_is_active(clip, current_time))
+                .map(|_| GraphItemInactiveReason::OutsideClipRange)
+        }
+        GraphItem::Container(owner) | GraphItem::PortAnchor { owner, .. } => {
+            container_inactive(project, owner, current_time)
+                .then_some(GraphItemInactiveReason::OutsideClipRange)
+        }
+    }
+}
+
+fn graph_item_inactive(project: &Project, item: GraphItem, current_time: f64) -> bool {
+    graph_item_inactive_reason(project, item, current_time).is_some()
 }
 
 fn input_definitions(project: &Project, item: GraphItem) -> Vec<PinDefinition> {
@@ -2966,11 +3005,29 @@ pub fn node_editor_panel(
         }
     }
 
+    for edit in &layout_edits {
+        if let LayoutEdit::MoveNode { node_id, .. } = edit {
+            node_editor_state.moved_node_ids.insert(*node_id);
+        }
+    }
+    let primary_released = ui.input(|input| input.pointer.primary_released());
+    let drop_graph_position = primary_released
+        .then(|| ui.input(|input| input.pointer.interact_pos()))
+        .flatten()
+        .map(|position| to_global.inverse() * position);
+
     let mut layout_changed = false;
     if let Ok(mut project) = project_lock.write() {
         apply_queued_node_edits(&mut project, edits, history_manager, node_editor_state);
         for edit in layout_edits {
             layout_changed |= apply_layout_edit(&mut project, edit);
+        }
+        if primary_released {
+            let moved_node_ids = std::mem::take(&mut node_editor_state.moved_node_ids);
+            if let Some(position) = drop_graph_position {
+                layout_changed |=
+                    reparent_nodes_at_drop(&mut project, comp_id, &moved_node_ids, position);
+            }
         }
     }
     if selection_changed {
@@ -3006,8 +3063,7 @@ pub fn node_editor_panel(
     // composition for any of those edits destroys user-authored positions and
     // can move a newly created Node outside the current viewport. Full layout
     // remains available explicitly and for the one-time invalid-layout repair.
-    let layout_finished = ui.input(|input| input.pointer.primary_released())
-        && node_editor_state.layout_changed_during_drag;
+    let layout_finished = primary_released && node_editor_state.layout_changed_during_drag;
     if layout_finished {
         node_editor_state.layout_changed_during_drag = false;
     }
@@ -4887,7 +4943,7 @@ fn handle_context_menu(
                     if matches_query(&query, "text")
                         && qa_menu_button(ui, "Text", "node_editor.menu.create.text").clicked()
                     {
-                        match project_service.create_text_graph(
+                        match project_service.create_text_node(
                             "Hello World",
                             library::editor::project_service::DEFAULT_TEXT_FONT,
                             canvas_size.0,
@@ -4895,7 +4951,7 @@ fn handle_context_menu(
                         ) {
                             Ok(node) => {
                                 action = Some(Box::new(move |project| {
-                                    insert_prebuilt_graph(project, graph_position, node, comp_id)
+                                    create_prebuilt_node(project, graph_position, node, comp_id)
                                 }));
                             }
                             Err(error) => log::error!("Cannot create Text Node: {error}"),
@@ -4929,7 +4985,7 @@ fn handle_context_menu(
                         && qa_menu_button(ui, "Shape (Rectangle)", "node_editor.menu.create.shape")
                             .clicked()
                     {
-                        match project_service.create_shape_graph(
+                        match project_service.create_shape_node(
                             library::editor::project_service::DEFAULT_SHAPE_PATH,
                             canvas_size.0,
                             canvas_size.1,
@@ -4938,7 +4994,7 @@ fn handle_context_menu(
                         ) {
                             Ok(node) => {
                                 action = Some(Box::new(move |project| {
-                                    insert_prebuilt_graph(project, graph_position, node, comp_id)
+                                    create_prebuilt_node(project, graph_position, node, comp_id)
                                 }));
                             }
                             Err(error) => log::error!("Cannot create Shape Node: {error}"),
@@ -5175,13 +5231,11 @@ fn available_effector_menu_entries(plugin_manager: &PluginManager) -> Vec<(Strin
             match plugin_manager.operation_descriptor(
                 EFFECTOR_CATEGORY,
                 &component_id,
-                EFFECTOR_PRODUCE_OPERATION,
+                EFFECTOR_APPLY_OPERATION,
             ) {
                 Ok(descriptor) => Some((component_id, descriptor.label().to_string())),
                 Err(error) => {
-                    log::warn!(
-                        "Cannot expose Effector {component_id} in the Node Editor: {error}"
-                    );
+                    log::warn!("Cannot expose Effector {component_id} in the Node Editor: {error}");
                     None
                 }
             }
@@ -5259,10 +5313,15 @@ fn insert_prebuilt_graph(
         desired.y.max(content_top),
     );
     let mut candidate = egui::Rect::from_min_size(anchor, graph_bounds.size());
-    let occupied = existing_node_ids
+    let mut occupied = existing_node_ids
         .iter()
         .filter_map(|node_id| estimated_node_rect(project, *node_id))
         .collect::<Vec<_>>();
+    occupied.extend(immediate_child_rects(
+        project,
+        &AutoLayoutPlan::default(),
+        container,
+    ));
     loop {
         let next_y = occupied
             .iter()
@@ -5285,10 +5344,8 @@ fn insert_prebuilt_graph(
         return false;
     }
 
-    if let NodeContainer::Composition(id) = container {
-        if let Some(composition) = project.get_composition_mut(id) {
-            composition.ui_collapsed = false;
-        }
+    if let Some(composition) = project.get_composition_mut(composition_id) {
+        composition.ui_collapsed = false;
     }
     ensure_container_hierarchy_contains(project, container, candidate);
     true
@@ -5497,7 +5554,7 @@ fn place_node_in_free_slot(
     };
     anchor.y = anchor.y.max(min.y);
 
-    let occupied = node_ids
+    let mut occupied = node_ids
         .iter()
         .filter(|child_id| **child_id != node_id)
         .filter_map(|child_id| {
@@ -5508,6 +5565,11 @@ fn place_node_in_free_slot(
             ))
         })
         .collect::<Vec<_>>();
+    occupied.extend(immediate_child_rects(
+        project,
+        &AutoLayoutPlan::default(),
+        container,
+    ));
     let mut candidate = egui::Rect::from_min_size(anchor, node_size);
     loop {
         let next_y = occupied
@@ -5543,48 +5605,78 @@ fn container_geometry(
     }
 }
 
+/// Resolves the deepest visible container chrome under a Node drop. Expanded
+/// headers and collapsed headers intentionally remain valid targets: a user
+/// can reparent into a container without first expanding it. A collapsed
+/// container's stored (hidden) body is not hit-testable because `rect()` is
+/// reduced to the visible header height.
 fn node_container_at_position(
     project: &Project,
     composition_id: Uuid,
     position: egui::Pos2,
 ) -> Option<NodeContainer> {
     let composition = project.get_composition(composition_id)?;
-    if !composition.ui_collapsed {
-        for track_id in composition.track_ids.iter().rev() {
-            let Some(track) = project.get_track(*track_id) else {
-                continue;
-            };
-            let track_container = NodeContainer::Track(*track_id);
-            let Some(track_visual) = container_visual(project, PortOwner::Track(*track_id)) else {
-                continue;
-            };
-            if !visible_container_body_contains(&track_visual, position) {
-                continue;
-            }
+    if composition.ui_collapsed {
+        return Some(NodeContainer::Composition(composition_id));
+    }
+    for track_id in composition.track_ids.iter().rev() {
+        let Some(track) = project.get_track(*track_id) else {
+            continue;
+        };
+        if !container_visual(project, PortOwner::Track(*track_id))
+            .is_some_and(|visual| visual.rect().contains(position))
+        {
+            continue;
+        }
+        if !track.ui_collapsed {
             for clip_id in track.clip_ids.iter().rev() {
-                let clip_container = NodeContainer::Clip(*clip_id);
                 if container_visual(project, PortOwner::Clip(*clip_id))
-                    .is_some_and(|visual| visible_container_body_contains(&visual, position))
+                    .is_some_and(|visual| visual.rect().contains(position))
                 {
-                    return Some(clip_container);
+                    return Some(NodeContainer::Clip(*clip_id));
                 }
             }
-            return Some(track_container);
         }
+        return Some(NodeContainer::Track(*track_id));
     }
     Some(NodeContainer::Composition(composition_id))
 }
 
-fn visible_container_body_contains(container: &ContainerVisual, position: egui::Pos2) -> bool {
-    if container.collapsed {
+fn reparent_nodes_at_drop(
+    project: &mut Project,
+    composition_id: Uuid,
+    node_ids: &HashSet<Uuid>,
+    position: egui::Pos2,
+) -> bool {
+    let Some(destination) = node_container_at_position(project, composition_id, position)
+    else {
         return false;
+    };
+    let mut candidate = project.clone();
+    let mut changed = false;
+    let mut node_ids = node_ids.iter().copied().collect::<Vec<_>>();
+    node_ids.sort_unstable();
+    for node_id in node_ids {
+        if candidate.find_node_container(node_id) == Some(destination) {
+            continue;
+        }
+        match candidate.attach_node_to_container(destination, node_id) {
+            Ok(()) => {
+                if let Some(rect) = estimated_node_rect(&candidate, node_id) {
+                    ensure_container_hierarchy_contains(&mut candidate, destination, rect);
+                }
+                changed = true;
+            }
+            Err(error) => {
+                log::warn!("Cannot move Node {node_id} to {destination:?}: {error}");
+                return false;
+            }
+        }
     }
-    let rect = container.rect();
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + CONTAINER_HEADER_HEIGHT),
-        rect.max,
-    );
-    body.contains(position)
+    if changed {
+        *project = candidate;
+    }
+    changed
 }
 
 fn container_rect(position: [f32; 2], size: [f32; 2]) -> egui::Rect {
@@ -5765,8 +5857,8 @@ mod tests {
     use super::*;
     use library::animation::EasingFunction;
     use library::model::project::{
-        FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, ProjectConnection,
-        STYLE_OUTPUT_PORT, STYLES_INPUT_PORT, TIME_PORT,
+        ProjectConnection, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+        SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
     };
     use library::model::property::{Keyframe, Property};
 
@@ -5966,7 +6058,9 @@ mod tests {
         solid: Uuid,
         merge: Uuid,
         text: Uuid,
+        text_fill: Uuid,
         shape: Uuid,
+        shape_fill: Uuid,
         composition_node: Uuid,
     }
 
@@ -6004,7 +6098,17 @@ mod tests {
         project
             .attach_node_to_container(NodeContainer::Clip(sibling_clip), text)
             .unwrap();
-        project.get_clip_mut(sibling_clip).unwrap().output_node_id = Some(text);
+        let text_fill = Uuid::from_u128(0x7_007);
+        let mut text_fill_node = PluginManager::default()
+            .create_style_operation_node("fill")
+            .unwrap();
+        text_fill_node.id = text_fill;
+        text_fill_node.ui_position = overlapping_position;
+        project.add_node(text_fill_node);
+        project
+            .attach_node_to_container(NodeContainer::Clip(sibling_clip), text_fill)
+            .unwrap();
+        project.get_clip_mut(sibling_clip).unwrap().output_node_id = Some(text_fill);
 
         let empty_clip = Uuid::from_u128(0x7_003);
         let mut collapsed_clip = library::model::Clip::new("Collapsed Empty", 0.0, 5.0);
@@ -6031,6 +6135,16 @@ mod tests {
         project
             .attach_node_to_container(NodeContainer::Track(track), shape)
             .unwrap();
+        let shape_fill = Uuid::from_u128(0x7_008);
+        let mut shape_fill_node = PluginManager::default()
+            .create_style_operation_node("fill")
+            .unwrap();
+        shape_fill_node.id = shape_fill;
+        shape_fill_node.ui_position = overlapping_position;
+        project.add_node(shape_fill_node);
+        project
+            .attach_node_to_container(NodeContainer::Track(track), shape_fill)
+            .unwrap();
 
         let composition_node = Uuid::from_u128(0x7_005);
         let mut root_merge = Node::new("Composition Merge", NodeContent::Merge);
@@ -6051,10 +6165,16 @@ mod tests {
             .attach_track_to_composition(composition, empty_track)
             .unwrap();
 
-        for source in [text, shape] {
+        for (source, fill) in [(text, text_fill), (shape, shape_fill)] {
             project
                 .connect_ports(
-                    PortAddress::new(PortOwner::Node(source), IMAGE_OUTPUT_PORT),
+                    PortAddress::new(PortOwner::Node(source), SHAPE_OUTPUT_PORT),
+                    PortAddress::new(PortOwner::Node(fill), SHAPE_INPUT_PORT),
+                )
+                .unwrap();
+            project
+                .connect_ports(
+                    PortAddress::new(PortOwner::Node(fill), IMAGE_OUTPUT_PORT),
                     PortAddress::new(PortOwner::Node(merge), MERGE_IMAGES_PORT),
                 )
                 .unwrap();
@@ -6078,7 +6198,9 @@ mod tests {
                 solid,
                 merge,
                 text,
+                text_fill,
                 shape,
+                shape_fill,
                 composition_node,
             },
         )
@@ -6181,6 +6303,17 @@ mod tests {
             .create_text_graph("Hello", "Arial", 1920, 1080)
             .unwrap();
         let consumer_id = graph.output_node_id.expect("Text factory sink");
+        let source_id = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                matches!(
+                    node.content,
+                    NodeContent::Generator(GeneratorContent::Text)
+                )
+            })
+            .unwrap()
+            .id;
         let fill_id = graph
             .nodes
             .iter()
@@ -6234,20 +6367,27 @@ mod tests {
             Some(&connection)
         );
 
-        let style_output = project
+        let shape_output = project
             .port_definition(
-                &PortAddress::new(PortOwner::Node(fill_id), STYLE_OUTPUT_PORT),
+                &PortAddress::new(PortOwner::Node(source_id), SHAPE_OUTPUT_PORT),
                 PortDirection::Output,
             )
             .unwrap();
-        let styles_input = project
+        let shape_input = project
             .port_definition(
-                &PortAddress::new(PortOwner::Node(consumer_id), STYLES_INPUT_PORT),
+                &PortAddress::new(PortOwner::Node(fill_id), SHAPE_INPUT_PORT),
                 PortDirection::Input,
             )
             .unwrap();
-        assert_eq!(style_output.data_type, PortDataType::Style);
-        assert_eq!(styles_input.data_type, PortDataType::Style);
+        let image_output = project
+            .port_definition(
+                &PortAddress::new(PortOwner::Node(fill_id), IMAGE_OUTPUT_PORT),
+                PortDirection::Output,
+            )
+            .unwrap();
+        assert_eq!(shape_output.data_type, PortDataType::Shape);
+        assert_eq!(shape_input.data_type, PortDataType::Shape);
+        assert_eq!(image_output.data_type, PortDataType::Image);
 
         let first_id = bundled_ids[0];
         let first = project.get_node(first_id).unwrap().ui_position;
@@ -6263,13 +6403,14 @@ mod tests {
 
         let rects = render_test_graph(&project, composition_id);
         for id in [
-            format!("node_editor.port.node:{fill_id}.output:{STYLE_OUTPUT_PORT}"),
-            format!("node_editor.port.node:{consumer_id}.input:{STYLES_INPUT_PORT}"),
+            format!("node_editor.port.node:{source_id}.output:{SHAPE_OUTPUT_PORT}"),
+            format!("node_editor.port.node:{fill_id}.input:{SHAPE_INPUT_PORT}"),
+            format!("node_editor.port.node:{fill_id}.output:{IMAGE_OUTPUT_PORT}"),
             format!("node_editor.edge:{}", connection.id),
         ] {
             assert!(
                 rects.get(&id).is_some_and(egui::Rect::is_positive),
-                "missing visible typed Style graph component {id}"
+                "missing visible typed Shape/Image graph component {id}"
             );
         }
 
@@ -6325,7 +6466,14 @@ mod tests {
         let appended = project
             .connections
             .iter()
-            .filter(|connection| connection_ids.contains(&connection.id))
+            .filter(|connection| {
+                connection_ids.contains(&connection.id)
+                    && connection.to
+                        == PortAddress::new(
+                            PortOwner::Node(consumer_id),
+                            MERGE_IMAGES_PORT,
+                        )
+            })
             .collect::<Vec<_>>();
         assert_eq!(
             appended
@@ -6350,7 +6498,7 @@ mod tests {
     }
 
     #[test]
-    fn standalone_style_add_has_a_typed_output_and_failed_graph_add_is_atomic() {
+    fn standalone_style_add_has_shape_input_image_output_and_failed_graph_add_is_atomic() {
         let (mut project, composition_id, _, clip_id, _, merge_id) = fixture();
         project
             .set_output_node(NodeContainer::Clip(clip_id), Some(merge_id))
@@ -6377,12 +6525,22 @@ mod tests {
         assert_eq!(
             project
                 .port_definition(
-                    &PortAddress::new(PortOwner::Node(fill_id), STYLE_OUTPUT_PORT),
+                    &PortAddress::new(PortOwner::Node(fill_id), IMAGE_OUTPUT_PORT),
                     PortDirection::Output,
                 )
                 .unwrap()
                 .data_type,
-            PortDataType::Style
+            PortDataType::Image
+        );
+        assert_eq!(
+            project
+                .port_definition(
+                    &PortAddress::new(PortOwner::Node(fill_id), SHAPE_INPUT_PORT),
+                    PortDirection::Input,
+                )
+                .unwrap()
+                .data_type,
+            PortDataType::Shape
         );
 
         let stroke = plugins.create_style_operation_node("stroke").unwrap();
@@ -6422,7 +6580,7 @@ mod tests {
         );
         let rects = render_test_graph(&project, composition_id);
         for node_id in [fill_id, stroke_id] {
-            let output = format!("node_editor.port.node:{node_id}.output:{STYLE_OUTPUT_PORT}");
+            let output = format!("node_editor.port.node:{node_id}.output:{IMAGE_OUTPUT_PORT}");
             assert!(rects.get(&output).is_some_and(egui::Rect::is_positive));
         }
 
@@ -6458,12 +6616,10 @@ mod tests {
 
         let factory = style_graph_factory();
         let plugins = factory.get_plugin_manager();
-        assert!(
-            plugins
-                .get_available_effects()
-                .iter()
-                .any(|(id, _, _)| id == "blur")
-        );
+        assert!(plugins
+            .get_available_effects()
+            .iter()
+            .any(|(id, _, _)| id == "blur"));
         let source = factory
             .create_solid_node(
                 library::model::frame::color::Color {
@@ -6585,6 +6741,224 @@ mod tests {
     }
 
     #[test]
+    fn effector_operation_nodes_and_menu_use_the_authoritative_descriptor() {
+        let factory = style_graph_factory();
+        let plugins = factory.get_plugin_manager();
+        let menu_entries = available_effector_menu_entries(plugins.as_ref());
+        assert!(menu_entries.contains(&("transform".to_string(), "Transform".to_string())));
+        assert!(menu_entries.contains(&("opacity".to_string(), "Opacity".to_string())));
+        assert!(menu_entries
+            .windows(2)
+            .all(|entries| entries[0].1 <= entries[1].1));
+
+        for component_id in ["transform", "opacity"] {
+            let descriptor = plugins
+                .operation_descriptor(EFFECTOR_CATEGORY, component_id, EFFECTOR_APPLY_OPERATION)
+                .unwrap();
+            let node = plugins
+                .create_effector_operation_node(component_id)
+                .unwrap();
+            assert_eq!(
+                node.properties
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<BTreeSet<_>>(),
+                descriptor
+                    .properties()
+                    .iter()
+                    .map(PropertyDefinition::name)
+                    .collect::<BTreeSet<_>>()
+            );
+            for definition in descriptor.properties() {
+                assert_eq!(
+                    node.properties
+                        .get(definition.name())
+                        .map(|property| property.evaluate_at(0.0)),
+                    Some(definition.default_value().clone()),
+                    "{component_id}.{} was not initialized by its descriptor factory",
+                    definition.name(),
+                );
+            }
+        }
+        let transform = plugins.create_effector_operation_node("transform").unwrap();
+        assert_eq!(
+            transform
+                .properties
+                .get("target")
+                .map(|property| property.evaluate_at(0.0)),
+            Some(PropertyValue::String("Block".to_string()))
+        );
+        let opacity = plugins.create_effector_operation_node("opacity").unwrap();
+        assert_eq!(
+            opacity
+                .properties
+                .get("mode")
+                .map(|property| property.evaluate_at(0.0)),
+            Some(PropertyValue::String("Set".to_string()))
+        );
+        assert_eq!(
+            opacity
+                .properties
+                .get("target")
+                .map(|property| property.evaluate_at(0.0)),
+            Some(PropertyValue::String("Block".to_string()))
+        );
+    }
+
+    #[test]
+    fn node_editor_effector_control_responds_to_real_pointer_drag() {
+        let (mut project, composition_id, _, clip_id, _, _) = fixture();
+        let plugins = PluginManager::default();
+        let mut effector = plugins.create_effector_operation_node("transform").unwrap();
+        effector.ui_position = [520.0, 390.0];
+        let effector_id = effector.id;
+        project.add_node(effector);
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), effector_id)
+            .unwrap();
+        let layout = compute_full_composition_layout(&project, composition_id).unwrap();
+        assert!(apply_auto_layout(&mut project, composition_id, &layout));
+        assert!(!layout_needs_reflow(&project, composition_id));
+        let (mut snarl, containers) = build_snarl(&project, composition_id);
+        let context = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1800.0, 1200.0));
+        let component_id = format!("node_editor.property.node:{effector_id}:tx");
+        let mut queued = Vec::new();
+        reset_test_rects();
+
+        let mut frames = vec![Vec::new(); 5];
+        for (frame, events) in frames.drain(..).enumerate() {
+            let output = context.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(frame as f64 / 60.0),
+                    events,
+                    ..Default::default()
+                },
+                |context| {
+                    egui::CentralPanel::default().show(context, |ui| {
+                        let mut edits = Vec::new();
+                        let mut navigation = None;
+                        let mut selection = None;
+                        let mut exclusions = Vec::new();
+                        let mut to_global = egui::emath::TSTransform::IDENTITY;
+                        let mut canvas_clip = ui.clip_rect();
+                        let mut viewer = ProjectNodeViewer {
+                            project: &project,
+                            plugin_manager: Some(&plugins),
+                            containers: &containers,
+                            edits: &mut edits,
+                            pending_navigation: &mut navigation,
+                            pending_selection: &mut selection,
+                            current_time: 0.0,
+                            context_menu_exclusion_rects: &mut exclusions,
+                            to_global: &mut to_global,
+                            canvas_clip: &mut canvas_clip,
+                            rendered_ports: Arc::new(Mutex::new(HashMap::new())),
+                        };
+                        snarl.show(
+                            &mut viewer,
+                            &node_editor_snarl_style(),
+                            egui::Id::new(("effector-real-event", composition_id)),
+                            ui,
+                        );
+                        queued.extend(edits);
+                    });
+                },
+            );
+            drop(output);
+        }
+        let rect = test_rect(&component_id).expect("rendered Transform tx control");
+        assert!(rect.is_positive());
+        let start = rect.center();
+        let end = start + egui::vec2(52.0, 0.0);
+        let event_frames = [
+            vec![egui::Event::PointerMoved(start)],
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            vec![egui::Event::PointerMoved(end)],
+            vec![egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ];
+        for (offset, events) in event_frames.into_iter().enumerate() {
+            let output = context.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some((offset + 5) as f64 / 60.0),
+                    events,
+                    ..Default::default()
+                },
+                |context| {
+                    egui::CentralPanel::default().show(context, |ui| {
+                        let mut edits = Vec::new();
+                        let mut navigation = None;
+                        let mut selection = None;
+                        let mut exclusions = Vec::new();
+                        let mut to_global = egui::emath::TSTransform::IDENTITY;
+                        let mut canvas_clip = ui.clip_rect();
+                        let mut viewer = ProjectNodeViewer {
+                            project: &project,
+                            plugin_manager: Some(&plugins),
+                            containers: &containers,
+                            edits: &mut edits,
+                            pending_navigation: &mut navigation,
+                            pending_selection: &mut selection,
+                            current_time: 0.0,
+                            context_menu_exclusion_rects: &mut exclusions,
+                            to_global: &mut to_global,
+                            canvas_clip: &mut canvas_clip,
+                            rendered_ports: Arc::new(Mutex::new(HashMap::new())),
+                        };
+                        snarl.show(
+                            &mut viewer,
+                            &node_editor_snarl_style(),
+                            egui::Id::new(("effector-real-event", composition_id)),
+                            ui,
+                        );
+                        queued.extend(edits);
+                    });
+                },
+            );
+            drop(output);
+        }
+
+        assert!(
+            queued.iter().any(|edit| matches!(
+                edit,
+                QueuedNodeEdit::Continuous {
+                    edit: Some(NodeEdit::SetProperty {
+                        owner: PortOwner::Node(id),
+                        key,
+                        value: PropertyValue::Number(value),
+                        ..
+                    }),
+                    ..
+                } if *id == effector_id && key == "tx" && value.into_inner() > 0.0
+            )),
+            "real pointer drag over {rect:?} did not edit tx: {queued:#?}"
+        );
+        assert!(queued.iter().any(|edit| matches!(
+            edit,
+            QueuedNodeEdit::Continuous {
+                pending,
+                finished: true,
+                ..
+            } if pending.owner == PortOwner::Node(effector_id) && pending.key == "tx"
+        )));
+    }
+
+    #[test]
     fn extreme_zoom_transform_and_adaptive_grid_remain_finite_and_bounded() {
         let style = node_editor_snarl_style();
         assert_eq!(style.min_scale, Some(0.0065));
@@ -6633,13 +7007,11 @@ mod tests {
         for (screen, graph) in screen_wire.into_iter().zip(graph_wire) {
             assert!((transform * graph).distance(screen) < 0.001);
         }
-        assert!(
-            overview_wire_graph_points(
-                screen_wire,
-                egui::emath::TSTransform::new(egui::Vec2::ZERO, 0.0),
-            )
-            .is_none()
-        );
+        assert!(overview_wire_graph_points(
+            screen_wire,
+            egui::emath::TSTransform::new(egui::Vec2::ZERO, 0.0),
+        )
+        .is_none());
 
         for scale in [
             NODE_EDITOR_MIN_SCALE,
@@ -6976,11 +7348,9 @@ mod tests {
             desired_center,
             egui::vec2(MIN_CONTAINER_SIZE.x * scale, MIN_CONTAINER_SIZE.y * scale),
         );
-        assert!(
-            resize_regions(tiny_container)
-                .iter()
-                .any(|(_, _, rect, _)| rect.contains(desired_center))
-        );
+        assert!(resize_regions(tiny_container)
+            .iter()
+            .any(|(_, _, rect, _)| rect.contains(desired_center)));
         assert!(!node_editor_resize_interactions_enabled(scale));
     }
 
@@ -7022,7 +7392,7 @@ mod tests {
                     },
                 )
                 .len(),
-                5
+                3
             );
         }
         assert!(items.contains(&GraphItem::Node(solid_id)));
@@ -7069,10 +7439,14 @@ mod tests {
         let track_rect = track_visual.rect();
         let empty_body_graph_position =
             egui::pos2(track_rect.right() - 40.0, track_rect.bottom() - 40.0);
-        assert!(visible_container_body_contains(
-            track_visual,
-            empty_body_graph_position
-        ));
+        let track_body = egui::Rect::from_min_max(
+            egui::pos2(
+                track_rect.left(),
+                track_rect.top() + CONTAINER_HEADER_HEIGHT,
+            ),
+            track_rect.max,
+        );
+        assert!(track_body.contains(empty_body_graph_position));
         assert!(
             !exclusion_rects
                 .iter()
@@ -7212,23 +7586,54 @@ mod tests {
     }
 
     #[test]
-    fn clip_activity_is_start_inclusive_end_exclusive_and_dims_owned_nodes() {
-        let (project, _, _, clip_id, solid_id, _) = fixture();
+    fn clip_activity_and_disabled_state_have_distinct_inactive_reasons() {
+        let (mut project, _, _, clip_id, solid_id, _) = fixture();
         let clip = project.get_clip(clip_id).unwrap();
 
         assert!(!clip_is_active(clip, 0.999));
         assert!(clip_is_active(clip, 1.0));
         assert!(clip_is_active(clip, 5.999));
         assert!(!clip_is_active(clip, 6.0));
+        assert_eq!(
+            graph_item_inactive_reason(
+                &project,
+                GraphItem::Node(solid_id),
+                0.5
+            ),
+            Some(GraphItemInactiveReason::OutsideClipRange)
+        );
+        assert_eq!(
+            graph_item_inactive_reason(
+                &project,
+                GraphItem::Node(solid_id),
+                1.0
+            ),
+            None
+        );
+
+        project.get_node_mut(solid_id).unwrap().enabled = false;
+        assert_eq!(
+            graph_item_inactive_reason(
+                &project,
+                GraphItem::Node(solid_id),
+                1.0
+            ),
+            Some(GraphItemInactiveReason::Disabled)
+        );
+        // Disabled is the primary authored reason even when the Clip is also
+        // outside its half-open active range.
+        assert_eq!(
+            graph_item_inactive_reason(
+                &project,
+                GraphItem::Node(solid_id),
+                0.5
+            ),
+            Some(GraphItemInactiveReason::Disabled)
+        );
         assert!(graph_item_inactive(
             &project,
             GraphItem::Node(solid_id),
             0.5
-        ));
-        assert!(!graph_item_inactive(
-            &project,
-            GraphItem::Node(solid_id),
-            1.0
         ));
     }
 
@@ -7609,13 +8014,11 @@ mod tests {
             .unwrap(),
             0.0
         );
-        assert!(
-            Clip::validate_timing_property_value(
-                "time_stretch",
-                &PropertyValue::Number(OrderedFloat(-0.5)),
-            )
-            .is_err()
-        );
+        assert!(Clip::validate_timing_property_value(
+            "time_stretch",
+            &PropertyValue::Number(OrderedFloat(-0.5)),
+        )
+        .is_err());
 
         assert!(apply_edit(
             &mut loaded,
@@ -7695,7 +8098,9 @@ mod tests {
             ids.solid,
             ids.merge,
             ids.text,
+            ids.text_fill,
             ids.shape,
+            ids.shape_fill,
             ids.composition_node,
         ];
         let rendered_nodes = node_ids
@@ -7733,7 +8138,9 @@ mod tests {
             (ids.solid, PortOwner::Clip(ids.clip)),
             (ids.merge, PortOwner::Clip(ids.clip)),
             (ids.text, PortOwner::Clip(ids.sibling_clip)),
+            (ids.text_fill, PortOwner::Clip(ids.sibling_clip)),
             (ids.shape, PortOwner::Track(ids.track)),
+            (ids.shape_fill, PortOwner::Track(ids.track)),
             (
                 ids.composition_node,
                 PortOwner::Composition(ids.composition),
@@ -7839,11 +8246,9 @@ mod tests {
         )
         .unwrap();
         assert!(!track_plan.track_layouts.contains_key(&ids.empty_track));
-        assert!(
-            !track_plan
-                .node_positions
-                .contains_key(&ids.composition_node)
-        );
+        assert!(!track_plan
+            .node_positions
+            .contains_key(&ids.composition_node));
         apply_auto_layout(&mut track_project, ids.composition, &track_plan);
         assert_eq!(
             track_project.get_track(ids.empty_track).unwrap(),
@@ -7940,57 +8345,72 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_hidden_body_does_not_capture_or_hide_a_created_node() {
+    fn reparent_drop_targets_include_visible_headers_but_exclude_collapsed_bodies() {
         let (mut project, composition_id, track_id, clip_id, _, _) = fixture();
+        let clip_header = egui::pos2(500.0, 280.0);
         let hidden_clip_body = egui::pos2(500.0, 400.0);
+
+        assert_eq!(
+            node_container_at_position(&project, composition_id, clip_header),
+            Some(NodeContainer::Clip(clip_id))
+        );
+
         let clip = project.get_clip_mut(clip_id).unwrap();
         clip.ui_collapsed = true;
         assert!(container_rect(clip.ui_position, clip.ui_size).contains(hidden_clip_body));
 
+        // The collapsed header remains visible and is deliberately a drop
+        // target, while its stored body is not.
+        assert_eq!(
+            node_container_at_position(&project, composition_id, clip_header),
+            Some(NodeContainer::Clip(clip_id))
+        );
         assert_eq!(
             node_container_at_position(&project, composition_id, hidden_clip_body),
             Some(NodeContainer::Track(track_id))
         );
 
-        let node = Node::new(
-            "Created Text",
-            NodeContent::Generator(GeneratorContent::Text),
-        );
-        let node_id = node.id;
-        create_prebuilt_node(&mut project, hidden_clip_body, node, composition_id);
-
+        let node_id = project.get_clip(clip_id).unwrap().node_ids[0];
+        assert!(reparent_nodes_at_drop(
+            &mut project,
+            composition_id,
+            &HashSet::from([node_id]),
+            hidden_clip_body,
+        ));
         assert_eq!(
             project.find_node_container(node_id),
             Some(NodeContainer::Track(track_id))
         );
-        assert!(project.validate_containment().is_empty());
-        let (snarl, _) = build_snarl(&project, composition_id);
-        assert!(snarl.nodes().any(|item| *item == GraphItem::Node(node_id)));
-    }
-
-    #[test]
-    fn creation_uses_only_visible_container_bodies_and_expands_a_collapsed_root() {
-        let (mut project, composition_id, track_id, clip_id, _, _) = fixture();
-
-        let clip_header = egui::pos2(500.0, 280.0);
+        assert!(reparent_nodes_at_drop(
+            &mut project,
+            composition_id,
+            &HashSet::from([node_id]),
+            clip_header,
+        ));
         assert_eq!(
-            node_container_at_position(&project, composition_id, clip_header),
-            Some(NodeContainer::Track(track_id))
+            project.find_node_container(node_id),
+            Some(NodeContainer::Clip(clip_id))
         );
 
         let track_header = egui::pos2(500.0, 160.0);
+        let hidden_track_body = egui::pos2(500.0, 400.0);
+        project.get_track_mut(track_id).unwrap().ui_collapsed = true;
         assert_eq!(
             node_container_at_position(&project, composition_id, track_header),
-            Some(NodeContainer::Composition(composition_id))
+            Some(NodeContainer::Track(track_id))
         );
-
-        project.get_track_mut(track_id).unwrap().ui_collapsed = true;
-        let hidden_track_body = egui::pos2(500.0, 400.0);
         assert_eq!(
             node_container_at_position(&project, composition_id, hidden_track_body),
             Some(NodeContainer::Composition(composition_id))
         );
+        assert!(project.validate_containment().is_empty());
+    }
 
+    #[test]
+    fn root_scoped_creation_expands_a_collapsed_composition() {
+        let (mut project, composition_id, track_id, clip_id, _, _) = fixture();
+        project.get_track_mut(track_id).unwrap().ui_collapsed = true;
+        let hidden_track_body = egui::pos2(500.0, 400.0);
         project
             .get_composition_mut(composition_id)
             .unwrap()
@@ -8037,10 +8457,6 @@ mod tests {
         assert_eq!(
             project.find_node_container(node_id),
             Some(NodeContainer::Track(track_id))
-        );
-        assert_eq!(
-            project.get_node(node_id).unwrap().ui_position,
-            [500.0, 400.0]
         );
         assert_eq!(
             project.get_composition(composition_id).unwrap().ui_position,
@@ -8123,10 +8539,6 @@ mod tests {
             "node_editor.port.node:{node_id}.input:{TIME_PORT}"
         ))
         .expect("time input pin rect");
-        let frame_input = test_rect(&format!(
-            "node_editor.port.node:{node_id}.input:{FRAME_PORT}"
-        ))
-        .expect("frame input pin rect");
         let image_output = test_rect(&format!(
             "node_editor.port.node:{node_id}.output:{IMAGE_OUTPUT_PORT}"
         ))
@@ -8134,8 +8546,6 @@ mod tests {
 
         assert!(time_input.center().x < node.center().x);
         assert!(image_output.center().x > node.center().x);
-        assert_eq!(time_input.center().x, frame_input.center().x);
-        assert!(frame_input.center().y > time_input.center().y);
         assert!(node.width() <= 500.0, "{node:?}");
     }
 

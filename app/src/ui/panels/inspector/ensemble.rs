@@ -1,13 +1,13 @@
 use super::action_handler::{ActionContext, PropertyTarget};
-use super::properties::{render_inspector_properties_grid, PropertyRenderContext};
+use super::properties::{PropertyRenderContext, render_inspector_properties_grid};
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
-use egui::collapsing_header::CollapsingState;
 use egui::Ui;
-use library::model::ensemble::{DecoratorInstance, EffectorInstance};
-use library::plugin::{EFFECTOR_CATEGORY, EFFECTOR_PRODUCE_OPERATION, PluginManager};
+use egui::collapsing_header::CollapsingState;
 use library::EditorService as ProjectService;
 use library::PropertyOwner;
+use library::model::ensemble::{DecoratorInstance, EffectorInstance};
+use library::plugin::{EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, PluginManager};
 use uuid::Uuid;
 
 #[allow(
@@ -78,7 +78,7 @@ fn render_effectors(
             match plugin_manager.operation_descriptor(
                 EFFECTOR_CATEGORY,
                 &type_name,
-                EFFECTOR_PRODUCE_OPERATION,
+                EFFECTOR_APPLY_OPERATION,
             ) {
                 Ok(descriptor) => Some((type_name, descriptor.label().to_string())),
                 Err(error) => {
@@ -106,7 +106,7 @@ fn render_effectors(
                             "effector_type": type_name,
                             "label": label,
                             "category": EFFECTOR_CATEGORY,
-                            "operation": EFFECTOR_PRODUCE_OPERATION,
+                            "operation": EFFECTOR_APPLY_OPERATION,
                         })),
                     );
                     if response.clicked() {
@@ -163,12 +163,10 @@ fn render_effectors(
                         })),
                     );
                     ui.label(
-                        egui::RichText::new(
-                            effector_display_label(
-                                project_service.get_plugin_manager().as_ref(),
-                                &effector.effector_type,
-                            ),
-                        )
+                        egui::RichText::new(effector_display_label(
+                            project_service.get_plugin_manager().as_ref(),
+                            &effector.effector_type,
+                        ))
                         .strong(),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -238,11 +236,7 @@ fn render_effectors(
 
 fn effector_display_label(plugin_manager: &PluginManager, component_id: &str) -> String {
     plugin_manager
-        .operation_descriptor(
-            EFFECTOR_CATEGORY,
-            component_id,
-            EFFECTOR_PRODUCE_OPERATION,
-        )
+        .operation_descriptor(EFFECTOR_CATEGORY, component_id, EFFECTOR_APPLY_OPERATION)
         .map(|descriptor| descriptor.label().to_string())
         // An unavailable plugin must not make an older/foreign Project
         // uninspectable. Its persisted identity remains a useful lossless

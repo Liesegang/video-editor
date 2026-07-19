@@ -821,6 +821,10 @@ pub(crate) fn property_definition_metadata(definition: &PropertyDefinition) -> s
 }
 
 // Helper to standardise Grid + Property Evaluation loop
+#[allow(
+    dead_code,
+    reason = "retained only for the legacy embedded extension renderers while Timeline Inspector uses operation Nodes"
+)]
 pub fn render_inspector_properties_grid(
     ui: &mut Ui,
     id: impl std::hash::Hash,
@@ -861,6 +865,10 @@ pub fn render_inspector_properties_grid(
     pending_actions
 }
 
+#[allow(
+    dead_code,
+    reason = "retained only for the legacy embedded extension renderers while Timeline Inspector uses operation Nodes"
+)]
 pub fn render_add_button(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
     ui.menu_button("➕ Add", content);
 }
@@ -868,7 +876,7 @@ pub fn render_add_button(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use library::plugin::{EFFECTOR_CATEGORY, EFFECTOR_PRODUCE_OPERATION, PluginManager};
+    use library::plugin::{EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, PluginManager};
 
     #[test]
     fn qa_metadata_preserves_the_complete_property_definition() {
@@ -934,11 +942,7 @@ mod tests {
         let plugins = PluginManager::default();
         let node = plugins.create_effector_operation_node("opacity").unwrap();
         let definition = plugins
-            .operation_descriptor(
-                EFFECTOR_CATEGORY,
-                "opacity",
-                EFFECTOR_PRODUCE_OPERATION,
-            )
+            .operation_descriptor(EFFECTOR_CATEGORY, "opacity", EFFECTOR_APPLY_OPERATION)
             .unwrap()
             .properties()
             .iter()
