@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::{Context, Result, bail};
 use library::SkiaRenderer;
 use library::cache::CacheManager;
 use library::core::ensemble::EnsembleData;
@@ -58,14 +59,15 @@ fn stroke(color: Color, width: f64, offset: f64) -> StyleConfig {
     }
 }
 
-fn cpu_renderer() -> SkiaRenderer {
-    SkiaRenderer::new(WIDTH, HEIGHT, transparent(), false, None, None).unwrap()
+fn cpu_renderer() -> Result<SkiaRenderer> {
+    SkiaRenderer::new(WIDTH, HEIGHT, transparent(), false, None, None)
+        .context("failed to construct CPU renderer for quality fixture")
 }
 
-fn image(output: RenderOutput) -> Image {
+fn image(output: RenderOutput) -> Result<Image> {
     match output {
-        RenderOutput::Image(image) => image,
-        RenderOutput::Texture(_) => panic!("CPU renderer unexpectedly returned a texture"),
+        RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Texture(_) => bail!("CPU renderer unexpectedly returned a texture"),
     }
 }
 
@@ -114,24 +116,30 @@ fn assert_clean_transparency(image: &Image) {
     }
 }
 
-fn artifact_directory() -> PathBuf {
+fn artifact_directory() -> Result<PathBuf> {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .unwrap()
-        .join("target/render-quality")
+        .map(|parent| parent.join("target/render-quality"))
+        .context("library manifest directory must have a workspace parent")
 }
 
-fn save_artifact(name: &str, image: &Image) {
-    let directory = artifact_directory();
-    fs::create_dir_all(&directory).unwrap();
+fn save_artifact(name: &str, image: &Image) -> Result<()> {
+    let directory = artifact_directory()?;
+    fs::create_dir_all(&directory).with_context(|| {
+        format!(
+            "failed to create render-quality artifact directory {}",
+            directory.display()
+        )
+    })?;
+    let straight_path = directory.join(format!("{name}.png"));
     image::save_buffer(
-        directory.join(format!("{name}.png")),
+        &straight_path,
         &image.data,
         image.width,
         image.height,
         image::ColorType::Rgba8,
     )
-    .unwrap();
+    .with_context(|| format!("failed to save artifact {}", straight_path.display()))?;
 
     let mut checker = Vec::with_capacity(image.data.len());
     for (index, pixel) in image.data.chunks_exact(4).enumerate() {
@@ -151,14 +159,16 @@ fn save_artifact(name: &str, image: &Image) {
         }
         checker.push(255);
     }
+    let checker_path = directory.join(format!("{name}-checker.png"));
     image::save_buffer(
-        directory.join(format!("{name}-checker.png")),
+        &checker_path,
         &checker,
         image.width,
         image.height,
         image::ColorType::Rgba8,
     )
-    .unwrap();
+    .with_context(|| format!("failed to save artifact {}", checker_path.display()))?;
+    Ok(())
 }
 
 fn map_local_bounds(bounds: (f32, f32, f32, f32), transform: &Transform) -> (f32, f32, f32, f32) {
@@ -275,7 +285,7 @@ fn frame(items: Vec<FrameItem>) -> FrameInfo {
     }
 }
 
-fn render_frame(frame: &FrameInfo) -> Image {
+fn render_frame(frame: &FrameInfo) -> Result<Image> {
     let renderer = SkiaRenderer::new(
         frame.width as u32,
         frame.height as u32,
@@ -284,10 +294,14 @@ fn render_frame(frame: &FrameInfo) -> Image {
         None,
         None,
     )
-    .unwrap();
+    .context("failed to construct renderer for evaluated frame")?;
     let plugins = Arc::new(PluginManager::default());
     let mut service = RenderService::new(renderer, plugins, Arc::new(CacheManager::new()));
-    image(service.render_from_frame_info(frame).unwrap())
+    image(
+        service
+            .render_from_frame_info(frame)
+            .context("failed to render quality-test frame")?,
+    )
 }
 
 fn vector_object(is_text: bool, transform: Transform, styles: &[StyleConfig]) -> FrameItem {
@@ -348,7 +362,7 @@ fn scaled_transform(scale: f64, position: (f64, f64)) -> Transform {
 }
 
 #[test]
-fn transparent_text_and_shape_layers_use_clean_straight_rgba() {
+fn transparent_text_and_shape_layers_use_clean_straight_rgba() -> Result<()> {
     let text_styles = vec![
         fill(
             Color {
@@ -374,7 +388,7 @@ fn transparent_text_and_shape_layers_use_clean_straight_rgba() {
         position: Position { x: 42.0, y: 35.0 },
         ..Transform::default()
     };
-    let mut renderer = cpu_renderer();
+    let mut renderer = cpu_renderer()?;
     let text = image(
         renderer
             .rasterize_text_layer(TextRasterRequest {
@@ -386,10 +400,10 @@ fn transparent_text_and_shape_layers_use_clean_straight_rgba() {
                 transform: Affine2D::from(&text_transform),
                 current_time: 0.0,
             })
-            .unwrap(),
-    );
+            .context("failed to rasterize transparent text fixture")?,
+    )?;
     assert_clean_transparency(&text);
-    save_artifact("text-standard-transparent", &text);
+    save_artifact("text-standard-transparent", &text)?;
 
     let shape_styles = vec![
         fill(
@@ -419,7 +433,7 @@ fn transparent_text_and_shape_layers_use_clean_straight_rgba() {
         anchor: Position { x: 52.0, y: 37.0 },
         ..Transform::default()
     };
-    let mut renderer = cpu_renderer();
+    let mut renderer = cpu_renderer()?;
     let shape = image(
         renderer
             .rasterize_shape_layer(ShapeRasterRequest {
@@ -429,17 +443,18 @@ fn transparent_text_and_shape_layers_use_clean_straight_rgba() {
                 ensemble: None,
                 transform: Affine2D::from(&shape_transform),
             })
-            .unwrap(),
-    );
+            .context("failed to rasterize transparent shape fixture")?,
+    )?;
     assert_clean_transparency(&shape);
     assert!(shape.data.chunks_exact(4).any(|pixel| {
         pixel[3] == 128 && pixel[0].abs_diff(240) <= 2 && pixel[1].abs_diff(80) <= 2
     }));
-    save_artifact("shape-transparent", &shape);
+    save_artifact("shape-transparent", &shape)?;
+    Ok(())
 }
 
 #[test]
-fn standard_and_ensemble_multiline_text_share_selection_metrics() {
+fn standard_and_ensemble_multiline_text_share_selection_metrics() -> Result<()> {
     let styles = vec![
         fill(Color::white(), 0.0),
         stroke(
@@ -473,7 +488,7 @@ fn standard_and_ensemble_multiline_text_share_selection_metrics() {
     };
     let selection = map_local_bounds(local_bounds, &transform);
 
-    let mut renderer = cpu_renderer();
+    let mut renderer = cpu_renderer()?;
     let standard = image(
         renderer
             .rasterize_text_layer(TextRasterRequest {
@@ -485,12 +500,14 @@ fn standard_and_ensemble_multiline_text_share_selection_metrics() {
                 transform: Affine2D::from(&transform),
                 current_time: 0.0,
             })
-            .unwrap(),
-    );
+            .context("failed to rasterize standard multiline text")?,
+    )?;
 
-    let mut ensemble = EnsembleData::default();
-    ensemble.enabled = true;
-    let mut renderer = cpu_renderer();
+    let ensemble = EnsembleData {
+        enabled: true,
+        ..EnsembleData::default()
+    };
+    let mut renderer = cpu_renderer()?;
     let ensemble_image = image(
         renderer
             .rasterize_text_layer(TextRasterRequest {
@@ -502,22 +519,25 @@ fn standard_and_ensemble_multiline_text_share_selection_metrics() {
                 transform: Affine2D::from(&transform),
                 current_time: 0.0,
             })
-            .unwrap(),
-    );
+            .context("failed to rasterize ensemble multiline text")?,
+    )?;
 
     assert_clean_transparency(&standard);
     assert_clean_transparency(&ensemble_image);
-    let standard_bounds = alpha_bounds(&standard).unwrap();
-    let ensemble_bounds = alpha_bounds(&ensemble_image).unwrap();
+    let standard_bounds =
+        alpha_bounds(&standard).context("standard multiline text painted no pixels")?;
+    let ensemble_bounds =
+        alpha_bounds(&ensemble_image).context("ensemble multiline text painted no pixels")?;
     assert_pixels_inside_selection(standard_bounds, selection, 2.0);
     assert_pixels_inside_selection(ensemble_bounds, selection, 2.0);
     assert_bounds_close(standard_bounds, ensemble_bounds, 3);
-    save_artifact("text-standard-transformed", &standard);
-    save_artifact("text-ensemble-transformed", &ensemble_image);
+    save_artifact("text-standard-transformed", &standard)?;
+    save_artifact("text-ensemble-transformed", &ensemble_image)?;
+    Ok(())
 }
 
 #[test]
-fn transformed_shape_pixels_fit_stroke_aware_selection_bounds() {
+fn transformed_shape_pixels_fit_stroke_aware_selection_bounds() -> Result<()> {
     let styles = vec![
         fill(
             Color {
@@ -540,7 +560,8 @@ fn transformed_shape_pixels_fit_stroke_aware_selection_bounds() {
         ),
     ];
     let path = "M 12 12 L 92 12 L 92 62 L 12 62 Z";
-    let local_bounds = measure_shape_visual_bounds(path, &styles, &[]).unwrap();
+    let local_bounds = measure_shape_visual_bounds(path, &styles, &[])
+        .context("shape fixture has no measurable visual bounds")?;
     assert_eq!(local_bounds, (6.0, 6.0, 92.0, 62.0));
     let transform = Transform {
         position: Position { x: 180.0, y: 130.0 },
@@ -551,7 +572,7 @@ fn transformed_shape_pixels_fit_stroke_aware_selection_bounds() {
     };
     let selection = map_local_bounds(local_bounds, &transform);
 
-    let mut renderer = cpu_renderer();
+    let mut renderer = cpu_renderer()?;
     let rendered = image(
         renderer
             .rasterize_shape_layer(ShapeRasterRequest {
@@ -561,15 +582,18 @@ fn transformed_shape_pixels_fit_stroke_aware_selection_bounds() {
                 ensemble: None,
                 transform: Affine2D::from(&transform),
             })
-            .unwrap(),
-    );
+            .context("failed to rasterize transformed shape fixture")?,
+    )?;
     assert_clean_transparency(&rendered);
-    assert_pixels_inside_selection(alpha_bounds(&rendered).unwrap(), selection, 2.0);
-    save_artifact("shape-stroke-bounds-transformed", &rendered);
+    let rendered_bounds =
+        alpha_bounds(&rendered).context("transformed shape fixture painted no pixels")?;
+    assert_pixels_inside_selection(rendered_bounds, selection, 2.0);
+    save_artifact("shape-stroke-bounds-transformed", &rendered)?;
+    Ok(())
 }
 
 #[test]
-fn track_and_clip_2x_4x_vector_transforms_match_direct_parent_raster_quality() {
+fn track_and_clip_2x_4x_vector_transforms_match_direct_parent_raster_quality() -> Result<()> {
     let styles = vec![
         fill(Color::white(), 0.0),
         stroke(
@@ -594,19 +618,23 @@ fn track_and_clip_2x_4x_vector_transforms_match_direct_parent_raster_quality() {
                     scaled_transform(scale, (0.0, 0.0)),
                     vec![child],
                 );
-                let through_container = render_frame(&frame(vec![container]));
+                let through_container = render_frame(&frame(vec![container]))?;
 
                 let direct = vector_object(
                     is_text,
                     scaled_transform(scale, (local_position.0 * scale, local_position.1 * scale)),
                     &styles,
                 );
-                let direct = render_frame(&frame(vec![direct]));
+                let direct = render_frame(&frame(vec![direct]))?;
 
                 assert_clean_transparency(&through_container);
                 assert_clean_transparency(&direct);
-                let container_bounds = alpha_bounds(&through_container).unwrap();
-                let direct_bounds = alpha_bounds(&direct).unwrap();
+                let container_bounds = alpha_bounds(&through_container).with_context(|| {
+                    format!("{container_kind:?} {scale}x fixture painted no pixels")
+                })?;
+                let direct_bounds = alpha_bounds(&direct).with_context(|| {
+                    format!("direct {scale}x reference fixture painted no pixels")
+                })?;
                 assert_bounds_close(container_bounds, direct_bounds, 1);
                 assert!(
                     mean_alpha_difference(&through_container, &direct) <= 0.05,
@@ -630,23 +658,24 @@ fn track_and_clip_2x_4x_vector_transforms_match_direct_parent_raster_quality() {
                     save_artifact(
                         &format!("{kind}-{content}-4x-final-resolution"),
                         &through_container,
-                    );
-                    save_artifact(&format!("{kind}-{content}-4x-direct-reference"), &direct);
+                    )?;
+                    save_artifact(&format!("{kind}-{content}-4x-direct-reference"), &direct)?;
                 }
             }
         }
     }
+    Ok(())
 }
 
 #[test]
-fn isolated_track_opacity_uses_final_target_resolution_without_softening() {
+fn isolated_track_opacity_uses_final_target_resolution_without_softening() -> Result<()> {
     let styles = vec![fill(Color::white(), 0.0)];
     let local_position = (12.0, 10.0);
     let child = vector_object(false, scaled_transform(1.0, local_position), &styles);
     let mut container_transform = scaled_transform(4.0, (0.0, 0.0));
     container_transform.opacity = 0.65;
     let isolated = group(FrameGroupKind::Track, container_transform, vec![child]);
-    let isolated = render_frame(&frame(vec![isolated]));
+    let isolated = render_frame(&frame(vec![isolated]))?;
 
     let mut direct_transform =
         scaled_transform(4.0, (local_position.0 * 4.0, local_position.1 * 4.0));
@@ -655,15 +684,15 @@ fn isolated_track_opacity_uses_final_target_resolution_without_softening() {
         false,
         direct_transform,
         &styles,
-    )]));
+    )]))?;
 
-    assert_bounds_close(
-        alpha_bounds(&isolated).unwrap(),
-        alpha_bounds(&direct).unwrap(),
-        1,
-    );
-    save_artifact("track-shape-4x-isolated-opacity", &isolated);
-    save_artifact("track-shape-4x-direct-opacity-reference", &direct);
+    let isolated_bounds =
+        alpha_bounds(&isolated).context("isolated track fixture painted no pixels")?;
+    let direct_bounds =
+        alpha_bounds(&direct).context("direct opacity fixture painted no pixels")?;
+    assert_bounds_close(isolated_bounds, direct_bounds, 1);
+    save_artifact("track-shape-4x-isolated-opacity", &isolated)?;
+    save_artifact("track-shape-4x-direct-opacity-reference", &direct)?;
     let mean_difference = mean_alpha_difference(&isolated, &direct);
     assert!(
         mean_difference <= 0.01,
@@ -673,10 +702,11 @@ fn isolated_track_opacity_uses_final_target_resolution_without_softening() {
         (alpha_edge_energy(&isolated) as f64 - alpha_edge_energy(&direct) as f64).abs()
             / (alpha_edge_energy(&direct) as f64).max(1.0);
     assert!(relative_energy_difference <= 0.005);
+    Ok(())
 }
 
 #[test]
-fn nested_composition_keeps_its_configured_resolution_raster_boundary() {
+fn nested_composition_keeps_its_configured_resolution_raster_boundary() -> Result<()> {
     let styles = vec![fill(Color::white(), 0.0)];
     let local_position = (4.0, 5.0);
     let child = vector_object(false, scaled_transform(1.0, local_position), &styles);
@@ -692,14 +722,14 @@ fn nested_composition_keeps_its_configured_resolution_raster_boundary() {
         effects: Vec::new(),
         items: vec![child],
     });
-    let nested = render_frame(&frame(vec![nested]));
+    let nested = render_frame(&frame(vec![nested]))?;
 
     let direct = vector_object(
         false,
         scaled_transform(4.0, (local_position.0 * 4.0, local_position.1 * 4.0)),
         &styles,
     );
-    let direct = render_frame(&frame(vec![direct]));
+    let direct = render_frame(&frame(vec![direct]))?;
 
     assert_clean_transparency(&nested);
     assert_clean_transparency(&direct);
@@ -713,6 +743,7 @@ fn nested_composition_keeps_its_configured_resolution_raster_boundary() {
         mean_alpha_difference(&nested, &direct) > 0.1,
         "nested Composition unexpectedly matched direct vector pixels"
     );
-    save_artifact("composition-configured-resolution-4x", &nested);
-    save_artifact("composition-direct-vector-4x-reference", &direct);
+    save_artifact("composition-configured-resolution-4x", &nested)?;
+    save_artifact("composition-direct-vector-4x-reference", &direct)?;
+    Ok(())
 }
