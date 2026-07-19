@@ -329,3 +329,26 @@ pub(super) fn show_clip_area(
 
     (content_rect_for_clip_area, response)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::box_selection_start_position;
+
+    #[test]
+    fn hand_tool_drag_owns_the_pointer_before_box_selection() {
+        let pointer = egui::pos2(320.0, 180.0);
+
+        assert_eq!(
+            box_selection_start_position(true, true, false, Some(pointer)),
+            None
+        );
+        assert_eq!(
+            box_selection_start_position(false, true, false, Some(pointer)),
+            Some(pointer)
+        );
+        assert_eq!(
+            box_selection_start_position(false, true, true, Some(pointer)),
+            None
+        );
+    }
+}

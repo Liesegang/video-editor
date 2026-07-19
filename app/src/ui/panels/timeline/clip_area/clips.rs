@@ -1546,6 +1546,134 @@ mod tests {
         (project, track_id, clip_ids)
     }
 
+    fn selection_geometry() -> ClipAreaGeometry {
+        ClipAreaGeometry {
+            content_rect: egui::Rect::from_min_size(
+                egui::pos2(100.0, 200.0),
+                egui::vec2(400.0, 300.0),
+            ),
+            scroll_offset: egui::vec2(75.0, 32.0),
+            pixels_per_unit: 100.0,
+            row_height: 30.0,
+            row_spacing: 2.0,
+        }
+    }
+
+    #[test]
+    fn box_selection_matches_collapsed_clip_geometry_with_zoom_and_pan() {
+        let (project, track_id, clip_ids) = expanded_track_project();
+        // With horizontal pan, A is partially visible from x=100 to x=125.
+        // Every collapsed Clip shares the Track header row at y=168..198.
+        let selection_rect =
+            egui::Rect::from_min_max(egui::pos2(100.0, 170.0), egui::pos2(120.0, 190.0));
+
+        let selected = get_clips_in_box(
+            selection_rect,
+            BoxSelectionContext {
+                project: &project,
+                track_ids: &[track_id],
+                expanded_tracks: &HashSet::new(),
+                geometry: selection_geometry(),
+            },
+        );
+
+        assert_eq!(selected, vec![(clip_ids[0], track_id)]);
+    }
+
+    #[test]
+    fn box_selection_checks_each_expanded_clip_only_on_its_visible_row() {
+        let (project, track_id, clip_ids) = expanded_track_project();
+        let expanded_tracks = HashSet::from([track_id]);
+        // Expanded order is header, C, B, A. At this zoom and pan B occupies
+        // x=125..225 and row 2 at y=232..262.
+        let selection_rect =
+            egui::Rect::from_min_max(egui::pos2(130.0, 235.0), egui::pos2(220.0, 258.0));
+
+        let selected = get_clips_in_box(
+            selection_rect,
+            BoxSelectionContext {
+                project: &project,
+                track_ids: &[track_id],
+                expanded_tracks: &expanded_tracks,
+                geometry: selection_geometry(),
+            },
+        );
+
+        assert_eq!(selected, vec![(clip_ids[1], track_id)]);
+    }
+
+    #[test]
+    fn failed_timing_update_cancels_gesture_without_history_or_preview_damage() {
+        let project = Arc::new(RwLock::new(Project::new("timing failure")));
+        let project_before = project.read().unwrap().clone();
+        let mut history = HistoryManager::new();
+        history.push_project_state(project_before.clone());
+
+        let mut editor_context = EditorContext::new(Uuid::new_v4());
+        editor_context.interaction.is_resizing_entity = true;
+        editor_context.interaction.is_moving_selected_entity = true;
+        editor_context.interaction.dragged_entity_original_track_id = Some(Uuid::new_v4());
+        editor_context.interaction.dragged_entity_hovered_track_id = Some(Uuid::new_v4());
+        editor_context.interaction.dragged_entity_has_moved = true;
+        editor_context.preview_texture_id = Some(42);
+        editor_context.preview_texture_width = 1920;
+        editor_context.preview_texture_height = 1080;
+        editor_context.preview_render_revision = 9;
+        editor_context.preview_region = Some(library::model::frame::frame::Region {
+            x: 10.0,
+            y: 20.0,
+            width: 640.0,
+            height: 360.0,
+        });
+        let preview_before = (
+            editor_context.preview_texture_id,
+            editor_context.preview_texture_width,
+            editor_context.preview_texture_height,
+            editor_context.preview_render_revision,
+            editor_context.preview_region,
+        );
+
+        let mut commit = ClipMutationCommit {
+            timing_history_requested: true,
+            ..ClipMutationCommit::default()
+        };
+        apply_timing_update_result(
+            Uuid::new_v4(),
+            Err(library::LibraryError::Project(
+                "Clip disappeared during drag".to_string(),
+            )),
+            &mut editor_context,
+            &mut commit,
+        );
+        push_clip_history_if_needed(&commit, &project, &mut history);
+
+        assert!(commit.timing_update_failed);
+        assert!(!commit.should_push_history());
+        assert_eq!(history.undo_depth(), 1);
+        assert!(!editor_context.interaction.is_resizing_entity);
+        assert!(!editor_context.interaction.is_moving_selected_entity);
+        assert!(editor_context
+            .interaction
+            .dragged_entity_original_track_id
+            .is_none());
+        assert!(editor_context
+            .interaction
+            .dragged_entity_hovered_track_id
+            .is_none());
+        assert!(!editor_context.interaction.dragged_entity_has_moved);
+        assert_eq!(
+            (
+                editor_context.preview_texture_id,
+                editor_context.preview_texture_width,
+                editor_context.preview_texture_height,
+                editor_context.preview_render_revision,
+                editor_context.preview_region,
+            ),
+            preview_before
+        );
+        assert_eq!(*project.read().unwrap(), project_before);
+    }
+
     #[test]
     fn expanded_track_exposes_every_canonical_insertion_slot_in_reverse_screen_order() {
         let (project, track_id, _) = expanded_track_project();
