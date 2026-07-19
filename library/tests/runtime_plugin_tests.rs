@@ -5,7 +5,8 @@ use std::sync::{Arc, Barrier};
 use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::model::{Composition, NodeContainer, NodeContent, Project};
 use library::plugin::native_plugin_api::{
-    DECORATOR_CATEGORY, PROPERTY_CATEGORY, PropertyValueV1, STYLE_CATEGORY,
+    DECORATOR_CATEGORY, EFFECT_CATEGORY, LOADER_CATEGORY, PROPERTY_CATEGORY, PropertyValueV1,
+    STYLE_CATEGORY,
 };
 use library::plugin::{EvaluationContext, PluginManager};
 
@@ -13,6 +14,8 @@ const COMPONENT_ID: &str = "random_property";
 const FILL_COMPONENT_ID: &str = "runtime_fill_style";
 const STROKE_COMPONENT_ID: &str = "runtime_stroke_style";
 const BACKPLATE_COMPONENT_ID: &str = "runtime_backplate_decorator";
+const EFFECT_COMPONENT_ID: &str = "runtime_solid_tint_effect";
+const LOADER_COMPONENT_ID: &str = "runtime_rgba_fixture_loader";
 const DESCRIPTOR_CALLS_OPERATION: &str = "random_property.descriptor_calls.v1";
 
 #[test]
@@ -138,12 +141,14 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
                 DECORATOR_CATEGORY.to_string(),
                 BACKPLATE_COMPONENT_ID.to_string()
             ),
+            (EFFECT_CATEGORY.to_string(), EFFECT_COMPONENT_ID.to_string()),
+            (LOADER_CATEGORY.to_string(), LOADER_COMPONENT_ID.to_string()),
         ]
     );
 
     let descriptors = manager.get_runtime_plugin_descriptors();
     assert_eq!(descriptors.len(), 1);
-    assert_eq!(descriptors[0].descriptor.components.len(), 4);
+    assert_eq!(descriptors[0].descriptor.components.len(), 6);
     let component = descriptors[0]
         .descriptor
         .components
@@ -183,6 +188,13 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
             manager
                 .create_decorator_operation_node(BACKPLATE_COMPONENT_ID)
                 .expect("runtime Backplate creates a graph Node"),
+        ),
+        (
+            EFFECT_CATEGORY,
+            EFFECT_COMPONENT_ID,
+            manager
+                .create_effect_operation_node(EFFECT_COMPONENT_ID)
+                .expect("runtime Effect creates a graph Node"),
         ),
     ] {
         let component = descriptors[0]
