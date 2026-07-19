@@ -4157,6 +4157,28 @@ mod tests {
         std::sync::atomic::AtomicUsize::new(0);
     static MISALIGNED_EXTENSION_POINTER: std::sync::atomic::AtomicUsize =
         std::sync::atomic::AtomicUsize::new(0);
+    static MISALIGNED_TABLE_CALLBACKS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    unsafe extern "C" fn forbidden_misaligned_descriptor_callback(
+        _context: *mut std::ffi::c_void,
+    ) -> RuvieCallResult {
+        MISALIGNED_TABLE_CALLBACKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        RuvieCallResult {
+            status: STATUS_OK,
+            buffer: RuvieBuffer::empty(),
+        }
+    }
+
+    unsafe extern "C" fn forbidden_misaligned_effect_create(
+        _context: *mut std::ffi::c_void,
+        _component_id: RuvieBytesView,
+        _properties: RuviePropertyMapViewV1,
+        _out_instance: *mut u64,
+    ) -> RuvieExtensionResultV1 {
+        MISALIGNED_TABLE_CALLBACKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        RuvieExtensionResultV1::error(ruvie_plugin_api::STATUS_PLUGIN_ERROR, "must not run")
+    }
 
     unsafe extern "C" fn misaligned_extension_query(
         _context: *mut std::ffi::c_void,
@@ -4169,11 +4191,12 @@ mod tests {
     #[test]
     fn misaligned_base_and_extension_tables_are_rejected_before_table_use()
     -> Result<(), Box<dyn std::error::Error>> {
+        MISALIGNED_TABLE_CALLBACKS.store(0, std::sync::atomic::Ordering::SeqCst);
         let base = RuviePluginApiV1 {
             abi_version: RUVIE_PLUGIN_ABI_V1,
             struct_size: size_of::<RuviePluginApiV1>(),
             context: std::ptr::null_mut(),
-            descriptor_json: None,
+            descriptor_json: Some(forbidden_misaligned_descriptor_callback),
             invoke_json: None,
             free_buffer: None,
             query_extension: None,
@@ -4199,12 +4222,17 @@ mod tests {
         };
         let error = error.to_string();
         assert!(error.contains("misaligned ABI table"));
+        assert_eq!(
+            MISALIGNED_TABLE_CALLBACKS.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a callback pointer from a misaligned base table must never execute"
+        );
 
         let extension = RuvieEffectCpuRgba8ApiV1 {
             abi_version: RUVIE_PLUGIN_ABI_V1,
             struct_size: size_of::<RuvieEffectCpuRgba8ApiV1>(),
             context: std::ptr::null_mut(),
-            create_instance: None,
+            create_instance: Some(forbidden_misaligned_effect_create),
             process: None,
             release_instance: None,
             free_frame: None,
@@ -4247,6 +4275,11 @@ mod tests {
         };
         MISALIGNED_EXTENSION_POINTER.store(0, std::sync::atomic::Ordering::SeqCst);
         assert!(error.to_string().contains("misaligned ABI table"));
+        assert_eq!(
+            MISALIGNED_TABLE_CALLBACKS.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a callback pointer from a misaligned extension table must never execute"
+        );
         Ok(())
     }
 
