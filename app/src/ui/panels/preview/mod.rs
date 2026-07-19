@@ -1,11 +1,12 @@
 use egui::Ui;
 use egui_phosphor::regular as icons;
+use std::num::NonZeroU32;
 use std::sync::{Arc, RwLock};
 
-use library::model::asset::AssetKind; // Added Import
-use library::model::project::Project;
 use library::EditorService;
 use library::RenderServer;
+use library::model::asset::AssetKind; // Added Import
+use library::model::project::Project;
 
 use crate::command::{CommandId, CommandRegistry};
 use crate::state::context_types::{
@@ -27,6 +28,23 @@ use action::PreviewAction;
 const PREVIEW_FIT_PADDING: f32 = 24.0;
 const PREVIEW_MIN_ZOOM: f32 = 0.0001;
 const PREVIEW_MAX_ZOOM: f32 = 1000.0;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ValidGlPreviewTexture {
+    id: NonZeroU32,
+    width: i32,
+    height: i32,
+}
+
+impl ValidGlPreviewTexture {
+    fn new(id: u32, width: u32, height: u32) -> Option<Self> {
+        Some(Self {
+            id: NonZeroU32::new(id)?,
+            width: i32::try_from(width).ok().filter(|width| *width > 0)?,
+            height: i32::try_from(height).ok().filter(|height| *height > 0)?,
+        })
+    }
+}
 
 fn rgba_image_probe(data: &[u8]) -> (u64, u64) {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
@@ -552,7 +570,7 @@ pub fn preview_panel(
                         comp_idx,
                         current_frame,
                         render_scale,
-                        Some(valid_region.clone()),
+                        Some(valid_region),
                         &property_evaluators,
                         &plugin_manager,
                     );
@@ -577,7 +595,7 @@ pub fn preview_panel(
             match result.output {
                 Ok(output) => {
                     clear_preview_render_error(editor_context);
-                    editor_context.preview_region = result.frame_info.region.clone();
+                    editor_context.preview_region = result.frame_info.region;
                     match output {
                         library::rendering::renderer::RenderOutput::Image(image) => {
                             if crate::qa::is_enabled() {
@@ -667,18 +685,29 @@ pub fn preview_panel(
                     move |_info, painter| {
                         use eframe::glow::HasContext;
                         let gl = painter.gl();
+                        let Some(texture) = ValidGlPreviewTexture::new(texture_id, width, height)
+                        else {
+                            log::error!(
+                                "Cannot draw invalid shared GL texture: id={texture_id}, size={width}x{height}"
+                            );
+                            return;
+                        };
 
                         if let Some(interface) = skia_safe::gpu::gl::Interface::new_native() {
                             if let Some(mut context) =
                                 skia_safe::gpu::direct_contexts::make_gl(interface, None)
                             {
+                                // SAFETY: `texture` validates a non-zero GL name and positive
+                                // i32 dimensions. The render server created this GL_TEXTURE_2D
+                                // in the context shared with eframe, and the paint callback keeps
+                                // that context current while Skia borrows (but does not own) it.
                                 let backend_texture = unsafe {
                                     skia_safe::gpu::backend_textures::make_gl(
-                                        (width as i32, height as i32),
+                                        (texture.width, texture.height),
                                         skia_safe::gpu::Mipmapped::No,
                                         skia_safe::gpu::gl::TextureInfo {
                                             target: eframe::glow::TEXTURE_2D,
-                                            id: texture_id,
+                                            id: texture.id.get(),
                                             format: 0x8058, // GL_RGBA8
                                             protected: skia_safe::gpu::Protected::No,
                                         },
@@ -686,13 +715,21 @@ pub fn preview_panel(
                                     )
                                 };
 
-                                let fbo_id = unsafe {
+                                // SAFETY: eframe invokes this callback with its GL context current;
+                                // DRAW_FRAMEBUFFER_BINDING is a valid scalar query in that context.
+                                let raw_fbo_id = unsafe {
                                     gl.get_parameter_i32(eframe::glow::DRAW_FRAMEBUFFER_BINDING)
-                                } as u32;
+                                };
+                                let Ok(fbo_id) = u32::try_from(raw_fbo_id) else {
+                                    log::error!(
+                                        "GL returned an invalid draw framebuffer binding: {raw_fbo_id}"
+                                    );
+                                    return;
+                                };
 
                                 let backend_render_target =
                                     skia_safe::gpu::backend_render_targets::make_gl(
-                                        (width as i32, height as i32),
+                                        (texture.width, texture.height),
                                         0, // sample count
                                         0, // stencil bits
                                         skia_safe::gpu::gl::FramebufferInfo {
@@ -1000,14 +1037,20 @@ pub fn preview_panel(
                 if let Some(id) = editor_context.selection.selected_entities.iter().next() {
                     if let Some(gc) = gui_clips.iter().find(|c| c.id() == *id) {
                         if let Some(path) = gc.node.properties.get_string("path") {
-                            let path = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path);
-                            let renderer = crate::ui::panels::preview::vector_editor::renderer::VectorEditorRenderer {
-                                state,
-                                path: &path,
-                                transform: gc.transform.clone(),
-                                to_screen: Box::new(|p| to_screen(p)),
-                            };
-                            renderer.draw(ui.painter());
+                            match crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path) {
+                                Ok(path) => {
+                                    let renderer = crate::ui::panels::preview::vector_editor::renderer::VectorEditorRenderer {
+                                        state,
+                                        path: &path,
+                                        transform: gc.transform.clone(),
+                                        to_screen: Box::new(to_screen),
+                                    };
+                                    renderer.draw(ui.painter());
+                                }
+                                Err(error) => {
+                                    log::warn!("Cannot draw invalid shape path: {error}");
+                                }
+                            }
                         }
                     }
                 }
@@ -1119,6 +1162,23 @@ pub fn preview_panel(
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn shared_gl_texture_validation_rejects_invalid_ffi_inputs() {
+        assert_eq!(
+            ValidGlPreviewTexture::new(7, 1920, 1080).map(|texture| (
+                texture.id.get(),
+                texture.width,
+                texture.height
+            )),
+            Some((7, 1920, 1080))
+        );
+        assert!(ValidGlPreviewTexture::new(0, 1920, 1080).is_none());
+        assert!(ValidGlPreviewTexture::new(7, 0, 1080).is_none());
+        assert!(ValidGlPreviewTexture::new(7, 1920, 0).is_none());
+        assert!(ValidGlPreviewTexture::new(7, u32::MAX, 1080).is_none());
+        assert!(ValidGlPreviewTexture::new(7, 1920, u32::MAX).is_none());
+    }
 
     fn assert_near(actual: f32, expected: f32) {
         assert!(

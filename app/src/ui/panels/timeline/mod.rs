@@ -26,15 +26,23 @@ pub fn timeline_panel(
     project: &Arc<RwLock<Project>>,
     registry: &CommandRegistry,
 ) {
-    let current_composition_fps: f64;
-    // CRITICAL CHANGE: Scope the read lock to only where `project_lock` is needed.
-    {
-        let project_lock = project.read().unwrap();
-        current_composition_fps = editor_context
+    // Scope the read lock to only where `project_lock` is needed. A poisoned
+    // authoritative Project is surfaced to the user instead of rendering a
+    // timeline from potentially inconsistent state.
+    let current_composition_fps = {
+        let project_lock = match project.read() {
+            Ok(project_lock) => project_lock,
+            Err(error) => {
+                let message = format!("Failed to read Project for Timeline: {error}");
+                log::error!("{message}");
+                editor_context.interaction.active_modal_error = Some(message);
+                return;
+            }
+        };
+        editor_context
             .get_current_composition(&project_lock)
-            .map(|c| c.fps)
-            .unwrap_or(30.0); // Default to 30.0 FPS if no composition is selected or loaded
-    } // `project_lock` is dropped here, releasing the read lock.
+            .map_or(30.0, |composition| composition.fps)
+    };
 
     const TRACK_LIST_SIDEBAR_WIDTH: f32 = 100.0;
     let pixels_per_unit =

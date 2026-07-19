@@ -37,7 +37,7 @@ pub fn to_svg_path(path_model: &VectorPath) -> String {
     }
 
     if path_model.is_closed {
-        path.push_str("Z");
+        path.push('Z');
     }
 
     path

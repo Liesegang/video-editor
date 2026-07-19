@@ -24,24 +24,15 @@ fn file_menu(
     triggered_action: &mut Option<CommandId>,
 ) {
     ui.menu_button("File", |ui| {
-        for cmd_id in [
-            CommandId::NewProject,
-            CommandId::LoadProject,
-            CommandId::Save,
-            CommandId::SaveAs,
-            CommandId::Export,
-            CommandId::Quit,
+        for (cmd_id, icon) in [
+            (CommandId::NewProject, icons::FILE_PLUS),
+            (CommandId::LoadProject, icons::FOLDER_OPEN),
+            (CommandId::Save, icons::FLOPPY_DISK),
+            (CommandId::SaveAs, icons::FLOPPY_DISK_BACK),
+            (CommandId::Export, icons::EXPORT),
+            (CommandId::Quit, icons::SIGN_OUT),
         ] {
             if let Some(cmd) = command_registry.find(cmd_id) {
-                let icon = match cmd_id {
-                    CommandId::NewProject => icons::FILE_PLUS,
-                    CommandId::LoadProject => icons::FOLDER_OPEN,
-                    CommandId::Save => icons::FLOPPY_DISK,
-                    CommandId::SaveAs => icons::FLOPPY_DISK_BACK,
-                    CommandId::Export => icons::EXPORT,
-                    CommandId::Quit => icons::SIGN_OUT,
-                    _ => unreachable!(), // Should not happen
-                };
                 let button = Button::new(egui::RichText::new(format!("{} {}", icon, cmd.text)))
                     .shortcut_text(cmd.shortcut_text.clone());
                 if ui.add(button).clicked() {

@@ -1,11 +1,53 @@
 use library::model::vector::{ControlPoint, PointType, VectorPath};
 use skia_safe::PathVerb;
+use std::fmt;
 
-pub fn parse_svg_path(path_data: &str) -> VectorPath {
-    let path = match skia_safe::utils::parse_path::from_svg(path_data) {
-        Some(p) => p,
-        None => return VectorPath::default(),
-    };
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SvgPathParseError {
+    InvalidSyntax,
+    InvalidVerbRecord {
+        verb: &'static str,
+        required_index: usize,
+        point_count: usize,
+    },
+}
+
+impl fmt::Display for SvgPathParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidSyntax => formatter.write_str("invalid SVG path syntax"),
+            Self::InvalidVerbRecord {
+                verb,
+                required_index,
+                point_count,
+            } => write!(
+                formatter,
+                "Skia returned an invalid {verb} record: point index {required_index} is missing from {point_count} points"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SvgPathParseError {}
+
+fn verb_point(
+    points: &[skia_safe::Point],
+    index: usize,
+    verb: &'static str,
+) -> Result<skia_safe::Point, SvgPathParseError> {
+    points
+        .get(index)
+        .copied()
+        .ok_or(SvgPathParseError::InvalidVerbRecord {
+            verb,
+            required_index: index,
+            point_count: points.len(),
+        })
+}
+
+pub fn parse_svg_path(path_data: &str) -> Result<VectorPath, SvgPathParseError> {
+    let path = skia_safe::utils::parse_path::from_svg(path_data)
+        .ok_or(SvgPathParseError::InvalidSyntax)?;
 
     let mut points = Vec::new();
     let mut is_closed = false;
@@ -17,7 +59,7 @@ pub fn parse_svg_path(path_data: &str) -> VectorPath {
         let pts = rec.points();
         match verb {
             PathVerb::Move => {
-                let p = pts[0];
+                let p = verb_point(pts, 0, "move")?;
                 points.push(ControlPoint {
                     position: [p.x, p.y],
                     handle_in: [0.0, 0.0],
@@ -26,7 +68,7 @@ pub fn parse_svg_path(path_data: &str) -> VectorPath {
                 });
             }
             PathVerb::Line => {
-                let p = pts[1];
+                let p = verb_point(pts, 1, "line")?;
                 points.push(ControlPoint {
                     position: [p.x, p.y],
                     handle_in: [0.0, 0.0],
@@ -35,9 +77,9 @@ pub fn parse_svg_path(path_data: &str) -> VectorPath {
                 });
             }
             PathVerb::Quad => {
-                let p0 = pts[0];
-                let p1 = pts[1];
-                let p2 = pts[2];
+                let p0 = verb_point(pts, 0, "quadratic curve")?;
+                let p1 = verb_point(pts, 1, "quadratic curve")?;
+                let p2 = verb_point(pts, 2, "quadratic curve")?;
 
                 let c1 = p0 + (p1 - p0) * (2.0 / 3.0);
                 let c2 = p2 + (p1 - p2) * (2.0 / 3.0);
@@ -54,7 +96,7 @@ pub fn parse_svg_path(path_data: &str) -> VectorPath {
                 });
             }
             PathVerb::Conic => {
-                let p = pts.last().unwrap();
+                let p = verb_point(pts, 2, "conic curve")?;
                 points.push(ControlPoint {
                     position: [p.x, p.y],
                     handle_in: [0.0, 0.0],
@@ -63,10 +105,10 @@ pub fn parse_svg_path(path_data: &str) -> VectorPath {
                 });
             }
             PathVerb::Cubic => {
-                let p0 = pts[0];
-                let c1 = pts[1];
-                let c2 = pts[2];
-                let p3 = pts[3];
+                let p0 = verb_point(pts, 0, "cubic curve")?;
+                let c1 = verb_point(pts, 1, "cubic curve")?;
+                let c2 = verb_point(pts, 2, "cubic curve")?;
+                let p3 = verb_point(pts, 3, "cubic curve")?;
 
                 if let Some(last) = points.last_mut() {
                     last.handle_out = [c1.x - p0.x, c1.y - p0.y];
@@ -92,14 +134,12 @@ pub fn parse_svg_path(path_data: &str) -> VectorPath {
             } else {
                 pt.point_type = PointType::Smooth;
             }
-        } else if is_zero(pt.handle_in) && is_zero(pt.handle_out) {
-            pt.point_type = PointType::Corner;
         } else {
             pt.point_type = PointType::Corner;
         }
     }
 
-    VectorPath { points, is_closed }
+    Ok(VectorPath { points, is_closed })
 }
 
 fn is_zero(v: [f32; 2]) -> bool {
@@ -145,14 +185,35 @@ mod tests {
         // Line -> Corner
         // Close -> is_closed
 
-        let path = parse_svg_path(original_path);
-        assert_eq!(path.points.len(), 4);
-        assert!(path.is_closed);
-
-        let generated = to_svg_path(&path);
+        let result = parse_svg_path(original_path);
+        assert!(
+            result
+                .as_ref()
+                .is_ok_and(|path| path.points.len() == 4 && path.is_closed)
+        );
+        let generated = result.as_ref().map(to_svg_path);
         // Expect: M 10,10 L 90,10 L 90,90 L 10,90 Z
         // Note: Floats might format differently.
-        assert!(generated.contains("M 10,10"));
-        assert!(generated.contains("Z"));
+        assert!(generated.is_ok_and(|path| path.contains("M 10,10") && path.contains('Z')));
+    }
+
+    #[test]
+    fn invalid_svg_is_reported_instead_of_becoming_an_empty_shape() {
+        assert!(matches!(
+            parse_svg_path("not a path"),
+            Err(SvgPathParseError::InvalidSyntax)
+        ));
+    }
+
+    #[test]
+    fn malformed_skia_verb_record_is_rejected_before_indexing() {
+        assert!(matches!(
+            verb_point(&[], 2, "conic curve"),
+            Err(SvgPathParseError::InvalidVerbRecord {
+                verb: "conic curve",
+                required_index: 2,
+                point_count: 0,
+            })
+        ));
     }
 }
