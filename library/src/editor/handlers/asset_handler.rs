@@ -19,14 +19,12 @@ impl AssetHandler {
 
     pub fn is_asset_used(project: &Arc<RwLock<Project>>, asset_id: Uuid) -> bool {
         if let Ok(proj) = project.read() {
-            // Check all clips in the nodes registry
             for node in proj.nodes.values() {
-                if let crate::model::Node::Layer(layer) = node {
-                    if let crate::model::LayerContent::Media(media) = &layer.content {
-                        if media.asset_id == asset_id {
-                            return true;
-                        }
-                    }
+                if matches!(
+                    &node.content,
+                    crate::model::NodeContent::Media(media) if media.asset_id == asset_id
+                ) {
+                    return true;
                 }
             }
         }

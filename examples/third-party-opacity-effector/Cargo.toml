@@ -1,0 +1,17 @@
+[package]
+name = "third-party-opacity-effector"
+version = "1.0.0"
+edition = "2024"
+license = "MIT"
+
+# This is intentionally a standalone workspace. It is not a member of, and is
+# never linked into, the RuViE host workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ruvie-plugin-api = { path = "../../plugin-api" }
+serde_json = "1.0"
+

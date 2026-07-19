@@ -6,6 +6,7 @@ use crate::rendering::skia_utils::GpuContext;
 use skia_safe::{TileMode, image_filters};
 use std::collections::HashMap;
 
+#[derive(Default)]
 pub struct BlurEffectPlugin;
 
 impl BlurEffectPlugin {

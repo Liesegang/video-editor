@@ -1,6 +1,9 @@
 use egui::{Key, RichText, ScrollArea, TextEdit, Ui};
 use std::collections::BTreeMap;
 
+type MenuItem<T> = (String, Option<String>, T);
+type MenuItemRef<'a, T> = &'a MenuItem<T>;
+
 #[derive(Clone, Default)]
 struct MenuState {
     query: String,
@@ -11,7 +14,7 @@ struct MenuState {
 pub fn show_searchable_menu<T: Clone + 'static>(
     ui: &mut Ui,
     id_source: &str,
-    items: &[(String, Option<String>, T)],
+    items: &[MenuItem<T>],
     mut on_select: impl FnMut(T),
 ) {
     let id = ui.make_persistent_id(id_source);
@@ -55,12 +58,12 @@ pub fn show_searchable_menu<T: Clone + 'static>(
 
 fn render_categorized_view<T: Clone>(
     ui: &mut Ui,
-    items: &[(String, Option<String>, T)],
+    items: &[MenuItem<T>],
     state: &mut MenuState,
     finalize: &mut impl FnMut(T, &mut MenuState, &mut Ui),
 ) {
-    let mut categorized: BTreeMap<String, Vec<&(String, Option<String>, T)>> = BTreeMap::new();
-    let mut uncategorized: Vec<&(String, Option<String>, T)> = Vec::new();
+    let mut categorized: BTreeMap<String, Vec<MenuItemRef<'_, T>>> = BTreeMap::new();
+    let mut uncategorized: Vec<MenuItemRef<'_, T>> = Vec::new();
 
     for item in items {
         if let Some(cat) = &item.1 {
@@ -95,7 +98,7 @@ fn render_categorized_view<T: Clone>(
 
 fn render_flat_view<T: Clone>(
     ui: &mut Ui,
-    items: &[(String, Option<String>, T)],
+    items: &[MenuItem<T>],
     state: &mut MenuState,
     text_res: &egui::Response,
     finalize: &mut impl FnMut(T, &mut MenuState, &mut Ui),

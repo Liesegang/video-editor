@@ -1,20 +1,24 @@
 use crate::model::vector::VectorEditorState;
 use egui::{Pos2, Response, Ui};
 use library::model::frame::transform::Transform;
-use library::model::vector::{HandleType, PointType};
+use library::model::vector::{HandleType, PointType, VectorPath};
 
 pub struct VectorEditorInteraction<'a> {
     pub state: &'a mut VectorEditorState,
+    /// Ephemeral value derived from the authoritative Project property for
+    /// this frame. It is written back through a PreviewAction when changed.
+    pub path: &'a mut VectorPath,
     pub transform: Transform,
     pub to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
     pub to_world: Box<dyn Fn(Pos2) -> Pos2 + 'a>, // Screen -> World (still transformed by object)
 }
 
 impl<'a> VectorEditorInteraction<'a> {
-    pub fn handle(&mut self, ui: &Ui, _response: &Response) -> (bool, bool) {
-        // changed, captured
+    pub fn handle(&mut self, ui: &Ui, _response: &Response) -> (bool, bool, bool) {
+        // changed, captured, commit_requested
         let mut changed = false;
         let mut captured = false;
+        let mut commit_requested = false;
 
         let screen_to_local = |screen_pos: Pos2| -> Pos2 {
             let world_pos = (self.to_world)(screen_pos);
@@ -72,10 +76,10 @@ impl<'a> VectorEditorInteraction<'a> {
         }
         let mut events = Vec::new();
 
-        for i in 0..self.state.path.points.len() {
+        for i in 0..self.path.points.len() {
             // Extract position to avoid holding borrow
             let (px, py) = {
-                let pt = &self.state.path.points[i];
+                let pt = &self.path.points[i];
                 (pt.position[0], pt.position[1])
             };
 
@@ -102,40 +106,44 @@ impl<'a> VectorEditorInteraction<'a> {
                 captured = true;
                 events.push(InteractionEvent::Select(i, HandleType::Vertex));
             }
+            commit_requested |= v_response.drag_stopped();
 
             v_response.context_menu(|ui| {
                 ui.label("Point Type");
                 if ui
                     .radio_value(
-                        &mut self.state.path.points[i].point_type,
+                        &mut self.path.points[i].point_type,
                         PointType::Corner,
                         "Corner",
                     )
                     .changed()
                 {
                     changed = true;
+                    commit_requested = true;
                 }
                 if ui
                     .radio_value(
-                        &mut self.state.path.points[i].point_type,
+                        &mut self.path.points[i].point_type,
                         PointType::Smooth,
                         "Smooth",
                     )
                     .changed()
                 {
                     changed = true;
+                    commit_requested = true;
                     // Initialize handles if zero?
                     // Logic handled in update usually, or handled on drag
                 }
                 if ui
                     .radio_value(
-                        &mut self.state.path.points[i].point_type,
+                        &mut self.path.points[i].point_type,
                         PointType::Symmetric,
                         "Symmetric",
                     )
                     .changed()
                 {
                     changed = true;
+                    commit_requested = true;
                 }
             });
 
@@ -143,7 +151,7 @@ impl<'a> VectorEditorInteraction<'a> {
             if self.state.selected_point_indices.contains(&i) {
                 // Re-borrow point for handles
                 let (h_in, h_out) = {
-                    let pt = &self.state.path.points[i];
+                    let pt = &self.path.points[i];
                     (pt.handle_in, pt.handle_out)
                 };
 
@@ -163,6 +171,7 @@ impl<'a> VectorEditorInteraction<'a> {
                     }
                     self.state.selected_handle = Some((i, HandleType::In));
                 }
+                commit_requested |= in_response.drag_stopped();
 
                 let out_rect =
                     egui::Rect::from_center_size(h_out_screen, egui::Vec2::splat(hit_radius * 2.0));
@@ -177,6 +186,7 @@ impl<'a> VectorEditorInteraction<'a> {
                     }
                     self.state.selected_handle = Some((i, HandleType::Out));
                 }
+                commit_requested |= out_response.drag_stopped();
             }
         }
 
@@ -196,10 +206,10 @@ impl<'a> VectorEditorInteraction<'a> {
                     changed = true;
                     match h_type {
                         HandleType::Vertex => {
-                            self.state.path.points[idx].position = [local_pos.x, local_pos.y];
+                            self.path.points[idx].position = [local_pos.x, local_pos.y];
                         }
                         HandleType::In => {
-                            let pt = &mut self.state.path.points[idx];
+                            let pt = &mut self.path.points[idx];
                             pt.handle_in =
                                 [local_pos.x - pt.position[0], local_pos.y - pt.position[1]];
 
@@ -221,7 +231,7 @@ impl<'a> VectorEditorInteraction<'a> {
                             }
                         }
                         HandleType::Out => {
-                            let pt = &mut self.state.path.points[idx];
+                            let pt = &mut self.path.points[idx];
                             pt.handle_out =
                                 [local_pos.x - pt.position[0], local_pos.y - pt.position[1]];
 
@@ -252,6 +262,6 @@ impl<'a> VectorEditorInteraction<'a> {
             self.state.selected_handle = None;
         }
 
-        (changed, captured)
+        (changed, captured, commit_requested)
     }
 }

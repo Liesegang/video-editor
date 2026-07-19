@@ -8,7 +8,7 @@ use library::EditorService;
 use library::RenderServer;
 
 use crate::command::{CommandId, CommandRegistry};
-use crate::state::context_types::PreviewTool;
+use crate::state::context_types::{PreviewPrimaryGesture, PreviewTool};
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 use crate::{action::HistoryManager, state::context::EditorContext};
 use library::model::property::Vec2;
@@ -21,6 +21,187 @@ mod interaction;
 pub mod vector_editor;
 
 use action::PreviewAction;
+
+const PREVIEW_FIT_PADDING: f32 = 24.0;
+const PREVIEW_MIN_ZOOM: f32 = 0.0001;
+const PREVIEW_MAX_ZOOM: f32 = 1000.0;
+
+fn rgba_image_probe(data: &[u8]) -> (u64, u64) {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in data {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    let nontransparent_pixels = data.chunks_exact(4).filter(|pixel| pixel[3] != 0).count() as u64;
+    (nontransparent_pixels, hash)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FittedPreviewView {
+    /// Translation relative to the Preview rect's minimum corner.
+    pan: egui::Vec2,
+    zoom: f32,
+}
+
+/// Fit a composition canvas into the actual Preview allocation.
+///
+/// egui rectangles and pointer coordinates are expressed in logical points,
+/// so pixels-per-point intentionally does not participate in this geometry.
+/// It is applied later only when choosing the renderer's pixel resolution.
+fn fit_canvas_to_viewport(
+    viewport_rect: egui::Rect,
+    canvas_size: egui::Vec2,
+) -> Option<FittedPreviewView> {
+    let viewport_size = viewport_rect.size();
+    if !viewport_size.x.is_finite()
+        || !viewport_size.y.is_finite()
+        || !canvas_size.x.is_finite()
+        || !canvas_size.y.is_finite()
+        || viewport_size.x <= 0.0
+        || viewport_size.y <= 0.0
+        || canvas_size.x <= 0.0
+        || canvas_size.y <= 0.0
+    {
+        return None;
+    }
+
+    // Keep the margin useful in normal panels without letting it consume a
+    // tiny allocation after a dock resize.
+    let padding_x = PREVIEW_FIT_PADDING.min(viewport_size.x * 0.1);
+    let padding_y = PREVIEW_FIT_PADDING.min(viewport_size.y * 0.1);
+    let available = egui::vec2(
+        (viewport_size.x - padding_x * 2.0).max(f32::EPSILON),
+        (viewport_size.y - padding_y * 2.0).max(f32::EPSILON),
+    );
+    let zoom = (available.x / canvas_size.x)
+        .min(available.y / canvas_size.y)
+        .clamp(PREVIEW_MIN_ZOOM, PREVIEW_MAX_ZOOM);
+    let pan = (viewport_size - canvas_size * zoom) * 0.5;
+
+    Some(FittedPreviewView { pan, zoom })
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PreviewGestureInput {
+    primary_pressed: bool,
+    primary_down: bool,
+    primary_released: bool,
+    primary_dragging: bool,
+    press_started_in_viewport: bool,
+    pan_requested: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PreviewGestureDecision {
+    pan_owned: bool,
+    finish_after_frame: bool,
+}
+
+/// Arbitrate the primary pointer once per press, then retain that owner until
+/// release. Modifier changes cannot leak one physical gesture into two tools.
+fn arbitrate_primary_gesture(
+    owner: &mut PreviewPrimaryGesture,
+    input: PreviewGestureInput,
+) -> PreviewGestureDecision {
+    if *owner == PreviewPrimaryGesture::Idle
+        && input.primary_pressed
+        && input.press_started_in_viewport
+    {
+        *owner = if input.pan_requested {
+            PreviewPrimaryGesture::Pan
+        } else {
+            PreviewPrimaryGesture::Pending
+        };
+    }
+
+    if *owner == PreviewPrimaryGesture::Pending && input.primary_down {
+        if input.pan_requested {
+            // Space may be pressed after the pointer, provided no content drag
+            // has actually started yet.
+            *owner = PreviewPrimaryGesture::Pan;
+        } else if input.primary_dragging {
+            *owner = PreviewPrimaryGesture::Content;
+        }
+    }
+
+    let pan_owned = *owner == PreviewPrimaryGesture::Pan;
+    let finish_after_frame = *owner != PreviewPrimaryGesture::Idle
+        && (input.primary_released || (!input.primary_down && !input.primary_pressed));
+
+    PreviewGestureDecision {
+        pan_owned,
+        finish_after_frame,
+    }
+}
+
+/// Submit only a fully evaluated frame. Evaluation failures invalidate the
+/// displayed output because keeping a previous texture would present stale
+/// pixels as if they were the current Project state.
+const PREVIEW_EVALUATION_ERROR_PREFIX: &str = "Failed to evaluate preview frame: ";
+const PREVIEW_RENDER_ERROR_PREFIX: &str = "Failed to render preview frame: ";
+
+fn invalidate_preview_output(editor_context: &mut EditorContext) {
+    editor_context.preview_texture = None;
+    editor_context.preview_texture_id = None;
+    editor_context.preview_texture_width = 0;
+    editor_context.preview_texture_height = 0;
+    editor_context.preview_region = None;
+}
+
+fn clear_preview_render_error(editor_context: &mut EditorContext) {
+    if editor_context
+        .interaction
+        .active_modal_error
+        .as_deref()
+        .is_some_and(|message| message.starts_with(PREVIEW_RENDER_ERROR_PREFIX))
+    {
+        editor_context.interaction.active_modal_error = None;
+    }
+}
+
+fn report_preview_render_error(error: &library::LibraryError, editor_context: &mut EditorContext) {
+    let message = format!("{PREVIEW_RENDER_ERROR_PREFIX}{error}");
+    if editor_context.interaction.active_modal_error.as_deref() != Some(&message) {
+        log::error!("{message}");
+        editor_context.interaction.active_modal_error = Some(message);
+    }
+    invalidate_preview_output(editor_context);
+    editor_context.preview_nontransparent_pixels = None;
+    editor_context.preview_pixel_hash = None;
+}
+
+fn dispatch_preview_frame(
+    frame: Result<library::model::frame::frame::FrameInfo, library::LibraryError>,
+    editor_context: &mut EditorContext,
+    send: impl FnOnce(library::model::frame::frame::FrameInfo),
+) -> bool {
+    match frame {
+        Ok(frame) => {
+            if editor_context
+                .interaction
+                .active_modal_error
+                .as_deref()
+                .is_some_and(|message| message.starts_with(PREVIEW_EVALUATION_ERROR_PREFIX))
+            {
+                editor_context.interaction.active_modal_error = None;
+            }
+            send(frame);
+            true
+        }
+        Err(error) => {
+            let message = format!("{PREVIEW_EVALUATION_ERROR_PREFIX}{error}");
+            if editor_context.interaction.active_modal_error.as_deref() != Some(&message) {
+                log::error!("{message}");
+                editor_context.interaction.active_modal_error = Some(message);
+            }
+            invalidate_preview_output(editor_context);
+            false
+        }
+    }
+}
 
 struct PreviewViewportState<'a> {
     pan: &'a mut egui::Vec2,
@@ -70,9 +251,21 @@ pub fn preview_panel(
     let preview_rect = egui::Rect::from_min_size(
         egui::pos2(available_rect.min.x, available_rect.min.y + top_bar_height),
         egui::vec2(
-            available_rect.width(),
-            available_rect.height() - bottom_bar_height - top_bar_height,
+            available_rect.width().max(0.0),
+            (available_rect.height() - bottom_bar_height - top_bar_height).max(0.0),
         ),
+    );
+    crate::qa::register_component_with_metadata(
+        "preview.canvas",
+        "preview_canvas",
+        preview_rect,
+        true,
+        Some(serde_json::json!({
+            "pan": {"x": editor_context.view.pan.x, "y": editor_context.view.pan.y},
+            "zoom": editor_context.view.zoom,
+            "texture_width": editor_context.preview_texture_width,
+            "texture_height": editor_context.preview_texture_height,
+        })),
     );
     let bottom_bar_rect = egui::Rect::from_min_max(
         egui::pos2(available_rect.min.x, preview_rect.max.y),
@@ -132,6 +325,45 @@ pub fn preview_panel(
         });
     });
 
+    let current_composition_view = project.read().ok().and_then(|project| {
+        editor_context
+            .get_current_composition(&project)
+            .map(|composition| (composition.id, composition.width, composition.height))
+    });
+
+    // A new/changed composition always gets a default fit. While that default
+    // view remains untouched, keep it centered through dock and DPI-driven
+    // logical-size changes. Once the user pans or zooms, resizing preserves
+    // their chosen camera.
+    if let Some((composition_id, width, height)) = current_composition_view {
+        let runtime = &mut editor_context.interaction.preview_viewport;
+        let composition_changed = runtime.fitted_composition_id != Some(composition_id)
+            || runtime.fitted_canvas_size != [width, height];
+        if composition_changed {
+            runtime.fitted_composition_id = Some(composition_id);
+            runtime.fitted_canvas_size = [width, height];
+            runtime.auto_fit = true;
+        }
+
+        let viewport_resized =
+            (runtime.last_viewport_size - preview_rect.size()).length_sq() > 0.25;
+        if runtime.auto_fit && (composition_changed || viewport_resized) {
+            if let Some(fitted) =
+                fit_canvas_to_viewport(preview_rect, egui::vec2(width as f32, height as f32))
+            {
+                editor_context.view.pan = fitted.pan;
+                editor_context.view.zoom = fitted.zoom;
+            }
+        }
+        runtime.last_viewport_size = preview_rect.size();
+    } else {
+        let runtime = &mut editor_context.interaction.preview_viewport;
+        runtime.fitted_composition_id = None;
+        runtime.fitted_canvas_size = [0, 0];
+        runtime.last_viewport_size = preview_rect.size();
+        runtime.auto_fit = true;
+    }
+
     // Viewport Controller Integration
     let hand_tool_key = registry
         .commands
@@ -139,6 +371,26 @@ pub fn preview_panel(
         .find(|c| c.id == CommandId::HandTool)
         .and_then(|c| c.shortcut)
         .map(|(_, key)| key);
+
+    // Read the momentary hand key directly: pointer gesture ownership must not
+    // depend on which inspector/text widget happened to retain keyboard focus.
+    let hand_tool_key_down = hand_tool_key.is_some_and(|key| ui.input(|input| input.key_down(key)));
+    let pan_requested = hand_tool_key_down || editor_context.view.active_tool == PreviewTool::Pan;
+    let gesture_input = ui.input(|input| PreviewGestureInput {
+        primary_pressed: input.pointer.button_pressed(egui::PointerButton::Primary),
+        primary_down: input.pointer.button_down(egui::PointerButton::Primary),
+        primary_released: input.pointer.button_released(egui::PointerButton::Primary),
+        primary_dragging: input.pointer.is_decidedly_dragging(),
+        press_started_in_viewport: input
+            .pointer
+            .press_origin()
+            .is_some_and(|position| preview_rect.contains(position)),
+        pan_requested,
+    });
+    let gesture_decision = arbitrate_primary_gesture(
+        &mut editor_context.interaction.preview_viewport.primary_gesture,
+        gesture_input,
+    );
 
     let mut state = PreviewViewportState {
         pan: &mut editor_context.view.pan,
@@ -148,29 +400,33 @@ pub fn preview_panel(
     let mut controller = ViewportController::new(
         ui,
         ui.make_persistent_id("unique_preview_viewport_controller_id"),
-        hand_tool_key,
+        None,
     )
     .with_config(ViewportConfig {
         zoom_uniform: true,
+        min_zoom: PREVIEW_MIN_ZOOM,
+        max_zoom: PREVIEW_MAX_ZOOM,
         ..Default::default()
     })
-    .with_pan_tool_active(editor_context.view.active_tool == PreviewTool::Pan)
-    .with_zoom_tool_active(editor_context.view.active_tool == PreviewTool::Zoom);
+    // Keep a latched pan alive after Space is released. When no button is
+    // down, `pan_requested` is included only to show the hand cursor.
+    .with_pan_tool_active(
+        gesture_decision.pan_owned || (!gesture_input.primary_down && pan_requested),
+    )
+    .with_zoom_tool_active(
+        editor_context.view.active_tool == PreviewTool::Zoom && !gesture_decision.pan_owned,
+    );
 
     // Provide specific rect to controller (excluding bottom bar)
-    let (_changed, response) = controller.interact_with_rect(
+    let (viewport_changed, response) = controller.interact_with_rect(
         preview_rect,
         &mut state,
         &mut editor_context.interaction.handled_hand_tool_drag,
     );
 
-    let _pointer_pos = response.hover_pos();
-    let is_hand_tool_active = if let Some(key) = controller.hand_tool_key {
-        ui.input(|i| i.key_down(key))
-    } else {
-        false
-    };
-    let _is_panning_input = is_hand_tool_active || response.dragged_by(egui::PointerButton::Middle);
+    if viewport_changed {
+        editor_context.interaction.preview_viewport.auto_fit = false;
+    }
 
     // Legacy logic (removed lines 36-64)
 
@@ -198,6 +454,7 @@ pub fn preview_panel(
 
     // Lock project once for reading state
     let mut pending_actions = Vec::new();
+    let mut frame_evaluation_failed = false;
     if let Ok(proj_read) = project.read() {
         let (comp_width, comp_height) =
             if let Some(comp) = editor_context.get_current_composition(&proj_read) {
@@ -218,6 +475,7 @@ pub fn preview_panel(
             egui::Rect::from_min_max(screen_frame_min, screen_frame_max),
             0.0,
             egui::Stroke::new(1.0, egui::Color32::from_white_alpha(50)), // Faint white border
+            egui::StrokeKind::Middle,
         );
 
         // Calculate current frame and Request Render
@@ -272,18 +530,10 @@ pub fn preview_panel(
                         &plugin_manager,
                     );
 
-                    // Trinity Path: If no objects, use Trinity Rendering
-                    if frame_info.objects.is_empty() {
-                        render_server.send_trinity_request(
-                            proj_read.clone(),
-                            comp.id,
-                            editor_context.timeline.current_time as f64,
-                            render_scale,
-                            Some(valid_region),
-                        );
-                    } else {
-                        render_server.send_request(frame_info);
-                    }
+                    frame_evaluation_failed =
+                        !dispatch_preview_frame(frame_info, editor_context, |frame_info| {
+                            render_server.send_request(frame_info)
+                        });
                 }
             }
         }
@@ -294,33 +544,56 @@ pub fn preview_panel(
             latest_result = Some(result);
         }
 
-        if let Some(result) = latest_result {
-            if let Some(info) = &result.frame_info {
-                editor_context.preview_region = info.region.clone();
-            }
+        // Always drain the RenderServer, but never apply an earlier successful
+        // result after the current Project failed frame evaluation.
+        if let Some(result) = latest_result.filter(|_| !frame_evaluation_failed) {
             match result.output {
-                library::rendering::renderer::RenderOutput::Image(image) => {
-                    let size = [image.width as usize, image.height as usize];
-                    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &image.data);
+                Ok(output) => {
+                    clear_preview_render_error(editor_context);
+                    editor_context.preview_region = result.frame_info.region.clone();
+                    match output {
+                        library::rendering::renderer::RenderOutput::Image(image) => {
+                            if crate::qa::is_enabled() {
+                                let (nontransparent_pixels, pixel_hash) =
+                                    rgba_image_probe(&image.data);
+                                editor_context.preview_nontransparent_pixels =
+                                    Some(nontransparent_pixels);
+                                editor_context.preview_pixel_hash = Some(pixel_hash);
+                            } else {
+                                editor_context.preview_nontransparent_pixels = None;
+                                editor_context.preview_pixel_hash = None;
+                            }
+                            let size = [image.width as usize, image.height as usize];
+                            let color_image =
+                                egui::ColorImage::from_rgba_unmultiplied(size, &image.data);
 
-                    if let Some(texture) = &mut editor_context.preview_texture {
-                        texture.set(color_image, Default::default());
-                    } else {
-                        editor_context.preview_texture = Some(ui.ctx().load_texture(
-                            "preview_texture",
-                            color_image,
-                            Default::default(),
-                        ));
+                            if let Some(texture) = &mut editor_context.preview_texture {
+                                texture.set(color_image, Default::default());
+                            } else {
+                                editor_context.preview_texture = Some(ui.ctx().load_texture(
+                                    "preview_texture",
+                                    color_image,
+                                    Default::default(),
+                                ));
+                            }
+                            editor_context.preview_texture_id = None;
+                            editor_context.preview_texture_width = image.width;
+                            editor_context.preview_texture_height = image.height;
+                        }
+                        library::rendering::renderer::RenderOutput::Texture(info) => {
+                            editor_context.preview_texture_id = Some(info.texture_id);
+                            editor_context.preview_texture = None;
+                            editor_context.preview_texture_width = info.width;
+                            editor_context.preview_texture_height = info.height;
+                            editor_context.preview_nontransparent_pixels = None;
+                            editor_context.preview_pixel_hash = None;
+                        }
                     }
-                    editor_context.preview_texture_id = None;
-                    editor_context.preview_texture_width = image.width;
-                    editor_context.preview_texture_height = image.height;
+                    editor_context.preview_render_revision =
+                        editor_context.preview_render_revision.wrapping_add(1);
                 }
-                library::rendering::renderer::RenderOutput::Texture(info) => {
-                    editor_context.preview_texture_id = Some(info.texture_id);
-                    editor_context.preview_texture = None; // Invalidate CPU texture
-                    editor_context.preview_texture_width = info.width;
-                    editor_context.preview_texture_height = info.height;
+                Err(error) => {
+                    report_preview_render_error(&error, editor_context);
                 }
             }
         }
@@ -446,47 +719,39 @@ pub fn preview_panel(
         let mut gui_clips: Vec<clip::PreviewClip> = Vec::new();
 
         if let Some(comp) = editor_context.get_current_composition(&proj_read) {
-            // Collect all layers in the composition recursively
-            // Collect all layers in the composition recursively
+            // Project order is authoritative: Composition -> Track -> Clip.
+            // Preview properties/content come from each Clip's output Node.
             let mut layers = Vec::new();
-            let mut stack = vec![comp.root_track_id];
-            while let Some(node_id) = stack.pop() {
-                if let Some(node) = proj_read.nodes.get(&node_id) {
-                    match node {
-                        library::model::Node::Track(track) => {
-                            stack.extend(track.children.iter().cloned());
-                        }
-                        library::model::Node::Layer(layer) => {
-                            layers.push(layer);
-                        }
+            for track_id in &comp.track_ids {
+                let Some(track) = proj_read.get_track(*track_id) else {
+                    continue;
+                };
+                for clip_id in &track.clip_ids {
+                    let Some(clip) = proj_read.get_clip(*clip_id) else {
+                        continue;
+                    };
+                    let node = clip
+                        .output_node_id
+                        .and_then(|node_id| proj_read.get_node(node_id))
+                        .or_else(|| {
+                            clip.node_ids
+                                .iter()
+                                .find_map(|node_id| proj_read.get_node(*node_id))
+                        });
+                    if let Some(node) = node {
+                        layers.push((clip, node, track.id));
                     }
                 }
             }
 
-            for entity in layers {
-                // Find the parent track for this clip
-                // In Trinity, we don't store parent pointer, but we can assume it's set if we traversed.
-                // For Gizmo needing parent track ID: we should probably find it or pass it down.
-                // But for now, let's look it up or default to nil if top level (impossible for layer).
-
-                // TODO: Optimize this lookup
-                let mut track_id = uuid::Uuid::nil();
-                // We need to find which track contains this layer.
-                // This is O(N) over all tracks.
-                for (nid, node) in &proj_read.nodes {
-                    if let library::model::Node::Track(t) = node {
-                        if t.children.contains(&entity.id) {
-                            track_id = *nid;
-                            break;
-                        }
+            for (timeline_clip, entity, track_id) in layers {
+                let current_time = editor_context.timeline.current_time as f64;
+                let local_time = timeline_clip.local_time(current_time);
+                let asset_opt = match &entity.content {
+                    library::model::NodeContent::Media(media) => {
+                        proj_read.get_asset(media.asset_id)
                     }
-                }
-
-                // Try to resolve asset ID from file_path property or similar
-                let asset_opt = if let Some(path) = entity.properties.get_string("file_path") {
-                    proj_read.assets.iter().find(|a| a.path == path)
-                } else {
-                    None
+                    _ => None,
                 };
 
                 let mut width = asset_opt.and_then(|a| a.width.map(|w| w as f32));
@@ -500,6 +765,11 @@ pub fn preview_panel(
 
                     let mut hasher = DefaultHasher::new();
                     entity.properties.hash(&mut hasher);
+                    entity.styles.hash(&mut hasher);
+                    entity.effects.hash(&mut hasher);
+                    entity.effectors.hash(&mut hasher);
+                    entity.decorators.hash(&mut hasher);
+                    local_time.to_bits().hash(&mut hasher);
                     let hash = hasher.finish();
 
                     // Check cache
@@ -524,17 +794,16 @@ pub fn preview_panel(
                         let plugin_manager = project_service.get_plugin_manager();
                         let property_evaluators = plugin_manager.get_property_evaluators();
 
-                        let current_frame =
-                            (editor_context.timeline.current_time as f64 * comp.fps).round() as u64;
-
                         let ctx = library::plugin::entity_converter::FrameEvaluationContext {
+                            project: &proj_read,
                             composition: comp,
                             property_evaluators: &property_evaluators,
                             plugin_manager: &plugin_manager,
+                            resolved_inputs: None,
                         };
 
                         let kind_str = match &entity.content {
-                            library::model::LayerContent::Media(m) => {
+                            library::model::NodeContent::Media(m) => {
                                 if let Some(asset) =
                                     proj_read.assets.iter().find(|a| a.id == m.asset_id)
                                 {
@@ -548,18 +817,22 @@ pub fn preview_panel(
                                     "Media"
                                 }
                             }
-                            library::model::LayerContent::Generator(g) => match g {
-                                library::model::GeneratorContent::Shape { .. } => "shape",
-                                library::model::GeneratorContent::Text { .. } => "text",
-                                library::model::GeneratorContent::SkSL { .. } => "sksl",
+                            library::model::NodeContent::Generator(g) => match g {
+                                library::model::GeneratorContent::Shape => "shape",
+                                library::model::GeneratorContent::Text => "text",
+                                library::model::GeneratorContent::SkSL => "sksl",
                                 _ => "generator",
                             },
-                            library::model::LayerContent::Reference(_) => "Reference",
+                            library::model::NodeContent::Reference(_) => "Reference",
+                            library::model::NodeContent::PluginOperation(operation) => {
+                                operation.operation.as_str()
+                            }
+                            library::model::NodeContent::Merge => "Merge",
                         };
 
                         if let Some(converter) = plugin_manager.get_entity_converter(kind_str) {
                             if let Some((x, y, w, h)) =
-                                converter.get_bounds(&ctx, entity, current_frame as f64)
+                                converter.get_bounds(&ctx, entity, local_time)
                             {
                                 width = Some(w);
                                 height = Some(h);
@@ -574,12 +847,6 @@ pub fn preview_panel(
                         }
                     }
                 }
-
-                let current_time = editor_context.timeline.current_time as f64;
-                // Trinity: local_time = (current_time - start_time + trim_in) * time_stretch
-                let local_time = (current_time - entity.start_time.into_inner()
-                    + entity.trim_in.into_inner())
-                    * entity.time_stretch.into_inner();
 
                 // Log Gizmo Time Calculation (throttle slightly if possible, or just spam per user request)
                 if editor_context.timeline.current_time.fract() < 0.1 {
@@ -660,7 +927,8 @@ pub fn preview_panel(
                 };
 
                 let gc = clip::PreviewClip {
-                    clip: entity,
+                    clip: timeline_clip,
+                    node: entity,
                     track_id,
                     transform,
                     content_bounds,
@@ -675,35 +943,83 @@ pub fn preview_panel(
                 ui,
                 editor_context,
                 &project,
-                history_manager,
                 &gui_clips,
                 to_screen,
                 to_world,
             );
-            interactions.handle(&response, rect, &mut pending_actions);
-            interactions.draw_text_overlay(&mut pending_actions);
+            interactions.handle(
+                &response,
+                rect,
+                gesture_decision.pan_owned,
+                &mut pending_actions,
+            );
+            if !gesture_decision.pan_owned {
+                interactions.draw_text_overlay(&mut pending_actions);
+            }
         }
 
         // Draw Gizmo
         if editor_context.view.active_tool == PreviewTool::Select {
-            gizmo::draw_gizmo(ui, editor_context, &project, &gui_clips, to_screen);
+            gizmo::draw_gizmo(
+                ui,
+                editor_context,
+                &project,
+                &gui_clips,
+                to_screen,
+                !gesture_decision.pan_owned,
+            );
         } else if editor_context.view.active_tool == PreviewTool::Shape {
             if let Some(state) = &editor_context.interaction.vector_editor_state {
                 if let Some(id) = editor_context.selection.selected_entities.iter().next() {
                     if let Some(gc) = gui_clips.iter().find(|c| c.id() == *id) {
-                        let renderer = crate::ui::panels::preview::vector_editor::renderer::VectorEditorRenderer {
-                            state,
-                            transform: gc.transform.clone(),
-                            to_screen: Box::new(|p| to_screen(p)),
-                        };
-                        renderer.draw(ui.painter());
+                        if let Some(path) = gc.node.properties.get_string("path") {
+                            let path = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path);
+                            let renderer = crate::ui::panels::preview::vector_editor::renderer::VectorEditorRenderer {
+                                state,
+                                path: &path,
+                                transform: gc.transform.clone(),
+                                to_screen: Box::new(|p| to_screen(p)),
+                            };
+                            renderer.draw(ui.painter());
+                        }
                     }
                 }
             }
         }
     } // End of project.read() scope
 
+    // Nested gizmo/path widgets can be the first widgets to recognize a drag.
+    // Record that ownership before a later Space press can claim it.
+    if editor_context.interaction.preview_viewport.primary_gesture == PreviewPrimaryGesture::Pending
+        && gesture_input.primary_down
+        && (editor_context.interaction.gizmo_state.is_some()
+            || editor_context.interaction.body_drag_state.is_some()
+            || editor_context
+                .interaction
+                .preview_selection_drag_start
+                .is_some()
+            || editor_context
+                .interaction
+                .vector_editor_state
+                .as_ref()
+                .is_some_and(|state| state.selected_handle.is_some()))
+    {
+        editor_context.interaction.preview_viewport.primary_gesture =
+            PreviewPrimaryGesture::Content;
+    }
+
+    if gesture_decision.finish_after_frame {
+        editor_context.interaction.preview_viewport.primary_gesture = PreviewPrimaryGesture::Idle;
+        // If Space was released before the pointer, shortcut dispatch already
+        // consumed that release. Do not leave the shared suppression latch set
+        // until the next unrelated Space tap.
+        if !hand_tool_key_down {
+            editor_context.interaction.handled_hand_tool_drag = false;
+        }
+    }
+
     // Execute pending actions
+    let mut history_commit_requested = false;
     for action in pending_actions {
         match action {
             PreviewAction::UpdateProperty {
@@ -714,7 +1030,7 @@ pub fn preview_panel(
                 time,
                 value,
             } => {
-                crate::utils::property::update_property(
+                match crate::utils::property::update_property(
                     project_service,
                     comp_id,
                     track_id,
@@ -722,8 +1038,20 @@ pub fn preview_panel(
                     &prop_name,
                     time,
                     value,
-                );
+                ) {
+                    Ok(()) => {}
+                    Err(error) => log::error!("Failed to update Preview property: {error}"),
+                }
             }
+            PreviewAction::CommitHistory => history_commit_requested = true,
+        }
+    }
+    if history_commit_requested {
+        // Drag updates are applied on preceding frames, so the release frame
+        // can contain only CommitHistory. Deduplication keeps this a no-op when
+        // no Project value changed.
+        if let Ok(project) = project.read() {
+            history_manager.push_project_state(project.clone());
         }
     }
 
@@ -758,4 +1086,211 @@ pub fn preview_panel(
                 });
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn assert_near(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 0.001,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn fit_uses_offset_viewport_rect_and_centers_canvas() {
+        let viewport =
+            egui::Rect::from_min_size(egui::pos2(137.0, 83.0), egui::vec2(1000.0, 700.0));
+        let canvas_size = egui::vec2(1920.0, 1080.0);
+        let fitted = fit_canvas_to_viewport(viewport, canvas_size).unwrap();
+        let screen_canvas =
+            egui::Rect::from_min_size(viewport.min + fitted.pan, canvas_size * fitted.zoom);
+
+        assert_near(screen_canvas.center().x, viewport.center().x);
+        assert_near(screen_canvas.center().y, viewport.center().y);
+        assert!(screen_canvas.left() >= viewport.left());
+        assert!(screen_canvas.right() <= viewport.right());
+        assert!(screen_canvas.top() >= viewport.top());
+        assert!(screen_canvas.bottom() <= viewport.bottom());
+    }
+
+    #[test]
+    fn fit_is_stable_in_logical_points_across_high_dpi_scales() {
+        let viewport = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(800.0, 600.0));
+        let canvas_size = egui::vec2(1920.0, 1080.0);
+        let fitted = fit_canvas_to_viewport(viewport, canvas_size).unwrap();
+
+        for pixels_per_point in [1.0_f32, 1.5, 2.0, 3.0] {
+            let physical_viewport_center = viewport.center().to_vec2() * pixels_per_point;
+            let logical_canvas_center =
+                viewport.min.to_vec2() + fitted.pan + canvas_size * fitted.zoom * 0.5;
+            let physical_canvas_center = logical_canvas_center * pixels_per_point;
+            assert_near(physical_canvas_center.x, physical_viewport_center.x);
+            assert_near(physical_canvas_center.y, physical_viewport_center.y);
+        }
+    }
+
+    #[test]
+    fn frame_error_is_reported_and_invalidates_stale_preview_without_dispatch() {
+        let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
+        editor_context.preview_texture_id = Some(42);
+        editor_context.preview_texture_width = 1920;
+        editor_context.preview_texture_height = 1080;
+        editor_context.preview_region = Some(library::model::frame::frame::Region {
+            x: 10.0,
+            y: 20.0,
+            width: 640.0,
+            height: 360.0,
+        });
+        let dispatched = Cell::new(false);
+
+        let submitted = dispatch_preview_frame(
+            Err(library::LibraryError::InvalidCompositionIndex(7)),
+            &mut editor_context,
+            |_| dispatched.set(true),
+        );
+
+        assert!(!submitted);
+        assert!(!dispatched.get());
+        assert_eq!(editor_context.preview_texture_id, None);
+        assert_eq!(editor_context.preview_texture_width, 0);
+        assert_eq!(editor_context.preview_texture_height, 0);
+        assert_eq!(editor_context.preview_region, None);
+        let message = editor_context
+            .interaction
+            .active_modal_error
+            .as_deref()
+            .expect("LibraryError should reach the existing modal error path");
+        assert!(message.starts_with("Failed to evaluate preview frame:"));
+        assert!(message.contains('7'));
+    }
+
+    #[test]
+    fn render_error_invalidates_stale_output_and_only_its_success_clears_the_modal() {
+        let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
+        editor_context.preview_texture_id = Some(42);
+        editor_context.preview_texture_width = 1920;
+        editor_context.preview_texture_height = 1080;
+        editor_context.preview_nontransparent_pixels = Some(10);
+        editor_context.preview_pixel_hash = Some(20);
+
+        report_preview_render_error(
+            &library::LibraryError::Render("injected shader failure".to_string()),
+            &mut editor_context,
+        );
+
+        assert_eq!(editor_context.preview_texture_id, None);
+        assert_eq!(editor_context.preview_texture_width, 0);
+        assert_eq!(editor_context.preview_texture_height, 0);
+        assert_eq!(editor_context.preview_nontransparent_pixels, None);
+        assert_eq!(editor_context.preview_pixel_hash, None);
+        let message = editor_context
+            .interaction
+            .active_modal_error
+            .as_deref()
+            .unwrap();
+        assert!(message.starts_with(PREVIEW_RENDER_ERROR_PREFIX));
+        assert!(message.contains("injected shader failure"));
+
+        clear_preview_render_error(&mut editor_context);
+        assert_eq!(editor_context.interaction.active_modal_error, None);
+
+        editor_context.interaction.active_modal_error = Some("unrelated failure".to_string());
+        clear_preview_render_error(&mut editor_context);
+        assert_eq!(
+            editor_context.interaction.active_modal_error.as_deref(),
+            Some("unrelated failure")
+        );
+    }
+
+    #[test]
+    fn space_pan_owns_press_through_modifier_release_and_pointer_release() {
+        let mut owner = PreviewPrimaryGesture::Idle;
+        let pressed = arbitrate_primary_gesture(
+            &mut owner,
+            PreviewGestureInput {
+                primary_pressed: true,
+                primary_down: true,
+                press_started_in_viewport: true,
+                pan_requested: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(owner, PreviewPrimaryGesture::Pan);
+        assert!(pressed.pan_owned);
+
+        let modifier_released = arbitrate_primary_gesture(
+            &mut owner,
+            PreviewGestureInput {
+                primary_down: true,
+                primary_dragging: true,
+                pan_requested: false,
+                ..Default::default()
+            },
+        );
+        assert_eq!(owner, PreviewPrimaryGesture::Pan);
+        assert!(modifier_released.pan_owned);
+
+        let released = arbitrate_primary_gesture(
+            &mut owner,
+            PreviewGestureInput {
+                primary_released: true,
+                ..Default::default()
+            },
+        );
+        assert!(released.pan_owned);
+        assert!(released.finish_after_frame);
+    }
+
+    #[test]
+    fn space_can_claim_pending_press_but_not_started_content_drag() {
+        let mut pending_owner = PreviewPrimaryGesture::Idle;
+        arbitrate_primary_gesture(
+            &mut pending_owner,
+            PreviewGestureInput {
+                primary_pressed: true,
+                primary_down: true,
+                press_started_in_viewport: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(pending_owner, PreviewPrimaryGesture::Pending);
+
+        let claimed = arbitrate_primary_gesture(
+            &mut pending_owner,
+            PreviewGestureInput {
+                primary_down: true,
+                pan_requested: true,
+                ..Default::default()
+            },
+        );
+        assert!(claimed.pan_owned);
+
+        let mut content_owner = PreviewPrimaryGesture::Pending;
+        let started = arbitrate_primary_gesture(
+            &mut content_owner,
+            PreviewGestureInput {
+                primary_down: true,
+                primary_dragging: true,
+                ..Default::default()
+            },
+        );
+        assert!(!started.pan_owned);
+        assert_eq!(content_owner, PreviewPrimaryGesture::Content);
+
+        let modifier_changed = arbitrate_primary_gesture(
+            &mut content_owner,
+            PreviewGestureInput {
+                primary_down: true,
+                primary_dragging: true,
+                pan_requested: true,
+                ..Default::default()
+            },
+        );
+        assert!(!modifier_changed.pan_owned);
+        assert_eq!(content_owner, PreviewPrimaryGesture::Content);
+    }
 }

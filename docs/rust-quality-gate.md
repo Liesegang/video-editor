@@ -1,0 +1,91 @@
+# Rust quality gate
+
+The repository uses one entry point locally and in CI:
+
+```bash
+./scripts/quality-gate.sh
+```
+
+It runs, without excluding crates, targets, features, or tests:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
+cargo test --workspace --all-targets --all-features --locked
+./scripts/dependency-audit.sh
+```
+
+The Clippy command also receives the opt-in lints listed in
+`scripts/clippy-policy.sh`. CI installs the Linux development packages required
+by FFmpeg, Skia, CPAL, PyO3, glutin, and winit before invoking the same script.
+The macOS and Windows packaging workflows continue to validate their native
+packaging paths separately.
+
+Rust 1.95.0 is pinned in `rust-toolchain.toml`. Rustup users get that toolchain
+automatically. A standalone Cargo installation, such as Homebrew Cargo, ignores
+the rustup override file; it must provide Rust 1.95.0 plus Clippy and rustfmt.
+
+## Dependency audit
+
+The shared entry point runs three exact, verified tool versions:
+
+| tool | version | enforced check |
+| --- | --- | --- |
+| `cargo-audit` | 0.22.2 | RustSec vulnerabilities plus unmaintained, unsound, and yanked warnings |
+| `cargo-deny` | 0.20.2 | allowed licenses, wildcard bans, and registry/Git source policy |
+| `cargo-machete` | 0.9.2 | unused direct dependencies, using Cargo metadata to resolve renamed crates |
+
+`scripts/dependency-audit.sh` installs a missing or mismatched version under
+`target/quality-tools`; it never silently uses another version from `PATH`.
+The CI workflow caches that directory. The initial audit removed unused direct
+dependencies and optional AVIF support that the native image loader did not
+advertise, then updated every advisory with a compatible fix. This reduced 14
+vulnerability findings (12 distinct advisory IDs) and ten denied warning
+findings to four reviewed exceptions.
+
+Exceptions live in `quality/dependency-advisory-exceptions.txt`. Each record
+must contain one exact advisory ID, a review deadline, an exact package and sole
+direct parent, the human-readable locked path, runtime reachability, and a
+remediation. The script validates every field and calendar date, rejects
+duplicate IDs, verifies the current all-target inverse dependency tree, and
+fails once any review date has passed before passing those exact IDs to
+`cargo-audit`. A new runtime parent for an otherwise ignored package therefore
+fails the path guard; wildcard or indefinite ignores are not supported.
+
+| advisory | locked path | impact and reachability | required remediation | review by |
+| --- | --- | --- | --- | --- |
+| `RUSTSEC-2026-0194` | `quick-xml 0.39.4 <- wayland-scanner 0.31.10 <- winit/Wayland` | CPU denial of service in attribute parsing. Here `wayland-scanner` is a proc-macro and reads bundled protocol XML only during compilation; project and network XML do not reach it at runtime. | Move to `quick-xml >=0.41` when `wayland-scanner` permits it, normally through the egui/winit update. | 2026-10-31 |
+| `RUSTSEC-2026-0195` | `quick-xml 0.39.4 <- wayland-scanner 0.31.10 <- winit/Wayland` | Memory denial of service in `NsReader`. The application does not use this parser at runtime; the locked path is build-time protocol generation. | Same upstream update as `RUSTSEC-2026-0194`. | 2026-10-31 |
+| `RUSTSEC-2024-0436` | `paste 1.0.15 <- egui_dock 0.18.0 <- app` | Maintenance-status advisory, with no reported vulnerability. `paste` is a compile-time proc-macro; even current `egui_dock 0.20.1` still depends on it. | Remove when `egui_dock` drops `paste`, or migrate the dock implementation. | 2026-10-31 |
+| `RUSTSEC-2026-0192` | `ttf-parser 0.25.1 <- owned_ttf_parser <- ab_glyph <- epaint 0.33.3 <- egui` | Maintenance-status advisory with no patched release in the egui 0.33 line. Font parsing is runtime-reachable, so it receives the shortest migration review rather than being classified unreachable. | Upgrade the egui ecosystem to 0.35 or later, which uses `skrifa`. | 2026-10-31 |
+
+The accepted license list in `deny.toml` is the observed all-target lockfile
+set: permissive licenses, font/data licenses, and the weak-copyleft MPL/LGPL
+dependencies. Unknown registries, unknown Git sources, wildcard dependency
+requirements, unlicensed workspace packages, and licenses outside that list
+fail the gate. Duplicate transitive versions remain reported as warnings
+because the cross-platform GUI/audio graph legitimately contains parallel
+platform API generations.
+
+## Executable policy test
+
+`scripts/quality-gate-self-test.sh` applies the shared Clippy arguments to a
+small independent crate. The valid fixture must pass, and each invalid feature
+must fail with its expected lint. This catches accidental removal or misspelling
+of the policy for `dbg!`, `todo!`, `unimplemented!`, ignored `Result`, redundant
+clone, oversized values/stack arrays, undocumented unsafe blocks, and
+`unwrap()`, `expect()`, or `panic!()` in production. Test targets may use the
+last three for assertion-oriented failures; the valid fixture proves that this
+exception is limited to test code while the invalid production fixtures fail.
+
+## Lint inventory and decisions
+
+`scripts/lint-inventory.sh` uses compiler JSON rather than source-text matching
+and evaluates the full workspace with every target and feature. The exhaustive
+nonzero `all`, `pedantic`, `nursery`, and `restriction` snapshot, including a
+per-lint adopt/defer/exclude decision, is recorded in
+[`clippy-lint-inventory.md`](clippy-lint-inventory.md). `clippy::all` and the
+curated safety/reliability lints are enforced now. Pedantic and nursery remain
+measured promotion candidates; the restriction group is never enabled as a
+blanket because it intentionally contains mutually exclusive policies.

@@ -7,9 +7,8 @@ pub fn show_easing_menu(
     mut on_select: impl FnMut(EasingFunction),
 ) {
     let mut item = |ui: &mut Ui, label: &str, easing: EasingFunction| {
-        let selected = current_easing.map_or(false, |c| {
-            std::mem::discriminant(c) == std::mem::discriminant(&easing)
-        });
+        let selected = current_easing
+            .is_some_and(|c| std::mem::discriminant(c) == std::mem::discriminant(&easing));
         // Use selectable_label for highlighting if selected, but regular button behavior mostly
         if ui.selectable_label(selected, label).clicked() {
             on_select(easing);

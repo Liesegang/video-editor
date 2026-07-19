@@ -6,6 +6,7 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use std::fs::File;
 use std::io::BufWriter;
 
+#[derive(Default)]
 pub struct PngExportPlugin;
 
 impl PngExportPlugin {

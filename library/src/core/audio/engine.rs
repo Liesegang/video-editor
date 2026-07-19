@@ -7,9 +7,56 @@ pub struct AudioEngine {
     _stream: cpal::Stream, // Keep stream alive
     producer: Arc<Mutex<rtrb::Producer<f32>>>,
     current_sample_count: Arc<AtomicU64>,
-    generation: Arc<std::sync::atomic::AtomicUsize>,
+    flush_state: Arc<AudioFlushState>,
     sample_rate: u32,
     channels: u16,
+}
+
+#[derive(Clone)]
+pub(crate) struct AudioFlushHandle {
+    state: Arc<AudioFlushState>,
+}
+
+impl AudioFlushHandle {
+    pub(crate) fn request(&self) {
+        self.state.request();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        Self {
+            state: Arc::new(AudioFlushState::default()),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending(&self) -> bool {
+        self.state.pending()
+    }
+}
+
+#[derive(Default)]
+struct AudioFlushState {
+    requested: std::sync::atomic::AtomicUsize,
+    acknowledged: std::sync::atomic::AtomicUsize,
+}
+
+impl AudioFlushState {
+    fn request(&self) -> usize {
+        self.requested.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    fn requested(&self) -> usize {
+        self.requested.load(Ordering::Acquire)
+    }
+
+    fn acknowledge(&self, generation: usize) {
+        self.acknowledged.store(generation, Ordering::Release);
+    }
+
+    fn pending(&self) -> bool {
+        self.requested.load(Ordering::Acquire) != self.acknowledged.load(Ordering::Acquire)
+    }
 }
 
 impl AudioEngine {
@@ -26,14 +73,14 @@ impl AudioEngine {
 
         // Create RingBuffer (Wait-free SPSC)
         // Capacity: 1 second buffer (approx)
-        let buffer_size = (sample_rate as usize) * (channels as usize) * 1;
+        let buffer_size = (sample_rate as usize) * (channels as usize);
         let (producer, mut consumer) = RingBuffer::new(buffer_size);
 
         let current_sample_count = Arc::new(AtomicU64::new(0));
         let counter_clone = current_sample_count.clone();
 
-        let generation = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let generation_clone = generation.clone();
+        let flush_state = Arc::new(AudioFlushState::default());
+        let callback_flush_state = Arc::clone(&flush_state);
         let mut local_generation = 0;
 
         // This closure runs on the high-priority audio thread.
@@ -41,11 +88,12 @@ impl AudioEngine {
         let stream = device.build_output_stream(
             &config,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                let global_gen = generation_clone.load(Ordering::Relaxed);
+                let global_gen = callback_flush_state.requested();
                 if global_gen > local_generation {
                     // Seek detected: Flush buffer
                     while consumer.pop().is_ok() {}
                     local_generation = global_gen;
+                    callback_flush_state.acknowledge(global_gen);
                 }
                 Self::write_audio_data(data, channels as usize, &mut consumer, &counter_clone);
             },
@@ -59,7 +107,7 @@ impl AudioEngine {
             _stream: stream,
             producer: Arc::new(Mutex::new(producer)),
             current_sample_count,
-            generation,
+            flush_state,
             sample_rate,
             channels,
         })
@@ -105,7 +153,16 @@ impl AudioEngine {
 
     // "Main Thread" API to feed data
     pub fn push_samples(&self, samples: &[f32]) -> usize {
-        let mut producer = self.producer.lock().unwrap();
+        if self.flush_state.pending() {
+            return 0;
+        }
+        let mut producer = self.producer.lock().unwrap_or_else(|poisoned| {
+            log::error!("audio producer lock was poisoned; recovering buffered samples");
+            poisoned.into_inner()
+        });
+        if self.flush_state.pending() {
+            return 0;
+        }
         // Since Producer is SPSC, we need to lock if multiple writers, but we should have one AssetWorker.
         // We use Mutex here just for safety in 'library' context.
 
@@ -123,6 +180,10 @@ impl AudioEngine {
     pub fn get_current_time(&self) -> f64 {
         let samples = self.current_sample_count.load(Ordering::Relaxed);
         samples as f64 / self.sample_rate as f64
+    }
+
+    pub fn get_current_sample(&self) -> u64 {
+        self.current_sample_count.load(Ordering::Acquire)
     }
 
     // Playback control
@@ -143,7 +204,21 @@ impl AudioEngine {
         self.current_sample_count.store(samples, Ordering::Relaxed);
 
         // Signal flush to clear old buffered audio
-        self.generation.fetch_add(1, Ordering::Relaxed);
+        self.flush();
+    }
+
+    pub fn flush(&self) {
+        self.flush_state.request();
+    }
+
+    pub fn flush_pending(&self) -> bool {
+        self.flush_state.pending()
+    }
+
+    pub(crate) fn flush_handle(&self) -> AudioFlushHandle {
+        AudioFlushHandle {
+            state: Arc::clone(&self.flush_state),
+        }
     }
 
     pub fn free_capacity(&self) -> usize {

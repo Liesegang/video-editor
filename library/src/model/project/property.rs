@@ -1,10 +1,11 @@
 use log;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ordered_float::OrderedFloat;
 use std::hash::{Hash, Hasher};
+use uuid::Uuid;
 
 use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
@@ -57,8 +58,11 @@ impl Hash for Vec4 {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(untagged)]
 pub enum PropertyValue {
-    Number(OrderedFloat<f64>),
+    // Keep Integer before Number: both serialize as an untagged JSON number,
+    // and serde tries untagged variants in declaration order. Number-first
+    // changed an authored Integer(0) into Number(0.0) on Project round-trip.
     Integer(i64),
+    Number(OrderedFloat<f64>),
     String(String),
     Boolean(bool),
     Vec2(Vec2),
@@ -169,31 +173,35 @@ impl From<serde_json::Value> for PropertyValue {
             }
             serde_json::Value::Object(o) => {
                 // Try to infer specific types
-                if o.len() == 2 && o.contains_key("x") && o.contains_key("y") {
-                    if let (Some(x_val), Some(y_val)) = (
+                if o.len() == 2
+                    && o.contains_key("x")
+                    && o.contains_key("y")
+                    && let (Some(x_val), Some(y_val)) = (
                         o.get("x").and_then(|v| v.as_f64()),
                         o.get("y").and_then(|v| v.as_f64()),
-                    ) {
-                        return PropertyValue::Vec2(Vec2 {
-                            x: OrderedFloat(x_val),
-                            y: OrderedFloat(y_val),
-                        });
-                    }
+                    )
+                {
+                    return PropertyValue::Vec2(Vec2 {
+                        x: OrderedFloat(x_val),
+                        y: OrderedFloat(y_val),
+                    });
                 }
 
-                if o.len() == 3 && o.contains_key("x") && o.contains_key("y") && o.contains_key("z")
-                {
-                    if let (Some(x_val), Some(y_val), Some(z_val)) = (
+                if o.len() == 3
+                    && o.contains_key("x")
+                    && o.contains_key("y")
+                    && o.contains_key("z")
+                    && let (Some(x_val), Some(y_val), Some(z_val)) = (
                         o.get("x").and_then(|v| v.as_f64()),
                         o.get("y").and_then(|v| v.as_f64()),
                         o.get("z").and_then(|v| v.as_f64()),
-                    ) {
-                        return PropertyValue::Vec3(Vec3 {
-                            x: OrderedFloat(x_val),
-                            y: OrderedFloat(y_val),
-                            z: OrderedFloat(z_val),
-                        });
-                    }
+                    )
+                {
+                    return PropertyValue::Vec3(Vec3 {
+                        x: OrderedFloat(x_val),
+                        y: OrderedFloat(y_val),
+                        z: OrderedFloat(z_val),
+                    });
                 }
 
                 if o.len() == 4
@@ -201,20 +209,19 @@ impl From<serde_json::Value> for PropertyValue {
                     && o.contains_key("y")
                     && o.contains_key("z")
                     && o.contains_key("w")
-                {
-                    if let (Some(x_val), Some(y_val), Some(z_val), Some(w_val)) = (
+                    && let (Some(x_val), Some(y_val), Some(z_val), Some(w_val)) = (
                         o.get("x").and_then(|v| v.as_f64()),
                         o.get("y").and_then(|v| v.as_f64()),
                         o.get("z").and_then(|v| v.as_f64()),
                         o.get("w").and_then(|v| v.as_f64()),
-                    ) {
-                        return PropertyValue::Vec4(Vec4 {
-                            x: OrderedFloat(x_val),
-                            y: OrderedFloat(y_val),
-                            z: OrderedFloat(z_val),
-                            w: OrderedFloat(w_val),
-                        });
-                    }
+                    )
+                {
+                    return PropertyValue::Vec4(Vec4 {
+                        x: OrderedFloat(x_val),
+                        y: OrderedFloat(y_val),
+                        z: OrderedFloat(z_val),
+                        w: OrderedFloat(w_val),
+                    });
                 }
 
                 if o.len() == 4
@@ -222,20 +229,19 @@ impl From<serde_json::Value> for PropertyValue {
                     && o.contains_key("g")
                     && o.contains_key("b")
                     && o.contains_key("a")
-                {
-                    if let (Some(r), Some(g), Some(b), Some(a)) = (
+                    && let (Some(r), Some(g), Some(b), Some(a)) = (
                         o.get("r").and_then(|v| v.as_u64()),
                         o.get("g").and_then(|v| v.as_u64()),
                         o.get("b").and_then(|v| v.as_u64()),
                         o.get("a").and_then(|v| v.as_u64()),
-                    ) {
-                        return PropertyValue::Color(Color {
-                            r: r as u8,
-                            g: g as u8,
-                            b: b as u8,
-                            a: a as u8,
-                        });
-                    }
+                    )
+                {
+                    return PropertyValue::Color(Color {
+                        r: r as u8,
+                        g: g as u8,
+                        b: b as u8,
+                        a: a as u8,
+                    });
                 }
 
                 PropertyValue::Map(o.into_iter().map(|(k, v)| (k, v.into())).collect())
@@ -247,16 +253,14 @@ impl From<serde_json::Value> for PropertyValue {
 impl From<&PropertyValue> for serde_json::Value {
     fn from(value: &PropertyValue) -> Self {
         match value {
-            PropertyValue::Number(n) => {
-                if n.fract().abs() < f64::EPSILON && n.abs() <= (i64::MAX as f64) {
-                    serde_json::Value::Number(serde_json::Number::from(n.into_inner() as i64))
-                } else {
-                    serde_json::Value::Number(
-                        serde_json::Number::from_f64(n.into_inner())
-                            .unwrap_or_else(|| serde_json::Number::from_f64(0.0).unwrap()),
-                    )
-                }
-            }
+            // Preserve the authored numeric variant. Encoding Number(1.0) as
+            // the integer JSON token `1` makes the untagged deserializer select
+            // PropertyValue::Integer, which in turn disables numeric keyframe
+            // interpolation. Integer has its own branch below.
+            PropertyValue::Number(n) => serde_json::Value::Number(
+                serde_json::Number::from_f64(n.into_inner())
+                    .unwrap_or_else(|| serde_json::Number::from(0)),
+            ),
             PropertyValue::Integer(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
             PropertyValue::String(s) => serde_json::Value::String(s.clone()),
             PropertyValue::Boolean(b) => serde_json::Value::Bool(*b),
@@ -440,12 +444,67 @@ fn default_constant_evaluator() -> String {
     "constant".to_string()
 }
 
+/// Persistent identity for one authored keyframe.
+///
+/// Time and sorted position are editable presentation data, so neither is a
+/// safe identity while a drag crosses neighbouring keys.  This ID is stored in
+/// the authoritative Project model and survives sorting and save/load.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[serde(transparent)]
+pub struct KeyframeId(Uuid);
+
+impl KeyframeId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub const fn from_uuid(id: Uuid) -> Self {
+        Self(id)
+    }
+
+    pub const fn as_uuid(&self) -> Uuid {
+        self.0
+    }
+}
+
+impl Default for KeyframeId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for KeyframeId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// Atomic changes applied to one persistently identified keyframe.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KeyframeUpdate {
+    pub time: Option<f64>,
+    pub value: Option<PropertyValue>,
+    pub easing: Option<EasingFunction>,
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Keyframe {
+    pub id: KeyframeId,
     pub time: OrderedFloat<f64>,
     pub value: PropertyValue,
     #[serde(default)]
     pub easing: EasingFunction, // Assuming EasingFunction implements Hash/Eq, check later
+}
+
+impl Keyframe {
+    pub fn new(time: f64, value: PropertyValue, easing: EasingFunction) -> Self {
+        Self {
+            id: KeyframeId::new(),
+            time: OrderedFloat(time),
+            value,
+            easing,
+        }
+    }
 }
 
 impl Property {
@@ -453,11 +512,11 @@ impl Property {
         Self {
             evaluator: "constant".to_string(),
             properties: HashMap::from([("value".to_string(), value)]),
-            ..Default::default()
         }
     }
 
-    pub fn keyframe(keyframes: Vec<Keyframe>) -> Self {
+    pub fn keyframe(mut keyframes: Vec<Keyframe>) -> Self {
+        keyframes.sort_by_key(|keyframe| keyframe.time);
         let list = keyframes
             .iter()
             .filter_map(|kf| serde_json::to_value(kf).ok())
@@ -476,7 +535,6 @@ impl Property {
         Self {
             evaluator: "keyframe".to_string(),
             properties,
-            ..Default::default()
         }
     }
 
@@ -487,7 +545,6 @@ impl Property {
                 "expression".to_string(),
                 PropertyValue::String(expression),
             )]),
-            ..Default::default()
         }
     }
 
@@ -533,6 +590,28 @@ impl Property {
             .position(|k| (k.time.into_inner() - time).abs() < tolerance)
     }
 
+    pub fn keyframe_id_at(&self, time: f64, tolerance: f64) -> Option<KeyframeId> {
+        if self.evaluator != "keyframe" {
+            return None;
+        }
+        self.keyframes()
+            .iter()
+            .find(|keyframe| (keyframe.time.into_inner() - time).abs() < tolerance)
+            .map(|keyframe| keyframe.id)
+    }
+
+    pub fn keyframe_by_id(&self, id: KeyframeId) -> Option<Keyframe> {
+        self.keyframes()
+            .into_iter()
+            .find(|keyframe| keyframe.id == id)
+    }
+
+    pub fn keyframe_index_by_id(&self, id: KeyframeId) -> Option<usize> {
+        self.keyframes()
+            .iter()
+            .position(|keyframe| keyframe.id == id)
+    }
+
     /// Check if a keyframe exists at the given time.
     pub fn has_keyframe_at(&self, time: f64, tolerance: f64) -> bool {
         self.keyframe_index_at(time, tolerance).is_some()
@@ -549,24 +628,32 @@ impl Property {
         value: PropertyValue,
         easing: Option<EasingFunction>,
     ) -> bool {
+        self.upsert_keyframe_with_id(time, value, easing).is_some()
+    }
+
+    /// Add or update a keyframe and return the persistent identity of the
+    /// affected key. A tolerance match keeps the existing identity.
+    pub fn upsert_keyframe_with_id(
+        &mut self,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<EasingFunction>,
+    ) -> Option<KeyframeId> {
         const TOLERANCE: f64 = 0.001;
 
         if self.evaluator == "constant" {
             // Convert to keyframe property
-            let kf = Keyframe {
-                time: OrderedFloat(time),
-                value,
-                easing: easing.unwrap_or(EasingFunction::Linear),
-            };
+            let kf = Keyframe::new(time, value, easing.unwrap_or(EasingFunction::Linear));
+            let id = kf.id;
             *self = Property::keyframe(vec![kf]);
-            return true;
+            return Some(id);
         }
 
         if self.evaluator == "keyframe" {
             let mut kfs = self.keyframes();
 
             // Check for existing keyframe at this time
-            if let Some(idx) = kfs
+            let id = if let Some(idx) = kfs
                 .iter()
                 .position(|k| (k.time.into_inner() - time).abs() < TOLERANCE)
             {
@@ -574,15 +661,15 @@ impl Property {
                 let preserved_easing = kfs[idx].easing.clone();
                 kfs[idx].value = value;
                 kfs[idx].easing = easing.unwrap_or(preserved_easing);
+                kfs[idx].id
             } else {
                 // Add new keyframe
-                kfs.push(Keyframe {
-                    time: OrderedFloat(time),
-                    value,
-                    easing: easing.unwrap_or(EasingFunction::Linear),
-                });
+                let keyframe = Keyframe::new(time, value, easing.unwrap_or(EasingFunction::Linear));
+                let id = keyframe.id;
+                kfs.push(keyframe);
                 kfs.sort_by_key(|k| k.time);
-            }
+                id
+            };
 
             // Preserve existing property attributes (like interpolation mode)
             let existing_props = self.properties.clone();
@@ -592,39 +679,32 @@ impl Property {
                     self.properties.insert(k, v);
                 }
             }
-            return true;
+            return Some(id);
         }
 
         // Other evaluator types (expression, etc.) - cannot add keyframes
-        false
+        None
     }
 
-    /// Update a keyframe at the given index.
-    /// Returns true if successful.
-    pub fn update_keyframe_at_index(
-        &mut self,
-        index: usize,
-        new_time: Option<f64>,
-        new_value: Option<PropertyValue>,
-        new_easing: Option<EasingFunction>,
-    ) -> bool {
+    /// Update one keyframe without using its mutable sorted position as its
+    /// identity. This remains stable when a time edit crosses neighbouring
+    /// keyframes.
+    pub fn update_keyframe_by_id(&mut self, id: KeyframeId, update: KeyframeUpdate) -> bool {
         if self.evaluator != "keyframe" {
             return false;
         }
 
         let mut kfs = self.keyframes();
-        if index >= kfs.len() {
+        let Some(kf) = kfs.iter_mut().find(|keyframe| keyframe.id == id) else {
             return false;
-        }
-
-        let kf = &mut kfs[index];
-        if let Some(t) = new_time {
+        };
+        if let Some(t) = update.time {
             kf.time = OrderedFloat(t);
         }
-        if let Some(v) = new_value {
+        if let Some(v) = update.value {
             kf.value = v;
         }
-        if let Some(e) = new_easing {
+        if let Some(e) = update.easing {
             kf.easing = e;
         }
 
@@ -641,18 +721,24 @@ impl Property {
         true
     }
 
-    /// Remove a keyframe at the given index.
-    pub fn remove_keyframe_at_index(&mut self, index: usize) -> bool {
+    /// Remove the identified keyframe. Removing the final key explicitly
+    /// returns the property to a constant containing that key's authored value,
+    /// preserving its PropertyValue type.
+    pub fn remove_keyframe_by_id(&mut self, id: KeyframeId) -> bool {
         if self.evaluator != "keyframe" {
             return false;
         }
 
         let mut kfs = self.keyframes();
-        if index >= kfs.len() {
+        let Some(index) = kfs.iter().position(|keyframe| keyframe.id == id) else {
             return false;
-        }
+        };
+        let removed = kfs.remove(index);
 
-        kfs.remove(index);
+        if kfs.is_empty() {
+            *self = Property::constant(removed.value);
+            return true;
+        }
 
         // Preserve existing property attributes
         let existing_props = self.properties.clone();
@@ -696,9 +782,16 @@ impl Property {
                     return kfs[0].value.clone();
                 }
 
+                let Some(last_keyframe) = kfs.last() else {
+                    return self
+                        .value()
+                        .cloned()
+                        .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
+                };
+
                 // If after last keyframe
-                if time >= kfs.last().unwrap().time.into_inner() {
-                    return kfs.last().unwrap().value.clone();
+                if time >= last_keyframe.time.into_inner() {
+                    return last_keyframe.value.clone();
                 }
 
                 // Find the segment [k1, k2] containing time
@@ -722,7 +815,7 @@ impl Property {
                 }
 
                 // Should not reach here
-                kfs.last().unwrap().value.clone()
+                last_keyframe.value.clone()
             }
             _ => self
                 .value()
@@ -793,11 +886,11 @@ impl PropertyValue {
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PropertyTarget {
-    Clip,
-    Effect(usize),
-    Style(usize),
-    Effector(usize),
-    Decorator(usize),
+    Direct,
+    Effect(Uuid),
+    Style(Uuid),
+    Effector(Uuid),
+    Decorator(Uuid),
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, PartialEq, Eq, Debug)] // Added Debug
@@ -875,6 +968,38 @@ impl PropertyMap {
             // New property, default to constant
             self.properties
                 .insert(key.to_string(), Property::constant(value));
+        }
+    }
+
+    /// Explicitly enables keyframing for a property and inserts or updates a
+    /// key at `time`. Unlike a normal property edit, this promotes constants
+    /// to the keyframe evaluator.
+    pub fn upsert_keyframe(
+        &mut self,
+        key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<EasingFunction>,
+    ) -> bool {
+        self.upsert_keyframe_with_id(key, time, value, easing)
+            .is_some()
+    }
+
+    pub fn upsert_keyframe_with_id(
+        &mut self,
+        key: &str,
+        time: f64,
+        value: PropertyValue,
+        easing: Option<EasingFunction>,
+    ) -> Option<KeyframeId> {
+        if let Some(property) = self.properties.get_mut(key) {
+            property.upsert_keyframe_with_id(time, value, easing)
+        } else {
+            let keyframe = Keyframe::new(time, value, easing.unwrap_or(EasingFunction::Linear));
+            let id = keyframe.id;
+            self.properties
+                .insert(key.to_string(), Property::keyframe(vec![keyframe]));
+            Some(id)
         }
     }
 
@@ -1012,5 +1137,324 @@ impl PropertyDefinition {
             );
         }
         self.default_value = value;
+    }
+
+    /// Validates the PropertyDefinition itself, including UI constraints and
+    /// its default. Runtime/plugin descriptors can share this check before
+    /// exposing editable state or constructing graph Nodes.
+    pub fn validate_definition(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("Property name must not be empty".to_string());
+        }
+        if self.label.trim().is_empty() {
+            return Err(format!("Property '{}' label must not be empty", self.name));
+        }
+        match &self.ui_type {
+            PropertyUiType::Float { min, max, step, .. } => {
+                if !min.is_finite() || !max.is_finite() || !step.is_finite() {
+                    return Err(format!(
+                        "Property '{}' float bounds and step must be finite",
+                        self.name
+                    ));
+                }
+                if min > max {
+                    return Err(format!(
+                        "Property '{}' float minimum cannot exceed maximum",
+                        self.name
+                    ));
+                }
+                if *step <= 0.0 {
+                    return Err(format!(
+                        "Property '{}' float step must be greater than zero",
+                        self.name
+                    ));
+                }
+            }
+            PropertyUiType::Integer { min, max, .. } if min > max => {
+                return Err(format!(
+                    "Property '{}' integer minimum cannot exceed maximum",
+                    self.name
+                ));
+            }
+            PropertyUiType::Dropdown { options } => {
+                if options.is_empty() {
+                    return Err(format!(
+                        "Property '{}' dropdown must have at least one option",
+                        self.name
+                    ));
+                }
+                let mut unique = HashSet::new();
+                for option in options {
+                    if option.trim().is_empty() {
+                        return Err(format!(
+                            "Property '{}' dropdown options must not be empty",
+                            self.name
+                        ));
+                    }
+                    if !unique.insert(option) {
+                        return Err(format!(
+                            "Property '{}' dropdown option {:?} is duplicated",
+                            self.name, option
+                        ));
+                    }
+                }
+                let PropertyValue::String(default) = &self.default_value else {
+                    return Err(format!(
+                        "Property '{}' dropdown default must be a string",
+                        self.name
+                    ));
+                };
+                if !options.contains(default) {
+                    return Err(format!(
+                        "Property '{}' dropdown default {:?} is not an option",
+                        self.name, default
+                    ));
+                }
+            }
+            _ => {}
+        }
+        self.validate_value(&self.default_value)
+    }
+
+    /// Validate an authored value against the definition's type and hard
+    /// numeric bounds. Soft min/max values remain UI guidance and are not
+    /// mutation constraints.
+    pub fn validate_value(&self, value: &PropertyValue) -> Result<(), String> {
+        if !value.is_compatible_with(&self.ui_type) {
+            return Err(format!(
+                "Property '{}' expects {:?}, got {:?}",
+                self.name, self.ui_type, value
+            ));
+        }
+        match (&self.ui_type, value) {
+            (
+                PropertyUiType::Float {
+                    min,
+                    max,
+                    min_hard_limit,
+                    max_hard_limit,
+                    ..
+                },
+                PropertyValue::Number(value),
+            ) => {
+                let value = value.into_inner();
+                if !value.is_finite() {
+                    return Err(format!("Property '{}' must be finite", self.name));
+                }
+                if *min_hard_limit && value < *min {
+                    return Err(format!(
+                        "Property '{}' cannot be less than {min}",
+                        self.name
+                    ));
+                }
+                if *max_hard_limit && value > *max {
+                    return Err(format!(
+                        "Property '{}' cannot be greater than {max}",
+                        self.name
+                    ));
+                }
+            }
+            (
+                PropertyUiType::Integer {
+                    min,
+                    max,
+                    min_hard_limit,
+                    max_hard_limit,
+                    ..
+                },
+                PropertyValue::Integer(value),
+            ) => {
+                if *min_hard_limit && value < min {
+                    return Err(format!(
+                        "Property '{}' cannot be less than {min}",
+                        self.name
+                    ));
+                }
+                if *max_hard_limit && value > max {
+                    return Err(format!(
+                        "Property '{}' cannot be greater than {max}",
+                        self.name
+                    ));
+                }
+            }
+            (PropertyUiType::Vec2 { .. }, PropertyValue::Vec2(value))
+                if !value.x.is_finite() || !value.y.is_finite() =>
+            {
+                return Err(format!(
+                    "Property '{}' vector components must be finite",
+                    self.name
+                ));
+            }
+            (PropertyUiType::Vec3 { .. }, PropertyValue::Vec3(value))
+                if !value.x.is_finite() || !value.y.is_finite() || !value.z.is_finite() =>
+            {
+                return Err(format!(
+                    "Property '{}' vector components must be finite",
+                    self.name
+                ));
+            }
+            (PropertyUiType::Vec4 { .. }, PropertyValue::Vec4(value))
+                if !value.x.is_finite()
+                    || !value.y.is_finite()
+                    || !value.z.is_finite()
+                    || !value.w.is_finite() =>
+            {
+                return Err(format!(
+                    "Property '{}' vector components must be finite",
+                    self.name
+                ));
+            }
+            (PropertyUiType::Dropdown { options }, PropertyValue::String(value))
+                if !options.contains(value) =>
+            {
+                return Err(format!(
+                    "Property '{}' dropdown value {:?} is not an option",
+                    self.name, value
+                ));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod keyframe_tests {
+    use super::*;
+
+    fn number(value: f64) -> PropertyValue {
+        PropertyValue::Number(OrderedFloat(value))
+    }
+
+    #[test]
+    fn missing_property_is_promoted_from_the_supplied_default_value() {
+        let mut properties = PropertyMap::new();
+
+        let id = properties
+            .upsert_keyframe_with_id("opacity", 1.25, number(100.0), None)
+            .expect("a missing direct property should be keyframeable");
+
+        let property = properties
+            .get("opacity")
+            .expect("property should be created");
+        assert_eq!(property.evaluator, "keyframe");
+        assert_eq!(
+            property.keyframes(),
+            vec![Keyframe {
+                id,
+                time: OrderedFloat(1.25),
+                value: number(100.0),
+                easing: EasingFunction::Linear,
+            }]
+        );
+    }
+
+    #[test]
+    fn tolerance_upsert_updates_one_key_and_preserves_identity_and_easing() {
+        let mut property = Property::constant(number(10.0));
+        let first_id = property
+            .upsert_keyframe_with_id(1.0, number(20.0), Some(EasingFunction::EaseInQuad))
+            .expect("constant should promote");
+
+        let matched_id = property
+            .upsert_keyframe_with_id(1.0005, number(30.0), None)
+            .expect("keyframe should update");
+        assert_eq!(matched_id, first_id);
+        assert_eq!(property.keyframes().len(), 1);
+        assert_eq!(property.keyframes()[0].value, number(30.0));
+        assert_eq!(property.keyframes()[0].easing, EasingFunction::EaseInQuad);
+
+        let distinct_id = property
+            .upsert_keyframe_with_id(1.002, number(40.0), None)
+            .expect("time outside tolerance should insert");
+        assert_ne!(distinct_id, first_id);
+        assert_eq!(property.keyframes().len(), 2);
+    }
+
+    #[test]
+    fn removing_the_last_keyframe_restores_its_typed_value_as_a_constant() {
+        let value = PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(12.0),
+            y: OrderedFloat(34.0),
+        });
+        let mut property = Property::constant(value.clone());
+        let id = property
+            .upsert_keyframe_with_id(2.0, value.clone(), None)
+            .expect("constant should promote");
+
+        assert!(property.remove_keyframe_by_id(id));
+        assert_eq!(property.evaluator, "constant");
+        assert_eq!(property.value(), Some(&value));
+        assert!(property.keyframes().is_empty());
+    }
+
+    #[test]
+    fn stable_identity_survives_crossing_and_continues_to_edit_the_same_key() {
+        let mut property = Property::constant(number(0.0));
+        let moving_id = property
+            .upsert_keyframe_with_id(1.0, number(10.0), None)
+            .expect("first key should insert");
+        let stationary_id = property
+            .upsert_keyframe_with_id(2.0, number(20.0), None)
+            .expect("second key should insert");
+
+        assert!(property.update_keyframe_by_id(
+            moving_id,
+            KeyframeUpdate {
+                time: Some(3.0),
+                ..Default::default()
+            }
+        ));
+        assert_eq!(
+            property
+                .keyframes()
+                .iter()
+                .map(|keyframe| keyframe.id)
+                .collect::<Vec<_>>(),
+            vec![stationary_id, moving_id]
+        );
+
+        assert!(property.update_keyframe_by_id(
+            moving_id,
+            KeyframeUpdate {
+                value: Some(number(99.0)),
+                easing: Some(EasingFunction::Constant),
+                ..Default::default()
+            }
+        ));
+        let moved = property
+            .keyframe_by_id(moving_id)
+            .expect("moving key should still exist");
+        let stationary = property
+            .keyframe_by_id(stationary_id)
+            .expect("stationary key should still exist");
+        assert_eq!(moved.time, OrderedFloat(3.0));
+        assert_eq!(moved.value, number(99.0));
+        assert_eq!(moved.easing, EasingFunction::Constant);
+        assert_eq!(stationary.time, OrderedFloat(2.0));
+        assert_eq!(stationary.value, number(20.0));
+    }
+
+    #[test]
+    fn easing_and_keyframe_identity_survive_serialization_roundtrip() {
+        let first = Keyframe::new(0.0, number(0.0), EasingFunction::EaseInQuad);
+        let second = Keyframe::new(1.0, number(10.0), EasingFunction::Linear);
+        let property = Property::keyframe(vec![second.clone(), first.clone()]);
+
+        assert_eq!(property.evaluate_at(0.5), number(2.5));
+        let json = serde_json::to_string(&property).expect("property should serialize");
+        assert!(json.contains("\"id\""));
+        let loaded: Property = serde_json::from_str(&json).expect("property should deserialize");
+
+        assert_eq!(loaded, property);
+        assert_eq!(
+            loaded
+                .keyframes()
+                .iter()
+                .map(|keyframe| keyframe.id)
+                .collect::<Vec<_>>(),
+            vec![first.id, second.id]
+        );
+        assert_eq!(loaded.evaluate_at(0.5), number(2.5));
     }
 }

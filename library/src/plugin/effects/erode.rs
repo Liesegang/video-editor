@@ -6,6 +6,7 @@ use crate::rendering::skia_utils::GpuContext;
 use skia_safe::image_filters;
 use std::collections::HashMap;
 
+#[derive(Default)]
 pub struct ErodeEffectPlugin;
 
 impl ErodeEffectPlugin {

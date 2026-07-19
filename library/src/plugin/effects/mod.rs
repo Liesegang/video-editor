@@ -19,7 +19,7 @@ pub use self::tile::TileEffectPlugin;
 
 use crate::error::LibraryError;
 use crate::model::property::{PropertyDefinition, PropertyValue};
-use crate::plugin::{Plugin, PluginCategory};
+use crate::plugin::{OperationDescriptor, OperationDescriptorError, Plugin, PluginCategory};
 use crate::rendering::renderer::RenderOutput;
 use crate::rendering::skia_utils::GpuContext;
 use std::collections::HashMap;
@@ -41,20 +41,27 @@ pub trait EffectPlugin: Plugin {
 
     fn properties(&self) -> Vec<PropertyDefinition>;
 
+    /// Authoritative graph operation description. Existing native effects
+    /// keep their property-definition implementation as the compatibility
+    /// source while all Node construction and execution consumes this common
+    /// descriptor.
+    fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
+        OperationDescriptor::effect(self.id(), self.name(), self.properties())
+    }
+
     fn plugin_type(&self) -> PluginCategory {
         PluginCategory::Effect
     }
 }
 
+#[derive(Default)]
 pub struct EffectRepository {
     pub plugins: HashMap<String, Arc<dyn EffectPlugin>>,
 }
 
 impl EffectRepository {
     pub fn new() -> Self {
-        Self {
-            plugins: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn register(&mut self, plugin: Arc<dyn EffectPlugin>) {

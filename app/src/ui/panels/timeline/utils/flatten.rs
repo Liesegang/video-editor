@@ -1,5 +1,5 @@
 use library::model::project::Project;
-use library::model::{Layer, Node, Track};
+use library::model::{Clip, Track};
 use std::collections::HashSet;
 use uuid::Uuid;
 
@@ -15,7 +15,7 @@ pub enum DisplayRow<'a> {
     },
     /// A clip row (shown when parent track is expanded)
     ClipRow {
-        clip: &'a Layer,
+        clip: &'a Clip,
         parent_track: &'a Track,
         depth: usize,
         visible_row_index: usize,
@@ -49,7 +49,7 @@ impl<'a> DisplayRow<'a> {
 /// - When expanded: each clip gets its own row below the header
 pub fn flatten_tracks_to_rows<'a>(
     project: &'a Project,
-    root_track_ids: &[Uuid],
+    track_ids: &[Uuid],
     expanded_tracks: &HashSet<Uuid>,
 ) -> Vec<DisplayRow<'a>> {
     let mut rows = Vec::new();
@@ -62,62 +62,40 @@ pub fn flatten_tracks_to_rows<'a>(
         depth: usize,
         rows: &mut Vec<DisplayRow<'a>>,
         current_row_index: &mut usize,
-        hide_header: bool,
     ) {
         let Some(track) = project.get_track(track_id) else {
             return;
         };
 
-        // If header is hidden (root track), always treat as expanded to show children
-        let is_expanded = if hide_header {
-            true
-        } else {
-            expanded_tracks.contains(&track_id)
-        };
+        let is_expanded = expanded_tracks.contains(&track_id);
 
-        if !hide_header {
-            rows.push(DisplayRow::TrackHeader {
-                track,
-                depth,
-                is_expanded,
-                visible_row_index: *current_row_index,
-            });
-            *current_row_index += 1;
-        }
+        rows.push(DisplayRow::TrackHeader {
+            track,
+            depth,
+            is_expanded,
+            visible_row_index: *current_row_index,
+        });
+        *current_row_index += 1;
 
         if is_expanded {
-            // Iterate in reverse: later children render on top, so show them first
-            for (child_index, child_id) in track.children.iter().enumerate().rev() {
-                match project.get_node(*child_id) {
-                    Some(Node::Layer(clip)) => {
-                        rows.push(DisplayRow::ClipRow {
-                            clip,
-                            parent_track: track,
-                            depth: if hide_header { depth } else { depth + 1 },
-                            visible_row_index: *current_row_index,
-                            child_index,
-                        });
-                        *current_row_index += 1;
-                    }
-                    Some(Node::Track(sub_track)) => {
-                        process_track(
-                            project,
-                            sub_track.id,
-                            expanded_tracks,
-                            if hide_header { depth } else { depth + 1 },
-                            rows,
-                            current_row_index,
-                            false,
-                        );
-                    }
-                    None => {}
+            // Later Clips render on top, so present them first in expanded tracks.
+            for (child_index, clip_id) in track.clip_ids.iter().enumerate().rev() {
+                if let Some(clip) = project.get_clip(*clip_id) {
+                    rows.push(DisplayRow::ClipRow {
+                        clip,
+                        parent_track: track,
+                        depth: depth + 1,
+                        visible_row_index: *current_row_index,
+                        child_index,
+                    });
+                    *current_row_index += 1;
                 }
             }
         }
     }
 
-    // Process tracks - later tracks in the list render on top
-    for track_id in root_track_ids {
+    // Composition order is the authoritative timeline order.
+    for track_id in track_ids {
         process_track(
             project,
             *track_id,
@@ -125,11 +103,69 @@ pub fn flatten_tracks_to_rows<'a>(
             0,
             &mut rows,
             &mut current_row_index,
-            true, // Hide root track header
         );
     }
 
     rows
 }
 
-// Backward compatibility - DisplayTrack for track list panel
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_track_list_produces_no_rows() {
+        let project = Project::new("test");
+
+        assert!(flatten_tracks_to_rows(&project, &[], &HashSet::new()).is_empty());
+    }
+
+    #[test]
+    fn top_level_tracks_keep_composition_order_and_show_headers() {
+        let mut project = Project::new("test");
+        let first = Track::new("first");
+        let second = Track::new("second");
+        let track_ids = vec![first.id, second.id];
+        project.add_track(first);
+        project.add_track(second);
+
+        let rows = flatten_tracks_to_rows(&project, &track_ids, &HashSet::new());
+        let row_track_ids: Vec<_> = rows.iter().map(DisplayRow::track_id).collect();
+
+        assert_eq!(row_track_ids, track_ids);
+        assert!(rows
+            .iter()
+            .all(|row| matches!(row, DisplayRow::TrackHeader { depth: 0, .. })));
+    }
+
+    #[test]
+    fn timeline_projection_reads_reordered_composition_track_ids_immediately() {
+        let mut project = Project::new("test");
+        let (mut composition, first) =
+            library::model::project::Composition::new("comp", 1920, 1080, 30.0, 10.0);
+        let second = Track::new("second");
+        let third = Track::new("third");
+        let composition_id = composition.id;
+        let ids = [first.id, second.id, third.id];
+        composition.track_ids.extend([second.id, third.id]);
+        project.add_track(first);
+        project.add_track(second);
+        project.add_track(third);
+        project.add_composition(composition);
+
+        project
+            .move_track_within_composition(composition_id, ids[2], 0)
+            .unwrap();
+        let authoritative_order = project
+            .get_composition(composition_id)
+            .unwrap()
+            .track_ids
+            .clone();
+        let rows = flatten_tracks_to_rows(&project, &authoritative_order, &HashSet::new());
+
+        assert_eq!(
+            rows.iter().map(DisplayRow::track_id).collect::<Vec<_>>(),
+            vec![ids[2], ids[0], ids[1]]
+        );
+    }
+}

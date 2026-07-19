@@ -11,6 +11,7 @@ struct SettingsState {
     search_query: String,
     listening_for: Option<CommandId>,
     active_tab: SettingsTab,
+    plugin_scan_message: Option<String>,
 }
 
 impl Default for SettingsState {
@@ -19,6 +20,7 @@ impl Default for SettingsState {
             search_query: String::new(),
             listening_for: None,
             active_tab: SettingsTab::Shortcuts,
+            plugin_scan_message: None,
         }
     }
 }
@@ -272,6 +274,15 @@ fn settings_panel(
                                 if ui.selectable_label(matches!(state.active_tab, SettingsTab::PluginList(PluginCategory::EntityConverter, _)), "Entity Converters").clicked() {
                                     state.active_tab = SettingsTab::PluginList(PluginCategory::EntityConverter, None);
                                 }
+                                if ui.selectable_label(matches!(state.active_tab, SettingsTab::PluginList(PluginCategory::Effector, _)), "Effectors").clicked() {
+                                    state.active_tab = SettingsTab::PluginList(PluginCategory::Effector, None);
+                                }
+                                if ui.selectable_label(matches!(state.active_tab, SettingsTab::PluginList(PluginCategory::Decorator, _)), "Decorators").clicked() {
+                                    state.active_tab = SettingsTab::PluginList(PluginCategory::Decorator, None);
+                                }
+                                if ui.selectable_label(matches!(state.active_tab, SettingsTab::PluginList(PluginCategory::Style, _)), "Styles").clicked() {
+                                    state.active_tab = SettingsTab::PluginList(PluginCategory::Style, None);
+                                }
                             });
 
                         if ui.selectable_label(matches!(state.active_tab, SettingsTab::Theme), "Theme").clicked() {
@@ -296,10 +307,15 @@ fn settings_panel(
                                     shortcuts_tab(ui, &mut registry.commands, &mut state);
                                 }
                                 SettingsTab::PluginPaths => {
-                                    plugins_paths_tab(ui, config);
+                                    plugins_paths_tab(
+                                        ui,
+                                        config,
+                                        plugin_manager,
+                                        &mut state.plugin_scan_message,
+                                    );
                                 }
                                 SettingsTab::PluginList(category, filter) => {
-                                    plugins_list_tab(ui, plugin_manager, category.clone(), filter.clone());
+                                    plugins_list_tab(ui, plugin_manager, *category, filter.clone());
                                 }
                                 SettingsTab::Theme => {
                                     theme_tab(ui, config);
@@ -341,7 +357,12 @@ fn settings_panel(
 // ... get_shortcut_text ...
 
 // Rename plugins_tab to plugins_paths_tab
-fn plugins_paths_tab(ui: &mut Ui, config: &mut AppConfig) {
+fn plugins_paths_tab(
+    ui: &mut Ui,
+    config: &mut AppConfig,
+    plugin_manager: &PluginManager,
+    scan_message: &mut Option<String>,
+) {
     ui.heading("Plugin Paths");
     ui.add_space(5.0);
     ui.label("Configure paths where the editor looks for plugins.");
@@ -356,7 +377,33 @@ fn plugins_paths_tab(ui: &mut Ui, config: &mut AppConfig) {
                 }
             }
         }
+        let rescan = ui.button("Rescan Runtime Plugins");
+        crate::qa::register_component(
+            "settings.plugins.rescan",
+            "plugin_rescan_button",
+            rescan.rect,
+        );
+        if rescan.clicked() {
+            let report = plugin_manager.rescan_runtime_plugins(&config.plugins.paths);
+            *scan_message = Some(format!(
+                "Loaded {} bundle(s), {} already loaded, {} failure(s)",
+                report.loaded_bundles.len(),
+                report.already_loaded_bundles.len(),
+                report.failures.len()
+            ));
+            for (path, error) in report.failures {
+                log::error!(
+                    "Runtime plugin rescan failed for {}: {}",
+                    path.display(),
+                    error
+                );
+            }
+        }
     });
+
+    if let Some(message) = scan_message {
+        ui.label(message.as_str());
+    }
 
     ui.separator();
 
@@ -547,7 +594,7 @@ fn loader_priority_tab(ui: &mut Ui, plugin_manager: &PluginManager) {
     ui.memory_mut(|m| m.data.insert_temp(id, priority_order));
 }
 
-fn shortcuts_tab(ui: &mut Ui, commands: &mut Vec<Command>, state: &mut SettingsState) {
+fn shortcuts_tab(ui: &mut Ui, commands: &mut [Command], state: &mut SettingsState) {
     ui.heading("Shortcut Settings");
     ui.add_space(10.0);
 
@@ -637,11 +684,12 @@ fn shortcuts_tab(ui: &mut Ui, commands: &mut Vec<Command>, state: &mut SettingsS
                             }
                         }
 
-                        if command.shortcut.is_some() && !is_listening {
-                            if ui.button("❌").on_hover_text("Clear").clicked() {
-                                command.shortcut = None;
-                                command.shortcut_text = "".to_string();
-                            }
+                        if command.shortcut.is_some()
+                            && !is_listening
+                            && ui.button("❌").on_hover_text("Clear").clicked()
+                        {
+                            command.shortcut = None;
+                            command.shortcut_text = "".to_string();
                         }
                     });
                 });

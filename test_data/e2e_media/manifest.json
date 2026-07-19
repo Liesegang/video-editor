@@ -1,0 +1,25 @@
+{
+  "schema": "pre-v1-test-fixture-manifest",
+  "generated_by": "generate.sh",
+  "loader_contract": {
+    "native_image_extensions": [
+      "png", "jpg", "jpeg", "bmp", "webp", "tiff", "tga", "gif", "ico", "pnm"
+    ],
+    "ffmpeg_video": "probe-based; availability depends on the linked FFmpeg decoders",
+    "unsupported_image_example": "svg"
+  },
+  "fixtures": [
+    { "file": "rgba.png", "kind": "image", "dimensions": [8, 6], "alpha": true },
+    { "file": "rgb.jpg", "kind": "image", "dimensions": [8, 6], "alpha": false },
+    { "file": "rgba.webp", "kind": "image", "dimensions": [8, 6], "alpha": true },
+    { "file": "h264_24.mp4", "kind": "video", "container": "mp4", "codec": "h264", "dimensions": [12, 8], "fps": 24, "frames": 72 },
+    { "file": "h264_24.mov", "kind": "video", "container": "mov", "codec": "h264", "dimensions": [12, 8], "fps": 24, "frames": 72 },
+    { "file": "vp9_odd.webm", "kind": "video", "container": "webm", "codec": "vp9", "dimensions": [9, 7], "fps": 15, "frames": 30, "odd_dimensions": true },
+    { "file": "ffv1_alpha.mkv", "kind": "video", "container": "matroska", "codec": "ffv1", "dimensions": [7, 5], "fps": 12, "frames": 12, "alpha": true, "odd_dimensions": true },
+    { "file": "multistream.mkv", "kind": "video", "container": "matroska", "codec": "ffv1", "dimensions": [8, 6], "fps": 12, "frames_per_stream": 12, "video_streams": 2 },
+    { "file": "vfr_pts.mkv", "kind": "video", "container": "matroska", "codec": "ffv1", "dimensions": [8, 6], "advertised_fps": 10, "frame_pts_seconds": [0.0, 0.1, 0.5, 1.8], "vfr": true },
+    { "file": "tone.mp3", "kind": "audio", "codec": "mp3", "sample_rate": 44100, "duration_seconds": 1 },
+    { "file": "multi_audio.mkv", "kind": "audio_video", "container": "matroska", "video_stream": 0, "audio_streams": [{ "index": 1, "codec": "pcm_s16le", "frequency": 440, "channels": "left_only" }, { "index": 2, "codec": "pcm_s16le", "frequency": 880, "channels": "right_only" }], "sample_rate": 8000, "duration_seconds": 3 },
+    { "file": "av_duration_mismatch.mp4", "kind": "audio_video", "container": "mp4", "video_codec": "h264", "audio_codec": "aac", "dimensions": [12, 8], "fps": 12, "video_frames": 12, "video_duration_seconds": 1, "audio_duration_seconds": 2, "container_duration_seconds": 2 }
+  ]
+}

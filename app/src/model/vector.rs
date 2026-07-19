@@ -1,22 +1,11 @@
-use library::model::vector::{HandleType, VectorPath};
+use library::model::vector::HandleType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, Default)]
 pub struct VectorEditorState {
-    pub path: VectorPath, // Use the library model
     #[serde(skip)]
     pub selected_point_indices: HashSet<usize>,
     #[serde(skip)]
     pub selected_handle: Option<(usize, HandleType)>, // Point Index, Handle Type
-}
-
-impl Default for VectorEditorState {
-    fn default() -> Self {
-        Self {
-            path: VectorPath::default(),
-            selected_point_indices: Default::default(),
-            selected_handle: None,
-        }
-    }
 }

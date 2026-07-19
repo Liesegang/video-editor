@@ -8,6 +8,7 @@ use crate::util::timing::{ScopedTimer, measure_info};
 use log::{error, info};
 
 use std::ops::Range;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{self, SyncSender};
 use std::thread::{self, JoinHandle};
@@ -94,13 +95,15 @@ impl ExportService {
             // and adds "audio_source" to ExportSettings.
 
             // Render Video
-            let clean_stem = if has_frame_token {
-                Self::format_frame_token_in_string(&base_template, frame_range.start)
+            let output = if has_frame_token {
+                let clean_stem =
+                    Self::format_frame_token_in_string(&base_template, frame_range.start);
+                Self::with_extension(&clean_stem, &settings_struct.container)
             } else {
-                base_template.clone()
+                Self::with_extension(&base_template, &settings_struct.container)
             };
 
-            Some(format!("{}.{}", clean_stem, settings_struct.container))
+            Some(output)
         } else {
             None
         };
@@ -133,14 +136,14 @@ impl ExportService {
                 ExportFormat::Png => {
                     if has_frame_token {
                         let name = Self::format_frame_token_in_string(&base_template, frame_index);
-                        format!("{}.png", name)
+                        Self::with_extension(&name, "png")
                     } else {
-                        format!("{}_{:03}.png", base_template, frame_index)
+                        Self::numbered_path(&base_template, frame_index, "png")
                     }
                 }
-                ExportFormat::Video => video_output.clone().unwrap_or_else(|| {
-                    format!("{}.{}", base_template, self.export_settings.container)
-                }),
+                ExportFormat::Video => video_output.as_ref().cloned().ok_or_else(|| {
+                    LibraryError::Render("Video output path was not initialized".to_string())
+                })?,
             };
             sender
                 .send(SaveTask {
@@ -154,6 +157,39 @@ impl ExportService {
         }
 
         Ok(())
+    }
+
+    fn has_extension(path: &str, extension: &str) -> bool {
+        let extension = extension.trim_start_matches('.');
+        Path::new(path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+    }
+
+    fn with_extension(path: &str, extension: &str) -> String {
+        let extension = extension.trim_start_matches('.');
+        if extension.is_empty() || Self::has_extension(path, extension) {
+            path.to_string()
+        } else {
+            format!("{path}.{extension}")
+        }
+    }
+
+    fn numbered_path(path: &str, frame: u64, extension: &str) -> String {
+        let extension = extension.trim_start_matches('.');
+        if !Self::has_extension(path, extension) {
+            return format!("{path}_{frame:03}.{extension}");
+        }
+
+        let path = Path::new(path);
+        let stem = path
+            .file_stem()
+            .map(|value| value.to_string_lossy())
+            .unwrap_or_default();
+        path.with_file_name(format!("{stem}_{frame:03}.{extension}"))
+            .to_string_lossy()
+            .into_owned()
     }
 
     pub fn shutdown(mut self) -> Result<(), LibraryError> {
@@ -176,8 +212,8 @@ impl ExportService {
                 let mut is_token = false;
 
                 // Clone the iterator to check ahead without consuming if it's not a token
-                let mut check_chars = chars.clone();
-                while let Some(tc) = check_chars.next() {
+                let check_chars = chars.clone();
+                for tc in check_chars {
                     if tc == '}' {
                         is_token = true;
                         break;
@@ -193,8 +229,7 @@ impl ExportService {
                             chars.next();
                         }
                         continue;
-                    } else if token_buffer.starts_with("frame:") {
-                        let spec = &token_buffer["frame:".len()..];
+                    } else if let Some(spec) = token_buffer.strip_prefix("frame:") {
                         // Parse "0N" or just "N"
                         if let Ok(width) = spec.parse::<usize>() {
                             result.push_str(&format!("{:0width$}", frame, width = width));
@@ -215,13 +250,55 @@ impl ExportService {
 impl Drop for ExportService {
     fn drop(&mut self) {
         self.save_tx.take();
-        if let Some(handle) = self.saver_handle.take() {
-            let _ = handle.join();
+        if let Some(handle) = self.saver_handle.take()
+            && handle.join().is_err()
+        {
+            error!("Save worker panicked during ExportService shutdown");
         }
         for path in &self.temp_files {
             if let Err(e) = std::fs::remove_file(path) {
                 error!("Failed to remove temp file {}: {}", path, e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ExportService;
+
+    #[test]
+    fn export_paths_handle_single_sequence_token_and_existing_extensions() {
+        assert_eq!(
+            ExportService::with_extension("render/final", "png"),
+            "render/final.png"
+        );
+        assert_eq!(
+            ExportService::with_extension("render/final.png", "png"),
+            "render/final.png"
+        );
+        assert_eq!(
+            ExportService::numbered_path("render/final", 12, "png"),
+            "render/final_012.png"
+        );
+        assert_eq!(
+            ExportService::numbered_path("render/final.png", 12, "png"),
+            "render/final_012.png"
+        );
+        assert_eq!(
+            ExportService::with_extension("render/final.mp4", "mp4"),
+            "render/final.mp4"
+        );
+        assert_eq!(
+            ExportService::with_extension("render/final", ".mp4"),
+            "render/final.mp4"
+        );
+        assert_eq!(
+            ExportService::with_extension(
+                &ExportService::format_frame_token_in_string("render/final_{frame:04}.png", 7,),
+                "png",
+            ),
+            "render/final_0007.png"
+        );
     }
 }

@@ -1,4 +1,6 @@
+#[cfg(feature = "python-easing")]
 use pyo3::prelude::*;
+#[cfg(feature = "python-easing")]
 use pyo3::types::PyDict;
 use serde::{Deserialize, Serialize};
 
@@ -87,7 +89,19 @@ pub enum EasingFunction {
 
 impl EasingFunction {
     pub fn apply(&self, t: f64) -> f64 {
-        match self {
+        match self.try_apply(t) {
+            Ok(value) => value,
+            Err(error) => {
+                log::error!("Easing evaluation failed: {error}");
+                t
+            }
+        }
+    }
+
+    /// Evaluate easing while preserving runtime errors for callers which need
+    /// to distinguish a failed Python expression from a valid linear result.
+    pub fn try_apply(&self, t: f64) -> Result<f64, crate::error::LibraryError> {
+        let value = match self {
             EasingFunction::Linear => t,
             EasingFunction::Constant => 0.0,
             EasingFunction::EaseInSine => 1.0 - (t * std::f64::consts::PI / 2.0).cos(),
@@ -247,9 +261,8 @@ impl EasingFunction {
                         break;
                     }
 
-                    current_t = current_t - (y - t) / dy_dt;
-
-                    current_t = current_t.max(0.0).min(1.0);
+                    current_t -= (y - t) / dy_dt;
+                    current_t = current_t.clamp(0.0, 1.0);
                 }
 
                 let one_minus_t = 1.0 - current_t;
@@ -263,7 +276,7 @@ impl EasingFunction {
             }
             EasingFunction::Bezier { points } => {
                 if points.is_empty() {
-                    return t;
+                    return Ok(t);
                 }
 
                 let mut all_points = Vec::with_capacity(points.len() + 2);
@@ -291,66 +304,16 @@ impl EasingFunction {
                         break;
                     }
 
-                    current_t = current_t - (y - t) / dy_dt;
-
-                    current_t = current_t.max(0.0).min(1.0);
+                    current_t -= (y - t) / dy_dt;
+                    current_t = current_t.clamp(0.0, 1.0);
                 }
 
                 let (x, _) = EasingFunction::evaluate_bezier(&all_points, current_t);
                 x
             }
-            Self::Expression { text } => Python::attach(|py| {
-                let locals = PyDict::new(py);
-                if let Err(e) = locals.set_item("t", t) {
-                    log::error!("Failed to set 't' in python context: {}", e);
-                    return t;
-                }
-
-                let builtins = match PyModule::import(py, "builtins") {
-                    Ok(m) => m,
-                    Err(e) => {
-                        log::error!("Failed to import builtins: {}", e);
-                        return t;
-                    }
-                };
-
-                let eval_func = match builtins.getattr("eval") {
-                    Ok(f) => f,
-                    Err(e) => {
-                        log::error!("Failed to get eval: {}", e);
-                        return t;
-                    }
-                };
-
-                let globals = PyDict::new(py);
-
-                if let Ok(math_mod) = PyModule::import(py, "math") {
-                    let _ = globals.set_item("math", math_mod);
-                } else {
-                    log::warn!("Failed to import math module for expression");
-                }
-
-                if let Ok(random_mod) = PyModule::import(py, "random") {
-                    let _ = globals.set_item("random", random_mod);
-                } else {
-                    log::warn!("Failed to import random module for expression");
-                }
-
-                match eval_func.call1((text.as_str(), Some(&globals), Some(&locals))) {
-                    Ok(result) => match result.extract::<f64>() {
-                        Ok(val) => val,
-                        Err(e) => {
-                            log::error!("Expression result is not a float: {}", e);
-                            t
-                        }
-                    },
-                    Err(e) => {
-                        log::error!("Failed to evaluate expression: {}", e);
-                        t
-                    }
-                }
-            }),
-        }
+            Self::Expression { text } => return evaluate_expression_easing(text, t),
+        };
+        Ok(value)
     }
 
     fn bounce_out(t: f64, n1: f64, d1: f64) -> f64 {
@@ -382,6 +345,32 @@ impl EasingFunction {
 
         Self::evaluate_bezier(&temp, t)
     }
+}
+
+#[cfg(feature = "python-easing")]
+fn evaluate_expression_easing(text: &str, t: f64) -> Result<f64, crate::error::LibraryError> {
+    Python::attach(|py| -> PyResult<f64> {
+        let locals = PyDict::new(py);
+        locals.set_item("t", t)?;
+
+        let builtins = PyModule::import(py, "builtins")?;
+        let eval_func = builtins.getattr("eval")?;
+
+        let globals = PyDict::new(py);
+        globals.set_item("math", PyModule::import(py, "math")?)?;
+        globals.set_item("random", PyModule::import(py, "random")?)?;
+        eval_func
+            .call1((text, Some(&globals), Some(&locals)))?
+            .extract::<f64>()
+    })
+    .map_err(|error| {
+        crate::error::LibraryError::Runtime(format!("Python easing expression failed: {error}"))
+    })
+}
+
+#[cfg(not(feature = "python-easing"))]
+fn evaluate_expression_easing(text: &str, t: f64) -> Result<f64, crate::error::LibraryError> {
+    super::python_expression::evaluate(text, t)
 }
 
 impl PartialEq for EasingFunction {
@@ -505,6 +494,69 @@ impl Hash for EasingFunction {
                 text.hash(state);
             }
             _ => {} // Unit variants only hash discriminant
+        }
+    }
+}
+
+#[cfg(test)]
+mod expression_tests {
+    use super::EasingFunction;
+
+    #[cfg(not(feature = "python-easing"))]
+    #[test]
+    fn expression_uses_external_python_without_embedded_feature() {
+        let easing = EasingFunction::Expression {
+            text: "t * t".to_string(),
+        };
+        assert_eq!(easing.try_apply(0.5).unwrap(), 0.25);
+    }
+
+    #[cfg(feature = "python-easing")]
+    #[test]
+    fn expression_uses_python_when_feature_is_enabled() {
+        let easing = EasingFunction::Expression {
+            text: "t * t".to_string(),
+        };
+        assert_eq!(easing.try_apply(0.5).unwrap(), 0.25);
+    }
+
+    #[test]
+    fn expression_keeps_python_math_and_numeric_conversion() {
+        let math = EasingFunction::Expression {
+            text: "math.sqrt(t)".to_string(),
+        };
+        let integer = EasingFunction::Expression {
+            text: "1 if t >= 0.5 else 0".to_string(),
+        };
+        assert_eq!(math.try_apply(0.25).unwrap(), 0.5);
+        assert_eq!(integer.try_apply(0.75).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn invalid_expression_is_an_error_and_apply_remains_non_panicking() {
+        let easing = EasingFunction::Expression {
+            text: "missing_name + 1".to_string(),
+        };
+        assert!(easing.try_apply(0.4).is_err());
+        assert_eq!(easing.apply(0.4), 0.4);
+    }
+
+    #[test]
+    fn expression_evaluation_is_safe_from_multiple_threads() {
+        let handles = (1..=8)
+            .map(|index| {
+                std::thread::spawn(move || {
+                    let t = f64::from(index) / 10.0;
+                    let easing = EasingFunction::Expression {
+                        text: "t * t".to_string(),
+                    };
+                    (t, easing.try_apply(t))
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            let (t, result) = handle.join().unwrap();
+            assert!((result.unwrap() - t * t).abs() < f64::EPSILON);
         }
     }
 }

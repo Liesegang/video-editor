@@ -2,6 +2,8 @@ use egui::{Id, Ui};
 use egui_dnd::dnd;
 use std::hash::{Hash, Hasher};
 
+use crate::utils::lock::read_or_recover;
+
 #[derive(Clone)]
 struct DndItem<T> {
     item: T,
@@ -112,11 +114,17 @@ where
 
         if changed {
             let new_items: Vec<T> = dnd_items.into_iter().map(|wrapper| wrapper.item).collect();
-            if (self.on_update)(new_items.clone(), project_service).is_ok() {
-                let current_state = project_service.get_project().read().unwrap().clone();
-                history_manager.push_project_state(current_state);
-                *self.items = new_items;
-                *needs_refresh = true;
+            match (self.on_update)(new_items.clone(), project_service) {
+                Ok(()) => {
+                    let project = project_service.get_project();
+                    let current_state = read_or_recover(project.as_ref()).clone();
+                    history_manager.push_project_state(current_state);
+                    *self.items = new_items;
+                    *needs_refresh = true;
+                }
+                Err(error) => {
+                    log::error!("failed to update collection: {error}");
+                }
             }
         }
     }

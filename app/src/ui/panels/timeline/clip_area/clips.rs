@@ -1,8 +1,9 @@
 use egui::{epaint::StrokeKind, Ui};
 use egui_phosphor::regular as icons;
+use library::audio::cache::{AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
 use library::model::asset::AssetKind;
 use library::model::project::Project;
-use library::model::{GeneratorContent, Layer, LayerContent, Node, Track};
+use library::model::{Clip, Node, NodeContent, Track};
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -21,6 +22,15 @@ enum DeferredClipAction {
         clip_id: Uuid,
         new_start_time: f64,
         new_duration: f64,
+        new_trim_in: f64,
+    },
+    MoveClip {
+        composition_id: Uuid,
+        source_track_id: Uuid,
+        clip_id: Uuid,
+        target_track_id: Uuid,
+        new_start_time: f64,
+        target_index: Option<usize>,
     },
 
     /// Remove clip from track
@@ -58,6 +68,7 @@ fn draw_waveform(
     painter: &egui::Painter,
     clip_rect: egui::Rect,
     audio_data: &[f32],
+    audio_start_time: f64,
     _layer_start_time: f64,
     trim_in: f64,
     _composition_fps: f64,
@@ -81,8 +92,8 @@ fn draw_waveform(
         let source_time = trim_in + _time_offset as f64;
 
         // Map to sample index
-        let start_sample_idx = if source_time >= 0.0 {
-            (source_time * sample_rate) as usize * channels
+        let start_sample_idx = if source_time >= audio_start_time {
+            ((source_time - audio_start_time) * sample_rate) as usize * channels
         } else {
             audio_data.len() + 1
         };
@@ -116,24 +127,27 @@ fn draw_waveform(
     }
 }
 
-// Helper to collect all clips from a track and its descendants using Project node lookup
-fn collect_descendant_clips<'a>(
-    project: &'a Project,
-    track: &'a Track,
-    clips: &mut Vec<&'a Layer>,
-) {
-    for child_id in &track.children {
-        match project.get_node(*child_id) {
-            Some(Node::Layer(layer)) => clips.push(&layer),
-            Some(Node::Track(sub_track)) => collect_descendant_clips(project, &sub_track, clips),
-            None => {}
+fn collect_track_clips<'a>(project: &'a Project, track: &'a Track, clips: &mut Vec<&'a Clip>) {
+    for clip_id in &track.clip_ids {
+        if let Some(clip) = project.get_clip(*clip_id) {
+            clips.push(clip);
         }
     }
 }
 
-fn get_clip_color(layer: &Layer, project: &Project) -> (u8, u8, u8) {
-    match &layer.content {
-        LayerContent::Media(m) => {
+fn primary_node<'a>(clip: &Clip, project: &'a Project) -> Option<&'a Node> {
+    clip.output_node_id
+        .and_then(|node_id| project.get_node(node_id))
+        .or_else(|| {
+            clip.node_ids
+                .iter()
+                .find_map(|node_id| project.get_node(*node_id))
+        })
+}
+
+fn get_clip_color(clip: &Clip, project: &Project) -> (u8, u8, u8) {
+    match primary_node(clip, project).map(|node| &node.content) {
+        Some(NodeContent::Media(m)) => {
             if let Some(asset) = project.assets.iter().find(|a| a.id == m.asset_id) {
                 match asset.kind {
                     AssetKind::Audio => (100, 200, 100),
@@ -145,13 +159,14 @@ fn get_clip_color(layer: &Layer, project: &Project) -> (u8, u8, u8) {
                 (200, 50, 50) // Missing asset
             }
         }
-        LayerContent::Generator(g) => match g {
-            GeneratorContent::Shape { .. } => (200, 200, 100),
-            GeneratorContent::Text { .. } => (200, 150, 100),
-            GeneratorContent::SkSL { .. } => (100, 200, 200),
-            GeneratorContent::Solid { .. } => (150, 150, 150),
+        Some(NodeContent::Generator(generator)) => match generator {
+            library::model::GeneratorContent::Shape => (200, 200, 100),
+            library::model::GeneratorContent::Text => (200, 150, 100),
+            library::model::GeneratorContent::SkSL => (100, 200, 200),
+            library::model::GeneratorContent::Solid => (150, 150, 150),
         },
-        LayerContent::Reference(_) => (150, 150, 150),
+        Some(NodeContent::PluginOperation(_)) => (180, 110, 210),
+        Some(NodeContent::Reference(_)) | Some(NodeContent::Merge) | None => (150, 150, 150),
     }
 }
 
@@ -164,7 +179,7 @@ pub fn calculate_insert_index(
     track_spacing: f32,
     display_rows: &[DisplayRow],
     project: &Project,
-    _root_track_ids: &[Uuid],
+    _track_ids: &[Uuid],
     hovered_track_id: Uuid,
 ) -> Option<(usize, usize)> {
     // Returns (target_index, header_row_index)
@@ -184,11 +199,7 @@ pub fn calculate_insert_index(
         // Clamp to valid range
         if let Some(track) = project.get_track(hovered_track_id) {
             // Count clips in this track
-            let clip_count = track
-                .children
-                .iter()
-                .filter(|id| matches!(project.get_node(**id), Some(Node::Layer(_))))
-                .count();
+            let clip_count = track.clip_ids.len();
 
             // Invert index because display order is reversed (Top of UI = End of List)
             let max_index = clip_count as isize;
@@ -202,6 +213,105 @@ pub fn calculate_insert_index(
     None
 }
 
+/// Logical insertion slots for an expanded Track.  Slot 0 is before the
+/// first canonical clip and `clip_count` is after the last.  The Timeline is
+/// visually reversed (later clips are higher), so slot numbers descend as Y
+/// increases.
+fn clip_insertion_markers(
+    display_rows: &[DisplayRow],
+    track_id: Uuid,
+    content_rect_min_y: f32,
+    scroll_offset_y: f32,
+    row_height: f32,
+    track_spacing: f32,
+    project: &Project,
+) -> Vec<(usize, f32)> {
+    let Some(header_row) = display_rows.iter().position(|row| {
+        row.track_id() == track_id && matches!(row, DisplayRow::TrackHeader { .. })
+    }) else {
+        return Vec::new();
+    };
+    let Some(track) = project.get_track(track_id) else {
+        return Vec::new();
+    };
+    let row_step = row_height + track_spacing;
+    let clip_count = track.clip_ids.len();
+    (0..=clip_count)
+        .map(|slot| {
+            let boundary_row = header_row + 1 + (clip_count - slot);
+            (
+                slot,
+                content_rect_min_y + boundary_row as f32 * row_step - scroll_offset_y,
+            )
+        })
+        .collect()
+}
+
+fn nearest_clip_insertion_slot(pointer_y: f32, markers: &[(usize, f32)]) -> Option<usize> {
+    markers
+        .iter()
+        .min_by(|(_, lhs_y), (_, rhs_y)| {
+            (pointer_y - *lhs_y)
+                .abs()
+                .total_cmp(&(pointer_y - *rhs_y).abs())
+        })
+        .map(|(slot, _)| *slot)
+}
+
+/// Convert an insertion slot in the original list into the index expected
+/// after the source Clip is detached.  The two slots directly adjacent to a
+/// Clip are intentional no-ops, which is what keeps a horizontal timing drag
+/// from silently changing layer order.
+fn destination_index_for_clip_slot(
+    same_track: bool,
+    source_index: usize,
+    insertion_slot: usize,
+    target_clip_count: usize,
+) -> Option<usize> {
+    if !same_track {
+        return Some(insertion_slot.min(target_clip_count));
+    }
+    if target_clip_count == 0 || source_index >= target_clip_count {
+        return None;
+    }
+    let destination = if insertion_slot > source_index {
+        insertion_slot - 1
+    } else {
+        insertion_slot
+    }
+    .min(target_clip_count - 1);
+    (destination != source_index).then_some(destination)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ClipTiming {
+    start_time: f64,
+    duration: f64,
+    trim_in: f64,
+}
+
+fn timing_after_left_edge_drag(clip: &Clip, delta_time: f64) -> Option<ClipTiming> {
+    let start_time = clip.start_time.into_inner() + delta_time;
+    let duration = clip.duration.into_inner() - delta_time;
+    // local_time(t) = (t - start) * time_stretch + trim_in. At the new
+    // boundary, preserving content therefore advances trim by delta*stretch.
+    let trim_in = clip.trim_in.into_inner() + delta_time * clip.time_stretch.into_inner();
+    (start_time >= 0.0 && duration > 0.0 && trim_in >= 0.0).then_some(ClipTiming {
+        start_time,
+        duration,
+        trim_in,
+    })
+}
+
+fn timing_after_body_drag(clip: &Clip, delta_time: f64) -> Option<ClipTiming> {
+    let start_time = (clip.start_time.into_inner() + delta_time).max(0.0);
+    (start_time != clip.start_time.into_inner()).then_some(ClipTiming {
+        start_time,
+        duration: clip.duration.into_inner(),
+        trim_in: clip.trim_in.into_inner(),
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn draw_clips(
     ui_content: &mut Ui,
@@ -210,7 +320,7 @@ pub fn draw_clips(
     project_service: &mut ProjectService,
     history_manager: &mut HistoryManager,
     project: &Arc<RwLock<Project>>,
-    root_track_ids: &[Uuid],
+    track_ids: &[Uuid],
     pixels_per_unit: f32,
     row_height: f32,
     track_spacing: f32,
@@ -229,9 +339,39 @@ pub fn draw_clips(
         // Flatten tracks for display using new DisplayRow system
         let display_rows = flatten_tracks_to_rows(
             &proj_read,
-            root_track_ids,
+            track_ids,
             &editor_context.timeline.expanded_tracks,
         );
+
+        for track_id in track_ids {
+            if !editor_context.timeline.expanded_tracks.contains(track_id) {
+                continue;
+            }
+            for (slot, y) in clip_insertion_markers(
+                &display_rows,
+                *track_id,
+                content_rect_for_clip_area.min.y,
+                editor_context.timeline.scroll_offset.y,
+                row_height,
+                track_spacing,
+                &proj_read,
+            ) {
+                let rect = egui::Rect::from_min_max(
+                    egui::pos2(content_rect_for_clip_area.min.x, y - 4.0),
+                    egui::pos2(content_rect_for_clip_area.max.x, y + 4.0),
+                );
+                crate::qa::register_component_with_metadata(
+                    format!("timeline.clip_insertion_slot.{track_id}:{slot}"),
+                    "timeline_clip_insertion_slot",
+                    rect,
+                    true,
+                    Some(serde_json::json!({
+                        "track_id": track_id,
+                        "slot": slot,
+                    })),
+                );
+            }
+        }
 
         // Calculate Reorder State if dragging
         let mut reorder_state = None;
@@ -248,15 +388,22 @@ pub fn draw_clips(
                     track_spacing,
                     &display_rows,
                     &proj_read,
-                    root_track_ids,
+                    track_ids,
                     hovered_tid,
                 ) {
                     // Find dragged clip original info
-                    let mut dragged_original_index = 0;
-                    if let Some(track) = proj_read.get_track(hovered_tid) {
-                        if let Some(pos) = track.children.iter().position(|id| *id == dragged_id) {
-                            dragged_original_index = pos;
-                        }
+                    let source_track_id = editor_context
+                        .interaction
+                        .dragged_entity_original_track_id
+                        .unwrap_or(hovered_tid);
+                    if let Some(dragged_original_index) =
+                        proj_read.get_track(source_track_id).and_then(|track| {
+                            track
+                                .clip_ids
+                                .iter()
+                                .position(|clip_id| *clip_id == dragged_id)
+                        })
+                    {
                         reorder_state = Some((
                             dragged_id,
                             hovered_tid,
@@ -279,20 +426,10 @@ pub fn draw_clips(
                 } => {
                     // If collapsed, draw all clips on this row
                     if !is_expanded {
-                        let mut clips_to_draw: Vec<&Layer> = Vec::new();
-                        collect_descendant_clips(&proj_read, track, &mut clips_to_draw);
-
-                        // Check if clip is a direct child of this track
-                        let direct_clip_ids: std::collections::HashSet<Uuid> = track
-                            .children
-                            .iter()
-                            .filter(|id| matches!(proj_read.get_node(**id), Some(Node::Layer(_))))
-                            .copied()
-                            .collect();
+                        let mut clips_to_draw: Vec<&Clip> = Vec::new();
+                        collect_track_clips(&proj_read, track, &mut clips_to_draw);
 
                         for clip in clips_to_draw {
-                            let is_summary_clip = !direct_clip_ids.contains(&clip.id);
-
                             draw_single_clip(
                                 ui_content,
                                 content_rect_for_clip_area,
@@ -300,7 +437,7 @@ pub fn draw_clips(
                                 &mut deferred_actions,
                                 project_service,
                                 &proj_read,
-                                root_track_ids,
+                                track_ids,
                                 clip,
                                 track,
                                 *visible_row_index,
@@ -308,7 +445,7 @@ pub fn draw_clips(
                                 row_height,
                                 track_spacing,
                                 composition_fps,
-                                is_summary_clip,
+                                false,
                                 &mut clicked_on_entity,
                                 &display_rows,
                                 &reorder_state,
@@ -330,7 +467,7 @@ pub fn draw_clips(
                         &mut deferred_actions,
                         project_service,
                         &proj_read,
-                        root_track_ids,
+                        track_ids,
                         clip,
                         parent_track,
                         *visible_row_index,
@@ -414,10 +551,31 @@ pub fn draw_clips(
                 clip_id,
                 new_start_time,
                 new_duration,
+                new_trim_in,
             } => {
                 project_service
-                    .update_clip_timing(clip_id, new_start_time, new_duration)
+                    .update_clip_timing(clip_id, new_start_time, new_duration, new_trim_in)
                     .ok();
+            }
+            DeferredClipAction::MoveClip {
+                composition_id,
+                source_track_id,
+                clip_id,
+                target_track_id,
+                new_start_time,
+                target_index,
+            } => {
+                match project_service.move_clip_to_track_at_index(
+                    composition_id,
+                    source_track_id,
+                    clip_id,
+                    target_track_id,
+                    new_start_time,
+                    target_index,
+                ) {
+                    Ok(()) => needs_history_push = true,
+                    Err(error) => log::error!("Failed to move timeline clip: {error}"),
+                }
             }
 
             DeferredClipAction::RemoveClip { track_id, clip_id } => {
@@ -460,8 +618,8 @@ fn draw_single_clip(
     deferred_actions: &mut Vec<DeferredClipAction>,
     project_service: &ProjectService,
     project: &Project,
-    _root_track_ids: &[Uuid],
-    clip: &Layer,
+    _track_ids: &[Uuid],
+    clip: &Clip,
     track: &Track,
     row_index: usize,
     pixels_per_unit: f32,
@@ -545,6 +703,26 @@ fn draw_single_clip(
         return;
     }
 
+    if !is_summary_clip {
+        let canonical_index = track
+            .clip_ids
+            .iter()
+            .position(|candidate| *candidate == clip.id);
+        crate::qa::register_component_with_metadata(
+            format!("timeline.clip:{}", clip.id),
+            "timeline_clip",
+            initial_clip_rect,
+            true,
+            Some(serde_json::json!({
+                "clip_id": clip.id,
+                "track_id": track.id,
+                "canonical_index": canonical_index,
+                "start_time": clip.start_time.into_inner(),
+                "duration": clip.duration.into_inner(),
+            })),
+        );
+    }
+
     // --- Interaction for clips ---
     let sense = if is_summary_clip {
         egui::Sense::click()
@@ -562,7 +740,13 @@ fn draw_single_clip(
 
     if !is_summary_clip {
         clip_resp.context_menu(|ui| {
-            if ui.button(format!("{} Remove", icons::TRASH)).clicked() {
+            let response = ui.button(format!("{} Remove", icons::TRASH));
+            crate::qa::register_component(
+                format!("timeline.menu.delete.clip:{}", clip.id),
+                "timeline_menu_item",
+                response.rect,
+            );
+            if response.clicked() {
                 if let Some(_comp_id) = editor_context.selection.composition_id {
                     deferred_actions.push(DeferredClipAction::RemoveClip {
                         track_id: track.id,
@@ -589,6 +773,13 @@ fn draw_single_clip(
             egui::Id::new(clip.id).with("left_edge"),
             egui::Sense::drag(),
         ));
+        crate::qa::register_component_with_metadata(
+            format!("timeline.clip_edge.left:{}", clip.id),
+            "timeline_clip_edge",
+            left_edge_rect,
+            true,
+            Some(serde_json::json!({"side": "left", "clip_id": clip.id})),
+        );
 
         let right_edge_rect = egui::Rect::from_min_size(
             egui::pos2(
@@ -602,6 +793,13 @@ fn draw_single_clip(
             egui::Id::new(clip.id).with("right_edge"),
             egui::Sense::drag(),
         ));
+        crate::qa::register_component_with_metadata(
+            format!("timeline.clip_edge.right:{}", clip.id),
+            "timeline_clip_edge",
+            right_edge_rect,
+            true,
+            Some(serde_json::json!({"side": "right", "clip_id": clip.id})),
+        );
     }
 
     // Handle edge dragging (resize)
@@ -619,9 +817,9 @@ fn draw_single_clip(
         && !is_summary_clip
     {
         if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
-            let mut new_start_time = clip.start_time;
-            let mut new_duration = clip.duration;
-            let mut new_trim_in = clip.trim_in;
+            let mut new_start_time = clip.start_time.into_inner();
+            let mut new_duration = clip.duration.into_inner();
+            let mut new_trim_in = clip.trim_in.into_inner();
 
             let delta_x = if left.dragged() {
                 left.drag_delta().x
@@ -635,37 +833,32 @@ fn draw_single_clip(
             let delta_time = delta_x / pixels_per_unit;
 
             if left.dragged() {
-                // Moving Start: Adjust start_time + trim_in, and duration
-                // start_time moves right (+delta), duration shrinks (-delta), trim_in moves right (+delta)
-                // trim_in cannot be < 0. start_time cannot be > end.
-                // But time_stretch affects trim calculation?
-                // Trinity: local_time = (current_time - start_time + trim_in) * time_stretch
-                // resizing left edge usually keeps the frame at the mouse position constant?
-                // If I drag left edge to right: start_time increases. duration decreases. trim_in increases.
-                // Assuming standard NLE behavior.
-                let proposed_start = new_start_time + delta_time as f64;
-                if proposed_start < new_start_time + new_duration {
-                    new_start_time = proposed_start;
-                    new_duration -= delta_time as f64;
-                    new_trim_in += delta_time as f64; // * time_stretch?
+                if let Some(timing) = timing_after_left_edge_drag(clip, delta_time as f64) {
+                    new_start_time = timing.start_time;
+                    new_duration = timing.duration;
+                    new_trim_in = timing.trim_in;
                 }
             } else if right.dragged() {
                 // Moving End: Adjust duration only.
                 let proposed_duration = new_duration + delta_time as f64;
-                if proposed_duration > ordered_float::OrderedFloat(0.0) {
+                if proposed_duration > 0.0 {
                     new_duration = proposed_duration;
                 }
             }
 
-            if new_start_time != clip.start_time || new_duration != clip.duration {
+            if new_start_time != clip.start_time.into_inner()
+                || new_duration != clip.duration.into_inner()
+                || new_trim_in != clip.trim_in.into_inner()
+            {
                 if let (Some(_comp_id), Some(_tid)) = (
                     editor_context.selection.composition_id,
                     editor_context.selection.last_selected_track_id,
                 ) {
                     deferred_actions.push(DeferredClipAction::UpdateClipTiming {
                         clip_id: clip.id,
-                        new_start_time: *new_start_time,
-                        new_duration: *new_duration,
+                        new_start_time,
+                        new_duration,
+                        new_trim_in,
                     });
                 }
             }
@@ -677,6 +870,110 @@ fn draw_single_clip(
             editor_context.interaction.is_resizing_entity = false;
             deferred_actions.push(DeferredClipAction::PushHistory);
         }
+    }
+
+    let edge_is_dragging = left_edge_resp
+        .as_ref()
+        .is_some_and(|response| response.dragged())
+        || right_edge_resp
+            .as_ref()
+            .is_some_and(|response| response.dragged());
+
+    if clip_resp.drag_started() && !edge_is_dragging && !is_summary_clip {
+        if !editor_context.is_selected(clip.id) {
+            editor_context.select_clip(clip.id, track.id);
+        }
+        editor_context.interaction.is_moving_selected_entity = true;
+        editor_context.interaction.dragged_entity_original_track_id = Some(track.id);
+        editor_context.interaction.dragged_entity_hovered_track_id = Some(track.id);
+        editor_context.interaction.dragged_entity_has_moved = false;
+    }
+
+    if editor_context.interaction.is_moving_selected_entity
+        && editor_context.selection.last_selected_entity_id == Some(clip.id)
+        && clip_resp.dragged()
+        && !edge_is_dragging
+    {
+        if let Some(pointer) = clip_resp.interact_pointer_pos() {
+            let row = ((pointer.y - content_rect_for_clip_area.min.y
+                + editor_context.timeline.scroll_offset.y)
+                / (row_height + track_spacing))
+                .floor()
+                .max(0.0) as usize;
+            if let Some(target_row) = display_rows.get(row) {
+                editor_context.interaction.dragged_entity_hovered_track_id =
+                    Some(target_row.track_id());
+            }
+        }
+        let delta_time = clip_resp.drag_delta().x as f64 / pixels_per_unit as f64;
+        if let Some(timing) = timing_after_body_drag(clip, delta_time) {
+            deferred_actions.push(DeferredClipAction::UpdateClipTiming {
+                clip_id: clip.id,
+                new_start_time: timing.start_time,
+                new_duration: timing.duration,
+                new_trim_in: timing.trim_in,
+            });
+            editor_context.interaction.dragged_entity_has_moved = true;
+        }
+    }
+
+    if clip_resp.drag_stopped()
+        && editor_context.interaction.is_moving_selected_entity
+        && editor_context.selection.last_selected_entity_id == Some(clip.id)
+        && !edge_is_dragging
+        && !is_summary_clip
+    {
+        let source_track_id = editor_context
+            .interaction
+            .dragged_entity_original_track_id
+            .unwrap_or(track.id);
+        let target_track_id = editor_context
+            .interaction
+            .dragged_entity_hovered_track_id
+            .unwrap_or(source_track_id);
+        // Horizontal timing changes were applied incrementally to the same
+        // authoritative Project while dragging. `drag_delta()` is per-frame
+        // and is zero on egui's release frame, so commit the current value.
+        let new_start_time = clip.start_time.into_inner();
+        let target_index = clip_resp.interact_pointer_pos().and_then(|pointer| {
+            let markers = clip_insertion_markers(
+                display_rows,
+                target_track_id,
+                content_rect_for_clip_area.min.y,
+                editor_context.timeline.scroll_offset.y,
+                row_height,
+                track_spacing,
+                project,
+            );
+            let insertion_slot = nearest_clip_insertion_slot(pointer.y, &markers)?;
+            let source_index = project
+                .get_track(source_track_id)?
+                .clip_ids
+                .iter()
+                .position(|candidate| *candidate == clip.id)?;
+            let target_count = project.get_track(target_track_id)?.clip_ids.len();
+            destination_index_for_clip_slot(
+                source_track_id == target_track_id,
+                source_index,
+                insertion_slot,
+                target_count,
+            )
+        });
+
+        if let Some(composition_id) = editor_context.selection.composition_id {
+            deferred_actions.push(DeferredClipAction::MoveClip {
+                composition_id,
+                source_track_id,
+                clip_id: clip.id,
+                target_track_id,
+                new_start_time,
+                target_index,
+            });
+        }
+        editor_context.interaction.is_moving_selected_entity = false;
+        editor_context.interaction.dragged_entity_original_track_id = None;
+        editor_context.interaction.dragged_entity_hovered_track_id = None;
+        editor_context.interaction.dragged_entity_has_moved = false;
     }
 
     // Calculate display position
@@ -710,108 +1007,106 @@ fn draw_single_clip(
     painter.rect_filled(drawing_clip_rect, 4.0, transparent_color);
 
     // Draw Audio Waveform
-    if let LayerContent::Media(m) = &clip.content {
-        let is_audio = if let Some(asset) = project.assets.iter().find(|a| a.id == m.asset_id) {
-            matches!(asset.kind, AssetKind::Audio)
-        } else {
-            false
-        };
-
-        if is_audio {
+    if let Some(NodeContent::Media(m)) = primary_node(clip, project).map(|node| &node.content) {
+        if let Some(asset) = project
+            .assets
+            .iter()
+            .find(|asset| asset.id == m.asset_id && asset.kind == AssetKind::Audio)
+        {
             if safe_width > 10.0 {
                 let cache = project_service.get_cache_manager();
-                if let Some(audio_data) = cache.get_audio(m.asset_id) {
-                    let sample_rate = project_service
-                        .get_audio_service()
-                        .get_audio_engine()
-                        .get_sample_rate() as f64;
-                    let channels = project_service
-                        .get_audio_service()
-                        .get_audio_engine()
-                        .get_channels() as usize;
+                let engine = project_service.get_audio_service().get_audio_engine();
+                let sample_rate = engine.get_sample_rate();
+                let channels = engine.get_channels();
+                let stream_index = m.audio_stream_index.or(asset.stream_index);
+                let format = AudioDecodeFormat::new(sample_rate, channels);
+                let source = format.and_then(|format| {
+                    AudioSourceKey::read(&asset.path, stream_index, format).ok()
+                });
+                let source_frame = (*clip.trim_in * f64::from(sample_rate)).max(0.0) as u64;
+                let key = source.map(|source| AudioChunkKey::containing(source, source_frame));
+                if let Some(audio_data) = key.as_ref().and_then(|key| cache.get_audio_chunk(key)) {
+                    let audio_start_time =
+                        audio_data.key().start_frame() as f64 / f64::from(sample_rate);
 
                     draw_waveform(
                         &painter,
                         drawing_clip_rect,
-                        &audio_data,
+                        audio_data.samples(),
+                        audio_start_time,
                         *clip.start_time,
                         *clip.trim_in,
                         composition_fps,
                         pixels_per_unit,
-                        sample_rate,
-                        channels,
+                        f64::from(sample_rate),
+                        usize::from(channels),
                     );
                 }
             }
         }
+    }
 
-        if is_sel_entity {
-            painter.rect_stroke(
-                drawing_clip_rect,
-                4.0,
-                egui::Stroke::new(2.0, egui::Color32::WHITE),
-                StrokeKind::Middle,
-            );
+    if is_sel_entity {
+        painter.rect_stroke(
+            drawing_clip_rect,
+            4.0,
+            egui::Stroke::new(2.0, egui::Color32::WHITE),
+            StrokeKind::Middle,
+        );
+    }
+
+    let mut clip_text = primary_node(clip, project)
+        .map(|node| node.name.clone())
+        .unwrap_or_else(|| clip.name.clone());
+
+    if is_summary_clip {
+        clip_text = format!("(Ref) {}", clip_text);
+    }
+
+    painter.text(
+        drawing_clip_rect.min + egui::vec2(5.0, 5.0),
+        egui::Align2::LEFT_TOP,
+        &clip_text,
+        egui::FontId::default(),
+        egui::Color32::BLACK,
+    );
+
+    if !is_summary_clip {
+        if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
+            if left.hovered() || right.hovered() {
+                ui_content
+                    .ctx()
+                    .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
         }
+    }
 
-        // Text clipping
-        let mut clip_text = match &clip.content {
-            LayerContent::Media(_) => "Media",
-            LayerContent::Generator(_) => "Gen",
-            LayerContent::Reference(_) => "Ref",
-        }
-        .to_string();
-
-        if is_summary_clip {
-            clip_text = format!("(Ref) {}", clip_text);
-        }
-
-        painter.text(
-            drawing_clip_rect.min + egui::vec2(5.0, 5.0),
-            egui::Align2::LEFT_TOP,
-            &clip_text,
-            egui::FontId::default(),
-            egui::Color32::BLACK,
+    if !editor_context.interaction.is_resizing_entity && clip_resp.clicked() {
+        let action = crate::ui::selection::get_click_action(
+            &ui_content.input(|i| i.modifiers),
+            Some(clip.id),
         );
 
-        // Cursor feedback
-        if !is_summary_clip {
-            if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
-                if left.hovered() || right.hovered() {
-                    ui_content
-                        .ctx()
-                        .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                }
+        match action {
+            crate::ui::selection::ClickAction::Select(id) => {
+                editor_context.select_clip(id, track.id);
             }
-        }
-
-        if !editor_context.interaction.is_resizing_entity && clip_resp.clicked() {
-            let action = crate::ui::selection::get_click_action(
-                &ui_content.input(|i| i.modifiers),
-                Some(clip.id),
-            );
-
-            match action {
-                crate::ui::selection::ClickAction::Select(id) => {
-                    editor_context.select_clip(id, track.id);
-                }
-                crate::ui::selection::ClickAction::Add(id) => {
-                    if !editor_context.is_selected(id) {
-                        editor_context.toggle_selection(id, track.id);
-                    }
-                }
-                crate::ui::selection::ClickAction::Remove(id) => {
-                    if editor_context.is_selected(id) {
-                        editor_context.toggle_selection(id, track.id);
-                    }
-                }
-                crate::ui::selection::ClickAction::Toggle(id) => {
+            crate::ui::selection::ClickAction::Add(id) => {
+                if !editor_context.is_selected(id) {
                     editor_context.toggle_selection(id, track.id);
                 }
-                _ => {}
             }
-            *clicked_on_entity = true;
+            crate::ui::selection::ClickAction::Remove(id) => {
+                if editor_context.is_selected(id) {
+                    editor_context.toggle_selection(id, track.id);
+                }
+            }
+            crate::ui::selection::ClickAction::Toggle(id) => {
+                editor_context.toggle_selection(id, track.id);
+            }
+            _ => {}
         }
+        *clicked_on_entity = true;
     }
 }
 
@@ -819,7 +1114,7 @@ pub fn get_clips_in_box(
     selection_rect: egui::Rect,
     editor_context: &EditorContext,
     project: &Project,
-    root_track_ids: &[uuid::Uuid],
+    track_ids: &[uuid::Uuid],
     _pixels_per_unit: f32,
     row_height: f32,
     track_spacing: f32,
@@ -829,7 +1124,7 @@ pub fn get_clips_in_box(
     let mut found = Vec::new();
     let display_rows = super::super::utils::flatten::flatten_tracks_to_rows(
         project,
-        root_track_ids,
+        track_ids,
         &editor_context.timeline.expanded_tracks,
     );
 
@@ -844,10 +1139,8 @@ pub fn get_clips_in_box(
         }
 
         if let Some(track) = project.get_track(row.track_id()) {
-            let children = &track.children;
-
-            for child_id in children {
-                if let Some(library::model::Node::Layer(clip)) = project.get_node(*child_id) {
+            for clip_id in &track.clip_ids {
+                if let Some(clip) = project.get_clip(*clip_id) {
                     // Calculate clip rect
                     let start_x =
                         (clip.start_time.into_inner() as f32 * pixels_per_second) - scroll_x;
@@ -870,4 +1163,116 @@ pub fn get_clips_in_box(
         }
     }
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn expanded_track_project() -> (Project, Uuid, Vec<Uuid>) {
+        let mut project = Project::new("timeline reorder");
+        let mut track = Track::new("Track");
+        let track_id = track.id;
+        let clips = [
+            Clip::new("A", 0.0, 1.0),
+            Clip::new("B", 1.0, 1.0),
+            Clip::new("C", 2.0, 1.0),
+        ];
+        let clip_ids = clips.iter().map(|clip| clip.id).collect::<Vec<_>>();
+        track.clip_ids = clip_ids.clone();
+        for clip in clips {
+            project.add_clip(clip);
+        }
+        project.add_track(track);
+        (project, track_id, clip_ids)
+    }
+
+    #[test]
+    fn expanded_track_exposes_every_canonical_insertion_slot_in_reverse_screen_order() {
+        let (project, track_id, _) = expanded_track_project();
+        let rows = flatten_tracks_to_rows(&project, &[track_id], &HashSet::from([track_id]));
+        let markers = clip_insertion_markers(&rows, track_id, 100.0, 30.0, 30.0, 2.0, &project);
+
+        assert_eq!(
+            markers,
+            vec![(0, 198.0), (1, 166.0), (2, 134.0), (3, 102.0)]
+        );
+        assert_eq!(nearest_clip_insertion_slot(103.0, &markers), Some(3));
+        assert_eq!(nearest_clip_insertion_slot(197.0, &markers), Some(0));
+    }
+
+    #[test]
+    fn horizontal_same_track_drop_is_a_noop_but_vertical_slot_reorders() {
+        // A is index 0. Its adjacent slots (0 and 1) retain its order while
+        // the slot after C detaches A and inserts it at destination index 2.
+        assert_eq!(destination_index_for_clip_slot(true, 0, 0, 3), None);
+        assert_eq!(destination_index_for_clip_slot(true, 0, 1, 3), None);
+        assert_eq!(destination_index_for_clip_slot(true, 0, 3, 3), Some(2));
+        assert_eq!(destination_index_for_clip_slot(true, 2, 0, 3), Some(0));
+
+        // Cross-Track slots are already destination indices because the
+        // source is detached from a different list.
+        assert_eq!(destination_index_for_clip_slot(false, 0, 2, 2), Some(2));
+    }
+
+    #[test]
+    fn converted_same_track_slot_produces_the_expected_authoritative_order() {
+        let (mut project, track_id, clip_ids) = expanded_track_project();
+        let destination = destination_index_for_clip_slot(true, 0, 3, 3).unwrap();
+        project
+            .attach_clip_to_track_at(track_id, clip_ids[0], Some(destination))
+            .unwrap();
+
+        assert_eq!(
+            project.get_track(track_id).unwrap().clip_ids,
+            vec![clip_ids[1], clip_ids[2], clip_ids[0]]
+        );
+    }
+
+    #[test]
+    fn left_edge_trim_keeps_the_content_frame_at_the_new_boundary() {
+        let mut clip = Clip::new("trim", 2.0, 6.0);
+        clip.trim_in = ordered_float::OrderedFloat(1.5);
+        clip.time_stretch = ordered_float::OrderedFloat(1.75);
+        let delta = 0.8;
+        let expected_local_time_at_new_boundary = clip.local_time(2.0 + delta);
+
+        let timing = timing_after_left_edge_drag(&clip, delta).unwrap();
+        assert!((timing.start_time - 2.8).abs() < 1e-9);
+        assert!((timing.duration - 5.2).abs() < 1e-9);
+        assert!((timing.trim_in - expected_local_time_at_new_boundary).abs() < 1e-9);
+
+        clip.start_time = ordered_float::OrderedFloat(timing.start_time);
+        clip.duration = ordered_float::OrderedFloat(timing.duration);
+        clip.trim_in = ordered_float::OrderedFloat(timing.trim_in);
+        assert!(
+            (clip.local_time(timing.start_time) - expected_local_time_at_new_boundary).abs() < 1e-9
+        );
+    }
+
+    #[test]
+    fn left_edge_trim_rejects_negative_source_or_empty_duration() {
+        let mut clip = Clip::new("trim", 2.0, 1.0);
+        clip.trim_in = ordered_float::OrderedFloat(0.25);
+        clip.time_stretch = ordered_float::OrderedFloat(1.0);
+        assert!(timing_after_left_edge_drag(&clip, 1.0).is_none());
+        assert!(timing_after_left_edge_drag(&clip, -0.5).is_none());
+    }
+
+    #[test]
+    fn body_drag_applies_frame_delta_without_changing_source_timing() {
+        let mut clip = Clip::new("move", 2.0, 6.0);
+        clip.trim_in = ordered_float::OrderedFloat(1.5);
+        let timing = timing_after_body_drag(&clip, 0.75).unwrap();
+
+        assert_eq!(timing.start_time, 2.75);
+        assert_eq!(timing.duration, 6.0);
+        assert_eq!(timing.trim_in, 1.5);
+        assert!(timing_after_body_drag(&clip, 0.0).is_none());
+
+        clip.start_time = ordered_float::OrderedFloat(0.25);
+        let clamped = timing_after_body_drag(&clip, -1.0).unwrap();
+        assert_eq!(clamped.start_time, 0.0);
+    }
 }

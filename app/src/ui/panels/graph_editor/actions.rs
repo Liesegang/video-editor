@@ -1,70 +1,233 @@
+use super::utils::time_mapper_for_entity;
 use super::PropertyComponent;
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
 use library::animation::EasingFunction;
 use library::model::project::Project;
-use library::model::property::PropertyValue;
-use library::EditorService;
+use library::model::property::{
+    KeyframeId, KeyframeUpdate, PropertyMap, PropertyTarget, PropertyValue,
+};
+use library::model::Node;
+use library::{EditorService, KeyframeBatchUpdate, PropertyOwner};
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub enum Action {
-    Select(String, usize),
-    Move(String, usize, f64, f64, Option<PropertyComponent>), // prop_key, index, new_time, new_value, component
-    Add(String, f64, f64, Option<PropertyComponent>),         // prop_key, time, value, component
-    SetEasing(String, usize, EasingFunction),
-    Remove(String, usize),
-    EditKeyframe(String, usize),
-    None,
+    Select(String, KeyframeId),
+    MoveBatch(Vec<KeyframeMove>),
+    FinishMove,
+    Add(String, f64, f64),
+    SetEasing(String, KeyframeId, EasingFunction),
+    Remove(String, KeyframeId),
+    EditKeyframe(String, KeyframeId),
 }
 
-fn parse_key(key: &str) -> Option<(usize, String)> {
-    if key.starts_with("effect:") {
-        let parts: Vec<&str> = key.splitn(3, ':').collect();
-        if parts.len() == 3 {
-            if let Ok(idx) = parts[1].parse::<usize>() {
-                return Some((idx, parts[2].to_string()));
-            }
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeyframeMove {
+    pub property_name: String,
+    pub keyframe_id: KeyframeId,
+    pub global_time: f64,
+    pub value: f64,
+}
+
+pub fn scoped_property_name(
+    target: PropertyTarget,
+    property_key: &str,
+    component: PropertyComponent,
+) -> String {
+    let scope = match target {
+        PropertyTarget::Direct => "direct".to_string(),
+        PropertyTarget::Effect(id) => format!("effect:{id}"),
+        PropertyTarget::Style(id) => format!("style:{id}"),
+        PropertyTarget::Effector(id) => format!("effector:{id}"),
+        PropertyTarget::Decorator(id) => format!("decorator:{id}"),
+    };
+    let suffix = match component {
+        PropertyComponent::Scalar => "",
+        PropertyComponent::X => ".x",
+        PropertyComponent::Y => ".y",
+    };
+    format!("{scope}:{property_key}{suffix}")
+}
+
+fn parse_target(name: &str) -> Option<(PropertyTarget, String, Option<PropertyComponent>)> {
+    let (base_name, component) = split_component(name);
+    let parts = base_name.split(':').collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["direct", property] if !property.is_empty() => {
+            Some((PropertyTarget::Direct, (*property).to_string(), component))
         }
-    }
-    None
-}
-
-fn parse_style_key(key: &str) -> Option<(usize, String)> {
-    if key.starts_with("style:") {
-        let parts: Vec<&str> = key.splitn(3, ':').collect();
-        if parts.len() == 3 {
-            if let Ok(idx) = parts[1].parse::<usize>() {
-                return Some((idx, parts[2].to_string()));
-            }
+        [scope, id, property] if !property.is_empty() => {
+            let id = id.parse().ok()?;
+            let target = match *scope {
+                "effect" => PropertyTarget::Effect(id),
+                "style" => PropertyTarget::Style(id),
+                "effector" => PropertyTarget::Effector(id),
+                "decorator" => PropertyTarget::Decorator(id),
+                _ => return None,
+            };
+            Some((target, (*property).to_string(), component))
         }
+        _ => None,
     }
-    None
 }
 
-/// Helper to calculate source-local time from global time using flat clip lookup
-fn global_to_source_time(
+fn split_component(name: &str) -> (&str, Option<PropertyComponent>) {
+    if let Some(base) = name.strip_suffix(".x") {
+        (base, Some(PropertyComponent::X))
+    } else if let Some(base) = name.strip_suffix(".y") {
+        (base, Some(PropertyComponent::Y))
+    } else {
+        (name, None)
+    }
+}
+
+fn property_map(node: &Node, target: PropertyTarget) -> Option<&PropertyMap> {
+    node.property_map(target)
+}
+
+fn current_keyframe_value(
+    node: &Node,
+    target: PropertyTarget,
+    property_key: &str,
+    keyframe_id: KeyframeId,
+) -> Option<PropertyValue> {
+    let property = property_map(node, target)?.get(property_key)?;
+    property
+        .keyframe_by_id(keyframe_id)
+        .map(|keyframe| keyframe.value)
+}
+
+fn merge_component(
+    current: Option<PropertyValue>,
+    value: f64,
+    component: Option<PropertyComponent>,
+) -> PropertyValue {
+    if let Some(PropertyValue::Vec2(old)) = current {
+        match component {
+            Some(PropertyComponent::X) => PropertyValue::Vec2(library::model::property::Vec2 {
+                x: OrderedFloat(value),
+                y: old.y,
+            }),
+            Some(PropertyComponent::Y) => PropertyValue::Vec2(library::model::property::Vec2 {
+                x: old.x,
+                y: OrderedFloat(value),
+            }),
+            _ => PropertyValue::Number(OrderedFloat(value)),
+        }
+    } else {
+        PropertyValue::Number(OrderedFloat(value))
+    }
+}
+
+#[derive(Clone)]
+struct PreparedMove {
+    target: PropertyTarget,
+    property_key: String,
+    keyframe_id: KeyframeId,
+    source_time: f64,
+    value: PropertyValue,
+}
+
+fn prepare_move_batch(
     project: &Project,
-    comp_id: Uuid,
     entity_id: Uuid,
-    global_time: f64,
-) -> f64 {
-    if project.get_composition(comp_id).is_some() {
-        if let Some(layer) = project.get_layer(entity_id) {
-            let in_time = layer.start_time.into_inner();
-            let source_start = layer.trim_in.into_inner();
-            // Local -> Source: source_time = (global - start) * speed + trim
-            // Invert: global = (source - trim) / speed + start ??
-            // Note: existing logic seems simple.
-            // Trinity Logic: global_to_source = (global - start) * speed + trim
-            return (global_time - in_time) * layer.time_stretch.into_inner() + source_start;
+    moves: &[KeyframeMove],
+) -> Result<(PropertyOwner, Vec<PreparedMove>), String> {
+    let node_id = crate::utils::property::visual_node_id(project, entity_id)
+        .ok_or_else(|| format!("Graph owner {entity_id} has no visual Node"))?;
+    let node = project
+        .get_node(node_id)
+        .ok_or_else(|| format!("Graph Node {node_id} does not exist"))?;
+    let mapper = time_mapper_for_entity(project, entity_id);
+    let mut prepared: Vec<PreparedMove> = Vec::new();
+
+    for movement in moves {
+        if !movement.global_time.is_finite() || !movement.value.is_finite() {
+            return Err(format!(
+                "Graph keyframe {} has a non-finite time or value",
+                movement.keyframe_id
+            ));
+        }
+        let (target, property_key, component) =
+            parse_target(&movement.property_name).ok_or_else(|| {
+                format!(
+                    "invalid scoped Graph property name {:?}",
+                    movement.property_name
+                )
+            })?;
+        let existing_index = prepared.iter().position(|candidate| {
+            candidate.target == target
+                && candidate.property_key == property_key
+                && candidate.keyframe_id == movement.keyframe_id
+        });
+        let current = existing_index
+            .map(|index| prepared[index].value.clone())
+            .or_else(|| current_keyframe_value(node, target, &property_key, movement.keyframe_id))
+            .ok_or_else(|| {
+                format!(
+                    "Graph keyframe {} was not found in {:?}.{}",
+                    movement.keyframe_id, target, property_key
+                )
+            })?;
+        if matches!(component, Some(PropertyComponent::X | PropertyComponent::Y))
+            && !matches!(current, PropertyValue::Vec2(_))
+        {
+            return Err(format!(
+                "Graph component {:?} does not address a Vec2 keyframe",
+                component
+            ));
+        }
+        let value = merge_component(Some(current), movement.value, component);
+        let source_time = mapper.to_source_time(movement.global_time);
+        if let Some(index) = existing_index {
+            prepared[index].source_time = source_time;
+            prepared[index].value = value;
+        } else {
+            prepared.push(PreparedMove {
+                target,
+                property_key,
+                keyframe_id: movement.keyframe_id,
+                source_time,
+                value,
+            });
         }
     }
-    global_time
+
+    if prepared.is_empty() {
+        return Err("Graph move batch is empty".to_string());
+    }
+    Ok((PropertyOwner::Node(node_id), prepared))
 }
 
+fn push_history(project: &Arc<RwLock<Project>>, history_manager: &mut HistoryManager) {
+    if let Ok(project) = project.read() {
+        history_manager.push_project_state(project.clone());
+    }
+}
+
+pub fn finish_pending_move(
+    editor_context: &mut EditorContext,
+    project: &Arc<RwLock<Project>>,
+    history_manager: &mut HistoryManager,
+) -> bool {
+    let changed = editor_context
+        .graph_editor
+        .keyframe_drag
+        .take()
+        .is_some_and(|drag| drag.changed);
+    if changed {
+        push_history(project, history_manager);
+    }
+    changed
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "graph actions need stable composition/track/entity identity plus model, UI, and history services for one atomic edit"
+)]
 pub fn process_action(
     action: Action,
     comp_id: Uuid,
@@ -76,451 +239,597 @@ pub fn process_action(
     history_manager: &mut HistoryManager,
 ) {
     match action {
-        Action::Select(name, idx) => {
-            editor_context.interaction.selected_keyframe = Some((name, idx));
+        Action::Select(name, keyframe_id) => {
+            editor_context.interaction.selected_keyframe = Some((name, keyframe_id));
         }
-
-        Action::Move(name, idx, new_time, new_val, component) => {
-            let base_name = if let Some(c) = component {
-                match c {
-                    PropertyComponent::X => name.trim_end_matches(".x"),
-                    PropertyComponent::Y => name.trim_end_matches(".y"),
-                    _ => name.as_str(),
-                }
-            } else {
-                name.as_str()
-            };
-
-            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                // Effect property - use flat lookup
-                let mut current_pv = None;
-                if let Ok(proj) = project.read() {
-                    if let Some(clip) = proj.get_layer(entity_id) {
-                        if let Some(effect) = clip.effects.get(eff_idx) {
-                            if let Some(prop) = effect.properties.get(&prop_key) {
-                                let keyframes = prop.keyframes();
-                                let mut sorted_kf = keyframes.clone();
-                                sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-                                if let Some(kf) = sorted_kf.get(idx) {
-                                    current_pv = Some(kf.value.clone());
-                                }
-                            }
-                        }
+        Action::MoveBatch(moves) => {
+            let prepared = project
+                .read()
+                .map_err(|error| error.to_string())
+                .and_then(|project| prepare_move_batch(&project, entity_id, &moves));
+            match prepared.and_then(|(owner, prepared)| {
+                let updates = prepared
+                    .into_iter()
+                    .map(|movement| KeyframeBatchUpdate {
+                        owner,
+                        target: movement.target,
+                        property_key: movement.property_key,
+                        keyframe_id: movement.keyframe_id,
+                        update: KeyframeUpdate {
+                            time: Some(movement.source_time),
+                            value: Some(movement.value),
+                            ..Default::default()
+                        },
+                    })
+                    .collect::<Vec<_>>();
+                project_service
+                    .update_keyframes_batch(&updates)
+                    .map_err(|error| error.to_string())
+            }) {
+                Ok(()) => {
+                    if let Some(drag) = &mut editor_context.graph_editor.keyframe_drag {
+                        drag.changed = true;
                     }
                 }
-
-                let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
-                    match component {
-                        Some(PropertyComponent::X) => {
-                            PropertyValue::Vec2(library::model::property::Vec2 {
-                                x: OrderedFloat(new_val),
-                                y: old_vec.y,
-                            })
-                        }
-                        Some(PropertyComponent::Y) => {
-                            PropertyValue::Vec2(library::model::property::Vec2 {
-                                x: old_vec.x,
-                                y: OrderedFloat(new_val),
-                            })
-                        }
-                        _ => PropertyValue::Number(OrderedFloat(new_val)),
-                    }
-                } else {
-                    PropertyValue::Number(OrderedFloat(new_val))
-                };
-
-                // Convert time using helper
-                let source_time = if let Ok(proj) = project.read() {
-                    global_to_source_time(&proj, comp_id, entity_id, new_time)
-                } else {
-                    new_time
-                };
-
-                let _ = project_service.update_effect_keyframe_by_index(
-                    entity_id,
-                    eff_idx,
-                    &prop_key,
-                    idx,
-                    Some(source_time),
-                    Some(new_pv),
-                    None,
-                );
-            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                // Style property - use flat lookup
-                let mut current_pv = None;
-                if let Ok(proj) = project.read() {
-                    if let Some(clip) = proj.get_layer(entity_id) {
-                        if let Some(style) = clip.styles.get(style_idx) {
-                            if let Some(prop) = style.properties.get(&prop_key) {
-                                let keyframes = prop.keyframes();
-                                let mut sorted_kf = keyframes.clone();
-                                sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-                                if let Some(kf) = sorted_kf.get(idx) {
-                                    current_pv = Some(kf.value.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-
-                let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
-                    match component {
-                        Some(PropertyComponent::X) => {
-                            PropertyValue::Vec2(library::model::property::Vec2 {
-                                x: OrderedFloat(new_val),
-                                y: old_vec.y,
-                            })
-                        }
-                        Some(PropertyComponent::Y) => {
-                            PropertyValue::Vec2(library::model::property::Vec2 {
-                                x: old_vec.x,
-                                y: OrderedFloat(new_val),
-                            })
-                        }
-                        _ => PropertyValue::Number(OrderedFloat(new_val)),
-                    }
-                } else {
-                    PropertyValue::Number(OrderedFloat(new_val))
-                };
-
-                let source_time = if let Ok(proj) = project.read() {
-                    global_to_source_time(&proj, comp_id, entity_id, new_time)
-                } else {
-                    new_time
-                };
-
-                let _ = project_service.update_style_keyframe_by_index(
-                    entity_id,
-                    style_idx,
-                    &prop_key,
-                    idx,
-                    Some(source_time),
-                    Some(new_pv),
-                    None,
-                );
-            } else {
-                // Clip property - use flat lookup
-                let mut current_pv = None;
-                if let Ok(proj) = project.read() {
-                    if let Some(clip) = proj.get_layer(entity_id) {
-                        if let Some(prop) = clip.properties.get(base_name) {
-                            let keyframes = prop.keyframes();
-                            let mut sorted_kf = keyframes.clone();
-                            sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
-                            if let Some(kf) = sorted_kf.get(idx) {
-                                current_pv = Some(kf.value.clone());
-                            }
-                        }
-                    }
-                }
-
-                let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_pv {
-                    match component {
-                        Some(PropertyComponent::X) => {
-                            PropertyValue::Vec2(library::model::property::Vec2 {
-                                x: OrderedFloat(new_val),
-                                y: old_vec.y,
-                            })
-                        }
-                        Some(PropertyComponent::Y) => {
-                            PropertyValue::Vec2(library::model::property::Vec2 {
-                                x: old_vec.x,
-                                y: OrderedFloat(new_val),
-                            })
-                        }
-                        _ => PropertyValue::Number(OrderedFloat(new_val)),
-                    }
-                } else {
-                    PropertyValue::Number(OrderedFloat(new_val))
-                };
-
-                let source_time = if let Ok(proj) = project.read() {
-                    global_to_source_time(&proj, comp_id, entity_id, new_time)
-                } else {
-                    new_time
-                };
-
-                let _ = project_service.update_keyframe(
-                    entity_id,
-                    base_name,
-                    idx,
-                    Some(source_time),
-                    Some(new_pv),
-                    None,
-                );
-            }
-            if let Ok(proj_read) = project.read() {
-                history_manager.push_project_state(proj_read.clone());
+                Err(error) => log::error!("Rejected atomic Graph move batch: {error}"),
             }
         }
-        Action::Add(name, time, val, component) => {
-            let base_name = if let Some(c) = component {
-                match c {
-                    PropertyComponent::X => name.trim_end_matches(".x"),
-                    PropertyComponent::Y => name.trim_end_matches(".y"),
-                    _ => name.as_str(),
-                }
-            } else {
-                name.as_str()
+        Action::FinishMove => {
+            finish_pending_move(editor_context, project, history_manager);
+        }
+        Action::Add(name, time, value) => {
+            let Some((target, property_key, component)) = parse_target(&name) else {
+                log::error!("Graph Editor rejected invalid scoped property name {name:?}");
+                return;
             };
-
-            let mut current_val_at_t = None;
-            let mut eval_time = time;
-
-            if let Ok(proj) = project.read() {
-                if let Some(comp) = proj.get_composition(comp_id) {
-                    if let Some(entity) = proj.get_layer(entity_id) {
-                        // Calculate source time from global time
-                        eval_time = global_to_source_time(&proj, comp_id, entity_id, time);
-
-                        if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                            if let Some(effect) = entity.effects.get(eff_idx) {
-                                if let Some(prop) = effect.properties.get(&prop_key) {
-                                    current_val_at_t =
-                                        Some(project_service.evaluate_property_value(
-                                            prop,
-                                            &effect.properties,
-                                            eval_time,
-                                            comp.fps,
-                                        ));
-                                }
-                            }
-                        } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                            if let Some(style) = entity.styles.get(style_idx) {
-                                if let Some(prop) = style.properties.get(&prop_key) {
-                                    current_val_at_t =
-                                        Some(project_service.evaluate_property_value(
-                                            prop,
-                                            &style.properties,
-                                            eval_time,
-                                            comp.fps,
-                                        ));
-                                }
-                            }
-                        } else {
-                            if let Some(prop) = entity.properties.get(base_name) {
-                                current_val_at_t = Some(project_service.evaluate_property_value(
-                                    prop,
-                                    &entity.properties,
-                                    eval_time,
-                                    comp.fps,
-                                ));
-                            }
-                        }
-                    }
+            let prepared = project.read().ok().and_then(|project| {
+                let composition = project.get_composition(comp_id)?;
+                let node_id = crate::utils::property::visual_node_id(&project, entity_id)?;
+                let node = project.get_node(node_id)?;
+                let source_time = time_mapper_for_entity(&project, entity_id).to_source_time(time);
+                let current = property_map(node, target).and_then(|properties| {
+                    properties.get(&property_key).map(|property| {
+                        project_service.evaluate_property_value(
+                            property,
+                            properties,
+                            source_time,
+                            composition.fps,
+                        )
+                    })
+                });
+                Some((
+                    PropertyOwner::Node(node_id),
+                    source_time,
+                    merge_component(current, value, component),
+                ))
+            });
+            if let Some((owner, source_time, value)) = prepared {
+                if project_service
+                    .add_keyframe(owner, target, &property_key, source_time, value, None)
+                    .is_ok()
+                {
+                    push_history(project, history_manager);
                 }
             }
-
-            let new_pv = if let Some(PropertyValue::Vec2(old_vec)) = current_val_at_t {
-                match component {
+        }
+        Action::SetEasing(name, keyframe_id, easing) => {
+            let Some((target, property_key, _)) = parse_target(&name) else {
+                log::error!("Graph Editor rejected invalid scoped property name {name:?}");
+                return;
+            };
+            let owner = project.read().ok().and_then(|project| {
+                crate::utils::property::visual_node_id(&project, entity_id).map(PropertyOwner::Node)
+            });
+            if let Some(owner) = owner {
+                if project_service
+                    .update_keyframe_by_id(
+                        owner,
+                        target,
+                        &property_key,
+                        keyframe_id,
+                        KeyframeUpdate {
+                            easing: Some(easing),
+                            ..Default::default()
+                        },
+                    )
+                    .is_ok()
+                {
+                    push_history(project, history_manager);
+                }
+            }
+        }
+        Action::Remove(name, keyframe_id) => {
+            let Some((target, property_key, _)) = parse_target(&name) else {
+                log::error!("Graph Editor rejected invalid scoped property name {name:?}");
+                return;
+            };
+            let owner = project.read().ok().and_then(|project| {
+                crate::utils::property::visual_node_id(&project, entity_id).map(PropertyOwner::Node)
+            });
+            if let Some(owner) = owner {
+                if project_service
+                    .remove_keyframe_by_id(owner, target, &property_key, keyframe_id)
+                    .is_ok()
+                {
+                    push_history(project, history_manager);
+                }
+            }
+        }
+        Action::EditKeyframe(name, keyframe_id) => {
+            let Some((target, property_key, component)) = parse_target(&name) else {
+                log::error!("Graph Editor rejected invalid scoped property name {name:?}");
+                return;
+            };
+            let keyframe = project.read().ok().and_then(|project| {
+                let node_id = crate::utils::property::visual_node_id(&project, entity_id)?;
+                let node = project.get_node(node_id)?;
+                let property = property_map(node, target)?.get(&property_key)?;
+                if property.evaluator != "keyframe" {
+                    return None;
+                }
+                property.keyframe_by_id(keyframe_id)
+            });
+            if let Some(keyframe) = keyframe {
+                let owner = project.read().ok().and_then(|project| {
+                    crate::utils::property::visual_node_id(&project, entity_id)
+                        .map(PropertyOwner::Node)
+                });
+                editor_context.keyframe_dialog.is_open = true;
+                editor_context.keyframe_dialog.track_id = Some(track_id);
+                editor_context.keyframe_dialog.entity_id = Some(entity_id);
+                editor_context.keyframe_dialog.property_name = name;
+                editor_context.keyframe_dialog.owner = owner;
+                editor_context.keyframe_dialog.target = Some(target);
+                editor_context.keyframe_dialog.property_key = property_key;
+                editor_context.keyframe_dialog.keyframe_id = Some(keyframe_id);
+                editor_context.keyframe_dialog.component = match component {
                     Some(PropertyComponent::X) => {
-                        PropertyValue::Vec2(library::model::property::Vec2 {
-                            x: OrderedFloat(val),
-                            y: old_vec.y,
-                        })
+                        crate::state::context_types::KeyframeValueComponent::X
                     }
                     Some(PropertyComponent::Y) => {
-                        PropertyValue::Vec2(library::model::property::Vec2 {
-                            x: old_vec.x,
-                            y: OrderedFloat(val),
-                        })
+                        crate::state::context_types::KeyframeValueComponent::Y
                     }
-                    _ => PropertyValue::Number(OrderedFloat(val)),
-                }
-            } else {
-                PropertyValue::Number(OrderedFloat(val))
-            };
-
-            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                let _ = project_service
-                    .add_effect_keyframe(entity_id, eff_idx, &prop_key, eval_time, new_pv, None);
-            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                let _ = project_service
-                    .add_style_keyframe(entity_id, style_idx, &prop_key, eval_time, new_pv, None);
-            } else {
-                let _ = project_service.add_keyframe(entity_id, base_name, eval_time, new_pv, None);
-            }
-            if let Ok(proj_read) = project.read() {
-                history_manager.push_project_state(proj_read.clone());
+                    _ => crate::state::context_types::KeyframeValueComponent::Scalar,
+                };
+                editor_context.keyframe_dialog.time =
+                    project
+                        .read()
+                        .ok()
+                        .map_or(keyframe.time.into_inner(), |project| {
+                            time_mapper_for_entity(&project, entity_id)
+                                .to_global_time(keyframe.time.into_inner())
+                        });
+                editor_context.keyframe_dialog.value = match component {
+                    Some(PropertyComponent::X) => keyframe
+                        .value
+                        .get_as::<library::model::property::Vec2>()
+                        .map_or(0.0, |value| value.x.into_inner()),
+                    Some(PropertyComponent::Y) => keyframe
+                        .value
+                        .get_as::<library::model::property::Vec2>()
+                        .map_or(0.0, |value| value.y.into_inner()),
+                    _ => keyframe.value.get_as::<f64>().unwrap_or(0.0),
+                };
+                editor_context.keyframe_dialog.easing = keyframe.easing;
+                editor_context.keyframe_dialog.begin_transaction();
             }
         }
-        Action::SetEasing(name, idx, easing) => {
-            let (base_name, _) = if name.ends_with(".x") {
-                (name.trim_end_matches(".x"), Some(PropertyComponent::X))
-            } else if name.ends_with(".y") {
-                (name.trim_end_matches(".y"), Some(PropertyComponent::Y))
-            } else {
-                (name.as_str(), None)
-            };
+    }
+}
 
-            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                let _ = project_service.update_effect_keyframe_by_index(
-                    entity_id,
-                    eff_idx,
-                    &prop_key,
-                    idx,
-                    None,
-                    None,
-                    Some(easing),
-                );
-            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                let _ = project_service.update_style_keyframe_by_index(
-                    entity_id,
-                    style_idx,
-                    &prop_key,
-                    idx,
-                    None,
-                    None,
-                    Some(easing),
-                );
-            } else {
-                let _ = project_service.update_keyframe(
-                    entity_id,
-                    base_name,
-                    idx,
-                    None,
-                    None,
-                    Some(easing),
-                );
-            }
-            if let Ok(proj_read) = project.read() {
-                history_manager.push_project_state(proj_read.clone());
-            }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::context_types::{GraphKeyframeDragOrigin, GraphKeyframeDragState};
+    use library::cache::CacheManager;
+    use library::model::ensemble::{DecoratorInstance, EffectorInstance};
+    use library::model::property::{Keyframe, Property, Vec2};
+    use library::model::style::StyleInstance;
+    use library::model::{Clip, Composition, EffectConfig, Node, NodeContent};
+    use library::plugin::PluginManager;
+
+    fn number(value: f64) -> PropertyValue {
+        PropertyValue::Number(OrderedFloat(value))
+    }
+
+    fn keyframed_number(time: f64, value: f64) -> (Property, KeyframeId) {
+        let keyframe = Keyframe::new(time, number(value), EasingFunction::Linear);
+        let id = keyframe.id;
+        (Property::keyframe(vec![keyframe]), id)
+    }
+
+    fn property_value(
+        project: &Project,
+        node_id: Uuid,
+        target: PropertyTarget,
+        property_key: &str,
+        keyframe_id: KeyframeId,
+    ) -> (f64, PropertyValue) {
+        let keyframe = project
+            .get_node(node_id)
+            .unwrap()
+            .property_map(target)
+            .unwrap()
+            .get(property_key)
+            .unwrap()
+            .keyframe_by_id(keyframe_id)
+            .unwrap();
+        (keyframe.time.into_inner(), keyframe.value)
+    }
+
+    #[test]
+    fn scoped_names_are_unambiguous_for_every_property_target() {
+        let ids = [
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        ];
+        let targets = [
+            PropertyTarget::Direct,
+            PropertyTarget::Effect(ids[0]),
+            PropertyTarget::Style(ids[1]),
+            PropertyTarget::Effector(ids[2]),
+            PropertyTarget::Decorator(ids[3]),
+        ];
+        for target in targets {
+            let name = scoped_property_name(target, "amount", PropertyComponent::X);
+            let parsed = parse_target(&name).unwrap();
+            assert_eq!(
+                parsed,
+                (target, "amount".to_string(), Some(PropertyComponent::X))
+            );
         }
-        Action::Remove(name, idx) => {
-            let (base_name, _) = if name.ends_with(".x") {
-                (name.trim_end_matches(".x"), Some(PropertyComponent::X))
-            } else if name.ends_with(".y") {
-                (name.trim_end_matches(".y"), Some(PropertyComponent::Y))
-            } else {
-                (name.as_str(), None)
-            };
+        assert!(parse_target("amount").is_none());
+        assert!(parse_target("effect:not-a-uuid:amount").is_none());
+    }
 
-            if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                let _ = project_service
-                    .remove_effect_keyframe_by_index(entity_id, eff_idx, &prop_key, idx);
-            } else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                let _ = project_service.remove_style_keyframe(entity_id, style_idx, &prop_key, idx);
-            } else {
-                let _ = project_service.remove_keyframe(entity_id, base_name, idx);
-            }
-            if let Ok(proj_read) = project.read() {
-                history_manager.push_project_state(proj_read.clone());
-            }
+    #[test]
+    fn absolute_multi_target_drag_does_not_overshoot_and_commits_one_history_state() {
+        let effect_id = Uuid::new_v4();
+        let style_id = Uuid::new_v4();
+        let effector_id = Uuid::new_v4();
+        let decorator_id = Uuid::new_v4();
+        let source_time = 2.0;
+
+        let (direct_property, direct_id) = keyframed_number(source_time, 10.0);
+        let position_keyframe = Keyframe::new(
+            source_time,
+            PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(20.0),
+                y: OrderedFloat(30.0),
+            }),
+            EasingFunction::Linear,
+        );
+        let position_id = position_keyframe.id;
+        let (effect_property, effect_keyframe_id) = keyframed_number(source_time, 20.0);
+        let (style_property, style_keyframe_id) = keyframed_number(source_time, 30.0);
+        let (effector_property, effector_keyframe_id) = keyframed_number(source_time, 40.0);
+        let (decorator_property, decorator_keyframe_id) = keyframed_number(source_time, 50.0);
+
+        let mut node = Node::new("graph target", NodeContent::Merge);
+        let node_id = node.id;
+        node.properties.set("amount".to_string(), direct_property);
+        node.properties.set(
+            "position".to_string(),
+            Property::keyframe(vec![position_keyframe]),
+        );
+        let mut effect_properties = PropertyMap::new();
+        effect_properties.set("amount".to_string(), effect_property);
+        node.effects.push(EffectConfig {
+            id: effect_id,
+            effect_type: "test".to_string(),
+            properties: effect_properties,
+        });
+        let mut style_properties = PropertyMap::new();
+        style_properties.set("amount".to_string(), style_property);
+        let mut style = StyleInstance::new("test", style_properties);
+        style.id = style_id;
+        node.styles.push(style);
+        let mut effector_properties = PropertyMap::new();
+        effector_properties.set("amount".to_string(), effector_property);
+        let mut effector = EffectorInstance::new("test", effector_properties);
+        effector.id = effector_id;
+        node.effectors.push(effector);
+        let mut decorator_properties = PropertyMap::new();
+        decorator_properties.set("amount".to_string(), decorator_property);
+        let mut decorator = DecoratorInstance::new("test", decorator_properties);
+        decorator.id = decorator_id;
+        node.decorators.push(decorator);
+
+        let (mut composition, track) = Composition::new("main", 640, 360, 30.0, 10.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        let mut clip = Clip::new("mapped", 1.25, 6.0);
+        clip.trim_in = OrderedFloat(0.5);
+        clip.time_stretch = OrderedFloat(2.0);
+        clip.node_ids = vec![node_id];
+        clip.output_node_id = Some(node_id);
+        composition.track_ids = vec![track_id];
+
+        let mut model = Project::new("graph drag");
+        model.add_track(track);
+        model.add_clip(clip);
+        model.add_node(node);
+        model.add_composition(composition);
+        let project = Arc::new(RwLock::new(model));
+        let service = EditorService::new(
+            Arc::clone(&project),
+            Arc::new(PluginManager::default()),
+            Arc::new(CacheManager::new()),
+        )
+        .unwrap();
+        let mut context = EditorContext::new(composition_id);
+        let anchor_name =
+            scoped_property_name(PropertyTarget::Direct, "amount", PropertyComponent::Scalar);
+        context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
+            entity_id: node_id,
+            anchor: (anchor_name.clone(), direct_id),
+            origins: vec![GraphKeyframeDragOrigin {
+                property_name: anchor_name.clone(),
+                keyframe_id: direct_id,
+                global_time: 2.0,
+                value: 10.0,
+            }],
+            changed: false,
+        });
+        let mut history = HistoryManager::new();
+        history.push_project_state(project.read().unwrap().clone());
+
+        let movement = |global_time, offset| {
+            vec![
+                KeyframeMove {
+                    property_name: anchor_name.clone(),
+                    keyframe_id: direct_id,
+                    global_time,
+                    value: 10.0 + offset,
+                },
+                KeyframeMove {
+                    property_name: scoped_property_name(
+                        PropertyTarget::Direct,
+                        "position",
+                        PropertyComponent::X,
+                    ),
+                    keyframe_id: position_id,
+                    global_time,
+                    value: 20.0 + offset,
+                },
+                KeyframeMove {
+                    property_name: scoped_property_name(
+                        PropertyTarget::Direct,
+                        "position",
+                        PropertyComponent::Y,
+                    ),
+                    keyframe_id: position_id,
+                    global_time,
+                    value: 30.0 + offset,
+                },
+                KeyframeMove {
+                    property_name: scoped_property_name(
+                        PropertyTarget::Effect(effect_id),
+                        "amount",
+                        PropertyComponent::Scalar,
+                    ),
+                    keyframe_id: effect_keyframe_id,
+                    global_time,
+                    value: 20.0 + offset,
+                },
+                KeyframeMove {
+                    property_name: scoped_property_name(
+                        PropertyTarget::Style(style_id),
+                        "amount",
+                        PropertyComponent::Scalar,
+                    ),
+                    keyframe_id: style_keyframe_id,
+                    global_time,
+                    value: 30.0 + offset,
+                },
+                KeyframeMove {
+                    property_name: scoped_property_name(
+                        PropertyTarget::Effector(effector_id),
+                        "amount",
+                        PropertyComponent::Scalar,
+                    ),
+                    keyframe_id: effector_keyframe_id,
+                    global_time,
+                    value: 40.0 + offset,
+                },
+                KeyframeMove {
+                    property_name: scoped_property_name(
+                        PropertyTarget::Decorator(decorator_id),
+                        "amount",
+                        PropertyComponent::Scalar,
+                    ),
+                    keyframe_id: decorator_keyframe_id,
+                    global_time,
+                    value: 50.0 + offset,
+                },
+            ]
+        };
+
+        // These are cumulative gesture deltas (2 then 4), not incremental
+        // deltas. The second frame must end at origin+4, never origin+2+4.
+        process_action(
+            Action::MoveBatch(movement(2.2, 2.0)),
+            composition_id,
+            track_id,
+            node_id,
+            &service,
+            &project,
+            &mut context,
+            &mut history,
+        );
+        process_action(
+            Action::MoveBatch(movement(2.4, 4.0)),
+            composition_id,
+            track_id,
+            node_id,
+            &service,
+            &project,
+            &mut context,
+            &mut history,
+        );
+        assert_eq!(
+            history.undo_depth(),
+            1,
+            "drag frames must not commit history"
+        );
+
+        let read = project.read().unwrap();
+        assert_eq!(
+            property_value(&read, node_id, PropertyTarget::Direct, "amount", direct_id),
+            (2.8, number(14.0))
+        );
+        let (_, position) = property_value(
+            &read,
+            node_id,
+            PropertyTarget::Direct,
+            "position",
+            position_id,
+        );
+        assert_eq!(
+            position,
+            PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(24.0),
+                y: OrderedFloat(34.0),
+            })
+        );
+        for (target, keyframe_id, expected) in [
+            (PropertyTarget::Effect(effect_id), effect_keyframe_id, 24.0),
+            (PropertyTarget::Style(style_id), style_keyframe_id, 34.0),
+            (
+                PropertyTarget::Effector(effector_id),
+                effector_keyframe_id,
+                44.0,
+            ),
+            (
+                PropertyTarget::Decorator(decorator_id),
+                decorator_keyframe_id,
+                54.0,
+            ),
+        ] {
+            assert_eq!(
+                property_value(&read, node_id, target, "amount", keyframe_id),
+                (2.8, number(expected))
+            );
         }
-        Action::EditKeyframe(ref name, idx) => {
-            let (base_name, _) = if name.ends_with(".x") {
-                (name.trim_end_matches(".x"), Some(PropertyComponent::X))
-            } else if name.ends_with(".y") {
-                (name.trim_end_matches(".y"), Some(PropertyComponent::Y))
-            } else {
-                (name.as_str(), None)
-            };
+        drop(read);
 
-            if let Ok(proj) = project.read() {
-                // Use flat O(1) lookup
-                if let Some(clip) = proj.get_layer(entity_id) {
-                    // Effect Property
-                    if let Some((eff_idx, prop_key)) = parse_key(base_name) {
-                        if let Some(effect) = clip.effects.get(eff_idx) {
-                            if let Some(prop) = effect.properties.get(&prop_key) {
-                                if prop.evaluator == "keyframe" {
-                                    let keyframes = prop.keyframes();
-                                    let mut sorted_kf = keyframes.clone();
-                                    sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+        process_action(
+            Action::FinishMove,
+            composition_id,
+            track_id,
+            node_id,
+            &service,
+            &project,
+            &mut context,
+            &mut history,
+        );
+        assert_eq!(history.undo_depth(), 2);
+        process_action(
+            Action::FinishMove,
+            composition_id,
+            track_id,
+            node_id,
+            &service,
+            &project,
+            &mut context,
+            &mut history,
+        );
+        assert_eq!(history.undo_depth(), 2, "one gesture must commit once");
 
-                                    if let Some(kf) = sorted_kf.get(idx) {
-                                        editor_context.keyframe_dialog.is_open = true;
-                                        editor_context.keyframe_dialog.track_id = Some(track_id);
-                                        editor_context.keyframe_dialog.entity_id = Some(entity_id);
-                                        editor_context.keyframe_dialog.property_name = name.clone();
-                                        editor_context.keyframe_dialog.keyframe_index = idx;
-                                        editor_context.keyframe_dialog.time = kf.time.into_inner();
-                                        editor_context.keyframe_dialog.value =
-                                            match (name.ends_with(".x"), name.ends_with(".y")) {
-                                                (true, _) => kf
-                                                    .value
-                                                    .get_as::<library::model::property::Vec2>()
-                                                    .map_or(0.0, |v| v.x.into_inner()),
-                                                (_, true) => kf
-                                                    .value
-                                                    .get_as::<library::model::property::Vec2>()
-                                                    .map_or(0.0, |v| v.y.into_inner()),
-                                                _ => kf.value.get_as::<f64>().unwrap_or(0.0),
-                                            };
-                                        editor_context.keyframe_dialog.easing = kf.easing.clone();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Style Property
-                    else if let Some((style_idx, prop_key)) = parse_style_key(base_name) {
-                        if let Some(style) = clip.styles.get(style_idx) {
-                            if let Some(prop) = style.properties.get(&prop_key) {
-                                if prop.evaluator == "keyframe" {
-                                    let keyframes = prop.keyframes();
-                                    let mut sorted_kf = keyframes.clone();
-                                    sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+        let before_invalid_batch = project.read().unwrap().clone();
+        context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
+            entity_id: node_id,
+            anchor: (anchor_name.clone(), direct_id),
+            origins: Vec::new(),
+            changed: false,
+        });
+        process_action(
+            Action::MoveBatch(vec![
+                KeyframeMove {
+                    property_name: anchor_name,
+                    keyframe_id: direct_id,
+                    global_time: 3.0,
+                    value: 99.0,
+                },
+                KeyframeMove {
+                    property_name: "effect:not-a-uuid:amount".to_string(),
+                    keyframe_id: effect_keyframe_id,
+                    global_time: 3.0,
+                    value: 99.0,
+                },
+            ]),
+            composition_id,
+            track_id,
+            node_id,
+            &service,
+            &project,
+            &mut context,
+            &mut history,
+        );
+        assert_eq!(*project.read().unwrap(), before_invalid_batch);
+        assert!(!context.graph_editor.keyframe_drag.as_ref().unwrap().changed);
+        process_action(
+            Action::FinishMove,
+            composition_id,
+            track_id,
+            node_id,
+            &service,
+            &project,
+            &mut context,
+            &mut history,
+        );
+        assert_eq!(history.undo_depth(), 2, "rejected batches must not commit");
+    }
 
-                                    if let Some(kf) = sorted_kf.get(idx) {
-                                        editor_context.keyframe_dialog.is_open = true;
-                                        editor_context.keyframe_dialog.track_id = Some(track_id);
-                                        editor_context.keyframe_dialog.entity_id = Some(entity_id);
-                                        editor_context.keyframe_dialog.property_name = name.clone();
-                                        editor_context.keyframe_dialog.keyframe_index = idx;
-                                        editor_context.keyframe_dialog.time = kf.time.into_inner();
-                                        editor_context.keyframe_dialog.value =
-                                            match (name.ends_with(".x"), name.ends_with(".y")) {
-                                                (true, _) => kf
-                                                    .value
-                                                    .get_as::<library::model::property::Vec2>()
-                                                    .map_or(0.0, |v| v.x.into_inner()),
-                                                (_, true) => kf
-                                                    .value
-                                                    .get_as::<library::model::property::Vec2>()
-                                                    .map_or(0.0, |v| v.y.into_inner()),
-                                                _ => kf.value.get_as::<f64>().unwrap_or(0.0),
-                                            };
-                                        editor_context.keyframe_dialog.easing = kf.easing.clone();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Clip Property
-                    else if let Some(prop) = clip.properties.get(base_name) {
-                        if prop.evaluator == "keyframe" {
-                            let keyframes = prop.keyframes();
-                            let mut sorted_kf = keyframes.clone();
-                            sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+    #[test]
+    fn graph_selection_and_drag_state_do_not_leak_between_nodes() {
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let keyframe_id = KeyframeId::new();
+        let mut state = crate::state::context_types::GraphEditorState::default();
+        assert!(state.begin_entity(first));
+        state
+            .selected_keyframes
+            .insert(("direct:amount".to_string(), keyframe_id));
+        state.keyframe_drag = Some(GraphKeyframeDragState {
+            entity_id: first,
+            anchor: ("direct:amount".to_string(), keyframe_id),
+            origins: Vec::new(),
+            changed: true,
+        });
 
-                            if let Some(kf) = sorted_kf.get(idx) {
-                                editor_context.keyframe_dialog.is_open = true;
-                                editor_context.keyframe_dialog.track_id = Some(track_id);
-                                editor_context.keyframe_dialog.entity_id = Some(entity_id);
-                                editor_context.keyframe_dialog.property_name = name.clone();
-                                editor_context.keyframe_dialog.keyframe_index = idx;
-                                editor_context.keyframe_dialog.time = kf.time.into_inner();
-                                editor_context.keyframe_dialog.value =
-                                    match (name.ends_with(".x"), name.ends_with(".y")) {
-                                        (true, _) => kf
-                                            .value
-                                            .get_as::<library::model::property::Vec2>()
-                                            .map_or(0.0, |v| v.x.into_inner()),
-                                        (_, true) => kf
-                                            .value
-                                            .get_as::<library::model::property::Vec2>()
-                                            .map_or(0.0, |v| v.y.into_inner()),
-                                        _ => kf.value.get_as::<f64>().unwrap_or(0.0),
-                                    };
-                                editor_context.keyframe_dialog.easing = kf.easing.clone();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Action::None => {}
+        assert!(!state.begin_entity(first));
+        assert_eq!(state.selected_keyframes.len(), 1);
+        assert!(state.keyframe_drag.is_some());
+        assert!(state.begin_entity(second));
+        assert!(state.selected_keyframes.is_empty());
+        assert!(state.keyframe_drag.is_none());
+    }
+
+    #[test]
+    fn interrupted_changed_drag_is_finalized_before_graph_owner_switch() {
+        let original = Project::new("before drag");
+        let project = Arc::new(RwLock::new(original.clone()));
+        let composition_id = Uuid::new_v4();
+        let entity_id = Uuid::new_v4();
+        let keyframe_id = KeyframeId::new();
+        let mut context = EditorContext::new(composition_id);
+        context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
+            entity_id,
+            anchor: ("direct:amount".to_string(), keyframe_id),
+            origins: Vec::new(),
+            changed: true,
+        });
+        project.write().unwrap().name = "after drag".to_string();
+        let edited = project.read().unwrap().clone();
+        let mut history = HistoryManager::new();
+        history.push_project_state(original.clone());
+
+        assert!(finish_pending_move(&mut context, &project, &mut history));
+        assert_eq!(history.undo_depth(), 2);
+        assert_eq!(history.undo(&edited), Some(original));
+        assert!(context.graph_editor.keyframe_drag.is_none());
     }
 }

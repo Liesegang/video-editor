@@ -35,14 +35,13 @@ where
             if let Some(texture) = skia_safe::gpu::surfaces::get_backend_texture(
                 &mut surface,
                 skia_safe::surface::BackendHandleAccess::FlushRead,
-            ) {
-                if let Some(gl_info) = texture.gl_texture_info() {
-                    return Ok(RenderOutput::Texture(TextureInfo {
-                        texture_id: gl_info.id,
-                        width,
-                        height,
-                    }));
-                }
+            ) && let Some(gl_info) = texture.gl_texture_info()
+            {
+                return Ok(RenderOutput::Texture(TextureInfo {
+                    texture_id: gl_info.id,
+                    width,
+                    height,
+                }));
             }
         }
         // Fallback to Image

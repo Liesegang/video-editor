@@ -1,9 +1,10 @@
 use library::model::frame::transform::Transform;
-use library::model::Layer;
+use library::model::{Clip, Node};
 use uuid::Uuid;
 
 pub struct PreviewClip<'a> {
-    pub clip: &'a Layer,
+    pub clip: &'a Clip,
+    pub node: &'a Node,
     pub track_id: Uuid,
     pub transform: Transform,
     // Calculated bounds in content space (e.g. text/shape bounding box)

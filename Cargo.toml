@@ -1,6 +1,41 @@
 [workspace]
+resolver = "3"
 members = [
+    "plugin-api",
     "library",
     "app",
     "plugins/random_property",
 ]
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+correctness = "deny"
+suspicious = "deny"
+perf = "deny"
+style = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+allow_attributes_without_reason = "deny"
+case_sensitive_file_extension_comparisons = "deny"
+dbg_macro = "deny"
+large_stack_arrays = "deny"
+large_types_passed_by_value = "deny"
+let_underscore_must_use = "deny"
+non_send_fields_in_send_ty = "deny"
+panic = "deny"
+redundant_clone = "deny"
+string_slice = "deny"
+todo = "deny"
+undocumented_unsafe_blocks = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+unused_result_ok = "deny"
+unwrap_used = "deny"
+unwrap_in_result = "deny"
+expect_used = "deny"
+
+[profile.release]
+debug = true

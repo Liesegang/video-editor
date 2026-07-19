@@ -1,4 +1,104 @@
+use super::target::EffectorTarget;
+use super::types::EffectorConfig;
 use super::types::{EffectorContext, TransformData};
+use crate::error::LibraryError;
+use skia_safe::Point;
+
+#[derive(Clone, Copy, Debug)]
+pub struct EffectorElementContext {
+    pub global_index: usize,
+    pub line_index: usize,
+    pub line_char_index: usize,
+    pub total_chars: usize,
+    pub line_char_count: usize,
+    pub char_center: Point,
+}
+
+/// Evaluates serialized effector configuration for one laid-out character.
+/// This is the single runtime path used by the renderer and the unit tests.
+pub fn evaluate_configured_transform(
+    configs: &[EffectorConfig],
+    time: f32,
+    element: EffectorElementContext,
+) -> Result<TransformData, LibraryError> {
+    let mut transform = TransformData::identity();
+    for config in configs {
+        let target = match config {
+            EffectorConfig::Transform { target, .. }
+            | EffectorConfig::StepDelay { target, .. }
+            | EffectorConfig::Opacity { target, .. }
+            | EffectorConfig::Randomize { target, .. } => *target,
+        };
+        let (index, total) = match target {
+            EffectorTarget::Block => (element.global_index, element.total_chars),
+            EffectorTarget::Line => (element.line_char_index, element.line_char_count),
+            EffectorTarget::Char => (0, 1),
+            EffectorTarget::Parts => {
+                return Err(LibraryError::Render(
+                    "Ensemble EffectorTarget::Parts is not supported".to_string(),
+                ));
+            }
+        };
+        let context = EffectorContext {
+            time,
+            index,
+            total,
+            element_index: element.global_index,
+            line_index: element.line_index,
+            char_center: element.char_center,
+        };
+        match config {
+            EffectorConfig::Transform {
+                translate,
+                rotate,
+                scale,
+                ..
+            } => TransformEffector::new(TransformData {
+                translate: *translate,
+                rotate: *rotate,
+                scale: *scale,
+                opacity: 1.0,
+                color_override: None,
+            })
+            .apply(&context, &mut transform),
+            EffectorConfig::StepDelay {
+                delay_per_element,
+                duration,
+                from_opacity,
+                to_opacity,
+                ..
+            } => StepDelayEffector::linear(
+                *delay_per_element,
+                TransformData {
+                    opacity: *from_opacity / 100.0,
+                    ..TransformData::identity()
+                },
+                TransformData {
+                    opacity: *to_opacity / 100.0,
+                    ..TransformData::identity()
+                },
+                *duration,
+            )
+            .apply(&context, &mut transform),
+            EffectorConfig::Opacity {
+                target_opacity,
+                mode,
+                ..
+            } => {
+                OpacityEffector::new(*target_opacity / 100.0, *mode).apply(&context, &mut transform)
+            }
+            EffectorConfig::Randomize {
+                translate_range,
+                rotate_range,
+                scale_range,
+                seed,
+                ..
+            } => RandomizeEffector::new(*translate_range, *rotate_range, *scale_range, *seed)
+                .apply(&context, &mut transform),
+        }
+    }
+    Ok(transform)
+}
 
 /// Effector（集団制御モディファイア）のトレイト
 pub trait Effector: Send + Sync {
@@ -68,7 +168,9 @@ impl Effector for StepDelayEffector {
         // effective_time = global_time - (index * delay)
         let effective_time = ctx.time - (ctx.index as f32 * self.delay_per_element);
 
-        let progress = if effective_time < 0.0 {
+        let progress = if self.duration <= 0.0 {
+            if effective_time < 0.0 { 0.0 } else { 1.0 }
+        } else if effective_time < 0.0 {
             0.0
         } else if effective_time > self.duration {
             1.0
@@ -181,27 +283,34 @@ impl RandomizeEffector {
         }
     }
 
-    /// 簡易的な疑似乱数生成（LCG）
-    fn random(&self, index: usize, component: u32) -> f32 {
-        let seed = self
+    /// Deterministically mix user seed, stable element identity, and transform
+    /// component. SplitMix64's avalanche avoids the nearly identical adjacent
+    /// values produced by running one LCG step on `seed + index + component`.
+    fn random(&self, element_index: usize, component: u32) -> f32 {
+        let mut value = self
             .seed
-            .wrapping_add(index as u64)
-            .wrapping_add(component as u64);
-        let a = 1664525u64;
-        let c = 1013904223u64;
-        let m = 2u64.pow(32);
-        let value = (a.wrapping_mul(seed).wrapping_add(c)) % m;
-        (value as f32) / (m as f32)
+            .wrapping_add((element_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            .wrapping_add(
+                u64::from(component)
+                    .wrapping_add(1)
+                    .wrapping_mul(0xD1B5_4A32_D192_ED03),
+            );
+        value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        value ^= value >> 31;
+        let mantissa = (value >> 40) as u32;
+        mantissa as f32 / (1_u32 << 24) as f32
     }
 }
 
 impl Effector for RandomizeEffector {
     fn apply(&self, ctx: &EffectorContext, transform: &mut TransformData) {
-        let tx = self.random(ctx.index, 0) * 2.0 - 1.0; // -1.0 ~ 1.0
-        let ty = self.random(ctx.index, 1) * 2.0 - 1.0;
-        let rot = self.random(ctx.index, 2) * 2.0 - 1.0;
-        let sx = self.random(ctx.index, 3) * 2.0 - 1.0;
-        let sy = self.random(ctx.index, 4) * 2. - 1.0;
+        let tx = self.random(ctx.element_index, 0) * 2.0 - 1.0; // -1.0 ~ 1.0
+        let ty = self.random(ctx.element_index, 1) * 2.0 - 1.0;
+        let rot = self.random(ctx.element_index, 2) * 2.0 - 1.0;
+        let sx = self.random(ctx.element_index, 3) * 2.0 - 1.0;
+        let sy = self.random(ctx.element_index, 4) * 2.0 - 1.0;
 
         transform.translate.0 += tx * self.translate_range.0;
         transform.translate.1 += ty * self.translate_range.1;
@@ -218,7 +327,20 @@ impl Effector for RandomizeEffector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ensemble::target::EffectorTarget;
+    use crate::core::ensemble::types::EffectorConfig;
     use skia_safe::Point;
+
+    fn element(global_index: usize, line_char_index: usize) -> EffectorElementContext {
+        EffectorElementContext {
+            global_index,
+            line_index: 1,
+            line_char_index,
+            total_chars: 6,
+            line_char_count: 3,
+            char_center: Point::new(5.0, 5.0),
+        }
+    }
 
     #[test]
     fn test_transform_effector() {
@@ -235,6 +357,7 @@ mod tests {
             time: 0.0,
             index: 0,
             total: 10,
+            element_index: 0,
             line_index: 0,
             char_center: Point::new(0.0, 0.0),
         };
@@ -261,6 +384,7 @@ mod tests {
             time: 0.5,
             index: 0,
             total: 10,
+            element_index: 0,
             line_index: 0,
             char_center: Point::new(0.0, 0.0),
         };
@@ -277,6 +401,7 @@ mod tests {
             time: 0.0,
             index: 0,
             total: 10,
+            element_index: 0,
             line_index: 0,
             char_center: Point::new(0.0, 0.0),
         };
@@ -293,6 +418,7 @@ mod tests {
             time: 0.0,
             index: 0,
             total: 10,
+            element_index: 0,
             line_index: 0,
             char_center: Point::new(0.0, 0.0),
         };
@@ -300,5 +426,148 @@ mod tests {
         effector.apply(&ctx, &mut transform);
         // ランダム性があるので、値がidentityから変化していることを確認
         assert_ne!(transform.translate, (0.0, 0.0));
+    }
+
+    #[test]
+    fn configured_step_delay_uses_time_and_target_index_scope() {
+        let config = |target| EffectorConfig::StepDelay {
+            delay_per_element: 0.25,
+            duration: 1.0,
+            from_opacity: 0.0,
+            to_opacity: 100.0,
+            target,
+        };
+        let block_start =
+            evaluate_configured_transform(&[config(EffectorTarget::Block)], 0.0, element(3, 0))
+                .unwrap();
+        let block_middle =
+            evaluate_configured_transform(&[config(EffectorTarget::Block)], 1.25, element(3, 0))
+                .unwrap();
+        let block_end =
+            evaluate_configured_transform(&[config(EffectorTarget::Block)], 2.0, element(3, 0))
+                .unwrap();
+        assert_eq!(block_start.opacity, 0.0);
+        assert!((block_middle.opacity - 0.5).abs() < f32::EPSILON);
+        assert_eq!(block_end.opacity, 1.0);
+
+        let line =
+            evaluate_configured_transform(&[config(EffectorTarget::Line)], 0.5, element(3, 0))
+                .unwrap();
+        let character =
+            evaluate_configured_transform(&[config(EffectorTarget::Char)], 0.5, element(3, 2))
+                .unwrap();
+        assert_eq!(line.opacity, 0.5);
+        assert_eq!(character.opacity, 0.5);
+    }
+
+    #[test]
+    fn configured_randomize_is_seeded_and_applies_translate_rotate_and_scale() {
+        let config = EffectorConfig::Randomize {
+            translate_range: (20.0, 30.0),
+            rotate_range: 45.0,
+            scale_range: (0.5, 0.25),
+            seed: 42,
+            target: EffectorTarget::Block,
+        };
+        let first =
+            evaluate_configured_transform(std::slice::from_ref(&config), 0.0, element(2, 2))
+                .unwrap();
+        let repeated = evaluate_configured_transform(&[config], 1.0, element(2, 2)).unwrap();
+        assert_eq!(first, repeated);
+        assert_ne!(first.translate, (0.0, 0.0));
+        assert_ne!(first.rotate, 0.0);
+        assert_ne!(first.scale, (1.0, 1.0));
+    }
+
+    #[test]
+    fn char_randomize_is_stable_well_distributed_and_seeded_per_element() {
+        let config = |seed| EffectorConfig::Randomize {
+            translate_range: (20.0, 30.0),
+            rotate_range: 45.0,
+            scale_range: (0.5, 0.25),
+            seed,
+            // Char deliberately gives every animation context index=0. Randomize
+            // must still use the character's stable element identity.
+            target: EffectorTarget::Char,
+        };
+
+        let transforms: Vec<_> = (0..8)
+            .map(|index| {
+                evaluate_configured_transform(&[config(42)], 0.0, element(index, index % 3))
+                    .unwrap()
+            })
+            .collect();
+
+        for (index, transform) in transforms.iter().enumerate() {
+            let repeated =
+                evaluate_configured_transform(&[config(42)], 99.0, element(index, index % 3))
+                    .unwrap();
+            assert_eq!(
+                *transform, repeated,
+                "Randomize changed with time for element {index}"
+            );
+        }
+
+        let mean_x = transforms
+            .iter()
+            .map(|transform| transform.translate.0)
+            .sum::<f32>()
+            / transforms.len() as f32;
+        let mean_y = transforms
+            .iter()
+            .map(|transform| transform.translate.1)
+            .sum::<f32>()
+            / transforms.len() as f32;
+        let translation_variance = transforms
+            .iter()
+            .map(|transform| {
+                (transform.translate.0 - mean_x).powi(2) + (transform.translate.1 - mean_y).powi(2)
+            })
+            .sum::<f32>()
+            / transforms.len() as f32;
+        assert!(
+            translation_variance > 100.0,
+            "per-character translations are insufficiently distributed: {translation_variance}"
+        );
+
+        let largest_pair_distance = transforms
+            .iter()
+            .enumerate()
+            .flat_map(|(left_index, left)| {
+                transforms.iter().skip(left_index + 1).map(move |right| {
+                    ((left.translate.0 - right.translate.0).powi(2)
+                        + (left.translate.1 - right.translate.1).powi(2))
+                    .sqrt()
+                })
+            })
+            .fold(0.0_f32, f32::max);
+        assert!(
+            largest_pair_distance > 25.0,
+            "characters remained visually clustered: {largest_pair_distance}"
+        );
+
+        let changed_seed =
+            evaluate_configured_transform(&[config(43)], 0.0, element(3, 0)).unwrap();
+        let seed_distance = ((transforms[3].translate.0 - changed_seed.translate.0).powi(2)
+            + (transforms[3].translate.1 - changed_seed.translate.1).powi(2))
+        .sqrt();
+        assert!(
+            seed_distance > 2.0,
+            "changing the seed barely changed the character: {seed_distance}"
+        );
+    }
+
+    #[test]
+    fn parts_target_is_an_explicit_error() {
+        let result = evaluate_configured_transform(
+            &[EffectorConfig::Opacity {
+                target_opacity: 50.0,
+                mode: OpacityMode::Set,
+                target: EffectorTarget::Parts,
+            }],
+            0.0,
+            element(0, 0),
+        );
+        assert!(matches!(result, Err(LibraryError::Render(message)) if message.contains("Parts")));
     }
 }

@@ -4,6 +4,10 @@ pub mod color;
 pub mod draw_type;
 pub mod effect;
 pub mod entity;
+#[allow(
+    clippy::module_inception,
+    reason = "FrameInfo's established public path is model::frame::frame::FrameInfo"
+)]
 pub mod frame;
 pub mod image;
 pub mod transform;

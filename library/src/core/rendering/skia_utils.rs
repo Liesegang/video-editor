@@ -57,19 +57,19 @@ impl GpuContext {
     pub fn resize(&mut self, width: u32, height: u32) {
         self._surface.resize(
             &self.context,
-            std::num::NonZeroU32::new(width.max(1)).unwrap(),
-            std::num::NonZeroU32::new(height.max(1)).unwrap(),
+            std::num::NonZeroU32::new(width).unwrap_or(std::num::NonZeroU32::MIN),
+            std::num::NonZeroU32::new(height).unwrap_or(std::num::NonZeroU32::MIN),
         );
     }
 }
 
 pub fn create_gpu_context(
-    #[allow(unused)] share_handle: Option<usize>,
-    #[allow(unused)] share_hwnd: Option<isize>,
+    _share_handle: Option<usize>,
+    _share_hwnd: Option<isize>,
 ) -> Option<GpuContext> {
     #[cfg(all(feature = "gl", target_os = "windows"))]
     {
-        match init_glutin_headless(share_handle, share_hwnd) {
+        match init_glutin_headless(_share_handle, _share_hwnd) {
             Ok(ctx) => Some(ctx),
             Err(err) => {
                 warn!(
@@ -346,8 +346,8 @@ pub fn create_surface(
     height: u32,
     context: Option<&mut DirectContext>,
 ) -> Result<Surface, LibraryError> {
-    if let Some(ctx) = context {
-        if let Some(surface) = gpu::surfaces::render_target(
+    if let Some(ctx) = context
+        && let Some(surface) = gpu::surfaces::render_target(
             ctx,
             gpu::Budgeted::Yes,
             &ImageInfo::new_n32_premul((width as i32, height as i32), None),
@@ -356,9 +356,9 @@ pub fn create_surface(
             None,
             false,
             false,
-        ) {
-            return Ok(surface);
-        }
+        )
+    {
+        return Ok(surface);
     }
     create_raster_surface(width, height)
 }
@@ -392,7 +392,7 @@ pub fn image_to_skia(image: &Image) -> Result<SkImage, LibraryError> {
     let info = ImageInfo::new(
         ISize::new(image.width as i32, image.height as i32),
         ColorType::RGBA8888,
-        AlphaType::Premul,
+        AlphaType::Unpremul,
         None,
     );
     let sk_data = Data::new_copy(image.data.as_slice());
@@ -410,7 +410,7 @@ pub fn surface_to_image(
     let image_info = ImageInfo::new(
         ISize::new(width as i32, height as i32),
         ColorType::RGBA8888,
-        AlphaType::Premul,
+        AlphaType::Unpremul,
         None,
     );
     if !surface.read_pixels(&image_info, &mut buffer, row_bytes, (0, 0)) {
@@ -418,11 +418,7 @@ pub fn surface_to_image(
             "Failed to read surface pixels".to_string(),
         ));
     }
-    Ok(Image {
-        width,
-        height,
-        data: buffer,
-    })
+    Ok(Image::new(width, height, buffer))
 }
 
 pub fn create_image_from_texture(
@@ -439,6 +435,9 @@ pub fn create_image_from_texture(
             format: 0x8058, // GL_RGBA8
             protected: skia_safe::gpu::Protected::No,
         };
+        // SAFETY: `texture_id` is supplied by the active GL context and the
+        // backend descriptor exactly matches the RGBA8 2D texture contract
+        // used throughout this renderer. Skia borrows rather than deletes it.
         let backend_texture = unsafe {
             skia_safe::gpu::backend_textures::make_gl(
                 (width as i32, height as i32),
@@ -479,4 +478,33 @@ pub fn get_available_fonts() -> Vec<String> {
     families.sort();
     families.dedup();
     families
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{create_raster_surface, image_to_skia, surface_to_image};
+    use crate::model::frame::Image;
+
+    #[test]
+    fn straight_rgba_survives_skia_round_trip_and_transparent_rgb_is_canonical() {
+        let input = Image::new(2, 1, vec![240, 80, 20, 128, 55, 66, 77, 0]);
+        assert_eq!(&input.data[4..8], &[0, 0, 0, 0]);
+
+        let skia_image = image_to_skia(&input).unwrap();
+        let mut surface = create_raster_surface(2, 1).unwrap();
+        surface.canvas().clear(skia_safe::Color::TRANSPARENT);
+        surface
+            .canvas()
+            .draw_image(&skia_image, (0, 0), Some(&skia_safe::Paint::default()));
+        let output = surface_to_image(&mut surface, 2, 1).unwrap();
+
+        for (actual, expected) in output.data[0..4].iter().zip([240, 80, 20, 128]) {
+            assert!(
+                actual.abs_diff(expected) <= 2,
+                "straight RGBA changed: {:?}",
+                &output.data[0..4]
+            );
+        }
+        assert_eq!(&output.data[4..8], &[0, 0, 0, 0]);
+    }
 }

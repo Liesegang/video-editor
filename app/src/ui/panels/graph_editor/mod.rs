@@ -8,7 +8,7 @@ use utils::*;
 
 use egui::{Color32, Sense, Ui, Vec2};
 use library::model::project::Project;
-use library::model::property::{Property, PropertyMap, PropertyValue};
+use library::model::property::{Property, PropertyMap, PropertyTarget, PropertyValue};
 use library::EditorService;
 use std::sync::{Arc, RwLock};
 
@@ -41,6 +41,42 @@ impl<'a> ViewportState for GraphViewportState<'a> {
     }
 }
 
+fn numeric_components(property: &Property) -> Vec<PropertyComponent> {
+    let value = if property.evaluator == "keyframe" {
+        property
+            .keyframes()
+            .first()
+            .map(|keyframe| &keyframe.value)
+            .cloned()
+    } else if property.evaluator == "constant" {
+        property.value().cloned()
+    } else {
+        None
+    };
+    match value {
+        Some(PropertyValue::Number(_)) => vec![PropertyComponent::Scalar],
+        Some(PropertyValue::Vec2(_)) => vec![PropertyComponent::X, PropertyComponent::Y],
+        _ => Vec::new(),
+    }
+}
+
+fn append_property_map<'a>(
+    output: &mut Vec<(String, &'a Property, &'a PropertyMap, PropertyComponent)>,
+    target: PropertyTarget,
+    properties: &'a PropertyMap,
+) {
+    for (property_key, property) in properties.iter() {
+        for component in numeric_components(property) {
+            output.push((
+                scoped_property_name(target, property_key, component),
+                property,
+                properties,
+                component,
+            ));
+        }
+    }
+}
+
 pub fn graph_editor_panel(
     ui: &mut Ui,
     editor_context: &mut EditorContext,
@@ -49,20 +85,42 @@ pub fn graph_editor_panel(
     project: &Arc<RwLock<Project>>,
     registry: &CommandRegistry,
 ) {
-    let (comp_id, track_id, entity_id) = match (
+    let (comp_id, selected_entity_id) = match (
         editor_context.selection.composition_id,
-        editor_context.selection.last_selected_track_id,
         editor_context.selection.last_selected_entity_id,
     ) {
-        (Some(c), Some(t), Some(e)) => (c, t, e),
+        (Some(c), Some(e)) => (c, e),
         _ => {
             ui.label("No entity selected.");
             return;
         }
     };
 
-    let mut action = Action::None;
-    let mut should_push_history = false;
+    let (entity_id, track_id) = {
+        let Ok(project) = project.read() else {
+            return;
+        };
+        let Some(node_id) = crate::utils::property::visual_node_id(&project, selected_entity_id)
+        else {
+            ui.label("Selected entity has no leaf Node.");
+            return;
+        };
+        let track_id = project
+            .find_parent_track(selected_entity_id)
+            .or_else(|| project.find_parent_track(node_id))
+            .or(editor_context.selection.last_selected_track_id)
+            .unwrap_or_else(uuid::Uuid::nil);
+        (node_id, track_id)
+    };
+    if editor_context.graph_editor.active_entity_id != Some(entity_id) {
+        actions::finish_pending_move(editor_context, project, history_manager);
+    }
+    if editor_context.graph_editor.begin_entity(entity_id) {
+        editor_context.interaction.selected_keyframe = None;
+        editor_context.interaction.editing_keyframe = None;
+    }
+
+    let mut actions = Vec::new();
 
     {
         let proj_read = if let Ok(p) = project.read() {
@@ -77,10 +135,7 @@ pub fn graph_editor_panel(
             return;
         };
 
-        let track = proj_read.get_track(track_id);
-        let _ = track; // Not needed directly anymore, using entity from project
-
-        let entity = if let Some(e) = proj_read.get_layer(entity_id) {
+        let entity = if let Some(e) = proj_read.get_node(entity_id) {
             e
         } else {
             return;
@@ -105,7 +160,11 @@ pub fn graph_editor_panel(
                                 components.push(PropertyComponent::Y);
                             }
                             _ => {
-                                log::trace!("GraphEditor: Skipping keyframe property {} with non-numeric type {:?}", k, first.value);
+                                log::trace!(
+                                    "GraphEditor: Skipping keyframe property {} with non-numeric type {:?}",
+                                    k,
+                                    first.value
+                                );
                             }
                         }
                     }
@@ -119,33 +178,40 @@ pub fn graph_editor_panel(
                         components.push(PropertyComponent::Y);
                     }
                     _ => {
-                        log::trace!("GraphEditor: Skipping constant property {} with non-numeric value {:?}", k, p.value());
+                        log::trace!(
+                            "GraphEditor: Skipping constant property {} with non-numeric value {:?}",
+                            k,
+                            p.value()
+                        );
                     }
                 },
                 _ => {}
             }
 
             for comp in components {
-                let suffix = match comp {
-                    PropertyComponent::Scalar => "",
-                    PropertyComponent::X => ".x",
-                    PropertyComponent::Y => ".y",
-                };
-                properties_to_plot.push((format!("{}{}", k, suffix), p, &entity.properties, comp));
+                properties_to_plot.push((
+                    scoped_property_name(PropertyTarget::Direct, k, comp),
+                    p,
+                    &entity.properties,
+                    comp,
+                ));
             }
         }
 
         // Capture clip range for visualization
-        let (clip_start_frame, clip_end_frame, clip_fps) = {
-            let start = entity.start_time.into_inner();
-            let duration = entity.duration.into_inner();
-            let fps = composition.fps;
-            ((start * fps) as i64, ((start + duration) * fps) as i64, fps)
+        let containing_clip = proj_read
+            .find_parent_clip(entity.id)
+            .and_then(|clip_id| proj_read.get_clip(clip_id));
+        let valid_time_range = {
+            let start = containing_clip
+                .map(|clip| clip.start_time.into_inner())
+                .unwrap_or(0.0);
+            let duration = containing_clip
+                .map(|clip| clip.duration.into_inner())
+                .unwrap_or(composition.duration);
+            Some((start, start + duration))
         };
-        let clip_source_begin_frame = (entity.trim_in.into_inner() * composition.fps) as i64;
-        let clip_inherent_fps = composition.fps; // Fallback, should check media asset if possible
-
-        for (effect_idx, effect) in entity.effects.iter().enumerate() {
+        for effect in &entity.effects {
             for (prop_key, prop) in effect.properties.iter() {
                 let mut components = Vec::new();
                 match prop.evaluator.as_str() {
@@ -160,7 +226,11 @@ pub fn graph_editor_panel(
                                     components.push(PropertyComponent::Y);
                                 }
                                 _ => {
-                                    log::trace!("GraphEditor: Skipping effect property {} with non-numeric type {:?}", prop_key, first.value);
+                                    log::trace!(
+                                        "GraphEditor: Skipping effect property {} with non-numeric type {:?}",
+                                        prop_key,
+                                        first.value
+                                    );
                                 }
                             }
                         }
@@ -174,20 +244,19 @@ pub fn graph_editor_panel(
                             components.push(PropertyComponent::Y);
                         }
                         _ => {
-                            log::trace!("GraphEditor: Skipping effect property {} with non-numeric value {:?}", prop_key, prop.value());
+                            log::trace!(
+                                "GraphEditor: Skipping effect property {} with non-numeric value {:?}",
+                                prop_key,
+                                prop.value()
+                            );
                         }
                     },
                     _ => {}
                 }
 
                 for comp in components {
-                    let suffix = match comp {
-                        PropertyComponent::Scalar => "",
-                        PropertyComponent::X => ".x",
-                        PropertyComponent::Y => ".y",
-                    };
                     properties_to_plot.push((
-                        format!("effect:{}:{}{}", effect_idx, prop_key, suffix),
+                        scoped_property_name(PropertyTarget::Effect(effect.id), prop_key, comp),
                         prop,
                         &effect.properties,
                         comp,
@@ -196,7 +265,7 @@ pub fn graph_editor_panel(
             }
         }
 
-        for (style_idx, style) in entity.styles.iter().enumerate() {
+        for style in &entity.styles {
             for (prop_key, prop) in style.properties.iter() {
                 let mut components = Vec::new();
                 match prop.evaluator.as_str() {
@@ -211,7 +280,11 @@ pub fn graph_editor_panel(
                                     components.push(PropertyComponent::Y);
                                 }
                                 _ => {
-                                    log::trace!("GraphEditor: Skipping style property {} with non-numeric type {:?}", prop_key, first.value);
+                                    log::trace!(
+                                        "GraphEditor: Skipping style property {} with non-numeric type {:?}",
+                                        prop_key,
+                                        first.value
+                                    );
                                 }
                             }
                         }
@@ -225,26 +298,41 @@ pub fn graph_editor_panel(
                             components.push(PropertyComponent::Y);
                         }
                         _ => {
-                            log::trace!("GraphEditor: Skipping style property {} with non-numeric value {:?}", prop_key, prop.value());
+                            log::trace!(
+                                "GraphEditor: Skipping style property {} with non-numeric value {:?}",
+                                prop_key,
+                                prop.value()
+                            );
                         }
                     },
                     _ => {}
                 }
 
                 for comp in components {
-                    let suffix = match comp {
-                        PropertyComponent::Scalar => "",
-                        PropertyComponent::X => ".x",
-                        PropertyComponent::Y => ".y",
-                    };
                     properties_to_plot.push((
-                        format!("style:{}:{}{}", style_idx, prop_key, suffix),
+                        scoped_property_name(PropertyTarget::Style(style.id), prop_key, comp),
                         prop,
                         &style.properties,
                         comp,
                     ));
                 }
             }
+        }
+
+        for effector in &entity.effectors {
+            append_property_map(
+                &mut properties_to_plot,
+                PropertyTarget::Effector(effector.id),
+                &effector.properties,
+            );
+        }
+
+        for decorator in &entity.decorators {
+            append_property_map(
+                &mut properties_to_plot,
+                PropertyTarget::Decorator(decorator.id),
+                &decorator.properties,
+            );
         }
 
         if properties_to_plot.is_empty() {
@@ -270,7 +358,7 @@ pub fn graph_editor_panel(
                     ui.heading("Properties");
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        let mut color_cycle = [
+                        const PROPERTY_COLORS: [Color32; 7] = [
                             Color32::RED,
                             Color32::GREEN,
                             Color32::BLUE,
@@ -278,12 +366,10 @@ pub fn graph_editor_panel(
                             Color32::CYAN,
                             Color32::MAGENTA,
                             Color32::ORANGE,
-                        ]
-                        .iter()
-                        .cycle();
+                        ];
 
-                        for (name, _, _, _) in &properties_to_plot {
-                            let color = *color_cycle.next().unwrap();
+                        for (index, (name, _, _, _)) in properties_to_plot.iter().enumerate() {
+                            let color = PROPERTY_COLORS[index % PROPERTY_COLORS.len()];
                             let mut is_visible = editor_context
                                 .graph_editor
                                 .visible_properties
@@ -294,7 +380,19 @@ pub fn graph_editor_panel(
                                     ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
                                 ui.painter().circle_filled(rect.center(), 5.0, color);
 
-                                if ui.checkbox(&mut is_visible, name).changed() {
+                                let visibility = ui.checkbox(&mut is_visible, name);
+                                crate::qa::register_component_with_metadata(
+                                    format!("graph.property_visibility:{name}"),
+                                    "graph_property_visibility",
+                                    visibility.rect,
+                                    visibility.enabled(),
+                                    Some(serde_json::json!({
+                                        "property": name,
+                                        "visible": is_visible,
+                                        "entity_id": entity_id,
+                                    })),
+                                );
+                                if visibility.changed() {
                                     if is_visible {
                                         editor_context
                                             .graph_editor
@@ -321,6 +419,32 @@ pub fn graph_editor_panel(
 
                 let mut graph_rect = available_rect;
                 graph_rect.min.y += ruler_height;
+
+                crate::qa::register_component_with_metadata(
+                    "graph.canvas",
+                    "graph_canvas",
+                    graph_rect,
+                    true,
+                    Some(serde_json::json!({
+                        "entity_id": entity_id,
+                        "pan": {
+                            "x": editor_context.graph_editor.pan.x,
+                            "y": editor_context.graph_editor.pan.y,
+                        },
+                        "zoom_x": pixels_per_second,
+                        "zoom_y": pixels_per_unit,
+                    })),
+                );
+                crate::qa::register_component_with_metadata(
+                    "graph.ruler",
+                    "graph_ruler",
+                    ruler_rect,
+                    true,
+                    Some(serde_json::json!({
+                        "entity_id": entity_id,
+                        "pixels_per_second": pixels_per_second,
+                    })),
+                );
 
                 let (_base_response, painter) =
                     ui.allocate_painter(available_rect.size(), Sense::hover());
@@ -364,30 +488,18 @@ pub fn graph_editor_panel(
                     pixels_per_unit,
                 );
 
-                let valid_range = if clip_fps > 0.0 {
-                    let start_t = clip_start_frame as f64 / clip_fps;
-                    let end_t = clip_end_frame as f64 / clip_fps;
-                    Some((start_t, end_t))
-                } else {
-                    None
-                };
-
-                drawing::draw_background(&painter, &transform, ruler_rect, valid_range);
+                drawing::draw_background(&painter, &transform, ruler_rect, valid_time_range);
                 drawing::draw_grid(&painter, &transform, ruler_rect);
 
                 if ruler_response.dragged() || ruler_response.clicked() {
                     if let Some(pos) = ruler_response.interact_pointer_pos() {
-                        let (t, _) = transform.from_screen(pos);
+                        let (t, _) = transform.screen_to_graph(pos);
                         editor_context.timeline.current_time = t.max(0.0) as f32;
                     }
                 }
 
-                let time_mapper = TimeMapper {
-                    clip_start_frame: clip_start_frame as i64,
-                    clip_source_begin_frame,
-                    clip_fps,
-                    clip_inherent_fps,
-                };
+                let time_mapper =
+                    containing_clip.map_or_else(TimeMapper::identity, TimeMapper::from_clip);
 
                 drawing::draw_properties(
                     ui,
@@ -396,10 +508,10 @@ pub fn graph_editor_panel(
                     &transform,
                     &time_mapper,
                     &properties_to_plot,
+                    entity_id,
                     editor_context,
                     project_service,
-                    &mut action,
-                    &mut should_push_history,
+                    &mut actions,
                     composition.fps,
                 );
 
@@ -413,14 +525,25 @@ pub fn graph_editor_panel(
         }
     }
 
-    actions::process_action(
-        action,
-        comp_id,
-        track_id,
-        entity_id,
-        project_service,
-        project,
-        editor_context,
-        history_manager,
-    );
+    if editor_context.graph_editor.keyframe_drag.is_some()
+        && ui.input(|input| input.pointer.any_released())
+        && !actions
+            .iter()
+            .any(|action| matches!(action, Action::FinishMove))
+    {
+        actions.push(Action::FinishMove);
+    }
+
+    for action in actions {
+        actions::process_action(
+            action,
+            comp_id,
+            track_id,
+            entity_id,
+            project_service,
+            project,
+            editor_context,
+            history_manager,
+        );
+    }
 }

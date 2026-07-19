@@ -1,0 +1,2 @@
+# advisory-id|review-deadline|exact-package|only-direct-parent|locked dependency path|runtime reachability|remediation
+RUSTSEC-2000-0001|2000-01-01|fixture@1.0.0|fixture-root@1.0.0|fixture 1.0 <- fixture-root|Fixture-only unreachable path.|Replace the fixture dependency.

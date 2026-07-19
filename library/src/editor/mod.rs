@@ -14,10 +14,14 @@ pub mod project_service;
 pub mod render_service;
 
 // Re-exports for convenient access
+pub use crate::model::NodeGraphBundle;
 pub use audio_service::AudioService;
 pub use color_service::ColorSpaceManager as ColorService;
 pub use editor_service::EditorService;
 pub use export_service::ExportService;
+pub use handlers::clip_handler::ClipBundle;
+pub use handlers::keyframe_handler::KeyframeBatchUpdate;
+pub use handlers::property_ops::PropertyOwner;
 pub use project_model::ProjectModel;
 pub use project_service::ProjectManager as ProjectService;
 pub use render_service::RenderService;

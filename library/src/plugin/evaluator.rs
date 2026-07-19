@@ -9,27 +9,18 @@ use ordered_float::OrderedFloat;
 use crate::model::property::{Property, PropertyMap, PropertyValue};
 
 /// Registry for property evaluators.
+#[derive(Clone, Default)]
 pub struct PropertyEvaluatorRegistry {
-    evaluators: HashMap<&'static str, Arc<dyn PropertyEvaluator>>,
-}
-
-impl Clone for PropertyEvaluatorRegistry {
-    fn clone(&self) -> Self {
-        Self {
-            evaluators: self.evaluators.clone(),
-        }
-    }
+    evaluators: HashMap<String, Arc<dyn PropertyEvaluator>>,
 }
 
 impl PropertyEvaluatorRegistry {
     pub fn new() -> Self {
-        Self {
-            evaluators: HashMap::new(),
-        }
+        Self::default()
     }
 
-    pub fn register(&mut self, key: &'static str, evaluator: Arc<dyn PropertyEvaluator>) {
-        self.evaluators.insert(key, evaluator);
+    pub fn register(&mut self, key: &str, evaluator: Arc<dyn PropertyEvaluator>) {
+        self.evaluators.insert(key.to_string(), evaluator);
     }
 
     pub fn evaluate(

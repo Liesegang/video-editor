@@ -2,12 +2,15 @@
 name = "random_property_plugin"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+
+[lints]
+workspace = true
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-library = { path = "../../library" }
-rand = "0.8"
+library = { version = "0.1.0", path = "../../library" }
+rand = "0.8.6"
 ordered-float = "5.1.0"
-

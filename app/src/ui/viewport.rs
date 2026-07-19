@@ -71,16 +71,6 @@ impl<'a> ViewportController<'a> {
         self
     }
 
-    #[allow(dead_code)]
-    pub fn interact(
-        &mut self,
-        state: &mut impl ViewportState,
-        handled_hand_tool_drag: &mut bool,
-    ) -> (bool, egui::Response) {
-        let available_rect = self.ui.available_rect_before_wrap();
-        self.interact_with_rect(available_rect, state, handled_hand_tool_drag)
-    }
-
     pub fn interact_with_rect(
         &mut self,
         rect: egui::Rect,

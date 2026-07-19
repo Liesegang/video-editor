@@ -1,7 +1,7 @@
 use egui::Ui;
 use library::model::asset::AssetKind;
 use library::model::project::Project;
-use library::model::Layer;
+use library::ClipBundle;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -38,11 +38,11 @@ pub fn handle_drag_and_drop(
 
                 if let Some(comp_id) = editor_context.selection.composition_id {
                     // ===== PHASE 1: Read all needed data, extract owned values =====
-                    let mut root_track_ids: Vec<Uuid> = Vec::new();
+                    let mut track_ids: Vec<Uuid> = Vec::new();
                     let mut comp_width = 1920u32;
                     let mut comp_height = 1080u32;
                     let mut target_track_id_opt: Option<Uuid> = None;
-                    let mut new_layer_opt: Option<Layer> = None;
+                    let mut new_bundle_opt: Option<ClipBundle> = None;
                     let mut calculated_insert_index: Option<usize> = None;
 
                     {
@@ -55,7 +55,7 @@ pub fn handle_drag_and_drop(
                         // Get composition info
                         if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id)
                         {
-                            root_track_ids.push(comp.root_track_id);
+                            track_ids = comp.track_ids.clone();
                             comp_width = comp.width as u32;
                             comp_height = comp.height as u32;
                         }
@@ -63,7 +63,7 @@ pub fn handle_drag_and_drop(
                         // Flatten to find corresponding track - extract only IDs
                         let display_rows = super::super::utils::flatten::flatten_tracks_to_rows(
                             &proj_read,
-                            &root_track_ids,
+                            &track_ids,
                             &editor_context.timeline.expanded_tracks,
                         );
 
@@ -99,8 +99,7 @@ pub fn handle_drag_and_drop(
                                         if let Some(header_idx) = display_rows.iter().position(|r| r.track_id() == tid && matches!(r, super::super::utils::flatten::DisplayRow::TrackHeader{..})) {
                                            let raw_index = visible_row_index as isize - header_idx as isize - 1;
                                            if let Some(track) = proj_read.get_track(tid) {
-                                               // Count existing layers in track
-                                               let clip_count = track.children.iter().filter(|id| matches!(proj_read.get_node(**id), Some(library::model::Node::Layer(_)))).count();
+                                               let clip_count = track.clip_ids.len();
                                                let max_index = clip_count as isize;
                                                let inverted = max_index - raw_index;
                                                calculated_insert_index = Some(inverted.clamp(0, max_index) as usize);
@@ -110,7 +109,7 @@ pub fn handle_drag_and_drop(
 
                                     let duration_sec = asset.duration.unwrap_or(5.0);
 
-                                    new_layer_opt = match asset.kind {
+                                    new_bundle_opt = match asset.kind {
                                         AssetKind::Video => {
                                             let video_clip_res = project_service.create_video_clip(
                                                 asset.id,
@@ -125,17 +124,19 @@ pub fn handle_drag_and_drop(
                                             video_clip_res.ok().map(|mut video_clip| {
                                                  if let (Some(w), Some(h)) = (asset.width, asset.height)
                                                 {
-                                                    video_clip.properties.set(
-                                                        "anchor".to_string(),
-                                                        library::model::property::Property::constant(
-                                                            library::model::property::PropertyValue::Vec2(
-                                                                library::model::property::Vec2 {
-                                                                    x: ordered_float::OrderedFloat(w as f64 / 2.0),
-                                                                    y: ordered_float::OrderedFloat(h as f64 / 2.0),
-                                                                },
+                                                    if let Some(node) = video_clip.primary_node_mut() {
+                                                        node.properties.set(
+                                                            "anchor".to_string(),
+                                                            library::model::property::Property::constant(
+                                                                library::model::property::PropertyValue::Vec2(
+                                                                    library::model::property::Vec2 {
+                                                                        x: ordered_float::OrderedFloat(w as f64 / 2.0),
+                                                                        y: ordered_float::OrderedFloat(h as f64 / 2.0),
+                                                                    },
+                                                                ),
                                                             ),
-                                                        ),
-                                                    );
+                                                        );
+                                                    }
                                                 }
                                                 video_clip
                                             })
@@ -154,17 +155,19 @@ pub fn handle_drag_and_drop(
                                                 // Source start irrelevant for Image? Or kept at 0
                                                 if let (Some(w), Some(h)) = (asset.width, asset.height)
                                                 {
-                                                    image_clip.properties.set(
-                                                        "anchor".to_string(),
-                                                        library::model::property::Property::constant(
-                                                            library::model::property::PropertyValue::Vec2(
-                                                                library::model::property::Vec2 {
-                                                                    x: ordered_float::OrderedFloat(w as f64 / 2.0),
-                                                                    y: ordered_float::OrderedFloat(h as f64 / 2.0),
-                                                                },
+                                                    if let Some(node) = image_clip.primary_node_mut() {
+                                                        node.properties.set(
+                                                            "anchor".to_string(),
+                                                            library::model::property::Property::constant(
+                                                                library::model::property::PropertyValue::Vec2(
+                                                                    library::model::property::Vec2 {
+                                                                        x: ordered_float::OrderedFloat(w as f64 / 2.0),
+                                                                        y: ordered_float::OrderedFloat(h as f64 / 2.0),
+                                                                    },
+                                                                ),
                                                             ),
-                                                        ),
-                                                    );
+                                                        );
+                                                    }
                                                 }
                                                 image_clip
                                             })
@@ -195,7 +198,7 @@ pub fn handle_drag_and_drop(
                                     duration_sec = c.duration;
                                 }
 
-                                new_layer_opt = project_service
+                                new_bundle_opt = project_service
                                     .create_reference_clip(
                                         *target_comp_id,
                                         drop_time_f64,
@@ -207,14 +210,14 @@ pub fn handle_drag_and_drop(
                     } // proj_read is now dropped
 
                     // ===== PHASE 2: Call service methods (needs write lock) =====
-                    if let Some(new_layer) = new_layer_opt {
+                    if let Some(new_bundle) = new_bundle_opt {
                         let mut success = false;
 
                         if let Some(parent_track_id) = target_track_id_opt {
                             if let Err(e) = project_service.add_clip_to_track(
                                 comp_id,
                                 parent_track_id,
-                                new_layer,
+                                new_bundle,
                                 calculated_insert_index,
                             ) {
                                 log::error!("Failed to add clip: {:?}", e);
@@ -233,7 +236,7 @@ pub fn handle_drag_and_drop(
                                 if let Err(e) = project_service.add_clip_to_track(
                                     comp_id,
                                     new_track_id,
-                                    new_layer,
+                                    new_bundle,
                                     calculated_insert_index,
                                 ) {
                                     log::error!("Failed to add clip to new track: {:?}", e);

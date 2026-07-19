@@ -1,10 +1,8 @@
-use skia_safe::FontMgr;
-use skia_safe::textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle};
-
 use super::{EntityConverterPlugin, FrameEvaluationContext};
+use crate::core::rendering::text_layout::{measure_text_layout, text_style_outset};
 use crate::model::frame::entity::{FrameContent, FrameObject};
-// use crate::model::project::TrackClip;
 
+#[derive(Default)]
 pub struct TextEntityConverterPlugin;
 
 impl TextEntityConverterPlugin {
@@ -139,17 +137,14 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        layer: &crate::model::Layer,
+        node: &crate::model::Node,
         time: f64,
     ) -> Option<FrameObject> {
-        let props = &layer.properties;
+        let props = &node.properties;
         let _comp_fps = evaluator.composition.fps;
 
-        // Calculate evaluation time based on Layer timeframe
-        // eval_time = (global_time - start_time) * stretch + trim_in
-        let time_since_start = time - layer.start_time.into_inner();
-        let eval_time =
-            time_since_start * layer.time_stretch.into_inner() + layer.trim_in.into_inner();
+        // Calculate evaluation time based on Node timeframe
+        let eval_time = time;
 
         let text = evaluator.require_string(props, "text", eval_time, "text")?;
         let font = evaluator
@@ -157,42 +152,16 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
             .unwrap_or_else(|| "Arial".to_string());
         let size = evaluator.evaluate_number(props, "size", eval_time, 12.0);
 
-        let styles = evaluator.build_styles(&layer.styles, eval_time);
+        let styles = evaluator.resolved_styles_or_legacy(&node.styles, eval_time);
 
         let transform = evaluator.build_transform(props, eval_time);
-        let effects = evaluator.build_image_effects(&layer.effects, eval_time);
+        let effects = evaluator.build_image_effects(&node.effects, eval_time);
 
-        // Build Ensemble data from layer.effectors/decorators
-        let ensemble = if !layer.effects.is_empty() || !layer.styles.is_empty() {
-            let mut effector_configs = Vec::new();
-            let mut decorator_configs = Vec::new();
+        let effector_configs = evaluator.resolved_effectors_or_legacy(&node.effectors, eval_time);
+        let decorator_configs =
+            evaluator.resolved_decorators_or_legacy(&node.decorators, eval_time);
 
-            // Convert EffectorInstances to EffectorConfigs
-            // Convert EffectConfigs to EffectorConfigs (Text Animators)
-            for instance in &layer.effects {
-                if let Some(plugin) = evaluator
-                    .plugin_manager
-                    .get_effector_plugin(&instance.effect_type)
-                {
-                    if let Some(config) = plugin.convert(evaluator, instance, eval_time) {
-                        effector_configs.push(config);
-                    }
-                }
-                // Note: Image effects are handled separately in build_image_effects
-            }
-
-            // Convert StyleInstances to DecoratorConfigs (Backplates)
-            for instance in &layer.styles {
-                if let Some(plugin) = evaluator
-                    .plugin_manager
-                    .get_decorator_plugin(&instance.style_type)
-                {
-                    if let Some(config) = plugin.convert(evaluator, instance, eval_time) {
-                        decorator_configs.push(config);
-                    }
-                }
-            }
-
+        let ensemble = if !effector_configs.is_empty() || !decorator_configs.is_empty() {
             Some(crate::core::ensemble::EnsembleData {
                 enabled: true,
                 effector_configs,
@@ -220,16 +189,14 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
     fn get_bounds(
         &self,
         evaluator: &FrameEvaluationContext,
-        layer: &crate::model::Layer,
+        node: &crate::model::Node,
         time: f64,
     ) -> Option<(f32, f32, f32, f32)> {
-        let props = &layer.properties;
+        let props = &node.properties;
         let _comp_fps = evaluator.composition.fps;
 
-        // Calculate evaluation time based on Layer timeframe
-        let time_since_start = time - layer.start_time.into_inner();
-        let eval_time =
-            time_since_start * layer.time_stretch.into_inner() + layer.trim_in.into_inner();
+        // Calculate evaluation time based on Node timeframe
+        let eval_time = time;
 
         let text = evaluator.require_string(props, "text", eval_time, "text")?;
         let font_name = evaluator
@@ -237,41 +204,28 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
             .unwrap_or_else(|| "Arial".to_string());
         let size = evaluator.evaluate_number(props, "size", eval_time, 12.0);
 
-        let (width, height) = measure_text_size(&text, &font_name, size as f32);
+        let metrics = measure_text_layout(&text, &font_name, size as f32);
+        let styles = evaluator.resolved_styles_or_legacy(&node.styles, eval_time);
+        let outset = text_style_outset(&styles);
 
-        Some((0.0, 0.0, width, height))
+        Some((
+            -outset,
+            -outset,
+            metrics.width + outset * 2.0,
+            metrics.height + outset * 2.0,
+        ))
     }
 }
 
 pub fn measure_text_size(text: &str, primary_font_name: &str, size: f32) -> (f32, f32) {
-    let mut font_collection = FontCollection::new();
-    font_collection.set_default_font_manager(FontMgr::default(), None);
-
-    let mut text_style = TextStyle::new();
-    text_style.set_font_families(&[primary_font_name]);
-    text_style.set_font_size(size);
-
-    let mut paragraph_style = ParagraphStyle::new();
-    paragraph_style.set_text_style(&text_style);
-
-    let mut builder = ParagraphBuilder::new(&paragraph_style, font_collection);
-
-    builder.add_text(text);
-
-    let mut paragraph = builder.build();
-    paragraph.layout(f32::MAX);
-
-    let width = paragraph.max_intrinsic_width();
-    let height = paragraph.height();
-
-    log::info!(
+    let metrics = measure_text_layout(text, primary_font_name, size);
+    log::debug!(
         "measure_text_size: text='{}' font='{}' size={} -> w={} h={}",
         text,
         primary_font_name,
         size,
-        width,
-        height
+        metrics.width,
+        metrics.height
     );
-
-    (width, height)
+    (metrics.width, metrics.height)
 }

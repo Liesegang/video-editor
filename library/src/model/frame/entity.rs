@@ -23,6 +23,8 @@ pub struct ImageSurface {
 
 use uuid::Uuid;
 
+use crate::model::BlendMode;
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct StyleConfig {
     pub id: Uuid,
@@ -35,7 +37,11 @@ pub enum FrameContent {
     Video {
         #[serde(flatten)]
         surface: ImageSurface,
-        frame_number: u64,
+        /// Source-local seconds used as the sole decode authority. The loader
+        /// maps this value into the selected stream's time base and PTS.
+        source_time: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stream_index: Option<usize>,
     },
     Image {
         #[serde(flatten)]
@@ -73,16 +79,29 @@ pub enum FrameContent {
     },
 }
 
+impl FrameContent {
+    pub fn transform_mut(&mut self) -> &mut Transform {
+        match self {
+            Self::Video { surface, .. } | Self::Image { surface } => &mut surface.transform,
+            Self::Text { transform, .. }
+            | Self::Shape { transform, .. }
+            | Self::SkSL { transform, .. } => transform,
+        }
+    }
+}
+
 impl Hash for FrameContent {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
         match self {
             FrameContent::Video {
                 surface,
-                frame_number,
+                source_time,
+                stream_index,
             } => {
                 surface.hash(state);
-                frame_number.hash(state);
+                OrderedFloat(*source_time).hash(state);
+                stream_index.hash(state);
             }
             FrameContent::Image { surface } => {
                 surface.hash(state);
@@ -139,13 +158,15 @@ impl PartialEq for FrameContent {
             (
                 FrameContent::Video {
                     surface: s1,
-                    frame_number: f1,
+                    source_time: t1,
+                    stream_index: i1,
                 },
                 FrameContent::Video {
                     surface: s2,
-                    frame_number: f2,
+                    source_time: t2,
+                    stream_index: i2,
                 },
-            ) => s1 == s2 && f1 == f2,
+            ) => s1 == s2 && OrderedFloat(*t1) == OrderedFloat(*t2) && i1 == i2,
             (FrameContent::Image { surface: s1 }, FrameContent::Image { surface: s2 }) => s1 == s2,
             (
                 FrameContent::Text {
@@ -221,6 +242,59 @@ impl Eq for FrameContent {}
 pub struct FrameObject {
     pub content: FrameContent, // Renamed from entity: FrameEntity
     pub properties: PropertyMap,
+}
+
+/// The kind of isolated image produced by a frame group.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum FrameGroupKind {
+    Track,
+    Clip,
+    Composition,
+    Node,
+    Merge,
+    /// A descriptor-backed Effect operation. Its child image is composited
+    /// into one isolated layer before the operation is applied exactly once.
+    Effect,
+    /// A Reference layer consuming a canonical image connection. The nested
+    /// source item remains in its original Project containment and is only
+    /// projected here for this render evaluation.
+    ConnectedImage,
+}
+
+/// A render-time image container derived directly from the authoritative
+/// Project. Track and nested Composition output semantics require isolation:
+/// children are composited first, then effects/transform/blend are applied to
+/// the resulting image exactly once.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct FrameGroup {
+    pub source_id: Uuid,
+    pub kind: FrameGroupKind,
+    pub width: u64,
+    pub height: u64,
+    pub background_color: crate::model::frame::color::Color,
+    pub transform: Transform,
+    pub blend_mode: BlendMode,
+    pub effect_time: OrderedFloat<f64>,
+    #[serde(default)]
+    pub effects: Vec<ImageEffect>,
+    #[serde(default)]
+    pub items: Vec<FrameItem>,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
+#[serde(tag = "item_type", content = "item")]
+pub enum FrameItem {
+    Object(FrameObject),
+    Group(FrameGroup),
+}
+
+impl FrameItem {
+    pub fn object_count(&self) -> usize {
+        match self {
+            Self::Object(_) => 1,
+            Self::Group(group) => group.items.iter().map(Self::object_count).sum(),
+        }
+    }
 }
 
 pub trait ImageContent {

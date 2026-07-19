@@ -10,7 +10,6 @@ pub struct PreviewInteractions<'a> {
     pub ui: &'a mut Ui,
     pub editor_context: &'a mut EditorContext,
     pub project: &'a Arc<RwLock<Project>>,
-    pub history_manager: &'a mut crate::action::HistoryManager,
     pub gui_clips: &'a [PreviewClip<'a>],
     pub to_screen: Box<dyn Fn(Pos2) -> Pos2 + 'a>, // Closure wrapper
     pub to_world: Box<dyn Fn(Pos2) -> Pos2 + 'a>,
@@ -21,7 +20,6 @@ impl<'a> PreviewInteractions<'a> {
         ui: &'a mut Ui,
         editor_context: &'a mut EditorContext,
         project: &'a Arc<RwLock<Project>>,
-        history_manager: &'a mut crate::action::HistoryManager,
         gui_clips: &'a [PreviewClip<'a>],
         to_screen: impl Fn(Pos2) -> Pos2 + 'a,
         to_world: impl Fn(Pos2) -> Pos2 + 'a,
@@ -30,7 +28,6 @@ impl<'a> PreviewInteractions<'a> {
             ui,
             editor_context,
             project,
-            history_manager,
             gui_clips,
             to_screen: Box::new(to_screen),
             to_world: Box::new(to_world),
@@ -41,8 +38,23 @@ impl<'a> PreviewInteractions<'a> {
         &mut self,
         response: &Response,
         content_rect: Rect,
+        pan_gesture_owned: bool,
         pending_actions: &mut Vec<PreviewAction>,
     ) {
+        if pan_gesture_owned {
+            // The viewport owns this entire primary press/drag/release. Clear
+            // transient content gestures without generating updates or a
+            // history commit, so the release cannot click through.
+            self.editor_context.interaction.is_moving_selected_entity = false;
+            self.editor_context.interaction.body_drag_state = None;
+            self.editor_context.interaction.preview_selection_drag_start = None;
+            self.editor_context.interaction.gizmo_state = None;
+            if let Some(state) = &mut self.editor_context.interaction.vector_editor_state {
+                state.selected_handle = None;
+            }
+            return;
+        }
+
         let pointer_pos = self.ui.input(|i| i.pointer.hover_pos());
         let active_tool = self.editor_context.view.active_tool.clone();
 
@@ -58,102 +70,69 @@ impl<'a> PreviewInteractions<'a> {
                 self.ui,
                 self.editor_context,
                 self.project,
-                self.history_manager,
                 pointer_pos,
                 &*self.to_world,
                 pending_actions,
             );
         } else if active_tool == crate::state::context_types::PreviewTool::Shape {
-            // 1. Ensure State is Loaded
-            let mut ensure_loaded = false;
-            if self
+            if let Some(id) = self
                 .editor_context
-                .interaction
-                .vector_editor_state
-                .is_none()
+                .selection
+                .selected_entities
+                .iter()
+                .next()
+                .copied()
             {
-                if let Some(id) = self
-                    .editor_context
-                    .selection
-                    .selected_entities
-                    .iter()
-                    .next()
-                {
-                    // Check if it is a shape and get path
-                    // use gui_clips to get track_id
-                    if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == *id) {
-                        if matches!(
-                            gc.clip.content,
-                            library::model::LayerContent::Generator(
-                                library::model::GeneratorContent::Shape { .. }
-                            )
-                        ) {
-                            if let Some(path_str) = gc.clip.properties.get_string("path") {
-                                let state = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
-                                self.editor_context.interaction.vector_editor_state = Some(state);
-                                ensure_loaded = true;
-                            }
-                        }
-                    }
-                }
-            } else {
-                ensure_loaded = true;
-            }
+                if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == id) {
+                    if matches!(
+                        &gc.node.content,
+                        library::model::NodeContent::Generator(
+                            library::model::GeneratorContent::Shape
+                        )
+                    ) {
+                        if let Some(path_str) = gc.node.properties.get_string("path") {
+                            // The path is always projected from Project. Only point
+                            // selection/handle state survives between frames.
+                            let mut path = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
+                            // Build Transform
+                            let transform = library::model::frame::transform::Transform {
+                                position: library::model::frame::transform::Position {
+                                    x: gc.transform.position.x,
+                                    y: gc.transform.position.y,
+                                },
+                                scale: library::model::frame::transform::Scale {
+                                    x: gc.transform.scale.x,
+                                    y: gc.transform.scale.y,
+                                },
+                                rotation: gc.transform.rotation,
+                                anchor: library::model::frame::transform::Position {
+                                    x: gc.transform.anchor.x,
+                                    y: gc.transform.anchor.y,
+                                },
+                                opacity: gc.transform.opacity,
+                            };
 
-            // 2. Handle Interaction
-            if ensure_loaded {
-                // Get Transform for the edited entity
-                // We need to know WHICH entity is being edited.
-                // We rely on selection.
-                if let Some(id) = self
-                    .editor_context
-                    .selection
-                    .selected_entities
-                    .iter()
-                    .next()
-                {
-                    if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == *id) {
-                        // Build Transform
-                        let transform = library::model::frame::transform::Transform {
-                            position: library::model::frame::transform::Position {
-                                x: gc.transform.position.x,
-                                y: gc.transform.position.y,
-                            },
-                            scale: library::model::frame::transform::Scale {
-                                x: gc.transform.scale.x,
-                                y: gc.transform.scale.y,
-                            },
-                            rotation: gc.transform.rotation,
-                            anchor: library::model::frame::transform::Position {
-                                x: gc.transform.anchor.x,
-                                y: gc.transform.anchor.y,
-                            },
-                            opacity: gc.transform.opacity,
-                        };
-
-                        let mut changed = false;
-                        if let Some(state) =
-                            &mut self.editor_context.interaction.vector_editor_state
-                        {
+                            let state = self
+                                .editor_context
+                                .interaction
+                                .vector_editor_state
+                                .get_or_insert_with(Default::default);
                             let mut interaction = crate::ui::panels::preview::vector_editor::interaction::VectorEditorInteraction {
                                   state,
+                                  path: &mut path,
                                   transform,
                                   to_screen: Box::new(|p| (self.to_screen)(p)),
                                   to_world: Box::new(|p| (self.to_world)(p)),
                                };
-                            let (changed_state, captured) = interaction.handle(self.ui, response);
-                            changed = changed_state;
+                            let (changed, captured, commit_requested) =
+                                interaction.handle(self.ui, response);
+                            drop(interaction);
                             if captured {
                                 interacted_with_gizmo = true;
                             }
-                        }
 
-                        if changed {
-                            // Save back
-                            if let Some(state) =
-                                &self.editor_context.interaction.vector_editor_state
-                            {
-                                let new_path = crate::ui::panels::preview::vector_editor::svg_writer::to_svg_path(state);
+                            if changed {
+                                let new_path = crate::ui::panels::preview::vector_editor::svg_writer::to_svg_path(&path);
 
                                 // Update property
                                 if let Some(comp_id) = self.editor_context.selection.composition_id
@@ -163,16 +142,17 @@ impl<'a> PreviewInteractions<'a> {
                                     pending_actions.push(PreviewAction::UpdateProperty {
                                         comp_id,
                                         track_id: gc.track_id,
-                                        entity_id: *id,
+                                        entity_id: id,
                                         prop_name: "path".to_string(),
                                         time: current_time,
                                         value: PropertyValue::String(new_path),
                                     });
                                 }
+                                interacted_with_gizmo = true;
                             }
-                        }
-                        if changed {
-                            interacted_with_gizmo = true;
+                            if commit_requested {
+                                pending_actions.push(PreviewAction::CommitHistory);
+                            }
                         }
                     }
                 }
@@ -260,12 +240,15 @@ impl<'a> PreviewInteractions<'a> {
             self.handle_box_selection(response);
         }
 
-        // Cleanup on release
-        if self.ui.input(|i| i.pointer.any_released()) {
+        // Cleanup only a body drag owned by Preview. Timeline and Preview are
+        // rendered in the same frame and currently share the legacy moving
+        // flag; consuming an unrelated release here would cancel Timeline's
+        // drag before Timeline can commit its Project edit.
+        if self.editor_context.interaction.body_drag_state.is_some()
+            && self.ui.input(|i| i.pointer.any_released())
+        {
             if self.editor_context.interaction.is_moving_selected_entity {
-                if let Ok(proj) = self.project.read() {
-                    self.history_manager.push_project_state(proj.clone());
-                }
+                pending_actions.push(PreviewAction::CommitHistory);
             }
             self.editor_context.interaction.is_moving_selected_entity = false;
             self.editor_context.interaction.body_drag_state = None;
@@ -273,7 +256,7 @@ impl<'a> PreviewInteractions<'a> {
     }
 
     fn is_clip_visible(&self, gc: &PreviewClip, current_time: f64) -> bool {
-        if let library::model::LayerContent::Media(media) = &gc.clip.content {
+        if let library::model::NodeContent::Media(media) = &gc.node.content {
             if let Ok(proj) = self.project.read() {
                 if let Some(asset) = proj.get_asset(media.asset_id) {
                     if matches!(asset.kind, library::model::asset::AssetKind::Audio) {
@@ -401,16 +384,16 @@ impl<'a> PreviewInteractions<'a> {
                 let is_text = self.gui_clips.iter().any(|c| {
                     c.id() == id
                         && matches!(
-                            c.clip.content,
-                            library::model::LayerContent::Generator(
-                                library::model::GeneratorContent::Text { .. }
+                            &c.node.content,
+                            library::model::NodeContent::Generator(
+                                library::model::GeneratorContent::Text
                             )
                         )
                 });
                 if is_text {
                     self.editor_context.interaction.editing_text_entity_id = Some(id);
                     if let Some(gc) = self.gui_clips.iter().find(|c| c.id() == id) {
-                        if let Some(text) = gc.clip.properties.get_string("text") {
+                        if let Some(text) = gc.node.properties.get_string("text") {
                             self.editor_context.interaction.text_edit_buffer = text;
                         }
                     }
@@ -632,7 +615,7 @@ impl<'a> PreviewInteractions<'a> {
                 let rect = Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y));
 
                 // Calculate Font Size
-                let font_size = gc.clip.properties.get_f32("size").unwrap_or(100.0);
+                let font_size = gc.node.properties.get_f32("size").unwrap_or(100.0);
 
                 let zoom = self.editor_context.view.zoom;
                 // Assuming uniform scale or using scale_y for height
@@ -652,10 +635,6 @@ impl<'a> PreviewInteractions<'a> {
                         .desired_width(rect.width()),
                 );
 
-                if !response.has_focus() {
-                    response.request_focus();
-                }
-
                 if response.changed() {
                     self.editor_context.interaction.text_edit_buffer = text.clone();
 
@@ -669,6 +648,16 @@ impl<'a> PreviewInteractions<'a> {
                             value: PropertyValue::String(text),
                         });
                     }
+                }
+
+                let finish_edit = response.lost_focus()
+                    || (response.has_focus()
+                        && self.ui.input(|input| input.key_pressed(egui::Key::Escape)));
+                if finish_edit {
+                    pending_actions.push(PreviewAction::CommitHistory);
+                    self.editor_context.interaction.editing_text_entity_id = None;
+                } else if !response.has_focus() {
+                    response.request_focus();
                 }
             }
         }

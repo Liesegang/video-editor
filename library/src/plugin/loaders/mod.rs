@@ -11,6 +11,7 @@ use crate::model::frame::Image;
 use crate::plugin::{Plugin, PluginCategory};
 use std::collections::HashMap;
 use std::sync::Arc;
+use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub enum LoadRequest {
@@ -19,7 +20,9 @@ pub enum LoadRequest {
     /// Load a video frame.
     VideoFrame {
         path: String,
-        frame_number: u64,
+        /// Source-local seconds. This is the sole decode authority; the
+        /// selected loader converts it into the stream's time-base/PTS.
+        source_time: f64,
         stream_index: Option<usize>,
         input_color_space: Option<String>,
         output_color_space: Option<String>,
@@ -35,9 +38,23 @@ impl LoadRequest {
     }
 }
 
+#[derive(Debug)]
 pub struct LoadResponse {
     pub image: Image,
 }
+
+/// A loader can either decline a request without error or report a real load
+/// failure. This prevents decode errors from being misreported as a missing
+/// plugin after the manager tries the next loader.
+#[derive(Debug, Error)]
+pub enum LoadPluginError {
+    #[error("request is not supported by this loader")]
+    Unsupported,
+    #[error(transparent)]
+    Failed(#[from] LibraryError),
+}
+
+pub type LoadPluginResult<T> = Result<T, LoadPluginError>;
 
 #[derive(Debug, Clone)]
 pub struct AssetMetadata {
@@ -47,28 +64,31 @@ pub struct AssetMetadata {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub stream_index: Option<usize>,
+    pub frame_count: Option<u64>,
+    pub time_base: Option<(i32, i32)>,
 }
 
 pub trait LoadPlugin: Plugin {
-    /// Open a file and return metadata for all available streams.
-    /// The plugin internally caches the reader/decoder for subsequent load() calls.
-    /// Returns Err if this plugin cannot handle the file.
-    fn open(&self, path: &str) -> Result<Vec<AssetMetadata>, LibraryError>;
+    /// Probe a file and return metadata for all available streams.
+    ///
+    /// Probing must not require a video decoder: audio-only resources and
+    /// metadata-only import paths must work independently from frame loading.
+    /// Implementations may initialize their state lazily in [`Self::load`].
+    /// Returns [`LoadPluginError::Unsupported`] when the plugin does not handle
+    /// the file and [`LoadPluginError::Failed`] when it does but opening fails.
+    fn open(&self, path: &str) -> LoadPluginResult<Vec<AssetMetadata>>;
 
     /// Load a frame from a file.
     /// The plugin uses internally cached reader if available.
-    /// Returns Err if the request type is not supported.
-    fn load(
-        &self,
-        request: &LoadRequest,
-        cache: &CacheManager,
-    ) -> Result<LoadResponse, LibraryError>;
+    /// Unsupported request types must not be encoded as generic plugin errors.
+    fn load(&self, request: &LoadRequest, cache: &CacheManager) -> LoadPluginResult<LoadResponse>;
 
     fn plugin_type(&self) -> PluginCategory {
         PluginCategory::Load
     }
 }
 
+#[derive(Default)]
 pub struct LoadRepository {
     pub plugins: HashMap<String, Arc<dyn LoadPlugin>>,
     /// Plugin IDs in priority order (first = highest priority).
@@ -77,10 +97,7 @@ pub struct LoadRepository {
 
 impl LoadRepository {
     pub fn new() -> Self {
-        Self {
-            plugins: HashMap::new(),
-            priority_order: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn register(&mut self, plugin: Arc<dyn LoadPlugin>) {

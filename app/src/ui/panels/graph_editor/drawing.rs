@@ -1,9 +1,10 @@
 use crate::state::context::EditorContext;
+use crate::state::context_types::{GraphKeyframeDragOrigin, GraphKeyframeDragState};
 use egui::{Color32, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, UiKind, Vec2};
 use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::EditorService;
 
-use super::actions::Action;
+use super::actions::{Action, KeyframeMove};
 use super::utils::{GraphTransform, PropertyComponent, TimeMapper};
 
 pub fn draw_background(
@@ -175,6 +176,24 @@ pub fn draw_playhead(
     }
 }
 
+fn keyframe_component_value(value: &PropertyValue, component: PropertyComponent) -> Option<f64> {
+    match component {
+        PropertyComponent::Scalar => value.get_as::<f64>(),
+        PropertyComponent::X => match value {
+            PropertyValue::Vec2(vector) => Some(vector.x.into_inner()),
+            _ => None,
+        },
+        PropertyComponent::Y => match value {
+            PropertyValue::Vec2(vector) => Some(vector.y.into_inner()),
+            _ => None,
+        },
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "immediate-mode graph rendering requires the frame UI, coordinate transforms, editable model context, and deferred action outputs together"
+)]
 pub fn draw_properties(
     ui: &mut Ui,
     painter: &Painter,
@@ -182,10 +201,10 @@ pub fn draw_properties(
     transform: &GraphTransform,
     time_mapper: &TimeMapper,
     properties: &[(String, &Property, &PropertyMap, PropertyComponent)],
+    entity_id: uuid::Uuid,
     editor_context: &mut EditorContext,
     project_service: &EditorService,
-    action: &mut Action,
-    should_push_history: &mut bool,
+    actions: &mut Vec<Action>,
     composition_fps: f64,
 ) {
     let graph_rect = transform.graph_rect;
@@ -203,9 +222,25 @@ pub fn draw_properties(
     .iter()
     .cycle();
 
+    let mut available_drag_origins = Vec::new();
+    for (name, property, _, component) in properties {
+        if property.evaluator != "keyframe" {
+            continue;
+        }
+        for keyframe in property.keyframes() {
+            let value = keyframe_component_value(&keyframe.value, *component).unwrap_or(0.0);
+            available_drag_origins.push(GraphKeyframeDragOrigin {
+                property_name: name.clone(),
+                keyframe_id: keyframe.id,
+                global_time: time_mapper.to_global_time(keyframe.time.into_inner()),
+                value,
+            });
+        }
+    }
+
     for (name, property, map, component_ref) in properties {
         let component = *component_ref;
-        let color = *color_cycle.next().unwrap();
+        let color = color_cycle.next().copied().unwrap_or(Color32::WHITE);
 
         if !editor_context
             .graph_editor
@@ -258,23 +293,9 @@ pub fn draw_properties(
                                 if (pointer_pos.y - y).abs() < 5.0
                                     && graph_rect.contains(pointer_pos)
                                 {
-                                    let (t, _) = transform.from_screen(pointer_pos);
-                                    if let Action::None = action {
-                                        *action = Action::Add(
-                                            name.clone(),
-                                            t.max(0.0),
-                                            val,
-                                            // Removing dereference *c based on error, assuming c is copied PropertyComponent.
-                                            // If component is PropertyComponent (impl Copy), then c is PropertyComponent.
-                                            // Wait, iterating &[(..., PropertyComponent)] yields &PropertyComponent.
-                                            // match component (reference) -> pattern match can deref.
-                                            // If I use match *component { ... c => Some(c) } it works
-                                            // Let's use `match *component` explicitly.
-                                            match component {
-                                                PropertyComponent::Scalar => None,
-                                                c => Some(c),
-                                            },
-                                        );
+                                    let (t, _) = transform.screen_to_graph(pointer_pos);
+                                    if actions.is_empty() {
+                                        actions.push(Action::Add(name.clone(), t.max(0.0), val));
                                     }
                                 }
                             }
@@ -335,28 +356,12 @@ pub fn draw_properties(
                 // 2. Draw Keyframe Dots (Overlay) if it is a keyframe property
                 if property.evaluator == "keyframe" {
                     let keyframes = property.keyframes();
-                    let mut sorted_kf = keyframes.clone();
-                    sorted_kf.sort_by(|a, b| a.time.cmp(&b.time));
+                    let mut sorted_kf = keyframes;
+                    sorted_kf.sort_by_key(|keyframe| keyframe.time);
 
                     for (i, kf) in sorted_kf.iter().enumerate() {
                         let t = kf.time.into_inner();
-                        let val_f64 = match component {
-                            PropertyComponent::Scalar => kf.value.get_as::<f64>(),
-                            PropertyComponent::X => {
-                                if let PropertyValue::Vec2(vec) = &kf.value {
-                                    Some(vec.x.into_inner())
-                                } else {
-                                    None
-                                }
-                            }
-                            PropertyComponent::Y => {
-                                if let PropertyValue::Vec2(vec) = &kf.value {
-                                    Some(vec.y.into_inner())
-                                } else {
-                                    None
-                                }
-                            }
-                        };
+                        let val_f64 = keyframe_component_value(&kf.value, component);
                         let val = val_f64.unwrap_or(0.0);
                         let global_t = time_mapper.to_global_time(t);
                         let kf_pos = transform.to_screen(global_t, val);
@@ -368,29 +373,97 @@ pub fn draw_properties(
 
                         // Interaction area
                         let point_rect = Rect::from_center_size(kf_pos, Vec2::splat(12.0));
-                        let point_id = response.id.with(&name).with(i);
+                        let point_id = response.id.with(name).with(kf.id);
                         let point_response =
                             ui.interact(point_rect, point_id, Sense::click_and_drag());
 
+                        let selection = (name.clone(), kf.id);
                         let is_selected = editor_context
-                            .interaction
-                            .selected_keyframe
-                            .as_ref()
-                            .map_or(false, |(s_name, s_idx)| s_name == name && *s_idx == i);
+                            .graph_editor
+                            .selected_keyframes
+                            .contains(&selection);
+
+                        crate::qa::register_component_with_metadata(
+                            format!("graph.keyframe.{name}:{}", kf.id),
+                            "graph_keyframe",
+                            point_rect,
+                            true,
+                            Some(serde_json::json!({
+                                "property": name,
+                                "component": format!("{component:?}"),
+                                "keyframe_id": kf.id.to_string(),
+                                "source_time": t,
+                                "global_time": global_t,
+                                "value": val,
+                                "selected": is_selected,
+                                "entity_id": entity_id,
+                            })),
+                        );
 
                         // Draw Dot
                         let dot_color = if is_selected { Color32::WHITE } else { color };
                         let radius = if is_selected { 6.0 } else { 4.0 };
                         painter.circle_filled(kf_pos, radius, dot_color);
 
-                        // Selection
+                        let additive_selection = ui.input(|input| {
+                            input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
+                        });
                         if point_response.clicked() {
-                            *action = Action::Select(name.clone(), i);
+                            if additive_selection {
+                                if !editor_context
+                                    .graph_editor
+                                    .selected_keyframes
+                                    .remove(&selection)
+                                {
+                                    editor_context
+                                        .graph_editor
+                                        .selected_keyframes
+                                        .insert(selection.clone());
+                                }
+                            } else {
+                                editor_context.graph_editor.selected_keyframes.clear();
+                                editor_context
+                                    .graph_editor
+                                    .selected_keyframes
+                                    .insert(selection.clone());
+                            }
+                            if editor_context
+                                .graph_editor
+                                .selected_keyframes
+                                .contains(&selection)
+                            {
+                                actions.push(Action::Select(name.clone(), kf.id));
+                            }
                         }
 
-                        // History: drag stopped
-                        if point_response.drag_stopped() {
-                            *should_push_history = true;
+                        if point_response.drag_started() {
+                            if !is_selected {
+                                if !additive_selection {
+                                    editor_context.graph_editor.selected_keyframes.clear();
+                                }
+                                editor_context
+                                    .graph_editor
+                                    .selected_keyframes
+                                    .insert(selection.clone());
+                            }
+                            let origins = available_drag_origins
+                                .iter()
+                                .filter(|origin| {
+                                    editor_context.graph_editor.selected_keyframes.contains(&(
+                                        origin.property_name.clone(),
+                                        origin.keyframe_id,
+                                    ))
+                                })
+                                .cloned()
+                                .collect();
+                            editor_context.graph_editor.keyframe_drag =
+                                Some(GraphKeyframeDragState {
+                                    entity_id,
+                                    anchor: selection.clone(),
+                                    origins,
+                                    changed: false,
+                                });
+                            actions.push(Action::Select(name.clone(), kf.id));
                         }
 
                         // Context Menu
@@ -404,42 +477,85 @@ pub fn draw_properties(
                             });
 
                             if let Some(easing) = chosen_easing {
-                                *action = Action::SetEasing(name_for_menu.clone(), i, easing);
-                                *should_push_history = true;
+                                actions.push(Action::SetEasing(
+                                    name_for_menu.clone(),
+                                    kf.id,
+                                    easing,
+                                ));
                                 ui.close_kind(UiKind::Menu);
                             }
 
                             ui.separator();
-                            if ui.button("Edit Keyframe...").clicked() {
-                                *action = Action::EditKeyframe(name_for_menu.clone(), i);
+                            let edit = ui.button("Edit Keyframe...");
+                            crate::qa::register_component_with_metadata(
+                                format!("graph.keyframe_menu.edit:{}", kf.id),
+                                "graph_keyframe_menu_item",
+                                edit.rect,
+                                edit.enabled(),
+                                Some(serde_json::json!({
+                                    "property": name_for_menu,
+                                    "keyframe_id": kf.id,
+                                })),
+                            );
+                            if edit.clicked() {
+                                actions.push(Action::EditKeyframe(name_for_menu.clone(), kf.id));
                                 ui.close_kind(UiKind::Menu);
                             }
 
                             ui.separator();
-                            if ui
-                                .button(egui::RichText::new("Delete Keyframe").color(Color32::RED))
-                                .clicked()
-                            {
-                                *action = Action::Remove(name_for_menu.clone(), i);
-                                *should_push_history = true;
+                            let delete = ui
+                                .button(egui::RichText::new("Delete Keyframe").color(Color32::RED));
+                            crate::qa::register_component_with_metadata(
+                                format!("graph.keyframe_menu.delete:{}", kf.id),
+                                "graph_keyframe_menu_item",
+                                delete.rect,
+                                delete.enabled(),
+                                Some(serde_json::json!({
+                                    "property": name_for_menu,
+                                    "keyframe_id": kf.id,
+                                })),
+                            );
+                            if delete.clicked() {
+                                actions.push(Action::Remove(name_for_menu.clone(), kf.id));
                                 ui.close_kind(UiKind::Menu);
                             }
                         });
 
                         // Dragging
-                        if is_selected && point_response.dragged() {
-                            let (new_t, new_val) =
-                                transform.from_screen(kf_pos + point_response.drag_delta());
-                            *action = Action::Move(
-                                name.clone(),
-                                i,
-                                new_t.max(0.0),
-                                new_val,
-                                match component {
-                                    PropertyComponent::Scalar => None,
-                                    c => Some(c),
-                                },
-                            );
+                        let is_drag_anchor = editor_context
+                            .graph_editor
+                            .keyframe_drag
+                            .as_ref()
+                            .is_some_and(|drag| drag.anchor == selection);
+                        if is_drag_anchor && point_response.dragged() {
+                            // Origins are a gesture-start snapshot, so apply
+                            // the gesture's total displacement. `drag_delta`
+                            // is only the latest frame's pointer movement.
+                            let delta = point_response.total_drag_delta().unwrap_or_default();
+                            let time_delta = f64::from(delta.x / transform.zoom_x);
+                            let value_delta = f64::from(-delta.y / transform.zoom_y);
+                            let moves = editor_context
+                                .graph_editor
+                                .keyframe_drag
+                                .as_ref()
+                                .map(|drag| {
+                                    drag.origins
+                                        .iter()
+                                        .map(|origin| KeyframeMove {
+                                            property_name: origin.property_name.clone(),
+                                            keyframe_id: origin.keyframe_id,
+                                            global_time: (origin.global_time + time_delta).max(0.0),
+                                            value: origin.value + value_delta,
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default();
+                            if !moves.is_empty() {
+                                actions.push(Action::MoveBatch(moves));
+                            }
+                        }
+                        if is_drag_anchor && point_response.drag_stopped() {
+                            actions.push(Action::FinishMove);
                         }
                     }
 
@@ -447,7 +563,7 @@ pub fn draw_properties(
                     if response.double_clicked() {
                         if let Some(pointer_pos) = response.interact_pointer_pos() {
                             if graph_rect.contains(pointer_pos) {
-                                let (t, _) = transform.from_screen(pointer_pos);
+                                let (t, _) = transform.screen_to_graph(pointer_pos);
 
                                 // Evaluate at pointer time
                                 let value_pv = project_service.evaluate_property_value(
@@ -479,16 +595,7 @@ pub fn draw_properties(
 
                                 // Distance check
                                 if (pointer_pos.y - curve_pos.y).abs() < 10.0 {
-                                    *action = Action::Add(
-                                        name.clone(),
-                                        t.max(0.0),
-                                        val_at_t,
-                                        match component {
-                                            PropertyComponent::Scalar => None,
-                                            c => Some(c),
-                                        },
-                                    );
-                                    *should_push_history = true;
+                                    actions.push(Action::Add(name.clone(), t.max(0.0), val_at_t));
                                 }
                             }
                         }

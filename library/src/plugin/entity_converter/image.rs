@@ -1,7 +1,8 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
+use crate::model::NodeContent;
 use crate::model::frame::entity::{FrameContent, FrameObject, ImageSurface};
-// use crate::model::project::TrackClip;
 
+#[derive(Default)]
 pub struct ImageEntityConverterPlugin;
 
 impl ImageEntityConverterPlugin {
@@ -109,23 +110,20 @@ impl EntityConverterPlugin for ImageEntityConverterPlugin {
     fn convert_entity(
         &self,
         evaluator: &FrameEvaluationContext,
-        layer: &crate::model::Layer,
+        node: &crate::model::Node,
         time: f64,
     ) -> Option<FrameObject> {
-        let props = &layer.properties;
-        let _comp_fps = evaluator.composition.fps;
+        let props = &node.properties;
+        let asset = match &node.content {
+            NodeContent::Media(media) => evaluator.project.get_asset(media.asset_id),
+            _ => None,
+        };
+        let file_path = asset
+            .map(|asset| asset.path.clone())
+            .or_else(|| evaluator.require_string(props, "file_path", time, "image"))?;
+        let transform = evaluator.build_transform(props, time);
 
-        // In Trinity, time is absolute project time (seconds).
-        // If Layer has start_time, we might want local time:
-        let eval_time = time; // - layer.start_time; // Depends on if transform/properties are relative to layer or project.
-        // For now, assume global time for properties, unless strictly relative.
-        // Legacy 'track_clip' had 'in_frame', 'source_begin_frame'.
-        // Layer has 'start_time', 'duration'.
-
-        let file_path = evaluator.require_string(props, "file_path", eval_time, "image")?;
-        let transform = evaluator.build_transform(props, eval_time);
-
-        let effects = evaluator.build_image_effects(&layer.effects, eval_time);
+        let effects = evaluator.build_image_effects(&node.effects, time);
         let surface = ImageSurface {
             file_path,
             effects,
