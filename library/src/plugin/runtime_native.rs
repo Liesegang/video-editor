@@ -988,7 +988,12 @@ impl RuntimeEffectPlugin {
         if let Some(existing) = instances.get(key).cloned() {
             return Ok(existing);
         }
-        instances.put(key.clone(), Arc::clone(&created));
+        let evicted = instances.put(key.clone(), Arc::clone(&created));
+        drop(instances);
+        // Releasing an opaque plugin instance is a plugin callback. Never run
+        // it while the local cache mutex is held, so a callback can safely
+        // re-enter another operation on this adapter.
+        drop(evicted);
         Ok(created)
     }
 }
