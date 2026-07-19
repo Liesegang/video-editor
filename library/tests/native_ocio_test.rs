@@ -1,23 +1,41 @@
+use anyhow::{Context, Result, ensure};
 use library::editor::color_service::ColorSpaceManager;
+use std::collections::HashSet;
 
 #[test]
-fn test_native_ocio_integration() {
-    // This test requires shim.dll and OpenColorIO_2_5.dll to be in the target directory (deps or debug).
-    // Cargo runs tests with target/debug/deps as current or runtime path?
-    // Actually, usually it's best to run this where the DLLs are.
-
-    // Check if we can get available color spaces.
+fn test_native_ocio_integration() -> Result<()> {
     let spaces = ColorSpaceManager::get_available_colorspaces();
-    println!("Available color spaces: {:?}", spaces);
+    let repeated = ColorSpaceManager::get_available_colorspaces();
+    ensure!(
+        spaces == repeated,
+        "OCIO color-space enumeration changed while using the same global context"
+    );
 
-    // We expect some spaces if OCIO config is found (or default).
-    // If using default raw config, might be empty or basic.
-    // If Env var OCIO is not set, CreateFromEnv might fail or return empty/default?
-    // Usually it defaults to raw if nothing found, or logging error.
+    let mut unique = HashSet::new();
+    for space in &spaces {
+        ensure!(
+            !space.trim().is_empty(),
+            "OCIO returned an empty color-space name"
+        );
+        ensure!(
+            unique.insert(space),
+            "OCIO returned duplicate color-space name {space:?}"
+        );
+    }
 
-    // Try creating a processor (raw to raw should always work if config supports it, otherwise identity)
-    // Note: If no config is present, we might get errors.
+    if let Some(space) = spaces.first() {
+        let processor = ColorSpaceManager::create_processor(space, space).with_context(|| {
+            format!("failed to create identity OCIO processor for color space {space:?}")
+        })?;
+        let pixels = [0_u8, 64, 128, 255, 255, 128, 64, 0];
+        let transformed = processor.apply_rgba(&pixels);
+        ensure!(
+            transformed.len() == pixels.len(),
+            "OCIO processor changed RGBA buffer length from {} to {}",
+            pixels.len(),
+            transformed.len()
+        );
+    }
 
-    // We can just assert that it doesn't crash (which means shim loading works).
-    assert!(true);
+    Ok(())
 }
