@@ -726,6 +726,17 @@ impl Project {
             .find(|connection| connection.id == connection_id)
             .cloned()
             .ok_or(ProjectGraphError::ConnectionNotFound(connection_id))?;
+        let via_input_definition = self
+            .port_definition(&via_input, PortDirection::Input)
+            .ok_or_else(|| ProjectGraphError::PortNotFound(via_input.clone()))?;
+        if via_input_definition.multiplicity == PortMultiplicity::Single
+            && self
+                .connections
+                .iter()
+                .any(|connection| connection.to == via_input)
+        {
+            return Err(ProjectGraphError::SpliceInputOccupied { target: via_input });
+        }
         let baseline = self.validate_connections();
         let mut candidate = self.clone();
         let upstream_id = candidate.connect_ports(original.from.clone(), via_input)?;
@@ -1104,10 +1115,26 @@ fn is_reachable(
 mod tests {
     use super::*;
     use crate::model::project::Composition;
-    use crate::model::{Clip, Node};
+    use crate::model::{Clip, Node, ReferenceContent};
 
     fn add_node(project: &mut Project, container: NodeContainer, name: &str) -> Uuid {
         let node = Node::new(name, NodeContent::Merge);
+        let node_id = node.id;
+        project.add_node(node);
+        project
+            .attach_node_to_container(container, node_id)
+            .unwrap();
+        node_id
+    }
+
+    fn add_reference_node(project: &mut Project, container: NodeContainer, name: &str) -> Uuid {
+        let node = Node::new(
+            name,
+            NodeContent::Reference(ReferenceContent {
+                target_id: Uuid::new_v4(),
+                sync_global_time: false,
+            }),
+        );
         let node_id = node.id;
         project.add_node(node);
         project
@@ -1314,5 +1341,263 @@ mod tests {
         assert_eq!(upstream.from.owner, PortOwner::Node(alternate_source));
         assert_eq!(upstream.to.owner, PortOwner::Node(via));
         assert!(project.validate_connections().is_empty());
+    }
+
+    #[test]
+    fn reconnect_is_atomic_replaces_single_inputs_and_normalizes_variadic_orders() {
+        let mut project = Project::new("reconnect contracts");
+        let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
+        let composition_id = composition.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let container = NodeContainer::Composition(composition_id);
+        let sources = (0..5)
+            .map(|index| add_node(&mut project, container, &format!("source {index}")))
+            .collect::<Vec<_>>();
+        let target_a = add_node(&mut project, container, "target a");
+        let target_b = add_node(&mut project, container, "target b");
+        let single_a = add_reference_node(&mut project, container, "single a");
+        let single_b = add_reference_node(&mut project, container, "single b");
+
+        let single_a_input = PortAddress::new(PortOwner::Node(single_a), IMAGE_INPUT_PORT);
+        let occupied_id = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(sources[0]), IMAGE_OUTPUT_PORT),
+                single_a_input.clone(),
+            )
+            .unwrap();
+        let moving_id = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(sources[1]), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(single_b), IMAGE_INPUT_PORT),
+            )
+            .unwrap();
+        project
+            .reconnect_connection(
+                moving_id,
+                PortAddress::new(PortOwner::Node(sources[1]), IMAGE_OUTPUT_PORT),
+                single_a_input.clone(),
+            )
+            .unwrap();
+        assert!(
+            !project
+                .connections
+                .iter()
+                .any(|item| item.id == occupied_id)
+        );
+        assert_eq!(
+            project
+                .connections
+                .iter()
+                .find(|item| item.id == moving_id)
+                .map(|item| (&item.to, item.order)),
+            Some((&single_a_input, 0))
+        );
+
+        let target_a_input = PortAddress::new(PortOwner::Node(target_a), MERGE_IMAGES_PORT);
+        let target_b_input = PortAddress::new(PortOwner::Node(target_b), MERGE_IMAGES_PORT);
+        for source in &sources[..3] {
+            project
+                .connect_ports(
+                    PortAddress::new(PortOwner::Node(*source), IMAGE_OUTPUT_PORT),
+                    target_a_input.clone(),
+                )
+                .unwrap();
+        }
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(sources[3]), IMAGE_OUTPUT_PORT),
+                target_b_input.clone(),
+            )
+            .unwrap();
+        let moved_variadic = project
+            .connections
+            .iter()
+            .find(|item| {
+                item.from.owner == PortOwner::Node(sources[2]) && item.to == target_a_input
+            })
+            .unwrap()
+            .id;
+        project
+            .reconnect_connection(
+                moved_variadic,
+                PortAddress::new(PortOwner::Node(sources[2]), IMAGE_OUTPUT_PORT),
+                target_b_input.clone(),
+            )
+            .unwrap();
+        let orders = |project: &Project, target: &PortAddress| {
+            let mut orders = project
+                .connections
+                .iter()
+                .filter(|item| &item.to == target)
+                .map(|item| item.order)
+                .collect::<Vec<_>>();
+            orders.sort_unstable();
+            orders
+        };
+        assert_eq!(orders(&project, &target_a_input), vec![0, 1]);
+        assert_eq!(orders(&project, &target_b_input), vec![0, 1]);
+
+        let before_invalid = project.clone();
+        let error = project
+            .reconnect_connection(
+                moved_variadic,
+                PortAddress::new(PortOwner::Node(sources[2]), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(target_b), TIME_PORT),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ProjectGraphError::IncompatiblePortTypes { .. }
+        ));
+        assert_eq!(project, before_invalid, "failed reconnect must roll back");
+    }
+
+    #[test]
+    fn reconnect_allows_cross_container_graph_ports_but_rejects_internal_escape_and_cycles() {
+        let mut project = Project::new("reconnect scope contracts");
+        let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let clip = Clip::new("clip", 0.0, 10.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id).unwrap();
+
+        let composition_source = add_node(
+            &mut project,
+            NodeContainer::Composition(composition_id),
+            "composition source",
+        );
+        let clip_source = add_node(&mut project, NodeContainer::Clip(clip_id), "clip source");
+        let clip_target = add_node(&mut project, NodeContainer::Clip(clip_id), "clip target");
+        let image_connection = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(clip_source), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(clip_target), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
+        project
+            .reconnect_connection(
+                image_connection,
+                PortAddress::new(PortOwner::Node(composition_source), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(clip_target), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
+
+        let time_connection = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
+                PortAddress::new(PortOwner::Node(clip_source), TIME_PORT),
+            )
+            .unwrap();
+        let before_escape = project.clone();
+        let error = project
+            .reconnect_connection(
+                time_connection,
+                PortAddress::new(PortOwner::Composition(composition_id), TIME_PORT),
+                PortAddress::new(PortOwner::Node(clip_source), TIME_PORT),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ProjectGraphError::InternalPortEscapesContainer { .. }
+        ));
+        assert_eq!(project, before_escape);
+
+        let a = add_node(
+            &mut project,
+            NodeContainer::Composition(composition_id),
+            "a",
+        );
+        let b = add_node(
+            &mut project,
+            NodeContainer::Composition(composition_id),
+            "b",
+        );
+        let c = add_node(
+            &mut project,
+            NodeContainer::Composition(composition_id),
+            "c",
+        );
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(a), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(b), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
+        let movable = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(c), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(clip_target), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
+        let before_cycle = project.clone();
+        let error = project
+            .reconnect_connection(
+                movable,
+                PortAddress::new(PortOwner::Node(b), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(a), MERGE_IMAGES_PORT),
+            )
+            .unwrap_err();
+        assert!(matches!(error, ProjectGraphError::ConnectionCycle { .. }));
+        assert_eq!(project, before_cycle);
+    }
+
+    #[test]
+    fn splice_rejects_occupied_single_input_and_any_validation_failure_without_mutation() {
+        let mut project = Project::new("splice rollback");
+        let (composition, track) = Composition::new("composition", 320, 180, 30.0, 10.0);
+        let composition_id = composition.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let container = NodeContainer::Composition(composition_id);
+        let source = add_node(&mut project, container, "source");
+        let occupant = add_node(&mut project, container, "occupant");
+        let via = add_reference_node(&mut project, container, "via");
+        let target = add_node(&mut project, container, "target");
+        let connection_id = project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(source), IMAGE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(target), MERGE_IMAGES_PORT),
+            )
+            .unwrap();
+        let via_input = PortAddress::new(PortOwner::Node(via), IMAGE_INPUT_PORT);
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(occupant), IMAGE_OUTPUT_PORT),
+                via_input.clone(),
+            )
+            .unwrap();
+        let before_occupied = project.clone();
+        assert_eq!(
+            project
+                .splice_connection(
+                    connection_id,
+                    via_input.clone(),
+                    PortAddress::new(PortOwner::Node(via), IMAGE_OUTPUT_PORT),
+                )
+                .unwrap_err(),
+            ProjectGraphError::SpliceInputOccupied { target: via_input }
+        );
+        assert_eq!(project, before_occupied);
+
+        let empty_via = add_reference_node(&mut project, container, "empty via");
+        let before_invalid = project.clone();
+        let error = project
+            .splice_connection(
+                connection_id,
+                PortAddress::new(PortOwner::Node(empty_via), IMAGE_INPUT_PORT),
+                PortAddress::new(PortOwner::Composition(composition_id), TIME_PORT),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ProjectGraphError::IncompatiblePortTypes { .. }
+                | ProjectGraphError::InternalPortEscapesContainer { .. }
+        ));
+        assert_eq!(project, before_invalid);
     }
 }

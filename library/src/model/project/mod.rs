@@ -412,6 +412,8 @@ pub enum ProjectGraphError {
     PortNotFound(PortAddress),
     #[error("connection {0} does not exist")]
     ConnectionNotFound(Uuid),
+    #[error("cannot splice through occupied single input: {target:?}")]
+    SpliceInputOccupied { target: PortAddress },
     #[error("cannot connect {source_type:?} to {target_type:?}")]
     IncompatiblePortTypes {
         source_type: PortDataType,
@@ -994,18 +996,21 @@ impl Project {
         output_node_id: Option<Uuid>,
     ) -> Result<(), ProjectGraphError> {
         let previous_output_node_id = match container {
-            NodeContainer::Composition(id) => self
-                .get_composition(id)
-                .ok_or(ProjectGraphError::CompositionNotFound(id))?
-                .output_node_id,
-            NodeContainer::Track(id) => self
-                .get_track(id)
-                .ok_or(ProjectGraphError::TrackNotFound(id))?
-                .output_node_id,
-            NodeContainer::Clip(id) => self
-                .get_clip(id)
-                .ok_or(ProjectGraphError::ClipNotFound(id))?
-                .output_node_id,
+            NodeContainer::Composition(id) => {
+                self.get_composition(id)
+                    .ok_or(ProjectGraphError::CompositionNotFound(id))?
+                    .output_node_id
+            }
+            NodeContainer::Track(id) => {
+                self.get_track(id)
+                    .ok_or(ProjectGraphError::TrackNotFound(id))?
+                    .output_node_id
+            }
+            NodeContainer::Clip(id) => {
+                self.get_clip(id)
+                    .ok_or(ProjectGraphError::ClipNotFound(id))?
+                    .output_node_id
+            }
         };
         if let Some(node_id) = output_node_id
             && self.find_node_container(node_id) != Some(container)
