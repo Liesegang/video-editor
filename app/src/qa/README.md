@@ -62,14 +62,19 @@ Coordinates default to egui logical points and can instead use
 curl -s -X POST http://127.0.0.1:39091/v1/input/click \
   -d '{"x":640,"y":360,"button":"primary"}'
 
+curl -s -X POST http://127.0.0.1:39091/v1/input/double-click \
+  -d '{"x":640,"y":360,"button":"primary"}'
+
 curl -s -X POST http://127.0.0.1:39091/v1/input/drag \
   -d '{"from":{"x":300,"y":200},"to":{"x":600,"y":220},"steps":8}'
 ```
 
 Also available: `/v1/input/move`, `/v1/input/press`, and
 `/v1/input/release`. Clicks are emitted as press and release on separate UI
-frames. Drags emit press, intermediate pointer moves, and release across
-multiple frames, so egui's normal hit testing and drag lifecycle run.
+frames. Double-clicks emit two such clicks as one uninterrupted action, inside
+egui's normal double-click interval. Drags emit press, intermediate pointer
+moves, and release across multiple frames, so normal hit testing and gesture
+lifecycle run.
 
 Inject a real command-modified wheel event at a screen coordinate with
 `/v1/input/scroll`:

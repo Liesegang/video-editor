@@ -173,6 +173,7 @@ pub enum InputAction {
     Press(PointerRequest),
     Release(PointerRequest),
     Click(PointerRequest),
+    DoubleClick(PointerRequest),
     Drag(DragRequest),
     Key(KeyRequest),
     Text(TextRequest),
@@ -185,7 +186,8 @@ impl InputAction {
             Self::Move(request)
             | Self::Press(request)
             | Self::Release(request)
-            | Self::Click(request) => {
+            | Self::Click(request)
+            | Self::DoubleClick(request) => {
                 if request.point().is_finite() {
                     Ok(())
                 } else {
@@ -414,6 +416,22 @@ fn build_steps(command: InputCommand, pixels_per_point: f32) -> Vec<FrameStep> {
                 request.modifiers,
             );
         }
+        InputAction::DoubleClick(request) => {
+            let pos = request
+                .point()
+                .to_points(request.coordinate_space, pixels_per_point);
+            push(vec![egui::Event::PointerMoved(pos)], request.modifiers);
+            for _ in 0..2 {
+                push(
+                    vec![pointer_event(pos, request.button, true, request.modifiers)],
+                    request.modifiers,
+                );
+                push(
+                    vec![pointer_event(pos, request.button, false, request.modifiers)],
+                    request.modifiers,
+                );
+            }
+        }
         InputAction::Drag(request) => {
             let from = request
                 .from
@@ -531,6 +549,32 @@ mod tests {
             [egui::Event::PointerButton { pressed: false, .. }]
         ));
         assert!(steps[2].final_step);
+    }
+
+    #[test]
+    fn double_click_uses_two_real_clicks_inside_one_frame_sequence() {
+        let steps = build_steps(
+            InputCommand {
+                id: 27,
+                action: InputAction::DoubleClick(pointer_request(12.0, 34.0)),
+            },
+            2.0,
+        );
+        assert_eq!(steps.len(), 5);
+        assert!(matches!(
+            steps[0].events.as_slice(),
+            [egui::Event::PointerMoved(_)]
+        ));
+        for (step, pressed) in steps[1..].iter().zip([true, false, true, false]) {
+            assert!(matches!(
+                step.events.as_slice(),
+                [egui::Event::PointerButton {
+                    pressed: event_pressed,
+                    ..
+                }] if *event_pressed == pressed
+            ));
+        }
+        assert!(steps[4].final_step);
     }
 
     #[test]
