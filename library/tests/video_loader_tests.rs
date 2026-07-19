@@ -456,12 +456,12 @@ fn loaders_report_unsupported_separately_from_failures() {
 #[test]
 fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() {
     use library::core::framing::FrameEvaluator;
+    use library::editor::project_service::MediaNodeRequest;
     use library::model::asset::{Asset, AssetKind};
     use library::model::frame::color::Color;
     use library::model::frame::entity::{FrameContent, FrameItem};
     use library::model::project::{Composition, NodeContainer};
-    use library::model::property::{Property, PropertyValue};
-    use library::model::{Clip, MediaContent, Node, Project};
+    use library::model::{Clip, Project};
     use library::{RenderService, SkiaRenderer};
     use ordered_float::OrderedFloat;
 
@@ -490,18 +490,19 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() {
     let clip_id = clip.id;
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id).unwrap();
-    let mut node = Node::new_media(
+    let node = support::media_node_for_canvas(
         "video",
-        MediaContent {
+        MediaNodeRequest::Video {
             asset_id,
+            file_path: path,
             // Exercise fallback to the authoritative Asset stream metadata.
             stream_index: None,
             audio_stream_index: None,
         },
-    );
-    node.properties.set(
-        "file_path".into(),
-        Property::constant(PropertyValue::String(path)),
+        16,
+        16,
+        1280,
+        720,
     );
     let node_id = node.id;
     project.add_node(node);
@@ -575,3 +576,4 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() {
         .render_from_frame_info(&out_of_range_frame)
         .expect("NoOutput outside the source range renders harmlessly");
 }
+mod support;

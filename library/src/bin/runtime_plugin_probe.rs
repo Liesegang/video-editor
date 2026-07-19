@@ -195,7 +195,7 @@ fn verify_config_operations(
         &context,
         FILL_COMPONENT_ID,
         fill.id,
-        &fill.properties,
+        fill.properties(),
         0.25,
     ) else {
         bail!("runtime Fill adapter produced NoOutput")
@@ -219,7 +219,7 @@ fn verify_config_operations(
         &context,
         STROKE_COMPONENT_ID,
         stroke.id,
-        &stroke.properties,
+        stroke.properties(),
         0.25,
     ) else {
         bail!("runtime Stroke adapter produced NoOutput")
@@ -249,7 +249,7 @@ fn verify_config_operations(
         &context,
         BACKPLATE_COMPONENT_ID,
         backplate.id,
-        &backplate.properties,
+        backplate.properties(),
         0.25,
     ) else {
         bail!("runtime Backplate adapter produced NoOutput")
@@ -273,15 +273,18 @@ fn verify_config_operations(
 
     verify_runtime_config_graph(manager)?;
 
-    let mut unavailable = fill;
-    let unavailable_component_id = {
-        let library::model::NodeContent::PluginOperation(operation) = &mut unavailable.content
-        else {
-            bail!("runtime Style factory returned non-operation content")
-        };
-        operation.component_id = "unavailable.vendor.style".to_string();
-        operation.component_id.clone()
-    };
+    let unavailable_component_id = "unavailable.vendor.style";
+    let mut unavailable_json = serde_json::to_value(fill)?;
+    let operation = unavailable_json
+        .get_mut("content")
+        .and_then(|content| content.get_mut("data"))
+        .and_then(serde_json::Value::as_object_mut)
+        .context("runtime Style factory returned non-operation content")?;
+    operation.insert(
+        "component_id".to_string(),
+        serde_json::Value::String(unavailable_component_id.to_string()),
+    );
+    let unavailable: Node = serde_json::from_value(unavailable_json)?;
     let json = serde_json::to_string(&unavailable)?;
     let preserved: Node = serde_json::from_str(&json)?;
     if preserved != unavailable {
@@ -290,9 +293,9 @@ fn verify_config_operations(
     if !matches!(
         manager.evaluate_style_operation(
             &context,
-            &unavailable_component_id,
+            unavailable_component_id,
             unavailable.id,
-            &unavailable.properties,
+            unavailable.properties(),
             0.25,
         ),
         EvalOutput::NoOutput
@@ -484,7 +487,12 @@ fn verify_runtime_config_graph(manager: &Arc<PluginManager>) -> anyhow::Result<(
     let text_id = graph
         .nodes
         .iter()
-        .find(|node| matches!(node.content, NodeContent::Generator(GeneratorContent::Text)))
+        .find(|node| {
+            matches!(
+                node.content(),
+                NodeContent::Generator(GeneratorContent::Text)
+            )
+        })
         .map(|node| node.id)
         .context("text graph has no explicit Shape source")?;
     let old_output = graph
@@ -641,7 +649,7 @@ fn verify_all_defaults(
         .map(|property| property.name.as_str())
         .collect::<BTreeSet<_>>();
     let node_names = node
-        .properties
+        .properties()
         .iter()
         .map(|(name, _)| name.as_str())
         .collect::<BTreeSet<_>>();

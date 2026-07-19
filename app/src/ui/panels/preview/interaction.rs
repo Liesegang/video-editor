@@ -1,7 +1,7 @@
 use crate::state::context::EditorContext;
 use crate::ui::panels::preview::{
     action::PreviewAction,
-    clip::{PreviewClip, visual_for_selection},
+    clip::{visual_for_selection, PreviewClip},
     gizmo,
 };
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
@@ -98,12 +98,12 @@ impl<'a> PreviewInteractions<'a> {
                         .as_deref(),
                 ) {
                     if matches!(
-                        &gc.node.content,
+                        gc.node.content(),
                         library::model::NodeContent::Generator(
                             library::model::GeneratorContent::Shape
                         )
                     ) {
-                        if let Some(path_str) = gc.node.properties.get_string("path") {
+                        if let Some(path_str) = gc.node.properties().get_string("path") {
                             // The path is always projected from Project. Only point
                             // selection/handle state survives between frames.
                             let parsed_path = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
@@ -351,7 +351,7 @@ impl<'a> PreviewInteractions<'a> {
                     visual_for_selection(self.gui_clips, id, Some(hit.instance_path.as_slice()));
                 let is_text = visual.is_some_and(|visual| {
                     matches!(
-                        &visual.node.content,
+                        visual.node.content(),
                         library::model::NodeContent::Generator(
                             library::model::GeneratorContent::Text
                         )
@@ -360,7 +360,7 @@ impl<'a> PreviewInteractions<'a> {
                 if is_text {
                     self.editor_context.interaction.editing_text_entity_id = Some(id);
                     if let Some(gc) = visual {
-                        if let Some(text) = gc.node.properties.get_string("text") {
+                        if let Some(text) = gc.node.properties().get_string("text") {
                             self.editor_context.interaction.text_edit_buffer = text;
                         }
                     }
@@ -632,7 +632,7 @@ impl<'a> PreviewInteractions<'a> {
                 let rect = Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y));
 
                 // Calculate Font Size
-                let font_size = gc.node.properties.get_f32("size").unwrap_or(100.0);
+                let font_size = gc.node.properties().get_f32("size").unwrap_or(100.0);
 
                 let zoom = self.editor_context.view.zoom;
                 // Assuming uniform scale or using scale_y for height

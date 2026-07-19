@@ -751,7 +751,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 }
                 if coordinate_double_clicked {
                     if let Some(node) = self.project.get_node(project_node_id) {
-                        if let NodeContent::Reference(reference) = &node.content {
+                        if let NodeContent::Reference(reference) = node.content() {
                             *self.pending_navigation = Some(reference.target_id);
                         }
                     }
@@ -1010,7 +1010,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 );
             });
 
-            match &node.content {
+            match node.content() {
                 NodeContent::Generator(GeneratorContent::Text) => {
                     self.edit_string_property(ui, project_node_id, node, "text", "Text", "");
                     self.edit_string_property(
@@ -1046,7 +1046,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                     let property_time =
                         node_property_time(self.project, project_node_id, self.current_time);
                     let color = node
-                        .properties
+                        .properties()
                         .get("color")
                         .and_then(|property| {
                             property
@@ -1134,9 +1134,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         );
                     });
                 }
-                NodeContent::Media(_)
-                | NodeContent::Reference(_)
-                | NodeContent::Merge => {}
+                NodeContent::Media(_) | NodeContent::Reference(_) | NodeContent::Merge => {}
             }
         });
     }
@@ -1454,7 +1452,7 @@ impl ProjectNodeViewer<'_> {
         let value = self
             .project
             .get_node(node_id)
-            .and_then(|node| node.properties.get(property_key))
+            .and_then(|node| node.properties().get(property_key))
             .map(|property| property.evaluate_at(property_time));
         let current_value_metadata = value
             .as_ref()
@@ -1627,7 +1625,7 @@ impl ProjectNodeViewer<'_> {
         #[cfg(test)]
         capture_test_rect(&component_id, rect);
         let operation_identity = self.project.get_node(node_id).and_then(|node| {
-            let NodeContent::PluginOperation(operation) = &node.content else {
+            let NodeContent::PluginOperation(operation) = node.content() else {
                 return None;
             };
             Some(serde_json::json!({
@@ -1763,7 +1761,7 @@ impl ProjectNodeViewer<'_> {
     ) {
         let property_time = node_property_time(self.project, node_id, self.current_time);
         let mut value = node
-            .properties
+            .properties()
             .get(key)
             .and_then(|property| property.evaluate_at(property_time).get_as::<String>())
             .unwrap_or_else(|| fallback.to_string());
@@ -1863,7 +1861,7 @@ fn value_operation_label(value: library::model::ValueContent) -> &'static str {
 }
 
 fn node_palette(project: &Project, node_id: Uuid) -> NodePalette {
-    match project.get_node(node_id).map(|node| &node.content) {
+    match project.get_node(node_id).map(Node::content) {
         Some(NodeContent::Generator(GeneratorContent::Text)) => NodePalette {
             body: Color32::from_rgb(32, 36, 48),
             header: Color32::from_rgb(77, 57, 112),
@@ -1913,7 +1911,7 @@ fn node_palette(project: &Project, node_id: Uuid) -> NodePalette {
 }
 
 fn node_icon(project: &Project, node_id: Uuid) -> &'static str {
-    match project.get_node(node_id).map(|node| &node.content) {
+    match project.get_node(node_id).map(Node::content) {
         Some(NodeContent::Generator(GeneratorContent::Text)) => "T",
         Some(NodeContent::Generator(GeneratorContent::Shape)) => "◇",
         Some(NodeContent::Generator(GeneratorContent::Solid)) => "■",
@@ -2307,7 +2305,7 @@ fn plugin_operation_property_definition(
     node: &Node,
     property_name: &str,
 ) -> Option<PropertyDefinition> {
-    let NodeContent::PluginOperation(operation) = &node.content else {
+    let NodeContent::PluginOperation(operation) = node.content() else {
         return None;
     };
     plugin_manager
@@ -5720,7 +5718,7 @@ fn estimated_node_size(project: &Project, node_id: Uuid) -> egui::Vec2 {
     // These are conservative graph-space bounds for the complete rendered
     // card (header, pin rows and body controls), not just the body widget.
     // The extra pin term keeps plugin Nodes with unusually many ports safe.
-    let base_height = match project.get_node(node_id).map(|node| &node.content) {
+    let base_height = match project.get_node(node_id).map(Node::content) {
         Some(NodeContent::Generator(GeneratorContent::Text)) => 330.0,
         Some(NodeContent::Generator(GeneratorContent::Shape))
         | Some(NodeContent::Generator(GeneratorContent::SkSL)) => 300.0,
@@ -5947,7 +5945,7 @@ fn splice_ports_for_node(
 ) -> Option<(PortAddress, PortAddress)> {
     let node = project.get_node(node_id)?;
     if !matches!(
-        node.content,
+        node.content(),
         NodeContent::PluginOperation(_) | NodeContent::Merge
     ) {
         return None;
@@ -6169,9 +6167,7 @@ fn apply_edit(project: &mut Project, edit: NodeEdit) -> bool {
                 .map(|candidate| (candidate.order, candidate.id))
                 .collect::<Vec<_>>();
             siblings.sort_by_key(|(order, id)| (*order, *id));
-            let Some(current_index) = siblings
-                .iter()
-                .position(|(_, id)| *id == connection_id)
+            let Some(current_index) = siblings.iter().position(|(_, id)| *id == connection_id)
             else {
                 return false;
             };
@@ -6300,12 +6296,12 @@ fn apply_edit(project: &mut Project, edit: NodeEdit) -> bool {
             time,
             value,
         } => match owner {
-            PortOwner::Clip(id) => project.get_clip_mut(id).is_some_and(|clip| {
-                clip.update_property_or_keyframe(&key, time, value, None)
-            }),
-            PortOwner::Node(id) => project.get_node_mut(id).is_some_and(|node| {
-                node.update_property_or_keyframe(&key, time, value, None)
-            }),
+            PortOwner::Clip(id) => project
+                .get_clip_mut(id)
+                .is_some_and(|clip| clip.update_property_or_keyframe(&key, time, value, None)),
+            PortOwner::Node(id) => project
+                .get_node_mut(id)
+                .is_some_and(|node| node.update_property_or_keyframe(&key, time, value, None)),
             PortOwner::Composition(_) | PortOwner::Track(_) => false,
         },
     }
@@ -6782,7 +6778,7 @@ fn connection_supports_authored_blend(
             PortOwner::Node(node_id)
                 if project
                     .get_node(node_id)
-                    .is_some_and(|node| matches!(node.content, NodeContent::Merge))
+                    .is_some_and(|node| matches!(node.content(), NodeContent::Merge))
         )
         && project
             .port_definition(&connection.to, PortDirection::Input)
@@ -8713,7 +8709,7 @@ mod tests {
     }
 
     fn plugin_operation_component(node: &Node) -> Option<&str> {
-        match &node.content {
+        match node.content() {
             NodeContent::PluginOperation(operation) => Some(&operation.component_id),
             _ => None,
         }
@@ -9236,13 +9232,8 @@ mod tests {
             }],
         ];
         let mut state = NodeEditorState::default();
-        let edits = run_wire_interaction_frames(
-            &project,
-            &edge,
-            &rendered_ports,
-            &mut state,
-            invalid_drop,
-        );
+        let edits =
+            run_wire_interaction_frames(&project, &edge, &rendered_ports, &mut state, invalid_drop);
         assert!(edits.is_empty());
         assert!(state.normal_connect_gesture.is_none());
         assert!(state.selected_connection_id.is_none());
@@ -9270,13 +9261,8 @@ mod tests {
                 modifiers: egui::Modifiers::NONE,
             }],
         ];
-        let edits = run_wire_interaction_frames(
-            &project,
-            &edge,
-            &rendered_ports,
-            &mut state,
-            escaped,
-        );
+        let edits =
+            run_wire_interaction_frames(&project, &edge, &rendered_ports, &mut state, escaped);
         assert!(edits.is_empty());
         assert!(state.normal_connect_gesture.is_none());
 
@@ -9772,7 +9758,12 @@ mod tests {
         let source_id = graph
             .nodes
             .iter()
-            .find(|node| matches!(node.content, NodeContent::Generator(GeneratorContent::Text)))
+            .find(|node| {
+                matches!(
+                    node.content(),
+                    NodeContent::Generator(GeneratorContent::Text)
+                )
+            })
             .unwrap()
             .id;
         let fill_id = graph
@@ -10214,7 +10205,7 @@ mod tests {
                 .create_effector_operation_node(component_id)
                 .unwrap();
             assert_eq!(
-                node.properties
+                node.properties()
                     .iter()
                     .map(|(name, _)| name.as_str())
                     .collect::<BTreeSet<_>>(),
@@ -10226,7 +10217,7 @@ mod tests {
             );
             for definition in descriptor.properties() {
                 assert_eq!(
-                    node.properties
+                    node.properties()
                         .get(definition.name())
                         .map(|property| property.evaluate_at(0.0)),
                     Some(definition.default_value().clone()),
@@ -10238,7 +10229,7 @@ mod tests {
         let transform = plugins.create_effector_operation_node("transform").unwrap();
         assert_eq!(
             transform
-                .properties
+                .properties()
                 .get("target")
                 .map(|property| property.evaluate_at(0.0)),
             Some(PropertyValue::String("Block".to_string()))
@@ -10246,14 +10237,14 @@ mod tests {
         let opacity = plugins.create_effector_operation_node("opacity").unwrap();
         assert_eq!(
             opacity
-                .properties
+                .properties()
                 .get("mode")
                 .map(|property| property.evaluate_at(0.0)),
             Some(PropertyValue::String("Set".to_string()))
         );
         assert_eq!(
             opacity
-                .properties
+                .properties()
                 .get("target")
                 .map(|property| property.evaluate_at(0.0)),
             Some(PropertyValue::String("Block".to_string()))
@@ -10786,9 +10777,7 @@ mod tests {
             },
             egui::Rect::from_center_size(position, egui::vec2(13.0, 13.0)),
         )]);
-        assert!(
-            rendered_normal_port_at_position(&detailed_ports, position, canvas).is_some()
-        );
+        assert!(rendered_normal_port_at_position(&detailed_ports, position, canvas).is_some());
 
         let offscreen = egui::Rect::from_center_size(
             egui::pos2(canvas.right() + 10.0, 400.0),
@@ -11559,8 +11548,7 @@ mod tests {
         project
             .get_node_mut(solid_id)
             .unwrap()
-            .properties
-            .set("animated".to_string(), animated.clone());
+            .set_property("animated".to_string(), animated.clone());
 
         let global_time = 6.0;
         let inspector_and_renderer_time =
@@ -11574,7 +11562,7 @@ mod tests {
             project
                 .get_node(solid_id)
                 .unwrap()
-                .properties
+                .properties()
                 .get("animated")
                 .unwrap()
                 .evaluate_at(node_property_time(&project, solid_id, global_time)),
@@ -11593,7 +11581,7 @@ mod tests {
         let clip_node_property = project
             .get_node(solid_id)
             .unwrap()
-            .properties
+            .properties()
             .get("animated")
             .unwrap();
         assert_eq!(
@@ -11606,7 +11594,7 @@ mod tests {
         let root_id = Uuid::from_u128(0x9_101);
         let mut root = Node::new_merge("Root");
         root.id = root_id;
-        root.properties.set("animated".to_string(), animated);
+        root.set_property("animated".to_string(), animated);
         project.add_node(root);
         project
             .attach_node_to_container(NodeContainer::Composition(composition_id), root_id)
@@ -11629,7 +11617,7 @@ mod tests {
         let root_property = project
             .get_node(root_id)
             .unwrap()
-            .properties
+            .properties()
             .get("animated")
             .unwrap();
         assert!(root_property.has_keyframe_at(global_time, 0.001));

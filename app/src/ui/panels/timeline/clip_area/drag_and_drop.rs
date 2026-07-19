@@ -1,8 +1,8 @@
 use egui::Ui;
-use library::ClipBundle;
-use library::EditorService as ProjectService;
 use library::model::asset::AssetKind;
 use library::model::project::Project;
+use library::ClipBundle;
+use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -124,7 +124,7 @@ pub(super) fn handle_drag_and_drop(
                                                  if let (Some(w), Some(h)) = (asset.width, asset.height)
                                                 {
                                                     if let Some(node) = video_clip.primary_node_mut() {
-                                                        node.properties.set(
+                                                        node.set_property(
                                                             "anchor".to_string(),
                                                             library::model::property::Property::constant(
                                                                 library::model::property::PropertyValue::Vec2(
@@ -155,7 +155,7 @@ pub(super) fn handle_drag_and_drop(
                                                 if let (Some(w), Some(h)) = (asset.width, asset.height)
                                                 {
                                                     if let Some(node) = image_clip.primary_node_mut() {
-                                                        node.properties.set(
+                                                        node.set_property(
                                                             "anchor".to_string(),
                                                             library::model::property::Property::constant(
                                                                 library::model::property::PropertyValue::Vec2(

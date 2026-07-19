@@ -141,7 +141,7 @@ pub fn graph_editor_panel(
 
         let mut properties_to_plot: Vec<(String, &Property, &PropertyMap, PropertyComponent)> =
             Vec::new();
-        append_property_map(&mut properties_to_plot, &entity.properties);
+        append_property_map(&mut properties_to_plot, entity.properties());
 
         // Capture clip range for visualization
         let containing_clip = proj_read

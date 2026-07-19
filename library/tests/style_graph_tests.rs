@@ -120,15 +120,14 @@ fn style_kinds(styles: &[DrawStyle]) -> Vec<&'static str> {
 }
 
 fn operation_component(node: &Node) -> Option<&str> {
-    match &node.content {
+    match node.content() {
         NodeContent::PluginOperation(operation) => Some(&operation.component_id),
         _ => None,
     }
 }
 
 fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
-    node.properties
-        .set(key.to_string(), Property::constant(value));
+    node.set_property(key.to_string(), Property::constant(value));
 }
 
 #[test]
@@ -139,7 +138,7 @@ fn style_descriptors_materialize_all_defaults_and_namespaced_typed_ports() {
             .operation_descriptor(STYLE_CATEGORY, component_id, STYLE_APPLY_OPERATION)
             .unwrap();
         let node = plugins.create_style_operation_node(component_id).unwrap();
-        let NodeContent::PluginOperation(operation) = &node.content else {
+        let NodeContent::PluginOperation(operation) = node.content() else {
             panic!("factory must create a plugin operation");
         };
         assert_eq!(operation.category, STYLE_CATEGORY);
@@ -150,7 +149,7 @@ fn style_descriptors_materialize_all_defaults_and_namespaced_typed_ports() {
 
         for definition in descriptor.properties() {
             assert_eq!(
-                node.properties
+                node.properties()
                     .get(definition.name())
                     .and_then(Property::value),
                 Some(definition.default_value())
@@ -327,7 +326,12 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
     let text_consumer = text
         .nodes
         .iter()
-        .find(|node| matches!(node.content, NodeContent::Generator(GeneratorContent::Text)))
+        .find(|node| {
+            matches!(
+                node.content(),
+                NodeContent::Generator(GeneratorContent::Text)
+            )
+        })
         .unwrap();
     let fill = text
         .nodes
@@ -350,7 +354,7 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
         .iter()
         .find(|node| {
             matches!(
-                node.content,
+                node.content(),
                 NodeContent::Generator(GeneratorContent::Shape)
             )
         })
@@ -359,7 +363,7 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
     let merge = shape
         .nodes
         .iter()
-        .find(|node| matches!(node.content, NodeContent::Merge))
+        .find(|node| matches!(node.content(), NodeContent::Merge))
         .unwrap();
     assert_eq!(shape.output_node_id, Some(merge.id));
     assert_eq!(shape.nodes.len(), 4);
@@ -486,7 +490,12 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
     let source = graph
         .nodes
         .iter()
-        .find(|node| matches!(node.content, NodeContent::Generator(GeneratorContent::Text)))
+        .find(|node| {
+            matches!(
+                node.content(),
+                NodeContent::Generator(GeneratorContent::Text)
+            )
+        })
         .unwrap()
         .clone();
     let mut project = project_with_graph(graph, 0.0, 2.0);
@@ -513,7 +522,7 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
         }]
     ));
 
-    project.get_node_mut(fill_id).unwrap().properties.set(
+    project.get_node_mut(fill_id).unwrap().set_property(
         "opacity".into(),
         Property::keyframe(vec![
             Keyframe::new(0.0, 0.2.into(), EasingFunction::Linear),
@@ -567,7 +576,12 @@ fn text_converter_exposes_grapheme_source_ranges_without_claiming_glyph_metadata
     let node = graph
         .nodes
         .iter()
-        .find(|node| matches!(node.content, NodeContent::Generator(GeneratorContent::Text)))
+        .find(|node| {
+            matches!(
+                node.content(),
+                NodeContent::Generator(GeneratorContent::Text)
+            )
+        })
         .unwrap();
     let (composition, _) = Composition::new("main", WIDTH, HEIGHT, FPS, 2.0);
     let project = Project::new("bounds");
@@ -600,22 +614,19 @@ fn unknown_missing_invalid_and_scalar_no_output_styles_are_safe() {
         Arc::new(RwLock::new(Project::new("factory"))),
         plugins.clone(),
     );
-    let graph = manager
+    let mut graph = manager
         .create_text_graph("unknown", "Arial", WIDTH, HEIGHT)
         .unwrap();
-    let fill_id = graph
+    let fill_index = graph
         .nodes
         .iter()
-        .find(|node| operation_component(node) == Some("fill"))
-        .unwrap()
-        .id;
-    let mut project = project_with_graph(graph, 0.0, 2.0);
-    let NodeContent::PluginOperation(operation) =
-        &mut project.get_node_mut(fill_id).unwrap().content
-    else {
-        panic!()
-    };
-    operation.component_id = "unavailable-style".into();
+        .position(|node| operation_component(node) == Some("fill"))
+        .unwrap();
+    let mut persisted = serde_json::to_value(&graph.nodes[fill_index]).unwrap();
+    persisted["content"]["data"]["component_id"] =
+        serde_json::Value::String("unavailable-style".into());
+    graph.nodes[fill_index] = serde_json::from_value(persisted).unwrap();
+    let project = project_with_graph(graph, 0.0, 2.0);
     let rendered = frame(&project, &plugins, 0);
     assert!(rendered.items.is_empty());
     let saved = project.save().unwrap();
@@ -637,7 +648,7 @@ fn unknown_missing_invalid_and_scalar_no_output_styles_are_safe() {
         resolved_inputs: Some(&resolved),
     };
     assert_eq!(
-        plugins.evaluate_style_operation(&context, "fill", fill.id, &fill.properties, 0.0),
+        plugins.evaluate_style_operation(&context, "fill", fill.id, fill.properties(), 0.0),
         EvalOutput::NoOutput
     );
 
@@ -654,7 +665,7 @@ fn unknown_missing_invalid_and_scalar_no_output_styles_are_safe() {
         "a missing descriptor property must not use the plugin fallback"
     );
 
-    let mut invalid_fill = fill.properties.clone();
+    let mut invalid_fill = fill.properties().clone();
     invalid_fill.set(
         "opacity".into(),
         Property::constant(PropertyValue::String("wrong-type".into())),
@@ -665,7 +676,7 @@ fn unknown_missing_invalid_and_scalar_no_output_styles_are_safe() {
     );
 
     let stroke = plugins.create_style_operation_node("stroke").unwrap();
-    let mut invalid_keyframe = stroke.properties.clone();
+    let mut invalid_keyframe = stroke.properties().clone();
     invalid_keyframe.set(
         "join".into(),
         Property::keyframe(vec![Keyframe::new(
@@ -692,7 +703,7 @@ fn unknown_missing_invalid_and_scalar_no_output_styles_are_safe() {
         resolved_inputs: Some(&invalid_scalar),
     };
     assert_eq!(
-        plugins.evaluate_style_operation(&context, "stroke", stroke.id, &stroke.properties, 0.0),
+        plugins.evaluate_style_operation(&context, "stroke", stroke.id, stroke.properties(), 0.0),
         EvalOutput::NoOutput
     );
 }

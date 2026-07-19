@@ -186,7 +186,7 @@ fn node_properties_are_the_only_generator_value_authority() {
             font: "Arial".to_string(),
         },
     );
-    node.properties.set(
+    node.set_property(
         "font_family".to_string(),
         Property::constant(PropertyValue::String("Arial".to_string())),
     );
@@ -205,8 +205,14 @@ fn node_properties_are_the_only_generator_value_authority() {
         None,
     ));
 
-    assert_eq!(node.properties.get_string("text").as_deref(), Some("after"));
-    assert_eq!(node.content, NodeContent::Generator(GeneratorContent::Text));
+    assert_eq!(
+        node.properties().get_string("text").as_deref(),
+        Some("after")
+    );
+    assert_eq!(
+        node.content(),
+        &NodeContent::Generator(GeneratorContent::Text)
+    );
     assert_eq!(clip.start_time, OrderedFloat(2.5));
     let serialized = serde_json::to_value(node).unwrap();
     assert_eq!(serialized["content"]["data"], "Text");

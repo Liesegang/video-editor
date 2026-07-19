@@ -10,19 +10,17 @@ use library::cache::CacheManager;
 use library::core::audio::cache::{AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
 use library::core::audio::loader::AudioLoader;
 use library::core::audio::mixer::{mix_samples, render_samples};
-use library::editor::project_service::{GeneratorNodeRequest, ProjectManager};
+use library::editor::project_service::{GeneratorNodeRequest, MediaNodeRequest, ProjectManager};
 use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameItem};
 use library::model::project::{
-    NodeGraphBundle, PortAddress, PortOwner, ProjectConnection, SHAPE_INPUT_PORT,
-    SHAPE_OUTPUT_PORT,
+    NodeGraphBundle, PortAddress, PortOwner, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{
-    Asset, AssetKind, Clip, Composition, MediaContent, Node, NodeContainer, NodeContent, Project,
-    Track,
+    Asset, AssetKind, Clip, Composition, Node, NodeContainer, NodeContent, Project, Track,
 };
 use library::plugin::loaders::ffmpeg_video::{FfmpegVideoLoader, VideoReader};
 use library::plugin::{
@@ -34,7 +32,7 @@ use ordered_float::OrderedFloat;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use support::generator_node_for_canvas;
+use support::{generator_node_for_canvas, media_node_for_canvas};
 
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -133,15 +131,18 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> (Project, MixedMediaId
     image_asset.height = Some(6);
     let image_asset_id = image_asset.id;
     project.assets.push(image_asset);
-    let mut image = Node::new_media(
+    let mut image = media_node_for_canvas(
         "image",
-        MediaContent {
+        MediaNodeRequest::Image {
             asset_id: image_asset_id,
-            stream_index: None,
-            audio_stream_index: None,
+            file_path: fixture("rgba.png"),
         },
+        12,
+        8,
+        8,
+        6,
     );
-    image.properties.set(
+    image.set_property(
         "opacity".into(),
         constant(PropertyValue::Number(OrderedFloat(70.0))),
     );
@@ -161,15 +162,20 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> (Project, MixedMediaId
     video_asset.stream_index = Some(0);
     let video_asset_id = video_asset.id;
     project.assets.push(video_asset);
-    let mut video = Node::new_media(
+    let mut video = media_node_for_canvas(
         "video",
-        MediaContent {
+        MediaNodeRequest::Video {
             asset_id: video_asset_id,
+            file_path: fixture("h264_24.mp4"),
             stream_index: None,
             audio_stream_index: None,
         },
+        12,
+        8,
+        12,
+        8,
     );
-    video.properties.set(
+    video.set_property(
         "opacity".into(),
         constant(PropertyValue::Number(OrderedFloat(65.0))),
     );
@@ -192,11 +198,11 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> (Project, MixedMediaId
         12,
         8,
     );
-    text.properties.set(
+    text.set_property(
         "size".into(),
         constant(PropertyValue::Number(OrderedFloat(5.0))),
     );
-    text.properties.set(
+    text.set_property(
         "position".into(),
         constant(PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(1.0),
@@ -247,22 +253,22 @@ half4 main(float2 fragCoord) {
         12,
         8,
     );
-    shader.properties.set(
+    shader.set_property(
         "width".into(),
         constant(PropertyValue::Number(OrderedFloat(3.0))),
     );
-    shader.properties.set(
+    shader.set_property(
         "height".into(),
         constant(PropertyValue::Number(OrderedFloat(3.0))),
     );
-    shader.properties.set(
+    shader.set_property(
         "position".into(),
         constant(PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(9.0),
             y: OrderedFloat(5.0),
         })),
     );
-    shader.properties.set(
+    shader.set_property(
         "anchor".into(),
         constant(PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(0.0),
@@ -677,13 +683,18 @@ fn cold_render_survives_high_stretch_with_a_two_chunk_cache() {
     let clip_id = clip.id;
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id).unwrap();
-    let node = Node::new_media(
+    let node = media_node_for_canvas(
         "explicit second audio stream",
-        MediaContent {
+        MediaNodeRequest::Video {
             asset_id,
+            file_path: fixture("multi_audio.mkv"),
             stream_index: Some(0),
             audio_stream_index: Some(2),
         },
+        8,
+        6,
+        8,
+        6,
     );
     let node_id = node.id;
     project.add_node(node);
@@ -716,6 +727,9 @@ fn media_project_with_asset(asset: Asset) -> (Project, Uuid) {
     let (composition, track) = Composition::new("main", 12, 8, 12.0, 2.0);
     let track_id = track.id;
     let asset_id = asset.id;
+    let file_path = asset.path.clone();
+    let media_width = u64::from(asset.width.unwrap_or(12));
+    let media_height = u64::from(asset.height.unwrap_or(8));
     project.add_track(track);
     project.add_composition(composition);
     project.assets.push(asset);
@@ -724,13 +738,18 @@ fn media_project_with_asset(asset: Asset) -> (Project, Uuid) {
     let clip_id = clip.id;
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id).unwrap();
-    let node = Node::new_media(
+    let node = media_node_for_canvas(
         "embedded audio video",
-        MediaContent {
+        MediaNodeRequest::Video {
             asset_id,
+            file_path,
             stream_index: None,
             audio_stream_index: None,
         },
+        12,
+        8,
+        media_width,
+        media_height,
     );
     let node_id = node.id;
     project.add_node(node);
@@ -1050,14 +1069,10 @@ fn node_and_timeline_edits_share_one_model_and_update_the_next_preview() {
     let (mut project, ids) = mixed_media_project(&plugins);
     let initial = preview_frame(&project, 0, &plugins);
 
-    project
-        .get_node_mut(ids.video_node)
-        .unwrap()
-        .properties
-        .set(
-            "opacity".into(),
-            constant(PropertyValue::Number(OrderedFloat(0.0))),
-        );
+    project.get_node_mut(ids.video_node).unwrap().set_property(
+        "opacity".into(),
+        constant(PropertyValue::Number(OrderedFloat(0.0))),
+    );
     let after_node_edit = preview_frame(&project, 0, &plugins);
     assert_ne!(rgba_hash(&initial), rgba_hash(&after_node_edit));
     assert_eq!(
@@ -1069,14 +1084,10 @@ fn node_and_timeline_edits_share_one_model_and_update_the_next_preview() {
         vec![ids.video_node]
     );
 
-    project
-        .get_node_mut(ids.video_node)
-        .unwrap()
-        .properties
-        .set(
-            "opacity".into(),
-            constant(PropertyValue::Number(OrderedFloat(65.0))),
-        );
+    project.get_node_mut(ids.video_node).unwrap().set_property(
+        "opacity".into(),
+        constant(PropertyValue::Number(OrderedFloat(65.0))),
+    );
     let clip = project.get_clip_mut(ids.video_clip).unwrap();
     clip.start_time = OrderedFloat(1.0);
     clip.duration = OrderedFloat(2.0);
@@ -1109,7 +1120,7 @@ fn node_and_timeline_edits_share_one_model_and_update_the_next_preview() {
     collect_content_kinds(&frame_at_start.items, &mut frame_at_start_kinds);
     assert!(frame_at_start_kinds.contains("video"));
     assert!(matches!(
-        project.get_node(ids.video_node).unwrap().content,
+        project.get_node(ids.video_node).unwrap().content(),
         NodeContent::Media(_)
     ));
     assert_ne!(

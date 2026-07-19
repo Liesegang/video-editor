@@ -228,7 +228,8 @@ impl OperationDescriptor {
     /// materialized from the same definitions that produced the input ports.
     pub fn create_node(&self) -> Result<Node, OperationDescriptorError> {
         self.validate()?;
-        let mut node = Node::new_plugin_operation(
+        let properties = PropertyMap::from_definitions(&self.properties);
+        Ok(Node::new_plugin_operation(
             &self.label,
             PluginOperationContent {
                 category: self.category.clone(),
@@ -236,9 +237,8 @@ impl OperationDescriptor {
                 operation: self.operation.clone(),
                 declared_ports: self.declared_ports.clone(),
             },
-        );
-        node.properties = PropertyMap::from_definitions(&self.properties);
-        Ok(node)
+            properties,
+        ))
     }
 
     fn validate(&self) -> Result<(), OperationDescriptorError> {

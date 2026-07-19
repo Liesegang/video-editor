@@ -1,4 +1,4 @@
-use library::editor::project_service::{GeneratorNodeRequest, ProjectManager};
+use library::editor::project_service::{GeneratorNodeRequest, MediaNodeRequest, ProjectManager};
 use library::model::{Node, Project};
 use library::plugin::PluginManager;
 use std::sync::{Arc, RwLock};
@@ -39,4 +39,35 @@ pub fn generator_node_for_canvas(
     let mut node = result.unwrap_or_else(|_| Node::new_merge("invalid Generator test fallback"));
     node.name = name.to_string();
     node
+}
+
+#[allow(
+    dead_code,
+    reason = "each integration-test crate compiles this shared helper independently"
+)]
+pub fn media_node_for_canvas(
+    name: &str,
+    request: MediaNodeRequest,
+    canvas_width: u64,
+    canvas_height: u64,
+    media_width: u64,
+    media_height: u64,
+) -> Node {
+    let manager = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("integration test media factory"))),
+        Arc::new(PluginManager::default()),
+    );
+    let result = manager.create_media_node(
+        name,
+        request,
+        canvas_width,
+        canvas_height,
+        media_width,
+        media_height,
+    );
+    assert!(
+        result.is_ok(),
+        "built-in Media factory must create a complete test Node: {result:?}"
+    );
+    result.unwrap_or_else(|_| Node::new_merge("invalid Media test fallback"))
 }

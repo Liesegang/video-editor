@@ -8,8 +8,8 @@ use library::model::project::{
     Composition, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer,
     PortAddress, PortOwner, Project, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
-use library::model::property::{Property, PropertyMap, PropertyValue, Vec2};
-use library::model::{Clip, Node, NodeContent};
+use library::model::property::{Property, PropertyValue, Vec2};
+use library::model::{Clip, Node};
 use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
@@ -33,7 +33,7 @@ fn project_with_solid() -> (Project, uuid::Uuid, uuid::Uuid) {
         320,
         180,
     );
-    node.properties.set(
+    node.set_property(
         "position".to_string(),
         Property::constant(PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(10.0),
@@ -138,11 +138,12 @@ fn set_and_load_reject_invalid_structure_without_replacing_the_current_project()
 
 #[test]
 fn adoption_preserves_sparse_pre_v1_generator_without_repair_or_rejection() -> Result<(), String> {
-    let (mut candidate, _, node_id) = project_with_solid();
-    candidate
-        .get_node_mut(node_id)
-        .ok_or_else(|| "solid fixture Node is missing".to_string())?
-        .properties = PropertyMap::new();
+    let (candidate, _, node_id) = project_with_solid();
+    let mut serialized_candidate =
+        serde_json::to_value(candidate).map_err(|error| error.to_string())?;
+    serialized_candidate["nodes"][node_id.to_string()]["properties"] = serde_json::json!({});
+    let candidate: Project =
+        serde_json::from_value(serialized_candidate).map_err(|error| error.to_string())?;
 
     let shared = Arc::new(RwLock::new(Project::new("current")));
     let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
@@ -161,10 +162,10 @@ fn adoption_preserves_sparse_pre_v1_generator_without_repair_or_rejection() -> R
         .map_err(|error| error.to_string())?;
     let project = shared.read().map_err(|error| error.to_string())?;
     assert_eq!(*project, candidate);
-    let properties = &project
+    let properties = project
         .get_node(node_id)
         .ok_or_else(|| "loaded sparse Generator is missing".to_string())?
-        .properties;
+        .properties();
     assert!(
         properties.iter().next().is_none(),
         "loading an incomplete pre-v1 Project must not synthesize properties"
@@ -175,7 +176,7 @@ fn adoption_preserves_sparse_pre_v1_generator_without_repair_or_rejection() -> R
 #[test]
 fn adoption_preserves_explicit_plugin_operation_nodes_unknown_to_this_binary() {
     let (mut candidate, _, node_id) = project_with_solid();
-    candidate.get_node_mut(node_id).unwrap().properties.set(
+    candidate.get_node_mut(node_id).unwrap().set_property(
         "future_plugin_property".to_string(),
         Property::constant(PropertyValue::String("preserve me".to_string())),
     );
@@ -195,11 +196,11 @@ fn adoption_preserves_explicit_plugin_operation_nodes_unknown_to_this_binary() {
         (&mut decorator, "third_party.decorator.not_installed"),
         (&mut style, "third_party.style.not_installed"),
     ] {
-        let NodeContent::PluginOperation(operation) = &mut node.content else {
-            panic!("plugin factory must return an operation Node")
-        };
-        operation.component_id = unavailable_id.to_string();
-        node.properties.set(
+        let mut encoded = serde_json::to_value(&*node).unwrap();
+        encoded["content"]["data"]["component_id"] =
+            serde_json::Value::String(unavailable_id.to_string());
+        *node = serde_json::from_value(encoded).unwrap();
+        node.set_property(
             "future_vendor_value".to_string(),
             Property::constant(PropertyValue::String("preserve exactly".to_string())),
         );

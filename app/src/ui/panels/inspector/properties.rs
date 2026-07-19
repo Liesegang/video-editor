@@ -900,7 +900,7 @@ pub fn render_add_button(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use library::plugin::{EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, PluginManager};
+    use library::plugin::{PluginManager, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY};
 
     #[test]
     fn qa_metadata_preserves_the_complete_property_definition() {
@@ -973,7 +973,7 @@ mod tests {
             .find(|definition| definition.name() == "opacity")
             .unwrap()
             .clone();
-        let property = node.properties.get("opacity").unwrap().clone();
+        let property = node.properties().get("opacity").unwrap().clone();
         let render_context = PropertyRenderContext {
             available_fonts: &[],
             in_grid: false,

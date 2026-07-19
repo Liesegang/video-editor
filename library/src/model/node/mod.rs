@@ -1,6 +1,6 @@
 use crate::model::project::connection::PortDefinition;
 use crate::model::project::property::{
-    PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
+    Property, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
 };
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
@@ -283,19 +283,35 @@ impl Clip {
 /// use library::model::{GeneratorContent, Node, NodeContent};
 /// let _ = Node::new("sparse", NodeContent::Generator(GeneratorContent::Text));
 /// ```
+///
+/// Persisted content and property maps are read-only through the public
+/// authoring API. Serde can still load incomplete pre-v1 data losslessly.
+///
+/// ```compile_fail
+/// use library::model::{GeneratorContent, Node, NodeContent};
+/// let mut node = Node::new_merge("cannot reclassify");
+/// node.content = NodeContent::Generator(GeneratorContent::Text);
+/// ```
+///
+/// ```compile_fail
+/// use library::model::property::PropertyMap;
+/// use library::model::Node;
+/// let mut node = Node::new_merge("cannot clear initialization");
+/// node.properties = PropertyMap::new();
+/// ```
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
     pub id: Uuid,
     pub name: String,
-    pub content: NodeContent,
+    pub(crate) content: NodeContent,
     /// Authoritative authored evaluation state. Disabled Nodes produce
     /// NoOutput before resolving descriptors, properties, or upstream values.
     pub enabled: bool,
     #[serde(default)]
     pub blend_mode: BlendMode,
     #[serde(default)]
-    pub properties: PropertyMap,
+    pub(crate) properties: PropertyMap,
     #[serde(default)]
     pub ui_position: [f32; 2],
     /// Authoritative Node Editor presentation state. These fields deliberately
@@ -312,8 +328,8 @@ impl Node {
 
     /// Creates a media source. Converter-backed media properties are populated
     /// by the editor factory that owns the relevant asset/canvas context.
-    pub fn new_media(name: &str, content: MediaContent) -> Self {
-        Self::with_properties(name, NodeContent::Media(content), PropertyMap::new())
+    pub(crate) fn new_media(name: &str, content: MediaContent, properties: PropertyMap) -> Self {
+        Self::with_properties(name, NodeContent::Media(content), properties)
     }
 
     /// Creates a composition/reference source.
@@ -324,12 +340,12 @@ impl Node {
     /// Completion point for descriptor-backed Plugin operations. Downstream
     /// callers cannot invoke this; `OperationDescriptor::create_node` owns the
     /// public construction path and immediately materializes its definitions.
-    pub(crate) fn new_plugin_operation(name: &str, content: PluginOperationContent) -> Self {
-        Self::with_properties(
-            name,
-            NodeContent::PluginOperation(content),
-            PropertyMap::new(),
-        )
+    pub(crate) fn new_plugin_operation(
+        name: &str,
+        content: PluginOperationContent,
+        properties: PropertyMap,
+    ) -> Self {
+        Self::with_properties(name, NodeContent::PluginOperation(content), properties)
     }
 
     /// Validated completion point for converter-backed native Generators.
@@ -406,6 +422,28 @@ impl Node {
             ui_size: [240.0, 160.0],
             ui_collapsed: false,
         }
+    }
+
+    /// Persisted execution kind. Content is immutable through the public
+    /// authoring API; use the typed factories to create a different kind.
+    pub fn content(&self) -> &NodeContent {
+        &self.content
+    }
+
+    /// Authoritative authored values. The map is read-only as a collection so
+    /// a complete factory result cannot be cleared or replaced accidentally.
+    pub fn properties(&self) -> &PropertyMap {
+        &self.properties
+    }
+
+    /// Inserts or replaces one authored value without permitting wholesale
+    /// removal of the factory-materialized property contract.
+    pub fn set_property(&mut self, key: String, property: Property) {
+        self.properties.set(key, property);
+    }
+
+    pub(crate) fn properties_mut(&mut self) -> &mut PropertyMap {
+        &mut self.properties
     }
 
     /// Creates a native scalar node for explicit timeline-time remapping.
@@ -605,13 +643,17 @@ mod tests {
 
     #[test]
     fn sparse_pre_v1_generator_still_deserializes_losslessly() -> Result<(), serde_json::Error> {
-        let mut sparse = Node::new_merge("persisted sparse generator");
-        sparse.content = NodeContent::Generator(GeneratorContent::Text);
+        let mut sparse = serde_json::to_value(Node::new_merge("persisted sparse generator"))?;
+        sparse["content"] = serde_json::json!({ "type": "Generator", "data": "Text" });
+        sparse["properties"] = serde_json::json!({});
         let json = serde_json::to_string(&sparse)?;
         let loaded: Node = serde_json::from_str(&json)?;
 
-        assert_eq!(loaded, sparse);
-        assert!(loaded.properties.iter().next().is_none());
+        assert_eq!(
+            loaded.content(),
+            &NodeContent::Generator(GeneratorContent::Text)
+        );
+        assert!(loaded.properties().iter().next().is_none());
         Ok(())
     }
 }

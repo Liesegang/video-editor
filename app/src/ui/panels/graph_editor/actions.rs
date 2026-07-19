@@ -30,10 +30,7 @@ pub struct KeyframeMove {
     pub value: f64,
 }
 
-pub fn graph_property_name(
-    property_key: &str,
-    component: PropertyComponent,
-) -> String {
+pub fn graph_property_name(property_key: &str, component: PropertyComponent) -> String {
     let suffix = match component {
         PropertyComponent::Scalar => "",
         PropertyComponent::X => ".x",
@@ -65,7 +62,7 @@ fn current_keyframe_value(
     property_key: &str,
     keyframe_id: KeyframeId,
 ) -> Option<PropertyValue> {
-    let property = node.properties.get(property_key)?;
+    let property = node.properties().get(property_key)?;
     property
         .keyframe_by_id(keyframe_id)
         .map(|keyframe| keyframe.value)
@@ -127,8 +124,7 @@ fn prepare_move_batch(
                 )
             })?;
         let existing_index = prepared.iter().position(|candidate| {
-            candidate.property_key == property_key
-                && candidate.keyframe_id == movement.keyframe_id
+            candidate.property_key == property_key && candidate.keyframe_id == movement.keyframe_id
         });
         let current = existing_index
             .map(|index| prepared[index].value.clone())
@@ -251,13 +247,13 @@ pub fn process_action(
                 let composition = project.get_composition(comp_id)?;
                 let node = project.get_node(entity_id)?;
                 let source_time = time_mapper_for_entity(&project, entity_id).to_source_time(time);
-                let current = node.properties.get(&property_key).map(|property| {
-                        project_service.evaluate_property_value(
-                            property,
-                            &node.properties,
-                            source_time,
-                            composition.fps,
-                        )
+                let current = node.properties().get(&property_key).map(|property| {
+                    project_service.evaluate_property_value(
+                        property,
+                        node.properties(),
+                        source_time,
+                        composition.fps,
+                    )
                 });
                 Some((
                     PropertyOwner::Node(entity_id),
@@ -327,7 +323,7 @@ pub fn process_action(
             };
             let keyframe = project.read().ok().and_then(|project| {
                 let node = project.get_node(entity_id)?;
-                let property = node.properties.get(&property_key)?;
+                let property = node.properties().get(&property_key)?;
                 if property.evaluator != "keyframe" {
                     return None;
                 }
@@ -409,7 +405,7 @@ mod tests {
         let keyframe = project
             .get_node(node_id)
             .unwrap()
-            .properties
+            .properties()
             .get(property_key)
             .unwrap()
             .keyframe_by_id(keyframe_id)
@@ -444,8 +440,8 @@ mod tests {
         let position_id = position_keyframe.id;
         let mut node = Node::new_merge("graph target");
         let node_id = node.id;
-        node.properties.set("amount".to_string(), direct_property);
-        node.properties.set(
+        node.set_property("amount".to_string(), direct_property);
+        node.set_property(
             "position".to_string(),
             Property::keyframe(vec![position_keyframe]),
         );
@@ -496,19 +492,13 @@ mod tests {
                     value: 10.0 + offset,
                 },
                 KeyframeMove {
-                    property_name: graph_property_name(
-                        "position",
-                        PropertyComponent::X,
-                    ),
+                    property_name: graph_property_name("position", PropertyComponent::X),
                     keyframe_id: position_id,
                     global_time,
                     value: 20.0 + offset,
                 },
                 KeyframeMove {
-                    property_name: graph_property_name(
-                        "position",
-                        PropertyComponent::Y,
-                    ),
+                    property_name: graph_property_name("position", PropertyComponent::Y),
                     keyframe_id: position_id,
                     global_time,
                     value: 30.0 + offset,
@@ -549,12 +539,7 @@ mod tests {
             property_value(&read, node_id, "amount", direct_id),
             (2.8, number(14.0))
         );
-        let (_, position) = property_value(
-            &read,
-            node_id,
-            "position",
-            position_id,
-        );
+        let (_, position) = property_value(&read, node_id, "position", position_id);
         assert_eq!(
             position,
             PropertyValue::Vec2(Vec2 {

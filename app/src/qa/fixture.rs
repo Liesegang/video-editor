@@ -2,7 +2,7 @@ use super::QA_PORT_ENV;
 use library::editor::ProjectService;
 use library::model::frame::color::Color;
 use library::model::project::{
-    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, PortAddress, PortOwner,
+    PortAddress, PortOwner, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{Property, PropertyValue, Vec2};
@@ -147,7 +147,7 @@ fn install_named(
         },
         [2350.0, 300.0],
     )?;
-    solid.properties.set(
+    solid.set_property(
         "opacity".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
     );
@@ -169,7 +169,7 @@ fn install_named(
         ("scale_y", 1.0),
         ("rotation", 0.0),
     ] {
-        transform.properties.set(
+        transform.set_property(
             name.to_string(),
             Property::constant(PropertyValue::Number(OrderedFloat(value))),
         );
@@ -180,7 +180,7 @@ fn install_named(
         "QA Opacity",
         [950.0, 300.0],
     )?;
-    opacity.properties.set(
+    opacity.set_property(
         "opacity".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
     );
@@ -190,15 +190,15 @@ fn install_named(
         "QA Backplate",
         [1250.0, 300.0],
     )?;
-    backplate.properties.set(
+    backplate.set_property(
         "target".to_string(),
         Property::constant(PropertyValue::String("Block".to_string())),
     );
-    backplate.properties.set(
+    backplate.set_property(
         "shape".to_string(),
         Property::constant(PropertyValue::String("RoundRect".to_string())),
     );
-    backplate.properties.set(
+    backplate.set_property(
         "color".to_string(),
         Property::constant(PropertyValue::Color(Color {
             r: 20,
@@ -207,11 +207,11 @@ fn install_named(
             a: 210,
         })),
     );
-    backplate.properties.set(
+    backplate.set_property(
         "padding".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(8.0))),
     );
-    backplate.properties.set(
+    backplate.set_property(
         "radius".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(6.0))),
     );
@@ -221,7 +221,7 @@ fn install_named(
         "QA Text Fill",
         [1550.0, 300.0],
     )?;
-    text_fill.properties.set(
+    text_fill.set_property(
         "color".to_string(),
         Property::constant(PropertyValue::Color(Color {
             r: 250,
@@ -244,7 +244,7 @@ fn install_named(
         "QA Shape Fill",
         [680.0, 900.0],
     )?;
-    shape_fill.properties.set(
+    shape_fill.set_property(
         "color".to_string(),
         Property::constant(PropertyValue::Color(Color {
             r: 54,
@@ -259,7 +259,7 @@ fn install_named(
         "QA Shape Stroke",
         [680.0, 1060.0],
     )?;
-    shape_stroke.properties.set(
+    shape_stroke.set_property(
         "color".to_string(),
         Property::constant(PropertyValue::Color(Color {
             r: 255,
@@ -268,7 +268,7 @@ fn install_named(
             a: 255,
         })),
     );
-    shape_stroke.properties.set(
+    shape_stroke.set_property(
         "width".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(4.0))),
     );
@@ -440,18 +440,18 @@ fn text_node(factory: &ProjectService, id: Uuid, ui_position: [f32; 2]) -> Resul
     node.id = id;
     node.name = "QA Text".to_string();
     node.ui_position = ui_position;
-    node.properties.set(
+    node.set_property(
         "position".to_string(),
         Property::constant(PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(320.0),
             y: OrderedFloat(180.0),
         })),
     );
-    node.properties.set(
+    node.set_property(
         "opacity".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
     );
-    node.properties.set(
+    node.set_property(
         "size".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(64.0))),
     );
@@ -466,7 +466,7 @@ fn shape_node(factory: &ProjectService, id: Uuid, ui_position: [f32; 2]) -> Resu
     node.id = id;
     node.name = "QA Shape".to_string();
     node.ui_position = ui_position;
-    node.properties.set(
+    node.set_property(
         "opacity".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
     );
@@ -525,7 +525,7 @@ mod tests {
         component_id: &str,
     ) {
         let node = project.get_node(node_id).unwrap();
-        let NodeContent::PluginOperation(operation) = &node.content else {
+        let NodeContent::PluginOperation(operation) = node.content() else {
             panic!("{node_id} must be a PluginOperation Node");
         };
         assert_eq!(operation.category, category);
@@ -543,7 +543,7 @@ mod tests {
         );
         for definition in descriptor.properties() {
             assert!(
-                node.properties.get(definition.name()).is_some(),
+                node.properties().get(definition.name()).is_some(),
                 "{} is missing {}",
                 node.name,
                 definition.name()
@@ -599,11 +599,11 @@ mod tests {
 
         let text = read.get_node(E2E_AUX_A_ID).unwrap();
         assert!(matches!(
-            text.content,
+            text.content(),
             NodeContent::Generator(library::model::GeneratorContent::Text)
         ));
         assert!(matches!(
-            read.get_node(E2E_AUX_B_ID).unwrap().content,
+            read.get_node(E2E_AUX_B_ID).unwrap().content(),
             NodeContent::Generator(library::model::GeneratorContent::Shape)
         ));
 

@@ -986,7 +986,7 @@ pub fn preview_panel(
                             .preview_selected_instance_path
                             .as_deref(),
                     ) {
-                        if let Some(path) = gc.node.properties.get_string("path") {
+                        if let Some(path) = gc.node.properties().get_string("path") {
                             match crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path) {
                                 Ok(path) => {
                                     let renderer = crate::ui::panels::preview::vector_editor::renderer::VectorEditorRenderer {
@@ -1617,21 +1617,21 @@ mod tests {
                     shader: "half4 main(float2 p) { return half4(1); }".to_string(),
                 },
             );
-            source.properties.set(
+            source.set_property(
                 "position".to_string(),
                 Property::constant(PropertyValue::Vec2(PropertyVec2 {
                     x: OrderedFloat(7.0),
                     y: OrderedFloat(11.0),
                 })),
             );
-            source.properties.set(
+            source.set_property(
                 "scale".to_string(),
                 Property::constant(PropertyValue::Vec2(PropertyVec2 {
                     x: OrderedFloat(100.0),
                     y: OrderedFloat(100.0),
                 })),
             );
-            source.properties.set(
+            source.set_property(
                 "rotation".to_string(),
                 Property::constant(PropertyValue::Number(OrderedFloat(0.0))),
             );
@@ -1688,7 +1688,7 @@ mod tests {
 
         fn vector_property(node: &Node, key: &str) -> (f64, f64) {
             let Some(PropertyValue::Vec2(value)) =
-                node.properties.get(key).and_then(Property::value)
+                node.properties().get(key).and_then(Property::value)
             else {
                 panic!("{key} must remain a Vec2 property")
             };
@@ -1956,7 +1956,7 @@ mod tests {
             },
         );
         let source_id = source.id;
-        source.properties.set(
+        source.set_property(
             "position".to_string(),
             Property::constant(PropertyValue::Vec2(Vec2 {
                 x: OrderedFloat(10.0),
@@ -2007,7 +2007,7 @@ mod tests {
             model
                 .get_node(source_id)
                 .unwrap()
-                .properties
+                .properties()
                 .get("position")
                 .and_then(Property::value),
             Some(&PropertyValue::Vec2(Vec2 {
@@ -2019,7 +2019,7 @@ mod tests {
             model
                 .get_node(sink_id)
                 .unwrap()
-                .properties
+                .properties()
                 .get("position")
                 .is_none(),
             "the output sink must not receive a guessed transform property"
