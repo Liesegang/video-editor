@@ -227,11 +227,59 @@ fn adoption_preserves_explicit_plugin_operation_nodes_unknown_to_this_binary() {
 
 #[test]
 fn legacy_embedded_operation_fields_are_rejected_instead_of_migrated() {
-    let (project, _, node_id) = project_with_solid();
-    let mut json = serde_json::to_value(project).unwrap();
-    json["nodes"][node_id.to_string()]["effects"] = serde_json::json!([]);
-    let error = Project::load(&serde_json::to_string(&json).unwrap()).unwrap_err();
-    assert!(error.to_string().contains("unknown field `effects`"));
+    #[derive(Clone, Copy, Debug)]
+    enum LegacyOwner {
+        Node,
+        Clip,
+        Track,
+        Composition,
+    }
+
+    let (candidate, _, node_id) = project_with_solid();
+    let composition = &candidate.compositions[0];
+    let track_id = composition.track_ids[0];
+    let clip_id = candidate.get_track(track_id).unwrap().clip_ids[0];
+    let current = Project::new("current project must survive rejected load");
+    let shared = Arc::new(RwLock::new(current.clone()));
+    let manager = ProjectManager::new(Arc::clone(&shared), Arc::new(PluginManager::default()));
+
+    let legacy_fields = [
+        (LegacyOwner::Node, "styles"),
+        (LegacyOwner::Node, "effects"),
+        (LegacyOwner::Node, "effectors"),
+        (LegacyOwner::Node, "decorators"),
+        (LegacyOwner::Clip, "effects"),
+        (LegacyOwner::Track, "effects"),
+        (LegacyOwner::Composition, "effects"),
+    ];
+
+    for (owner, field) in legacy_fields {
+        let mut json = serde_json::to_value(&candidate).unwrap();
+        let target = match owner {
+            LegacyOwner::Node => json["nodes"].get_mut(node_id.to_string()).unwrap(),
+            LegacyOwner::Clip => json["clips"].get_mut(clip_id.to_string()).unwrap(),
+            LegacyOwner::Track => json["tracks"].get_mut(track_id.to_string()).unwrap(),
+            LegacyOwner::Composition => json["compositions"].get_mut(0).unwrap(),
+        };
+        target
+            .as_object_mut()
+            .unwrap()
+            .insert(field.to_string(), serde_json::json!([]));
+        let serialized = serde_json::to_string(&json).unwrap();
+
+        let error = manager.load_project(&serialized).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("unknown field `{field}`")),
+            "{owner:?}.{field} failed with the wrong error: {error}"
+        );
+        assert_eq!(
+            *shared.read().unwrap(),
+            current,
+            "rejected {owner:?}.{field} must not replace the current Project"
+        );
+    }
 }
 
 #[test]
