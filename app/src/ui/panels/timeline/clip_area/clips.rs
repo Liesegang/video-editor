@@ -424,6 +424,23 @@ fn timing_after_body_drag(clip: &Clip, delta_time: f64) -> Option<ClipTiming> {
     })
 }
 
+/// Return the pointer movement not yet applied to the authoritative Clip.
+///
+/// `Response::drag_delta` only reports movement from the current frame. egui
+/// does not claim a drag until its threshold is crossed, so those first few
+/// points would otherwise be discarded. On the transition frame the total
+/// delta includes that pre-threshold movement; later frames remain
+/// incremental and can be applied directly to the current Project value.
+fn timeline_drag_delta(response: &egui::Response) -> egui::Vec2 {
+    if response.drag_started() {
+        response
+            .total_drag_delta()
+            .unwrap_or_else(|| response.drag_delta())
+    } else {
+        response.drag_delta()
+    }
+}
+
 pub(super) struct DrawClipsContext<'a> {
     pub(super) editor_context: &'a mut EditorContext,
     pub(super) project_service: &'a mut ProjectService,
@@ -490,6 +507,24 @@ fn apply_timing_update_result(
         log::error!("Failed to update timeline Clip {clip_id} timing: {error}");
         commit.timing_update_failed = true;
         cancel_failed_timing_gesture(editor_context);
+    }
+}
+
+fn apply_move_clip_result(
+    clip_id: Uuid,
+    target_track_id: Uuid,
+    result: Result<(), library::LibraryError>,
+    editor_context: &mut EditorContext,
+    commit: &mut ClipMutationCommit,
+) {
+    match result {
+        Ok(()) => {
+            commit.persistent_change = true;
+            if editor_context.selection.last_selected_entity_id == Some(clip_id) {
+                editor_context.selection.last_selected_track_id = Some(target_track_id);
+            }
+        }
+        Err(error) => log::error!("Failed to move timeline Clip {clip_id}: {error}"),
     }
 }
 
@@ -737,19 +772,20 @@ pub(super) fn draw_clips(ui_content: &mut Ui, context: DrawClipsContext<'_>) -> 
                 target_track_id,
                 new_start_time,
                 target_index,
-            } => {
-                match project_service.move_clip_to_track_at_index(
+            } => apply_move_clip_result(
+                clip_id,
+                target_track_id,
+                project_service.move_clip_to_track_at_index(
                     composition_id,
                     source_track_id,
                     clip_id,
                     target_track_id,
                     new_start_time,
                     target_index,
-                ) {
-                    Ok(()) => commit.persistent_change = true,
-                    Err(error) => log::error!("Failed to move timeline clip: {error}"),
-                }
-            }
+                ),
+                editor_context,
+                &mut commit,
+            ),
 
             DeferredClipAction::RemoveClip { track_id, clip_id } => {
                 if let Err(e) = project_service.remove_clip_from_track(track_id, clip_id) {
@@ -991,9 +1027,9 @@ fn draw_single_clip(
             let mut new_trim_in = clip.trim_in.into_inner();
 
             let delta_x = if left.dragged() {
-                left.drag_delta().x
+                timeline_drag_delta(left).x
             } else if right.dragged() {
-                right.drag_delta().x
+                timeline_drag_delta(right).x
             } else {
                 0.0
             };
@@ -1076,7 +1112,8 @@ fn draw_single_clip(
                     Some(target_row.track_id());
             }
         }
-        let delta_time = f64::from(clip_resp.drag_delta().x) / f64::from(geometry.pixels_per_unit);
+        let delta_time =
+            f64::from(timeline_drag_delta(&clip_resp).x) / f64::from(geometry.pixels_per_unit);
         if let Some(timing) = timing_after_body_drag(clip, delta_time) {
             deferred_actions.push(DeferredClipAction::UpdateClipTiming {
                 clip_id: clip.id,
@@ -1721,6 +1758,52 @@ mod tests {
     }
 
     #[test]
+    fn successful_cross_track_move_updates_selection_owner_but_failure_does_not() {
+        let composition_id = Uuid::new_v4();
+        let source_track_id = Uuid::new_v4();
+        let target_track_id = Uuid::new_v4();
+        let clip_id = Uuid::new_v4();
+        let mut editor_context = EditorContext::new(composition_id);
+        editor_context.select_clip(clip_id, source_track_id);
+        let mut commit = ClipMutationCommit::default();
+
+        apply_move_clip_result(
+            clip_id,
+            target_track_id,
+            Ok(()),
+            &mut editor_context,
+            &mut commit,
+        );
+
+        assert!(commit.persistent_change);
+        assert_eq!(
+            editor_context.selection.last_selected_track_id,
+            Some(target_track_id)
+        );
+        assert_eq!(
+            editor_context.selection.last_selected_entity_id,
+            Some(clip_id)
+        );
+        assert!(editor_context.selection.selected_entities.contains(&clip_id));
+
+        editor_context.select_clip(clip_id, source_track_id);
+        let mut failed_commit = ClipMutationCommit::default();
+        apply_move_clip_result(
+            clip_id,
+            target_track_id,
+            Err(library::LibraryError::Project("rejected move".to_string())),
+            &mut editor_context,
+            &mut failed_commit,
+        );
+
+        assert!(!failed_commit.persistent_change);
+        assert_eq!(
+            editor_context.selection.last_selected_track_id,
+            Some(source_track_id)
+        );
+    }
+
+    #[test]
     fn resize_click_and_invalid_zero_change_drag_do_not_create_history() {
         let project = Arc::new(RwLock::new(Project::new("zero change resize")));
         let initial = project.read().unwrap().clone();
@@ -1853,5 +1936,57 @@ mod tests {
         clip.start_time = ordered_float::OrderedFloat(0.25);
         let clamped = timing_after_body_drag(&clip, -1.0).unwrap();
         assert_eq!(clamped.start_time, 0.0);
+    }
+
+    #[test]
+    fn raw_pointer_drag_keeps_motion_before_egui_claims_the_gesture() {
+        let context = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0, 160.0));
+        let start = egui::pos2(60.0, 80.0);
+        let mut applied_x = 0.0;
+        let mut started_count = 0;
+        let frames = [
+            vec![egui::Event::PointerMoved(start)],
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            vec![egui::Event::PointerMoved(start + egui::vec2(4.0, 0.0))],
+            vec![egui::Event::PointerMoved(start + egui::vec2(12.0, 0.0))],
+            vec![egui::Event::PointerMoved(start + egui::vec2(24.0, 0.0))],
+            vec![egui::Event::PointerButton {
+                pos: start + egui::vec2(24.0, 0.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ];
+
+        for (frame, events) in frames.into_iter().enumerate() {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(frame as f64 / 60.0),
+                events,
+                ..egui::RawInput::default()
+            };
+            let _ = context.run(input, |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    let response = ui.interact(
+                        egui::Rect::from_min_max(egui::pos2(20.0, 40.0), egui::pos2(220.0, 120.0)),
+                        egui::Id::new("timeline_clip_drag"),
+                        egui::Sense::drag(),
+                    );
+                    if response.drag_started() {
+                        started_count += 1;
+                    }
+                    applied_x += timeline_drag_delta(&response).x;
+                });
+            });
+        }
+
+        assert_eq!(started_count, 1);
+        assert!((applied_x - 24.0).abs() < 1.0e-5, "applied {applied_x}");
     }
 }
