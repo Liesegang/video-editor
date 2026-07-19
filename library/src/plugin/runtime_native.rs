@@ -945,8 +945,8 @@ fn style_config_from_wire(
     let style = match output {
         StyleOutputV1::NoOutput => return Ok(None),
         StyleOutputV1::Fill { color, offset } => {
-            if !offset.is_finite() {
-                return Err(invalid("has a non-finite Fill offset"));
+            if !finite_render_scalar(offset) || !finite_render_scalar(offset * 2.0) {
+                return Err(invalid("has an unsafe Fill offset"));
             }
             DrawStyle::Fill {
                 color: color_from_wire(color),
@@ -963,10 +963,12 @@ fn style_config_from_wire(
             dash_array,
             dash_offset,
         } => {
-            if !width.is_finite()
-                || !offset.is_finite()
-                || !miter.is_finite()
-                || !dash_offset.is_finite()
+            let effective_width = (width + offset * 2.0).max(0.0);
+            if !finite_render_scalar(width)
+                || !finite_render_scalar(offset)
+                || !finite_render_scalar(effective_width)
+                || !finite_render_scalar(miter)
+                || !finite_render_scalar(dash_offset)
                 || width < 0.0
                 || miter < 0.0
                 || !valid_stroke_dash_array(&dash_array)
@@ -1002,7 +1004,13 @@ fn style_config_from_wire(
 fn valid_stroke_dash_array(values: &[f64]) -> bool {
     values.is_empty()
         || (values.len().is_multiple_of(2)
-            && values.iter().all(|value| value.is_finite() && *value > 0.0))
+            && values
+                .iter()
+                .all(|value| finite_render_scalar(*value) && *value > 0.0))
+}
+
+fn finite_render_scalar(value: f64) -> bool {
+    value.is_finite() && (value as f32).is_finite()
 }
 
 struct RuntimeDecoratorPlugin {
@@ -2184,6 +2192,44 @@ mod tests {
             )
             .is_err(),
             "non-finite output must not reach host StyleConfig"
+        );
+        assert!(
+            style_config_from_wire(
+                StyleOutputV1::Fill {
+                    color: ColorV1 {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    },
+                    offset: f64::MAX,
+                },
+                source_id,
+            )
+            .is_err(),
+            "finite f64 that overflows the renderer's scalar must be NoOutput"
+        );
+        assert!(
+            style_config_from_wire(
+                StyleOutputV1::Stroke {
+                    color: ColorV1 {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    },
+                    width: f32::MAX as f64,
+                    offset: f32::MAX as f64,
+                    cap: StrokeCapV1::Round,
+                    join: StrokeJoinV1::Round,
+                    miter: 4.0,
+                    dash_array: Vec::new(),
+                    dash_offset: 0.0,
+                },
+                source_id,
+            )
+            .is_err(),
+            "derived effective width must remain a finite renderer scalar"
         );
         for invalid_dash in [vec![1.0], vec![1.0, 0.0], vec![1.0, -1.0]] {
             assert!(

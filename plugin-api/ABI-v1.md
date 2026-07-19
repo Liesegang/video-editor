@@ -185,8 +185,10 @@ service extension rather than relying on RuViE implementation layouts.
     "miter":4.0,"dash_array":[3.0,2.0],"dash_offset":0.0}`
 
 Fill and Stroke are the complete set of host `DrawStyle` variants at the time
-this operation was defined. Every numeric field must be finite. Stroke width
-and miter must be non-negative. An empty dash array means a solid stroke;
+this operation was defined. Every numeric field must be finite and remain
+finite when converted to the host renderer's 32-bit scalar. Derived stroke
+width (`width + 2 * offset`) must satisfy the same rule. Stroke width and
+miter must be non-negative. An empty dash array means a solid stroke;
 a non-empty dash array must have even length and every interval must be
 strictly positive. Cap values are `round`,
 `square`, and `butt`; join values are `round`, `bevel`, and `miter`. The host
