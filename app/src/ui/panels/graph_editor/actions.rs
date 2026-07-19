@@ -387,7 +387,7 @@ mod tests {
     use crate::state::context_types::{GraphKeyframeDragOrigin, GraphKeyframeDragState};
     use library::cache::CacheManager;
     use library::model::property::{Keyframe, Property, Vec2};
-    use library::model::{Clip, Composition, Node, NodeContent};
+    use library::model::{Clip, Composition, Node};
     use library::plugin::PluginManager;
 
     fn number(value: f64) -> PropertyValue {
@@ -442,7 +442,7 @@ mod tests {
             EasingFunction::Linear,
         );
         let position_id = position_keyframe.id;
-        let mut node = Node::new("graph target", NodeContent::Merge);
+        let mut node = Node::new_merge("graph target");
         let node_id = node.id;
         node.properties.set("amount".to_string(), direct_property);
         node.properties.set(

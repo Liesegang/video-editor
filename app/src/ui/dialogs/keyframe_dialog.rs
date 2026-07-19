@@ -450,7 +450,7 @@ mod tests {
     use library::animation::EasingFunction;
     use library::cache::CacheManager;
     use library::model::property::{Keyframe, Property, Vec2};
-    use library::model::{Clip, Node, NodeContent};
+    use library::model::{Clip, Node};
     use library::plugin::PluginManager;
 
     #[test]
@@ -464,7 +464,7 @@ mod tests {
             EasingFunction::Linear,
         );
         let keyframe_id = keyframe.id;
-        let mut node = Node::new("dialog", NodeContent::Merge);
+        let mut node = Node::new_merge("dialog");
         let node_id = node.id;
         node.properties
             .set("position".to_string(), Property::keyframe(vec![keyframe]));
@@ -512,7 +512,7 @@ mod tests {
             EasingFunction::Linear,
         );
         let keyframe_id = keyframe.id;
-        let mut node = Node::new("dialog history", NodeContent::Merge);
+        let mut node = Node::new_merge("dialog history");
         let node_id = node.id;
         node.properties
             .set("amount".to_string(), Property::keyframe(vec![keyframe]));

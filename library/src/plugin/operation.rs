@@ -10,7 +10,7 @@ use crate::model::project::{
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use crate::model::property::{PropertyDefinition, PropertyMap, PropertyUiType};
-use crate::model::{Node, NodeContent, PluginOperationContent};
+use crate::model::{Node, PluginOperationContent};
 use std::collections::HashSet;
 use thiserror::Error;
 
@@ -228,14 +228,14 @@ impl OperationDescriptor {
     /// materialized from the same definitions that produced the input ports.
     pub fn create_node(&self) -> Result<Node, OperationDescriptorError> {
         self.validate()?;
-        let mut node = Node::new(
+        let mut node = Node::new_plugin_operation(
             &self.label,
-            NodeContent::PluginOperation(PluginOperationContent {
+            PluginOperationContent {
                 category: self.category.clone(),
                 component_id: self.component_id.clone(),
                 operation: self.operation.clone(),
                 declared_ports: self.declared_ports.clone(),
-            }),
+            },
         );
         node.properties = PropertyMap::from_definitions(&self.properties);
         Ok(node)

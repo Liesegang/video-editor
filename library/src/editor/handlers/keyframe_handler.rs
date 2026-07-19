@@ -196,8 +196,10 @@ impl KeyframeHandler {
 mod tests {
     use super::*;
     use crate::animation::EasingFunction;
+    use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
+    use crate::model::frame::color::Color;
     use crate::model::property::{Keyframe, PropertyValue};
-    use crate::model::{GeneratorContent, Node, NodeContent, PluginOperationContent};
+    use crate::model::{Node, PluginOperationContent};
     use ordered_float::OrderedFloat;
 
     fn number(value: f64) -> PropertyValue {
@@ -213,7 +215,12 @@ mod tests {
     #[test]
     fn handler_uses_stable_identity_across_sorted_index_changes() {
         let mut project = Project::new("keyframes");
-        let node = Node::new("solid", NodeContent::Generator(GeneratorContent::Solid));
+        let node = test_generator_node(
+            "solid",
+            GeneratorNodeRequest::Solid {
+                color: Color::white(),
+            },
+        );
         let node_id = node.id;
         project.add_node(node);
         let project = Arc::new(RwLock::new(project));
@@ -294,14 +301,14 @@ mod tests {
             ("decorator", 40.0, 41.0),
         ] {
             let (property, keyframe_id) = keyframed(initial);
-            let mut node = Node::new(
+            let mut node = Node::new_plugin_operation(
                 category,
-                NodeContent::PluginOperation(PluginOperationContent {
+                PluginOperationContent {
                     category: category.to_string(),
                     component_id: "test".to_string(),
                     operation: "test.apply.v1".to_string(),
                     declared_ports: Vec::new(),
-                }),
+                },
             );
             node.properties.set("amount".to_string(), property);
             addresses.push((PropertyOwner::Node(node.id), keyframe_id, updated));

@@ -72,6 +72,7 @@ fn static_vec2_or(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
     use crate::model::frame::color::Color;
     use crate::model::property::{Property, PropertyValue, Vec2};
     use ordered_float::OrderedFloat;
@@ -97,21 +98,19 @@ mod tests {
 
     #[test]
     fn node_display_color_comes_from_authoritative_properties() {
-        let mut node = Node::new("solid", NodeContent::Generator(GeneratorContent::Solid));
-        node.properties.set(
-            "color".to_string(),
-            Property::constant(PropertyValue::Color(Color {
-                r: 10,
-                g: 20,
-                b: 30,
-                a: 255,
-            })),
+        let node = test_generator_node(
+            "solid",
+            GeneratorNodeRequest::Solid {
+                color: Color {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    a: 255,
+                },
+            },
         );
 
         assert_eq!(node.display_color(), (10, 20, 30));
-        assert_eq!(
-            Node::new("merge", NodeContent::Merge).display_color(),
-            (150, 180, 190)
-        );
+        assert_eq!(Node::new_merge("merge").display_color(), (150, 180, 190));
     }
 }

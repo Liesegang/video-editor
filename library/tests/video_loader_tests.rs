@@ -461,7 +461,7 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() {
     use library::model::frame::entity::{FrameContent, FrameItem};
     use library::model::project::{Composition, NodeContainer};
     use library::model::property::{Property, PropertyValue};
-    use library::model::{Clip, MediaContent, Node, NodeContent, Project};
+    use library::model::{Clip, MediaContent, Node, Project};
     use library::{RenderService, SkiaRenderer};
     use ordered_float::OrderedFloat;
 
@@ -490,14 +490,14 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() {
     let clip_id = clip.id;
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id).unwrap();
-    let mut node = Node::new(
+    let mut node = Node::new_media(
         "video",
-        NodeContent::Media(MediaContent {
+        MediaContent {
             asset_id,
             // Exercise fallback to the authoritative Asset stream metadata.
             stream_index: None,
             audio_stream_index: None,
-        }),
+        },
     );
     node.properties.set(
         "file_path".into(),

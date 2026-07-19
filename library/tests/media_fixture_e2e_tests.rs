@@ -1,3 +1,5 @@
+mod support;
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,7 +10,7 @@ use library::cache::CacheManager;
 use library::core::audio::cache::{AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
 use library::core::audio::loader::AudioLoader;
 use library::core::audio::mixer::{mix_samples, render_samples};
-use library::editor::project_service::ProjectManager;
+use library::editor::project_service::{GeneratorNodeRequest, ProjectManager};
 use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
@@ -19,8 +21,8 @@ use library::model::project::{
 };
 use library::model::property::{Property, PropertyValue, Vec2};
 use library::model::{
-    Asset, AssetKind, Clip, Composition, GeneratorContent, MediaContent, Node, NodeContainer,
-    NodeContent, Project, Track,
+    Asset, AssetKind, Clip, Composition, MediaContent, Node, NodeContainer, NodeContent, Project,
+    Track,
 };
 use library::plugin::loaders::ffmpeg_video::{FfmpegVideoLoader, VideoReader};
 use library::plugin::{
@@ -31,6 +33,8 @@ use library::{EditorService, ExportService, ProjectModel, RenderService, SkiaRen
 use ordered_float::OrderedFloat;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+
+use support::generator_node_for_canvas;
 
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -101,15 +105,20 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> (Project, MixedMediaId
     project.add_track(solid_track);
     project.add_composition(composition);
 
-    let mut solid = Node::new("solid", NodeContent::Generator(GeneratorContent::Solid));
-    solid.properties.set(
-        "color".into(),
-        constant(PropertyValue::Color(Color {
-            r: 30,
-            g: 45,
-            b: 60,
-            a: 255,
-        })),
+    let solid = generator_node_for_canvas(
+        "solid",
+        GeneratorNodeRequest::Solid {
+            color: Color {
+                r: 30,
+                g: 45,
+                b: 60,
+                a: 255,
+            },
+        },
+        12,
+        8,
+        12,
+        8,
     );
     add_clip_node(&mut project, solid_track_id, "solid clip", solid);
 
@@ -124,13 +133,13 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> (Project, MixedMediaId
     image_asset.height = Some(6);
     let image_asset_id = image_asset.id;
     project.assets.push(image_asset);
-    let mut image = Node::new(
+    let mut image = Node::new_media(
         "image",
-        NodeContent::Media(MediaContent {
+        MediaContent {
             asset_id: image_asset_id,
             stream_index: None,
             audio_stream_index: None,
-        }),
+        },
     );
     image.properties.set(
         "opacity".into(),
@@ -152,13 +161,13 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> (Project, MixedMediaId
     video_asset.stream_index = Some(0);
     let video_asset_id = video_asset.id;
     project.assets.push(video_asset);
-    let mut video = Node::new(
+    let mut video = Node::new_media(
         "video",
-        NodeContent::Media(MediaContent {
+        MediaContent {
             asset_id: video_asset_id,
             stream_index: None,
             audio_stream_index: None,
-        }),
+        },
     );
     video.properties.set(
         "opacity".into(),
@@ -172,12 +181,16 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> (Project, MixedMediaId
     project
         .attach_track_to_composition(composition_id, text_track_id)
         .unwrap();
-    let mut text = Node::new("text", NodeContent::Generator(GeneratorContent::Text));
-    text.properties
-        .set("text".into(), constant(PropertyValue::String("E2E".into())));
-    text.properties.set(
-        "font_family".into(),
-        constant(PropertyValue::String("Arial".into())),
+    let mut text = generator_node_for_canvas(
+        "text",
+        GeneratorNodeRequest::Text {
+            text: "E2E".to_string(),
+            font: "Arial".to_string(),
+        },
+        12,
+        8,
+        12,
+        8,
     );
     text.properties.set(
         "size".into(),
@@ -224,10 +237,15 @@ half4 main(float2 fragCoord) {
     return half4(color, 1.0);
 }
 "#;
-    let mut shader = Node::new("shader", NodeContent::Generator(GeneratorContent::SkSL));
-    shader.properties.set(
-        "shader".into(),
-        constant(PropertyValue::String(shader_source.to_string())),
+    let mut shader = generator_node_for_canvas(
+        "shader",
+        GeneratorNodeRequest::SkSL {
+            shader: shader_source.to_string(),
+        },
+        12,
+        8,
+        12,
+        8,
     );
     shader.properties.set(
         "width".into(),
@@ -659,13 +677,13 @@ fn cold_render_survives_high_stretch_with_a_two_chunk_cache() {
     let clip_id = clip.id;
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id).unwrap();
-    let node = Node::new(
+    let node = Node::new_media(
         "explicit second audio stream",
-        NodeContent::Media(MediaContent {
+        MediaContent {
             asset_id,
             stream_index: Some(0),
             audio_stream_index: Some(2),
-        }),
+        },
     );
     let node_id = node.id;
     project.add_node(node);
@@ -706,13 +724,13 @@ fn media_project_with_asset(asset: Asset) -> (Project, Uuid) {
     let clip_id = clip.id;
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id).unwrap();
-    let node = Node::new(
+    let node = Node::new_media(
         "embedded audio video",
-        NodeContent::Media(MediaContent {
+        MediaContent {
             asset_id,
             stream_index: None,
             audio_stream_index: None,
-        }),
+        },
     );
     let node_id = node.id;
     project.add_node(node);
@@ -1101,10 +1119,7 @@ fn node_and_timeline_edits_share_one_model_and_update_the_next_preview() {
 }
 
 fn solid_node(name: &str, color: Color) -> Node {
-    let mut node = Node::new(name, NodeContent::Generator(GeneratorContent::Solid));
-    node.properties
-        .set("color".into(), constant(PropertyValue::Color(color)));
-    node
+    generator_node_for_canvas(name, GeneratorNodeRequest::Solid { color }, 4, 4, 4, 4)
 }
 
 #[test]

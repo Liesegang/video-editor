@@ -8,6 +8,8 @@ mod model;
 mod qa;
 mod shortcut;
 mod state;
+#[cfg(test)]
+mod test_support;
 mod ui;
 pub mod utils;
 

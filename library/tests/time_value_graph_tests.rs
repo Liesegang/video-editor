@@ -52,13 +52,13 @@ fn time_graph_fixture(
 
     let modulo = Node::new_time_modulo("Time Modulo");
     let modulo_id = modulo.id;
-    let media = Node::new(
+    let media = Node::new_media(
         "Video",
-        NodeContent::Media(MediaContent {
+        MediaContent {
             asset_id,
             stream_index: None,
             audio_stream_index: None,
-        }),
+        },
     );
     let media_id = media.id;
     for node in [modulo, media] {
@@ -165,7 +165,7 @@ fn operation_and_merge_paths_use_the_same_source_node_time_remap() {
         ]),
     );
     let effect_id = effect.id;
-    let merge = Node::new("Merge", NodeContent::Merge);
+    let merge = Node::new_merge("Merge");
     let merge_id = merge.id;
     for node in [effect, merge] {
         let id = node.id;

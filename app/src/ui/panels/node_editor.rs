@@ -6691,7 +6691,7 @@ fn create_operation_node_for_request(
         NodeCreateRequest::Effect(effect_id) => {
             plugin_manager.create_effect_operation_node(effect_id)
         }
-        NodeCreateRequest::Merge => return Some(Node::new("Merge", NodeContent::Merge)),
+        NodeCreateRequest::Merge => return Some(Node::new_merge("Merge")),
         NodeCreateRequest::TimeModulo => return Some(Node::new_time_modulo("Time Modulo")),
         NodeCreateRequest::Text
         | NodeCreateRequest::Solid
@@ -7762,12 +7762,12 @@ fn create_composition_node(project: &mut Project, position: egui::Pos2, comp_id:
     candidate.add_track(root);
     candidate.add_composition(composition);
 
-    let mut node = Node::new(
+    let mut node = Node::new_reference(
         "Container",
-        NodeContent::Reference(library::model::ReferenceContent {
+        library::model::ReferenceContent {
             target_id: nested_id,
             sync_global_time: false,
-        }),
+        },
     );
     node.ui_position = [position.x, position.y];
     let node_id = node.id;
@@ -7782,12 +7782,7 @@ fn create_composition_node(project: &mut Project, position: egui::Pos2, comp_id:
 }
 
 fn create_merge_node(project: &mut Project, position: egui::Pos2, comp_id: Uuid) -> bool {
-    create_prebuilt_node(
-        project,
-        position,
-        Node::new("Merge", NodeContent::Merge),
-        comp_id,
-    )
+    create_prebuilt_node(project, position, Node::new_merge("Merge"), comp_id)
 }
 
 fn attach_node_at_position(
@@ -8168,7 +8163,9 @@ fn create_track_at_free_slot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::generator_node;
     use library::animation::EasingFunction;
+    use library::editor::project_service::GeneratorNodeRequest;
     use library::model::frame::color::Color;
     use library::model::frame::draw_type::DrawStyle;
     use library::model::frame::entity::StyleConfig;
@@ -8621,17 +8618,16 @@ mod tests {
         project.add_clip(clip);
         project.attach_clip_to_track(track_id, clip_id).unwrap();
 
-        let mut solid = Node::new("Solid", NodeContent::Generator(GeneratorContent::Solid));
-        solid.properties.set(
-            "color".to_string(),
-            library::model::property::Property::constant(PropertyValue::Color(
-                library::model::frame::color::Color {
+        let mut solid = generator_node(
+            "Solid",
+            GeneratorNodeRequest::Solid {
+                color: library::model::frame::color::Color {
                     r: 10,
                     g: 20,
                     b: 30,
                     a: 255,
                 },
-            )),
+            },
         );
         solid.ui_position = [450.0, 390.0];
         let solid_id = solid.id;
@@ -8640,7 +8636,7 @@ mod tests {
             .attach_node_to_container(NodeContainer::Clip(clip_id), solid_id)
             .unwrap();
 
-        let mut merge = Node::new("Merge", NodeContent::Merge);
+        let mut merge = Node::new_merge("Merge");
         merge.ui_position = [770.0, 390.0];
         let merge_id = merge.id;
         project.add_node(merge);
@@ -8863,7 +8859,12 @@ mod tests {
         assert!(matches.iter().any(|index| items[*index] == *runtime_style));
 
         let (mut project, _, _, clip_id, _, _) = fixture();
-        let shape = Node::new("Shape", NodeContent::Generator(GeneratorContent::Shape));
+        let shape = generator_node(
+            "Shape",
+            GeneratorNodeRequest::Shape {
+                path: "M 0 0 H 100 V 100 Z".to_string(),
+            },
+        );
         let shape_id = shape.id;
         let transform = plugins.create_effector_operation_node("transform").unwrap();
         let transform_id = transform.id;
@@ -8924,9 +8925,11 @@ mod tests {
             })
             .unwrap()
             .id;
-        let mut second = Node::new(
+        let mut second = generator_node(
             "Second Solid",
-            NodeContent::Generator(GeneratorContent::Solid),
+            GeneratorNodeRequest::Solid {
+                color: Color::black(),
+            },
         );
         second.ui_position = [450.0, 560.0];
         let second_id = second.id;
@@ -9319,7 +9322,12 @@ mod tests {
     #[test]
     fn endpoint_drag_reconnects_through_real_pointer_frames_without_changing_wire_identity() {
         let (mut project, _, _, clip_id, solid_id, merge_id) = fixture();
-        let mut alternate = Node::new("Alternate", NodeContent::Generator(GeneratorContent::Solid));
+        let mut alternate = generator_node(
+            "Alternate",
+            GeneratorNodeRequest::Solid {
+                color: Color::black(),
+            },
+        );
         alternate.ui_position = [250.0, 520.0];
         let alternate_id = alternate.id;
         project.add_node(alternate);
@@ -9543,18 +9551,12 @@ mod tests {
         project.attach_clip_to_track(track, sibling_clip).unwrap();
 
         let text = Uuid::from_u128(0x7_002);
-        let mut text_node = Node::new("Tall Text", NodeContent::Generator(GeneratorContent::Text));
-        text_node.properties.set(
-            "text".to_string(),
-            library::model::property::Property::constant(PropertyValue::String(
-                "A deliberately tall text Node".to_string(),
-            )),
-        );
-        text_node.properties.set(
-            "font_family".to_string(),
-            library::model::property::Property::constant(PropertyValue::String(
-                "Arial".to_string(),
-            )),
+        let mut text_node = generator_node(
+            "Tall Text",
+            GeneratorNodeRequest::Text {
+                text: "A deliberately tall text Node".to_string(),
+                font: "Arial".to_string(),
+            },
         );
         text_node.id = text;
         text_node.ui_position = overlapping_position;
@@ -9583,15 +9585,11 @@ mod tests {
         project.attach_clip_to_track(track, empty_clip).unwrap();
 
         let shape = Uuid::from_u128(0x7_004);
-        let mut shape_node = Node::new(
+        let mut shape_node = generator_node(
             "Track Shape",
-            NodeContent::Generator(GeneratorContent::Shape),
-        );
-        shape_node.properties.set(
-            "path".to_string(),
-            library::model::property::Property::constant(PropertyValue::String(
-                "M 0 0 H 100 V 100 Z".to_string(),
-            )),
+            GeneratorNodeRequest::Shape {
+                path: "M 0 0 H 100 V 100 Z".to_string(),
+            },
         );
         shape_node.id = shape;
         shape_node.ui_position = overlapping_position;
@@ -9611,7 +9609,7 @@ mod tests {
             .unwrap();
 
         let composition_node = Uuid::from_u128(0x7_005);
-        let mut root_merge = Node::new("Composition Merge", NodeContent::Merge);
+        let mut root_merge = Node::new_merge("Composition Merge");
         root_merge.id = composition_node;
         root_merge.ui_position = overlapping_position;
         project.add_node(root_merge);
@@ -11606,7 +11604,7 @@ mod tests {
         assert!(!clip_node_property.has_keyframe_at(global_time, 0.001));
 
         let root_id = Uuid::from_u128(0x9_101);
-        let mut root = Node::new("Root", NodeContent::Merge);
+        let mut root = Node::new_merge("Root");
         root.id = root_id;
         root.properties.set("animated".to_string(), animated);
         project.add_node(root);
@@ -12158,7 +12156,7 @@ mod tests {
     #[test]
     fn new_nodes_use_a_dependency_near_free_slot_inside_clip() {
         let (mut project, _, _, clip_id, existing_id, _) = fixture();
-        let node = Node::new("New", NodeContent::Merge);
+        let node = Node::new_merge("New");
         let node_id = node.id;
         project.add_node(node);
         project
@@ -12254,7 +12252,7 @@ mod tests {
             .get_composition_mut(composition_id)
             .unwrap()
             .ui_collapsed = true;
-        let node = Node::new("Root Node", NodeContent::Merge);
+        let node = Node::new_merge("Root Node");
         let node_id = node.id;
         create_prebuilt_node(&mut project, hidden_track_body, node, composition_id);
 
@@ -12285,9 +12283,12 @@ mod tests {
         let merge_before = project.get_node(merge_id).unwrap().clone();
         let connections_before = project.connections.clone();
         let desired = egui::pos2(500.0, 400.0);
-        let node = Node::new(
+        let node = generator_node(
             "Locally Placed Text",
-            NodeContent::Generator(GeneratorContent::Text),
+            GeneratorNodeRequest::Text {
+                text: "Locally Placed Text".to_string(),
+                font: "Arial".to_string(),
+            },
         );
         let node_id = node.id;
 

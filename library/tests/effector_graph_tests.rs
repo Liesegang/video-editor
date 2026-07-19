@@ -23,7 +23,7 @@ use library::model::project::{
 use library::model::property::{
     Keyframe, Property, PropertyDefinition, PropertyMap, PropertyValue, Vec2,
 };
-use library::model::{BlendMode, Clip, Node, NodeContent, PluginOperationContent};
+use library::model::{BlendMode, Clip, Node, NodeContent};
 use library::plugin::{
     EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin, FrameEvaluationContext,
     OperationDescriptor, OperationDescriptorError, Plugin, PluginManager, ResolvedNodeInputs,
@@ -621,21 +621,23 @@ fn disabled_and_inactive_effector_operations_short_circuit_before_plugin_work() 
         "disabled Shape operations must not look up a plugin descriptor"
     );
 
-    let mut broken_time = Node::new(
+    let mut broken_time = OperationDescriptor::new(
+        "test",
+        "broken-time",
+        "test.broken-time.v1",
         "broken time",
-        NodeContent::PluginOperation(PluginOperationContent {
-            category: "test".into(),
-            component_id: "broken-time".into(),
-            operation: "test.broken-time.v1".into(),
-            declared_ports: vec![PortDefinition::output(
-                "broken_time",
-                "Broken Time",
-                PortDataType::Number,
-                PortSide::Right,
-                PortExposure::Graph,
-            )],
-        }),
-    );
+        Vec::new(),
+        [PortDefinition::output(
+            "broken_time",
+            "Broken Time",
+            PortDataType::Number,
+            PortSide::Right,
+            PortExposure::Graph,
+        )],
+    )
+    .unwrap()
+    .create_node()
+    .unwrap();
     broken_time.ui_position = [-400.0, -200.0];
     let broken_time_id = broken_time.id;
     let container = project.find_node_container(counting_id).unwrap();

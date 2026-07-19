@@ -1,7 +1,10 @@
+mod support;
+
 use std::sync::Arc;
 
 use library::animation::EasingFunction;
 use library::cache::CacheManager;
+use library::editor::project_service::GeneratorNodeRequest;
 use library::framing::get_frame_from_project;
 use library::model::frame::Image;
 use library::model::frame::color::Color;
@@ -15,14 +18,16 @@ use library::model::project::{
 };
 use library::model::property::{Keyframe, Property, PropertyValue};
 use library::model::{
-    Asset, AssetKind, BlendMode, Clip, GeneratorContent, MediaContent, Node, NodeContent,
-    PluginOperationContent, ReferenceContent, Track,
+    Asset, AssetKind, BlendMode, Clip, MediaContent, Node, NodeContent, PluginOperationContent,
+    ReferenceContent, Track,
 };
 use library::plugin::PluginManager;
 use library::rendering::renderer::RenderOutput;
 use library::{RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
+
+use support::generator_node_for_canvas;
 
 fn project_with_composition() -> (Project, Uuid, Uuid) {
     let mut project = Project::new("direct graph");
@@ -43,12 +48,16 @@ fn add_clip(project: &mut Project, track_id: Uuid, name: &str) -> Uuid {
 }
 
 fn solid_node(name: &str) -> Node {
-    let mut node = Node::new(name, NodeContent::Generator(GeneratorContent::Solid));
-    node.properties.set(
-        "color".to_string(),
-        Property::constant(PropertyValue::Color(Color::black())),
-    );
-    node
+    generator_node_for_canvas(
+        name,
+        GeneratorNodeRequest::Solid {
+            color: Color::black(),
+        },
+        320,
+        180,
+        320,
+        180,
+    )
 }
 
 fn colored_solid_node(name: &str, color: Color) -> Node {
@@ -71,15 +80,15 @@ fn plugin_operation_node(
     operation: &str,
     declared_ports: Vec<PortDefinition>,
 ) -> Node {
-    Node::new(
-        name,
-        NodeContent::PluginOperation(PluginOperationContent {
+    Node {
+        content: NodeContent::PluginOperation(PluginOperationContent {
             category: category.to_string(),
             component_id: component_id.to_string(),
             operation: operation.to_string(),
             declared_ports,
         }),
-    )
+        ..Node::new_merge(name)
+    }
 }
 
 fn add_node(project: &mut Project, container: NodeContainer, node: Node) -> Uuid {
@@ -245,16 +254,8 @@ fn wire_blend_is_required_and_distinct_fanout_values_roundtrip_losslessly() {
     let clip_id = add_clip(&mut project, track_id, "fanout");
     let container = NodeContainer::Clip(clip_id);
     let source_id = add_node(&mut project, container, solid_node("shared source"));
-    let first_merge_id = add_node(
-        &mut project,
-        container,
-        Node::new("first merge", NodeContent::Merge),
-    );
-    let second_merge_id = add_node(
-        &mut project,
-        container,
-        Node::new("second merge", NodeContent::Merge),
-    );
+    let first_merge_id = add_node(&mut project, container, Node::new_merge("first merge"));
+    let second_merge_id = add_node(&mut project, container, Node::new_merge("second merge"));
     let source = address(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT);
     let first_wire = project
         .connect_ports(
@@ -681,7 +682,7 @@ fn node_graph_bundle_commit_and_structural_failure_are_atomic() {
 
     let source = solid_node("source");
     let source_id = source.id;
-    let merge = Node::new("merge", NodeContent::Merge);
+    let merge = Node::new_merge("merge");
     let merge_id = merge.id;
     let malformed_connection = ProjectConnection::new(
         address(PortOwner::Node(source_id), "missing_output"),
@@ -881,7 +882,7 @@ fn validation_reports_clip_node_asset_and_connection_identity_corruption() {
     let merge_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new("merge", NodeContent::Merge),
+        Node::new_merge("merge"),
     );
     let connection_id = project
         .connect_ports(
@@ -1095,8 +1096,7 @@ fn direct_node_reparent_remaps_metadata_for_every_container_pair() {
             ];
             let source = sources[source_kind];
             let destination = destinations[destination_kind];
-            let moved_node_id =
-                add_node(&mut project, source, Node::new("moved", NodeContent::Merge));
+            let moved_node_id = add_node(&mut project, source, Node::new_merge("moved"));
             let destination_output_id =
                 add_node(&mut project, destination, solid_node("destination output"));
             project
@@ -1247,7 +1247,7 @@ fn node_reparent_preserves_graph_image_wires_ids_orders_targets_and_rendering() 
     let merge_id = add_node(
         &mut project,
         NodeContainer::Track(first_track_id),
-        Node::new("moved merge", NodeContent::Merge),
+        Node::new_merge("moved merge"),
     );
     project
         .connect_ports(
@@ -1358,7 +1358,7 @@ fn unremappable_direct_parent_source_fails_without_mutating_project() {
     let node_id = add_node(
         &mut project,
         NodeContainer::Track(track_id),
-        Node::new("moved", NodeContent::Merge),
+        Node::new_merge("moved"),
     );
     let missing_source = address(PortOwner::Track(track_id), "missing_metadata");
     project.connections.push(ProjectConnection::new(
@@ -1448,12 +1448,12 @@ fn cross_track_image_connection_preserves_containment_and_internal_metadata_cann
     let reference_id = add_node(
         &mut project,
         NodeContainer::Clip(second_clip),
-        Node::new(
+        Node::new_reference(
             "reference",
-            NodeContent::Reference(ReferenceContent {
+            ReferenceContent {
                 target_id: composition_id,
                 sync_global_time: false,
-            }),
+            },
         ),
     );
 
@@ -1502,18 +1502,18 @@ fn single_inputs_replace_while_variadic_inputs_reorder_disconnect_and_roundtrip(
     let reference_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new(
+        Node::new_reference(
             "single",
-            NodeContent::Reference(ReferenceContent {
+            ReferenceContent {
                 target_id: composition_id,
                 sync_global_time: false,
-            }),
+            },
         ),
     );
     let merge_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new("merge", NodeContent::Merge),
+        Node::new_merge("merge"),
     );
 
     let single_target = address(PortOwner::Node(reference_id), IMAGE_INPUT_PORT);
@@ -1607,12 +1607,12 @@ fn image_cycles_include_connections_containment_and_explicit_outputs() {
     let first_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new("first merge", NodeContent::Merge),
+        Node::new_merge("first merge"),
     );
     let second_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new("second merge", NodeContent::Merge),
+        Node::new_merge("second merge"),
     );
     project
         .connect_ports(
@@ -1655,12 +1655,12 @@ fn setting_an_output_rejects_a_preexisting_reverse_edge_atomically() {
     let feedback_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new("feedback merge", NodeContent::Merge),
+        Node::new_merge("feedback merge"),
     );
     let valid_output_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new("valid output", NodeContent::Merge),
+        Node::new_merge("valid output"),
     );
 
     project
@@ -1707,13 +1707,13 @@ fn clip_is_the_only_timing_owner_and_metadata_connection_overrides_authored_prop
     let clip_id = clip.id;
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id).unwrap();
-    let mut node = Node::new(
+    let mut node = Node::new_media(
         "video",
-        NodeContent::Media(MediaContent {
+        MediaContent {
             asset_id,
             stream_index: None,
             audio_stream_index: None,
-        }),
+        },
     );
     node.properties.set(
         "opacity".into(),
@@ -1908,9 +1908,28 @@ fn unbound_composition_and_track_outputs_use_only_ordered_child_containers() {
 fn text_and_shape_require_style_before_the_clip_can_output_an_image() {
     let (mut project, _composition_id, track_id) = project_with_composition();
     let clip_id = add_clip(&mut project, track_id, "shape graph");
-    let text = Node::new("Text", NodeContent::Generator(GeneratorContent::Text));
+    let text = generator_node_for_canvas(
+        "Text",
+        GeneratorNodeRequest::Text {
+            text: "Text".to_string(),
+            font: "Arial".to_string(),
+        },
+        320,
+        180,
+        320,
+        180,
+    );
     let text_id = text.id;
-    let shape = Node::new("Shape", NodeContent::Generator(GeneratorContent::Shape));
+    let shape = generator_node_for_canvas(
+        "Shape",
+        GeneratorNodeRequest::Shape {
+            path: "M 0 0 H 100 V 100 Z".to_string(),
+        },
+        320,
+        180,
+        100,
+        100,
+    );
     let shape_id = shape.id;
     let style = plugin_operation_node(
         "Style",
@@ -1996,7 +2015,7 @@ fn child_container_images_feeding_a_direct_parent_sink_are_not_double_composed()
     let track_merge_id = add_node(
         &mut project,
         NodeContainer::Track(track_id),
-        Node::new("Track Merge", NodeContent::Merge),
+        Node::new_merge("Track Merge"),
     );
     project
         .connect_ports(
@@ -2010,7 +2029,7 @@ fn child_container_images_feeding_a_direct_parent_sink_are_not_double_composed()
     let composition_merge_id = add_node(
         &mut project,
         NodeContainer::Composition(composition_id),
-        Node::new("Composition Merge", NodeContent::Merge),
+        Node::new_merge("Composition Merge"),
     );
     project
         .connect_ports(
@@ -2054,7 +2073,7 @@ fn cross_container_image_consumers_do_not_hide_the_source_containers_fallback() 
     let target_merge_id = add_node(
         &mut project,
         NodeContainer::Composition(target_composition_id),
-        Node::new("Cross-container Merge", NodeContent::Merge),
+        Node::new_merge("Cross-container Merge"),
     );
     project
         .connect_ports(
@@ -2102,7 +2121,7 @@ fn merge_order_and_wire_blend_change_real_pixels_without_reading_source_blend() 
     let merge_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new("merge", NodeContent::Merge),
+        Node::new_merge("merge"),
     );
     project
         .set_output_node(NodeContainer::Clip(clip_id), Some(merge_id))
@@ -2195,12 +2214,12 @@ fn reference_materializes_an_empty_nested_composition_as_its_opaque_background()
     let reference_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new(
+        Node::new_reference(
             "empty composition reference",
-            NodeContent::Reference(ReferenceContent {
+            ReferenceContent {
                 target_id: nested_id,
                 sync_global_time: false,
-            }),
+            },
         ),
     );
     project
@@ -2233,7 +2252,7 @@ fn merge_keeps_an_empty_nested_composition_as_a_transparent_produced_input() {
     let merge_id = add_node(
         &mut project,
         NodeContainer::Composition(parent_id),
-        Node::new("composition merge", NodeContent::Merge),
+        Node::new_merge("composition merge"),
     );
     project
         .set_output_node(NodeContainer::Composition(parent_id), Some(merge_id))
@@ -2301,7 +2320,7 @@ fn merge_skips_a_disabled_first_input_and_normalizes_the_first_produced_wire_at_
     let merge_id = add_node(
         &mut project,
         NodeContainer::Composition(composition_id),
-        Node::new("merge", NodeContent::Merge),
+        Node::new_merge("merge"),
     );
     project
         .set_output_node(NodeContainer::Composition(composition_id), Some(merge_id))
@@ -2408,7 +2427,7 @@ fn malformed_serialized_variadic_orders_are_reported_without_repairing_the_model
     let merge_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new("merge", NodeContent::Merge),
+        Node::new_merge("merge"),
     );
     let target = address(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
     project.connections = vec![

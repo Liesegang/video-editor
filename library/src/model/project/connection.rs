@@ -1233,7 +1233,7 @@ mod tests {
     use crate::model::{Clip, Node, ReferenceContent};
 
     fn add_node(project: &mut Project, container: NodeContainer, name: &str) -> Uuid {
-        let node = Node::new(name, NodeContent::Merge);
+        let node = Node::new_merge(name);
         let node_id = node.id;
         project.add_node(node);
         project
@@ -1243,12 +1243,12 @@ mod tests {
     }
 
     fn add_reference_node(project: &mut Project, container: NodeContainer, name: &str) -> Uuid {
-        let node = Node::new(
+        let node = Node::new_reference(
             name,
-            NodeContent::Reference(ReferenceContent {
+            ReferenceContent {
                 target_id: Uuid::new_v4(),
                 sync_global_time: false,
-            }),
+            },
         );
         let node_id = node.id;
         project.add_node(node);

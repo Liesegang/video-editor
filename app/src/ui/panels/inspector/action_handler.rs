@@ -169,7 +169,7 @@ mod tests {
     use super::*;
     use library::cache::CacheManager;
     use library::model::property::PropertyValue;
-    use library::model::{Node, NodeContent, Project};
+    use library::model::{Node, Project};
     use library::plugin::PluginManager;
     use ordered_float::OrderedFloat;
     use std::sync::{Arc, RwLock};
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn inspector_materializes_a_missing_property_as_a_typed_keyframe() {
-        let node = Node::new("sparse", NodeContent::Merge);
+        let node = Node::new_merge("sparse");
         let node_id = node.id;
         let mut initial = Project::new("missing property");
         initial.add_node(node);

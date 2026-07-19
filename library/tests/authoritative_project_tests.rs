@@ -1,5 +1,7 @@
+mod support;
+
 use library::ProjectModel;
-use library::editor::project_service::ProjectManager;
+use library::editor::project_service::{GeneratorNodeRequest, ProjectManager};
 use library::framing::get_frame_from_project;
 use library::model::frame::entity::{FrameContent, FrameItem, FrameObject};
 use library::model::project::{
@@ -7,10 +9,12 @@ use library::model::project::{
     PortAddress, PortOwner, Project, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::property::{Property, PropertyValue, Vec2};
-use library::model::{Clip, GeneratorContent, Node, NodeContent};
+use library::model::{Clip, Node, NodeContent};
 use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
+
+use support::generator_node_for_canvas;
 
 fn project_with_solid() -> (Project, uuid::Uuid, uuid::Uuid) {
     let mut project = Project::new("authoritative");
@@ -19,10 +23,15 @@ fn project_with_solid() -> (Project, uuid::Uuid, uuid::Uuid) {
     let track_id = track.id;
     let clip = Clip::new("solid clip", 0.0, 2.0);
     let clip_id = clip.id;
-    let mut node = Node::new("solid", NodeContent::Generator(GeneratorContent::Solid));
-    node.properties.set(
-        "color".to_string(),
-        Property::constant(PropertyValue::Color(Default::default())),
+    let mut node = generator_node_for_canvas(
+        "solid",
+        GeneratorNodeRequest::Solid {
+            color: Default::default(),
+        },
+        320,
+        180,
+        320,
+        180,
     );
     node.properties.set(
         "position".to_string(),
@@ -159,11 +168,17 @@ fn adoption_preserves_explicit_plugin_operation_nodes_unknown_to_this_binary() {
             Property::constant(PropertyValue::String("preserve exactly".to_string())),
         );
     }
-    let shape = Node::new(
+    let shape = generator_node_for_canvas(
         "shape source",
-        NodeContent::Generator(GeneratorContent::Shape),
+        GeneratorNodeRequest::Shape {
+            path: "M 0 0 H 100 V 100 Z".to_string(),
+        },
+        320,
+        180,
+        100,
+        100,
     );
-    let merge = Node::new("result", NodeContent::Merge);
+    let merge = Node::new_merge("result");
     let effect_id = effect.id;
     let shape_id = shape.id;
     let effector_id = effector.id;
