@@ -163,8 +163,9 @@ pub struct ComponentDescriptorV1 {
     pub properties: Vec<PropertyDefinitionV1>,
     /// Value returned by the host when a runtime property evaluator cannot be
     /// invoked or returns an invalid response. Required for `property`
-    /// components and omitted for categories that do not produce a value. Its
-    /// variant also declares the component's ABI-v1 output type.
+    /// components; its variant also declares the component's ABI-v1 output
+    /// type. Omitted for categories whose failure contract is explicit
+    /// `no_output` (Effector, Style, and Decorator).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_default: Option<PropertyValueV1>,
 }

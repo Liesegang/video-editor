@@ -38,11 +38,12 @@ does not link into `app` or `library`.
 Each implementation's definitions are the sole source for an instance's
 PropertyDefinitions and defaults: built-in native plugins return the same
 host `PropertyDefinition` type directly, while runtime native descriptors are
-validated and translated into it. `PluginManager::create_effector_instance`
-materializes every declared property in both cases, so callers cannot forget
-fields such as `mode` or `target`. Both then use the same plugin ID +
-`EffectorInstance` + `PropertyMap` editing model; the Project does not branch
-on implementation tier.
+validated and translated into it. Descriptor-backed operation factories
+materialize every declared property in both cases, so callers cannot forget
+fields such as `mode` or `target`. Both then use the same plugin ID + explicit
+operation Node + `PropertyMap` editing model; the Project does not branch on
+implementation tier. Runtime Style and Decorator components use the same
+typed graph ports as their built-in counterparts.
 If the plugin later becomes unavailable, the Project's plugin ID and property
 map remain ordinary serialized data and are preserved; the renderer simply
 cannot invoke that implementation until it is installed again.
@@ -63,14 +64,16 @@ Run the actual post-build proof with:
 ```
 
 The script builds the app and exact probe into an isolated host target first,
-independently builds the standalone random-property plugin into a different
-target directory,
-checks the locked dependency tree contains neither `app` nor `library`,
-installs it into a temporary runtime bundle, runs the unchanged prebuilt
-probe, and runs the explicitly ignored external integration test with the
-bundle environment supplied. That test concurrently rescans the bundle and
-uses plugin-side instrumentation to prove the descriptor callback ran exactly
-once; it cannot pass by silently skipping when the bundle is absent.
+then independently builds the standalone fixture plugin into a different
+target directory. That bundle contains Property, Fill/Stroke Style, and
+Backplate Decorator components. The script checks the locked dependency tree
+contains neither `app` nor `library`, installs the bundle, and runs the
+unchanged prebuilt probe. The probe executes an explicit
+`Text -> runtime Backplate -> runtime Fill -> Clip` Project graph through the
+Frame evaluator and CPU renderer. The explicitly ignored external integration
+test concurrently rescans the bundle and uses plugin-side instrumentation to
+prove the descriptor callback ran exactly once; it cannot pass by silently
+skipping when the bundle is absent.
 Set `CARGO_TARGET_DIR` to reuse its isolated
 `runtime-plugin-e2e/host` and `runtime-plugin-e2e/sample` build caches. When
 the variable is absent, both targets live under a self-cleaning temporary
@@ -80,19 +83,33 @@ directory.
 
 Plugin ABI version 1 is independent of Project serialization. No Project
 schema version or migration is involved. The JSON invocation envelope is a
-low-bandwidth control plane. ABI v1 integrates Effector output and property
-evaluation; it is deliberately **not** a frame-transport API.
+low-bandwidth control plane. ABI v1 integrates Effector output, property
+evaluation, and low-bandwidth Style/Decorator config evaluation; it is
+deliberately **not** a frame-transport API. Runtime Style covers every current
+host `DrawStyle` variant (Fill and Stroke), while Runtime Decorator covers the
+executable Backplate config. Backplate `Parts` is not advertised because the
+renderer does not implement it. Descriptor properties are resolved and
+validated once, then materialized as constants before plugin evaluation so a
+stateful authored evaluator cannot be invoked twice. Invalid, unknown,
+non-finite, or structurally unsafe config responses produce `NoOutput`.
+
+Style and Decorator requests contain only time, fps, and explicitly tagged
+values for the component's declared properties. They do not contain a shape,
+path, Project object, frame, renderer, or GPU object. The host assigns the
+resulting config the source operation Node's identity.
+
 Effects, loaders, and entity converters need versioned typed extension tables
 obtained through `query_extension`, using host-owned opaque frame/resource
 handles (or an explicitly specified pixel-buffer contract) and host service
 callbacks. Serializing every frame through JSON would be incorrect.
 
-Runtime Style, Decorator, Effect, loader, exporter, and entity-converter
-adapters still need implementations. ABI v1 rejects a bundle
-containing any of those categories as a whole; it does not retain a
-descriptor-only component or expose generic invocation for something the
-editor cannot execute. A category becomes legal only together with its real
-host adapter. Performance-sensitive built-ins may intentionally remain
+Runtime Effect, loader, exporter, and entity-converter adapters still need
+implementations. ABI v1 rejects a bundle containing any of those categories
+as a whole; it does not retain a descriptor-only component or expose generic
+invocation for something the editor cannot execute. Effect and Loader remain
+future high-bandwidth extensions and must not pass frames or decoded resources
+through the JSON control plane. A category becomes legal only together with
+its real host adapter. Performance-sensitive built-ins may intentionally remain
 statically linked native implementations; externalization is not required.
 Any future runtime hot-path adapter must still expose the same plugin
 IDs/definitions and editing model, while using a typed/batched ABI rather than
@@ -106,6 +123,7 @@ memory, or crash the host; the C ABI is a compatibility boundary, not a
 sandbox. RuViE validates manifest containment, ABI version/table size,
 descriptor structure, declared operations, payload size, returned buffer
 invariants, exact default-value types/ranges, property metadata, duplicate
-IDs, supported categories, and non-finite Effector/property output.
+IDs, supported categories, and non-finite or structurally unsafe
+Effector/Property/Style/Decorator output.
 Those checks cannot make hostile native code safe. Production distribution
 should add signatures/trust policy before offering automatic downloads.

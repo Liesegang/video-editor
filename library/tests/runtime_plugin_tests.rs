@@ -4,10 +4,15 @@ use std::sync::{Arc, Barrier};
 
 use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::model::{Composition, NodeContainer, NodeContent, Project};
-use library::plugin::native_plugin_api::{PROPERTY_CATEGORY, PropertyValueV1};
+use library::plugin::native_plugin_api::{
+    DECORATOR_CATEGORY, PROPERTY_CATEGORY, PropertyValueV1, STYLE_CATEGORY,
+};
 use library::plugin::{EvaluationContext, PluginManager};
 
 const COMPONENT_ID: &str = "random_property";
+const FILL_COMPONENT_ID: &str = "runtime_fill_style";
+const STROKE_COMPONENT_ID: &str = "runtime_stroke_style";
+const BACKPLATE_COMPONENT_ID: &str = "runtime_backplate_decorator";
 const DESCRIPTOR_CALLS_OPERATION: &str = "random_property.descriptor_calls.v1";
 
 #[test]
@@ -59,7 +64,7 @@ fn bundle_from_environment() -> PathBuf {
 
 #[test]
 #[ignore = "requires the independently built bundle from scripts/test-runtime-plugin.sh"]
-fn standalone_runtime_property_loads_describes_builds_and_invokes() {
+fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
     let bundle = bundle_from_environment();
     let manager = Arc::new(PluginManager::default());
     let workers = 12;
@@ -125,12 +130,26 @@ fn standalone_runtime_property_loads_describes_builds_and_invokes() {
         .expect("one scan loaded the runtime bundle");
     assert_eq!(
         report.registered_components,
-        vec![(PROPERTY_CATEGORY.to_string(), COMPONENT_ID.to_string())]
+        vec![
+            (PROPERTY_CATEGORY.to_string(), COMPONENT_ID.to_string()),
+            (STYLE_CATEGORY.to_string(), FILL_COMPONENT_ID.to_string()),
+            (STYLE_CATEGORY.to_string(), STROKE_COMPONENT_ID.to_string()),
+            (
+                DECORATOR_CATEGORY.to_string(),
+                BACKPLATE_COMPONENT_ID.to_string()
+            ),
+        ]
     );
 
     let descriptors = manager.get_runtime_plugin_descriptors();
     assert_eq!(descriptors.len(), 1);
-    let component = &descriptors[0].descriptor.components[0];
+    assert_eq!(descriptors[0].descriptor.components.len(), 4);
+    let component = descriptors[0]
+        .descriptor
+        .components
+        .iter()
+        .find(|component| component.category == PROPERTY_CATEGORY)
+        .expect("bundle has its property component");
     assert_eq!(component.id, COMPONENT_ID);
     assert_eq!(component.category, PROPERTY_CATEGORY);
     assert!(matches!(
@@ -143,6 +162,50 @@ fn standalone_runtime_property_loads_describes_builds_and_invokes() {
         .map(|definition| definition.name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(names, vec!["amplitude", "seed"]);
+    for (category, id, node) in [
+        (
+            STYLE_CATEGORY,
+            FILL_COMPONENT_ID,
+            manager
+                .create_style_operation_node(FILL_COMPONENT_ID)
+                .expect("runtime Fill creates a graph Node"),
+        ),
+        (
+            STYLE_CATEGORY,
+            STROKE_COMPONENT_ID,
+            manager
+                .create_style_operation_node(STROKE_COMPONENT_ID)
+                .expect("runtime Stroke creates a graph Node"),
+        ),
+        (
+            DECORATOR_CATEGORY,
+            BACKPLATE_COMPONENT_ID,
+            manager
+                .create_decorator_operation_node(BACKPLATE_COMPONENT_ID)
+                .expect("runtime Backplate creates a graph Node"),
+        ),
+    ] {
+        let component = descriptors[0]
+            .descriptor
+            .components
+            .iter()
+            .find(|component| component.category == category && component.id == id)
+            .expect("runtime config component stays in the accepted descriptor");
+        let descriptor_names = component
+            .properties
+            .iter()
+            .map(|definition| definition.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let node_names = node
+            .properties
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            node_names, descriptor_names,
+            "descriptor-backed runtime factory must materialize every property"
+        );
+    }
 
     let instance = manager
         .create_property_instance(COMPONENT_ID)
