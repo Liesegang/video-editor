@@ -27,8 +27,8 @@ use crate::plugin::loaders::{
 use crate::plugin::repository::{PluginRegistry, PluginRepository};
 use crate::plugin::runtime_native::{
     RuntimeBundleClaim, RuntimeBundleState, RuntimePluginDescriptor, RuntimePluginRegistry,
-    RuntimePluginScanReport, discover_manifests, open_bundle, resolve_bundle,
-    resolve_manifest_identity,
+    RuntimePluginScanReport, RuntimeRegistrationTargets, discover_manifests, open_bundle,
+    resolve_bundle, resolve_manifest_identity,
 };
 
 use crate::plugin::traits::{Plugin, PropertyPlugin};
@@ -544,9 +544,11 @@ impl PluginManager {
         operation: &str,
         payload: serde_json::Value,
     ) -> Result<serde_json::Value, LibraryError> {
-        self.read_registry()
-            .runtime_plugins
-            .invoke(category, component_id, operation, payload)
+        let component = {
+            let inner = self.read_registry();
+            inner.runtime_plugins.component(category, component_id)?
+        };
+        component.invoke(operation, payload)
     }
 
     /// Discovers `ruvie-plugin.toml` bundles in configured runtime directories
@@ -653,6 +655,8 @@ impl PluginManager {
             let mut inner = self.write_registry();
             let PluginRegistry {
                 runtime_plugins,
+                effect_plugins,
+                load_plugins,
                 effector_plugins,
                 decorator_plugins,
                 style_plugins,
@@ -661,10 +665,14 @@ impl PluginManager {
             } = &mut *inner;
             match runtime_plugins.register_bundle(
                 pending,
-                effector_plugins,
-                decorator_plugins,
-                style_plugins,
-                property_evaluators,
+                RuntimeRegistrationTargets {
+                    effect_plugins,
+                    load_plugins,
+                    effector_plugins,
+                    decorator_plugins,
+                    style_plugins,
+                    property_evaluators,
+                },
             ) {
                 Ok(registered) => {
                     report.loaded_bundles.push(manifest_path);
@@ -714,8 +722,11 @@ impl PluginManager {
         params: &HashMap<String, PropertyValue>,
         gpu_context: Option<&mut GpuContext>,
     ) -> Result<RenderOutput, LibraryError> {
-        let inner = self.read_registry();
-        if let Some(plugin) = inner.effect_plugins.get(key) {
+        let plugin = {
+            let inner = self.read_registry();
+            inner.effect_plugins.get(key).cloned()
+        };
+        if let Some(plugin) = plugin {
             debug!("PluginManager: Applying effect '{}'", key);
             plugin.apply(input, params, gpu_context)
         } else {
@@ -745,8 +756,11 @@ impl PluginManager {
         request: &LoadRequest,
         cache: &CacheManager,
     ) -> Result<LoadResponse, LibraryError> {
-        let inner = self.read_registry();
-        for plugin in inner.load_plugins.values() {
+        let plugins = {
+            let inner = self.read_registry();
+            inner.load_plugins.values().cloned().collect::<Vec<_>>()
+        };
+        for plugin in plugins {
             match plugin.load(request, cache) {
                 Ok(response) => return Ok(response),
                 Err(LoadPluginError::Unsupported) => {}
@@ -777,8 +791,11 @@ impl PluginManager {
 
     /// Get all available streams/resources from a file.
     pub fn get_available_streams(&self, path: &str) -> Option<Vec<AssetMetadata>> {
-        let inner = self.read_registry();
-        for plugin in inner.load_plugins.values() {
+        let plugins = {
+            let inner = self.read_registry();
+            inner.load_plugins.values().cloned().collect::<Vec<_>>()
+        };
+        for plugin in plugins {
             match plugin.open(path) {
                 Ok(streams) => return Some(streams),
                 Err(LoadPluginError::Unsupported) => {}

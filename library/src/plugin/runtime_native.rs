@@ -2,21 +2,34 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::mem::size_of;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use libloading::{Library, Symbol};
+use lru::LruCache;
 use ordered_float::OrderedFloat;
 use ruvie_plugin_api::{
-    BackplateShapeV1, ColorV1, ComponentDescriptorV1, DECORATOR_CATEGORY, DECORATOR_EVALUATE_V1,
-    DecoratorEvaluateRequestV1, DecoratorOutputV1, DecoratorTargetV1, EFFECTOR_CATEGORY,
+    ALPHA_MODE_STRAIGHT_V1, ASSET_KIND_IMAGE_V1, ASSET_KIND_VIDEO_V1, ASSET_METADATA_DIMENSIONS_V1,
+    ASSET_METADATA_DURATION_V1, ASSET_METADATA_FPS_V1, ASSET_METADATA_FRAME_COUNT_V1,
+    ASSET_METADATA_STREAM_INDEX_V1, ASSET_METADATA_TIME_BASE_V1, BackplateShapeV1,
+    COLOR_PROFILE_SRGB_V1, ColorV1, ComponentDescriptorV1, DECORATOR_CATEGORY,
+    DECORATOR_EVALUATE_V1, DecoratorEvaluateRequestV1, DecoratorOutputV1, DecoratorTargetV1,
+    EFFECT_CATEGORY, EFFECT_CPU_RGBA8_EXTENSION_V1, EFFECT_PROCESS_CPU_RGBA8_V1, EFFECTOR_CATEGORY,
     EFFECTOR_EVALUATE_V1, EffectorEvaluateRequestV1, EffectorOutputV1, EffectorTargetV1, InsetsV1,
-    InvokeRequestV1, MAX_PLUGIN_PAYLOAD_BYTES, MAX_STYLE_DASH_INTERVALS_V1, OpacityModeV1,
-    PROPERTY_CATEGORY, PROPERTY_EVALUATE_V1, PluginDescriptorV1, PropertyEvaluateRequestV1,
-    PropertyEvaluateResponseV1, PropertyUiV1, PropertyValueV1, RUVIE_PLUGIN_ABI_V1,
-    RUVIE_PLUGIN_ENTRY_V1, RuvieBuffer, RuvieBytesView, RuvieCallResult, RuviePluginApiV1,
-    STATUS_OK, STYLE_CATEGORY, STYLE_EVALUATE_V1, StrokeCapV1, StrokeJoinV1,
-    StyleEvaluateRequestV1, StyleOutputV1,
+    InvokeRequestV1, LOAD_REQUEST_IMAGE_V1, LOAD_REQUEST_VIDEO_FRAME_V1, LOADER_CATEGORY,
+    LOADER_CPU_RGBA8_EXTENSION_V1, LOADER_LOAD_CPU_RGBA8_V1, LOADER_OPEN_V1,
+    MAX_CPU_RGBA8_DIMENSION_V1, MAX_CPU_RGBA8_FRAME_BYTES_V1, MAX_LOADER_STREAMS_V1,
+    MAX_PLUGIN_PAYLOAD_BYTES, MAX_STYLE_DASH_INTERVALS_V1, OpacityModeV1, PROPERTY_CATEGORY,
+    PROPERTY_EVALUATE_V1, PROPERTY_VALUE_BOOLEAN_V1, PROPERTY_VALUE_COLOR_V1,
+    PROPERTY_VALUE_INTEGER_V1, PROPERTY_VALUE_NUMBER_V1, PROPERTY_VALUE_STRING_V1,
+    PROPERTY_VALUE_VEC2_V1, PROPERTY_VALUE_VEC3_V1, PROPERTY_VALUE_VEC4_V1, PluginDescriptorV1,
+    PropertyEvaluateRequestV1, PropertyEvaluateResponseV1, PropertyUiV1, PropertyValueV1,
+    RUVIE_PLUGIN_ABI_V1, RUVIE_PLUGIN_ENTRY_V1, RuvieAssetMetadataV1, RuvieBuffer, RuvieBytesView,
+    RuvieCallResult, RuvieEffectCpuRgba8ApiV1, RuvieExtensionResultV1, RuvieLoaderCpuRgba8ApiV1,
+    RuvieLoaderRequestV1, RuvieOwnedRgba8FrameV1, RuviePluginApiV1, RuviePropertyMapViewV1,
+    RuviePropertyValueViewV1, RuvieRgba8FrameViewV1, STATUS_OK, STATUS_UNSUPPORTED, STYLE_CATEGORY,
+    STYLE_EVALUATE_V1, StrokeCapV1, StrokeJoinV1, StyleEvaluateRequestV1, StyleOutputV1,
 };
 use serde::Deserialize;
 
@@ -27,7 +40,11 @@ use crate::model::property::{
 use crate::plugin::entity_converter::FrameEvaluationContext;
 use crate::plugin::evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
 use crate::plugin::repository::PluginRepository;
-use crate::plugin::{DecoratorPlugin, EffectorPlugin, Plugin, PluginCategory, StylePlugin};
+use crate::plugin::{
+    AssetMetadata, DecoratorPlugin, EffectPlugin, EffectorPlugin, LoadPlugin, LoadPluginError,
+    LoadPluginResult, LoadRepository, LoadRequest, LoadResponse, Plugin, PluginCategory,
+    StylePlugin,
+};
 
 const BUNDLE_MANIFEST_NAME: &str = "ruvie-plugin.toml";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -164,20 +181,19 @@ impl RuntimePluginRegistry {
         self.descriptors.clone()
     }
 
-    pub fn invoke(
+    pub(crate) fn component(
         &self,
         category: &str,
         component_id: &str,
-        operation: &str,
-        payload: serde_json::Value,
-    ) -> Result<serde_json::Value, LibraryError> {
-        let key = (category.to_string(), component_id.to_string());
-        let component = self.components.get(&key).ok_or_else(|| {
-            LibraryError::Plugin(format!(
-                "Runtime plugin component '{category}/{component_id}' is not available"
-            ))
-        })?;
-        component.invoke(operation, payload)
+    ) -> Result<RuntimeComponent, LibraryError> {
+        self.components
+            .get(&(category.to_string(), component_id.to_string()))
+            .cloned()
+            .ok_or_else(|| {
+                LibraryError::Plugin(format!(
+                    "Runtime plugin component '{category}/{component_id}' is not available"
+                ))
+            })
     }
 
     pub fn create_property(&self, evaluator_id: &str) -> Result<Property, LibraryError> {
@@ -205,10 +221,7 @@ impl RuntimePluginRegistry {
     pub fn register_bundle(
         &mut self,
         pending: PendingBundle,
-        effector_plugins: &mut PluginRepository<dyn EffectorPlugin>,
-        decorator_plugins: &mut PluginRepository<dyn DecoratorPlugin>,
-        style_plugins: &mut PluginRepository<dyn StylePlugin>,
-        property_evaluators: &mut PropertyEvaluatorRegistry,
+        targets: RuntimeRegistrationTargets<'_>,
     ) -> Result<Vec<(String, String)>, LibraryError> {
         // Prepare every fallible definition conversion and adapter before
         // touching either repository. A malformed later component must never
@@ -233,34 +246,48 @@ impl RuntimePluginRegistry {
                 )));
             }
             match &component.adapter {
-                RuntimeAdapter::Effector(_) if effector_plugins.get(&key.1).is_some() => {
+                RuntimeAdapter::Effector(_) if targets.effector_plugins.get(&key.1).is_some() => {
                     return Err(LibraryError::Plugin(format!(
                         "Effector plugin ID '{}' is already registered",
                         key.1
                     )));
                 }
-                RuntimeAdapter::Property(_) if property_evaluators.contains(&key.1) => {
+                RuntimeAdapter::Property(_) if targets.property_evaluators.contains(&key.1) => {
                     return Err(LibraryError::Plugin(format!(
                         "Property evaluator ID '{}' is already registered",
                         key.1
                     )));
                 }
-                RuntimeAdapter::Decorator(_) if decorator_plugins.get(&key.1).is_some() => {
+                RuntimeAdapter::Decorator(_) if targets.decorator_plugins.get(&key.1).is_some() => {
                     return Err(LibraryError::Plugin(format!(
                         "Decorator plugin ID '{}' is already registered",
                         key.1
                     )));
                 }
-                RuntimeAdapter::Style(_) if style_plugins.get(&key.1).is_some() => {
+                RuntimeAdapter::Style(_) if targets.style_plugins.get(&key.1).is_some() => {
                     return Err(LibraryError::Plugin(format!(
                         "Style plugin ID '{}' is already registered",
+                        key.1
+                    )));
+                }
+                RuntimeAdapter::Effect(_) if targets.effect_plugins.get(&key.1).is_some() => {
+                    return Err(LibraryError::Plugin(format!(
+                        "Effect plugin ID '{}' is already registered",
+                        key.1
+                    )));
+                }
+                RuntimeAdapter::Loader(_) if targets.load_plugins.get(&key.1).is_some() => {
+                    return Err(LibraryError::Plugin(format!(
+                        "Loader plugin ID '{}' is already registered",
                         key.1
                     )));
                 }
                 RuntimeAdapter::Effector(_)
                 | RuntimeAdapter::Property(_)
                 | RuntimeAdapter::Decorator(_)
-                | RuntimeAdapter::Style(_) => {}
+                | RuntimeAdapter::Style(_)
+                | RuntimeAdapter::Effect(_)
+                | RuntimeAdapter::Loader(_) => {}
             }
         }
 
@@ -268,12 +295,16 @@ impl RuntimePluginRegistry {
         let mut registered = Vec::with_capacity(prepared.len());
         for component in prepared {
             match component.adapter {
-                RuntimeAdapter::Effector(plugin) => effector_plugins.register(plugin),
+                RuntimeAdapter::Effector(plugin) => targets.effector_plugins.register(plugin),
                 RuntimeAdapter::Property(evaluator) => {
-                    property_evaluators.register(&component.key.1, evaluator);
+                    targets
+                        .property_evaluators
+                        .register(&component.key.1, evaluator);
                 }
-                RuntimeAdapter::Decorator(plugin) => decorator_plugins.register(plugin),
-                RuntimeAdapter::Style(plugin) => style_plugins.register(plugin),
+                RuntimeAdapter::Decorator(plugin) => targets.decorator_plugins.register(plugin),
+                RuntimeAdapter::Style(plugin) => targets.style_plugins.register(plugin),
+                RuntimeAdapter::Effect(plugin) => targets.effect_plugins.register(plugin),
+                RuntimeAdapter::Loader(plugin) => targets.load_plugins.register(plugin),
             }
             registered.push(component.key.clone());
             self.components.insert(component.key, component.component);
@@ -292,6 +323,15 @@ impl RuntimePluginRegistry {
     }
 }
 
+pub(crate) struct RuntimeRegistrationTargets<'a> {
+    pub effect_plugins: &'a mut PluginRepository<dyn EffectPlugin>,
+    pub load_plugins: &'a mut LoadRepository,
+    pub effector_plugins: &'a mut PluginRepository<dyn EffectorPlugin>,
+    pub decorator_plugins: &'a mut PluginRepository<dyn DecoratorPlugin>,
+    pub style_plugins: &'a mut PluginRepository<dyn StylePlugin>,
+    pub property_evaluators: &'a mut PropertyEvaluatorRegistry,
+}
+
 struct PreparedRuntimeComponent {
     key: (String, String),
     component: RuntimeComponent,
@@ -303,6 +343,8 @@ enum RuntimeAdapter {
     Property(Arc<dyn PropertyEvaluator>),
     Decorator(Arc<dyn DecoratorPlugin>),
     Style(Arc<dyn StylePlugin>),
+    Effect(Arc<dyn EffectPlugin>),
+    Loader(Arc<dyn LoadPlugin>),
 }
 
 fn prepare_runtime_components(
@@ -339,6 +381,25 @@ fn prepare_runtime_components(
                 STYLE_CATEGORY => RuntimeAdapter::Style(Arc::new(RuntimeStylePlugin {
                     component: component.clone(),
                     definitions,
+                })),
+                EFFECT_CATEGORY => RuntimeAdapter::Effect(Arc::new(RuntimeEffectPlugin::new(
+                    component.clone(),
+                    definitions,
+                    pending.effect_api.ok_or_else(|| {
+                        LibraryError::Plugin(format!(
+                            "Runtime Effect '{}' has no {EFFECT_CPU_RGBA8_EXTENSION_V1} table",
+                            descriptor.id
+                        ))
+                    })?,
+                )?)),
+                LOADER_CATEGORY => RuntimeAdapter::Loader(Arc::new(RuntimeLoaderPlugin {
+                    component: component.clone(),
+                    api: pending.loader_api.ok_or_else(|| {
+                        LibraryError::Plugin(format!(
+                            "Runtime Loader '{}' has no {LOADER_CPU_RGBA8_EXTENSION_V1} table",
+                            descriptor.id
+                        ))
+                    })?,
                 })),
                 _ => {
                     return Err(LibraryError::Plugin(format!(
@@ -394,6 +455,8 @@ pub(crate) struct PendingBundle {
     library_path: PathBuf,
     descriptor: PluginDescriptorV1,
     library: Arc<RuntimeLibrary>,
+    effect_api: Option<RuvieEffectCpuRgba8ApiV1>,
+    loader_api: Option<RuvieLoaderCpuRgba8ApiV1>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -476,11 +539,25 @@ pub(crate) fn open_bundle(bundle: &ResolvedBundle) -> Result<PendingBundle, Libr
     let library = Arc::new(RuntimeLibrary::open(&bundle.library_path)?);
     let descriptor: PluginDescriptorV1 = library.descriptor()?;
     validate_descriptor(&descriptor)?;
+    let effect_api = descriptor
+        .components
+        .iter()
+        .any(|component| component.category == EFFECT_CATEGORY)
+        .then(|| library.effect_cpu_rgba8_extension())
+        .transpose()?;
+    let loader_api = descriptor
+        .components
+        .iter()
+        .any(|component| component.category == LOADER_CATEGORY)
+        .then(|| library.loader_cpu_rgba8_extension())
+        .transpose()?;
     Ok(PendingBundle {
         manifest_path: bundle.manifest_path.clone(),
         library_path: bundle.library_path.clone(),
         descriptor,
         library,
+        effect_api,
+        loader_api,
     })
 }
 
@@ -583,11 +660,119 @@ impl RuntimeLibrary {
         serde_json::from_slice(&bytes).map_err(LibraryError::Json)
     }
 
+    fn effect_cpu_rgba8_extension(&self) -> Result<RuvieEffectCpuRgba8ApiV1, LibraryError> {
+        let api =
+            self.query_extension::<RuvieEffectCpuRgba8ApiV1>(EFFECT_CPU_RGBA8_EXTENSION_V1)?;
+        if api.create_instance.is_none()
+            || api.process.is_none()
+            || api.release_instance.is_none()
+            || api.free_frame.is_none()
+        {
+            return Err(LibraryError::Plugin(format!(
+                "Runtime extension {EFFECT_CPU_RGBA8_EXTENSION_V1} is missing a required callback"
+            )));
+        }
+        Ok(api)
+    }
+
+    fn loader_cpu_rgba8_extension(&self) -> Result<RuvieLoaderCpuRgba8ApiV1, LibraryError> {
+        let api =
+            self.query_extension::<RuvieLoaderCpuRgba8ApiV1>(LOADER_CPU_RGBA8_EXTENSION_V1)?;
+        if api.open.is_none() || api.load.is_none() || api.free_frame.is_none() {
+            return Err(LibraryError::Plugin(format!(
+                "Runtime extension {LOADER_CPU_RGBA8_EXTENSION_V1} is missing a required callback"
+            )));
+        }
+        Ok(api)
+    }
+
+    fn query_extension<T: Copy>(&self, name: &str) -> Result<T, LibraryError> {
+        #[repr(C)]
+        struct ExtensionHeader {
+            abi_version: u32,
+            struct_size: usize,
+        }
+
+        let query = self.api.query_extension.ok_or_else(|| {
+            LibraryError::Plugin(format!(
+                "Runtime plugin does not expose query_extension required by {name}"
+            ))
+        })?;
+        let name_bytes = name.as_bytes();
+        // SAFETY: The loaded base table was validated. The extension name is a
+        // borrowed host slice alive for the call; plugins return a table that
+        // remains valid for the lifetime of the loaded library.
+        let pointer = unsafe { query(self.api.context, RuvieBytesView::from_slice(name_bytes)) };
+        if pointer.is_null() {
+            return Err(LibraryError::Plugin(format!(
+                "Runtime plugin does not implement extension {name}"
+            )));
+        }
+        let header = pointer.cast::<ExtensionHeader>();
+        // SAFETY: Every queried extension table starts with this stable
+        // version/size prefix. The plugin contract requires proper alignment.
+        let abi_version = unsafe { (*header).abi_version };
+        // SAFETY: Same validated extension header prefix.
+        let struct_size = unsafe { (*header).struct_size };
+        if abi_version != RUVIE_PLUGIN_ABI_V1 || struct_size < size_of::<T>() {
+            return Err(LibraryError::Plugin(format!(
+                "Runtime extension {name} ABI mismatch: version {abi_version}, table {struct_size} bytes; host requires v{} and at least {} bytes",
+                RUVIE_PLUGIN_ABI_V1,
+                size_of::<T>()
+            )));
+        }
+        // SAFETY: Version and complete requested table size were checked; the
+        // table is copied while its owning library remains retained by `self`.
+        Ok(unsafe { *pointer.cast::<T>() })
+    }
+
+    fn consume_extension_result(
+        &self,
+        result: RuvieExtensionResultV1,
+    ) -> Result<ExtensionStatus, LibraryError> {
+        let message = self.copy_plugin_buffer(
+            result.message,
+            MAX_PLUGIN_PAYLOAD_BYTES,
+            "extension message",
+        )?;
+        match result.status {
+            STATUS_OK => Ok(ExtensionStatus::Ok),
+            STATUS_UNSUPPORTED => Ok(ExtensionStatus::Unsupported(
+                String::from_utf8_lossy(&message).into_owned(),
+            )),
+            status => Err(LibraryError::Plugin(format!(
+                "Runtime plugin extension call failed with status {status}: {}",
+                String::from_utf8_lossy(&message)
+            ))),
+        }
+    }
+
     fn copy_and_free(&self, result: RuvieCallResult) -> Result<Vec<u8>, LibraryError> {
-        let RuvieBuffer { ptr, len, capacity } = result.buffer;
+        let bytes = self.copy_plugin_buffer(
+            result.buffer,
+            MAX_PLUGIN_PAYLOAD_BYTES,
+            "JSON/control payload",
+        )?;
+        if result.status != STATUS_OK {
+            return Err(LibraryError::Plugin(format!(
+                "Runtime plugin call failed with status {}: {}",
+                result.status,
+                String::from_utf8_lossy(&bytes)
+            )));
+        }
+        Ok(bytes)
+    }
+
+    fn copy_plugin_buffer(
+        &self,
+        buffer: RuvieBuffer,
+        maximum_len: usize,
+        label: &str,
+    ) -> Result<Vec<u8>, LibraryError> {
+        let RuvieBuffer { ptr, len, capacity } = buffer;
         let structurally_reclaimable =
             (!ptr.is_null() && capacity >= len) || (ptr.is_null() && len == 0 && capacity == 0);
-        let invalid = len > MAX_PLUGIN_PAYLOAD_BYTES
+        let invalid = len > maximum_len
             || capacity < len
             || (len > 0 && ptr.is_null())
             || (ptr.is_null() && capacity > 0);
@@ -599,14 +784,14 @@ impl RuntimeLibrary {
                 // SAFETY: Although the payload is rejected (for example due to
                 // size), its pointer/len/capacity still satisfy the allocator
                 // round-trip contract, so returning ownership avoids a leak.
-                unsafe { free(self.api.context, result.buffer) };
+                unsafe { free(self.api.context, buffer) };
             }
             // A null pointer with non-zero length/capacity or len > capacity
             // cannot be passed to the reference Vec-based deallocator safely.
             // Such a trusted native plugin has already violated the ABI; the
             // host reports it and intentionally cannot reclaim that buffer.
             return Err(LibraryError::Plugin(format!(
-                "Runtime plugin returned an invalid buffer (len={len}, capacity={capacity})"
+                "Runtime plugin returned an invalid {label} buffer (len={len}, capacity={capacity})"
             )));
         }
         let bytes = if len == 0 {
@@ -621,26 +806,24 @@ impl RuntimeLibrary {
         })?;
         // SAFETY: Ownership is returned once to the same loaded plugin that
         // allocated this exact buffer.
-        unsafe { free(self.api.context, result.buffer) };
-        if result.status != STATUS_OK {
-            return Err(LibraryError::Plugin(format!(
-                "Runtime plugin call failed with status {}: {}",
-                result.status,
-                String::from_utf8_lossy(&bytes)
-            )));
-        }
+        unsafe { free(self.api.context, buffer) };
         Ok(bytes)
     }
 }
 
+enum ExtensionStatus {
+    Ok,
+    Unsupported(String),
+}
+
 #[derive(Clone)]
-struct RuntimeComponent {
+pub(crate) struct RuntimeComponent {
     descriptor: ComponentDescriptorV1,
     library: Arc<RuntimeLibrary>,
 }
 
 impl RuntimeComponent {
-    fn invoke(
+    pub(crate) fn invoke(
         &self,
         operation: &str,
         payload: serde_json::Value,
@@ -663,6 +846,784 @@ impl RuntimeComponent {
             payload,
         })
     }
+}
+
+const RUNTIME_EFFECT_INSTANCE_CACHE_SIZE: usize = 64;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct EffectConfigKey(Vec<(String, PropertyValue)>);
+
+struct RuntimeEffectInstance {
+    handle: u64,
+    api: RuvieEffectCpuRgba8ApiV1,
+    // Retain the dynamic library until the release callback has returned.
+    _library: Arc<RuntimeLibrary>,
+}
+
+impl Drop for RuntimeEffectInstance {
+    fn drop(&mut self) {
+        if let Some(release) = self.api.release_instance {
+            // SAFETY: A non-zero handle is returned by this same extension's
+            // create callback and released exactly once when its Arc expires.
+            unsafe { release(self.api.context, self.handle) };
+        }
+    }
+}
+
+struct RuntimeEffectPlugin {
+    component: RuntimeComponent,
+    definitions: Vec<PropertyDefinition>,
+    api: RuvieEffectCpuRgba8ApiV1,
+    instances: Mutex<LruCache<EffectConfigKey, Arc<RuntimeEffectInstance>>>,
+}
+
+impl RuntimeEffectPlugin {
+    fn new(
+        component: RuntimeComponent,
+        definitions: Vec<PropertyDefinition>,
+        api: RuvieEffectCpuRgba8ApiV1,
+    ) -> Result<Self, LibraryError> {
+        let capacity =
+            NonZeroUsize::new(RUNTIME_EFFECT_INSTANCE_CACHE_SIZE).unwrap_or(NonZeroUsize::MIN);
+        Ok(Self {
+            component,
+            definitions,
+            api,
+            instances: Mutex::new(LruCache::new(capacity)),
+        })
+    }
+
+    fn lock_instances(
+        &self,
+    ) -> MutexGuard<'_, LruCache<EffectConfigKey, Arc<RuntimeEffectInstance>>> {
+        self.instances.lock().unwrap_or_else(|poisoned| {
+            log::error!(
+                "Runtime Effect '{}' instance cache was poisoned; recovering committed entries",
+                self.id()
+            );
+            poisoned.into_inner()
+        })
+    }
+
+    fn config_key(
+        &self,
+        params: &HashMap<String, PropertyValue>,
+    ) -> Result<EffectConfigKey, LibraryError> {
+        let mut entries = Vec::with_capacity(self.definitions.len());
+        for definition in &self.definitions {
+            let value = params
+                .get(definition.name())
+                .unwrap_or_else(|| definition.default_value());
+            definition.validate_value(value).map_err(|error| {
+                LibraryError::Plugin(format!(
+                    "Runtime Effect '{}.{}' received an invalid value: {error}",
+                    self.id(),
+                    definition.name()
+                ))
+            })?;
+            entries.push((definition.name().to_string(), value.clone()));
+        }
+        Ok(EffectConfigKey(entries))
+    }
+
+    fn instance_for(
+        &self,
+        key: &EffectConfigKey,
+    ) -> Result<Arc<RuntimeEffectInstance>, LibraryError> {
+        if let Some(instance) = self.lock_instances().get(key).cloned() {
+            return Ok(instance);
+        }
+
+        // Plugin code runs outside the instance-cache and manager locks. A
+        // concurrent miss may create the same immutable config twice; the
+        // loser is safely released after the second cache check.
+        let properties = property_views(&key.0)?;
+        let map = RuviePropertyMapViewV1 {
+            ptr: if properties.is_empty() {
+                std::ptr::null()
+            } else {
+                properties.as_ptr()
+            },
+            len: properties.len(),
+        };
+        let create = self.api.create_instance.ok_or_else(|| {
+            LibraryError::Plugin(format!(
+                "Runtime Effect '{}' create callback is missing",
+                self.id()
+            ))
+        })?;
+        let mut handle = 0_u64;
+        // SAFETY: All property views borrow `key`, which remains alive and
+        // immutable through the callback. `handle` is writable host memory.
+        let result = unsafe {
+            create(
+                self.api.context,
+                RuvieBytesView::from_slice(self.id().as_bytes()),
+                map,
+                &mut handle,
+            )
+        };
+        match self.component.library.consume_extension_result(result)? {
+            ExtensionStatus::Ok => {}
+            ExtensionStatus::Unsupported(message) => {
+                return Err(LibraryError::Plugin(format!(
+                    "Runtime Effect '{}' declined its declared config: {message}",
+                    self.id()
+                )));
+            }
+        }
+        if handle == 0 {
+            return Err(LibraryError::Plugin(format!(
+                "Runtime Effect '{}' returned an invalid zero instance handle",
+                self.id()
+            )));
+        }
+        let created = Arc::new(RuntimeEffectInstance {
+            handle,
+            api: self.api,
+            _library: Arc::clone(&self.component.library),
+        });
+        let mut instances = self.lock_instances();
+        if let Some(existing) = instances.get(key).cloned() {
+            return Ok(existing);
+        }
+        instances.put(key.clone(), Arc::clone(&created));
+        Ok(created)
+    }
+}
+
+impl Plugin for RuntimeEffectPlugin {
+    fn id(&self) -> &str {
+        &self.component.descriptor.id
+    }
+
+    fn name(&self) -> String {
+        self.component.descriptor.name.clone()
+    }
+
+    fn category(&self) -> String {
+        self.component.descriptor.group.clone()
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        parse_semver_triplet(&self.component.descriptor.version)
+    }
+
+    fn impl_type(&self) -> String {
+        "Native ABI v1 / CPU RGBA8".to_string()
+    }
+}
+
+impl EffectPlugin for RuntimeEffectPlugin {
+    fn apply(
+        &self,
+        input: &crate::rendering::renderer::RenderOutput,
+        params: &HashMap<String, PropertyValue>,
+        _gpu_context: Option<&mut crate::rendering::skia_utils::GpuContext>,
+    ) -> Result<crate::rendering::renderer::RenderOutput, LibraryError> {
+        let crate::rendering::renderer::RenderOutput::Image(input) = input else {
+            return Err(LibraryError::Plugin(format!(
+                "Runtime Effect '{}' requires a CPU Image input",
+                self.id()
+            )));
+        };
+        let input_view = rgba8_view(input)?;
+        let time = match params.get("u_time") {
+            Some(PropertyValue::Number(value)) if value.is_finite() => value.into_inner(),
+            Some(_) => {
+                return Err(LibraryError::Plugin(format!(
+                    "Runtime Effect '{}' received an invalid render time",
+                    self.id()
+                )));
+            }
+            None => 0.0,
+        };
+        let key = self.config_key(params)?;
+        let instance = self.instance_for(&key)?;
+        let process = self.api.process.ok_or_else(|| {
+            LibraryError::Plugin(format!(
+                "Runtime Effect '{}' process callback is missing",
+                self.id()
+            ))
+        })?;
+        let mut output = RuvieOwnedRgba8FrameV1::empty();
+        // SAFETY: Input pixels are borrowed for the call; output is writable
+        // host memory initialized to the empty ownership state. The instance
+        // Arc retains both its handle and the dynamic library.
+        let result = unsafe {
+            process(
+                self.api.context,
+                instance.handle,
+                time,
+                &input_view,
+                &mut output,
+            )
+        };
+        let status = self.component.library.consume_extension_result(result);
+        match status {
+            Ok(ExtensionStatus::Ok) => {}
+            Ok(ExtensionStatus::Unsupported(message)) => {
+                reclaim_owned_frame(self.api.context, self.api.free_frame, output);
+                return Err(LibraryError::Plugin(format!(
+                    "Runtime Effect '{}' declined an RGBA8 frame: {message}",
+                    self.id()
+                )));
+            }
+            Err(error) => {
+                reclaim_owned_frame(self.api.context, self.api.free_frame, output);
+                return Err(LibraryError::Plugin(format!(
+                    "Runtime Effect '{}' failed: {error}",
+                    self.id()
+                )));
+            }
+        }
+        let image = copy_owned_frame(self.api.context, self.api.free_frame, output)?;
+        Ok(crate::rendering::renderer::RenderOutput::Image(image))
+    }
+
+    fn properties(&self) -> Vec<PropertyDefinition> {
+        self.definitions.clone()
+    }
+}
+
+struct RuntimeLoaderPlugin {
+    component: RuntimeComponent,
+    api: RuvieLoaderCpuRgba8ApiV1,
+}
+
+impl Plugin for RuntimeLoaderPlugin {
+    fn id(&self) -> &str {
+        &self.component.descriptor.id
+    }
+
+    fn name(&self) -> String {
+        self.component.descriptor.name.clone()
+    }
+
+    fn category(&self) -> String {
+        self.component.descriptor.group.clone()
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        parse_semver_triplet(&self.component.descriptor.version)
+    }
+
+    fn impl_type(&self) -> String {
+        "Native ABI v1 / CPU RGBA8".to_string()
+    }
+}
+
+impl LoadPlugin for RuntimeLoaderPlugin {
+    fn open(&self, path: &str) -> LoadPluginResult<Vec<AssetMetadata>> {
+        let open = self.api.open.ok_or_else(|| {
+            LoadPluginError::Failed(LibraryError::Plugin(format!(
+                "Runtime Loader '{}' open callback is missing",
+                self.id()
+            )))
+        })?;
+        let mut metadata = vec![RuvieAssetMetadataV1::default(); MAX_LOADER_STREAMS_V1];
+        let mut metadata_len = usize::MAX;
+        // SAFETY: The path is borrowed for the call. The fixed-size metadata
+        // allocation and its length output are writable host-owned memory.
+        let result = unsafe {
+            open(
+                self.api.context,
+                RuvieBytesView::from_slice(self.id().as_bytes()),
+                RuvieBytesView::from_slice(path.as_bytes()),
+                metadata.as_mut_ptr(),
+                metadata.len(),
+                &mut metadata_len,
+            )
+        };
+        match self.component.library.consume_extension_result(result) {
+            Ok(ExtensionStatus::Unsupported(_)) => return Err(LoadPluginError::Unsupported),
+            Ok(ExtensionStatus::Ok) => {}
+            Err(error) => return Err(self.failed(path, "inspect", error)),
+        }
+        if metadata_len == 0 || metadata_len > metadata.len() {
+            return Err(self.failed(
+                path,
+                "inspect",
+                LibraryError::Plugin(format!(
+                    "returned invalid metadata length {metadata_len} (capacity {})",
+                    metadata.len()
+                )),
+            ));
+        }
+        metadata
+            .into_iter()
+            .take(metadata_len)
+            .map(|value| {
+                metadata_from_wire(value).map_err(|error| self.failed(path, "inspect", error))
+            })
+            .collect()
+    }
+
+    fn load(
+        &self,
+        request: &LoadRequest,
+        cache: &crate::cache::CacheManager,
+    ) -> LoadPluginResult<LoadResponse> {
+        let cache_key = runtime_loader_cache_key(self.id(), request);
+        let cached = match request {
+            LoadRequest::Image { .. } => cache.get_image(&cache_key),
+            LoadRequest::VideoFrame { source_time, .. } => {
+                cache.get_video_frame(&cache_key, source_time_bits(*source_time))
+            }
+        };
+        if let Some(image) = cached {
+            return Ok(LoadResponse { image });
+        }
+
+        let (wire, _borrowed) = loader_request_to_wire(request)
+            .map_err(|error| self.failed(request.path(), "decode", error))?;
+        let load = self.api.load.ok_or_else(|| {
+            self.failed(
+                request.path(),
+                "decode",
+                LibraryError::Plugin(format!(
+                    "Runtime Loader '{}' load callback is missing",
+                    self.id()
+                )),
+            )
+        })?;
+        let mut output = RuvieOwnedRgba8FrameV1::empty();
+        // SAFETY: Every byte view in `wire` borrows `request`, which remains
+        // alive for the callback. Output starts in the empty ownership state.
+        let result = unsafe {
+            load(
+                self.api.context,
+                RuvieBytesView::from_slice(self.id().as_bytes()),
+                &wire,
+                &mut output,
+            )
+        };
+        match self.component.library.consume_extension_result(result) {
+            Ok(ExtensionStatus::Unsupported(_)) => {
+                reclaim_owned_frame(self.api.context, self.api.free_frame, output);
+                return Err(LoadPluginError::Unsupported);
+            }
+            Ok(ExtensionStatus::Ok) => {}
+            Err(error) => {
+                reclaim_owned_frame(self.api.context, self.api.free_frame, output);
+                return Err(self.failed(request.path(), "decode", error));
+            }
+        }
+        let image = copy_owned_frame(self.api.context, self.api.free_frame, output)
+            .map_err(|error| self.failed(request.path(), "decode", error))?;
+        match request {
+            LoadRequest::Image { .. } => cache.put_image(&cache_key, &image),
+            LoadRequest::VideoFrame { source_time, .. } => {
+                cache.put_video_frame(&cache_key, source_time_bits(*source_time), &image);
+            }
+        }
+        Ok(LoadResponse { image })
+    }
+}
+
+impl RuntimeLoaderPlugin {
+    fn failed(&self, path: &str, action: &str, cause: LibraryError) -> LoadPluginError {
+        LoadPluginError::Failed(LibraryError::Plugin(format!(
+            "Runtime Loader '{}' failed to {action} path {:?}: {cause}",
+            self.id(),
+            path
+        )))
+    }
+}
+
+fn empty_bytes_view() -> RuvieBytesView {
+    RuvieBytesView {
+        ptr: std::ptr::null(),
+        len: 0,
+    }
+}
+
+fn property_views(
+    values: &[(String, PropertyValue)],
+) -> Result<Vec<RuviePropertyValueViewV1>, LibraryError> {
+    values
+        .iter()
+        .map(|(name, value)| {
+            let mut view = RuviePropertyValueViewV1 {
+                name: RuvieBytesView::from_slice(name.as_bytes()),
+                value_type: 0,
+                number: 0.0,
+                integer: 0,
+                bytes: empty_bytes_view(),
+                vector: [0.0; 4],
+                color: [0; 4],
+            };
+            match value {
+                PropertyValue::Number(value) if value.is_finite() => {
+                    view.value_type = PROPERTY_VALUE_NUMBER_V1;
+                    view.number = value.into_inner();
+                }
+                PropertyValue::Integer(value) => {
+                    view.value_type = PROPERTY_VALUE_INTEGER_V1;
+                    view.integer = *value;
+                }
+                PropertyValue::String(value) => {
+                    view.value_type = PROPERTY_VALUE_STRING_V1;
+                    view.bytes = RuvieBytesView::from_slice(value.as_bytes());
+                }
+                PropertyValue::Boolean(value) => {
+                    view.value_type = PROPERTY_VALUE_BOOLEAN_V1;
+                    view.integer = i64::from(*value);
+                }
+                PropertyValue::Vec2(value) if value.x.is_finite() && value.y.is_finite() => {
+                    view.value_type = PROPERTY_VALUE_VEC2_V1;
+                    view.vector[..2].copy_from_slice(&[value.x.into_inner(), value.y.into_inner()]);
+                }
+                PropertyValue::Vec3(value)
+                    if value.x.is_finite() && value.y.is_finite() && value.z.is_finite() =>
+                {
+                    view.value_type = PROPERTY_VALUE_VEC3_V1;
+                    view.vector[..3].copy_from_slice(&[
+                        value.x.into_inner(),
+                        value.y.into_inner(),
+                        value.z.into_inner(),
+                    ]);
+                }
+                PropertyValue::Vec4(value)
+                    if value.x.is_finite()
+                        && value.y.is_finite()
+                        && value.z.is_finite()
+                        && value.w.is_finite() =>
+                {
+                    view.value_type = PROPERTY_VALUE_VEC4_V1;
+                    view.vector.copy_from_slice(&[
+                        value.x.into_inner(),
+                        value.y.into_inner(),
+                        value.z.into_inner(),
+                        value.w.into_inner(),
+                    ]);
+                }
+                PropertyValue::Color(value) => {
+                    view.value_type = PROPERTY_VALUE_COLOR_V1;
+                    view.color = [value.r, value.g, value.b, value.a];
+                }
+                PropertyValue::Number(_)
+                | PropertyValue::Vec2(_)
+                | PropertyValue::Vec3(_)
+                | PropertyValue::Vec4(_) => {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime Effect property {name:?} contains a non-finite value"
+                    )));
+                }
+                PropertyValue::Array(_) | PropertyValue::Map(_) => {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime Effect property {name:?} uses an unsupported aggregate value"
+                    )));
+                }
+            }
+            Ok(view)
+        })
+        .collect()
+}
+
+fn rgba8_view(image: &crate::model::frame::Image) -> Result<RuvieRgba8FrameViewV1, LibraryError> {
+    let stride = usize::try_from(image.width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .ok_or_else(|| LibraryError::Plugin("RGBA8 input stride overflow".to_string()))?;
+    validate_rgba8_layout(image.width, image.height, stride, image.data.len())?;
+    Ok(RuvieRgba8FrameViewV1 {
+        struct_size: size_of::<RuvieRgba8FrameViewV1>(),
+        width: image.width,
+        height: image.height,
+        stride_bytes: stride,
+        alpha_mode: ALPHA_MODE_STRAIGHT_V1,
+        color_profile: COLOR_PROFILE_SRGB_V1,
+        pixels: RuvieBytesView::from_slice(&image.data),
+    })
+}
+
+fn validate_rgba8_layout(
+    width: u32,
+    height: u32,
+    stride: usize,
+    length: usize,
+) -> Result<(), LibraryError> {
+    if width == 0
+        || height == 0
+        || width > MAX_CPU_RGBA8_DIMENSION_V1
+        || height > MAX_CPU_RGBA8_DIMENSION_V1
+    {
+        return Err(LibraryError::Plugin(format!(
+            "RGBA8 dimensions {width}x{height} are outside ABI-v1 bounds"
+        )));
+    }
+    let row_bytes = usize::try_from(width)
+        .ok()
+        .and_then(|value| value.checked_mul(4))
+        .ok_or_else(|| LibraryError::Plugin("RGBA8 row-byte overflow".to_string()))?;
+    if stride < row_bytes {
+        return Err(LibraryError::Plugin(format!(
+            "RGBA8 stride {stride} is smaller than row width {row_bytes}"
+        )));
+    }
+    let expected = stride
+        .checked_mul(usize::try_from(height).unwrap_or(usize::MAX))
+        .ok_or_else(|| LibraryError::Plugin("RGBA8 frame-byte overflow".to_string()))?;
+    if expected != length || expected > MAX_CPU_RGBA8_FRAME_BYTES_V1 {
+        return Err(LibraryError::Plugin(format!(
+            "RGBA8 buffer length {length} does not match bounded layout {expected}"
+        )));
+    }
+    Ok(())
+}
+
+fn frame_is_reclaimable(frame: RuvieOwnedRgba8FrameV1) -> bool {
+    let pixels = frame.pixels;
+    (!pixels.ptr.is_null() && pixels.capacity >= pixels.len)
+        || (pixels.ptr.is_null() && pixels.len == 0 && pixels.capacity == 0)
+}
+
+fn reclaim_owned_frame(
+    context: *mut std::ffi::c_void,
+    free: Option<unsafe extern "C" fn(*mut std::ffi::c_void, RuvieOwnedRgba8FrameV1)>,
+    frame: RuvieOwnedRgba8FrameV1,
+) {
+    if frame_is_reclaimable(frame)
+        && let Some(free) = free
+    {
+        // SAFETY: Structural pointer/len/capacity invariants permit ownership
+        // to return to the same extension exactly once.
+        unsafe { free(context, frame) };
+    }
+}
+
+fn copy_owned_frame(
+    context: *mut std::ffi::c_void,
+    free: Option<unsafe extern "C" fn(*mut std::ffi::c_void, RuvieOwnedRgba8FrameV1)>,
+    frame: RuvieOwnedRgba8FrameV1,
+) -> Result<crate::model::frame::Image, LibraryError> {
+    if !frame_is_reclaimable(frame) {
+        return Err(LibraryError::Plugin(format!(
+            "Runtime plugin returned an unreclaimable RGBA8 buffer (len={}, capacity={})",
+            frame.pixels.len, frame.pixels.capacity
+        )));
+    }
+    let result = (|| {
+        if frame.struct_size < size_of::<RuvieOwnedRgba8FrameV1>() {
+            return Err(LibraryError::Plugin(format!(
+                "Runtime plugin returned a truncated RGBA8 frame table ({} bytes)",
+                frame.struct_size
+            )));
+        }
+        if frame.alpha_mode != ALPHA_MODE_STRAIGHT_V1 {
+            return Err(LibraryError::Plugin(format!(
+                "Runtime plugin returned unsupported alpha mode {}",
+                frame.alpha_mode
+            )));
+        }
+        if frame.color_profile != COLOR_PROFILE_SRGB_V1 {
+            return Err(LibraryError::Plugin(format!(
+                "Runtime plugin returned unsupported color profile {}",
+                frame.color_profile
+            )));
+        }
+        validate_rgba8_layout(
+            frame.width,
+            frame.height,
+            frame.stride_bytes,
+            frame.pixels.len,
+        )?;
+        let row_bytes = usize::try_from(frame.width)
+            .ok()
+            .and_then(|width| width.checked_mul(4))
+            .ok_or_else(|| LibraryError::Plugin("RGBA8 row-byte overflow".to_string()))?;
+        let tight_len = row_bytes
+            .checked_mul(usize::try_from(frame.height).unwrap_or(usize::MAX))
+            .ok_or_else(|| LibraryError::Plugin("RGBA8 tight-buffer overflow".to_string()))?;
+        let pixels = if frame.pixels.len == 0 {
+            &[][..]
+        } else {
+            // SAFETY: Non-null, len/capacity, total layout, and maximum byte
+            // count were validated before borrowing plugin-owned memory.
+            unsafe { std::slice::from_raw_parts(frame.pixels.ptr.cast_const(), frame.pixels.len) }
+        };
+        let mut tight = Vec::with_capacity(tight_len);
+        for row in pixels.chunks_exact(frame.stride_bytes) {
+            tight.extend_from_slice(&row[..row_bytes]);
+        }
+        Ok(crate::model::frame::Image::new(
+            frame.width,
+            frame.height,
+            tight,
+        ))
+    })();
+    let free = free.ok_or_else(|| {
+        LibraryError::Plugin("Runtime plugin RGBA8 free callback is missing".to_string())
+    })?;
+    // SAFETY: Structural invariants were checked before the copy, and the
+    // exact frame is returned once even when semantic validation failed.
+    unsafe { free(context, frame) };
+    result
+}
+
+fn metadata_from_wire(value: RuvieAssetMetadataV1) -> Result<AssetMetadata, LibraryError> {
+    const KNOWN_FIELDS: u32 = ASSET_METADATA_DURATION_V1
+        | ASSET_METADATA_FPS_V1
+        | ASSET_METADATA_DIMENSIONS_V1
+        | ASSET_METADATA_STREAM_INDEX_V1
+        | ASSET_METADATA_FRAME_COUNT_V1
+        | ASSET_METADATA_TIME_BASE_V1;
+    if value.present_fields & !KNOWN_FIELDS != 0 {
+        return Err(LibraryError::Plugin(format!(
+            "Runtime Loader metadata has unknown field bits {:#x}",
+            value.present_fields & !KNOWN_FIELDS
+        )));
+    }
+    let kind = match value.kind {
+        ASSET_KIND_IMAGE_V1 => crate::model::asset::AssetKind::Image,
+        ASSET_KIND_VIDEO_V1 => crate::model::asset::AssetKind::Video,
+        other => {
+            return Err(LibraryError::Plugin(format!(
+                "Runtime Loader metadata has unsupported asset kind {other}"
+            )));
+        }
+    };
+    let has = |field| value.present_fields & field != 0;
+    let duration = has(ASSET_METADATA_DURATION_V1).then_some(value.duration_seconds);
+    if duration.is_some_and(|duration| !duration.is_finite() || duration < 0.0) {
+        return Err(LibraryError::Plugin(
+            "Runtime Loader metadata duration must be finite and non-negative".to_string(),
+        ));
+    }
+    let fps = has(ASSET_METADATA_FPS_V1).then_some(value.fps);
+    if fps.is_some_and(|fps| !fps.is_finite() || fps <= 0.0) {
+        return Err(LibraryError::Plugin(
+            "Runtime Loader metadata FPS must be finite and positive".to_string(),
+        ));
+    }
+    let (width, height) = if has(ASSET_METADATA_DIMENSIONS_V1) {
+        if value.width == 0
+            || value.height == 0
+            || value.width > MAX_CPU_RGBA8_DIMENSION_V1
+            || value.height > MAX_CPU_RGBA8_DIMENSION_V1
+        {
+            return Err(LibraryError::Plugin(format!(
+                "Runtime Loader metadata dimensions {}x{} are invalid",
+                value.width, value.height
+            )));
+        }
+        (Some(value.width), Some(value.height))
+    } else {
+        (None, None)
+    };
+    let stream_index = has(ASSET_METADATA_STREAM_INDEX_V1)
+        .then(|| usize::try_from(value.stream_index))
+        .transpose()
+        .map_err(|_| LibraryError::Plugin("Runtime Loader stream index overflow".to_string()))?;
+    let frame_count = has(ASSET_METADATA_FRAME_COUNT_V1).then_some(value.frame_count);
+    let time_base = if has(ASSET_METADATA_TIME_BASE_V1) {
+        if value.time_base_denominator == 0 || value.time_base_numerator == 0 {
+            return Err(LibraryError::Plugin(
+                "Runtime Loader metadata time base must have non-zero terms".to_string(),
+            ));
+        }
+        Some((value.time_base_numerator, value.time_base_denominator))
+    } else {
+        None
+    };
+    Ok(AssetMetadata {
+        kind,
+        duration,
+        fps,
+        width,
+        height,
+        stream_index,
+        frame_count,
+        time_base,
+    })
+}
+
+fn loader_request_to_wire(
+    request: &LoadRequest,
+) -> Result<(RuvieLoaderRequestV1, Vec<&str>), LibraryError> {
+    let (request_kind, path, source_time, stream_index, input, output) = match request {
+        LoadRequest::Image { path } => (LOAD_REQUEST_IMAGE_V1, path, 0.0, None, None, None),
+        LoadRequest::VideoFrame {
+            path,
+            source_time,
+            stream_index,
+            input_color_space,
+            output_color_space,
+        } => {
+            if !source_time.is_finite() || *source_time < 0.0 {
+                return Err(LibraryError::Plugin(format!(
+                    "Runtime Loader source time {source_time} is invalid"
+                )));
+            }
+            (
+                LOAD_REQUEST_VIDEO_FRAME_V1,
+                path,
+                *source_time,
+                *stream_index,
+                input_color_space.as_deref(),
+                output_color_space.as_deref(),
+            )
+        }
+    };
+    let stream_index = stream_index
+        .map(u32::try_from)
+        .transpose()
+        .map_err(|_| LibraryError::Plugin("Runtime Loader stream index exceeds u32".to_string()))?;
+    let borrowed = vec![path.as_str(), input.unwrap_or(""), output.unwrap_or("")];
+    Ok((
+        RuvieLoaderRequestV1 {
+            struct_size: size_of::<RuvieLoaderRequestV1>(),
+            request_kind,
+            path: RuvieBytesView::from_slice(borrowed[0].as_bytes()),
+            source_time,
+            has_stream_index: u32::from(stream_index.is_some()),
+            stream_index: stream_index.unwrap_or(0),
+            input_color_space: if input.is_some() {
+                RuvieBytesView::from_slice(borrowed[1].as_bytes())
+            } else {
+                empty_bytes_view()
+            },
+            output_color_space: if output.is_some() {
+                RuvieBytesView::from_slice(borrowed[2].as_bytes())
+            } else {
+                empty_bytes_view()
+            },
+        },
+        borrowed,
+    ))
+}
+
+fn runtime_loader_cache_key(loader_id: &str, request: &LoadRequest) -> String {
+    let path = request.path();
+    let source_identity = std::fs::metadata(path)
+        .ok()
+        .map(|metadata| {
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0_u128, |duration| duration.as_nanos());
+            format!("{}:{modified}", metadata.len())
+        })
+        .unwrap_or_else(|| "unavailable".to_string());
+    match request {
+        LoadRequest::Image { .. } => format!(
+            "runtime-loader:{loader_id}:{LOADER_LOAD_CPU_RGBA8_V1}:image:{path}:{source_identity}"
+        ),
+        LoadRequest::VideoFrame {
+            stream_index,
+            input_color_space,
+            output_color_space,
+            ..
+        } => format!(
+            "runtime-loader:{loader_id}:{LOADER_LOAD_CPU_RGBA8_V1}:video:{path}:{source_identity}:stream={stream_index:?}:input={input_color_space:?}:output={output_color_space:?}"
+        ),
+    }
+}
+
+fn source_time_bits(source_time: f64) -> i64 {
+    i64::from_ne_bytes(source_time.to_bits().to_ne_bytes())
 }
 
 struct RuntimeEffectorPlugin {
@@ -1540,9 +2501,49 @@ fn validate_descriptor(descriptor: &PluginDescriptorV1) -> Result<(), LibraryErr
                     )));
                 }
             }
+            EFFECT_CATEGORY => {
+                if !component
+                    .operations
+                    .iter()
+                    .any(|operation| operation == EFFECT_PROCESS_CPU_RGBA8_V1)
+                {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime Effect '{}' does not declare {EFFECT_PROCESS_CPU_RGBA8_V1}",
+                        component.id
+                    )));
+                }
+                if component.output_default.is_some() {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime Effect '{}' must not declare output_default",
+                        component.id
+                    )));
+                }
+            }
+            LOADER_CATEGORY => {
+                if !component
+                    .operations
+                    .iter()
+                    .any(|operation| operation == LOADER_OPEN_V1)
+                    || !component
+                        .operations
+                        .iter()
+                        .any(|operation| operation == LOADER_LOAD_CPU_RGBA8_V1)
+                {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime Loader '{}' must declare {LOADER_OPEN_V1} and {LOADER_LOAD_CPU_RGBA8_V1}",
+                        component.id
+                    )));
+                }
+                if component.output_default.is_some() || !component.properties.is_empty() {
+                    return Err(LibraryError::Plugin(format!(
+                        "Runtime Loader '{}' must not declare properties or output_default",
+                        component.id
+                    )));
+                }
+            }
             unsupported => {
                 return Err(LibraryError::Plugin(format!(
-                    "Runtime plugin component '{}/{}' uses category '{unsupported}', but ABI v1 integrates only '{EFFECTOR_CATEGORY}', '{PROPERTY_CATEGORY}', '{STYLE_CATEGORY}', and '{DECORATOR_CATEGORY}'; the entire bundle was rejected",
+                    "Runtime plugin component '{}/{}' uses category '{unsupported}', but ABI v1 integrates only '{EFFECTOR_CATEGORY}', '{PROPERTY_CATEGORY}', '{STYLE_CATEGORY}', '{DECORATOR_CATEGORY}', '{EFFECT_CATEGORY}', and '{LOADER_CATEGORY}'; the entire bundle was rejected",
                     descriptor.name, component.id
                 )));
             }
@@ -1844,6 +2845,8 @@ mod tests {
                 },
                 _library: current_process_library(),
             }),
+            effect_api: None,
+            loader_api: None,
         }
     }
 
@@ -2062,8 +3065,8 @@ mod tests {
     fn abi_v1_rejects_unintegrated_categories_instead_of_registering_descriptors() {
         let supported = component(PropertyUiV1::Bool, serde_json::json!(true));
         let mut unsupported = supported.clone();
-        unsupported.id = "example.unsupported_loader".to_string();
-        unsupported.category = "loader".to_string();
+        unsupported.id = "example.unsupported_exporter".to_string();
+        unsupported.category = "exporter".to_string();
         let descriptor = PluginDescriptorV1 {
             name: "Mixed".to_string(),
             vendor: "Tests".to_string(),
@@ -2073,7 +3076,7 @@ mod tests {
         let error = validate_descriptor(&descriptor)
             .expect_err("an unintegrated category must reject the bundle")
             .to_string();
-        assert!(error.contains("uses category 'loader'"));
+        assert!(error.contains("uses category 'exporter'"));
         assert!(error.contains("'style'"));
         assert!(error.contains("'decorator'"));
         assert!(error.contains("entire bundle was rejected"));
@@ -2087,6 +3090,8 @@ mod tests {
         };
 
         let mut registry = RuntimePluginRegistry::new();
+        let mut effects: PluginRepository<dyn EffectPlugin> = PluginRepository::new();
+        let mut loaders = LoadRepository::new();
         let mut effectors: PluginRepository<dyn EffectorPlugin> = PluginRepository::new();
         let mut decorators: PluginRepository<dyn DecoratorPlugin> = PluginRepository::new();
         let mut styles: PluginRepository<dyn StylePlugin> = PluginRepository::new();
@@ -2094,10 +3099,14 @@ mod tests {
         let registered = registry
             .register_bundle(
                 pending_bundle(config_descriptor()),
-                &mut effectors,
-                &mut decorators,
-                &mut styles,
-                &mut property_evaluators,
+                RuntimeRegistrationTargets {
+                    effect_plugins: &mut effects,
+                    load_plugins: &mut loaders,
+                    effector_plugins: &mut effectors,
+                    decorator_plugins: &mut decorators,
+                    style_plugins: &mut styles,
+                    property_evaluators: &mut property_evaluators,
+                },
             )
             .expect("the complete low-bandwidth config bundle registers");
         assert_eq!(
@@ -2711,6 +3720,8 @@ mod tests {
             components: vec![style_component(), malformed_decorator],
         };
         let mut registry = RuntimePluginRegistry::new();
+        let mut effects: PluginRepository<dyn EffectPlugin> = PluginRepository::new();
+        let mut loaders = LoadRepository::new();
         let mut effectors: PluginRepository<dyn EffectorPlugin> = PluginRepository::new();
         let mut decorators: PluginRepository<dyn DecoratorPlugin> = PluginRepository::new();
         let mut styles: PluginRepository<dyn StylePlugin> = PluginRepository::new();
@@ -2719,10 +3730,14 @@ mod tests {
         let error = registry
             .register_bundle(
                 pending_bundle(descriptor),
-                &mut effectors,
-                &mut decorators,
-                &mut styles,
-                &mut property_evaluators,
+                RuntimeRegistrationTargets {
+                    effect_plugins: &mut effects,
+                    load_plugins: &mut loaders,
+                    effector_plugins: &mut effectors,
+                    decorator_plugins: &mut decorators,
+                    style_plugins: &mut styles,
+                    property_evaluators: &mut property_evaluators,
+                },
             )
             .expect_err("a malformed later Decorator must reject the whole bundle")
             .to_string();
@@ -2859,6 +3874,8 @@ mod tests {
             library_path: PathBuf::from("/runtime-plugin-test/plugin.test"),
         };
         let mut registry = RuntimePluginRegistry::new();
+        let mut effects: PluginRepository<dyn EffectPlugin> = PluginRepository::new();
+        let mut loaders = LoadRepository::new();
         let mut effectors: PluginRepository<dyn EffectorPlugin> = PluginRepository::new();
         let mut decorators: PluginRepository<dyn DecoratorPlugin> = PluginRepository::new();
         let mut styles: PluginRepository<dyn StylePlugin> = PluginRepository::new();
@@ -2871,10 +3888,14 @@ mod tests {
         let error = registry
             .register_bundle(
                 pending_bundle(two_component_descriptor(serde_json::json!(101.0))),
-                &mut effectors,
-                &mut decorators,
-                &mut styles,
-                &mut property_evaluators,
+                RuntimeRegistrationTargets {
+                    effect_plugins: &mut effects,
+                    load_plugins: &mut loaders,
+                    effector_plugins: &mut effectors,
+                    decorator_plugins: &mut decorators,
+                    style_plugins: &mut styles,
+                    property_evaluators: &mut property_evaluators,
+                },
             )
             .expect_err("the second component exceeds its hard maximum")
             .to_string();
@@ -2897,10 +3918,14 @@ mod tests {
         let registered = registry
             .register_bundle(
                 pending_bundle(two_component_descriptor(serde_json::json!(50.0))),
-                &mut effectors,
-                &mut decorators,
-                &mut styles,
-                &mut property_evaluators,
+                RuntimeRegistrationTargets {
+                    effect_plugins: &mut effects,
+                    load_plugins: &mut loaders,
+                    effector_plugins: &mut effectors,
+                    decorator_plugins: &mut decorators,
+                    style_plugins: &mut styles,
+                    property_evaluators: &mut property_evaluators,
+                },
             )
             .expect("a corrected rescan must not hit a stale partial-ID collision");
         assert_eq!(registered.len(), 2);
