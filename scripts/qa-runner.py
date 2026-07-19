@@ -77,6 +77,7 @@ def suite_specs(mode: str) -> tuple[SuiteSpec, ...]:
             SuiteSpec("keyframe", "qa-keyframe-e2e.py"),
             SuiteSpec("node-editor", "qa-node-editor-e2e.py"),
             SuiteSpec("node-wire", "qa-e2e.py", ("--suite", "node-wire")),
+            SuiteSpec("preview", "qa-preview-e2e.py"),
         )
     raise ValueError("unknown QA mode: {}".format(mode))
 
@@ -541,6 +542,7 @@ def run_self_test() -> int:
         "unittest",
         "scripts/test_qa_runner.py",
         "scripts/test_qa_node_editor_e2e.py",
+        "scripts/test_qa_preview_e2e.py",
     ]
     return subprocess.call(command, cwd=REPOSITORY_ROOT)
 

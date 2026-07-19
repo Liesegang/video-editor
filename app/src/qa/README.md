@@ -29,7 +29,7 @@ Initial stable ID families are:
 - `inspector.property.*`, `inspector.keyframe.*`
 - `graph.canvas`, `graph.ruler`, `graph.keyframe.*`
 - `keyframe_dialog.*`
-- `preview.canvas`
+- `preview.canvas`, `preview.content`
 
 `node_editor.canvas` is re-registered after Snarl finishes drawing. Its final
 metadata is therefore authoritative for that completed UI frame:
@@ -156,3 +156,18 @@ real primary-coordinate drag. It requires scale and all LOD gates to remain
 unchanged during pan, verifies the translation delta, and confirms that the
 authoritative Project and undo history did not change. The suite is also part
 of `python3 scripts/qa-runner.py --mode full`.
+
+Run the focused Preview fit and hand-tool suite with:
+
+```sh
+python3 scripts/qa-preview-e2e.py --spawn
+```
+
+`preview.content` publishes the current composition's fitted screen rectangle
+and camera metadata. The suite verifies that a fresh composition is centered,
+then holds Space through a real coordinate press and pointer move. It releases
+Space before the final coordinate release to prove that Preview retains gesture
+ownership without selecting or moving content. Pan must equal the pointer
+delta; zoom, Project, selection, Timeline state, and undo history remain
+unchanged, `auto_fit` becomes false, and the owner returns to `Idle`. This suite
+is also part of `python3 scripts/qa-runner.py --mode full`.
