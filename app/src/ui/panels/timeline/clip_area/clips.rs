@@ -452,6 +452,23 @@ impl ClipMutationCommit {
     }
 }
 
+fn begin_resize_gesture(editor_context: &mut EditorContext) {
+    editor_context.interaction.is_resizing_entity = true;
+    editor_context.interaction.dragged_entity_has_moved = false;
+}
+
+fn mark_resize_timing_changed(editor_context: &mut EditorContext) {
+    editor_context.interaction.dragged_entity_has_moved = true;
+}
+
+fn finish_resize_gesture(editor_context: &mut EditorContext) -> bool {
+    let should_commit = editor_context.interaction.is_resizing_entity
+        && editor_context.interaction.dragged_entity_has_moved;
+    editor_context.interaction.is_resizing_entity = false;
+    editor_context.interaction.dragged_entity_has_moved = false;
+    should_commit
+}
+
 fn cancel_failed_timing_gesture(editor_context: &mut EditorContext) {
     editor_context.interaction.is_resizing_entity = false;
     editor_context.interaction.is_moving_selected_entity = false;
@@ -956,7 +973,7 @@ fn draw_single_clip(
     // Handle edge dragging (resize)
     if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
         if left.drag_started() || right.drag_started() {
-            editor_context.interaction.is_resizing_entity = true;
+            begin_resize_gesture(editor_context);
             editor_context.select_clip(clip.id, track.id);
         }
     }
@@ -1009,14 +1026,16 @@ fn draw_single_clip(
                         new_duration,
                         new_trim_in,
                     });
+                    mark_resize_timing_changed(editor_context);
                 }
             }
         }
     }
 
     if let (Some(left), Some(right)) = (&left_edge_resp, &right_edge_resp) {
-        if left.drag_stopped() || right.drag_stopped() {
-            editor_context.interaction.is_resizing_entity = false;
+        let should_commit_resize =
+            (left.drag_stopped() || right.drag_stopped()) && finish_resize_gesture(editor_context);
+        if should_commit_resize {
             deferred_actions.push(DeferredClipAction::PushHistory);
         }
     }
@@ -1610,7 +1629,8 @@ mod tests {
         history.push_project_state(project_before.clone());
 
         let mut editor_context = EditorContext::new(Uuid::new_v4());
-        editor_context.interaction.is_resizing_entity = true;
+        begin_resize_gesture(&mut editor_context);
+        mark_resize_timing_changed(&mut editor_context);
         editor_context.interaction.is_moving_selected_entity = true;
         editor_context.interaction.dragged_entity_original_track_id = Some(Uuid::new_v4());
         editor_context.interaction.dragged_entity_hovered_track_id = Some(Uuid::new_v4());
@@ -1633,22 +1653,30 @@ mod tests {
             editor_context.preview_region,
         );
 
-        let mut commit = ClipMutationCommit {
-            timing_history_requested: true,
-            ..ClipMutationCommit::default()
-        };
+        // Move frame: the authoritative update fails and cancels the active
+        // gesture. No history request is emitted in this frame.
+        let mut move_frame_commit = ClipMutationCommit::default();
         apply_timing_update_result(
             Uuid::new_v4(),
             Err(library::LibraryError::Project(
                 "Clip disappeared during drag".to_string(),
             )),
             &mut editor_context,
-            &mut commit,
+            &mut move_frame_commit,
         );
-        push_clip_history_if_needed(&commit, &project, &mut history);
+        push_clip_history_if_needed(&move_frame_commit, &project, &mut history);
 
-        assert!(commit.timing_update_failed);
-        assert!(!commit.should_push_history());
+        // Release frame: egui still reports `drag_stopped`, but the failure
+        // reset from the previous frame prevents a no-op history snapshot.
+        let mut release_frame_commit = ClipMutationCommit::default();
+        if finish_resize_gesture(&mut editor_context) {
+            release_frame_commit.timing_history_requested = true;
+        }
+        push_clip_history_if_needed(&release_frame_commit, &project, &mut history);
+
+        assert!(move_frame_commit.timing_update_failed);
+        assert!(!move_frame_commit.should_push_history());
+        assert!(!release_frame_commit.should_push_history());
         assert_eq!(history.undo_depth(), 1);
         assert!(!editor_context.interaction.is_resizing_entity);
         assert!(!editor_context.interaction.is_moving_selected_entity);
@@ -1672,6 +1700,43 @@ mod tests {
             preview_before
         );
         assert_eq!(*project.read().unwrap(), project_before);
+    }
+
+    #[test]
+    fn resize_click_and_invalid_zero_change_drag_do_not_create_history() {
+        let project = Arc::new(RwLock::new(Project::new("zero change resize")));
+        let initial = project.read().unwrap().clone();
+        let mut history = HistoryManager::new();
+        history.push_project_state(initial);
+        let mut editor_context = EditorContext::new(Uuid::new_v4());
+
+        // Press/release without movement.
+        begin_resize_gesture(&mut editor_context);
+        let click_release = ClipMutationCommit {
+            timing_history_requested: finish_resize_gesture(&mut editor_context),
+            ..ClipMutationCommit::default()
+        };
+        push_clip_history_if_needed(&click_release, &project, &mut history);
+
+        // A drag beyond a valid timing boundary never queues an update, so it
+        // likewise never marks the gesture as changed.
+        begin_resize_gesture(&mut editor_context);
+        let invalid_drag_release = ClipMutationCommit {
+            timing_history_requested: finish_resize_gesture(&mut editor_context),
+            ..ClipMutationCommit::default()
+        };
+        push_clip_history_if_needed(&invalid_drag_release, &project, &mut history);
+
+        assert!(!click_release.should_push_history());
+        assert!(!invalid_drag_release.should_push_history());
+        assert_eq!(history.undo_depth(), 1);
+
+        // The positive path remains explicit: a queued timing update marks
+        // the release as commit-worthy exactly once.
+        begin_resize_gesture(&mut editor_context);
+        mark_resize_timing_changed(&mut editor_context);
+        assert!(finish_resize_gesture(&mut editor_context));
+        assert!(!finish_resize_gesture(&mut editor_context));
     }
 
     #[test]
