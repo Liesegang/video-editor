@@ -1,8 +1,8 @@
 use super::{EntityConverterPlugin, FrameEvaluationContext};
-use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::entity::FrameObject;
 use crate::model::frame::runtime_shape::{
     RuntimeBounds, RuntimePathShape, RuntimeShape, RuntimeShapeGeometry,
+    measure_shape_visual_bounds,
 };
 
 #[derive(Default)]
@@ -284,53 +284,4 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
         let path_effects = evaluator.parse_path_effects(props, eval_time);
         measure_shape_visual_bounds(&path_str, &[], &path_effects)
     }
-}
-
-/// Return the local-space visual bounds painted by Shape rendering.
-///
-/// Skia's tight path bounds only describe the path geometry. Positive fill
-/// offsets, strokes, and Discrete path deviation can all paint outside it and
-/// must be reflected by Preview selection/hit testing as well.
-pub fn measure_shape_visual_bounds(
-    path_data: &str,
-    styles: &[crate::model::frame::entity::StyleConfig],
-    path_effects: &[PathEffect],
-) -> Option<(f32, f32, f32, f32)> {
-    let path = skia_safe::utils::parse_path::from_svg(path_data)?;
-    if path.is_empty() {
-        return None;
-    }
-    let bounds = path.compute_tight_bounds();
-    let style_outset = styles.iter().fold(0.0_f32, |outset, config| {
-        let candidate = match &config.style {
-            DrawStyle::Fill { offset, .. } => offset.max(0.0) as f32,
-            DrawStyle::Stroke { width, offset, .. } if *width > 0.0 => {
-                if *offset > 0.0 {
-                    (offset + width / 2.0) as f32
-                } else if *offset == 0.0 {
-                    (width / 2.0) as f32
-                } else {
-                    // Negative offset strokes are explicitly clipped inside.
-                    0.0
-                }
-            }
-            DrawStyle::Stroke { .. } => 0.0,
-        };
-        outset.max(candidate)
-    });
-    let effect_outset = path_effects.iter().fold(0.0_f32, |outset, effect| {
-        if let PathEffect::Discrete { deviation, .. } = effect {
-            outset.max(deviation.abs() as f32)
-        } else {
-            outset
-        }
-    });
-    let outset = style_outset + effect_outset;
-
-    Some((
-        bounds.left - outset,
-        bounds.top - outset,
-        bounds.width() + outset * 2.0,
-        bounds.height() + outset * 2.0,
-    ))
 }

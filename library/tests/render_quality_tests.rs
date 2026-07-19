@@ -313,6 +313,8 @@ fn vector_object(is_text: bool, transform: Transform, styles: &[StyleConfig]) ->
         }
     };
     FrameItem::Object(FrameObject {
+        source_node_id: Uuid::new_v4(),
+        content_bounds: None,
         content,
         properties: PropertyMap::new(),
     })

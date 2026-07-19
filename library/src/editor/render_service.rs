@@ -151,10 +151,7 @@ impl<T: Renderer> RenderService<T> {
         context: &RenderContext,
         current_time: f64,
     ) -> Result<(), LibraryError> {
-        let FrameObject {
-            content,
-            properties: _properties,
-        } = frame_object;
+        let content = &frame_object.content;
 
         match content {
             FrameContent::Video {

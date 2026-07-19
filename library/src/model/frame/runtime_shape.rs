@@ -11,9 +11,9 @@ use uuid::Uuid;
 use crate::core::ensemble::effectors::{EffectorElementContext, evaluate_configured_transform};
 use crate::core::ensemble::types::{DecoratorConfig, EffectorConfig, EnsembleData};
 use crate::error::LibraryError;
-use crate::model::frame::draw_type::PathEffect;
+use crate::model::frame::draw_type::{DrawStyle, PathEffect};
 use crate::model::frame::effect::ImageEffect;
-use crate::model::frame::entity::{FrameContent, FrameObject, StyleConfig};
+use crate::model::frame::entity::{FrameBounds, FrameContent, FrameObject, StyleConfig};
 use crate::model::frame::transform::Transform;
 use crate::model::property::PropertyMap;
 
@@ -51,6 +51,54 @@ impl RuntimeBounds {
             bottom: self.bottom.max(other.bottom),
         }
     }
+}
+
+/// Return the local-space bounds painted by Shape rendering.
+///
+/// Tight path geometry alone excludes positive fill offsets, strokes, and
+/// Discrete path deviation. Keeping this next to the runtime Shape value lets
+/// both conversion and the final `FrameObject` use one calculation.
+pub fn measure_shape_visual_bounds(
+    path_data: &str,
+    styles: &[StyleConfig],
+    path_effects: &[PathEffect],
+) -> Option<(f32, f32, f32, f32)> {
+    let path = skia_safe::utils::parse_path::from_svg(path_data)?;
+    if path.is_empty() {
+        return None;
+    }
+    let bounds = path.compute_tight_bounds();
+    let style_outset = styles.iter().fold(0.0_f32, |outset, config| {
+        let candidate = match &config.style {
+            DrawStyle::Fill { offset, .. } => offset.max(0.0) as f32,
+            DrawStyle::Stroke { width, offset, .. } if *width > 0.0 => {
+                if *offset > 0.0 {
+                    (offset + width / 2.0) as f32
+                } else if *offset == 0.0 {
+                    (width / 2.0) as f32
+                } else {
+                    0.0
+                }
+            }
+            DrawStyle::Stroke { .. } => 0.0,
+        };
+        outset.max(candidate)
+    });
+    let effect_outset = path_effects.iter().fold(0.0_f32, |outset, effect| {
+        if let PathEffect::Discrete { deviation, .. } = effect {
+            outset.max(deviation.abs() as f32)
+        } else {
+            outset
+        }
+    });
+    let outset = style_outset + effect_outset;
+
+    Some((
+        bounds.left - outset,
+        bounds.top - outset,
+        bounds.width() + outset * 2.0,
+        bounds.height() + outset * 2.0,
+    ))
 }
 
 /// One Unicode grapheme element. It may contain multiple Unicode scalars, and
@@ -173,6 +221,26 @@ impl RuntimeShape {
     /// Cross the Shape -> Image boundary by creating one renderer object with
     /// exactly the Style from this branch.
     pub fn into_styled_object(self, style: StyleConfig) -> FrameObject {
+        let source_node_id = self.source_id;
+        let content_bounds = match &self.geometry {
+            RuntimeShapeGeometry::Text(text) => {
+                let outset = crate::core::rendering::text_layout::text_style_outset(
+                    std::slice::from_ref(&style),
+                );
+                Some(FrameBounds::new(
+                    text.block_bounds.left - outset,
+                    text.block_bounds.top - outset,
+                    text.block_bounds.width() + outset * 2.0,
+                    text.block_bounds.height() + outset * 2.0,
+                ))
+            }
+            RuntimeShapeGeometry::Path(path) => measure_shape_visual_bounds(
+                &path.path,
+                std::slice::from_ref(&style),
+                &path.path_effects,
+            )
+            .map(|(x, y, width, height)| FrameBounds::new(x, y, width, height)),
+        };
         let ensemble = if self.effector_configs.is_empty() && self.decorator_configs.is_empty() {
             None
         } else {
@@ -203,6 +271,8 @@ impl RuntimeShape {
             },
         };
         FrameObject {
+            source_node_id,
+            content_bounds,
             content,
             properties: self.properties,
         }

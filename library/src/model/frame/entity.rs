@@ -82,6 +82,15 @@ pub enum FrameContent {
 }
 
 impl FrameContent {
+    pub fn transform(&self) -> &Transform {
+        match self {
+            Self::Video { surface, .. } | Self::Image { surface } => &surface.transform,
+            Self::Text { transform, .. }
+            | Self::Shape { transform, .. }
+            | Self::SkSL { transform, .. } => transform,
+        }
+    }
+
     pub fn transform_mut(&mut self) -> &mut Transform {
         match self {
             Self::Video { surface, .. } | Self::Image { surface } => &mut surface.transform,
@@ -217,9 +226,7 @@ impl PartialEq for FrameContent {
                     ensemble: en2,
                     transform: tr2,
                 },
-            ) => {
-                p1 == p2 && st1 == st2 && pe1 == pe2 && e1 == e2 && en1 == en2 && tr1 == tr2
-            }
+            ) => p1 == p2 && st1 == st2 && pe1 == pe2 && e1 == e2 && en1 == en2 && tr1 == tr2,
             (
                 FrameContent::SkSL {
                     shader: s1,
@@ -246,8 +253,46 @@ impl PartialEq for FrameContent {
 }
 impl Eq for FrameContent {}
 
+/// Evaluated local-space bounds of one rendered object.
+///
+/// These bounds travel with the exact `FrameObject` that reached the final
+/// Composition evaluation. Preview interaction can therefore use the same
+/// source and geometry as rendering instead of guessing from container order.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct FrameBounds {
+    pub x: OrderedFloat<f32>,
+    pub y: OrderedFloat<f32>,
+    pub width: OrderedFloat<f32>,
+    pub height: OrderedFloat<f32>,
+}
+
+impl FrameBounds {
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self {
+            x: OrderedFloat(x),
+            y: OrderedFloat(y),
+            width: OrderedFloat(width.max(0.0)),
+            height: OrderedFloat(height.max(0.0)),
+        }
+    }
+
+    pub fn as_tuple(self) -> (f32, f32, f32, f32) {
+        (
+            self.x.into_inner(),
+            self.y.into_inner(),
+            self.width.into_inner(),
+            self.height.into_inner(),
+        )
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)] // Added Debug
 pub struct FrameObject {
+    /// The authored Node whose evaluated visual value became this object.
+    /// Style, Effect, Merge, and container wrappers deliberately do not
+    /// replace this identity.
+    pub source_node_id: Uuid,
+    pub content_bounds: Option<FrameBounds>,
     pub content: FrameContent, // Renamed from entity: FrameEntity
     pub properties: PropertyMap,
 }
