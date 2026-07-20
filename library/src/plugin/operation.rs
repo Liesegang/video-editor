@@ -6,8 +6,8 @@
 //! be installed merely to load or validate that data.
 
 use crate::model::project::{
-    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType, PortDefinition, PortExposure, PortSide,
-    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, PortDataType, PortDefinition,
+    PortDirection, PortExposure, PortSide, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use crate::model::property::{PropertyDefinition, PropertyUiType};
 use crate::model::{Node, PluginOperationContent};
@@ -38,6 +38,8 @@ pub enum OperationDescriptorError {
     InvalidOperationPortKey { key: String },
     #[error("operation descriptor port {key:?} label must not be empty")]
     EmptyPortLabel { key: String },
+    #[error("operation descriptor derived timing port {key:?} is read-only and cannot be an input")]
+    ReadOnlyDerivedTimingInput { key: String },
 }
 
 #[derive(Clone, Debug)]
@@ -322,6 +324,13 @@ impl OperationDescriptor {
             }
             if port.label.trim().is_empty() {
                 return Err(OperationDescriptorError::EmptyPortLabel {
+                    key: port.key.clone(),
+                });
+            }
+            if port.direction == PortDirection::Input
+                && matches!(port.key.as_str(), FRAME_PORT | FPS_PORT)
+            {
+                return Err(OperationDescriptorError::ReadOnlyDerivedTimingInput {
                     key: port.key.clone(),
                 });
             }
