@@ -7,8 +7,8 @@ use library::model::node::{
     CLIP_TRIM_IN_PROPERTY,
 };
 use library::model::project::{
-    PortOwner, Project, ProjectConnection, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
-    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
+    ContainerGraphSemantics, PortOwner, Project, ProjectConnection, IMAGE_INPUT_PORT,
+    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
 use library::model::{Clip, Composition, GeneratorContent, Node, NodeContent, Track, ValueContent};
@@ -36,16 +36,19 @@ enum InspectorSelection {
         composition: Composition,
         nodes: Vec<Node>,
         connections: Vec<ProjectConnection>,
+        semantics: ContainerGraphSemantics,
     },
     Track {
         track: Track,
         nodes: Vec<Node>,
         connections: Vec<ProjectConnection>,
+        semantics: ContainerGraphSemantics,
     },
     Clip {
         clip: Clip,
         nodes: Vec<Node>,
         connections: Vec<ProjectConnection>,
+        semantics: ContainerGraphSemantics,
         track_id: Option<Uuid>,
     },
     Node {
@@ -185,6 +188,7 @@ fn inspector_panel_content(
             composition,
             nodes,
             connections,
+            semantics,
         } => {
             let heading = ui.heading(format!("Composition: {}", composition.name));
             crate::qa::register_component_with_metadata(
@@ -199,9 +203,9 @@ fn inspector_panel_content(
                 ui,
                 "Composition Output",
                 FacadeOwnerKind::Composition,
+                &semantics,
                 &nodes,
                 &connections,
-                composition.output_node_id,
                 composition_id,
                 None,
                 global_time,
@@ -216,6 +220,7 @@ fn inspector_panel_content(
             track,
             nodes,
             connections,
+            semantics,
         } => {
             let heading = ui.heading(format!("Track: {}", track.name));
             crate::qa::register_component_with_metadata(
@@ -230,9 +235,9 @@ fn inspector_panel_content(
                 ui,
                 "Track Output",
                 FacadeOwnerKind::Track,
+                &semantics,
                 &nodes,
                 &connections,
-                track.output_node_id,
                 composition_id,
                 Some(track.id),
                 global_time,
@@ -247,6 +252,7 @@ fn inspector_panel_content(
             clip,
             nodes,
             connections,
+            semantics,
             track_id,
         } => {
             let heading = ui.heading(format!("Clip: {}", clip.name));
@@ -299,9 +305,9 @@ fn inspector_panel_content(
                 ui,
                 "Clip Output",
                 FacadeOwnerKind::Clip,
+                &semantics,
                 &nodes,
                 &connections,
-                clip.output_node_id,
                 composition_id,
                 track_id,
                 local_time,
@@ -363,6 +369,7 @@ fn resolve_selection(
                     clip: clip.clone(),
                     connections: connections_for_nodes(project, &clip.node_ids),
                     nodes,
+                    semantics: project.container_graph_semantics(PortOwner::Clip(clip.id)),
                     track_id: project.find_track_for_clip(selected_id),
                 });
             }
@@ -389,6 +396,7 @@ fn resolve_selection(
             track: track.clone(),
             nodes: nodes_for_ids(project, &track.node_ids),
             connections: connections_for_nodes(project, &track.node_ids),
+            semantics: project.container_graph_semantics(PortOwner::Track(track.id)),
         });
     }
 
@@ -397,6 +405,7 @@ fn resolve_selection(
         composition: composition.clone(),
         nodes: nodes_for_ids(project, &composition.node_ids),
         connections: connections_for_nodes(project, &composition.node_ids),
+        semantics: project.container_graph_semantics(PortOwner::Composition(composition.id)),
     })
 }
 
@@ -442,9 +451,9 @@ fn render_semantic_graph_facade(
     ui: &mut Ui,
     output_label: &str,
     owner_kind: FacadeOwnerKind,
+    semantics: &ContainerGraphSemantics,
     nodes: &[Node],
     connections: &[ProjectConnection],
-    output_node_id: Option<Uuid>,
     composition_id: Uuid,
     track_id: Option<Uuid>,
     current_time: f64,
@@ -454,6 +463,7 @@ fn render_semantic_graph_facade(
     editor_context: &mut EditorContext,
     needs_refresh: &mut bool,
 ) {
+    let output_node_id = semantics.explicit_output_node_id();
     let output_mode = owner_kind.output_mode(output_node_id);
     let sources = semantic_visual_sources(nodes);
     let values = native_value_nodes(nodes);
@@ -473,7 +483,7 @@ fn render_semantic_graph_facade(
     }
     for source in sources {
         let is_result = output_mode.explicit_node_id() == Some(source.id);
-        let wired_to_result = structurally_reaches_result(source.id, output_mode, connections);
+        let wired_to_result = semantics.structurally_reaches_output(PortOwner::Node(source.id));
         let outgoing = connections
             .iter()
             .filter(|connection| {
@@ -567,7 +577,7 @@ fn render_semantic_graph_facade(
             &matching,
             nodes,
             connections,
-            output_mode,
+            semantics,
             composition_id,
             track_id,
             current_time,
@@ -600,7 +610,7 @@ fn render_semantic_graph_facade(
             &matching,
             nodes,
             connections,
-            output_mode,
+            semantics,
             composition_id,
             track_id,
             current_time,
@@ -617,7 +627,7 @@ fn render_semantic_graph_facade(
         &merges,
         nodes,
         connections,
-        output_mode,
+        semantics,
         composition_id,
         track_id,
         current_time,
@@ -801,7 +811,7 @@ fn render_operation_category(
     operations: &[&Node],
     all_nodes: &[Node],
     connections: &[ProjectConnection],
-    output_mode: FacadeOutputMode,
+    semantics: &ContainerGraphSemantics,
     composition_id: Uuid,
     track_id: Option<Uuid>,
     current_time: f64,
@@ -839,8 +849,8 @@ fn render_operation_category(
                     && is_content_flow_connection(connection)
             })
             .collect::<Vec<_>>();
-        let is_result = output_mode.explicit_node_id() == Some(node.id);
-        let wired_to_result = structurally_reaches_result(node.id, output_mode, connections);
+        let is_result = semantics.explicit_output_node_id() == Some(node.id);
+        let wired_to_result = semantics.structurally_reaches_output(PortOwner::Node(node.id));
         let state = operation_state_label(
             available,
             node.enabled,
@@ -918,7 +928,7 @@ fn render_merge_category(
     merges: &[&Node],
     all_nodes: &[Node],
     connections: &[ProjectConnection],
-    output_mode: FacadeOutputMode,
+    semantics: &ContainerGraphSemantics,
     composition_id: Uuid,
     track_id: Option<Uuid>,
     current_time: f64,
@@ -953,8 +963,8 @@ fn render_merge_category(
                     && is_content_flow_connection(connection)
             })
             .collect::<Vec<_>>();
-        let is_result = output_mode.explicit_node_id() == Some(merge.id);
-        let wired_to_result = structurally_reaches_result(merge.id, output_mode, connections);
+        let is_result = semantics.explicit_output_node_id() == Some(merge.id);
+        let wired_to_result = semantics.structurally_reaches_output(PortOwner::Node(merge.id));
         let state = operation_state_label(
             true,
             merge.enabled,
@@ -1077,43 +1087,6 @@ fn facade_output_metadata(
         "owner_kind": owner_kind.qa_value(),
         "output_mode": output_mode.qa_value(),
     })
-}
-
-/// Reports authored wire topology only. It deliberately does not infer runtime
-/// production state (enabled nodes, current Clip range, missing external
-/// sources, unavailable plug-ins, or NoOutput).
-fn structurally_reaches_result(
-    start_node_id: Uuid,
-    output_mode: FacadeOutputMode,
-    connections: &[ProjectConnection],
-) -> bool {
-    let FacadeOutputMode::Explicit(output_node_id) = output_mode else {
-        return false;
-    };
-    let mut pending = vec![start_node_id];
-    let mut visited = HashSet::new();
-    while let Some(node_id) = pending.pop() {
-        if output_node_id == node_id {
-            return true;
-        }
-        if !visited.insert(node_id) {
-            continue;
-        }
-        let outgoing = connections
-            .iter()
-            .filter(|connection| {
-                connection.from.owner == PortOwner::Node(node_id)
-                    && is_content_flow_connection(connection)
-            })
-            .collect::<Vec<_>>();
-        pending.extend(outgoing.into_iter().filter_map(|connection| {
-            let PortOwner::Node(target_id) = connection.to.owner else {
-                return None;
-            };
-            Some(target_id)
-        }));
-    }
-    false
 }
 
 fn is_content_flow_connection(connection: &ProjectConnection) -> bool {
@@ -1921,7 +1894,14 @@ mod tests {
     }
 
     #[test]
-    fn structural_status_follows_content_wires_to_the_explicit_result() {
+    fn structural_status_reuses_the_authoritative_clip_semantics(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut project = Project::new("inspector graph semantics");
+        let (composition, track) = Composition::new("main", 1920, 1080, 30.0, 10.0);
+        let composition_id = composition.id;
+        let track_id = track.id;
+        let clip = Clip::new("clip", 0.0, 10.0);
+        let clip_id = clip.id;
         let source = generator_node(
             "Title",
             GeneratorNodeRequest::Text {
@@ -1929,68 +1909,85 @@ mod tests {
                 font: "Arial".to_string(),
             },
         );
-        let applied = PluginManager::default()
-            .create_style_operation_node("fill")
-            .unwrap();
-        let disconnected = PluginManager::default()
-            .create_effect_operation_node("blur")
-            .unwrap();
+        let plugin_manager = PluginManager::default();
+        let applied = plugin_manager.create_style_operation_node("fill")?;
+        let disconnected = plugin_manager.create_effect_operation_node("blur")?;
         let result = Node::new_merge("Composite");
-        let connections = vec![
-            ProjectConnection::new(
-                library::model::project::PortAddress::new(
-                    PortOwner::Node(source.id),
-                    SHAPE_OUTPUT_PORT,
-                ),
-                library::model::project::PortAddress::new(
-                    PortOwner::Node(applied.id),
-                    SHAPE_INPUT_PORT,
-                ),
-                0,
-            ),
-            ProjectConnection::new(
-                library::model::project::PortAddress::new(
-                    PortOwner::Node(applied.id),
-                    IMAGE_OUTPUT_PORT,
-                ),
-                library::model::project::PortAddress::new(
-                    PortOwner::Node(result.id),
-                    MERGE_IMAGES_PORT,
-                ),
-                3,
-            ),
-            ProjectConnection::new(
-                library::model::project::PortAddress::new(
-                    PortOwner::Node(applied.id),
-                    "property.opacity",
-                ),
-                library::model::project::PortAddress::new(
-                    PortOwner::Node(disconnected.id),
-                    "property.sigma_x",
-                ),
-                99,
-            ),
-        ];
+        let source_id = source.id;
+        let applied_id = applied.id;
+        let disconnected_id = disconnected.id;
+        let result_id = result.id;
 
-        assert!(structurally_reaches_result(
-            source.id,
-            FacadeOutputMode::Explicit(result.id),
-            &connections
+        project.add_track(track);
+        project.add_composition(composition);
+        project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id)?;
+        for node in [source, applied, disconnected, result] {
+            let node_id = node.id;
+            project.add_node(node);
+            project.attach_node_to_container(NodeContainer::Clip(clip_id), node_id)?;
+        }
+        project.connect_ports(
+            library::model::project::PortAddress::new(
+                PortOwner::Node(source_id),
+                SHAPE_OUTPUT_PORT,
+            ),
+            library::model::project::PortAddress::new(
+                PortOwner::Node(applied_id),
+                SHAPE_INPUT_PORT,
+            ),
+        )?;
+        let result_connection_id = project.connect_ports(
+            library::model::project::PortAddress::new(
+                PortOwner::Node(applied_id),
+                IMAGE_OUTPUT_PORT,
+            ),
+            library::model::project::PortAddress::new(
+                PortOwner::Node(result_id),
+                MERGE_IMAGES_PORT,
+            ),
+        )?;
+        project.set_output_node(NodeContainer::Clip(clip_id), Some(result_id))?;
+        let Some(result_connection) = project
+            .connections
+            .iter_mut()
+            .find(|connection| connection.id == result_connection_id)
+        else {
+            return Err(std::io::Error::other("result connection was not retained").into());
+        };
+        result_connection.order = 3;
+        project.connections.push(ProjectConnection::new(
+            library::model::project::PortAddress::new(
+                PortOwner::Node(applied_id),
+                "property.opacity",
+            ),
+            library::model::project::PortAddress::new(
+                PortOwner::Node(disconnected_id),
+                "property.sigma_x",
+            ),
+            99,
         ));
-        assert!(structurally_reaches_result(
-            applied.id,
-            FacadeOutputMode::Explicit(result.id),
-            &connections
-        ));
-        assert!(!structurally_reaches_result(
-            disconnected.id,
-            FacadeOutputMode::Explicit(result.id),
-            &connections
-        ));
+
+        let Some(InspectorSelection::Clip {
+            semantics,
+            connections,
+            ..
+        }) = resolve_selection(&project, Some(clip_id), None, composition_id)
+        else {
+            return Err(std::io::Error::other("Clip selection should resolve").into());
+        };
+        assert_eq!(
+            semantics,
+            project.container_graph_semantics(PortOwner::Clip(clip_id))
+        );
+        assert!(semantics.structurally_reaches_output(PortOwner::Node(source_id)));
+        assert!(semantics.structurally_reaches_output(PortOwner::Node(applied_id)));
+        assert!(semantics.structurally_reaches_output(PortOwner::Node(result_id)));
+        assert!(!semantics.structurally_reaches_output(PortOwner::Node(disconnected_id)));
         let outgoing = connections
             .iter()
             .filter(|connection| {
-                connection.from.owner == PortOwner::Node(applied.id)
+                connection.from.owner == PortOwner::Node(applied_id)
                     && is_content_flow_connection(connection)
             })
             .collect::<Vec<_>>();
@@ -1999,12 +1996,12 @@ mod tests {
         assert_eq!(metadata["connection_id"], serde_json::json!(outgoing[0].id));
         assert_eq!(
             metadata["from_owner"],
-            serde_json::json!(PortOwner::Node(applied.id))
+            serde_json::json!(PortOwner::Node(applied_id))
         );
         assert_eq!(metadata["from_port"], IMAGE_OUTPUT_PORT);
         assert_eq!(
             metadata["to_owner"],
-            serde_json::json!(PortOwner::Node(result.id))
+            serde_json::json!(PortOwner::Node(result_id))
         );
         assert_eq!(metadata["to_port"], MERGE_IMAGES_PORT);
         assert_eq!(metadata["order"], 3);
@@ -2024,23 +2021,7 @@ mod tests {
             operation_state_label(true, false, false, true, &outgoing),
             "Disabled"
         );
-        for owner_kind in [
-            FacadeOwnerKind::Composition,
-            FacadeOwnerKind::Track,
-            FacadeOwnerKind::Clip,
-        ] {
-            let output_mode = owner_kind.output_mode(None);
-            assert!(!structurally_reaches_result(
-                applied.id,
-                output_mode,
-                &connections
-            ));
-            assert!(!structurally_reaches_result(
-                result.id,
-                output_mode,
-                &connections
-            ));
-        }
+        Ok(())
     }
 
     #[test]
