@@ -329,12 +329,9 @@ fn expression_without_typed_fallback_propagates_no_output() -> Result<()> {
     };
     fixture
         .project
-        .get_node_mut(fixture.modulo_id)
-        .context("Time Modulo Node must exist")?
-        .set_property(
-            TIME_MODULO_PERIOD_PROPERTY.to_string(),
-            malformed_expression,
-        )
+        .get_node_mut(fixture.fmod_id)
+        .context("Fmod Node must exist")?
+        .set_property(FMOD_DIVISOR_INPUT_PORT.to_string(), malformed_expression)
         .map_err(|error| anyhow!(error))?;
 
     assert!(
