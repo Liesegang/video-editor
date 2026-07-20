@@ -50,9 +50,6 @@ use canvas::{
     GRID_TARGET_SCREEN_SPACING, NODE_EDITOR_DETAIL_SCALE, NODE_EDITOR_MAX_SCALE,
     NODE_EDITOR_MAX_TRANSLATION, NODE_EDITOR_MIN_SCALE, NODE_EDITOR_RESIZE_INTERACTION_SCALE,
 };
-#[cfg(test)]
-use egui_snarl::ui::{PinPlacement, WireLayer};
-
 const CONTAINER_HEADER_HEIGHT: f32 = 64.0;
 const CONTAINER_CONTROL_OFFSET: egui::Vec2 = egui::vec2(14.0, 10.0);
 const CONTAINER_PORT_Y: f32 = 86.0;
@@ -3552,6 +3549,13 @@ fn wire_interactions(
                 input.key_pressed(egui::Key::Escape),
             )
         });
+    if escape_pressed {
+        state.selected_connection_id = None;
+        state.wire_context_menu = None;
+        if state.wire_gesture.take().is_some() {
+            return Vec::new();
+        }
+    }
     if state.normal_connect_cancel_pending_release {
         if !primary_down {
             state.normal_connect_cancel_pending_release = false;
@@ -3650,6 +3654,22 @@ fn wire_interactions(
         })
         .flatten();
     let pointer_on_normal_port = normal_port.is_some();
+    let hovered = pointer
+        .filter(|_| !pointer_on_normal_port)
+        .and_then(|position| {
+            let edge = rendered_edge_at_position(frame.edges, position)?;
+            edge.kind.connection_id()?;
+            let endpoint = rendered_wire_drag_kind(edge, position);
+            let graph_position = frame.to_global.inverse() * position;
+            let over_graph_item = frame
+                .graph_item_rects
+                .iter()
+                .any(|rect| rect.contains(graph_position));
+            (!over_graph_item || endpoint != NodeEditorWireDragKind::Disconnect).then_some(edge)
+        });
+    if primary_pressed && hovered.is_none() {
+        state.selected_connection_id = None;
+    }
     if let (true, Some(port), Some(position)) = (primary_pressed, normal_port, pointer) {
         if port.direction == PortDirection::Output
             && frame
@@ -3687,19 +3707,6 @@ fn wire_interactions(
         .wire_gesture
         .as_ref()
         .map(|gesture| gesture.connection_id);
-    let hovered = pointer
-        .filter(|_| !pointer_on_normal_port)
-        .and_then(|position| {
-            let edge = rendered_edge_at_position(frame.edges, position)?;
-            edge.kind.connection_id()?;
-            let endpoint = rendered_wire_drag_kind(edge, position);
-            let graph_position = frame.to_global.inverse() * position;
-            let over_graph_item = frame
-                .graph_item_rects
-                .iter()
-                .any(|rect| rect.contains(graph_position));
-            (!over_graph_item || endpoint != NodeEditorWireDragKind::Disconnect).then_some(edge)
-        });
     let interaction_edge = active_id
         .and_then(|connection_id| {
             frame
@@ -4421,6 +4428,7 @@ pub fn node_editor_panel(
         }
 
         if ui.input(|input| input.pointer.secondary_clicked()) {
+            node_editor_state.selected_connection_id = None;
             if let Some(position) = ui.input(|input| input.pointer.interact_pos()) {
                 let graph_position = to_global.inverse() * position;
                 let over_graph_item = context_menu_exclusion_rects
@@ -7807,6 +7815,7 @@ fn show_wire_context_menu(
     }
     if should_close {
         state.wire_context_menu = None;
+        state.selected_connection_id = None;
     }
     edit
 }
@@ -7887,6 +7896,7 @@ fn show_output_binding_wire_context_menu(
     }
     if should_close {
         state.wire_context_menu = None;
+        state.selected_connection_id = None;
     }
     edit
 }
@@ -11043,6 +11053,67 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(state.selected_connection_id, Some(connection.id));
+
+        let escape = vec![vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: Some(egui::Key::Escape),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]];
+        assert!(
+            run_wire_interaction_frames(&project, &edge, &rendered_ports, &mut state, escape,)
+                .is_empty()
+        );
+        assert!(state.selected_connection_id.is_none());
+
+        assert!(run_wire_interaction_frames(
+            &project,
+            &edge,
+            &rendered_ports,
+            &mut state,
+            vec![
+                vec![egui::Event::PointerMoved(midpoint)],
+                vec![egui::Event::PointerButton {
+                    pos: midpoint,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                vec![egui::Event::PointerButton {
+                    pos: midpoint,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            ],
+        )
+        .is_empty());
+        assert_eq!(state.selected_connection_id, Some(connection.id));
+        let blank = egui::pos2(32.0, 32.0);
+        assert!(run_wire_interaction_frames(
+            &project,
+            &edge,
+            &rendered_ports,
+            &mut state,
+            vec![
+                vec![egui::Event::PointerMoved(blank)],
+                vec![egui::Event::PointerButton {
+                    pos: blank,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                vec![egui::Event::PointerButton {
+                    pos: blank,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            ],
+        )
+        .is_empty());
+        assert!(state.selected_connection_id.is_none());
 
         let dragged = midpoint + egui::vec2(0.0, 48.0);
         let drag = vec![

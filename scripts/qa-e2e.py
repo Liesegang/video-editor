@@ -2908,6 +2908,33 @@ def run_node_wire_suite(client):
         == connection_id
         else None,
     )
+    selected_before_clear = client.state()
+    blank_snapshot, blank_point = find_free_canvas_point(client)
+    client.inject(
+        "click",
+        {
+            "x": blank_point["x"],
+            "y": blank_point["y"],
+            "coordinate_space": "points",
+            "button": "primary",
+        },
+        {
+            "component_id": "node_editor.canvas",
+            "component_frame": blank_snapshot["frame"],
+            "coordinate_reason": "fresh unobstructed canvas point clears wire selection",
+            "cleared_connection_id": connection_id,
+        },
+    )
+    deselected = client.wait_until(
+        "wire coordinate deselection",
+        lambda: client.state()
+        if client.state()["editor"]["node_editor"]["selected_connection_id"] is None
+        else None,
+    )
+    if deselected["project"] != selected_before_clear["project"]:
+        raise QaFailure("clearing a wire selection changed the Project")
+    if deselected["history"] != selected_before_clear["history"]:
+        raise QaFailure("clearing a wire selection changed Project history")
 
     # Merge rows expose the canonical Back->Front order and per-wire authored
     # blend without requiring a precision wire hit. Every action below is a

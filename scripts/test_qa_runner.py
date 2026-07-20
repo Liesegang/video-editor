@@ -392,6 +392,7 @@ class QaRunnerTests(unittest.TestCase):
                 "node-editor",
                 "node-reparent",
                 "node-wire",
+                "node-wire-selection",
                 "preview",
             ],
         )
