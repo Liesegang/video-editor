@@ -1,8 +1,6 @@
 use super::QA_PORT_ENV;
-use library::editor::project_service::MediaNodeRequest;
 use library::editor::ProjectService;
 use library::model::frame::color::Color;
-use library::model::project::asset::{Asset, AssetKind};
 use library::model::project::{
     PortAddress, PortOwner, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
     SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
@@ -15,6 +13,10 @@ use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
+
+mod audio;
+
+use audio::audio_node;
 
 mod transform_preview;
 
@@ -527,35 +529,6 @@ fn solid_node(
     Ok(node)
 }
 
-fn audio_node(
-    factory: &ProjectService,
-    asset_id: Uuid,
-    node_id: Uuid,
-    name: &str,
-    path: &str,
-    ui_position: [f32; 2],
-) -> Result<(Asset, Node), String> {
-    let mut asset = Asset::new(name, path, AssetKind::Audio);
-    asset.id = asset_id;
-    let mut node = factory
-        .create_media_node(
-            name,
-            MediaNodeRequest::Audio {
-                asset_id,
-                file_path: path.to_string(),
-                audio_stream_index: None,
-            },
-            640,
-            360,
-            1,
-            1,
-        )
-        .map_err(|error| format!("cannot create QA Audio through factory: {error}"))?;
-    node.id = node_id;
-    node.ui_position = ui_position;
-    Ok((asset, node))
-}
-
 fn text_node(factory: &ProjectService, id: Uuid, ui_position: [f32; 2]) -> Result<Node, String> {
     let mut node = factory
         .create_text_node("QA Text", "Arial", 640, 360)
@@ -632,6 +605,7 @@ fn operation_node<E: std::fmt::Display>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use library::model::project::asset::AssetKind;
 
     fn installed_fixture() -> (Arc<RwLock<Project>>, Arc<PluginManager>, FixtureInfo) {
         let project = Arc::new(RwLock::new(Project::new("empty")));
