@@ -1012,11 +1012,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                     let color = node
                         .properties()
                         .get("color")
-                        .and_then(|property| {
-                            property
-                                .evaluate_at(property_time)
-                                .get_as::<library::model::frame::color::Color>()
-                        })
+                        .and_then(|property| property.evaluate_at(property_time).ok())
+                        .and_then(|value| value.get_as::<library::model::frame::color::Color>())
                         .unwrap_or(library::model::frame::color::Color {
                             r: 255,
                             g: 255,
@@ -1671,7 +1668,7 @@ impl ProjectNodeViewer<'_> {
             .project
             .get_node(node_id)
             .and_then(|node| node.properties().get(property_key))
-            .map(|property| property.evaluate_at(property_time));
+            .and_then(|property| property.evaluate_at(property_time).ok());
         let current_value_metadata = value
             .as_ref()
             .map(serde_json::Value::from)
@@ -1981,7 +1978,8 @@ impl ProjectNodeViewer<'_> {
         let mut value = node
             .properties()
             .get(key)
-            .and_then(|property| property.evaluate_at(property_time).get_as::<String>())
+            .and_then(|property| property.evaluate_at(property_time).ok())
+            .and_then(|value| value.get_as::<String>())
             .unwrap_or_else(|| fallback.to_string());
         ui.horizontal(|ui| {
             property_label(ui, label);
@@ -12181,7 +12179,7 @@ mod tests {
                 assert_eq!(
                     node.properties()
                         .get(definition.name())
-                        .map(|property| property.evaluate_at(0.0)),
+                        .and_then(|property| property.evaluate_at(0.0).ok()),
                     Some(definition.default_value().clone()),
                     "{component_id}.{} was not initialized by its descriptor factory",
                     definition.name(),
@@ -12193,7 +12191,7 @@ mod tests {
             transform
                 .properties()
                 .get("target")
-                .map(|property| property.evaluate_at(0.0)),
+                .and_then(|property| property.evaluate_at(0.0).ok()),
             Some(PropertyValue::String("Block".to_string()))
         );
         let opacity = plugins.create_effector_operation_node("opacity").unwrap();
@@ -12201,14 +12199,14 @@ mod tests {
             opacity
                 .properties()
                 .get("mode")
-                .map(|property| property.evaluate_at(0.0)),
+                .and_then(|property| property.evaluate_at(0.0).ok()),
             Some(PropertyValue::String("Set".to_string()))
         );
         assert_eq!(
             opacity
                 .properties()
                 .get("target")
-                .map(|property| property.evaluate_at(0.0)),
+                .and_then(|property| property.evaluate_at(0.0).ok()),
             Some(PropertyValue::String("Block".to_string()))
         );
     }
@@ -13531,7 +13529,8 @@ mod tests {
                 .properties()
                 .get("opacity")
                 .unwrap()
-                .evaluate_at(node_property_time(&project, solid_id, global_time)),
+                .evaluate_at(node_property_time(&project, solid_id, global_time))
+                .unwrap(),
             PropertyValue::Number(OrderedFloat(42.5))
         );
 
@@ -13551,7 +13550,9 @@ mod tests {
             .get("opacity")
             .unwrap();
         assert_eq!(
-            clip_node_property.evaluate_at(inspector_and_renderer_time),
+            clip_node_property
+                .evaluate_at(inspector_and_renderer_time)
+                .unwrap(),
             PropertyValue::Number(OrderedFloat(91.0))
         );
         assert!(clip_node_property.has_keyframe_at(inspector_and_renderer_time, 0.001));
@@ -13594,7 +13595,7 @@ mod tests {
             .unwrap();
         assert!(root_property.has_keyframe_at(global_time, 0.001));
         assert_eq!(
-            root_property.evaluate_at(global_time),
+            root_property.evaluate_at(global_time).unwrap(),
             PropertyValue::Number(OrderedFloat(55.0))
         );
     }

@@ -1003,7 +1003,7 @@ mod tests {
                         actions.extend(render_property_rows(
                             ui,
                             std::slice::from_ref(&definition),
-                            |_| Some(property.evaluate_at(0.0)),
+                            |_| property.evaluate_at(0.0).ok(),
                             |_| Some(property.clone()),
                             &render_context,
                         ));
@@ -1052,7 +1052,7 @@ mod tests {
                         actions.extend(render_property_rows(
                             ui,
                             std::slice::from_ref(&definition),
-                            |_| Some(property.evaluate_at(0.0)),
+                            |_| property.evaluate_at(0.0).ok(),
                             |_| Some(property.clone()),
                             &render_context,
                         ));

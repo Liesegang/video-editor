@@ -1755,14 +1755,14 @@ fn node_display_type(node: &Node) -> String {
 
 fn inferred_property_definitions(
     properties: &PropertyMap,
-    current_time: f64,
+    _current_time: f64,
 ) -> Vec<PropertyDefinition> {
     let mut entries: Vec<_> = properties.iter().collect();
     entries.sort_by_key(|(name, _)| *name);
     entries
         .into_iter()
         .filter_map(|(name, property)| {
-            let value = property.evaluate_at(current_time);
+            let value = property.value()?.clone();
             let ui_type = match &value {
                 PropertyValue::Number(_) => PropertyUiType::Float {
                     min: -1_000_000.0,
@@ -2402,7 +2402,7 @@ mod tests {
                 assert_eq!(
                     node.properties()
                         .get(definition.name())
-                        .map(|property| property.evaluate_at(0.0)),
+                        .and_then(|property| property.evaluate_at(0.0).ok()),
                     Some(definition.default_value().clone()),
                     "{component_id}.{} must be initialized by its descriptor factory",
                     definition.name(),

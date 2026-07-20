@@ -9,7 +9,9 @@ use crate::expression::{
 };
 use crate::model::frame::color::Color;
 use crate::model::property::{Property, PropertyValue, Vec2, Vec3, Vec4};
-use crate::plugin::{EvaluationContext, PropertyEvaluationError, PropertyEvaluator};
+use crate::plugin::{
+    EvaluationContext, PropertyEvaluationError, PropertyEvaluationOutcome, PropertyEvaluator,
+};
 
 static EXPRESSION_ENGINE: OnceLock<ExpressionEngine> = OnceLock::new();
 
@@ -101,17 +103,55 @@ impl PropertyEvaluator for ExpressionEvaluator {
         time: f64,
         context: &EvaluationContext,
     ) -> Result<PropertyValue, PropertyEvaluationError> {
-        let fallback = property.value().cloned();
-        match self.evaluate_detailed(property, time, context) {
-            Ok(value) => Ok(value),
-            Err(diagnostic) => {
-                log::warn!(
-                    "Expression property failed at local time {time}; using authored fallback: {diagnostic}"
-                );
-                fallback.ok_or_else(|| {
+        self.evaluate_with_diagnostics(property, time, context)
+            .map(PropertyEvaluationOutcome::into_value)
+    }
+
+    fn evaluate_with_diagnostics(
+        &self,
+        property: &Property,
+        time: f64,
+        context: &EvaluationContext,
+    ) -> Result<PropertyEvaluationOutcome, PropertyEvaluationError> {
+        if property.evaluator != "expression" {
+            return Err(PropertyEvaluationError::new(
+                "expression",
+                format!(
+                    "ExpressionEvaluator cannot evaluate property type '{}'",
+                    property.evaluator
+                ),
+            ));
+        }
+        let source = property.expression_text().ok_or_else(|| {
+            PropertyEvaluationError::new("expression", "property has no string source")
+        })?;
+        let fallback = property.value().ok_or_else(|| {
+            PropertyEvaluationError::new("expression", "property has no typed input value")
+        })?;
+        let expression_fallback =
+            expression_value_from_property(fallback).map_err(|diagnostic| {
+                PropertyEvaluationError::new("expression", diagnostic.to_string())
+            })?;
+        let output_type = expression_fallback.output_type();
+        let evaluation_context =
+            ExpressionEvaluationContext::new(time, context.fps, context.resolution)
+                .map_err(|diagnostic| {
                     PropertyEvaluationError::new("expression", diagnostic.to_string())
-                })
-            }
+                })?
+                .with_value(expression_fallback);
+
+        match expression_engine().evaluate(source, &evaluation_context, output_type) {
+            Ok(value) => Ok(PropertyEvaluationOutcome::clean(
+                property_value_from_expression(value),
+            )),
+            Err(diagnostic) if diagnostic.kind == ExpressionDiagnosticKind::InvalidContext => Err(
+                PropertyEvaluationError::new("expression", diagnostic.to_string()),
+            ),
+            Err(diagnostic) => Ok(PropertyEvaluationOutcome::recovered(
+                fallback.clone(),
+                "expression",
+                diagnostic.to_string(),
+            )),
         }
     }
 }

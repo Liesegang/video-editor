@@ -180,10 +180,27 @@ fn detailed_api_preserves_diagnostic_for_inspector_and_node_callers() -> Result<
         &context(&properties),
     ))?;
     assert_eq!(error.kind, ExpressionDiagnosticKind::TypeMismatch);
-    assert_eq!(
-        ExpressionEvaluator.evaluate(&unsupported_type, 0.0, &context(&properties)),
-        Ok(PropertyValue::Array(vec![PropertyValue::Integer(3)]))
+    assert!(
+        ExpressionEvaluator
+            .evaluate(&unsupported_type, 0.0, &context(&properties))
+            .is_err(),
+        "unsupported authored input types are malformed, not recoverable script errors"
     );
+    Ok(())
+}
+
+#[test]
+fn registered_evaluator_preserves_recoverable_diagnostics_with_typed_value() -> Result<()> {
+    let properties = PropertyMap::new();
+    let property = Property::expression("1 / 0".to_string(), PropertyValue::from(9.0));
+    let registry = PluginManager::default().get_property_evaluators();
+    let outcome = registry.evaluate_with_diagnostics(&property, 0.0, &context(&properties))?;
+    assert_eq!(outcome.value(), &PropertyValue::from(9.0));
+    let diagnostic = outcome
+        .diagnostic()
+        .ok_or_else(|| anyhow!("recoverable script error lost its diagnostic"))?;
+    assert_eq!(diagnostic.evaluator(), "expression");
+    assert!(diagnostic.message().contains("division by zero"));
     Ok(())
 }
 
@@ -212,4 +229,13 @@ fn missing_fallback_and_unknown_evaluator_fail_closed() {
         .evaluate(&unknown, 0.0, &context)
         .expect_err("an unknown evaluator must not return a legacy Number(0)");
     assert_eq!(unknown_error.evaluator(), "not-installed");
+}
+
+#[test]
+fn invalid_expression_context_fails_closed_instead_of_returning_input() {
+    let properties = PropertyMap::new();
+    let property = Property::expression("value".to_string(), PropertyValue::from(4.0));
+    let registry = PluginManager::default().get_property_evaluators();
+    let invalid = EvaluationContext::new(&properties, 0.0, (1920, 1080));
+    assert!(registry.evaluate(&property, 0.0, &invalid).is_err());
 }
