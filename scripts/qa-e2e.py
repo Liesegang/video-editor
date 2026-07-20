@@ -741,14 +741,43 @@ def assert_close(actual, expected, description, tolerance=1.0e-5):
         )
 
 
+def selection_target(kind, entity_id):
+    return {"kind": kind, "id": entity_id}
+
+
+def selection_matches(state, kind, entity_id):
+    return state["editor"]["selection"]["primary"] == selection_target(
+        kind, entity_id
+    )
+
+
+def assert_exact_selection(state, kind, entity_id, operation):
+    expected = selection_target(kind, entity_id)
+    selection = state["editor"]["selection"]
+    if selection["primary"] != expected or selection["targets"] != [expected]:
+        raise QaFailure(
+            "{} produced non-exact typed selection {!r}".format(operation, selection)
+        )
+
+
 def assert_selection(state, entity_id, track_id, operation):
     selection = state["editor"]["selection"]
-    if selection["last_selected_entity_id"] != entity_id:
+    expected = selection_target("clip", entity_id)
+    if selection["primary"] != expected:
         raise QaFailure("{} selected the wrong entity".format(operation))
-    if selection["last_selected_track_id"] != track_id:
-        raise QaFailure("{} retained the wrong Track owner".format(operation))
-    if entity_id not in selection["selected_entities"]:
+    if expected not in selection["targets"]:
         raise QaFailure("{} omitted the selected entity from selection".format(operation))
+    owners = [
+        candidate_id
+        for candidate_id, track in state["project"]["tracks"].items()
+        if entity_id in track.get("clip_ids", [])
+    ]
+    if owners != [track_id]:
+        raise QaFailure(
+            "{} has canonical Track owners {}, expected {}".format(
+                operation, owners, track_id
+            )
+        )
 
 
 def assert_valid_preview(state, operation):
@@ -2011,10 +2040,7 @@ def run_node_toggle_cross_view_scenario(client):
     selected_clip = client.wait_until(
         "disabled Clip coordinate selection",
         lambda: state
-        if (state := client.state())["editor"]["selection"][
-            "last_selected_entity_id"
-        ]
-        == CLIP_A2
+        if selection_matches((state := client.state()), "clip", CLIP_A2)
         else None,
     )
     assert_selection(selected_clip, CLIP_A2, TRACK_A, "disabled Clip selection")
@@ -2358,10 +2384,7 @@ def assert_node_editor_reflection(client, timeline_state):
     selected = client.wait_until(
         "reflected Node coordinate selection",
         lambda: state
-        if (state := client.state())["editor"]["selection"][
-            "last_selected_entity_id"
-        ]
-        == selected_node
+        if selection_matches((state := client.state()), "node", selected_node)
         else None,
     )
     validate_canonical_ownership(selected["project"])
@@ -2420,6 +2443,64 @@ def run_timeline_suite(client):
     }
 
 
+def run_selection_suite(client):
+    """Verify cross-view selection through fresh real screen coordinates."""
+    health = client.wait_health()
+    initial = wait_fresh_fixture(client)
+
+    activate_dock_tab(
+        client, "dock.tab:timeline", "Timeline", "typed Timeline selection"
+    )
+    clip_component = "timeline.clip:" + CLIP_A2
+    client.wait_component_settled(clip_component)
+    clip_before = client.state()
+    client.click_component(clip_component)
+    clip_state = client.wait_until(
+        "typed Timeline Clip selection",
+        lambda: state
+        if selection_matches((state := client.state()), "clip", CLIP_A2)
+        else None,
+    )
+    assert_exact_selection(clip_state, "clip", CLIP_A2, "Timeline Clip click")
+    assert_selection(clip_state, CLIP_A2, TRACK_A, "Timeline Clip click")
+    client.wait_component("inspector.owner.clip:" + CLIP_A2)
+    if clip_state["project"] != clip_before["project"]:
+        raise QaFailure("Timeline Clip selection mutated the authoritative Project")
+    if clip_state["history"] != clip_before["history"]:
+        raise QaFailure("Timeline Clip selection changed undo/redo history")
+
+    activate_dock_tab(
+        client, "dock.tab:node_editor", "Node Editor", "typed Node selection"
+    )
+    node_header = "node_editor.node_header:" + TEXT
+    reveal_node_editor_component(client, node_header)
+    node_before = client.state()
+    client.click_component(node_header)
+    node_state = client.wait_until(
+        "typed Node Editor Node selection",
+        lambda: state
+        if selection_matches((state := client.state()), "node", TEXT)
+        else None,
+    )
+    assert_exact_selection(node_state, "node", TEXT, "Node Editor Node click")
+    client.wait_component("inspector.owner.node:" + TEXT)
+
+    if node_state["project"] != node_before["project"]:
+        raise QaFailure("Node Editor selection mutated the authoritative Project")
+    if node_state["history"] != node_before["history"]:
+        raise QaFailure("Node Editor selection changed undo/redo history")
+    return {
+        "ok": True,
+        "suite": "selection",
+        "health": health,
+        "initial_frame": initial["frame"],
+        "final_frame": node_state["frame"],
+        "clip_selection": clip_state["editor"]["selection"],
+        "node_selection": node_state["editor"]["selection"],
+        "actions": client.evidence,
+    }
+
+
 def run_smoke_suite(client, capture_path):
     """Edit a descriptor-driven operation through fresh screen coordinates."""
     health = client.wait_health()
@@ -2439,7 +2520,7 @@ def run_smoke_suite(client, capture_path):
     client.wait_until(
         "Clip A2 coordinate selection",
         lambda: client.state()
-        if client.state()["editor"]["selection"]["last_selected_entity_id"] == CLIP_A2
+        if selection_matches(client.state(), "clip", CLIP_A2)
         else None,
     )
     client.wait_component("inspector.owner.clip:" + CLIP_A2)
@@ -3429,7 +3510,7 @@ def run_suite(client):
     client.wait_until(
         "Text Node selection",
         lambda: client.state()
-        if client.state()["editor"]["selection"]["last_selected_entity_id"] == TEXT
+        if selection_matches(client.state(), "node", TEXT)
         else None,
     )
     client.wait_component("inspector.owner.node:" + TEXT)
@@ -3530,7 +3611,7 @@ def run_suite(client):
     client.wait_until(
         "Shape Node selection",
         lambda: client.state()
-        if client.state()["editor"]["selection"]["last_selected_entity_id"] == SHAPE
+        if selection_matches(client.state(), "node", SHAPE)
         else None,
     )
     shape_before = client.state()
@@ -3556,7 +3637,7 @@ def run_suite(client):
     client.wait_until(
         "Clip A2 selection for operation editing",
         lambda: client.state()
-        if client.state()["editor"]["selection"]["last_selected_entity_id"] == CLIP_A2
+        if selection_matches(client.state(), "clip", CLIP_A2)
         else None,
     )
     tx_id = "inspector.property.node:{}:tx".format(TRANSFORM_EFFECTOR)
@@ -3625,7 +3706,7 @@ def parse_args():
     parser.add_argument("--base-url", default=None)
     parser.add_argument(
         "--suite",
-        choices=("all", "timeline", "smoke", "node-wire"),
+        choices=("all", "timeline", "selection", "smoke", "node-wire"),
         default="all",
         help="run the complete suite or a focused Timeline, smoke, or Node wire suite",
     )
@@ -3666,6 +3747,8 @@ def main():
         client = QaClient(base_url, args.timeout)
         if args.suite == "timeline":
             result = run_timeline_suite(client)
+        elif args.suite == "selection":
+            result = run_selection_suite(client)
         elif args.suite == "smoke":
             capture_path = args.capture or "target/qa-smoke-evidence.png"
             result = run_smoke_suite(client, capture_path)

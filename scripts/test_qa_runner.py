@@ -154,6 +154,25 @@ class TimelineGeometryQaClient(E2E.QaClient):
 
 
 class QaRunnerTests(unittest.TestCase):
+    def test_selection_contract_preserves_entity_kind_and_derives_clip_owner(self):
+        state = {
+            "editor": {
+                "selection": {
+                    "targets": [{"kind": "clip", "id": "shared"}],
+                    "primary": {"kind": "clip", "id": "shared"},
+                }
+            },
+            "project": {
+                "tracks": {
+                    "track": {"clip_ids": ["shared"]},
+                }
+            },
+        }
+
+        self.assertTrue(E2E.selection_matches(state, "clip", "shared"))
+        self.assertFalse(E2E.selection_matches(state, "node", "shared"))
+        E2E.assert_selection(state, "shared", "track", "typed Clip")
+
     def test_e2e_fixture_contract_names_all_twelve_explicit_nodes(self):
         self.assertEqual(len(E2E.EXPECTED_FIXTURE_NODES), 12)
         self.assertEqual(
@@ -368,6 +387,7 @@ class QaRunnerTests(unittest.TestCase):
             [
                 "all",
                 "timeline",
+                "selection",
                 "keyframe",
                 "node-editor",
                 "node-reparent",
