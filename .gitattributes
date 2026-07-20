@@ -1,0 +1,2 @@
+# Preserve audited upstream snapshots byte-for-byte, including source whitespace.
+third_party/rustpython-parser/** -whitespace

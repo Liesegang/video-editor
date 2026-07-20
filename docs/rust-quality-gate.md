@@ -82,11 +82,25 @@ fails the path guard; wildcard or indefinite ignores are not supported.
 
 The accepted license list in `deny.toml` is the observed all-target lockfile
 set: permissive licenses, font/data licenses, and the weak-copyleft MPL/LGPL
-dependencies. Unknown registries, unknown Git sources, wildcard dependency
-requirements, unlicensed workspace packages, and licenses outside that list
-fail the gate. Duplicate transitive versions remain reported as warnings
-because the cross-platform GUI/audio graph legitimately contains parallel
-platform API generations.
+dependencies. The vendored parser's build-only CC0 dependency and Unicode name
+data license are exact-package exceptions with recorded reasons. Unknown
+registries, unknown Git sources, wildcard dependency requirements, unlicensed
+workspace packages, and licenses outside that list fail the gate. Duplicate
+transitive versions remain reported as warnings because the cross-platform
+GUI/audio graph legitimately contains parallel platform API generations.
+
+`rustpython-parser 0.4.0` is pinned as an audited source snapshot under
+`third_party/rustpython-parser`. Its public parser and AST API remain unchanged;
+the local patch only replaces the abandoned `unic-* 0.9.0` identifier and emoji
+tables with `unicode-ident` and ICU4X. Provenance, the upstream checksum,
+license, and the exact patch surface are recorded in the vendored directory's
+`PATCHES.md`. This removes the unmaintained packages from `Cargo.lock` instead
+of suppressing their RustSec advisories.
+
+The 1,000-line ratchet applies to first-party Rust. Audited upstream snapshots
+under `third_party/` retain their upstream/generated file layout and are
+excluded explicitly; the executable policy fixture proves that an equally
+large file anywhere in first-party source still fails.
 
 ## Executable policy test
 

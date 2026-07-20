@@ -1,0 +1,5 @@
+---
+source: compiler/parser/src/parser.rs
+expression: parse_ast
+---
+[]

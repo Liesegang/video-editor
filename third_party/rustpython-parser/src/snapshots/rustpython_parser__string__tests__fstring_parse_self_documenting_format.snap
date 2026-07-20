@@ -1,0 +1,57 @@
+---
+source: parser/src/string.rs
+expression: parse_ast
+---
+[
+    Constant(
+        ExprConstant {
+            range: 0..14,
+            value: Str(
+                "user=",
+            ),
+            kind: None,
+        },
+    ),
+    Constant(
+        ExprConstant {
+            range: 0..14,
+            value: Str(
+                "",
+            ),
+            kind: None,
+        },
+    ),
+    FormattedValue(
+        ExprFormattedValue {
+            range: 0..14,
+            value: Name(
+                ExprName {
+                    range: 3..7,
+                    id: Identifier(
+                        "user",
+                    ),
+                    ctx: Load,
+                },
+            ),
+            conversion: None,
+            format_spec: Some(
+                JoinedStr(
+                    ExprJoinedStr {
+                        range: 0..14,
+                        values: [
+                            Constant(
+                                ExprConstant {
+                                    range: 0..14,
+                                    value: Str(
+                                        ">10",
+                                    ),
+                                    kind: None,
+                                },
+                            ),
+                        ],
+                    },
+                ),
+            ),
+        },
+    ),
+]

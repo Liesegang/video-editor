@@ -1,0 +1,72 @@
+---
+source: parser/src/function.rs
+expression: parse_ast
+---
+Ok(
+    [
+        FunctionDef(
+            StmtFunctionDef {
+                range: 0..23,
+                name: Identifier(
+                    "f",
+                ),
+                args: Arguments {
+                    range: 6..16,
+                    posonlyargs: [],
+                    args: [],
+                    vararg: None,
+                    kwonlyargs: [
+                        ArgWithDefault {
+                            range: 9..10,
+                            def: Arg {
+                                range: 9..10,
+                                arg: Identifier(
+                                    "a",
+                                ),
+                                annotation: None,
+                                type_comment: None,
+                            },
+                            default: None,
+                        },
+                        ArgWithDefault {
+                            range: 12..13,
+                            def: Arg {
+                                range: 12..13,
+                                arg: Identifier(
+                                    "b",
+                                ),
+                                annotation: None,
+                                type_comment: None,
+                            },
+                            default: None,
+                        },
+                        ArgWithDefault {
+                            range: 15..16,
+                            def: Arg {
+                                range: 15..16,
+                                arg: Identifier(
+                                    "c",
+                                ),
+                                annotation: None,
+                                type_comment: None,
+                            },
+                            default: None,
+                        },
+                    ],
+                    kwarg: None,
+                },
+                body: [
+                    Pass(
+                        StmtPass {
+                            range: 19..23,
+                        },
+                    ),
+                ],
+                decorator_list: [],
+                returns: None,
+                type_comment: None,
+                type_params: [],
+            },
+        ),
+    ],
+)
