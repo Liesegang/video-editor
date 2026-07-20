@@ -33,8 +33,8 @@ pub struct SkslPropertyConfig {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum ValueWrapper {
-    Float(f64),
     Int(i64),
+    Float(f64),
     Bool(bool),
     String(String),
     Vec2([f64; 2]),
@@ -354,8 +354,22 @@ impl EffectPlugin for SkslEffectPlugin {
                 };
 
                 let default_value = match &p.default {
-                    Some(ValueWrapper::Float(f)) => PropertyValue::Number(OrderedFloat(*f)),
-                    Some(ValueWrapper::Int(i)) => PropertyValue::Integer(*i),
+                    Some(ValueWrapper::Float(value))
+                        if matches!(ui_type, PropertyUiType::Integer { .. })
+                            && value.is_finite()
+                            && value.fract() == 0.0
+                            && *value >= i64::MIN as f64
+                            && *value <= i64::MAX as f64 =>
+                    {
+                        PropertyValue::Integer(*value as i64)
+                    }
+                    Some(ValueWrapper::Float(value)) => PropertyValue::Number(OrderedFloat(*value)),
+                    Some(ValueWrapper::Int(value))
+                        if matches!(ui_type, PropertyUiType::Float { .. }) =>
+                    {
+                        PropertyValue::Number(OrderedFloat(*value as f64))
+                    }
+                    Some(ValueWrapper::Int(value)) => PropertyValue::Integer(*value),
                     Some(ValueWrapper::Bool(b)) => PropertyValue::Boolean(*b),
                     Some(ValueWrapper::String(s)) => PropertyValue::String(s.clone()),
                     Some(ValueWrapper::Vec2(v)) => {
@@ -397,7 +411,44 @@ impl EffectPlugin for SkslEffectPlugin {
                             })
                         }
                     }
-                    None => PropertyValue::Number(OrderedFloat(0.0)), // Safe default
+                    None => match &ui_type {
+                        PropertyUiType::Float { .. } => PropertyValue::Number(OrderedFloat(0.0)),
+                        PropertyUiType::Integer { .. } => PropertyValue::Integer(0),
+                        PropertyUiType::Bool => PropertyValue::Boolean(false),
+                        PropertyUiType::Color => {
+                            PropertyValue::Color(crate::model::frame::color::Color {
+                                r: 0,
+                                g: 0,
+                                b: 0,
+                                a: 255,
+                            })
+                        }
+                        PropertyUiType::Vec2 { .. } => {
+                            PropertyValue::Vec2(crate::model::property::Vec2 {
+                                x: OrderedFloat(0.0),
+                                y: OrderedFloat(0.0),
+                            })
+                        }
+                        PropertyUiType::Vec3 { .. } => {
+                            PropertyValue::Vec3(crate::model::property::Vec3 {
+                                x: OrderedFloat(0.0),
+                                y: OrderedFloat(0.0),
+                                z: OrderedFloat(0.0),
+                            })
+                        }
+                        PropertyUiType::Vec4 { .. } => {
+                            PropertyValue::Vec4(crate::model::property::Vec4 {
+                                x: OrderedFloat(0.0),
+                                y: OrderedFloat(0.0),
+                                z: OrderedFloat(0.0),
+                                w: OrderedFloat(0.0),
+                            })
+                        }
+                        PropertyUiType::Text
+                        | PropertyUiType::MultilineText
+                        | PropertyUiType::Font
+                        | PropertyUiType::Dropdown { .. } => PropertyValue::String(String::new()),
+                    },
                 };
 
                 PropertyDefinition::new(&p.name, ui_type, &p.label, default_value)
