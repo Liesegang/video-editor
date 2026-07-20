@@ -15,5 +15,10 @@ mod value;
 pub use diagnostic::{
     ExpressionDiagnostic, ExpressionDiagnosticKind, ExpressionPhase, ExpressionSourceSpan,
 };
-pub use engine::{CompiledExpression, ExpressionCacheStats, ExpressionEngine, ExpressionLimits};
-pub use value::{ExpressionEvaluationContext, ExpressionOutputType, ExpressionValue};
+pub(crate) use engine::ExpressionEngine;
+#[cfg(test)]
+pub(crate) use engine::ExpressionLimits;
+pub(crate) use value::{ExpressionEvaluationContext, ExpressionOutputType, ExpressionValue};
+
+#[cfg(test)]
+mod tests;
