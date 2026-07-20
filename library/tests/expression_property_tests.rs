@@ -30,9 +30,7 @@ fn expression_property_persists_source_and_typed_fallback_without_cache_state() 
     assert_eq!(property.evaluator, "expression");
     assert_eq!(property.expression_text(), Some("value + vec2(time, 0)"));
     assert_eq!(property.value(), Some(&fallback));
-    assert!(fallback.is_compatible_with(&PropertyUiType::Vec2 {
-        suffix: "px".to_string(),
-    }));
+    assert!(fallback.is_compatible_with(&PropertyUiType::vec2("px")));
 
     let encoded = serde_json::to_string(&property)?;
     assert!(!encoded.contains("cache"));
