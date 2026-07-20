@@ -6,27 +6,27 @@ pub const SEARCHABLE_POPUP_VIEWPORT_MARGIN: f32 = 8.0;
 
 /// Screen-space placement shared by searchable popup callers.
 ///
-/// `position` is the popup's top-left corner and `max_height` is the usable
-/// popup height after clamping the desired content to the viewport. Callers
-/// should apply both values: using only the height can still leave a popup
-/// clipped against the bottom edge.
+/// `area_anchor` and `pivot` keep the popup attached to the requested pointer
+/// edge while `max_height` bounds its usable height inside the viewport.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SearchablePopupPlacement {
-    pub position: Pos2,
+    pub area_anchor: Pos2,
+    pub pivot: egui::Align2,
     pub width: f32,
     pub max_height: f32,
     pub opens_upward: bool,
+    pub clamped: bool,
 }
 
 /// Place a popup at `desired_anchor`, preferring the space below the anchor
-/// unless the requested content would be clipped and more room is available
+/// unless the requested root size would be clipped and more room is available
 /// above. The result is inset from the viewport edges and horizontally
-/// clamped, so it is suitable for `egui::Area::fixed_pos` plus a matching
-/// `Ui::set_max_height`.
+/// clamped. Apply its `pivot` and `area_anchor` to `egui::Area`, then render the
+/// contents with [`show_searchable_popup_frame`].
 #[must_use]
 pub fn searchable_popup_placement(
     desired_anchor: Pos2,
-    desired_content_size: Vec2,
+    desired_popup_size: Vec2,
     viewport: Rect,
 ) -> SearchablePopupPlacement {
     let margin = SEARCHABLE_POPUP_VIEWPORT_MARGIN;
@@ -35,12 +35,12 @@ pub fn searchable_popup_placement(
     let top = viewport.top() + margin;
     let bottom = (viewport.bottom() - margin).max(top);
     let available_width = (right - left).max(0.0);
-    let width = finite_non_negative(desired_content_size.x).min(available_width);
+    let width = finite_non_negative(desired_popup_size.x).min(available_width);
     let anchor_x = finite_or(desired_anchor.x, left).clamp(left, right);
     let anchor_y = finite_or(desired_anchor.y, top).clamp(top, bottom);
     let space_above = (anchor_y - top).max(0.0);
     let space_below = (bottom - anchor_y).max(0.0);
-    let desired_height = finite_non_negative(desired_content_size.y);
+    let desired_height = finite_non_negative(desired_popup_size.y);
     let opens_upward = desired_height > space_below && space_above > space_below;
     let max_height = desired_height.min(if opens_upward {
         space_above
@@ -48,18 +48,36 @@ pub fn searchable_popup_placement(
         space_below
     });
     let x = anchor_x.clamp(left, (right - width).max(left));
-    let y = if opens_upward {
-        anchor_y - max_height
-    } else {
-        anchor_y
-    };
+    let clamped =
+        !desired_anchor.is_finite() || x != desired_anchor.x || anchor_y != desired_anchor.y;
 
     SearchablePopupPlacement {
-        position: Pos2::new(x, y),
+        area_anchor: Pos2::new(x, anchor_y),
+        pivot: if opens_upward {
+            egui::Align2::LEFT_BOTTOM
+        } else {
+            egui::Align2::LEFT_TOP
+        },
         width,
         max_height,
         opens_upward,
+        clamped,
     }
+}
+
+/// Render a menu frame whose outer root respects the placement bounds.
+pub fn show_searchable_popup_frame<R>(
+    ui: &mut Ui,
+    placement: SearchablePopupPlacement,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> egui::InnerResponse<R> {
+    let frame = egui::Frame::menu(ui.style());
+    let margin = frame.total_margin().sum();
+    frame.show(ui, |ui| {
+        ui.set_width((placement.width - margin.x).max(0.0));
+        ui.set_max_height((placement.max_height - margin.y).max(0.0));
+        add_contents(ui)
+    })
 }
 
 fn finite_non_negative(value: f32) -> f32 {
@@ -155,44 +173,57 @@ struct CategoryNode {
     children: BTreeMap<String, CategoryNode>,
 }
 
-#[derive(Clone, Debug, Default)]
-struct SearchablePopupRects(Vec<Rect>);
-
-/// Return whether the current pointer click is outside both the caller-owned
-/// popup frame and every native category submenu rendered by this widget.
-///
-/// `id_source` must match the value passed to
-/// [`show_searchable_items_with_qa`]. Tracking exact submenu rectangles avoids
-/// treating an unrelated egui popup as part of this searchable menu.
+/// Return whether the current pointer click is outside the caller-owned popup.
+/// Inline category accordions remain inside this rectangle at every depth.
 #[must_use]
 pub fn searchable_menu_click_is_outside(
     ctx: &egui::Context,
-    id_source: &str,
+    _id_source: &str,
     root_rect: Rect,
 ) -> bool {
-    let popup_rects = ctx.data(|data| {
-        data.get_temp::<SearchablePopupRects>(searchable_popup_rects_id(id_source))
-            .unwrap_or_default()
-    });
     ctx.input(|input| input.pointer.interact_pos())
-        .is_some_and(|pointer| point_is_outside_searchable_menu(pointer, root_rect, &popup_rects.0))
+        .is_some_and(|pointer| !root_rect.contains(pointer))
 }
 
-fn searchable_popup_rects_id(id_source: &str) -> egui::Id {
-    egui::Id::new(("searchable_menu_popup_rects", id_source))
-}
-
-fn point_is_outside_searchable_menu(pointer: Pos2, root_rect: Rect, popup_rects: &[Rect]) -> bool {
-    !root_rect.contains(pointer) && popup_rects.iter().all(|rect| !rect.contains(pointer))
-}
-
-fn store_searchable_popup_rects(ctx: &egui::Context, id_source: &str, rects: Vec<Rect>) {
-    ctx.data_mut(|data| {
-        data.insert_temp(
-            searchable_popup_rects_id(id_source),
-            SearchablePopupRects(rects),
-        );
-    });
+/// Register a searchable popup's requested anchor and real root geometry.
+pub fn register_searchable_popup_qa(
+    qa_id: &str,
+    requested_anchor: Pos2,
+    placement: SearchablePopupPlacement,
+    actual_root_rect: Rect,
+) {
+    let actual = actual_root_rect.min;
+    let anchored_y = if placement.opens_upward {
+        actual_root_rect.bottom()
+    } else {
+        actual_root_rect.top()
+    };
+    crate::qa::register_component_with_metadata(
+        qa_id,
+        "searchable_context_menu",
+        actual_root_rect,
+        true,
+        Some(serde_json::json!({
+            "requested_anchor": {"x": requested_anchor.x, "y": requested_anchor.y},
+            "placement_anchor": {"x": placement.area_anchor.x, "y": placement.area_anchor.y},
+            "pivot": if placement.opens_upward { "left_bottom" } else { "left_top" },
+            "actual_root_rect": {
+                "min_x": actual_root_rect.min.x,
+                "min_y": actual_root_rect.min.y,
+                "max_x": actual_root_rect.max.x,
+                "max_y": actual_root_rect.max.y,
+                "width": actual_root_rect.width(),
+                "height": actual_root_rect.height(),
+            },
+            "offset": {"x": actual.x - requested_anchor.x, "y": actual.y - requested_anchor.y},
+            "anchor_edge_offset": {
+                "x": actual_root_rect.left() - requested_anchor.x,
+                "y": anchored_y - requested_anchor.y,
+            },
+            "clamped": placement.clamped,
+            "opens_upward": placement.opens_upward,
+        })),
+    );
 }
 
 /// Return the indices whose label or keyword matches every whitespace-separated
@@ -292,7 +323,6 @@ pub fn show_searchable_items_with_qa<T: Clone>(
     }
 
     if ui.input(|input| input.key_pressed(Key::Escape)) {
-        store_searchable_popup_rects(ui.ctx(), id_source, Vec::new());
         ui.data_mut(|data| data.insert_temp(id, MenuState::default()));
         ui.close();
         return None;
@@ -347,7 +377,6 @@ pub fn show_searchable_items_with_qa<T: Clone>(
     };
 
     let mut clicked_selection = None;
-    let mut popup_rects = Vec::new();
     let scroll_to = state.take_scroll_request();
 
     let results_height = DEFAULT_SEARCHABLE_RESULTS_MAX_HEIGHT.min(ui.available_height().max(0.0));
@@ -360,12 +389,12 @@ pub fn show_searchable_items_with_qa<T: Clone>(
             }
             MenuContents::Categories(root) => render_category_node(
                 ui,
+                id_source,
                 root,
                 &[],
                 items,
                 qa_search_id,
                 &mut clicked_selection,
-                &mut popup_rects,
             ),
             MenuContents::FlatSearch(displayed) if displayed.is_empty() => {
                 ui.label("No results");
@@ -384,7 +413,6 @@ pub fn show_searchable_items_with_qa<T: Clone>(
                 }
             }
         });
-    store_searchable_popup_rects(ui.ctx(), id_source, popup_rects);
 
     let selection = clicked_selection.or(keyboard_selection).and_then(|index| {
         items
@@ -448,42 +476,41 @@ fn normalized_category_path(category: Option<&str>) -> Vec<String> {
 
 fn render_category_node<T>(
     ui: &mut Ui,
+    id_source: &str,
     node: &CategoryNode,
     path: &[String],
     items: &[SearchableItem<T>],
     qa_search_id: Option<&str>,
     clicked_selection: &mut Option<usize>,
-    popup_rects: &mut Vec<Rect>,
 ) {
     for (label, child) in &node.children {
         let mut child_path = path.to_vec();
         child_path.push(label.clone());
-        let mut popup_rect = None;
-        let menu = ui.menu_button(label, |ui| {
-            render_category_node(
-                ui,
-                child,
-                &child_path,
-                items,
-                qa_search_id,
-                clicked_selection,
-                popup_rects,
-            );
-            popup_rect = Some(ui.min_rect());
-        });
-        popup_rects.extend(popup_rect.filter(|rect| rect.is_finite() && rect.is_positive()));
-        if menu.response.rect.is_finite() && menu.response.rect.is_positive() {
-            popup_rects.push(menu.response.rect);
-        }
+        let accordion = egui::CollapsingHeader::new(label)
+            .id_salt(("searchable_menu_category", id_source, child_path.join("/")))
+            .default_open(false)
+            .show(ui, |ui| {
+                render_category_node(
+                    ui,
+                    id_source,
+                    child,
+                    &child_path,
+                    items,
+                    qa_search_id,
+                    clicked_selection,
+                );
+            });
         if let Some(qa_search_id) = qa_search_id {
             crate::qa::register_component_with_metadata(
                 format!("{qa_search_id}.category:{}", child_path.join("/")),
                 "searchable_menu_category",
-                menu.response.rect,
-                menu.response.enabled(),
+                accordion.header_response.rect,
+                accordion.header_response.enabled(),
                 Some(serde_json::json!({
-                    "action": "enter_category",
+                    "action": "toggle_category",
                     "category_path": child_path,
+                    "inline": true,
+                    "open": accordion.body_response.is_some(),
                 })),
             );
         }
@@ -495,7 +522,6 @@ fn render_category_node<T>(
     for index in node.items.iter().copied() {
         if render_item_button(ui, index, items, false, false) {
             *clicked_selection = Some(index);
-            ui.close_kind(egui::UiKind::Menu);
         }
     }
 }
@@ -606,10 +632,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_query_builds_sorted_recursive_category_submenus() {
+    fn empty_query_builds_sorted_recursive_category_accordions() {
         let items = fixture();
         let MenuContents::Categories(root) = menu_contents(&items, "") else {
-            panic!("an empty query must browse native category submenus")
+            panic!("an empty query must browse inline category accordions")
         };
 
         assert_eq!(root.items, vec![3]);
@@ -643,25 +669,11 @@ mod tests {
     }
 
     #[test]
-    fn outside_click_geometry_includes_native_submenu_rects_only() {
+    fn outside_click_geometry_uses_the_inline_root_rect() {
         let root = Rect::from_min_max(Pos2::new(1_300.0, 502.0), Pos2::new(1_620.0, 664.0));
-        let submenu = Rect::from_min_max(Pos2::new(1_392.0, 649.0), Pos2::new(1_441.0, 751.0));
-
-        assert!(!point_is_outside_searchable_menu(
-            Pos2::new(1_325.0, 633.0),
-            root,
-            &[submenu],
-        ));
-        assert!(!point_is_outside_searchable_menu(
-            Pos2::new(1_416.0, 742.0),
-            root,
-            &[submenu],
-        ));
-        assert!(point_is_outside_searchable_menu(
-            Pos2::new(1_000.0, 820.0),
-            root,
-            &[submenu],
-        ));
+        assert!(root.contains(Pos2::new(1_325.0, 633.0)));
+        assert!(!root.contains(Pos2::new(1_416.0, 742.0)));
+        assert!(!root.contains(Pos2::new(1_000.0, 820.0)));
     }
 
     #[test]
@@ -784,11 +796,14 @@ mod tests {
             searchable_popup_placement(Pos2::new(780.0, 580.0), Vec2::new(300.0, 320.0), viewport);
 
         assert!(placement.opens_upward);
-        assert_eq!(placement.position, Pos2::new(492.0, 260.0));
+        assert!(placement.clamped);
+        assert_eq!(placement.area_anchor, Pos2::new(492.0, 580.0));
+        assert_eq!(placement.pivot, egui::Align2::LEFT_BOTTOM);
         let size = Vec2::new(placement.width, placement.max_height);
+        let maximum_rect = Rect::from_min_size(placement.area_anchor - Vec2::Y * size.y, size);
         assert_eq!(size, Vec2::new(300.0, 320.0));
-        assert!(viewport.contains(placement.position));
-        assert!(viewport.contains(placement.position + size));
+        assert!(viewport.contains(maximum_rect.min));
+        assert!(viewport.contains(maximum_rect.max));
     }
 
     #[test]
@@ -801,7 +816,19 @@ mod tests {
         );
 
         assert!(placement.opens_upward);
-        assert_eq!(placement.position.y, 8.0);
+        assert_eq!(placement.area_anchor.y - placement.max_height, 8.0);
         assert_eq!(placement.max_height, 492.0);
+    }
+
+    #[test]
+    fn popup_keeps_an_unclamped_requested_anchor() {
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(1_200.0, 800.0));
+        let anchor = Pos2::new(240.0, 180.0);
+        let placement = searchable_popup_placement(anchor, Vec2::new(320.0, 348.0), viewport);
+
+        assert_eq!(placement.area_anchor, anchor);
+        assert_eq!(placement.pivot, egui::Align2::LEFT_TOP);
+        assert!(!placement.opens_upward);
+        assert!(!placement.clamped);
     }
 }

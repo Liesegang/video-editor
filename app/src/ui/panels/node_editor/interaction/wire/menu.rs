@@ -1,6 +1,7 @@
 use crate::state::context_types::{NodeEditorEditableWire, NodeEditorState};
 use crate::ui::widgets::searchable_context_menu::{
     searchable_menu_click_is_outside, searchable_popup_placement, show_searchable_items_with_qa,
+    show_searchable_popup_frame,
 };
 use eframe::egui;
 use library::model::project::PortOwner;
@@ -55,11 +56,11 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
     let mut should_close = false;
     let response = egui::Area::new(egui::Id::new(("node_wire_context_menu", connection_id)))
         .order(egui::Order::Foreground)
-        .fixed_pos(popup.position)
+        .pivot(popup.pivot)
+        .fixed_pos(popup.area_anchor)
+        .constrain(false)
         .show(ui.ctx(), |ui| {
-            egui::Frame::menu(ui.style()).show(ui, |ui| {
-                ui.set_width(popup.width);
-                ui.set_max_height(popup.max_height);
+            show_searchable_popup_frame(ui, popup, |ui| {
                 if context.inserting {
                     let items = wire_splice_menu_items(project, connection_id, plugin_manager);
                     if items.is_empty() {
