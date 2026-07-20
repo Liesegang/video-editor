@@ -272,6 +272,12 @@ enum RenderedEdgeKind {
     DerivedOutput { owner: PortOwner, source: PortOwner },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WireSecondaryClickHit {
+    Editable(NodeEditorEditableWire),
+    DisplayOnly,
+}
+
 impl RenderedEdgeKind {
     fn metadata_kind(self) -> &'static str {
         match self {
@@ -2948,6 +2954,18 @@ fn rendered_edge_at_position(
         .map(|(edge, _, _)| edge)
 }
 
+fn wire_secondary_click_hit(
+    edges: &[RenderedEdge],
+    position: egui::Pos2,
+) -> Option<WireSecondaryClickHit> {
+    rendered_edge_at_position(edges, position).map(|edge| {
+        edge.kind.editable_wire().map_or(
+            WireSecondaryClickHit::DisplayOnly,
+            WireSecondaryClickHit::Editable,
+        )
+    })
+}
+
 fn editable_wire_sort_key(target: NodeEditorEditableWire) -> (u8, u8, Uuid, Uuid) {
     match target {
         NodeEditorEditableWire::ProjectConnection { connection_id } => {
@@ -4113,11 +4131,22 @@ pub fn node_editor_panel(
                     .any(|rect| rect.contains(graph_position));
                 if over_graph_item {
                     wire_context_request = None;
-                } else if let Some(edge) = rendered_edge_at_position(&rendered_edges, position) {
-                    if let Some(target) = edge.kind.editable_wire() {
-                        suppress_wire_secondary_click = true;
-                        if wire_context_request.is_none() {
-                            wire_context_request = Some(target);
+                } else if let Some(hit) = wire_secondary_click_hit(&rendered_edges, position) {
+                    // Every rendered wire owns its secondary-click hit area.
+                    // Authored wires open commands below; containment-derived
+                    // wires are display-only and must not leak the same click
+                    // through to the blank-canvas Add menu.
+                    suppress_wire_secondary_click = true;
+                    match hit {
+                        WireSecondaryClickHit::Editable(target) => {
+                            if wire_context_request.is_none() {
+                                wire_context_request = Some(target);
+                            }
+                        }
+                        WireSecondaryClickHit::DisplayOnly => {
+                            wire_context_request = None;
+                            node_editor_state.wire_context_menu = None;
+                            *context_menu_state = None;
                         }
                     }
                 }
@@ -11161,6 +11190,31 @@ mod tests {
             GraphItem::Node(solid_id),
             0.5
         ));
+    }
+
+    #[test]
+    fn derived_wire_secondary_hit_is_display_only_instead_of_blank_canvas() {
+        let derived = RenderedEdge {
+            kind: RenderedEdgeKind::DerivedOutput {
+                owner: PortOwner::Track(Uuid::from_u128(0xD001)),
+                source: PortOwner::Clip(Uuid::from_u128(0xD002)),
+            },
+            start: egui::pos2(100.0, 180.0),
+            control_a: egui::pos2(180.0, 180.0),
+            control_b: egui::pos2(320.0, 180.0),
+            end: egui::pos2(400.0, 180.0),
+        };
+        let hit_point = egui::pos2(250.0, 180.0);
+
+        assert_eq!(
+            wire_secondary_click_hit(&[derived], hit_point),
+            Some(WireSecondaryClickHit::DisplayOnly)
+        );
+        assert_eq!(
+            wire_secondary_click_hit(&[], hit_point),
+            None,
+            "blank canvas must remain distinguishable from a display-only wire"
+        );
     }
 
     #[test]
