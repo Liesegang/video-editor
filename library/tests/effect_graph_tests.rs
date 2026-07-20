@@ -42,8 +42,11 @@ fn output_port(key: &str, data_type: PortDataType) -> PortDefinition {
 }
 
 fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
-    node.set_property(key.to_string(), Property::constant(value))
-        .expect("operation descriptor initializes the test property");
+    assert!(
+        node.set_property(key.to_string(), Property::constant(value))
+            .is_ok(),
+        "operation descriptor must initialize {key}"
+    );
 }
 
 fn vec2(x: f64, y: f64) -> PropertyValue {
