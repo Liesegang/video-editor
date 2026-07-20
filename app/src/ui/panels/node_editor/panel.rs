@@ -13,18 +13,19 @@ use uuid::Uuid;
 
 use super::{
     apply_auto_layout, apply_edit, apply_layout_edit, apply_queued_node_edits, build_snarl,
-    captured_snarl_drag_node, collect_layout_edits, compute_auto_layout,
-    compute_full_composition_layout, container_inactive, container_resize_interactions,
-    final_node_positions, finish_node_reparent, flush_pending_continuous_edit, handle_context_menu,
-    layout_needs_reflow, node_can_splice_connection, node_drop_intents,
-    node_editor_canvas_metadata, node_editor_details_visible, node_editor_snarl_style,
-    node_selection_after_snarl_click, non_selectable_label, paint_container_foreground,
-    port_owner_composition, port_owner_for_node_container, primary_node_drop_intent,
-    push_history_snapshot, record_node_reparent_origins, register_container_chrome,
-    register_rendered_edges, register_reparent_drop_targets, rendered_edge_at_position,
-    show_wire_context_menu, splice_node_for_release, wire_interactions, wire_secondary_click_hit,
-    AutoLayoutScope, GraphItem, NodeContextMenuFrame, NodeEdit, OverviewWirePainter,
-    ProjectNodeViewer, ReparentReleaseOutcome, WireInteractionFrame, WireSecondaryClickHit,
+    capture_container_resize_before_canvas, captured_snarl_drag_node, collect_layout_edits,
+    compute_auto_layout, compute_full_composition_layout, container_inactive,
+    container_resize_interactions, final_node_positions, finish_node_reparent,
+    flush_pending_continuous_edit, handle_context_menu, layout_needs_reflow,
+    node_can_splice_connection, node_drop_intents, node_editor_canvas_metadata,
+    node_editor_details_visible, node_editor_snarl_style, node_selection_after_snarl_click,
+    non_selectable_label, paint_container_foreground, port_owner_composition,
+    port_owner_for_node_container, primary_node_drop_intent, push_history_snapshot,
+    record_node_reparent_origins, register_container_chrome, register_rendered_edges,
+    register_reparent_drop_targets, rendered_edge_at_position, show_wire_context_menu,
+    splice_node_for_release, wire_interactions, wire_secondary_click_hit, AutoLayoutScope,
+    GraphItem, NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer,
+    ReparentReleaseOutcome, WireInteractionFrame, WireSecondaryClickHit,
 };
 
 pub fn node_editor_panel(
@@ -168,6 +169,16 @@ pub fn node_editor_panel(
         let (built_snarl, containers) = build_snarl(&project, comp_id);
         snarl = built_snarl;
 
+        if let Some(previous_transform) = node_editor_state.node_editor_canvas_transform {
+            capture_container_resize_before_canvas(
+                ui,
+                &containers,
+                previous_transform,
+                canvas_rect,
+                node_editor_state,
+            );
+        }
+
         let mut viewer = ProjectNodeViewer {
             project: &project,
             plugin_manager: Some(plugin_manager.as_ref()),
@@ -182,9 +193,15 @@ pub fn node_editor_panel(
                 || node_editor_state.normal_connect_gesture.is_some()
                 || node_editor_state.normal_connect_cancel_pending_release,
             locked_canvas_transform: node_editor_state
-                .normal_connect_gesture
+                .container_resize
                 .as_ref()
-                .map(|gesture| gesture.canvas_transform)
+                .map(|resize| resize.canvas_transform)
+                .or_else(|| {
+                    node_editor_state
+                        .normal_connect_gesture
+                        .as_ref()
+                        .map(|gesture| gesture.canvas_transform)
+                })
                 .or_else(|| {
                     node_editor_state
                         .wire_knife
@@ -200,6 +217,7 @@ pub fn node_editor_panel(
         let graph_id = egui::Id::new(("project_node_editor", comp_id));
         snarl.show(&mut viewer, &snarl_style, graph_id, ui);
         drop(viewer);
+        node_editor_state.node_editor_canvas_transform = Some(to_global);
         // The early registration makes the canvas discoverable even if graph
         // construction exits before Snarl renders. Replace it in the same
         // frame with the transform observed by Snarl's `final_transform`

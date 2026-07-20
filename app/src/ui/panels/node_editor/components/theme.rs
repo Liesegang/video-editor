@@ -1,13 +1,15 @@
 use eframe::egui::{self, Color32};
+use egui_phosphor::regular as icons;
 use egui_snarl::ui::{PinInfo, WireStyle};
 use library::model::project::{PortDataType, PortDirection, PortOwner, PortSide};
-use library::model::{GeneratorContent, Node, NodeContent, Project};
+use library::model::{AssetKind, GeneratorContent, Node, NodeContent, Project, ValueContent};
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{
     canonical_pin_definitions, node_editor_details_visible, screen_stroke_in_graph_units,
     ContainerKind, ContainerVisual, CONTAINER_HEADER_HEIGHT, CONTAINER_PORT_Y,
-    EMBEDDED_PORT_LABEL_INSET, PORT_ROW_HEIGHT,
+    CONTAINER_RIGHT_PORT_ROW_HEIGHT, CONTAINER_RIGHT_PORT_Y, EMBEDDED_PORT_LABEL_INSET,
+    PORT_ROW_HEIGHT,
 };
 
 #[derive(Clone, Copy)]
@@ -18,6 +20,21 @@ pub(in crate::ui::panels::node_editor) struct NodePalette {
 }
 
 pub(in crate::ui::panels::node_editor) const VALUE_NODE_CATEGORY_LABEL: &str = "Value";
+
+/// One semantic glyph from the bundled Phosphor font plus its plain-language
+/// meaning. Keeping both together prevents visual chrome from falling back to
+/// arbitrary Unicode symbols and gives every glyph an accessible tooltip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::ui::panels::node_editor) struct NodeEditorIcon {
+    pub(in crate::ui::panels::node_editor) glyph: &'static str,
+    pub(in crate::ui::panels::node_editor) label: &'static str,
+}
+
+impl NodeEditorIcon {
+    const fn new(glyph: &'static str, label: &'static str) -> Self {
+        Self { glyph, label }
+    }
+}
 
 pub(in crate::ui::panels::node_editor) fn value_operation_label(
     value: library::model::ValueContent,
@@ -81,33 +98,59 @@ pub(in crate::ui::panels::node_editor) fn node_palette(
 pub(in crate::ui::panels::node_editor) fn node_icon(
     project: &Project,
     node_id: Uuid,
-) -> &'static str {
+) -> NodeEditorIcon {
     match project.get_node(node_id).map(Node::content) {
-        Some(NodeContent::Generator(GeneratorContent::Text)) => "T",
-        Some(NodeContent::Generator(GeneratorContent::Shape)) => "◇",
-        Some(NodeContent::Generator(GeneratorContent::Solid)) => "■",
-        Some(NodeContent::Generator(GeneratorContent::SkSL)) => "ƒ",
-        Some(NodeContent::Media(_)) => "▶",
-        Some(NodeContent::Reference(_)) => "↗",
+        Some(NodeContent::Generator(GeneratorContent::Text)) => {
+            NodeEditorIcon::new(icons::TEXT_T, "Text generator")
+        }
+        Some(NodeContent::Generator(GeneratorContent::Shape)) => {
+            NodeEditorIcon::new(icons::POLYGON, "Shape generator")
+        }
+        Some(NodeContent::Generator(GeneratorContent::Solid)) => {
+            NodeEditorIcon::new(icons::SQUARE, "Solid generator")
+        }
+        Some(NodeContent::Generator(GeneratorContent::SkSL)) => {
+            NodeEditorIcon::new(icons::FUNCTION, "SkSL generator")
+        }
+        Some(NodeContent::Media(media)) => {
+            match project.get_asset(media.asset_id).map(|asset| &asset.kind) {
+                Some(AssetKind::Video) => NodeEditorIcon::new(icons::FILE_VIDEO, "Video asset"),
+                Some(AssetKind::Audio) => NodeEditorIcon::new(icons::FILE_AUDIO, "Audio asset"),
+                Some(AssetKind::Image) => NodeEditorIcon::new(icons::FILE_IMAGE, "Image asset"),
+                Some(AssetKind::Model3D) => NodeEditorIcon::new(icons::CUBE, "3D asset"),
+                Some(AssetKind::Other) | None => NodeEditorIcon::new(icons::FILE, "Media asset"),
+            }
+        }
+        Some(NodeContent::Reference(_)) => {
+            NodeEditorIcon::new(icons::ARROW_SQUARE_OUT, "Reference")
+        }
         Some(NodeContent::PluginOperation(operation)) => match operation.category.as_str() {
-            "style" => "◐",
-            "effect" => "✦",
-            "effector" => "↯",
-            "decorator" => "⌁",
-            _ => "P",
+            "style" => NodeEditorIcon::new(icons::PALETTE, "Style operation"),
+            "effect" => NodeEditorIcon::new(icons::SPARKLE, "Effect operation"),
+            "effector" => NodeEditorIcon::new(icons::LIGHTNING, "Effector operation"),
+            "decorator" => NodeEditorIcon::new(icons::MAGIC_WAND, "Decorator operation"),
+            _ => NodeEditorIcon::new(icons::PLUG, "Plugin operation"),
         },
-        Some(NodeContent::Value(value)) => value.symbol(),
-        Some(NodeContent::Merge) => "⋈",
-        None => "?",
+        Some(NodeContent::Value(value)) => match value {
+            ValueContent::Fmod => NodeEditorIcon::new(icons::PERCENT, "Fmod value operation"),
+            ValueContent::Add => NodeEditorIcon::new(icons::PLUS, "Add value operation"),
+            ValueContent::Subtract => NodeEditorIcon::new(icons::MINUS, "Subtract value operation"),
+            ValueContent::Multiply => NodeEditorIcon::new(icons::X, "Multiply value operation"),
+            ValueContent::Divide => NodeEditorIcon::new(icons::DIVIDE, "Divide value operation"),
+        },
+        Some(NodeContent::Merge) => NodeEditorIcon::new(icons::ARROWS_MERGE, "Merge operation"),
+        None => NodeEditorIcon::new(icons::QUESTION, "Missing node"),
     }
 }
 
-pub(in crate::ui::panels::node_editor) fn container_icon(owner: PortOwner) -> &'static str {
+pub(in crate::ui::panels::node_editor) fn container_icon(owner: PortOwner) -> NodeEditorIcon {
     match owner {
-        PortOwner::Composition(_) => "◉",
-        PortOwner::Track(_) => "≡",
-        PortOwner::Clip(_) => "▱",
-        PortOwner::Node(_) => "●",
+        PortOwner::Composition(_) => {
+            NodeEditorIcon::new(icons::PROJECTOR_SCREEN, "Composition container")
+        }
+        PortOwner::Track(_) => NodeEditorIcon::new(icons::STACK, "Track container"),
+        PortOwner::Clip(_) => NodeEditorIcon::new(icons::FILM_STRIP, "Clip container"),
+        PortOwner::Node(_) => NodeEditorIcon::new(icons::CIRCLE, "Node"),
     }
 }
 
@@ -206,18 +249,6 @@ pub(in crate::ui::panels::node_editor) fn paint_container_foreground(
         ],
         egui::Stroke::new(1.0, stroke.color.gamma_multiply(0.82)),
     );
-    painter.text(
-        rect.right_top() + egui::vec2(-12.0, 10.0),
-        egui::Align2::RIGHT_TOP,
-        match container.kind {
-            ContainerKind::Composition => "COMPOSITION",
-            ContainerKind::Track => "TRACK",
-            ContainerKind::Clip => "CLIP",
-        },
-        egui::FontId::proportional(11.0),
-        Color32::from_white_alpha(155),
-    );
-
     if !container.collapsed {
         for (index, definition) in canonical_pin_definitions(
             project,
@@ -239,16 +270,28 @@ pub(in crate::ui::panels::node_editor) fn paint_container_foreground(
                 pin_color(definition.data_type).gamma_multiply(if inactive { 0.45 } else { 0.9 }),
             );
         }
-        painter.text(
-            egui::pos2(
-                rect.right() - EMBEDDED_PORT_LABEL_INSET,
-                rect.top() + CONTAINER_HEADER_HEIGHT * 0.5,
-            ),
-            egui::Align2::RIGHT_CENTER,
-            "IMAGE OUT",
-            egui::FontId::proportional(10.0),
-            pin_color(PortDataType::Image).gamma_multiply(if inactive { 0.45 } else { 0.9 }),
-        );
+        for (index, definition) in canonical_pin_definitions(
+            project,
+            container.owner,
+            PortDirection::Output,
+            PortSide::Right,
+        )
+        .iter()
+        .enumerate()
+        {
+            painter.text(
+                egui::pos2(
+                    rect.right() - 42.0,
+                    rect.top()
+                        + CONTAINER_RIGHT_PORT_Y
+                        + index as f32 * CONTAINER_RIGHT_PORT_ROW_HEIGHT,
+                ),
+                egui::Align2::RIGHT_CENTER,
+                definition.name.to_uppercase(),
+                egui::FontId::proportional(10.0),
+                pin_color(definition.data_type).gamma_multiply(if inactive { 0.45 } else { 0.9 }),
+            );
+        }
     }
 
     if let PortOwner::Clip(clip_id) = container.owner {
@@ -257,7 +300,7 @@ pub(in crate::ui::panels::node_editor) fn paint_container_foreground(
                 rect.right_top() + egui::vec2(-12.0, 35.0),
                 egui::Align2::RIGHT_TOP,
                 format!(
-                    "{:.2}s  ·  {:.2}s  ·  ×{:.2}",
+                    "{:.2}s  ·  {:.2}s  ·  x{:.2}",
                     clip.start_time.into_inner(),
                     clip.duration.into_inner(),
                     clip.time_stretch.into_inner()

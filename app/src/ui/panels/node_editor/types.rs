@@ -2,9 +2,16 @@ use eframe::egui;
 use library::model::project::{PortDataType, PortOwner};
 use uuid::Uuid;
 
-pub(super) const CONTAINER_HEADER_HEIGHT: f32 = 64.0;
-pub(super) const CONTAINER_CONTROL_OFFSET: egui::Vec2 = egui::vec2(14.0, 10.0);
-pub(super) const CONTAINER_PORT_Y: f32 = 86.0;
+pub(super) const CONTAINER_HEADER_HEIGHT: f32 = 48.0;
+pub(super) const CONTAINER_CONTROL_OFFSET: egui::Vec2 = egui::vec2(10.0, 6.0);
+/// First left-edge metadata socket. Additional sockets stack downward without
+/// reserving the same vertical strip across the full container width.
+pub(super) const CONTAINER_PORT_Y: f32 = 66.0;
+/// Right-edge container outputs live in the header and stack compactly. This
+/// keeps their hit regions away from the container's usable body.
+pub(super) const CONTAINER_RIGHT_PORT_Y: f32 = 12.0;
+pub(super) const CONTAINER_RIGHT_PORT_ROW_HEIGHT: f32 = 24.0;
+pub(super) const PORT_SOCKET_SIZE: f32 = 13.0;
 pub(super) const EMBEDDED_PORT_LABEL_INSET: f32 = 18.0;
 pub(super) const RESIZE_HIT_WIDTH: f32 = 7.0;
 pub(super) const RESIZE_CORNER_SIZE: f32 = 15.0;
@@ -38,25 +45,18 @@ pub(super) const AUTO_LAYOUT_NODE_PADDING: f32 = 24.0;
 pub(super) const DETACHED_GRAPH_NODE_GAP: f32 = AUTO_LAYOUT_NODE_PADDING + 0.5;
 pub(super) const AUTO_LAYOUT_CLIP_GAP: f32 = 64.0;
 pub(super) const AUTO_LAYOUT_TRACK_GAP: f32 = 80.0;
-pub(super) const CONTAINER_CONTROL_CHROME_HEIGHT: f32 = 54.0;
-pub(super) const CONTAINER_STANDARD_BODY_ROWS: f32 = 2.0;
-pub(super) const CONTAINER_CLIP_BODY_ROWS: f32 = 6.0;
-const fn reserved_control_top(body_rows: f32) -> f32 {
-    CONTAINER_CONTROL_OFFSET.y
-        + CONTAINER_CONTROL_CHROME_HEIGHT
-        + body_rows * PORT_ROW_HEIGHT
-        + AUTO_LAYOUT_NODE_PADDING
-}
-pub(super) const AUTO_LAYOUT_COMPOSITION_TOP: f32 =
-    reserved_control_top(CONTAINER_STANDARD_BODY_ROWS);
-pub(super) const AUTO_LAYOUT_COMPOSITION_LEFT: f32 = 190.0;
-pub(super) const AUTO_LAYOUT_COMPOSITION_RIGHT: f32 = 100.0;
-pub(super) const AUTO_LAYOUT_COMPOSITION_BOTTOM: f32 = 100.0;
-pub(super) const AUTO_LAYOUT_TRACK_TOP: f32 = reserved_control_top(CONTAINER_STANDARD_BODY_ROWS);
-pub(super) const AUTO_LAYOUT_CLIP_TOP: f32 = reserved_control_top(CONTAINER_CLIP_BODY_ROWS);
-pub(super) const AUTO_LAYOUT_TRACK_LEFT: f32 = 184.0;
-pub(super) const AUTO_LAYOUT_TRACK_RIGHT: f32 = 150.0;
-pub(super) const AUTO_LAYOUT_TRACK_BOTTOM: f32 = 70.0;
+/// Container content starts just below the compact header. Left-edge metadata
+/// labels get a narrow, fixed rail; their number no longer pushes the entire
+/// body down. The right rail is only wide enough for a localized socket hit.
+pub(super) const AUTO_LAYOUT_COMPOSITION_TOP: f32 = CONTAINER_HEADER_HEIGHT + 12.0;
+pub(super) const AUTO_LAYOUT_COMPOSITION_LEFT: f32 = 80.0;
+pub(super) const AUTO_LAYOUT_COMPOSITION_RIGHT: f32 = 24.0;
+pub(super) const AUTO_LAYOUT_COMPOSITION_BOTTOM: f32 = 24.0;
+pub(super) const AUTO_LAYOUT_TRACK_TOP: f32 = CONTAINER_HEADER_HEIGHT + 12.0;
+pub(super) const AUTO_LAYOUT_CLIP_TOP: f32 = CONTAINER_HEADER_HEIGHT + 12.0;
+pub(super) const AUTO_LAYOUT_TRACK_LEFT: f32 = 80.0;
+pub(super) const AUTO_LAYOUT_TRACK_RIGHT: f32 = 24.0;
+pub(super) const AUTO_LAYOUT_TRACK_BOTTOM: f32 = 24.0;
 
 /// Ephemeral Snarl payload. It contains identity and visual role only; all
 /// editable values continue to live in `Project`.
@@ -77,7 +77,7 @@ pub(super) enum PortAnchorKind {
     ExternalInputs,
     InternalMetadata,
     ImageSink,
-    ExternalImage,
+    ExternalOutputs,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +108,70 @@ impl ContainerVisual {
             egui::vec2(self.size[0].max(MIN_CONTAINER_SIZE.x), height),
         )
     }
+
+    pub(super) fn content_rect(&self) -> Option<egui::Rect> {
+        if self.collapsed {
+            return None;
+        }
+        let rect = self.rect();
+        let (left, top, right, bottom) = match self.kind {
+            ContainerKind::Composition => (
+                AUTO_LAYOUT_COMPOSITION_LEFT,
+                AUTO_LAYOUT_COMPOSITION_TOP,
+                AUTO_LAYOUT_COMPOSITION_RIGHT,
+                AUTO_LAYOUT_COMPOSITION_BOTTOM,
+            ),
+            ContainerKind::Track => (
+                AUTO_LAYOUT_TRACK_LEFT,
+                AUTO_LAYOUT_TRACK_TOP,
+                AUTO_LAYOUT_TRACK_RIGHT,
+                AUTO_LAYOUT_TRACK_BOTTOM,
+            ),
+            ContainerKind::Clip => (
+                AUTO_LAYOUT_TRACK_LEFT,
+                AUTO_LAYOUT_CLIP_TOP,
+                AUTO_LAYOUT_TRACK_RIGHT,
+                AUTO_LAYOUT_TRACK_BOTTOM,
+            ),
+        };
+        let content = egui::Rect::from_min_max(
+            rect.min + egui::vec2(left, top),
+            rect.max - egui::vec2(right, bottom),
+        );
+        content.is_positive().then_some(content)
+    }
+
+    pub(super) fn embedded_port_center(&self, kind: PortAnchorKind, index: usize) -> egui::Pos2 {
+        let rect = self.rect();
+        let left_row_y = if self.collapsed {
+            rect.top() + 11.0 + index as f32 * 9.0
+        } else {
+            rect.top() + CONTAINER_PORT_Y + index as f32 * PORT_ROW_HEIGHT
+        };
+        let right_row_y =
+            rect.top() + CONTAINER_RIGHT_PORT_Y + index as f32 * CONTAINER_RIGHT_PORT_ROW_HEIGHT;
+        match kind {
+            PortAnchorKind::ExternalInputs => egui::pos2(rect.left() - 7.0, left_row_y),
+            PortAnchorKind::InternalMetadata => egui::pos2(rect.left() + 7.0, left_row_y),
+            PortAnchorKind::ImageSink => egui::pos2(rect.right() - 32.0, right_row_y),
+            PortAnchorKind::ExternalOutputs => egui::pos2(rect.right(), right_row_y),
+        }
+    }
+
+    /// Unit-scale screen hit used by QA geometry tests. Runtime projection
+    /// applies canvas scale first and then the fixed screen-space drop radius.
+    #[cfg(test)]
+    pub(super) fn unit_scale_port_hit_rect(
+        &self,
+        kind: PortAnchorKind,
+        index: usize,
+    ) -> egui::Rect {
+        egui::Rect::from_center_size(
+            self.embedded_port_center(kind, index),
+            egui::Vec2::splat(PORT_SOCKET_SIZE),
+        )
+        .expand(WIRE_PORT_DROP_RADIUS)
+    }
 }
 
 #[derive(Clone)]
@@ -115,4 +179,74 @@ pub(super) struct PinDefinition {
     pub(super) key: String,
     pub(super) name: String,
     pub(super) data_type: PortDataType,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expanded_visual(kind: ContainerKind) -> ContainerVisual {
+        ContainerVisual {
+            owner: PortOwner::Composition(Uuid::nil()),
+            kind,
+            position: [100.0, 80.0],
+            size: [800.0, 500.0],
+            collapsed: false,
+        }
+    }
+
+    #[test]
+    fn container_content_reclaims_body_beside_localized_port_rails() {
+        for kind in [
+            ContainerKind::Composition,
+            ContainerKind::Track,
+            ContainerKind::Clip,
+        ] {
+            let visual = expanded_visual(kind);
+            let frame = visual.rect();
+            let content = visual.content_rect().expect("expanded content rect");
+            let area_ratio = content.width() * content.height() / (frame.width() * frame.height());
+
+            assert!(area_ratio > 0.65, "{kind:?} content ratio={area_ratio}");
+            assert_eq!(frame.right() - content.right(), 24.0);
+            assert!(content.contains(egui::pos2(frame.right() - 40.0, content.center().y,)));
+
+            for (anchor, index) in [
+                (PortAnchorKind::InternalMetadata, 0),
+                (PortAnchorKind::InternalMetadata, 5),
+                (PortAnchorKind::ImageSink, 0),
+                (PortAnchorKind::ExternalOutputs, 0),
+            ] {
+                let hit = visual.unit_scale_port_hit_rect(anchor, index);
+                assert_eq!(hit.size(), egui::Vec2::splat(23.0));
+                assert!(
+                    !hit.intersects(content),
+                    "{kind:?} {anchor:?} hit {hit:?} overlaps content {content:?}",
+                );
+            }
+            assert!(!visual
+                .unit_scale_port_hit_rect(PortAnchorKind::ImageSink, 0)
+                .intersects(visual.unit_scale_port_hit_rect(PortAnchorKind::ExternalOutputs, 0,)));
+        }
+    }
+
+    #[test]
+    fn stacked_external_outputs_have_disjoint_header_hits() {
+        let visual = expanded_visual(ContainerKind::Track);
+        let frame = visual.rect();
+        let image = visual.unit_scale_port_hit_rect(PortAnchorKind::ExternalOutputs, 0);
+        let audio = visual.unit_scale_port_hit_rect(PortAnchorKind::ExternalOutputs, 1);
+
+        assert!(!image.intersects(audio));
+        assert!(image.top() >= frame.top());
+        assert!(audio.bottom() <= frame.top() + CONTAINER_HEADER_HEIGHT);
+        assert_eq!(audio.center().y - image.center().y, 24.0);
+    }
+
+    #[test]
+    fn collapsed_container_has_no_node_placement_surface() {
+        let mut visual = expanded_visual(ContainerKind::Clip);
+        visual.collapsed = true;
+        assert!(visual.content_rect().is_none());
+    }
 }

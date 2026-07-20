@@ -5,7 +5,6 @@ use library::model::Project;
 
 use crate::ui::panels::node_editor::{
     input_definitions, output_definitions, ContainerVisual, GraphItem, NodeEdit, PortAnchorKind,
-    CONTAINER_HEADER_HEIGHT, CONTAINER_PORT_Y, PORT_ROW_HEIGHT,
 };
 
 pub(in crate::ui::panels::node_editor) fn edit_for_wire(
@@ -69,21 +68,5 @@ pub(in crate::ui::panels::node_editor) fn embedded_pin_center(
     let visual = containers
         .iter()
         .find(|container| container.owner == owner)?;
-    let rect = visual.rect();
-    let row_y = if visual.collapsed {
-        rect.top() + 11.0 + index as f32 * 9.0
-    } else {
-        rect.top() + CONTAINER_PORT_Y + index as f32 * PORT_ROW_HEIGHT
-    };
-    Some(match kind {
-        PortAnchorKind::ExternalInputs => egui::pos2(rect.left() - 7.0, row_y),
-        PortAnchorKind::InternalMetadata => egui::pos2(rect.left() + 7.0, row_y),
-        PortAnchorKind::ImageSink => egui::pos2(
-            rect.right() - 7.0,
-            rect.top() + CONTAINER_HEADER_HEIGHT * 0.5,
-        ),
-        PortAnchorKind::ExternalImage => {
-            egui::pos2(rect.right(), rect.top() + CONTAINER_HEADER_HEIGHT * 0.5)
-        }
-    })
+    Some(visual.embedded_port_center(kind, index))
 }

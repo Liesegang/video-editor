@@ -88,7 +88,7 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
                     let order_label = non_selectable_label(
                         ui,
                         format!(
-                            "Layer Order · Back→Front {} / {}",
+                            "Layer Order · Back to Front {} / {}",
                             order.back_to_front_index + 1,
                             order.layer_count
                         ),

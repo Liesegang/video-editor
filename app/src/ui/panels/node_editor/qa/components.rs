@@ -85,7 +85,7 @@ pub(in crate::ui::panels::node_editor) fn qa_port_id(
                 PortAnchorKind::ExternalInputs => "external_input",
                 PortAnchorKind::InternalMetadata => "internal_output",
                 PortAnchorKind::ImageSink => "image_sink",
-                PortAnchorKind::ExternalImage => "external_output",
+                PortAnchorKind::ExternalOutputs => "external_output",
             };
             format!(
                 "node_editor.container_port.{}.{role}:{port_key}",
