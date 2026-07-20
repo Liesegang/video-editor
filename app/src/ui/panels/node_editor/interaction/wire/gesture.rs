@@ -3,16 +3,20 @@ use crate::state::context_types::{
     NodeEditorWireDragKind, NodeEditorWireGesture, NodeEditorWireKnifeGesture,
 };
 use eframe::egui::{self, Color32};
-use library::model::project::PortDirection;
+use library::model::project::{PortAddress, PortDirection, PortOwner};
 use library::model::Project;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use super::model::edit_for_port_addresses;
+
 use crate::ui::panels::node_editor::{
-    editable_wire_qa_value, editable_wire_sort_key, knife_segment_hits_edge,
-    node_editor_port_interactions_enabled, qa_container_key, rendered_edge_at_position,
-    rendered_normal_port_at_position, rendered_port_at_position, rendered_wire_drag_kind, NodeEdit,
-    QueuedNodeEdit, RenderedEdge, RenderedEdgeKind, RenderedPortKey, WIRE_DRAG_THRESHOLD,
+    container_output_binding_port, container_output_port, editable_wire_is_current,
+    editable_wire_qa_value, editable_wire_sort_key, editable_wire_stable_key,
+    knife_segment_hits_edge, node_editor_port_interactions_enabled, qa_container_key,
+    rendered_edge_at_position, rendered_normal_port_at_position, rendered_port_at_position,
+    rendered_wire_drag_kind, NodeEdit, QueuedNodeEdit, RenderedEdge, RenderedEdgeKind,
+    RenderedPortKey, WIRE_DRAG_THRESHOLD,
 };
 
 pub(in crate::ui::panels::node_editor) struct WireInteractionFrame<'a> {
@@ -23,6 +27,66 @@ pub(in crate::ui::panels::node_editor) struct WireInteractionFrame<'a> {
     pub(in crate::ui::panels::node_editor) canvas_clip: egui::Rect,
     pub(in crate::ui::panels::node_editor) graph_item_rects: &'a [egui::Rect],
     pub(in crate::ui::panels::node_editor) to_global: egui::emath::TSTransform,
+}
+
+fn output_binding_edge_for_port<'a>(
+    edges: &'a [RenderedEdge],
+    port: &RenderedPortKey,
+) -> Option<&'a RenderedEdge> {
+    if port.direction != PortDirection::Output {
+        return None;
+    }
+    let PortOwner::Node(port_node_id) = port.address.owner else {
+        return None;
+    };
+    edges.iter().find(|edge| {
+        matches!(
+            edge.kind,
+            RenderedEdgeKind::OutputBinding {
+                node_id,
+                data_type,
+                ..
+            } if node_id == port_node_id
+                && container_output_port(data_type) == Some(port.address.port.as_str())
+        )
+    })
+}
+
+fn reconnect_edit(
+    project: &Project,
+    wire: NodeEditorEditableWire,
+    endpoint: NodeEditorWireDragKind,
+    port: PortAddress,
+) -> Option<NodeEdit> {
+    match wire {
+        NodeEditorEditableWire::ProjectConnection { connection_id } => {
+            let connection = project
+                .connections
+                .iter()
+                .find(|connection| connection.id == connection_id)?;
+            let (from, to) = match endpoint {
+                NodeEditorWireDragKind::ReconnectSource => (port, connection.to.clone()),
+                NodeEditorWireDragKind::ReconnectTarget => (connection.from.clone(), port),
+                NodeEditorWireDragKind::Disconnect => return None,
+            };
+            Some(NodeEdit::ReconnectConnection {
+                connection_id,
+                from,
+                to,
+            })
+        }
+        NodeEditorEditableWire::OutputBinding {
+            owner, data_type, ..
+        } => {
+            // The container sink is structural and cannot move. Reconnecting
+            // the source atomically replaces only this owner's typed binding.
+            if endpoint != NodeEditorWireDragKind::ReconnectSource {
+                return None;
+            }
+            let binding_port = container_output_binding_port(data_type)?;
+            edit_for_port_addresses(project, port, PortAddress::new(owner, binding_port), true)
+        }
+    }
 }
 
 fn paint_wire_knife(ui: &egui::Ui, gesture: &NodeEditorWireKnifeGesture, canvas_clip: egui::Rect) {
@@ -263,13 +327,11 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
     }) {
         state.selected_connection_id = None;
     }
-    if state.wire_gesture.as_ref().is_some_and(|gesture| {
-        !frame
-            .project
-            .connections
-            .iter()
-            .any(|connection| connection.id == gesture.connection_id)
-    }) {
+    if state
+        .wire_gesture
+        .as_ref()
+        .is_some_and(|gesture| !editable_wire_is_current(frame.project, gesture.wire))
+    {
         state.wire_gesture = None;
     }
 
@@ -333,12 +395,9 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
                 frame.canvas_clip,
             )
         });
-        return target.map_or_else(Vec::new, |to| {
-            vec![QueuedNodeEdit::Atomic(NodeEdit::Connect {
-                from: gesture.from,
-                to,
-            })]
-        });
+        return target
+            .and_then(|to| edit_for_port_addresses(frame.project, gesture.from, to, true))
+            .map_or_else(Vec::new, |edit| vec![QueuedNodeEdit::Atomic(edit)]);
     }
     if state.normal_wire_drag_active {
         if escape_pressed || !primary_down {
@@ -359,7 +418,7 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
     }) {
         let hover_text = match edge.kind {
             RenderedEdgeKind::OutputBinding { .. } => Some(
-                "Container output binding. Right-click to clear it, or cross it with the Alt knife.",
+                "Container output binding. Drag its source endpoint to rebind; right-click or use the Alt knife to clear it.",
             ),
             RenderedEdgeKind::DerivedOutput { .. } => edge.kind.blocked_reason(),
             RenderedEdgeKind::ProjectConnection { .. } => None,
@@ -387,44 +446,58 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
             })
         })
         .flatten();
-    let pointer_on_normal_port = normal_port.is_some();
-    let hovered = pointer
-        .filter(|_| !pointer_on_normal_port)
-        .and_then(|position| {
-            let edge = rendered_edge_at_position(frame.edges, position)?;
-            edge.kind.connection_id()?;
-            let endpoint = rendered_wire_drag_kind(edge, position);
-            let graph_position = frame.to_global.inverse() * position;
-            let over_graph_item = frame
-                .graph_item_rects
-                .iter()
-                .any(|rect| rect.contains(graph_position));
-            (!over_graph_item || endpoint != NodeEditorWireDragKind::Disconnect).then_some(edge)
-        });
-    if primary_pressed && hovered.is_none() {
-        state.selected_connection_id = None;
-    }
-    if let (true, Some(port), Some(position)) = (primary_pressed, normal_port, pointer) {
-        if port.direction == PortDirection::Output
-            && frame
+    let binding_on_normal_port = normal_port
+        .as_ref()
+        .filter(|port| {
+            !frame
                 .project
                 .connections
                 .iter()
                 .any(|connection| connection.from == port.address)
-        {
-            state.normal_connect_gesture = Some(NodeEditorNormalConnectGesture {
-                from: port.address,
-                start: position,
-                current: position,
-                canvas_transform: frame.to_global,
-            });
-        } else {
-            // Snarl has already received this frame's press. Preserve that
-            // ownership until release so foreground wire surfaces cannot
-            // claim the rest of the physical gesture.
-            state.normal_wire_drag_active = true;
+        })
+        .and_then(|port| output_binding_edge_for_port(frame.edges, port));
+    let pointer_on_other_normal_port = normal_port.is_some() && binding_on_normal_port.is_none();
+    let hovered = binding_on_normal_port.or_else(|| {
+        pointer
+            .filter(|_| !pointer_on_other_normal_port)
+            .and_then(|position| {
+                let edge = rendered_edge_at_position(frame.edges, position)?;
+                edge.kind.editable_wire()?;
+                let endpoint = rendered_wire_drag_kind(edge, position);
+                let graph_position = frame.to_global.inverse() * position;
+                let over_graph_item = frame
+                    .graph_item_rects
+                    .iter()
+                    .any(|rect| rect.contains(graph_position));
+                (!over_graph_item || endpoint != NodeEditorWireDragKind::Disconnect).then_some(edge)
+            })
+    });
+    if primary_pressed && hovered.is_none() {
+        state.selected_connection_id = None;
+    }
+    if primary_pressed && binding_on_normal_port.is_none() {
+        if let (Some(port), Some(position)) = (normal_port.as_ref(), pointer) {
+            if port.direction == PortDirection::Output
+                && frame
+                    .project
+                    .connections
+                    .iter()
+                    .any(|connection| connection.from == port.address)
+            {
+                state.normal_connect_gesture = Some(NodeEditorNormalConnectGesture {
+                    from: port.address.clone(),
+                    start: position,
+                    current: position,
+                    canvas_transform: frame.to_global,
+                });
+            } else {
+                // Snarl has already received this frame's press. Preserve that
+                // ownership until release so foreground wire surfaces cannot
+                // claim the rest of the physical gesture.
+                state.normal_wire_drag_active = true;
+            }
+            return Vec::new();
         }
-        return Vec::new();
     }
 
     let knife_was_active = state.wire_knife.is_some();
@@ -432,36 +505,34 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
     if knife_was_active || state.wire_knife.is_some() || !knife_edits.is_empty() {
         return knife_edits;
     }
-    // At detail zoom the exact pin center belongs to Snarl's normal
-    // connection gesture. A connected port is also the endpoint of an
-    // existing curve; letting the foreground reconnect hit win there makes
-    // fan-out impossible. The surrounding wire endpoint radius remains the
-    // reconnect target, and overview mode still uses custom endpoint hits.
-    let active_id = state
-        .wire_gesture
-        .as_ref()
-        .map(|gesture| gesture.connection_id);
-    let interaction_edge = active_id
-        .and_then(|connection_id| {
+    // At detail zoom an explicit connected output pin keeps Snarl's normal
+    // fan-out gesture. A container binding has no canonical ProjectConnection
+    // to fan out, so its exact source pin belongs to typed endpoint rebind.
+    let active_wire = state.wire_gesture.as_ref().map(|gesture| gesture.wire);
+    let interaction_edge = active_wire
+        .and_then(|wire| {
             frame
                 .edges
                 .iter()
-                .find(|edge| edge.kind.connection_id() == Some(connection_id))
+                .find(|edge| edge.kind.editable_wire() == Some(wire))
         })
         .or(hovered);
     let mut edits = Vec::new();
 
     if let Some(edge) = interaction_edge {
-        let Some(connection_id) = edge.kind.connection_id() else {
+        let Some(wire) = edge.kind.editable_wire() else {
             return edits;
         };
         let response = ui.interact(
             frame.canvas_clip,
-            ui.make_persistent_id(("node_editor_wire", connection_id)),
+            ui.make_persistent_id(("node_editor_wire", editable_wire_stable_key(wire))),
             egui::Sense::click_and_drag(),
         );
         if response.clicked_by(egui::PointerButton::Primary) {
-            state.selected_connection_id = Some(connection_id);
+            state.selected_connection_id = match wire {
+                NodeEditorEditableWire::ProjectConnection { connection_id } => Some(connection_id),
+                NodeEditorEditableWire::OutputBinding { .. } => None,
+            };
         }
         let (primary_pressed, primary_down, primary_released, pointer_position) =
             ui.input(|input| {
@@ -472,14 +543,19 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
                     input.pointer.interact_pos(),
                 )
             });
-        let pointer_started_on_edge = hovered
-            .is_some_and(|hovered_edge| hovered_edge.kind.connection_id() == Some(connection_id));
+        let pointer_started_on_edge =
+            hovered.is_some_and(|hovered_edge| hovered_edge.kind.editable_wire() == Some(wire));
         if primary_pressed && pointer_started_on_edge {
             if let Some(position) = pointer_position {
-                state.selected_connection_id = Some(connection_id);
+                state.selected_connection_id = match wire {
+                    NodeEditorEditableWire::ProjectConnection { connection_id } => {
+                        Some(connection_id)
+                    }
+                    NodeEditorEditableWire::OutputBinding { .. } => None,
+                };
                 state.wire_context_menu = None;
                 state.wire_gesture = Some(NodeEditorWireGesture {
-                    connection_id,
+                    wire,
                     kind: rendered_wire_drag_kind(edge, position),
                     start: position,
                     current: position,
@@ -495,15 +571,22 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
         }
         if primary_released {
             if let Some(gesture) = state.wire_gesture.take() {
-                if gesture.connection_id == connection_id
+                if gesture.wire == wire
                     && gesture.current.distance(gesture.start) >= WIRE_DRAG_THRESHOLD
                 {
                     match gesture.kind {
-                        NodeEditorWireDragKind::Disconnect => {
-                            edits.push(QueuedNodeEdit::Atomic(NodeEdit::DisconnectConnection {
-                                connection_id: gesture.connection_id,
-                            }));
-                        }
+                        NodeEditorWireDragKind::Disconnect => match gesture.wire {
+                            NodeEditorEditableWire::ProjectConnection { connection_id } => {
+                                edits.push(QueuedNodeEdit::Atomic(
+                                    NodeEdit::DisconnectConnection { connection_id },
+                                ));
+                            }
+                            NodeEditorEditableWire::OutputBinding { .. } => {
+                                edits.push(QueuedNodeEdit::Atomic(NodeEdit::DisconnectWires {
+                                    wires: vec![gesture.wire],
+                                }));
+                            }
+                        },
                         endpoint_kind => {
                             let direction =
                                 if endpoint_kind == NodeEditorWireDragKind::ReconnectSource {
@@ -519,25 +602,10 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
                                     frame.canvas_clip,
                                 )
                             });
-                            if let (Some(port), Some(connection)) = (
-                                ports,
-                                frame
-                                    .project
-                                    .connections
-                                    .iter()
-                                    .find(|connection| connection.id == gesture.connection_id),
-                            ) {
-                                let (from, to) =
-                                    if endpoint_kind == NodeEditorWireDragKind::ReconnectSource {
-                                        (port, connection.to.clone())
-                                    } else {
-                                        (connection.from.clone(), port)
-                                    };
-                                edits.push(QueuedNodeEdit::Atomic(NodeEdit::ReconnectConnection {
-                                    connection_id: gesture.connection_id,
-                                    from,
-                                    to,
-                                }));
+                            if let Some(edit) = ports.and_then(|port| {
+                                reconnect_edit(frame.project, gesture.wire, endpoint_kind, port)
+                            }) {
+                                edits.push(QueuedNodeEdit::Atomic(edit));
                             }
                         }
                     }
@@ -557,13 +625,21 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
         }
     }
 
-    if let Some(connection_id) = state.selected_connection_id {
+    if let Some(gesture) = state.wire_gesture.as_ref() {
+        if let Some(edge) = frame
+            .edges
+            .iter()
+            .find(|edge| edge.kind.editable_wire() == Some(gesture.wire))
+        {
+            paint_wire_interaction(ui, edge, Some(gesture), frame.canvas_clip);
+        }
+    } else if let Some(connection_id) = state.selected_connection_id {
         if let Some(edge) = frame
             .edges
             .iter()
             .find(|edge| edge.kind.connection_id() == Some(connection_id))
         {
-            paint_wire_interaction(ui, edge, state.wire_gesture.as_ref(), frame.canvas_clip);
+            paint_wire_interaction(ui, edge, None, frame.canvas_clip);
         }
     }
     edits
@@ -586,4 +662,179 @@ pub(in crate::ui::panels::node_editor) fn overview_wire_graph_points(
         .iter()
         .all(|position| position.x.is_finite() && position.y.is_finite())
         .then_some(graph_points)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::action::HistoryManager;
+    use crate::test_support::media_node_for_canvas;
+    use crate::ui::panels::node_editor::apply_queued_node_edits;
+    use library::editor::project_service::MediaNodeRequest;
+    use library::model::asset::{Asset, AssetKind};
+    use library::model::project::{Composition, NodeContainer, AUDIO_OUTPUT_PORT};
+    use library::model::Clip;
+
+    fn add_audio_media(project: &mut Project, name: &str) -> uuid::Uuid {
+        let asset = Asset::new(name, &format!("/fixture/{name}.wav"), AssetKind::Audio);
+        let node = media_node_for_canvas(
+            name,
+            MediaNodeRequest::Audio {
+                asset_id: asset.id,
+                file_path: asset.path.clone(),
+                audio_stream_index: None,
+            },
+            64,
+            64,
+            1,
+            1,
+        );
+        let node_id = node.id;
+        project.assets.push(asset);
+        project.add_node(node);
+        node_id
+    }
+
+    fn run_frames(
+        project: &Project,
+        edge: &RenderedEdge,
+        rendered_ports: &Arc<Mutex<HashMap<RenderedPortKey, egui::Rect>>>,
+        state: &mut NodeEditorState,
+        frames: Vec<Vec<egui::Event>>,
+    ) -> Vec<QueuedNodeEdit> {
+        let context = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 420.0));
+        let mut queued = Vec::new();
+        for (frame_number, events) in frames.into_iter().enumerate() {
+            drop(context.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(frame_number as f64 / 60.0),
+                    events,
+                    ..Default::default()
+                },
+                |context| {
+                    egui::CentralPanel::default().show(context, |ui| {
+                        queued.extend(wire_interactions(
+                            ui,
+                            state,
+                            WireInteractionFrame {
+                                project,
+                                edges: std::slice::from_ref(edge),
+                                rendered_ports,
+                                canvas_clip: screen,
+                                graph_item_rects: &[],
+                                to_global: egui::emath::TSTransform::IDENTITY,
+                            },
+                        ));
+                    });
+                },
+            ));
+        }
+        queued
+    }
+
+    fn pointer_button(position: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn audio_output_binding_source_endpoint_rebinds_in_one_undoable_gesture() {
+        let mut project = Project::new("typed binding endpoint reconnect");
+        let (composition, track) = Composition::new("Main", 64, 64, 24.0, 2.0);
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let clip = Clip::new("Audio", 0.0, 2.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id).unwrap();
+
+        let original_id = add_audio_media(&mut project, "original");
+        let replacement_id = add_audio_media(&mut project, "replacement");
+        for node_id in [original_id, replacement_id] {
+            project
+                .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
+                .unwrap();
+        }
+        project
+            .set_audio_output_node(NodeContainer::Clip(clip_id), Some(original_id))
+            .unwrap();
+        let initial = project.clone();
+
+        let source = egui::pos2(120.0, 180.0);
+        let replacement = egui::pos2(480.0, 260.0);
+        let edge = RenderedEdge {
+            kind: RenderedEdgeKind::OutputBinding {
+                owner: PortOwner::Clip(clip_id),
+                node_id: original_id,
+                data_type: library::model::project::PortDataType::Audio,
+            },
+            start: source,
+            control_a: egui::pos2(200.0, 180.0),
+            control_b: egui::pos2(300.0, 180.0),
+            end: egui::pos2(380.0, 180.0),
+        };
+        let rendered_ports = Arc::new(Mutex::new(HashMap::from([
+            (
+                RenderedPortKey {
+                    address: PortAddress::new(PortOwner::Node(original_id), AUDIO_OUTPUT_PORT),
+                    direction: PortDirection::Output,
+                    connection_id: None,
+                },
+                egui::Rect::from_center_size(source, egui::vec2(14.0, 14.0)),
+            ),
+            (
+                RenderedPortKey {
+                    address: PortAddress::new(PortOwner::Node(replacement_id), AUDIO_OUTPUT_PORT),
+                    direction: PortDirection::Output,
+                    connection_id: None,
+                },
+                egui::Rect::from_center_size(replacement, egui::vec2(14.0, 14.0)),
+            ),
+        ])));
+        let mut state = NodeEditorState::default();
+        let edits = run_frames(
+            &project,
+            &edge,
+            &rendered_ports,
+            &mut state,
+            vec![
+                vec![egui::Event::PointerMoved(source)],
+                vec![pointer_button(source, true)],
+                vec![egui::Event::PointerMoved(replacement)],
+                vec![pointer_button(replacement, false)],
+            ],
+        );
+        assert!(matches!(
+            edits.as_slice(),
+            [QueuedNodeEdit::Atomic(NodeEdit::SetAudioOutputNode {
+                owner: PortOwner::Clip(owner),
+                node_id: Some(node_id),
+            })] if *owner == clip_id && *node_id == replacement_id
+        ));
+        assert!(state.wire_gesture.is_none());
+
+        let mut history = HistoryManager::new();
+        history.push_project_state(initial.clone());
+        assert!(apply_queued_node_edits(
+            &mut project,
+            edits,
+            &mut history,
+            &mut state,
+        ));
+        assert_eq!(
+            project.get_clip(clip_id).unwrap().audio_output_node_id,
+            Some(replacement_id)
+        );
+        let edited = project.clone();
+        assert_eq!(history.undo_depth(), 2);
+        assert_eq!(history.undo(&edited), Some(initial.clone()));
+        assert_eq!(history.redo(&initial), Some(edited));
+    }
 }

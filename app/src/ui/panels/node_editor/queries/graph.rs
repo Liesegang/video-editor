@@ -82,20 +82,6 @@ pub(in crate::ui::panels::node_editor) fn container_collapsed(
     }
 }
 
-pub(in crate::ui::panels::node_editor) fn container_output_node_id(
-    project: &Project,
-    owner: PortOwner,
-) -> Option<Uuid> {
-    match owner {
-        PortOwner::Composition(id) => project
-            .get_composition(id)
-            .and_then(|composition| composition.output_node_id),
-        PortOwner::Track(id) => project.get_track(id).and_then(|track| track.output_node_id),
-        PortOwner::Clip(id) => project.get_clip(id).and_then(|clip| clip.output_node_id),
-        PortOwner::Node(_) => None,
-    }
-}
-
 pub(in crate::ui::panels::node_editor) fn port_owner_for_node_container(
     container: NodeContainer,
 ) -> PortOwner {
@@ -136,7 +122,6 @@ pub(in crate::ui::panels::node_editor) fn parent_container_owner(
         PortOwner::Clip(clip_id) => project.find_track_for_clip(clip_id).map(PortOwner::Track),
     }
 }
-
 /// Node properties share the evaluator's time domain. A Node directly owned
 /// by a Clip is evaluated and edited in that Clip's source-local time; Nodes
 /// owned directly by a Track or Composition stay in global composition time.
@@ -267,14 +252,21 @@ pub(in crate::ui::panels::node_editor) fn input_definitions(
             kind: PortAnchorKind::ExternalInputs,
         } => owner,
         GraphItem::PortAnchor {
-            kind: PortAnchorKind::ImageSink,
+            kind: PortAnchorKind::OutputSinks,
             ..
         } => {
-            return vec![PinDefinition {
-                key: "output_binding".to_string(),
-                name: "Image".to_string(),
-                data_type: PortDataType::Image,
-            }];
+            return vec![
+                PinDefinition {
+                    key: crate::ui::panels::node_editor::IMAGE_OUTPUT_BINDING_PORT.to_string(),
+                    name: "Image".to_string(),
+                    data_type: PortDataType::Image,
+                },
+                PinDefinition {
+                    key: crate::ui::panels::node_editor::AUDIO_OUTPUT_BINDING_PORT.to_string(),
+                    name: "Audio".to_string(),
+                    data_type: PortDataType::Audio,
+                },
+            ];
         }
         GraphItem::Container(_) | GraphItem::PortAnchor { .. } => return Vec::new(),
     };

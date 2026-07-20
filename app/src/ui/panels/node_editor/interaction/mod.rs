@@ -9,10 +9,10 @@ pub(in crate::ui::panels::node_editor) use resize::{
 };
 pub(in crate::ui::panels::node_editor) use selection::node_selection_after_snarl_click;
 #[cfg(test)]
+pub(in crate::ui::panels::node_editor) use wire::cubic_bezier_point;
+#[cfg(test)]
 pub(in crate::ui::panels::node_editor) use wire::register_edge_component;
 pub(in crate::ui::panels::node_editor) use wire::show_wire_context_menu;
-#[cfg(test)]
-pub(in crate::ui::panels::node_editor) use wire::{cubic_bezier_point, segments_intersect};
 pub(in crate::ui::panels::node_editor) use wire::{
     edit_for_wire, embedded_pin_center, graph_item_owner,
 };

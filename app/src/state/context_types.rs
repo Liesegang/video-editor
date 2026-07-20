@@ -6,7 +6,7 @@ use crate::model::ui_types::{GizmoHandle, TimelineDisplayMode, Vec2Def};
 use crate::model::vector::VectorEditorState;
 
 use library::animation::EasingFunction; // Added import
-use library::model::project::{NodeContainer, PortAddress, PortOwner};
+use library::model::project::{NodeContainer, PortAddress, PortDataType, PortOwner};
 use library::model::property::KeyframeId;
 use library::PropertyOwner;
 
@@ -715,7 +715,11 @@ pub enum NodeEditorWireDragKind {
 
 #[derive(Clone, Debug)]
 pub struct NodeEditorWireGesture {
-    pub connection_id: Uuid,
+    /// Stable authored identity for the complete physical gesture. Explicit
+    /// connections retain their UUID; container output bindings retain owner,
+    /// current source, and Image/Audio type so the two bindings can never be
+    /// confused while an endpoint is being moved.
+    pub wire: NodeEditorEditableWire,
     pub kind: NodeEditorWireDragKind,
     pub start: egui::Pos2,
     pub current: egui::Pos2,
@@ -763,8 +767,14 @@ pub struct NodeEditorWireKnifeGesture {
 /// graph connections.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NodeEditorEditableWire {
-    ProjectConnection { connection_id: Uuid },
-    OutputBinding { owner: PortOwner, node_id: Uuid },
+    ProjectConnection {
+        connection_id: Uuid,
+    },
+    OutputBinding {
+        owner: PortOwner,
+        node_id: Uuid,
+        data_type: PortDataType,
+    },
 }
 
 #[derive(Clone, Debug)]

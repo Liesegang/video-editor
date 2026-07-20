@@ -14,6 +14,10 @@ use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+mod audio;
+
+use audio::audio_node;
+
 mod transform_preview;
 
 #[cfg(test)]
@@ -37,6 +41,10 @@ pub const E2E_SOLID_ID: Uuid = Uuid::from_u128(0x401);
 pub const E2E_MERGE_ID: Uuid = Uuid::from_u128(0x402);
 pub const E2E_AUX_A_ID: Uuid = Uuid::from_u128(0x403);
 pub const E2E_AUX_B_ID: Uuid = Uuid::from_u128(0x404);
+pub const E2E_AUDIO_A_ID: Uuid = Uuid::from_u128(0x405);
+pub const E2E_AUDIO_B_ID: Uuid = Uuid::from_u128(0x406);
+pub const E2E_AUDIO_ASSET_A_ID: Uuid = Uuid::from_u128(0x701);
+pub const E2E_AUDIO_ASSET_B_ID: Uuid = Uuid::from_u128(0x702);
 pub const E2E_EFFECTOR_TRANSFORM_ID: Uuid = Uuid::from_u128(0x501);
 pub const E2E_EFFECTOR_OPACITY_ID: Uuid = Uuid::from_u128(0x502);
 pub const E2E_DECORATOR_BACKPLATE_ID: Uuid = Uuid::from_u128(0x503);
@@ -120,10 +128,10 @@ fn install_named(
 
     let mut clip_a1 = Clip::new("QA Clip A1", 1.0, 4.0);
     clip_a1.id = E2E_CLIP_A1_ID;
-    clip_a1.node_ids = vec![E2E_SOLID_ID, E2E_MERGE_ID];
+    clip_a1.node_ids = vec![E2E_AUDIO_A_ID, E2E_AUDIO_B_ID, E2E_SOLID_ID, E2E_MERGE_ID];
     clip_a1.output_node_id = Some(E2E_MERGE_ID);
     clip_a1.ui_position = [2250.0, 180.0];
-    clip_a1.ui_size = [750.0, 380.0];
+    clip_a1.ui_size = [750.0, 440.0];
 
     let mut clip_a2 = Clip::new("QA Clip A2", 1.0, 8.0);
     clip_a2.id = E2E_CLIP_A2_ID;
@@ -163,7 +171,7 @@ fn install_named(
             b: 40,
             a: 255,
         },
-        [2350.0, 300.0],
+        [2350.0, 390.0],
     )?;
     solid.set_property(
         "opacity".to_string(),
@@ -171,7 +179,23 @@ fn install_named(
     )?;
     let mut merge = Node::new_merge("QA Merge");
     merge.id = E2E_MERGE_ID;
-    merge.ui_position = [2670.0, 300.0];
+    merge.ui_position = [2670.0, 390.0];
+    let (audio_asset_a, audio_a) = audio_node(
+        &factory,
+        E2E_AUDIO_ASSET_A_ID,
+        E2E_AUDIO_A_ID,
+        "QA Audio A",
+        "test_data/e2e_media/tone.mp3",
+        [2320.0, 230.0],
+    )?;
+    let (audio_asset_b, audio_b) = audio_node(
+        &factory,
+        E2E_AUDIO_ASSET_B_ID,
+        E2E_AUDIO_B_ID,
+        "QA Audio B",
+        "test_data/test_sound2.mp3",
+        [2600.0, 230.0],
+    )?;
 
     let text = text_node(&factory, E2E_AUX_A_ID, [350.0, 300.0])?;
     let text_transform = root_transform_node(
@@ -327,6 +351,10 @@ fn install_named(
     project.add_clip(clip_a1);
     project.add_clip(clip_a2);
     project.add_clip(clip_b1);
+    project.assets.push(audio_asset_a);
+    project.assets.push(audio_asset_b);
+    project.add_node(audio_a);
+    project.add_node(audio_b);
     project.add_node(solid);
     project.add_node(merge);
     project.add_node(text);
@@ -437,6 +465,8 @@ fn install_named(
             .map_err(|error| format!("cannot connect QA content graph: {error}"))?;
     }
     for (container, node) in [
+        (E2E_CLIP_A1_ID, E2E_AUDIO_A_ID),
+        (E2E_CLIP_A1_ID, E2E_AUDIO_B_ID),
         (E2E_CLIP_A1_ID, E2E_SOLID_ID),
         (E2E_CLIP_A1_ID, E2E_MERGE_ID),
         (E2E_CLIP_A2_ID, E2E_AUX_A_ID),
@@ -575,6 +605,7 @@ fn operation_node<E: std::fmt::Display>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use library::model::project::asset::AssetKind;
 
     fn installed_fixture() -> (Arc<RwLock<Project>>, Arc<PluginManager>, FixtureInfo) {
         let project = Arc::new(RwLock::new(Project::new("empty")));
@@ -663,8 +694,12 @@ mod tests {
         );
 
         let clip_a1 = read.get_clip(E2E_CLIP_A1_ID).unwrap();
-        assert_eq!(clip_a1.node_ids, vec![E2E_SOLID_ID, E2E_MERGE_ID]);
+        assert_eq!(
+            clip_a1.node_ids,
+            vec![E2E_AUDIO_A_ID, E2E_AUDIO_B_ID, E2E_SOLID_ID, E2E_MERGE_ID,]
+        );
         assert_eq!(clip_a1.output_node_id, Some(E2E_MERGE_ID));
+        assert!(clip_a1.audio_output_node_id.is_none());
         let clip_a2 = read.get_clip(E2E_CLIP_A2_ID).unwrap();
         assert_eq!(
             clip_a2.node_ids,
@@ -691,6 +726,24 @@ mod tests {
             ]
         );
         assert_eq!(clip_b1.output_node_id, Some(E2E_SHAPE_MERGE_ID));
+
+        for (node_id, asset_id) in [
+            (E2E_AUDIO_A_ID, E2E_AUDIO_ASSET_A_ID),
+            (E2E_AUDIO_B_ID, E2E_AUDIO_ASSET_B_ID),
+        ] {
+            let NodeContent::Media(media) = read.get_node(node_id).unwrap().content() else {
+                panic!("{node_id} must be a Media Node");
+            };
+            assert_eq!(media.asset_id, asset_id);
+            assert_eq!(
+                read.assets
+                    .iter()
+                    .find(|asset| asset.id == asset_id)
+                    .unwrap()
+                    .kind,
+                AssetKind::Audio
+            );
+        }
 
         let text = read.get_node(E2E_AUX_A_ID).unwrap();
         assert!(matches!(
@@ -744,7 +797,7 @@ mod tests {
             assert_operation(&read, &plugin_manager, node_id, category, component_id);
         }
 
-        assert_eq!(read.nodes.len(), 14);
+        assert_eq!(read.nodes.len(), 16);
         for track in read.tracks.values() {
             assert!(track.output_node_id.is_none());
             assert!(track.node_ids.is_empty());
@@ -813,6 +866,8 @@ mod tests {
         }
 
         for (clip_id, node_id) in [
+            (E2E_CLIP_A1_ID, E2E_AUDIO_A_ID),
+            (E2E_CLIP_A1_ID, E2E_AUDIO_B_ID),
             (E2E_CLIP_A1_ID, E2E_SOLID_ID),
             (E2E_CLIP_A1_ID, E2E_MERGE_ID),
             (E2E_CLIP_A2_ID, E2E_AUX_A_ID),
@@ -838,7 +893,7 @@ mod tests {
             );
         }
 
-        assert_eq!(read.connections.len(), 28);
+        assert_eq!(read.connections.len(), 30);
         assert!(read.validate_connections().is_empty());
     }
 

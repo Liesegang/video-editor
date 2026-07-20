@@ -1,0 +1,34 @@
+---
+source: parser/src/string.rs
+expression: parse_ast
+---
+[
+    Expr(
+        StmtExpr {
+            range: 0..11,
+            value: JoinedStr(
+                ExprJoinedStr {
+                    range: 0..11,
+                    values: [
+                        FormattedValue(
+                            ExprFormattedValue {
+                                range: 0..11,
+                                value: Name(
+                                    ExprName {
+                                        range: 6..7,
+                                        id: Identifier(
+                                            "x",
+                                        ),
+                                        ctx: Load,
+                                    },
+                                ),
+                                conversion: None,
+                                format_spec: None,
+                            },
+                        ),
+                    ],
+                },
+            ),
+        },
+    ),
+]

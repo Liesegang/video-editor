@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{
-    container_output_node_id, qa_container_key, wire_port_drop_rect, RenderedEdge, RenderedPortKey,
-    WireSecondaryClickHit, WIRE_ENDPOINT_RADIUS, WIRE_HIT_RADIUS,
+    container_output_node_id, container_output_type_key, qa_container_key, wire_port_drop_rect,
+    RenderedEdge, RenderedPortKey, WireSecondaryClickHit, WIRE_ENDPOINT_RADIUS, WIRE_HIT_RADIUS,
 };
 
 pub(in crate::ui::panels::node_editor) fn cubic_bezier_point(
@@ -181,19 +181,28 @@ pub(in crate::ui::panels::node_editor) fn wire_secondary_click_hit(
 
 pub(in crate::ui::panels::node_editor) fn editable_wire_sort_key(
     target: NodeEditorEditableWire,
-) -> (u8, u8, Uuid, Uuid) {
+) -> (u8, u8, u8, Uuid, Uuid) {
     match target {
         NodeEditorEditableWire::ProjectConnection { connection_id } => {
-            (0, 0, connection_id, Uuid::nil())
+            (0, 0, 0, connection_id, Uuid::nil())
         }
-        NodeEditorEditableWire::OutputBinding { owner, node_id } => {
+        NodeEditorEditableWire::OutputBinding {
+            owner,
+            node_id,
+            data_type,
+        } => {
             let owner_kind = match owner {
                 PortOwner::Composition(_) => 0,
                 PortOwner::Track(_) => 1,
                 PortOwner::Clip(_) => 2,
                 PortOwner::Node(_) => 3,
             };
-            (1, owner_kind, owner.id(), node_id)
+            let output_kind = match container_output_type_key(data_type) {
+                Some("image") => 0,
+                Some("audio") => 1,
+                Some(_) | None => 2,
+            };
+            (1, owner_kind, output_kind, owner.id(), node_id)
         }
     }
 }
@@ -206,10 +215,15 @@ pub(in crate::ui::panels::node_editor) fn editable_wire_qa_value(
             "kind": "explicit",
             "connection_id": connection_id,
         }),
-        NodeEditorEditableWire::OutputBinding { owner, node_id } => serde_json::json!({
+        NodeEditorEditableWire::OutputBinding {
+            owner,
+            node_id,
+            data_type,
+        } => serde_json::json!({
             "kind": "output_binding",
             "owner": qa_container_key(owner),
             "node_id": node_id,
+            "output_type": container_output_type_key(data_type),
         }),
     }
 }
@@ -219,8 +233,16 @@ pub(in crate::ui::panels::node_editor) fn editable_wire_stable_key(
 ) -> String {
     match target {
         NodeEditorEditableWire::ProjectConnection { connection_id } => connection_id.to_string(),
-        NodeEditorEditableWire::OutputBinding { owner, node_id } => {
-            format!("output_binding:{}:{node_id}", qa_container_key(owner))
+        NodeEditorEditableWire::OutputBinding {
+            owner,
+            node_id,
+            data_type,
+        } => {
+            let output_type = container_output_type_key(data_type).unwrap_or("unsupported");
+            format!(
+                "output_binding:{}:{output_type}:{node_id}",
+                qa_container_key(owner)
+            )
         }
     }
 }
@@ -234,9 +256,11 @@ pub(in crate::ui::panels::node_editor) fn editable_wire_is_current(
             .connections
             .iter()
             .any(|connection| connection.id == connection_id),
-        NodeEditorEditableWire::OutputBinding { owner, node_id } => {
-            container_output_node_id(project, owner) == Some(node_id)
-        }
+        NodeEditorEditableWire::OutputBinding {
+            owner,
+            node_id,
+            data_type,
+        } => container_output_node_id(project, owner, data_type) == Some(node_id),
     }
 }
 
@@ -295,4 +319,55 @@ pub(in crate::ui::panels::node_editor) fn rendered_normal_port_at_position(
                 .total_cmp(&right.1.center().distance(position))
         })
         .map(|(key, _)| key.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use library::model::project::PortDataType;
+
+    #[test]
+    fn derived_wire_secondary_hit_is_display_only_instead_of_blank_canvas() {
+        let derived = RenderedEdge {
+            kind: crate::ui::panels::node_editor::RenderedEdgeKind::DerivedOutput {
+                owner: PortOwner::Track(Uuid::from_u128(0xD001)),
+                source: PortOwner::Clip(Uuid::from_u128(0xD002)),
+                data_type: PortDataType::Image,
+            },
+            start: egui::pos2(100.0, 180.0),
+            control_a: egui::pos2(180.0, 180.0),
+            control_b: egui::pos2(320.0, 180.0),
+            end: egui::pos2(400.0, 180.0),
+        };
+        let hit_point = egui::pos2(250.0, 180.0);
+
+        assert_eq!(
+            wire_secondary_click_hit(&[derived], hit_point),
+            Some(WireSecondaryClickHit::DisplayOnly)
+        );
+        assert_eq!(wire_secondary_click_hit(&[], hit_point), None);
+    }
+
+    #[test]
+    fn wire_knife_detects_midspan_intersection_of_long_segments() {
+        let knife_start = egui::pos2(10.0, -1_000.0);
+        let knife_end = egui::pos2(10.0, 1_000.0);
+        let edge = RenderedEdge {
+            kind: crate::ui::panels::node_editor::RenderedEdgeKind::ProjectConnection {
+                connection_id: Uuid::new_v4(),
+            },
+            start: egui::pos2(-1_000.0, 0.0),
+            control_a: egui::pos2(-333.333_34, 0.0),
+            control_b: egui::pos2(333.333_34, 0.0),
+            end: egui::pos2(1_000.0, 0.0),
+        };
+
+        assert!(segments_intersect(
+            knife_start,
+            knife_end,
+            edge.start,
+            edge.end,
+        ));
+        assert!(knife_segment_hits_edge(knife_start, knife_end, &edge));
+    }
 }

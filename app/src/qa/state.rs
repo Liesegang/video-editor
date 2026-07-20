@@ -180,15 +180,35 @@ pub fn snapshot(
                             "kind": "explicit",
                             "connection_id": connection_id,
                         }),
-                        NodeEditorEditableWire::OutputBinding { owner, node_id } => serde_json::json!({
+                        NodeEditorEditableWire::OutputBinding { owner, node_id, data_type } => serde_json::json!({
                             "kind": "output_binding",
                             "owner": owner,
                             "node_id": node_id,
+                            "output_type": format!("{data_type:?}").to_lowercase(),
                         }),
                     }),
                 "wire_gesture": editor_context.node_editor_state.wire_gesture.as_ref().map(|gesture| {
+                    let (connection_id, target) = match gesture.wire {
+                        NodeEditorEditableWire::ProjectConnection { connection_id } => (
+                            Some(connection_id),
+                            serde_json::json!({
+                                "kind": "explicit",
+                                "connection_id": connection_id,
+                            }),
+                        ),
+                        NodeEditorEditableWire::OutputBinding { owner, node_id, data_type } => (
+                            None,
+                            serde_json::json!({
+                                "kind": "output_binding",
+                                "owner": owner,
+                                "node_id": node_id,
+                                "output_type": format!("{data_type:?}").to_lowercase(),
+                            }),
+                        ),
+                    };
                     serde_json::json!({
-                        "connection_id": gesture.connection_id,
+                        "connection_id": connection_id,
+                        "target": target,
                         "kind": format!("{:?}", gesture.kind),
                         "start": {"x": gesture.start.x, "y": gesture.start.y},
                         "current": {"x": gesture.current.x, "y": gesture.current.y},
@@ -217,8 +237,8 @@ pub fn snapshot(
                         NodeEditorEditableWire::ProjectConnection { connection_id } => {
                             format!("explicit:{connection_id}")
                         }
-                        NodeEditorEditableWire::OutputBinding { owner, node_id } => {
-                            format!("output_binding:{owner:?}:{node_id}")
+                        NodeEditorEditableWire::OutputBinding { owner, node_id, data_type } => {
+                            format!("output_binding:{owner:?}:{data_type:?}:{node_id}")
                         }
                     });
                     let crossed_connection_ids = crossed.iter().filter_map(|target| match target {
@@ -230,10 +250,11 @@ pub fn snapshot(
                             "kind": "explicit",
                             "connection_id": connection_id,
                         }),
-                        NodeEditorEditableWire::OutputBinding { owner, node_id } => serde_json::json!({
+                        NodeEditorEditableWire::OutputBinding { owner, node_id, data_type } => serde_json::json!({
                             "kind": "output_binding",
                             "owner": owner,
                             "node_id": node_id,
+                            "output_type": format!("{data_type:?}").to_lowercase(),
                         }),
                     }).collect::<Vec<_>>();
                     serde_json::json!({

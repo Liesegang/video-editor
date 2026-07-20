@@ -19,7 +19,7 @@ pub struct ClipBundle {
 }
 
 impl ClipBundle {
-    pub fn with_primary_node(mut clip: Clip, node: Node) -> Self {
+    pub fn with_image_node(mut clip: Clip, node: Node) -> Self {
         clip.node_ids = vec![node.id];
         clip.output_node_id = Some(node.id);
         Self {
@@ -28,12 +28,41 @@ impl ClipBundle {
         }
     }
 
+    pub fn with_audio_node(mut clip: Clip, node: Node) -> Self {
+        clip.node_ids = vec![node.id];
+        clip.audio_output_node_id = Some(node.id);
+        Self {
+            clip,
+            graph: NodeGraphBundle::new(vec![node], Vec::new(), None),
+        }
+    }
+
+    pub fn with_av_node(mut clip: Clip, node: Node) -> Self {
+        clip.node_ids = vec![node.id];
+        clip.output_node_id = Some(node.id);
+        clip.audio_output_node_id = Some(node.id);
+        Self {
+            clip,
+            graph: NodeGraphBundle::with_output_node(node),
+        }
+    }
+
     pub fn primary_node(&self) -> Option<&Node> {
-        self.graph.output_node()
+        self.graph.output_node().or_else(|| {
+            let audio_output = self.clip.audio_output_node_id?;
+            self.graph.nodes.iter().find(|node| node.id == audio_output)
+        })
     }
 
     pub fn primary_node_mut(&mut self) -> Option<&mut Node> {
-        self.graph.output_node_mut()
+        let primary_id = self
+            .graph
+            .output_node_id
+            .or(self.clip.audio_output_node_id)?;
+        self.graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == primary_id)
     }
 }
 
@@ -89,37 +118,51 @@ impl ClipHandler {
         }
         if bundle.graph.nodes.is_empty() {
             return Err(LibraryError::Project(
-                "A factory Clip must contain an explicit image output Node".to_string(),
+                "A factory Clip must contain an explicit image or audio output Node".to_string(),
             ));
         }
 
         let clip_id = bundle.clip.id;
-        let primary_node_id = match (bundle.clip.output_node_id, bundle.graph.output_node_id) {
+        let image_output_node_id = match (bundle.clip.output_node_id, bundle.graph.output_node_id) {
             (Some(clip_output), Some(graph_output)) if clip_output != graph_output => {
                 return Err(LibraryError::Project(format!(
                     "Clip and graph disagree on explicit image output: {clip_output} != {graph_output}"
                 )));
             }
-            (Some(output), _) | (_, Some(output)) if node_ids.contains(&output) => output,
+            (Some(output), _) | (_, Some(output)) if node_ids.contains(&output) => Some(output),
             (Some(output), _) | (_, Some(output)) => {
                 return Err(LibraryError::Project(format!(
                     "Explicit image output Node {output} is not bundled"
                 )));
             }
-            (None, None) => {
-                return Err(LibraryError::Project(
-                    "A factory Clip requires an explicit image output Node".to_string(),
-                ));
-            }
+            (None, None) => None,
         };
+        let audio_output_node_id = match bundle.clip.audio_output_node_id {
+            Some(output) if node_ids.contains(&output) => Some(output),
+            Some(output) => {
+                return Err(LibraryError::Project(format!(
+                    "Explicit audio output Node {output} is not bundled"
+                )));
+            }
+            None => None,
+        };
+        if image_output_node_id.is_none() && audio_output_node_id.is_none() {
+            return Err(LibraryError::Project(
+                "A factory Clip requires an explicit image or audio output Node".to_string(),
+            ));
+        }
         bundle.clip.node_ids.clear();
         bundle.clip.output_node_id = None;
-        bundle.graph.output_node_id = Some(primary_node_id);
+        bundle.clip.audio_output_node_id = None;
+        bundle.graph.output_node_id = image_output_node_id;
         project.add_clip(bundle.clip);
 
         let result = (|| {
             project
                 .insert_node_graph(NodeContainer::Clip(clip_id), bundle.graph)
+                .map_err(|error| LibraryError::Project(error.to_string()))?;
+            project
+                .set_audio_output_node(NodeContainer::Clip(clip_id), audio_output_node_id)
                 .map_err(|error| LibraryError::Project(error.to_string()))?;
             project
                 .attach_clip_to_track_at(track_id, clip_id, insert_index.or(Some(0)))
@@ -400,7 +443,7 @@ mod tests {
             &project,
             composition_id,
             track_id,
-            ClipBundle::with_primary_node(clip, node),
+            ClipBundle::with_image_node(clip, node),
             None,
         )
         .unwrap();
@@ -419,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn bundle_without_explicit_image_output_is_rejected_atomically() {
+    fn bundle_without_explicit_image_or_audio_output_is_rejected_atomically() {
         let (project, composition_id, track_id) = project_with_composition("missing output");
         let baseline = project.clone();
         let clip = Clip::new("clip", 0.0, 1.0);
@@ -441,7 +484,7 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("explicit image output"));
+        assert!(error.to_string().contains("explicit image or audio output"));
         assert_eq!(*project.read().unwrap(), baseline);
     }
 

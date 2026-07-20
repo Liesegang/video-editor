@@ -565,7 +565,7 @@ impl ProjectManager {
             0,
         )?;
 
-        Ok(ClipBundle::with_primary_node(clip, node))
+        Ok(ClipBundle::with_audio_node(clip, node))
     }
 
     #[allow(
@@ -623,7 +623,7 @@ impl ProjectManager {
             media_height,
         )?;
 
-        Ok(ClipBundle::with_primary_node(clip, node))
+        Ok(ClipBundle::with_av_node(clip, node))
     }
 
     pub fn create_image_clip(
@@ -647,7 +647,7 @@ impl ProjectManager {
             u64::from(canvas_height),
         )?;
 
-        Ok(ClipBundle::with_primary_node(
+        Ok(ClipBundle::with_image_node(
             Clip::new("Image Clip", start_time, duration),
             node,
         ))
@@ -708,7 +708,7 @@ impl ProjectManager {
             u64::from(canvas_height),
         )?;
 
-        Ok(ClipBundle::with_primary_node(
+        Ok(ClipBundle::with_image_node(
             Clip::new("SkSL Clip", start_time, duration),
             node,
         ))
@@ -727,7 +727,7 @@ impl ProjectManager {
                 sync_global_time: false,
             },
         );
-        Ok(ClipBundle::with_primary_node(
+        Ok(ClipBundle::with_image_node(
             Clip::new("Reference Clip", start_time, duration),
             node,
         ))

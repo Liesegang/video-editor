@@ -1,6 +1,8 @@
 use crate::state::context_types::NodeEditorEditableWire;
 use eframe::egui;
-use library::model::project::{PortAddress, PortDirection, PortMultiplicity, PortOwner};
+use library::model::project::{
+    PortAddress, PortDataType, PortDirection, PortMultiplicity, PortOwner,
+};
 use library::model::{Node, NodeContainer, NodeContent, Project};
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -164,15 +166,24 @@ pub(super) fn disconnect_editable_wires(
             NodeEditorEditableWire::ProjectConnection { connection_id } => {
                 changed |= candidate.disconnect_connection(connection_id);
             }
-            NodeEditorEditableWire::OutputBinding { owner, node_id } => {
-                if container_output_node_id(&candidate, owner) != Some(node_id) {
+            NodeEditorEditableWire::OutputBinding {
+                owner,
+                node_id,
+                data_type,
+            } => {
+                if container_output_node_id(&candidate, owner, data_type) != Some(node_id) {
                     continue;
                 }
                 let Some(container) = container_for_output_owner(owner) else {
                     return false;
                 };
-                if let Err(error) = candidate.set_output_node(container, None) {
-                    log::warn!("Cannot clear container output binding: {error}");
+                let result = match data_type {
+                    PortDataType::Image => candidate.set_output_node(container, None),
+                    PortDataType::Audio => candidate.set_audio_output_node(container, None),
+                    _ => return false,
+                };
+                if let Err(error) = result {
+                    log::warn!("Cannot clear {data_type:?} container output binding: {error}");
                     return false;
                 }
                 changed = true;

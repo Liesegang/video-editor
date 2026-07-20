@@ -5,6 +5,10 @@ use library::model::Project;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+mod container_outputs;
+
+use container_outputs::connect_container_output_wires;
+
 use super::{
     input_definitions, merge_input_index_for_connection, output_definitions, ContainerKind,
     ContainerVisual, GraphItem, PortAnchorKind, CONTAINER_CONTROL_OFFSET, CONTAINER_PORT_Y,
@@ -119,57 +123,6 @@ pub(super) fn build_snarl(
     (snarl, containers)
 }
 
-fn connect_container_output_wires(
-    project: &Project,
-    containers: &[ContainerVisual],
-    snarl_ids: &HashMap<GraphItem, egui_snarl::NodeId>,
-    snarl: &mut Snarl<GraphItem>,
-) {
-    for visual in containers {
-        let sink_item = GraphItem::PortAnchor {
-            owner: visual.owner,
-            kind: PortAnchorKind::ImageSink,
-        };
-        let Some(&sink_id) = snarl_ids.get(&sink_item) else {
-            continue;
-        };
-        for source in project.container_image_sources(visual.owner) {
-            let source_owner = source.source;
-            let source_item = match source_owner {
-                PortOwner::Node(id) => GraphItem::Node(id),
-                owner @ (PortOwner::Composition(_) | PortOwner::Track(_) | PortOwner::Clip(_)) => {
-                    GraphItem::PortAnchor {
-                        owner,
-                        kind: PortAnchorKind::ExternalOutputs,
-                    }
-                }
-            };
-            let Some(&source_id) = snarl_ids.get(&source_item) else {
-                continue;
-            };
-            let Some(output_index) =
-                output_definitions(project, source_item)
-                    .iter()
-                    .position(|definition| {
-                        definition.key == library::model::project::IMAGE_OUTPUT_PORT
-                    })
-            else {
-                continue;
-            };
-            snarl.connect(
-                egui_snarl::OutPinId {
-                    node: source_id,
-                    output: output_index,
-                },
-                egui_snarl::InPinId {
-                    node: sink_id,
-                    input: 0,
-                },
-            );
-        }
-    }
-}
-
 fn insert_leaf_nodes(
     project: &Project,
     node_ids: &[Uuid],
@@ -207,7 +160,7 @@ fn insert_container_items(
         },
         GraphItem::PortAnchor {
             owner: visual.owner,
-            kind: PortAnchorKind::ImageSink,
+            kind: PortAnchorKind::OutputSinks,
         },
         GraphItem::PortAnchor {
             owner: visual.owner,
@@ -244,7 +197,7 @@ pub(super) fn container_item_position(visual: &ContainerVisual, item: GraphItem)
             ..
         } => egui::pos2(position.x + 2.0, position.y + port_y),
         GraphItem::PortAnchor {
-            kind: PortAnchorKind::ImageSink,
+            kind: PortAnchorKind::OutputSinks,
             ..
         } => egui::pos2(
             position.x + size.x - 40.0,

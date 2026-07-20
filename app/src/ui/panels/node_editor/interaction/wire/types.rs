@@ -1,7 +1,7 @@
 use crate::state::context_types::NodeEditorEditableWire;
 use eframe::egui::{self, Color32};
 use egui_snarl::ui::{PinInfo, PinWireInfo, SnarlPin, SnarlStyle};
-use library::model::project::{PortAddress, PortDirection, PortOwner};
+use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwner};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -9,7 +9,8 @@ use uuid::Uuid;
 #[cfg(test)]
 use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
-    clipped_qa_rect, node_editor_port_interactions_enabled, qa_rect_metadata, wire_port_drop_rect,
+    clipped_qa_rect, node_editor_port_interactions_enabled, qa_container_key, qa_rect_metadata,
+    wire_port_drop_rect,
 };
 
 pub(in crate::ui::panels::node_editor) struct QaPin {
@@ -18,6 +19,7 @@ pub(in crate::ui::panels::node_editor) struct QaPin {
     pub(in crate::ui::panels::node_editor) to_global: egui::emath::TSTransform,
     pub(in crate::ui::panels::node_editor) graph_center: Option<egui::Pos2>,
     pub(in crate::ui::panels::node_editor) address: Option<PortAddress>,
+    pub(in crate::ui::panels::node_editor) data_type: PortDataType,
     pub(in crate::ui::panels::node_editor) direction: PortDirection,
     pub(in crate::ui::panels::node_editor) connected: bool,
     pub(in crate::ui::panels::node_editor) connection_id: Option<Uuid>,
@@ -46,9 +48,19 @@ pub(in crate::ui::panels::node_editor) struct RenderedEdge {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(in crate::ui::panels::node_editor) enum RenderedEdgeKind {
-    ProjectConnection { connection_id: Uuid },
-    OutputBinding { owner: PortOwner, node_id: Uuid },
-    DerivedOutput { owner: PortOwner, source: PortOwner },
+    ProjectConnection {
+        connection_id: Uuid,
+    },
+    OutputBinding {
+        owner: PortOwner,
+        node_id: Uuid,
+        data_type: PortDataType,
+    },
+    DerivedOutput {
+        owner: PortOwner,
+        source: PortOwner,
+        data_type: PortDataType,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,9 +85,15 @@ impl RenderedEdgeKind {
             Self::ProjectConnection { connection_id } => {
                 Some(NodeEditorEditableWire::ProjectConnection { connection_id })
             }
-            Self::OutputBinding { owner, node_id } => {
-                Some(NodeEditorEditableWire::OutputBinding { owner, node_id })
-            }
+            Self::OutputBinding {
+                owner,
+                node_id,
+                data_type,
+            } => Some(NodeEditorEditableWire::OutputBinding {
+                owner,
+                node_id,
+                data_type,
+            }),
             Self::DerivedOutput { .. } => None,
         }
     }
@@ -161,6 +179,11 @@ impl SnarlPin for QaPin {
                     PortDirection::Input => "input",
                     PortDirection::Output => "output",
                 },
+                "data_type": format!("{:?}", self.data_type).to_lowercase(),
+                "address": self.address.as_ref().map(|address| serde_json::json!({
+                    "owner": qa_container_key(address.owner),
+                    "port": address.port,
+                })),
                 "normal_interaction_enabled": interaction_size > 0.0,
                 "connection_id": self.connection_id,
                 "unclipped_rect": qa_rect_metadata(unclipped_drop_rect),

@@ -6,7 +6,13 @@ use crate::model::{BlendMode, GeneratorContent, NodeContent};
 
 use super::{NodeContainer, Project, ProjectGraphError};
 
+mod container_outputs;
+pub use container_outputs::{
+    ContainerAudioSource, ContainerAudioSourceKind, ContainerImageSource, ContainerImageSourceKind,
+};
+
 pub const IMAGE_OUTPUT_PORT: &str = "image";
+pub const AUDIO_OUTPUT_PORT: &str = "audio";
 pub const IMAGE_INPUT_PORT: &str = "image_in";
 pub const MERGE_IMAGES_PORT: &str = "images";
 pub const SHAPE_OUTPUT_PORT: &str = "shape";
@@ -65,23 +71,6 @@ impl PortOwner {
             Self::Composition(id) | Self::Track(id) | Self::Clip(id) | Self::Node(id) => id,
         }
     }
-}
-
-/// Why a container exposes a particular owner as part of its image output.
-/// This is a derived graph projection, not persisted project state.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum ContainerImageSourceKind {
-    /// The container's `output_node_id` selects one directly contained Node.
-    OutputBinding,
-    /// No output binding exists, so the ordered direct children are composed.
-    DerivedChild,
-}
-
-/// One ordered dependency of a Composition, Track, or Clip image output.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ContainerImageSource {
-    pub source: PortOwner,
-    pub kind: ContainerImageSourceKind,
 }
 
 /// On-demand authored identity for one container's visual graph.
@@ -336,10 +325,20 @@ fn container_ports() -> Vec<PortDefinition> {
         PortSide::Right,
         PortExposure::External,
     ));
+    ports.push(PortDefinition::output(
+        AUDIO_OUTPUT_PORT,
+        "Audio",
+        PortDataType::Audio,
+        PortSide::Right,
+        PortExposure::External,
+    ));
     ports
 }
 
-fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
+fn node_ports(
+    node: &crate::model::Node,
+    media_kind: Option<&crate::model::asset::AssetKind>,
+) -> Vec<PortDefinition> {
     let mut ports = Vec::new();
     let time_input = || PortDefinition::input(TIME_PORT, "Time", PortDataType::Number);
     let image_output = || {
@@ -347,6 +346,15 @@ fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
             IMAGE_OUTPUT_PORT,
             "Image",
             PortDataType::Image,
+            PortSide::Right,
+            PortExposure::Graph,
+        )
+    };
+    let audio_output = || {
+        PortDefinition::output(
+            AUDIO_OUTPUT_PORT,
+            "Audio",
+            PortDataType::Audio,
             PortSide::Right,
             PortExposure::Graph,
         )
@@ -396,12 +404,16 @@ fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
             ports.push(image_output());
         }
         NodeContent::Media(_) => {
-            ports.extend([
-                time_input(),
-                PortDefinition::input("opacity", "Opacity", PortDataType::Number),
-                PortDefinition::input("audio", "Audio", PortDataType::Audio),
-            ]);
-            ports.push(image_output());
+            ports.push(time_input());
+            match media_kind {
+                Some(crate::model::asset::AssetKind::Video) => {
+                    ports.push(image_output());
+                    ports.push(audio_output());
+                }
+                Some(crate::model::asset::AssetKind::Image) => ports.push(image_output()),
+                Some(crate::model::asset::AssetKind::Audio) => ports.push(audio_output()),
+                _ => {}
+            }
         }
         NodeContent::Reference(_) => {
             ports.push(time_input());
@@ -619,107 +631,25 @@ impl Project {
         }
     }
 
-    /// Return the authoritative, ordered image dependencies for a container.
-    ///
-    /// An explicit output binding always replaces fallback composition. Without
-    /// one, a Composition derives from its ordered Tracks and a Track derives
-    /// from its ordered Clips. Direct Nodes are an internal graph implementation
-    /// detail and never become an implicit image output; a Clip therefore needs
-    /// an explicit output binding. Missing owners and leaf Nodes have no sources.
-    pub fn container_image_sources(&self, owner: PortOwner) -> Vec<ContainerImageSource> {
-        self.container_image_sources_with_connections(owner, &self.connections)
-    }
-
-    fn container_image_sources_with_connections(
-        &self,
-        owner: PortOwner,
-        _connections: &[ProjectConnection],
-    ) -> Vec<ContainerImageSource> {
-        let derived = |source| ContainerImageSource {
-            source,
-            kind: ContainerImageSourceKind::DerivedChild,
-        };
-        let bound = |node_id| {
-            vec![ContainerImageSource {
-                source: PortOwner::Node(node_id),
-                kind: ContainerImageSourceKind::OutputBinding,
-            }]
-        };
-
-        let (container, output_node_id) = match owner {
-            PortOwner::Composition(id) => {
-                let Some(composition) = self.get_composition(id) else {
-                    return Vec::new();
-                };
-                (NodeContainer::Composition(id), composition.output_node_id)
-            }
-            PortOwner::Track(id) => {
-                let Some(track) = self.get_track(id) else {
-                    return Vec::new();
-                };
-                (NodeContainer::Track(id), track.output_node_id)
-            }
-            PortOwner::Clip(id) => {
-                let Some(clip) = self.get_clip(id) else {
-                    return Vec::new();
-                };
-                (NodeContainer::Clip(id), clip.output_node_id)
-            }
-            PortOwner::Node(_) => return Vec::new(),
-        };
-        if let Some(output_node_id) = output_node_id {
-            return bound(output_node_id);
-        }
-
-        self.direct_child_owners(container)
-            .into_iter()
-            .filter(|source| self.owner_has_image_output(*source))
-            .map(derived)
-            .collect()
-    }
-
     pub fn port_definitions(&self, owner: PortOwner) -> Vec<PortDefinition> {
         match owner {
             PortOwner::Composition(id) if self.get_composition(id).is_some() => container_ports(),
             PortOwner::Track(id) if self.get_track(id).is_some() => container_ports(),
             PortOwner::Clip(id) if self.get_clip(id).is_some() => container_ports(),
-            PortOwner::Node(id) => self.get_node(id).map(node_ports).unwrap_or_default(),
+            PortOwner::Node(id) => self
+                .get_node(id)
+                .map(|node| {
+                    let media_kind = match node.content() {
+                        NodeContent::Media(media) => {
+                            self.get_asset(media.asset_id).map(|asset| &asset.kind)
+                        }
+                        _ => None,
+                    };
+                    node_ports(node, media_kind)
+                })
+                .unwrap_or_default(),
             _ => Vec::new(),
         }
-    }
-
-    fn direct_child_owners(&self, container: NodeContainer) -> Vec<PortOwner> {
-        match container {
-            NodeContainer::Composition(id) => self
-                .get_composition(id)
-                .map(|composition| {
-                    composition
-                        .track_ids
-                        .iter()
-                        .copied()
-                        .map(PortOwner::Track)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            NodeContainer::Track(id) => self
-                .get_track(id)
-                .map(|track| {
-                    track
-                        .clip_ids
-                        .iter()
-                        .copied()
-                        .map(PortOwner::Clip)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            NodeContainer::Clip(_) => Vec::new(),
-        }
-    }
-
-    fn owner_has_image_output(&self, owner: PortOwner) -> bool {
-        let address = PortAddress::new(owner, IMAGE_OUTPUT_PORT);
-        self.port_definition(&address, PortDirection::Output)
-            .is_some_and(|port| port.data_type == PortDataType::Image)
     }
 
     fn first_authored_visual_source(
@@ -865,7 +795,7 @@ impl Project {
                 target_owner: to.owner,
             });
         }
-        if !is_render_evaluable_type(source.data_type) {
+        if !is_graph_connectable_type(source.data_type) {
             return Err(ProjectGraphError::UnsupportedConnectionType {
                 connection_id: Uuid::nil(),
                 data_type: source.data_type,
@@ -898,7 +828,7 @@ impl Project {
         }
         prospective.push(connection.clone());
         if source.exposure != PortExposure::Internal
-            && is_render_evaluable_type(source.data_type)
+            && is_graph_connectable_type(source.data_type)
             && self.connection_is_cyclic(&connection, &prospective)
         {
             return Err(ProjectGraphError::ConnectionCycle {
@@ -1194,7 +1124,8 @@ impl Project {
     }
 
     fn validate_container_output_ports(&self) -> Vec<ProjectGraphError> {
-        self.compositions
+        let image_errors = self
+            .compositions
             .iter()
             .filter_map(|composition| {
                 composition
@@ -1215,7 +1146,30 @@ impl Project {
                     .is_some_and(|_| !self.owner_has_image_output(PortOwner::Node(node_id)))
                     .then_some(ProjectGraphError::OutputNodeHasNoImagePort { node_id, container })
             })
-            .collect()
+            .collect::<Vec<_>>();
+        let audio_errors = self
+            .compositions
+            .iter()
+            .filter_map(|composition| {
+                composition
+                    .audio_output_node_id
+                    .map(|node_id| (NodeContainer::Composition(composition.id), node_id))
+            })
+            .chain(self.tracks.values().filter_map(|track| {
+                track
+                    .audio_output_node_id
+                    .map(|node_id| (NodeContainer::Track(track.id), node_id))
+            }))
+            .chain(self.clips.values().filter_map(|clip| {
+                clip.audio_output_node_id
+                    .map(|node_id| (NodeContainer::Clip(clip.id), node_id))
+            }))
+            .filter_map(|(container, node_id)| {
+                self.get_node(node_id)
+                    .is_some_and(|_| !self.owner_has_audio_output(PortOwner::Node(node_id)))
+                    .then_some(ProjectGraphError::OutputNodeHasNoAudioPort { node_id, container })
+            });
+        image_errors.into_iter().chain(audio_errors).collect()
     }
 
     fn validate_plugin_operation_contracts(&self) -> Vec<ProjectGraphError> {
@@ -1309,14 +1263,14 @@ impl Project {
                 target_owner: connection.to.owner,
             });
         }
-        if !is_render_evaluable_type(source.data_type) {
+        if !is_graph_connectable_type(source.data_type) {
             errors.push(ProjectGraphError::UnsupportedConnectionType {
                 connection_id: connection.id,
                 data_type: source.data_type,
             });
         }
         if source.exposure != PortExposure::Internal
-            && is_render_evaluable_type(source.data_type)
+            && is_graph_connectable_type(source.data_type)
             && self.connection_is_cyclic(connection, &self.connections)
         {
             errors.push(ProjectGraphError::ConnectionCycle {
@@ -1447,24 +1401,42 @@ impl Project {
         let mut dependencies: HashMap<PortOwner, Vec<PortOwner>> = HashMap::new();
         for composition in &self.compositions {
             let owner = PortOwner::Composition(composition.id);
-            dependencies.entry(owner).or_default().extend(
+            let dependencies_for_owner = dependencies.entry(owner).or_default();
+            dependencies_for_owner.extend(
                 self.container_image_sources_with_connections(owner, connections)
+                    .into_iter()
+                    .map(|source| source.source),
+            );
+            dependencies_for_owner.extend(
+                self.container_audio_sources(owner)
                     .into_iter()
                     .map(|source| source.source),
             );
         }
         for track in self.tracks.values() {
             let owner = PortOwner::Track(track.id);
-            dependencies.entry(owner).or_default().extend(
+            let dependencies_for_owner = dependencies.entry(owner).or_default();
+            dependencies_for_owner.extend(
                 self.container_image_sources_with_connections(owner, connections)
+                    .into_iter()
+                    .map(|source| source.source),
+            );
+            dependencies_for_owner.extend(
+                self.container_audio_sources(owner)
                     .into_iter()
                     .map(|source| source.source),
             );
         }
         for clip in self.clips.values() {
             let owner = PortOwner::Clip(clip.id);
-            dependencies.entry(owner).or_default().extend(
+            let dependencies_for_owner = dependencies.entry(owner).or_default();
+            dependencies_for_owner.extend(
                 self.container_image_sources_with_connections(owner, connections)
+                    .into_iter()
+                    .map(|source| source.source),
+            );
+            dependencies_for_owner.extend(
+                self.container_audio_sources(owner)
                     .into_iter()
                     .map(|source| source.source),
             );
@@ -1477,7 +1449,7 @@ impl Project {
                 .port_definition(&connection.from, PortDirection::Output)
                 .is_some_and(|port| {
                     port.exposure != PortExposure::Internal
-                        && is_render_evaluable_type(port.data_type)
+                        && is_graph_connectable_type(port.data_type)
                 });
             if creates_dependency {
                 dependencies
@@ -1502,8 +1474,8 @@ impl Project {
     }
 }
 
-fn is_render_evaluable_type(data_type: PortDataType) -> bool {
-    !matches!(data_type, PortDataType::Any | PortDataType::Audio)
+fn is_graph_connectable_type(data_type: PortDataType) -> bool {
+    data_type != PortDataType::Any
 }
 
 fn is_reachable(

@@ -2,8 +2,8 @@ use crate::cache::CacheManager;
 use crate::core::audio::cache::{AudioChunk, AudioChunkKey, AudioDecodeFormat, AudioSourceKey};
 use crate::core::audio::loader::AudioLoader;
 use crate::model::asset::{Asset, AssetKind};
-use crate::model::project::{Composition, Project};
-use crate::model::{Clip, Node, NodeContent, Track};
+use crate::model::project::{Composition, PortDataType, PortDirection, PortOwner, Project};
+use crate::model::{Clip, Node, NodeContainer, NodeContent};
 use crate::plugin::{PluginManager, PropertyEvaluatorRegistry};
 use lru::LruCache;
 use std::collections::HashSet;
@@ -33,11 +33,8 @@ enum DecodePolicy {
     DecodeMissing,
 }
 
-/// Mixes the audio-producing leaf Nodes contained by a Composition.
-///
-/// Image graph outputs are deliberately not used as audio routing. Every Media
-/// Node whose asset has audio contributes additively: Composition/Track Nodes
-/// use global time, while Clip Nodes use the Clip's local time mapping.
+/// Mixes the Media leaves that structurally reach the Composition's authored
+/// Audio output. Image bindings and disconnected Media Nodes never contribute.
 #[allow(
     clippy::too_many_arguments,
     reason = "audio callback boundary requires project scope, cache, sample window, and device format as independent inputs"
@@ -107,29 +104,10 @@ fn mix_samples_with_policy(
         (composition.width, composition.height),
     );
 
-    // Direct Composition Nodes live in the global composition time scope.
-    mix_global_nodes(
-        project,
-        &composition.node_ids,
-        &mut mix_buffer,
-        assets,
-        cache_manager,
-        start_time,
-        frames_to_mix,
-        sample_rate,
-        channels,
-        decode_policy,
-        &property_context,
-    );
-
-    for track_id in &composition.track_ids {
-        let Some(track) = project.get_track(*track_id) else {
-            log::trace!("audio mixer skipped missing Track {track_id}");
-            continue;
-        };
-        mix_track(
+    for node_id in routed_audio_media_nodes(project, composition.id) {
+        mix_routed_media_node(
             project,
-            track,
+            node_id,
             &mut mix_buffer,
             assets,
             cache_manager,
@@ -147,11 +125,11 @@ fn mix_samples_with_policy(
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "track mixing passes the same explicit render window and device format through the real-time audio path"
+    reason = "routed Media mixing keeps graph scope, render window, and device format explicit"
 )]
-fn mix_track(
+fn mix_routed_media_node(
     project: &Project,
-    track: &Track,
+    node_id: uuid::Uuid,
     accum_buffer: &mut [f32],
     assets: &[Asset],
     cache_manager: &CacheManager,
@@ -162,164 +140,162 @@ fn mix_track(
     decode_policy: DecodePolicy,
     property_context: &AudioPropertyContext<'_>,
 ) {
-    let mut track_buffer = vec![0.0; accum_buffer.len()];
-
-    // Direct Track Nodes, like direct Composition Nodes, use global time.
-    mix_global_nodes(
-        project,
-        &track.node_ids,
-        &mut track_buffer,
-        assets,
-        cache_manager,
-        start_time,
-        frames,
-        sample_rate,
-        channels,
-        decode_policy,
-        property_context,
-    );
-
-    for clip_id in &track.clip_ids {
-        let Some(clip) = project.get_clip(*clip_id) else {
-            log::trace!("audio mixer skipped missing Clip {clip_id}");
-            continue;
-        };
-        mix_clip(
-            project,
-            clip,
-            &mut track_buffer,
-            assets,
-            cache_manager,
-            start_time,
-            frames,
-            sample_rate,
-            channels,
-            decode_policy,
-            property_context,
-        );
-    }
-
-    // Track gain applies exactly once to the sum of direct and Clip audio.
-    let scope = format!("track:{}", track.id);
-    for frame in 0..frames {
-        let global_time = start_time + frame as f64 / sample_rate as f64;
-        let volume = volume_at(&track.properties, global_time, property_context, &scope);
-        let base = frame * channels;
-        for channel in 0..channels {
-            accum_buffer[base + channel] += track_buffer[base + channel] * volume;
-        }
-    }
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "node mixing passes the same explicit render window and device format through the real-time audio path"
-)]
-fn mix_global_nodes(
-    project: &Project,
-    node_ids: &[uuid::Uuid],
-    accum_buffer: &mut [f32],
-    assets: &[Asset],
-    cache_manager: &CacheManager,
-    start_time: f64,
-    frames: usize,
-    sample_rate: u32,
-    channels: usize,
-    decode_policy: DecodePolicy,
-    property_context: &AudioPropertyContext<'_>,
-) {
-    for node_id in node_ids {
-        let Some(node) = project.get_node(*node_id) else {
-            log::trace!("audio mixer skipped missing Node {node_id}");
-            continue;
-        };
-        if !node.enabled {
-            log::trace!("audio mixer skipped disabled Node {node_id}");
-            continue;
-        }
-        let Some(source_key) = audio_source_for_node(node, assets, sample_rate, channels) else {
-            continue;
-        };
-        let mut source = CachedAudioSource::new(source_key, cache_manager, decode_policy);
-        let scope = format!("node:{}", node.id);
-
-        for frame in 0..frames {
-            let global_time = start_time + frame as f64 / sample_rate as f64;
-            mix_source_frame(
-                &mut source,
-                accum_buffer,
-                frame,
-                global_time,
-                volume_at(node.properties(), global_time, property_context, &scope),
-                sample_rate,
-                channels,
-            );
-        }
-    }
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "clip mixing additionally needs clip-local time while preserving the explicit audio render window"
-)]
-fn mix_clip(
-    project: &Project,
-    clip: &Clip,
-    accum_buffer: &mut [f32],
-    assets: &[Asset],
-    cache_manager: &CacheManager,
-    start_time: f64,
-    frames: usize,
-    sample_rate: u32,
-    channels: usize,
-    decode_policy: DecodePolicy,
-    property_context: &AudioPropertyContext<'_>,
-) {
-    if clip.duration.into_inner() <= 0.0 {
+    let Some(node) = project.get_node(node_id) else {
+        log::trace!("audio mixer skipped missing Node {node_id}");
+        return;
+    };
+    if !node.enabled {
         return;
     }
+    let Some(source_key) = audio_source_for_node(node, assets, sample_rate, channels) else {
+        return;
+    };
+    let clip = clip_for_node(project, node_id);
+    let track = match project.find_node_container(node_id) {
+        Some(NodeContainer::Track(track_id)) => project.get_track(track_id),
+        Some(NodeContainer::Clip(clip_id)) => project
+            .find_track_for_clip(clip_id)
+            .and_then(|track_id| project.get_track(track_id)),
+        _ => None,
+    };
+    let mut source = CachedAudioSource::new(source_key, cache_manager, decode_policy);
+    let node_scope = format!("node:{}", node.id);
+    let clip_scope = clip.map(|clip| format!("clip:{}", clip.id));
+    let track_scope = track.map(|track| format!("track:{}", track.id));
 
-    for node_id in &clip.node_ids {
-        let Some(node) = project.get_node(*node_id) else {
-            log::trace!(
-                "audio mixer skipped missing Node {node_id} in Clip {}",
-                clip.id
-            );
-            continue;
-        };
-        if !node.enabled {
-            log::trace!(
-                "audio mixer skipped disabled Node {node_id} in Clip {}",
-                clip.id
-            );
-            continue;
-        }
-        let Some(source_key) = audio_source_for_node(node, assets, sample_rate, channels) else {
-            continue;
-        };
-        let mut source = CachedAudioSource::new(source_key, cache_manager, decode_policy);
-        let clip_scope = format!("clip:{}", clip.id);
-        let node_scope = format!("{clip_scope}/node:{}", node.id);
-
-        for frame in 0..frames {
-            let global_time = start_time + frame as f64 / sample_rate as f64;
+    for frame in 0..frames {
+        let global_time = start_time + frame as f64 / sample_rate as f64;
+        let source_time = if let Some(clip) = clip {
             if global_time < clip.start_time.into_inner() || global_time >= clip.end_time() {
                 continue;
             }
-
-            let local_time = clip.local_time(global_time);
-            let gain = volume_at(&clip.properties, local_time, property_context, &clip_scope)
-                * volume_at(node.properties(), local_time, property_context, &node_scope);
-            mix_source_frame(
-                &mut source,
-                accum_buffer,
-                frame,
-                local_time,
-                gain,
-                sample_rate,
-                channels,
-            );
+            clip.local_time(global_time)
+        } else {
+            global_time
+        };
+        let mut gain = volume_at(
+            node.properties(),
+            source_time,
+            property_context,
+            &node_scope,
+        );
+        if let (Some(clip), Some(scope)) = (clip, clip_scope.as_deref()) {
+            gain *= volume_at(&clip.properties, source_time, property_context, scope);
         }
+        if let (Some(track), Some(scope)) = (track, track_scope.as_deref()) {
+            gain *= volume_at(&track.properties, global_time, property_context, scope);
+        }
+        mix_source_frame(
+            &mut source,
+            accum_buffer,
+            frame,
+            source_time,
+            gain,
+            sample_rate,
+            channels,
+        );
+    }
+}
+
+fn routed_audio_media_nodes(project: &Project, composition_id: uuid::Uuid) -> Vec<uuid::Uuid> {
+    let mut nodes = Vec::new();
+    let mut emitted = HashSet::new();
+    collect_routed_audio_media_nodes(
+        project,
+        PortOwner::Composition(composition_id),
+        &mut HashSet::new(),
+        &mut emitted,
+        &mut nodes,
+    );
+    nodes
+}
+
+fn collect_routed_audio_media_nodes(
+    project: &Project,
+    owner: PortOwner,
+    path: &mut HashSet<PortOwner>,
+    emitted: &mut HashSet<uuid::Uuid>,
+    nodes: &mut Vec<uuid::Uuid>,
+) {
+    if !path.insert(owner) {
+        return;
+    }
+    match owner {
+        PortOwner::Composition(_) | PortOwner::Track(_) | PortOwner::Clip(_) => {
+            for source in project.container_audio_sources(owner) {
+                collect_routed_audio_media_nodes(project, source.source, path, emitted, nodes);
+            }
+        }
+        PortOwner::Node(node_id) => {
+            let Some(node) = project.get_node(node_id) else {
+                path.remove(&owner);
+                return;
+            };
+            if !node.enabled
+                || !project.port_definitions(owner).into_iter().any(|port| {
+                    port.direction == PortDirection::Output && port.data_type == PortDataType::Audio
+                })
+            {
+                path.remove(&owner);
+                return;
+            }
+            match node.content() {
+                NodeContent::Media(_) => {
+                    if emitted.insert(node_id) {
+                        nodes.push(node_id);
+                    }
+                }
+                NodeContent::PluginOperation(operation) => {
+                    // Audio PluginOperation evaluation is not implemented by
+                    // the mixer yet. Treating its Audio inputs as an implicit
+                    // sum/pass-through would silently change plugin semantics,
+                    // so an authored operation output is NoOutput until the
+                    // matching runtime evaluation contract exists.
+                    log::trace!(
+                        "audio mixer skipped unsupported PluginOperation {} ({}/{})",
+                        node.id,
+                        operation.category,
+                        operation.component_id
+                    );
+                }
+                NodeContent::Generator(_)
+                | NodeContent::Reference(_)
+                | NodeContent::Value(_)
+                | NodeContent::Merge => {
+                    let mut inputs = project
+                        .connections
+                        .iter()
+                        .filter(|connection| connection.to.owner == owner)
+                        .filter(|connection| {
+                            project
+                                .port_definition(&connection.from, PortDirection::Output)
+                                .is_some_and(|port| port.data_type == PortDataType::Audio)
+                                && project
+                                    .port_definition(&connection.to, PortDirection::Input)
+                                    .is_some_and(|port| port.data_type == PortDataType::Audio)
+                        })
+                        .collect::<Vec<_>>();
+                    inputs.sort_by_key(|connection| (connection.order, connection.id));
+                    for connection in inputs {
+                        collect_routed_audio_media_nodes(
+                            project,
+                            connection.from.owner,
+                            path,
+                            emitted,
+                            nodes,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    path.remove(&owner);
+}
+
+fn clip_for_node(project: &Project, node_id: uuid::Uuid) -> Option<&Clip> {
+    match project.find_node_container(node_id) {
+        Some(NodeContainer::Clip(clip_id)) => project.get_clip(clip_id),
+        _ => None,
     }
 }
 
@@ -476,42 +452,17 @@ pub fn audio_window_requests_for_composition(
         return Vec::new();
     }
     let mut requests = HashSet::new();
-    collect_node_windows(
-        project,
-        &composition.node_ids,
-        None,
-        start_sample,
-        frames,
-        sample_rate,
-        &mut requests,
-    );
-    for track_id in &composition.track_ids {
-        let Some(track) = project.get_track(*track_id) else {
-            continue;
-        };
+    for node_id in routed_audio_media_nodes(project, composition.id) {
+        let clip = clip_for_node(project, node_id);
         collect_node_windows(
             project,
-            &track.node_ids,
-            None,
+            std::slice::from_ref(&node_id),
+            clip,
             start_sample,
             frames,
             sample_rate,
             &mut requests,
         );
-        for clip_id in &track.clip_ids {
-            let Some(clip) = project.get_clip(*clip_id) else {
-                continue;
-            };
-            collect_node_windows(
-                project,
-                &clip.node_ids,
-                Some(clip),
-                start_sample,
-                frames,
-                sample_rate,
-                &mut requests,
-            );
-        }
     }
     requests.into_iter().collect()
 }

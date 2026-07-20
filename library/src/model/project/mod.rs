@@ -12,12 +12,14 @@ use crate::model::project::property::PropertyMap;
 pub mod asset;
 pub mod clip_helpers;
 pub mod connection;
+mod output_binding;
 pub mod property;
 
 pub use connection::{
-    ContainerGraphSemantics, ContainerImageSource, ContainerImageSourceKind, DURATION_PORT,
-    EvalOutput, EvalResult, EvaluationError, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, FPS_PORT,
-    FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NUMBER_RESULT_OUTPUT_PORT,
+    AUDIO_OUTPUT_PORT, ContainerAudioSource, ContainerAudioSourceKind, ContainerGraphSemantics,
+    ContainerImageSource, ContainerImageSourceKind, DURATION_PORT, EvalOutput, EvalResult,
+    EvaluationError, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, FPS_PORT, FRAME_PORT,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NUMBER_RESULT_OUTPUT_PORT,
     NUMERIC_A_INPUT_PORT, NUMERIC_B_INPUT_PORT, PortAddress, PortDataType, PortDefinition,
     PortDirection, PortExposure, PortMultiplicity, PortOwner, PortSide, ProjectConnection,
     RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
@@ -118,6 +120,10 @@ pub struct Composition {
     pub node_ids: Vec<Uuid>,
     #[serde(default)]
     pub output_node_id: Option<Uuid>,
+    /// Explicit graph result for the Composition audio output. This is
+    /// independent from the image binding above.
+    #[serde(deserialize_with = "deserialize_required_audio_output_node_id")]
+    pub audio_output_node_id: Option<Uuid>,
     #[serde(default)]
     pub ui_position: [f32; 2],
     #[serde(default = "default_composition_ui_size")]
@@ -128,6 +134,15 @@ pub struct Composition {
 
 fn default_composition_ui_size() -> [f32; 2] {
     [1280.0, 860.0]
+}
+
+fn deserialize_required_audio_output_node_id<'de, D>(
+    deserializer: D,
+) -> Result<Option<Uuid>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<Uuid>::deserialize(deserializer)
 }
 
 fn default_color_profile() -> String {
@@ -188,6 +203,7 @@ impl Composition {
                 track_ids: vec![first_track.id],
                 node_ids: Vec::new(),
                 output_node_id: None,
+                audio_output_node_id: None,
                 ui_position: [0.0, 0.0],
                 ui_size: default_composition_ui_size(),
                 ui_collapsed: false,
@@ -282,6 +298,15 @@ struct ContainerNodeState {
     container: NodeContainer,
     node_ids: Vec<Uuid>,
     output_node_id: Option<Uuid>,
+    audio_output_node_id: Option<Uuid>,
+}
+
+#[derive(Clone, Copy)]
+struct ContainerView<'a> {
+    container: NodeContainer,
+    node_ids: &'a [Uuid],
+    image_output_node_id: Option<Uuid>,
+    audio_output_node_id: Option<Uuid>,
 }
 
 /// A side-effect-free Project integrity diagnostic. The adjacent JSON
@@ -377,6 +402,11 @@ pub enum ProjectGraphError {
     },
     #[error("output node {node_id} in {container:?} does not declare an image output port")]
     OutputNodeHasNoImagePort {
+        node_id: Uuid,
+        container: NodeContainer,
+    },
+    #[error("audio output node {node_id} in {container:?} does not declare an audio output port")]
+    OutputNodeHasNoAudioPort {
         node_id: Uuid,
         container: NodeContainer,
     },
@@ -941,13 +971,17 @@ impl Project {
         let containment_backup = self
             .container_views()
             .into_iter()
-            .filter(|(candidate, ids, output)| {
-                *candidate == container || ids.contains(&node_id) || *output == Some(node_id)
+            .filter(|view| {
+                view.container == container
+                    || view.node_ids.contains(&node_id)
+                    || view.image_output_node_id == Some(node_id)
+                    || view.audio_output_node_id == Some(node_id)
             })
-            .map(|(candidate, ids, output)| ContainerNodeState {
-                container: candidate,
-                node_ids: ids.clone(),
-                output_node_id: output,
+            .map(|view| ContainerNodeState {
+                container: view.container,
+                node_ids: view.node_ids.to_vec(),
+                output_node_id: view.image_output_node_id,
+                audio_output_node_id: view.audio_output_node_id,
             })
             .collect::<Vec<_>>();
 
@@ -968,6 +1002,13 @@ impl Project {
         {
             self.set_container_output_node_unchecked(container, output_node_id);
         }
+        if let Some(audio_output_node_id) = containment_backup
+            .iter()
+            .find(|state| state.container == container)
+            .map(|state| state.audio_output_node_id)
+        {
+            self.set_container_audio_output_node_unchecked(container, audio_output_node_id);
+        }
         self.apply_connection_source_remaps(&remaps);
 
         if let Some(error) =
@@ -985,67 +1026,21 @@ impl Project {
     pub fn detach_node(&mut self, node_id: Uuid) -> bool {
         let mut removed = false;
         for composition in &mut self.compositions {
-            removed |= remove_node_id(
-                &mut composition.node_ids,
-                &mut composition.output_node_id,
-                node_id,
-            );
+            removed |= remove_node_id(&mut composition.node_ids, node_id);
+            clear_output_node(&mut composition.output_node_id, node_id);
+            clear_output_node(&mut composition.audio_output_node_id, node_id);
         }
         for track in self.tracks.values_mut() {
-            removed |= remove_node_id(&mut track.node_ids, &mut track.output_node_id, node_id);
+            removed |= remove_node_id(&mut track.node_ids, node_id);
+            clear_output_node(&mut track.output_node_id, node_id);
+            clear_output_node(&mut track.audio_output_node_id, node_id);
         }
         for clip in self.clips.values_mut() {
-            removed |= remove_node_id(&mut clip.node_ids, &mut clip.output_node_id, node_id);
+            removed |= remove_node_id(&mut clip.node_ids, node_id);
+            clear_output_node(&mut clip.output_node_id, node_id);
+            clear_output_node(&mut clip.audio_output_node_id, node_id);
         }
         removed
-    }
-
-    pub fn set_output_node(
-        &mut self,
-        container: NodeContainer,
-        output_node_id: Option<Uuid>,
-    ) -> Result<(), ProjectGraphError> {
-        let previous_output_node_id = match container {
-            NodeContainer::Composition(id) => {
-                self.get_composition(id)
-                    .ok_or(ProjectGraphError::CompositionNotFound(id))?
-                    .output_node_id
-            }
-            NodeContainer::Track(id) => {
-                self.get_track(id)
-                    .ok_or(ProjectGraphError::TrackNotFound(id))?
-                    .output_node_id
-            }
-            NodeContainer::Clip(id) => {
-                self.get_clip(id)
-                    .ok_or(ProjectGraphError::ClipNotFound(id))?
-                    .output_node_id
-            }
-        };
-        if let Some(node_id) = output_node_id
-            && self.find_node_container(node_id) != Some(container)
-        {
-            return Err(ProjectGraphError::OutputNodeOutsideContainer { node_id, container });
-        }
-        if let Some(node_id) = output_node_id {
-            let image_output = PortAddress::new(PortOwner::Node(node_id), IMAGE_OUTPUT_PORT);
-            if !self
-                .port_definition(&image_output, PortDirection::Output)
-                .is_some_and(|port| port.data_type == PortDataType::Image)
-            {
-                return Err(ProjectGraphError::OutputNodeHasNoImagePort { node_id, container });
-            }
-        }
-
-        let validation_baseline = self.validate_connections();
-        self.set_container_output_node_unchecked(container, output_node_id);
-        if let Some(error) =
-            first_new_project_validation_error(&validation_baseline, self.validate_connections())
-        {
-            self.set_container_output_node_unchecked(container, previous_output_node_id);
-            return Err(error);
-        }
-        Ok(())
     }
 
     pub fn validate_containment(&self) -> Vec<ProjectGraphError> {
@@ -1160,25 +1155,28 @@ impl Project {
         }
 
         let mut owners = HashMap::new();
-        for (container, ids, output) in self.container_views() {
-            for node_id in ids {
+        for view in self.container_views() {
+            for node_id in view.node_ids {
                 if !self.nodes.contains_key(node_id) {
                     errors.push(ProjectGraphError::NodeNotFound(*node_id));
                 }
-                if let Some(previous) = owners.insert(*node_id, container) {
+                if let Some(previous) = owners.insert(*node_id, view.container) {
                     errors.push(ProjectGraphError::NodeAlreadyContained {
                         node_id: *node_id,
                         container: previous,
                     });
                 }
             }
-            if let Some(output_node_id) = output
-                && !ids.contains(&output_node_id)
+            for output_node_id in [view.image_output_node_id, view.audio_output_node_id]
+                .into_iter()
+                .flatten()
             {
-                errors.push(ProjectGraphError::OutputNodeOutsideContainer {
-                    node_id: output_node_id,
-                    container,
-                });
+                if !view.node_ids.contains(&output_node_id) {
+                    errors.push(ProjectGraphError::OutputNodeOutsideContainer {
+                        node_id: output_node_id,
+                        container: view.container,
+                    });
+                }
             }
         }
         for node_id in self.nodes.keys() {
@@ -1319,48 +1317,27 @@ impl Project {
         }
     }
 
-    fn set_container_output_node_unchecked(
-        &mut self,
-        container: NodeContainer,
-        output_node_id: Option<Uuid>,
-    ) {
-        match container {
-            NodeContainer::Composition(id) => {
-                if let Some(composition) = self.get_composition_mut(id) {
-                    composition.output_node_id = output_node_id;
-                }
-            }
-            NodeContainer::Track(id) => {
-                if let Some(track) = self.get_track_mut(id) {
-                    track.output_node_id = output_node_id;
-                }
-            }
-            NodeContainer::Clip(id) => {
-                if let Some(clip) = self.get_clip_mut(id) {
-                    clip.output_node_id = output_node_id;
-                }
-            }
-        }
-    }
-
     fn restore_container_node_state(&mut self, state: ContainerNodeState) {
         match state.container {
             NodeContainer::Composition(id) => {
                 if let Some(composition) = self.get_composition_mut(id) {
                     composition.node_ids = state.node_ids;
                     composition.output_node_id = state.output_node_id;
+                    composition.audio_output_node_id = state.audio_output_node_id;
                 }
             }
             NodeContainer::Track(id) => {
                 if let Some(track) = self.get_track_mut(id) {
                     track.node_ids = state.node_ids;
                     track.output_node_id = state.output_node_id;
+                    track.audio_output_node_id = state.audio_output_node_id;
                 }
             }
             NodeContainer::Clip(id) => {
                 if let Some(clip) = self.get_clip_mut(id) {
                     clip.node_ids = state.node_ids;
                     clip.output_node_id = state.output_node_id;
+                    clip.audio_output_node_id = state.audio_output_node_id;
                 }
             }
         }
@@ -1376,29 +1353,26 @@ impl Project {
         }
     }
 
-    fn container_views(&self) -> Vec<(NodeContainer, &Vec<Uuid>, Option<Uuid>)> {
+    fn container_views(&self) -> Vec<ContainerView<'_>> {
         self.compositions
             .iter()
-            .map(|item| {
-                (
-                    NodeContainer::Composition(item.id),
-                    &item.node_ids,
-                    item.output_node_id,
-                )
+            .map(|item| ContainerView {
+                container: NodeContainer::Composition(item.id),
+                node_ids: &item.node_ids,
+                image_output_node_id: item.output_node_id,
+                audio_output_node_id: item.audio_output_node_id,
             })
-            .chain(self.tracks.values().map(|item| {
-                (
-                    NodeContainer::Track(item.id),
-                    &item.node_ids,
-                    item.output_node_id,
-                )
+            .chain(self.tracks.values().map(|item| ContainerView {
+                container: NodeContainer::Track(item.id),
+                node_ids: &item.node_ids,
+                image_output_node_id: item.output_node_id,
+                audio_output_node_id: item.audio_output_node_id,
             }))
-            .chain(self.clips.values().map(|item| {
-                (
-                    NodeContainer::Clip(item.id),
-                    &item.node_ids,
-                    item.output_node_id,
-                )
+            .chain(self.clips.values().map(|item| ContainerView {
+                container: NodeContainer::Clip(item.id),
+                node_ids: &item.node_ids,
+                image_output_node_id: item.output_node_id,
+                audio_output_node_id: item.audio_output_node_id,
             }))
             .collect()
     }
@@ -1429,11 +1403,14 @@ fn first_new_project_validation_error(
     })
 }
 
-fn remove_node_id(ids: &mut Vec<Uuid>, output: &mut Option<Uuid>, node_id: Uuid) -> bool {
+fn remove_node_id(ids: &mut Vec<Uuid>, node_id: Uuid) -> bool {
     let old_len = ids.len();
     ids.retain(|id| *id != node_id);
+    old_len != ids.len()
+}
+
+fn clear_output_node(output: &mut Option<Uuid>, node_id: Uuid) {
     if *output == Some(node_id) {
         *output = None;
     }
-    old_len != ids.len()
 }
