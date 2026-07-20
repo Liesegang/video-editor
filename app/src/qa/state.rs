@@ -214,6 +214,23 @@ pub fn snapshot(
                         "current": {"x": gesture.current.x, "y": gesture.current.y},
                     })
                 }),
+                "merge_layer_reorder": editor_context
+                    .node_editor_state
+                    .merge_layer_reorder
+                    .as_ref()
+                    .map(|gesture| serde_json::json!({
+                        "merge_id": gesture.merge_id,
+                        "connection_id": gesture.connection_id,
+                        "start_index": gesture.start_index,
+                        "target_index": gesture.target_index,
+                        "layer_count": gesture.layer_count,
+                        "measured_row_count": gesture
+                            .row_rects
+                            .iter()
+                            .filter(|rect| rect.is_positive())
+                            .count(),
+                        "finished": gesture.finished,
+                    })),
                 "wire_knife": editor_context.node_editor_state.wire_knife.as_ref().map(|gesture| {
                     let mut crossed = gesture.crossed_wires.iter().copied().collect::<Vec<_>>();
                     crossed.sort_by_key(|target| match target {

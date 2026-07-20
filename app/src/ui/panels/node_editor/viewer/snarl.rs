@@ -7,11 +7,19 @@ use egui_snarl::{
     ui::{BackgroundPattern, NodeLayout, SnarlPin, SnarlStyle, SnarlViewer},
     InPin, OutPin, Snarl,
 };
-use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwner};
+use library::model::project::{
+    PortAddress, PortDataType, PortDirection, PortOwner, MERGE_IMAGES_PORT,
+};
 use library::model::property::PropertyValue;
-use library::model::{GeneratorContent, NodeContent};
+use library::model::{GeneratorContent, NodeContent, Project};
 use library::plugin::property_name_from_port;
 use std::sync::Arc;
+use uuid::Uuid;
+
+fn is_physical_merge_node(project: &Project, node_id: Uuid) -> bool {
+    let target = PortAddress::new(PortOwner::Node(node_id), MERGE_IMAGES_PORT);
+    merge_images_target_node_id(project, &target).is_some()
+}
 
 impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     fn node_layout(
@@ -307,7 +315,14 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     }
 
     fn inputs(&mut self, item: &GraphItem) -> usize {
-        input_definitions(self.project, *item).len()
+        match item {
+            GraphItem::Node(node_id) if is_physical_merge_node(self.project, *node_id) => {
+                merge_input_slots(self.project, *node_id).len()
+            }
+            GraphItem::Node(_) | GraphItem::Container(_) | GraphItem::PortAnchor { .. } => {
+                input_definitions(self.project, *item).len()
+            }
+        }
     }
 
     fn outputs(&mut self, item: &GraphItem) -> usize {
@@ -321,12 +336,24 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         snarl: &mut Snarl<GraphItem>,
     ) -> impl SnarlPin + 'static {
         let item = snarl.get_node(pin.id.node).copied();
-        let definition = snarl
-            .get_node(pin.id.node)
-            .and_then(|item| {
-                input_definitions(self.project, *item)
+        let merge_slot = match item {
+            Some(GraphItem::Node(node_id)) if is_physical_merge_node(self.project, node_id) => {
+                merge_input_slots(self.project, node_id)
                     .get(pin.id.input)
                     .cloned()
+            }
+            Some(GraphItem::Node(_) | GraphItem::Container(_) | GraphItem::PortAnchor { .. })
+            | None => None,
+        };
+        let definition = merge_slot
+            .as_ref()
+            .map(|slot| slot.definition.clone())
+            .or_else(|| {
+                snarl.get_node(pin.id.node).and_then(|item| {
+                    input_definitions(self.project, *item)
+                        .get(pin.id.input)
+                        .cloned()
+                })
             })
             .unwrap_or_else(|| PinDefinition {
                 key: "missing".to_string(),
@@ -334,34 +361,56 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 data_type: PortDataType::Any,
             });
         let connected = !pin.remotes.is_empty();
-        if let Some(GraphItem::Node(node_id)) = item {
-            if node_editor_details_visible(self.to_global.scaling) {
-                let property_key = property_name_from_port(&definition.key)
-                    .unwrap_or(&definition.key)
-                    .to_string();
-                let property_definition = self.project.get_node(node_id).and_then(|node| {
-                    node_property_definition(self.plugin_manager, node, &property_key)
-                });
-                self.show_node_input_row(
-                    ui,
-                    node_id,
-                    &definition,
-                    &property_key,
-                    property_definition.as_ref(),
-                    connected,
-                );
+        let merge_connection_id =
+            if let (Some(GraphItem::Node(node_id)), Some(slot)) = (item, merge_slot.as_ref()) {
+                match slot.role {
+                    MergeInputSlotRole::Connected(_) | MergeInputSlotRole::VacantImages => {
+                        self.show_merge_input_slot(node_id, slot, ui)
+                    }
+                    MergeInputSlotRole::Canonical => None,
+                }
             } else {
-                ui.allocate_space(egui::vec2(PORT_LABEL_WIDTH + 80.0, PORT_ROW_HEIGHT));
+                None
+            };
+        let merge_slot_rendered = merge_slot.as_ref().is_some_and(|slot| {
+            matches!(
+                slot.role,
+                MergeInputSlotRole::Connected(_) | MergeInputSlotRole::VacantImages
+            )
+        });
+        if !merge_slot_rendered {
+            if let Some(GraphItem::Node(node_id)) = item {
+                if node_editor_details_visible(self.to_global.scaling) {
+                    let property_key = property_name_from_port(&definition.key)
+                        .unwrap_or(&definition.key)
+                        .to_string();
+                    let property_definition = self.project.get_node(node_id).and_then(|node| {
+                        node_property_definition(self.plugin_manager, node, &property_key)
+                    });
+                    self.show_node_input_row(
+                        ui,
+                        node_id,
+                        &definition,
+                        &property_key,
+                        property_definition.as_ref(),
+                        connected,
+                    );
+                } else {
+                    ui.allocate_space(egui::vec2(PORT_LABEL_WIDTH + 80.0, PORT_ROW_HEIGHT));
+                }
+            } else {
+                ui.allocate_space(egui::vec2(0.0, PORT_ROW_HEIGHT));
             }
-        } else {
-            ui.allocate_space(egui::vec2(0.0, PORT_ROW_HEIGHT));
         }
         let address = item
             .and_then(graph_item_owner)
             .map(|owner| PortAddress::new(owner, definition.key.clone()));
         QaPin {
             info: pin_info(definition.data_type, connected),
-            component_id: qa_port_id(self.project, item, "input", &definition.key),
+            component_id: merge_connection_id.map_or_else(
+                || qa_port_id(self.project, item, "input", &definition.key),
+                |connection_id| format!("node_editor.port.input.merge_connection:{connection_id}"),
+            ),
             to_global: *self.to_global,
             graph_center: embedded_pin_center(
                 self.containers,
@@ -373,6 +422,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             data_type: definition.data_type,
             direction: PortDirection::Input,
             connected,
+            connection_id: merge_connection_id,
             canvas_clip: *self.canvas_clip,
             rendered_ports: Arc::clone(&self.rendered_ports),
         }
@@ -429,20 +479,15 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             data_type: definition.data_type,
             direction: PortDirection::Output,
             connected,
+            connection_id: None,
             canvas_clip: *self.canvas_clip,
             rendered_ports: Arc::clone(&self.rendered_ports),
         }
     }
 
     fn has_body(&mut self, item: &GraphItem) -> bool {
-        matches!(
-            item,
-            GraphItem::Node(node_id)
-                if self
-                    .project
-                    .get_node(*node_id)
-                    .is_some_and(|node| matches!(node.content(), NodeContent::Merge))
-        )
+        let _ = item;
+        false
     }
 
     fn show_body(
@@ -466,17 +511,6 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         let GraphItem::Node(project_node_id) = item else {
             return;
         };
-        if self
-            .project
-            .get_node(project_node_id)
-            .is_some_and(|node| matches!(node.content(), NodeContent::Merge))
-        {
-            ui.vertical(|ui| {
-                ui.set_width(MERGE_BODY_WIDTH);
-                self.show_merge_layers(project_node_id, ui);
-            });
-            return;
-        }
         ui.vertical(|ui| {
             ui.set_width(NODE_BODY_WIDTH);
             let Some(node) = self.project.get_node(project_node_id) else {

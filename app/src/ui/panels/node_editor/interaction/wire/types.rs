@@ -22,6 +22,7 @@ pub(in crate::ui::panels::node_editor) struct QaPin {
     pub(in crate::ui::panels::node_editor) data_type: PortDataType,
     pub(in crate::ui::panels::node_editor) direction: PortDirection,
     pub(in crate::ui::panels::node_editor) connected: bool,
+    pub(in crate::ui::panels::node_editor) connection_id: Option<Uuid>,
     pub(in crate::ui::panels::node_editor) canvas_clip: egui::Rect,
     pub(in crate::ui::panels::node_editor) rendered_ports:
         Arc<Mutex<HashMap<RenderedPortKey, egui::Rect>>>,
@@ -31,6 +32,9 @@ pub(in crate::ui::panels::node_editor) struct QaPin {
 pub(in crate::ui::panels::node_editor) struct RenderedPortKey {
     pub(in crate::ui::panels::node_editor) address: PortAddress,
     pub(in crate::ui::panels::node_editor) direction: PortDirection,
+    /// Merge variadic inputs have one rendered endpoint per canonical wire.
+    /// Every other socket, including the vacant variadic input, uses `None`.
+    pub(in crate::ui::panels::node_editor) connection_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,6 +121,7 @@ pub(in crate::ui::panels::node_editor) struct EdgeComponent<'a> {
     pub(in crate::ui::panels::node_editor) authored_order: Option<i64>,
     pub(in crate::ui::panels::node_editor) back_to_front_index: Option<usize>,
     pub(in crate::ui::panels::node_editor) layer_count: Option<usize>,
+    pub(in crate::ui::panels::node_editor) physical_merge_target: bool,
     pub(in crate::ui::panels::node_editor) authored_blend_mode: Option<&'static str>,
     pub(in crate::ui::panels::node_editor) authored_blend_available: bool,
 }
@@ -155,6 +160,7 @@ impl SnarlPin for QaPin {
                     RenderedPortKey {
                         address: address.clone(),
                         direction: self.direction,
+                        connection_id: self.connection_id,
                     },
                     unclipped_global_rect,
                 );
@@ -180,6 +186,7 @@ impl SnarlPin for QaPin {
                     "port": address.port,
                 })),
                 "normal_interaction_enabled": interaction_size > 0.0,
+                "connection_id": self.connection_id,
                 "unclipped_rect": qa_rect_metadata(unclipped_drop_rect),
                 "visible_in_canvas": drop_rect.is_positive(),
             })),

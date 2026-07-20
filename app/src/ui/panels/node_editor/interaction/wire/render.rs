@@ -11,9 +11,10 @@ use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
     blend_mode_qa_key, clipped_qa_rect, connection_supports_authored_blend, container_inactive,
     container_output_node_id, container_output_type_key, edge_endpoint_qa_metadata,
-    overview_wire_graph_points, pin_color, qa_container_key, qa_rect_metadata,
-    screen_stroke_in_graph_units, wire_order_menu_states, ContainerKind, ContainerVisual,
-    EdgeComponent, OverviewWirePainter, RenderedEdge, RenderedEdgeKind, RenderedPortKey,
+    merge_images_target_node_id, overview_wire_graph_points, pin_color, qa_container_key,
+    qa_rect_metadata, screen_stroke_in_graph_units, wire_order_menu_states, ContainerKind,
+    ContainerVisual, EdgeComponent, OverviewWirePainter, RenderedEdge, RenderedEdgeKind,
+    RenderedPortKey,
 };
 
 pub(in crate::ui::panels::node_editor) fn register_container_chrome(
@@ -105,6 +106,7 @@ pub(in crate::ui::panels::node_editor) fn register_rendered_edges(
     let order_states = wire_order_menu_states(project);
     for connection in &project.connections {
         let order = order_states.get(&connection.id).copied();
+        let physical_merge_target = merge_images_target_node_id(project, &connection.to).is_some();
         let authored_blend_available = connection_supports_authored_blend(project, connection);
         let edge = register_edge_component(
             EdgeComponent {
@@ -123,6 +125,7 @@ pub(in crate::ui::panels::node_editor) fn register_rendered_edges(
                 authored_order: Some(connection.order),
                 back_to_front_index: order.map(|order| order.back_to_front_index),
                 layer_count: order.map(|order| order.layer_count),
+                physical_merge_target,
                 authored_blend_mode: authored_blend_available
                     .then(|| blend_mode_qa_key(connection.blend_mode)),
                 authored_blend_available,
@@ -167,11 +170,25 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
     let from_rect = ports.get(&RenderedPortKey {
         address: edge.from.clone(),
         direction: PortDirection::Output,
+        connection_id: None,
     })?;
-    let to_rect = ports.get(&RenderedPortKey {
-        address: edge.to.clone(),
-        direction: PortDirection::Input,
-    })?;
+    let exact_connection_id = edge
+        .kind
+        .connection_id()
+        .filter(|_| edge.physical_merge_target);
+    let to_rect = ports
+        .get(&RenderedPortKey {
+            address: edge.to.clone(),
+            direction: PortDirection::Input,
+            connection_id: exact_connection_id,
+        })
+        .or_else(|| {
+            ports.get(&RenderedPortKey {
+                address: edge.to.clone(),
+                direction: PortDirection::Input,
+                connection_id: None,
+            })
+        })?;
     let start = from_rect.center();
     let end = to_rect.center();
     if ![start, end]
@@ -286,6 +303,7 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
             "authored_blend_mode": edge.authored_blend_mode,
             "authored_blend_available": edge.authored_blend_available,
             "runtime_first_produced_may_be_normal": edge.authored_blend_available,
+            "physical_variadic_endpoint": exact_connection_id.is_some(),
             "unclipped_rect": qa_rect_metadata(unclipped_bbox),
             "hit_point": {"x": midpoint.x, "y": midpoint.y},
         })),
@@ -297,8 +315,11 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
         ] {
             let unclipped_rect = egui::Rect::from_center_size(position, egui::vec2(18.0, 18.0));
             let rect = clipped_qa_rect(unclipped_rect, canvas_clip);
+            let component_id = format!("node_editor.edge:{connection_id}.{suffix}");
+            #[cfg(test)]
+            capture_test_rect(&component_id, rect);
             crate::qa::register_component_with_metadata(
-                format!("node_editor.edge:{connection_id}.{suffix}"),
+                component_id,
                 "node_edge_endpoint",
                 rect,
                 true,

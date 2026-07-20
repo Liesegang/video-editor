@@ -190,6 +190,7 @@ impl EditorContext {
         self.node_editor_state.normal_connect_cancel_pending_release = false;
         self.node_editor_state.wire_knife = None;
         self.node_editor_state.wire_context_menu = None;
+        self.node_editor_state.merge_layer_reorder = None;
 
         self.preview_texture = None;
         self.preview_texture_id = None;

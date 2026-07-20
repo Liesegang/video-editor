@@ -4,7 +4,8 @@ use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwne
 use library::model::{NodeContainer, Project};
 
 use crate::ui::panels::node_editor::{
-    input_definitions, output_definitions, ContainerVisual, GraphItem, NodeEdit,
+    input_definitions, merge_images_target_node_id, merge_input_slots, output_definitions,
+    ContainerVisual, GraphItem, NodeEdit,
 };
 
 pub(in crate::ui::panels::node_editor) fn edit_for_wire(
@@ -21,12 +22,44 @@ pub(in crate::ui::panels::node_editor) fn edit_for_wire(
     let output = output_definitions(project, source_item)
         .get(output_index)?
         .clone();
-    let input = input_definitions(project, target_item)
-        .get(input_index)?
-        .clone();
+    let target_merge_id = match target_item {
+        GraphItem::Node(node_id) => merge_images_target_node_id(
+            project,
+            &PortAddress::new(
+                PortOwner::Node(node_id),
+                library::model::project::MERGE_IMAGES_PORT,
+            ),
+        ),
+        GraphItem::Container(_) | GraphItem::PortAnchor { .. } => None,
+    };
+    let merge_connection = target_merge_id.and_then(|merge_id| {
+        merge_input_slots(project, merge_id)
+            .get(input_index)
+            .and_then(|slot| match &slot.role {
+                crate::ui::panels::node_editor::MergeInputSlotRole::Connected(row) => {
+                    Some(row.connection_id)
+                }
+                crate::ui::panels::node_editor::MergeInputSlotRole::Canonical
+                | crate::ui::panels::node_editor::MergeInputSlotRole::VacantImages => None,
+            })
+    });
+    let input = match target_merge_id {
+        Some(merge_id) => merge_input_slots(project, merge_id)
+            .get(input_index)?
+            .definition
+            .clone(),
+        None => input_definitions(project, target_item)
+            .get(input_index)?
+            .clone(),
+    };
     let from = PortAddress::new(graph_item_owner(source_item)?, output.key);
     let to = PortAddress::new(graph_item_owner(target_item)?, input.key);
 
+    if !connect {
+        if let Some(connection_id) = merge_connection {
+            return Some(NodeEdit::DisconnectConnection { connection_id });
+        }
+    }
     edit_for_port_addresses(project, from, to, connect)
 }
 

@@ -9,261 +9,342 @@ use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 impl ProjectNodeViewer<'_> {
-    pub(super) fn show_merge_layers(&mut self, merge_id: Uuid, ui: &mut egui::Ui) {
-        let rows = merge_layer_rows(self.project, merge_id);
+    pub(super) fn show_merge_input_slot(
+        &mut self,
+        merge_id: Uuid,
+        slot: &MergeInputSlot,
+        ui: &mut egui::Ui,
+    ) -> Option<Uuid> {
+        let MergeInputSlotRole::Connected(row) = &slot.role else {
+            if matches!(slot.role, MergeInputSlotRole::VacantImages) {
+                let response = non_selectable_label(
+                    ui,
+                    egui::RichText::new(format!("{} Connect Image", icons::PLUS))
+                        .small()
+                        .weak(),
+                )
+                .on_hover_text("Vacant variadic input; drag an Image output here");
+                register_merge_layer_component(
+                    format!("node_editor.merge_layer.vacant:{merge_id}"),
+                    "node_editor_merge_layer_vacant_input",
+                    response.rect,
+                    true,
+                    *self.to_global,
+                    *self.canvas_clip,
+                    serde_json::json!({
+                        "merge_id": merge_id,
+                        "action": "connect",
+                        "port": library::model::project::MERGE_IMAGES_PORT,
+                        "variadic": true,
+                    }),
+                );
+                if merge_layer_rows(self.project, merge_id).is_empty() {
+                    register_merge_layer_component(
+                        format!("node_editor.merge_layers.empty:{merge_id}"),
+                        "node_editor_merge_layers_empty",
+                        response.rect,
+                        false,
+                        *self.to_global,
+                        *self.canvas_clip,
+                        serde_json::json!({
+                            "merge_id": merge_id,
+                            "layer_count": 0,
+                            "order_semantics": "back_to_front",
+                        }),
+                    );
+                }
+            }
+            return None;
+        };
+
         let to_global = *self.to_global;
         let canvas_clip = *self.canvas_clip;
-        let header = non_selectable_label(
-            ui,
-            egui::RichText::new(format!("Layers · Back {} Front", icons::ARROW_RIGHT))
-                .small()
-                .strong(),
-        )
-        .on_hover_text("Each row is one authored Merge input wire.");
+        let active_target = self
+            .merge_layer_reorder
+            .as_ref()
+            .and_then(|gesture| (gesture.merge_id == merge_id).then_some(gesture.target_index));
+        let target_highlight = active_target.flatten() == Some(row.back_to_front_index);
+        let mut selected_blend = None;
+        let mut requested_order = None;
+        let mut drag_response = None;
+        let mut back_response = None;
+        let mut front_response = None;
+        let row_response = egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(5, 3))
+            .corner_radius(4)
+            .fill(if target_highlight {
+                Color32::from_rgba_premultiplied(120, 154, 230, 72)
+            } else {
+                Color32::from_black_alpha(28)
+            })
+            .show(ui, |ui| {
+                ui.set_min_size(egui::vec2(260.0, 46.0));
+                ui.horizontal(|ui| {
+                    let handle = ui
+                        .add_enabled(
+                            row.layer_count > 1,
+                            egui::Label::new(
+                                egui::RichText::new(icons::DOTS_SIX_VERTICAL).strong(),
+                            )
+                            .sense(egui::Sense::drag()),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::Grab)
+                        .on_hover_text("Drag vertically to reorder this input wire");
+                    drag_response = Some(handle);
+                    non_selectable_label(
+                        ui,
+                        egui::RichText::new(format!(
+                            "{} / {}",
+                            row.back_to_front_index + 1,
+                            row.layer_count
+                        ))
+                        .small()
+                        .strong(),
+                    );
+                    bounded_non_selectable_label(
+                        ui,
+                        row.source_label.clone(),
+                        94.0,
+                        egui::Align::LEFT,
+                    )
+                    .on_hover_text(format!("{} · {}", row.source_label, row.source.port));
+                    let combo = ui.add_enabled_ui(row.authored_blend_available, |ui| {
+                        egui::ComboBox::from_id_salt((
+                            "merge_layer_authored_blend",
+                            merge_id,
+                            row.connection_id,
+                        ))
+                        .selected_text(blend_mode_label(row.authored_blend_mode))
+                        .width(72.0)
+                        .show_ui(ui, |ui| {
+                            for blend_mode in AUTHORED_BLEND_MODES {
+                                let selected = blend_mode == row.authored_blend_mode;
+                                let option = ui.add_enabled(
+                                    !selected,
+                                    egui::Button::selectable(
+                                        selected,
+                                        blend_mode_label(blend_mode),
+                                    )
+                                    .frame(false),
+                                );
+                                register_merge_layer_popup_component(
+                                    format!(
+                                        "node_editor.merge_layer.blend.{}:{merge_id}:{}",
+                                        blend_mode_qa_key(blend_mode),
+                                        row.connection_id
+                                    ),
+                                    "node_editor_merge_layer_blend_option",
+                                    option.rect,
+                                    option.enabled(),
+                                    ui.clip_rect(),
+                                    row.qa_metadata(Some(serde_json::json!({
+                                        "action": "set_authored_blend",
+                                        "blend_mode": blend_mode_qa_key(blend_mode),
+                                        "selected": selected,
+                                    }))),
+                                );
+                                if option.clicked() {
+                                    selected_blend = Some(blend_mode);
+                                    ui.close();
+                                }
+                            }
+                        })
+                        .response
+                    });
+                    register_merge_layer_component(
+                        format!(
+                            "node_editor.merge_layer.blend_select:{merge_id}:{}",
+                            row.connection_id
+                        ),
+                        "node_editor_merge_layer_blend_select",
+                        combo.inner.rect,
+                        combo.inner.enabled(),
+                        to_global,
+                        canvas_clip,
+                        row.qa_metadata(Some(serde_json::json!({
+                            "action": "open_authored_blend",
+                        }))),
+                    );
+
+                    let back_index = row.back_to_front_index.checked_sub(1);
+                    let response = ui
+                        .add_enabled(back_index.is_some(), egui::Button::new(icons::ARROW_UP))
+                        .on_hover_text("Move one layer toward the back");
+                    if response.clicked() {
+                        requested_order = back_index;
+                    }
+                    back_response = Some(response);
+                    let front_index = (row.back_to_front_index + 1 < row.layer_count)
+                        .then_some(row.back_to_front_index + 1);
+                    let response = ui
+                        .add_enabled(front_index.is_some(), egui::Button::new(icons::ARROW_DOWN))
+                        .on_hover_text("Move one layer toward the front");
+                    if response.clicked() {
+                        requested_order = front_index;
+                    }
+                    front_response = Some(response);
+                });
+            })
+            .response;
+
+        let Some(drag_response) = drag_response else {
+            return Some(row.connection_id);
+        };
+
+        if drag_response.drag_started() {
+            *self.merge_layer_reorder = Some(NodeEditorMergeLayerReorderGesture {
+                merge_id,
+                connection_id: row.connection_id,
+                start_index: row.back_to_front_index,
+                target_index: Some(row.back_to_front_index),
+                layer_count: row.layer_count,
+                row_rects: vec![egui::Rect::NOTHING; row.layer_count],
+                canvas_transform: to_global,
+                finished: false,
+            });
+        }
+        if let Some(gesture) = self.merge_layer_reorder.as_mut().filter(|gesture| {
+            gesture.merge_id == merge_id && gesture.layer_count == row.layer_count
+        }) {
+            if let Some(rect) = gesture.row_rects.get_mut(row.back_to_front_index) {
+                *rect = row_response.rect;
+            }
+        }
+        let owns_drag = self.merge_layer_reorder.as_ref().is_some_and(|gesture| {
+            gesture.merge_id == merge_id && gesture.connection_id == row.connection_id
+        });
+        if owns_drag {
+            let pointer = ui
+                .input(|input| input.pointer.interact_pos())
+                .map(|position| to_global.inverse() * position);
+            let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+            let target_index = self.merge_layer_reorder.as_ref().and_then(|gesture| {
+                let measured = gesture
+                    .row_rects
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, rect)| rect.is_positive())
+                    .collect::<Vec<_>>();
+                let bounds = measured
+                    .iter()
+                    .fold(egui::Rect::NOTHING, |bounds, (_, rect)| {
+                        bounds.union(**rect)
+                    })
+                    .expand2(egui::vec2(24.0, 6.0));
+                let pointer = pointer.filter(|position| bounds.contains(*position))?;
+                measured
+                    .into_iter()
+                    .min_by(|left, right| {
+                        (left.1.center().y - pointer.y)
+                            .abs()
+                            .total_cmp(&(right.1.center().y - pointer.y).abs())
+                    })
+                    .map(|(index, _)| index)
+            });
+            if let Some(gesture) = self.merge_layer_reorder.as_mut() {
+                gesture.target_index = (!escape).then_some(target_index).flatten();
+            }
+            if escape || drag_response.drag_stopped() {
+                if let Some(gesture) = self.merge_layer_reorder.as_mut() {
+                    let changed_target = gesture
+                        .target_index
+                        .filter(|target| *target != gesture.start_index);
+                    if let Some(target_index) = (!escape).then_some(changed_target).flatten() {
+                        self.edits
+                            .push(QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
+                                connection_id: gesture.connection_id,
+                                new_order: target_index as i64,
+                            }));
+                    }
+                    gesture.finished = true;
+                }
+            }
+            ui.ctx().request_repaint();
+        }
+
+        let active = self.merge_layer_reorder.as_ref().filter(|gesture| {
+            gesture.merge_id == merge_id && gesture.connection_id == row.connection_id
+        });
         register_merge_layer_component(
-            format!("node_editor.merge_layers.header:{merge_id}"),
-            "node_editor_merge_layers_header",
-            header.rect,
+            format!("node_editor.merge_layer:{merge_id}:{}", row.connection_id),
+            "node_editor_merge_layer",
+            row_response.rect,
             true,
             to_global,
             canvas_clip,
-            serde_json::json!({
-                "merge_id": merge_id,
-                "layer_count": rows.len(),
-                "order_semantics": "back_to_front",
-                "blend_ownership": "connection",
-            }),
+            row.qa_metadata(Some(serde_json::json!({
+                "action": "physical_reorder_drop_target",
+                "drop_target_index": row.back_to_front_index,
+                "drag_active": active.is_some(),
+                "current_drop_target_index": active.and_then(|gesture| gesture.target_index),
+                "gesture_start_index": active.map(|gesture| gesture.start_index),
+            }))),
         );
-
-        if rows.is_empty() {
-            let empty = non_selectable_label(
-                ui,
-                egui::RichText::new("No image inputs")
-                    .small()
-                    .color(Color32::from_gray(135)),
-            );
-            register_merge_layer_component(
-                format!("node_editor.merge_layers.empty:{merge_id}"),
-                "node_editor_merge_layers_empty",
-                empty.rect,
-                false,
-                to_global,
-                canvas_clip,
-                serde_json::json!({
-                    "merge_id": merge_id,
-                    "layer_count": 0,
-                    "order_semantics": "back_to_front",
-                }),
-            );
-            return;
-        }
-
-        for row in rows {
-            let mut selected_blend = None;
-            let mut requested_order = None;
-            let row_response = egui::Frame::new()
-                .inner_margin(egui::Margin::symmetric(7, 5))
-                .corner_radius(5)
-                .fill(Color32::from_black_alpha(32))
-                .show(ui, |ui| {
-                    ui.set_width(216.0);
-                    ui.horizontal(|ui| {
-                        non_selectable_label(
-                            ui,
-                            egui::RichText::new(format!(
-                                "{} / {}",
-                                row.back_to_front_index + 1,
-                                row.layer_count
-                            ))
-                            .small()
-                            .strong(),
-                        )
-                        .on_hover_text("Layer position in Back to Front order");
-                        bounded_non_selectable_label(
-                            ui,
-                            row.source_label.clone(),
-                            158.0,
-                            egui::Align::LEFT,
-                        )
-                        .on_hover_text(format!(
-                            "{} output · {}",
-                            row.source_label, row.source.port
-                        ));
-                    });
-
-                    ui.horizontal(|ui| {
-                        let combo = ui.add_enabled_ui(row.authored_blend_available, |ui| {
-                            egui::ComboBox::from_id_salt((
-                                "merge_layer_authored_blend",
-                                merge_id,
-                                row.connection_id,
-                            ))
-                            .selected_text(format!(
-                                "Wire · {}",
-                                blend_mode_label(row.authored_blend_mode)
-                            ))
-                            .width(178.0)
-                            .show_ui(ui, |ui| {
-                                for blend_mode in AUTHORED_BLEND_MODES {
-                                    let selected = blend_mode == row.authored_blend_mode;
-                                    let option = ui
-                                        .add_enabled(
-                                            !selected,
-                                            egui::Button::selectable(
-                                                selected,
-                                                blend_mode_label(blend_mode),
-                                            )
-                                            .frame(false),
-                                        )
-                                        .on_hover_text(
-                                            "Authored on this input wire, not on the Merge Node.",
-                                        );
-                                    register_merge_layer_popup_component(
-                                        format!(
-                                            "node_editor.merge_layer.blend.{}:{merge_id}:{}",
-                                            blend_mode_qa_key(blend_mode),
-                                            row.connection_id
-                                        ),
-                                        "node_editor_merge_layer_blend_option",
-                                        option.rect,
-                                        option.enabled(),
-                                        ui.clip_rect(),
-                                        row.qa_metadata(Some(serde_json::json!({
-                                            "action": "set_authored_blend",
-                                            "blend_mode": blend_mode_qa_key(blend_mode),
-                                            "selected": selected,
-                                        }))),
-                                    );
-                                    if option.clicked() {
-                                        selected_blend = Some(blend_mode);
-                                        ui.close();
-                                    }
-                                }
-                            })
-                            .response
-                        });
-                        let combo_response = combo.inner;
-                        register_merge_layer_component(
-                            format!(
-                                "node_editor.merge_layer.blend_select:{merge_id}:{}",
-                                row.connection_id
-                            ),
-                            "node_editor_merge_layer_blend_select",
-                            combo_response.rect,
-                            combo_response.enabled(),
-                            to_global,
-                            canvas_clip,
-                            row.qa_metadata(Some(serde_json::json!({
-                                "action": "open_authored_blend",
-                            }))),
-                        );
-                    });
-
-                    ui.horizontal(|ui| {
-                        let back_index = row.back_to_front_index.checked_sub(1);
-                        let back = ui
-                            .add_enabled(
-                                back_index.is_some(),
-                                egui::Button::new(format!("{} Back", icons::ARROW_LEFT)),
-                            )
-                            .on_hover_text("Move this wire one layer toward the back");
-                        register_merge_layer_component(
-                            format!(
-                                "node_editor.merge_layer.order_back:{merge_id}:{}",
-                                row.connection_id
-                            ),
-                            "node_editor_merge_layer_order_button",
-                            back.rect,
-                            back.enabled(),
-                            to_global,
-                            canvas_clip,
-                            row.qa_metadata(Some(serde_json::json!({
-                                "action": "reorder",
-                                "direction": "back",
-                                "target_back_to_front_index": back_index,
-                            }))),
-                        );
-                        if back.clicked() {
-                            requested_order = back_index;
-                        }
-
-                        let front_index = (row.back_to_front_index + 1 < row.layer_count)
-                            .then_some(row.back_to_front_index + 1);
-                        let front = ui
-                            .add_enabled(
-                                front_index.is_some(),
-                                egui::Button::new(format!("Front {}", icons::ARROW_RIGHT)),
-                            )
-                            .on_hover_text("Move this wire one layer toward the front");
-                        register_merge_layer_component(
-                            format!(
-                                "node_editor.merge_layer.order_front:{merge_id}:{}",
-                                row.connection_id
-                            ),
-                            "node_editor_merge_layer_order_button",
-                            front.rect,
-                            front.enabled(),
-                            to_global,
-                            canvas_clip,
-                            row.qa_metadata(Some(serde_json::json!({
-                                "action": "reorder",
-                                "direction": "front",
-                                "target_back_to_front_index": front_index,
-                            }))),
-                        );
-                        if front.clicked() {
-                            requested_order = front_index;
-                        }
-                    });
-                })
-                .response;
-
-            register_merge_layer_component(
-                format!("node_editor.merge_layer:{merge_id}:{}", row.connection_id),
-                "node_editor_merge_layer",
-                row_response.rect,
-                true,
-                to_global,
-                canvas_clip,
-                row.qa_metadata(None),
-            );
-            if let Some(blend_mode) = selected_blend {
-                self.edits
-                    .push(QueuedNodeEdit::Atomic(NodeEdit::SetConnectionBlendMode {
-                        connection_id: row.connection_id,
-                        blend_mode,
-                    }));
-            }
-            if let Some(new_order) = requested_order {
-                self.edits
-                    .push(QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
-                        connection_id: row.connection_id,
-                        new_order: new_order as i64,
-                    }));
+        for (direction, response, target_index) in [
+            (
+                "back",
+                back_response,
+                row.back_to_front_index.checked_sub(1),
+            ),
+            (
+                "front",
+                front_response,
+                (row.back_to_front_index + 1 < row.layer_count)
+                    .then_some(row.back_to_front_index + 1),
+            ),
+        ] {
+            if let Some(response) = response {
+                register_merge_layer_component(
+                    format!(
+                        "node_editor.merge_layer.order_{direction}:{merge_id}:{}",
+                        row.connection_id
+                    ),
+                    "node_editor_merge_layer_order_button",
+                    response.rect,
+                    response.enabled(),
+                    to_global,
+                    canvas_clip,
+                    row.qa_metadata(Some(serde_json::json!({
+                        "action": "reorder",
+                        "direction": direction,
+                        "target_back_to_front_index": target_index,
+                    }))),
+                );
             }
         }
-
-        let runtime_note = non_selectable_label(
-            ui,
-            egui::RichText::new(
-                "Runtime: first produced layer composites as Normal; authored wire modes remain.",
-            )
-            .small()
-            .weak(),
-        );
         register_merge_layer_component(
-            format!("node_editor.merge_layers.runtime_note:{merge_id}"),
-            "node_editor_merge_layers_runtime_note",
-            runtime_note.rect,
-            false,
+            format!(
+                "node_editor.merge_layer.drag_handle:{merge_id}:{}",
+                row.connection_id
+            ),
+            "node_editor_merge_layer_drag_handle",
+            drag_response.rect,
+            row.layer_count > 1,
             to_global,
             canvas_clip,
-            serde_json::json!({
-                "merge_id": merge_id,
-                "runtime_first_produced_may_be_normal": true,
-                "authored_blend_ownership": "connection",
-            }),
+            row.qa_metadata(Some(serde_json::json!({
+                "action": "physical_reorder",
+                "gesture": "primary_vertical_drag",
+                "drop_target_index": active.and_then(|gesture| gesture.target_index),
+                "invalid_drop_cancels": true,
+            }))),
         );
+
+        if let Some(blend_mode) = selected_blend {
+            self.edits
+                .push(QueuedNodeEdit::Atomic(NodeEdit::SetConnectionBlendMode {
+                    connection_id: row.connection_id,
+                    blend_mode,
+                }));
+        }
+        if let Some(new_order) = requested_order {
+            self.edits
+                .push(QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
+                    connection_id: row.connection_id,
+                    new_order: new_order as i64,
+                }));
+        }
+        Some(row.connection_id)
     }
 
     pub(super) fn queue_continuous_edit(

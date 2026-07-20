@@ -312,6 +312,12 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
     state: &mut NodeEditorState,
     frame: WireInteractionFrame<'_>,
 ) -> Vec<QueuedNodeEdit> {
+    if state.merge_layer_reorder.is_some() {
+        state.wire_gesture = None;
+        state.normal_connect_gesture = None;
+        state.normal_wire_drag_active = false;
+        return Vec::new();
+    }
     if state.selected_connection_id.is_some_and(|connection_id| {
         !frame
             .project
@@ -779,6 +785,7 @@ mod tests {
                 RenderedPortKey {
                     address: PortAddress::new(PortOwner::Node(original_id), AUDIO_OUTPUT_PORT),
                     direction: PortDirection::Output,
+                    connection_id: None,
                 },
                 egui::Rect::from_center_size(source, egui::vec2(14.0, 14.0)),
             ),
@@ -786,6 +793,7 @@ mod tests {
                 RenderedPortKey {
                     address: PortAddress::new(PortOwner::Node(replacement_id), AUDIO_OUTPUT_PORT),
                     direction: PortDirection::Output,
+                    connection_id: None,
                 },
                 egui::Rect::from_center_size(replacement, egui::vec2(14.0, 14.0)),
             ),

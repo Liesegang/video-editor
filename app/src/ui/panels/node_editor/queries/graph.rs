@@ -1,7 +1,7 @@
 use crate::ui::widgets::property_drag_value::FloatDragValueConfig;
 use library::model::project::{PortDataType, PortDirection, PortOwner, PortSide};
 use library::model::property::PropertyDefinition;
-use library::model::{Node, NodeContent, Project};
+use library::model::{Node, NodeContainer, NodeContent, Project};
 use library::plugin::PluginManager;
 use uuid::Uuid;
 
@@ -82,6 +82,46 @@ pub(in crate::ui::panels::node_editor) fn container_collapsed(
     }
 }
 
+pub(in crate::ui::panels::node_editor) fn port_owner_for_node_container(
+    container: NodeContainer,
+) -> PortOwner {
+    match container {
+        NodeContainer::Composition(id) => PortOwner::Composition(id),
+        NodeContainer::Track(id) => PortOwner::Track(id),
+        NodeContainer::Clip(id) => PortOwner::Clip(id),
+    }
+}
+
+pub(in crate::ui::panels::node_editor) fn port_owner_composition(
+    project: &Project,
+    owner: PortOwner,
+) -> Option<Uuid> {
+    match owner {
+        PortOwner::Composition(composition_id) => project
+            .get_composition(composition_id)
+            .map(|_| composition_id),
+        PortOwner::Track(track_id) => project.find_composition_for_track(track_id),
+        PortOwner::Clip(clip_id) => project
+            .find_track_for_clip(clip_id)
+            .and_then(|track_id| project.find_composition_for_track(track_id)),
+        PortOwner::Node(node_id) => project.find_node_container(node_id).and_then(|container| {
+            port_owner_composition(project, port_owner_for_node_container(container))
+        }),
+    }
+}
+
+pub(in crate::ui::panels::node_editor) fn parent_container_owner(
+    project: &Project,
+    owner: PortOwner,
+) -> Option<PortOwner> {
+    match owner {
+        PortOwner::Composition(_) | PortOwner::Node(_) => None,
+        PortOwner::Track(track_id) => project
+            .find_composition_for_track(track_id)
+            .map(PortOwner::Composition),
+        PortOwner::Clip(clip_id) => project.find_track_for_clip(clip_id).map(PortOwner::Track),
+    }
+}
 /// Node properties share the evaluator's time domain. A Node directly owned
 /// by a Clip is evaluated and edited in that Clip's source-local time; Nodes
 /// owned directly by a Track or Composition stay in global composition time.
