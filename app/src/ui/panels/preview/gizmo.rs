@@ -69,6 +69,10 @@ pub fn handle_gizmo_interaction(
     ) else {
         return true;
     };
+    let Some(spatial_edit_id) = visual.editable_spatial_id() else {
+        editor_context.interaction.gizmo_state = None;
+        return false;
+    };
 
     let start_world = to_world(start_mouse_pos);
     let current_world = to_world(mouse_pos);
@@ -149,7 +153,7 @@ pub fn handle_gizmo_interaction(
 
     let current_time = editor_context.timeline.current_time as f64;
     pending_actions.push(PreviewAction::UpdateProperty {
-        node_id: selected_id,
+        node_id: spatial_edit_id,
         prop_name: "scale".to_string(),
         time: current_time,
         value: PropertyValue::Vec2(PropVec2 {
@@ -158,7 +162,7 @@ pub fn handle_gizmo_interaction(
         }),
     });
     pending_actions.push(PreviewAction::UpdateProperty {
-        node_id: selected_id,
+        node_id: spatial_edit_id,
         prop_name: "position".to_string(),
         time: current_time,
         value: PropertyValue::Vec2(PropVec2 {
@@ -167,7 +171,7 @@ pub fn handle_gizmo_interaction(
         }),
     });
     pending_actions.push(PreviewAction::UpdateProperty {
-        node_id: selected_id,
+        node_id: spatial_edit_id,
         prop_name: "rotation".to_string(),
         time: current_time,
         value: PropertyValue::Number(OrderedFloat(new_rotation as f64)),
@@ -221,6 +225,9 @@ pub fn draw_gizmo(
     let Some((corners, rotation, top)) = draw_clip_box(ui, visual, &to_screen, color, 2.0) else {
         return;
     };
+    if visual.editable_spatial_id().is_none() {
+        return;
+    }
     let rotation_distance = 10.0 / editor_context.view.zoom;
     let rotation_pos = top
         + egui::vec2(
@@ -268,12 +275,12 @@ pub fn draw_gizmo(
                     start_mouse_pos: response.hover_pos().unwrap_or(position),
                     active_handle: handle,
                     original_position: [
-                        visual.source_transform.position.x as f32,
-                        visual.source_transform.position.y as f32,
+                        visual.spatial_transform.position.x as f32,
+                        visual.spatial_transform.position.y as f32,
                     ],
-                    original_scale_x: visual.source_transform.scale.x as f32 * 100.0,
-                    original_scale_y: visual.source_transform.scale.y as f32 * 100.0,
-                    original_rotation: visual.source_transform.rotation as f32,
+                    original_scale_x: visual.spatial_transform.scale.x as f32 * 100.0,
+                    original_scale_y: visual.spatial_transform.scale.y as f32 * 100.0,
+                    original_rotation: visual.spatial_transform.rotation as f32,
                     original_visual_position: [
                         visual.transform.position.x as f32,
                         visual.transform.position.y as f32,
@@ -281,8 +288,8 @@ pub fn draw_gizmo(
                     original_visual_scale_x: visual.transform.scale.x as f32 * 100.0,
                     original_visual_scale_y: visual.transform.scale.y as f32 * 100.0,
                     original_visual_rotation: visual.transform.rotation as f32,
-                    original_anchor_x: visual.source_transform.anchor.x as f32,
-                    original_anchor_y: visual.source_transform.anchor.y as f32,
+                    original_anchor_x: visual.spatial_transform.anchor.x as f32,
+                    original_anchor_y: visual.spatial_transform.anchor.y as f32,
                     original_width: width,
                     original_height: height,
                 });
@@ -374,8 +381,9 @@ mod tests {
         let mut node = Node::new_merge("same UUID visual");
         node.id = shared_id;
         let visual = PreviewClip {
-            node,
-            source_transform: Transform::default(),
+            content_node: node.clone(),
+            spatial_node: Some(node),
+            spatial_transform: Transform::default(),
             transform: Transform::default(),
             parent_transform: Affine2D::IDENTITY,
             world_transform: Affine2D::IDENTITY,

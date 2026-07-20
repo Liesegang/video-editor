@@ -12,8 +12,20 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 struct PreviewHit {
-    node_id: Uuid,
+    content_node_id: Uuid,
+    editable_spatial_node_id: Option<Uuid>,
     instance_path: Vec<Uuid>,
+}
+
+impl PreviewHit {
+    fn selection_node_id(&self, tool: crate::state::context_types::PreviewTool) -> Uuid {
+        if tool == crate::state::context_types::PreviewTool::Select {
+            self.editable_spatial_node_id
+                .unwrap_or(self.content_node_id)
+        } else {
+            self.content_node_id
+        }
+    }
 }
 
 pub struct PreviewInteractions<'a> {
@@ -92,12 +104,12 @@ impl<'a> PreviewInteractions<'a> {
                         .as_deref(),
                 ) {
                     if matches!(
-                        gc.node.content(),
+                        gc.content_node.content(),
                         library::model::NodeContent::Generator(
                             library::model::GeneratorContent::Shape
                         )
                     ) {
-                        if let Some(path_str) = gc.node.properties().get_string("path") {
+                        if let Some(path_str) = gc.content_node.properties().get_string("path") {
                             // The path is always projected from Project. Only point
                             // selection/handle state survives between frames.
                             let parsed_path = crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path_str);
@@ -129,7 +141,7 @@ impl<'a> PreviewInteractions<'a> {
 
                                     // Update property
                                     pending_actions.push(PreviewAction::UpdateProperty {
-                                        node_id: id,
+                                        node_id: gc.content_id(),
                                         prop_name: "path".to_string(),
                                         time: self.editor_context.timeline.current_time as f64,
                                         value: PropertyValue::String(new_path),
@@ -167,7 +179,7 @@ impl<'a> PreviewInteractions<'a> {
             // Drag Start Detection
             if response.drag_started_by(PointerButton::Primary) {
                 if let Some(hit) = hovered_hit.as_ref() {
-                    let hovered = hit.node_id;
+                    let hovered = hit.selection_node_id(active_tool.clone());
                     let target = SelectionTarget::Node(hovered);
                     // Started drag on an entity
                     // Ensure it is selected (if not modifier click)
@@ -198,7 +210,11 @@ impl<'a> PreviewInteractions<'a> {
                         }
                     }
 
-                    if should_drag && self.editor_context.is_selected(target) {
+                    if should_drag
+                        && active_tool == crate::state::context_types::PreviewTool::Select
+                        && hit.editable_spatial_node_id.is_some()
+                        && self.editor_context.is_selected(target)
+                    {
                         self.editor_context.set_primary_selection(target);
                         self.editor_context
                             .interaction
@@ -292,7 +308,8 @@ impl<'a> PreviewInteractions<'a> {
 
             if !(has_pos && has_neg) {
                 return Some(PreviewHit {
-                    node_id: gc.id(),
+                    content_node_id: gc.content_id(),
+                    editable_spatial_node_id: gc.editable_spatial_id(),
                     instance_path: gc.instance_path.clone(),
                 });
             }
@@ -317,11 +334,14 @@ impl<'a> PreviewInteractions<'a> {
                     None
                 };
                 if let Some(gc) = visual_for_selection(self.gui_clips, selected_id, instance_path) {
+                    let Some(spatial_id) = gc.editable_spatial_id() else {
+                        continue;
+                    };
                     original_positions.insert(
-                        selected_id,
+                        spatial_id,
                         [
-                            gc.source_transform.position.x as f32,
-                            gc.source_transform.position.y as f32,
+                            gc.spatial_transform.position.x as f32,
+                            gc.spatial_transform.position.y as f32,
                         ],
                     );
                 }
@@ -335,15 +355,17 @@ impl<'a> PreviewInteractions<'a> {
     }
 
     fn handle_click_selection(&mut self, hovered_hit: Option<&PreviewHit>) {
-        let hovered_target = hovered_hit.map(|hit| SelectionTarget::Node(hit.node_id));
+        let active_tool = self.editor_context.view.active_tool.clone();
+        let hovered_target = hovered_hit
+            .map(|hit| SelectionTarget::Node(hit.selection_node_id(active_tool.clone())));
         if self.editor_context.view.active_tool == crate::state::context_types::PreviewTool::Text {
             if let Some(hit) = hovered_hit {
-                let id = hit.node_id;
+                let id = hit.content_node_id;
                 let visual =
                     visual_for_selection(self.gui_clips, id, Some(hit.instance_path.as_slice()));
                 let is_text = visual.is_some_and(|visual| {
                     matches!(
-                        visual.node.content(),
+                        visual.content_node.content(),
                         library::model::NodeContent::Generator(
                             library::model::GeneratorContent::Text
                         )
@@ -352,7 +374,7 @@ impl<'a> PreviewInteractions<'a> {
                 if is_text {
                     self.editor_context.interaction.editing_text_entity_id = Some(id);
                     if let Some(gc) = visual {
-                        if let Some(text) = gc.node.properties().get_string("text") {
+                        if let Some(text) = gc.content_node.properties().get_string("text") {
                             self.editor_context.interaction.text_edit_buffer = text;
                         }
                     }
@@ -371,7 +393,9 @@ impl<'a> PreviewInteractions<'a> {
         match action {
             crate::ui::selection::ClickAction::Select(target) => {
                 let instance_path = hovered_hit
-                    .filter(|hit| target == SelectionTarget::Node(hit.node_id))
+                    .filter(|hit| {
+                        target == SelectionTarget::Node(hit.selection_node_id(active_tool.clone()))
+                    })
                     .map(|hit| hit.instance_path.clone());
                 self.editor_context.select_target(target);
                 self.editor_context
@@ -380,7 +404,9 @@ impl<'a> PreviewInteractions<'a> {
             }
             crate::ui::selection::ClickAction::Add(target) => {
                 let instance_path = hovered_hit
-                    .filter(|hit| target == SelectionTarget::Node(hit.node_id))
+                    .filter(|hit| {
+                        target == SelectionTarget::Node(hit.selection_node_id(active_tool.clone()))
+                    })
                     .map(|hit| hit.instance_path.clone());
                 if !self.editor_context.is_selected(target) {
                     self.editor_context.add_selection(target);
@@ -399,7 +425,9 @@ impl<'a> PreviewInteractions<'a> {
             }
             crate::ui::selection::ClickAction::Toggle(target) => {
                 let instance_path = hovered_hit
-                    .filter(|hit| target == SelectionTarget::Node(hit.node_id))
+                    .filter(|hit| {
+                        target == SelectionTarget::Node(hit.selection_node_id(active_tool.clone()))
+                    })
                     .map(|hit| hit.instance_path.clone());
                 self.editor_context.toggle_selection(target);
                 self.editor_context
@@ -431,10 +459,16 @@ impl<'a> PreviewInteractions<'a> {
                 let current_time = self.editor_context.timeline.current_time as f64;
 
                 for (entity_id, orig_pos) in &drag_state.original_positions {
-                    let local_delta = self
-                        .selected_visual(*entity_id)
-                        .and_then(|visual| inverse_map_vector(visual.parent_transform, world_delta))
-                        .unwrap_or(world_delta);
+                    let local_delta = visual_for_selection(
+                        self.gui_clips,
+                        *entity_id,
+                        self.editor_context
+                            .interaction
+                            .preview_selected_instance_path
+                            .as_deref(),
+                    )
+                    .and_then(|visual| inverse_map_vector(visual.parent_transform, world_delta))
+                    .unwrap_or(world_delta);
                     let new_x = orig_pos[0] as f64 + local_delta.x as f64;
                     let new_y = orig_pos[1] as f64 + local_delta.y as f64;
 
@@ -534,8 +568,9 @@ impl<'a> PreviewInteractions<'a> {
             let clip_screen_rect =
                 Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y));
 
-            if selection_rect.intersects(clip_screen_rect) && seen.insert(gc.id()) {
-                found.push(SelectionTarget::Node(gc.id()));
+            let selection_id = gc.editable_spatial_id().unwrap_or_else(|| gc.content_id());
+            if selection_rect.intersects(clip_screen_rect) && seen.insert(selection_id) {
+                found.push(SelectionTarget::Node(selection_id));
             }
         }
         found
@@ -577,7 +612,11 @@ impl<'a> PreviewInteractions<'a> {
                 let rect = Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y));
 
                 // Calculate Font Size
-                let font_size = gc.node.properties().get_f32("size").unwrap_or(100.0);
+                let font_size = gc
+                    .content_node
+                    .properties()
+                    .get_f32("size")
+                    .unwrap_or(100.0);
 
                 let zoom = self.editor_context.view.zoom;
                 // Assuming uniform scale or using scale_y for height

@@ -234,7 +234,7 @@ fn scalar_result_can_drive_a_number_property_and_a_time_input() -> Result<()> {
         video_time(&frame).context("scalar frame must contain Video time")?,
         0.5,
     );
-    assert_close(object.source_transform.opacity, 0.005);
+    assert_close(object.spatial_transform.opacity, 0.005);
     Ok(())
 }
 

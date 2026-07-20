@@ -1127,7 +1127,13 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() -> AnyResult<
         first_object(&text_frame.items)
             .context("Text frame has no object")?
             .source_node_id,
-        text_transform_id
+        text_id
+    );
+    assert_eq!(
+        first_object(&text_frame.items)
+            .context("Text frame has no object")?
+            .spatial_transform_node_id,
+        Some(text_transform_id)
     );
     let text_image = render_frame(&text_frame, &plugins)?;
     assert_alpha_inside_preview_bounds(&text_frame, &text_image)?;
@@ -1326,6 +1332,17 @@ fn shape_variadic_effector_input_applies_single_element_transform() -> AnyResult
     let mut graph = manager
         .create_shape_graph("M0 0 L20 0 L20 20 L0 20 Z", WIDTH, HEIGHT, 20, 20)
         .context("create Shape graph")?;
+    let shape_id = graph
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(
+                node.content(),
+                NodeContent::Generator(library::model::GeneratorContent::Shape)
+            )
+        })
+        .context("Shape graph has no Shape source")?
+        .id;
     let root_transform_id = root_transform_id(&graph)?;
     let mut modulation = plugins.create_effector_operation_node("transform")?;
     set_constant(&mut modulation, "tx", 8.0.into());
@@ -1343,11 +1360,12 @@ fn shape_variadic_effector_input_applies_single_element_transform() -> AnyResult
     let FrameContent::Shape { transform, .. } = &object.content else {
         bail!("Shape graph did not render Shape content");
     };
-    assert_eq!(object.source_node_id, root_transform_id);
+    assert_eq!(object.source_node_id, shape_id);
+    assert_eq!(object.spatial_transform_node_id, Some(root_transform_id));
     assert_eq!(
         (
-            object.source_transform.position.x,
-            object.source_transform.position.y
+            object.spatial_transform.position.x,
+            object.spatial_transform.position.y
         ),
         (64.0, 40.0),
         "Preview edits the root Transform, not the downstream Transform Modulation"
@@ -1369,8 +1387,8 @@ fn shape_variadic_effector_input_applies_single_element_transform() -> AnyResult
     let moved_object = first_object(&moved.items).context("moved frame has no object")?;
     assert_eq!(
         (
-            moved_object.source_transform.position.x,
-            moved_object.source_transform.position.y
+            moved_object.spatial_transform.position.x,
+            moved_object.spatial_transform.position.y
         ),
         (70.0, 44.0)
     );

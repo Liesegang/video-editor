@@ -331,6 +331,7 @@ fn root_transform_keyframes_drive_the_whole_shape_and_preview_owner() -> AnyResu
             Keyframe::new(1.0, 90.0.into(), EasingFunction::Linear),
         ]),
     )?;
+    let shape_id = generator_id(&graph, GeneratorContent::Shape)?;
     let project = project_with_graph(graph)?;
 
     for (frame_number, expected_position, expected_rotation) in
@@ -338,17 +339,24 @@ fn root_transform_keyframes_drive_the_whole_shape_and_preview_owner() -> AnyResu
     {
         let rendered = evaluate(&project, &plugins, frame_number)?;
         let object = first_object(&rendered.items).context("Shape frame has no object")?;
-        assert_eq!(object.source_node_id, transform_id);
+        assert_eq!(object.source_node_id, shape_id);
+        assert_eq!(object.spatial_transform_node_id, Some(transform_id));
         assert_eq!(
             (
-                object.source_transform.position.x,
-                object.source_transform.position.y
+                object.spatial_transform.position.x,
+                object.spatial_transform.position.y
             ),
             expected_position
         );
-        assert_eq!(object.source_transform.rotation, expected_rotation);
-        assert_eq!(object.source_transform.anchor, Position { x: 10.0, y: 5.0 });
-        assert_eq!(object.source_transform.as_ref(), object.content.transform());
+        assert_eq!(object.spatial_transform.rotation, expected_rotation);
+        assert_eq!(
+            object.spatial_transform.anchor,
+            Position { x: 10.0, y: 5.0 }
+        );
+        assert_eq!(
+            object.spatial_transform.as_ref(),
+            object.content.transform()
+        );
     }
     Ok(())
 }
@@ -408,7 +416,7 @@ fn transform_preserves_generator_and_text_group_identity() -> AnyResult<()> {
         },
     )?;
     assert_eq!(shape.source_id, text_id);
-    assert_eq!(shape.transform_source_id, Some(transform_id));
+    assert_eq!(shape.spatial_transform_node_id, Some(transform_id));
     let after = match &shape.geometry {
         RuntimeShapeGeometry::Text(text) => text
             .elements
@@ -424,6 +432,121 @@ fn transform_preserves_generator_and_text_group_identity() -> AnyResult<()> {
         RuntimeShapeGeometry::Path(_) => bail!("Transform replaced Text geometry"),
     };
     assert_eq!(after, before);
+    Ok(())
+}
+
+#[test]
+fn path_modulation_is_component_wise_and_independent_of_root_wire_order() -> AnyResult<()> {
+    let plugins = Arc::new(PluginManager::default());
+    let manager = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("factory"))),
+        plugins.clone(),
+    );
+    let make_graph = |modulation_before_root: bool| -> AnyResult<(NodeGraphBundle, Uuid, Uuid)> {
+        let mut graph = manager.create_shape_graph("M0 0 H20 V10 H0 Z", WIDTH, HEIGHT, 20, 10)?;
+        let shape_id = generator_id(&graph, GeneratorContent::Shape)?;
+        let root_id = operation_id(&graph, TRANSFORM_CATEGORY, TRANSFORM_COMPONENT_ID)?;
+        let mut translate = plugins.create_effector_operation_node("transform")?;
+        set_property(&mut translate, "tx", Property::constant(8.0.into()))?;
+        set_property(&mut translate, "ty", Property::constant(3.0.into()))?;
+        set_property(&mut translate, "rotation", Property::constant(12.0.into()))?;
+        set_property(&mut translate, "scale_x", Property::constant(1.25.into()))?;
+        set_property(&mut translate, "scale_y", Property::constant(0.8.into()))?;
+        let translate_id = translate.id;
+        let mut opacity = plugins.create_effector_operation_node("opacity")?;
+        set_property(&mut opacity, "opacity", Property::constant(50.0.into()))?;
+        set_property(
+            &mut opacity,
+            "mode",
+            Property::constant(PropertyValue::String("Set".into())),
+        )?;
+        let opacity_id = opacity.id;
+        graph.nodes.extend([translate, opacity]);
+
+        if modulation_before_root {
+            let upstream = graph
+                .connections
+                .iter_mut()
+                .find(|connection| {
+                    connection.from
+                        == PortAddress::new(PortOwner::Node(shape_id), SHAPE_OUTPUT_PORT)
+                        && connection.to
+                            == PortAddress::new(PortOwner::Node(root_id), SHAPE_INPUT_PORT)
+                })
+                .context("Shape-to-Transform wire is missing")?;
+            upstream.to = PortAddress::new(PortOwner::Node(translate_id), SHAPE_INPUT_PORT);
+            graph.connections.extend([
+                ProjectConnection::new(
+                    PortAddress::new(PortOwner::Node(translate_id), SHAPE_OUTPUT_PORT),
+                    PortAddress::new(PortOwner::Node(opacity_id), SHAPE_INPUT_PORT),
+                    0,
+                ),
+                ProjectConnection::new(
+                    PortAddress::new(PortOwner::Node(opacity_id), SHAPE_OUTPUT_PORT),
+                    PortAddress::new(PortOwner::Node(root_id), SHAPE_INPUT_PORT),
+                    0,
+                ),
+            ]);
+        } else {
+            let mut style_targets = Vec::new();
+            graph.connections.retain(|connection| {
+                let is_root_style_wire = connection.from
+                    == PortAddress::new(PortOwner::Node(root_id), SHAPE_OUTPUT_PORT)
+                    && connection.to.port == SHAPE_INPUT_PORT;
+                if is_root_style_wire {
+                    style_targets.push(connection.to.clone());
+                }
+                !is_root_style_wire
+            });
+            assert_eq!(style_targets.len(), 2);
+            graph.connections.extend([
+                ProjectConnection::new(
+                    PortAddress::new(PortOwner::Node(root_id), SHAPE_OUTPUT_PORT),
+                    PortAddress::new(PortOwner::Node(translate_id), SHAPE_INPUT_PORT),
+                    0,
+                ),
+                ProjectConnection::new(
+                    PortAddress::new(PortOwner::Node(translate_id), SHAPE_OUTPUT_PORT),
+                    PortAddress::new(PortOwner::Node(opacity_id), SHAPE_INPUT_PORT),
+                    0,
+                ),
+            ]);
+            for target in style_targets {
+                graph.connections.push(ProjectConnection::new(
+                    PortAddress::new(PortOwner::Node(opacity_id), SHAPE_OUTPUT_PORT),
+                    target,
+                    0,
+                ));
+            }
+        }
+        Ok((graph, shape_id, root_id))
+    };
+
+    let evaluate_order = |before_root| -> AnyResult<(Transform, Transform)> {
+        let (graph, shape_id, root_id) = make_graph(before_root)?;
+        let project = project_with_graph(graph)?;
+        let rendered = evaluate(&project, &plugins, 0)?;
+        let object = first_object(&rendered.items).context("Path frame has no object")?;
+        assert_eq!(object.source_node_id, shape_id);
+        assert_eq!(object.spatial_transform_node_id, Some(root_id));
+        Ok((
+            object.spatial_transform.as_ref().clone(),
+            object.content.transform().clone(),
+        ))
+    };
+    let (before_spatial, before_final) = evaluate_order(true)?;
+    let (after_spatial, after_final) = evaluate_order(false)?;
+    assert_eq!(before_spatial, after_spatial);
+    assert_eq!(before_final, after_final);
+    assert_eq!(
+        (before_final.position.x, before_final.position.y),
+        (168.0, 93.0)
+    );
+    assert_eq!(before_final.rotation, 12.0);
+    assert!((before_final.scale.x - 1.25).abs() < 1e-9);
+    assert!((before_final.scale.y - 0.8).abs() < 1e-6);
+    assert_eq!(before_final.opacity, 0.5);
+    assert_eq!(before_spatial.opacity, 1.0);
     Ok(())
 }
 

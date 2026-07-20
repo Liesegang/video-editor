@@ -396,12 +396,16 @@ pub struct RuntimeShape {
     pub source_id: Uuid,
     pub geometry: RuntimeShapeGeometry,
     /// The downstream whole-Shape Transform that owns absolute placement.
-    /// `None` means the generator remains the visual source at identity.
-    pub transform_source_id: Option<Uuid>,
-    /// Direct transform evaluated from `transform_source_id`, or identity when
+    /// `None` means the Shape has no editable absolute spatial owner.
+    pub spatial_transform_node_id: Option<Uuid>,
+    /// Direct transform evaluated from `spatial_transform_node_id`, or identity when
     /// the graph has no whole-Shape Transform. Element modulation may mutate
     /// `transform`, but must not change this edit baseline.
-    pub source_transform: Transform,
+    pub spatial_transform: Transform,
+    /// Component-wise modulation accumulated by Path Effectors independently
+    /// from absolute placement. Keeping this separate makes
+    /// `Transform -> Effector` and `Effector -> Transform` equivalent.
+    pub modulation_transform: Transform,
     pub transform: Transform,
     pub effects: Vec<ImageEffect>,
     pub effector_configs: Vec<EffectorConfig>,
@@ -423,15 +427,38 @@ impl RuntimeShape {
         source_id: Uuid,
         transform: Transform,
     ) -> Result<(), LibraryError> {
-        if let Some(existing_id) = self.transform_source_id {
+        if let Some(existing_id) = self.spatial_transform_node_id {
             return Err(LibraryError::Validation(format!(
                 "Shape Transform chain {existing_id} -> {source_id} requires an affine transform stack"
             )));
         }
-        self.transform_source_id = Some(source_id);
-        self.source_transform = transform.clone();
-        self.transform = transform;
+        self.spatial_transform_node_id = Some(source_id);
+        self.spatial_transform = transform;
+        self.recompose_transform();
         Ok(())
+    }
+
+    /// Compose absolute placement with optional element modulation in property
+    /// space. Translation and rotation are additive, scale and opacity are
+    /// multiplicative, and anchor belongs only to the absolute Transform.
+    ///
+    /// This is intentionally component-wise rather than matrix-order based:
+    /// an Effector describes deltas to the authored root properties, so valid
+    /// Shape wiring produces the same value on either side of that root.
+    fn recompose_transform(&mut self) {
+        self.transform = Transform {
+            position: crate::model::frame::transform::Position {
+                x: self.spatial_transform.position.x + self.modulation_transform.position.x,
+                y: self.spatial_transform.position.y + self.modulation_transform.position.y,
+            },
+            scale: crate::model::frame::transform::Scale {
+                x: self.spatial_transform.scale.x * self.modulation_transform.scale.x,
+                y: self.spatial_transform.scale.y * self.modulation_transform.scale.y,
+            },
+            anchor: self.spatial_transform.anchor.clone(),
+            rotation: self.spatial_transform.rotation + self.modulation_transform.rotation,
+            opacity: self.spatial_transform.opacity * self.modulation_transform.opacity,
+        };
     }
 
     pub fn apply_effector(
@@ -464,12 +491,13 @@ impl RuntimeShape {
                         ),
                     },
                 )?;
-                self.transform.position.x += f64::from(transform.translate.0);
-                self.transform.position.y += f64::from(transform.translate.1);
-                self.transform.rotation += f64::from(transform.rotate);
-                self.transform.scale.x *= f64::from(transform.scale.0);
-                self.transform.scale.y *= f64::from(transform.scale.1);
-                self.transform.opacity *= f64::from(transform.opacity);
+                self.modulation_transform.position.x += f64::from(transform.translate.0);
+                self.modulation_transform.position.y += f64::from(transform.translate.1);
+                self.modulation_transform.rotation += f64::from(transform.rotate);
+                self.modulation_transform.scale.x *= f64::from(transform.scale.0);
+                self.modulation_transform.scale.y *= f64::from(transform.scale.1);
+                self.modulation_transform.opacity *= f64::from(transform.opacity);
+                self.recompose_transform();
             }
         }
         Ok(())
@@ -486,7 +514,8 @@ impl RuntimeShape {
         style: StyleConfig,
         current_time: f32,
     ) -> Result<FrameObject, LibraryError> {
-        let source_node_id = self.transform_source_id.unwrap_or(self.source_id);
+        let source_node_id = self.source_id;
+        let spatial_transform_node_id = self.spatial_transform_node_id;
         let ensemble = if self.effector_configs.is_empty() && self.decorator_configs.is_empty() {
             None
         } else {
@@ -558,7 +587,8 @@ impl RuntimeShape {
         };
         Ok(FrameObject {
             source_node_id,
-            source_transform: Box::new(self.source_transform),
+            spatial_transform_node_id,
+            spatial_transform: Box::new(self.spatial_transform),
             content_bounds,
             content,
         })

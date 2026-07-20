@@ -986,7 +986,7 @@ pub fn preview_panel(
                             .preview_selected_instance_path
                             .as_deref(),
                     ) {
-                        if let Some(path) = gc.node.properties().get_string("path") {
+                        if let Some(path) = gc.content_node.properties().get_string("path") {
                             match crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path) {
                                 Ok(path) => {
                                     let renderer = crate::ui::panels::preview::vector_editor::renderer::VectorEditorRenderer {
@@ -1427,6 +1427,128 @@ mod tests {
     }
 
     #[test]
+    fn dual_identity_preview_routes_spatial_drag_to_transform_and_text_tool_to_generator() {
+        use library::model::frame::transform::{Position, Transform};
+        use library::plugin::PluginManager;
+        use library::rendering::renderer::Affine2D;
+
+        let mut content_node = generator_node(
+            "Text content",
+            GeneratorNodeRequest::Text {
+                text: "Editable text".to_string(),
+                font: "Arial".to_string(),
+            },
+        );
+        let content_id = uuid::Uuid::new_v4();
+        content_node.id = content_id;
+        let mut spatial_node = PluginManager::default()
+            .create_transform_operation_node()
+            .expect("native Transform factory must be available");
+        let spatial_id = uuid::Uuid::new_v4();
+        spatial_node.id = spatial_id;
+        let spatial_transform = Transform {
+            position: Position { x: 240.0, y: 160.0 },
+            ..Transform::default()
+        };
+        let visual = clip::PreviewClip {
+            content_node,
+            spatial_node: Some(spatial_node),
+            spatial_transform: spatial_transform.clone(),
+            transform: spatial_transform.clone(),
+            parent_transform: Affine2D::IDENTITY,
+            world_transform: Affine2D::from(&spatial_transform),
+            content_bounds: Some((-40.0, -20.0, 80.0, 40.0)),
+            instance_path: vec![content_id, spatial_id],
+        };
+        let center = egui::pos2(240.0, 160.0);
+
+        // A content-generator selection made in Node Editor still identifies
+        // the rendered visual. A Select-tool body drag transfers the primary
+        // selection to, and writes only, its explicit spatial Transform.
+        let context = egui::Context::default();
+        let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
+        editor_context.view.zoom = 1.0;
+        editor_context.select_target(SelectionTarget::Node(content_id));
+        editor_context.interaction.preview_selected_instance_path =
+            Some(visual.instance_path.clone());
+        let mut actions = Vec::new();
+        raw_pointer_drag(
+            &context,
+            &mut editor_context,
+            &visual,
+            &mut actions,
+            center,
+            center + egui::vec2(8.0, 0.0),
+            center + egui::vec2(20.0, 10.0),
+        );
+        assert_eq!(
+            editor_context.selection.primary(),
+            Some(SelectionTarget::Node(spatial_id))
+        );
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            PreviewAction::UpdateProperty {
+                node_id,
+                prop_name,
+                ..
+            } if *node_id == spatial_id && prop_name == "position"
+        )));
+        assert!(!actions.iter().any(|action| matches!(
+            action,
+            PreviewAction::UpdateProperty { node_id, .. } if *node_id == content_id
+        )));
+
+        // Text editing deliberately resolves the same rendered instance back
+        // to the content generator rather than the spatial edit owner.
+        let context = egui::Context::default();
+        let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
+        editor_context.view.active_tool = PreviewTool::Text;
+        run_transformed_visual_frame(
+            &context,
+            &mut editor_context,
+            &visual,
+            &mut Vec::new(),
+            0,
+            vec![egui::Event::PointerMoved(center)],
+        );
+        run_transformed_visual_frame(
+            &context,
+            &mut editor_context,
+            &visual,
+            &mut Vec::new(),
+            1,
+            vec![egui::Event::PointerButton {
+                pos: center,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        run_transformed_visual_frame(
+            &context,
+            &mut editor_context,
+            &visual,
+            &mut Vec::new(),
+            2,
+            vec![egui::Event::PointerButton {
+                pos: center,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert_eq!(
+            editor_context.selection.primary(),
+            Some(SelectionTarget::Node(content_id))
+        );
+        assert_eq!(
+            editor_context.interaction.editing_text_entity_id,
+            Some(content_id)
+        );
+        assert_eq!(editor_context.interaction.text_edit_buffer, "Editable text");
+    }
+
+    #[test]
     fn real_space_primary_drag_pans_without_content_selection_or_drag_updates() {
         use crate::model::ui_types::GizmoHandle;
         use crate::model::vector::VectorEditorState;
@@ -1659,8 +1781,9 @@ mod tests {
                 ..Transform::default()
             });
             clip::PreviewClip {
-                node: source.clone(),
-                source_transform,
+                content_node: source.clone(),
+                spatial_node: Some(source.clone()),
+                spatial_transform: source_transform,
                 world_transform: parent_transform.compose(Affine2D::from(&transform)),
                 parent_transform,
                 transform,
@@ -1943,21 +2066,50 @@ mod tests {
     }
 
     #[test]
-    fn preview_actions_edit_the_evaluated_source_not_the_output_sink_or_history_alone() {
+    fn preview_actions_edit_explicit_spatial_transform_not_text_or_output_sink() {
         use library::cache::CacheManager;
+        use library::editor::project_service::ProjectManager;
         use library::model::property::{Property, PropertyValue, Vec2};
-        use library::plugin::PluginManager;
+        use library::model::{Clip, Composition, NodeContainer, NodeContent};
+        use library::plugin::{PluginManager, TRANSFORM_CATEGORY};
         use ordered_float::OrderedFloat;
 
-        let mut source = generator_node(
-            "Text source",
-            GeneratorNodeRequest::Text {
-                text: "Text source".to_string(),
-                font: "Arial".to_string(),
-            },
+        let plugins = Arc::new(PluginManager::default());
+        let factory = ProjectManager::new(
+            Arc::new(RwLock::new(Project::new("factory"))),
+            plugins.clone(),
         );
-        let source_id = source.id;
-        source
+        let mut graph = factory
+            .create_text_graph("Text source", "Arial", 640, 360)
+            .unwrap();
+        let source_id = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                matches!(
+                    node.content(),
+                    NodeContent::Generator(library::model::GeneratorContent::Text)
+                )
+            })
+            .unwrap()
+            .id;
+        let transform_id = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                matches!(
+                    node.content(),
+                    NodeContent::PluginOperation(operation)
+                        if operation.category == TRANSFORM_CATEGORY
+                )
+            })
+            .unwrap()
+            .id;
+        graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == transform_id)
+            .unwrap()
             .set_property(
                 "position".to_string(),
                 Property::constant(PropertyValue::Vec2(Vec2 {
@@ -1965,13 +2117,20 @@ mod tests {
                     y: OrderedFloat(20.0),
                 })),
             )
-            .expect("text factory initializes position");
-        let plugins = Arc::new(PluginManager::default());
-        let sink = plugins.create_style_operation_node("fill").unwrap();
-        let sink_id = sink.id;
+            .expect("Transform factory initializes position");
+        let sink_id = graph.output_node_id.unwrap();
         let mut model = Project::new("preview target");
-        model.add_node(source);
-        model.add_node(sink);
+        let (composition, track) = Composition::new("main", 640, 360, 30.0, 2.0);
+        let track_id = track.id;
+        model.add_track(track);
+        model.add_composition(composition);
+        let clip = Clip::new("Text Clip", 0.0, 2.0);
+        let clip_id = clip.id;
+        model.add_clip(clip);
+        model.attach_clip_to_track(track_id, clip_id).unwrap();
+        model
+            .insert_node_graph(NodeContainer::Clip(clip_id), graph)
+            .unwrap();
         let project = Arc::new(RwLock::new(model));
         let service =
             EditorService::new(Arc::clone(&project), plugins, Arc::new(CacheManager::new()))
@@ -1990,7 +2149,7 @@ mod tests {
         apply_preview_actions(
             vec![
                 PreviewAction::UpdateProperty {
-                    node_id: source_id,
+                    node_id: transform_id,
                     prop_name: "position".to_string(),
                     time: 0.0,
                     value: PropertyValue::Vec2(Vec2 {
@@ -2008,7 +2167,7 @@ mod tests {
         let model = project.read().unwrap();
         assert_eq!(
             model
-                .get_node(source_id)
+                .get_node(transform_id)
                 .unwrap()
                 .properties()
                 .get("position")
@@ -2017,6 +2176,15 @@ mod tests {
                 x: OrderedFloat(30.0),
                 y: OrderedFloat(40.0),
             }))
+        );
+        assert!(
+            model
+                .get_node(source_id)
+                .unwrap()
+                .properties()
+                .get("position")
+                .is_none(),
+            "Text content ownership must remain independent from spatial edits"
         );
         assert!(
             model

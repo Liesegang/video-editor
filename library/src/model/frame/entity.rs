@@ -287,17 +287,18 @@ impl FrameBounds {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)] // Added Debug
 pub struct FrameObject {
-    /// The authored Node whose evaluated visual value became this object.
-    /// Style, Effect, Merge, and container wrappers deliberately do not
-    /// replace this identity.
+    /// Geometry/content generator identity. Style, Transform, Effect, Merge,
+    /// and container wrappers deliberately do not replace it.
     pub source_node_id: Uuid,
-    /// Evaluated transform owned directly by `source_node_id`, before any
-    /// downstream Shape Effector modifies the rendered geometry.
+    /// Optional Node that owns the editable absolute spatial transform.
     ///
-    /// Preview gizmos deliberately edit this direct source transform. Effect,
-    /// Style, Merge, container, and Effector operation transforms remain
-    /// independently editable through their own Node/Inspector controls.
-    pub source_transform: Box<Transform>,
+    /// Raster generators normally own their spatial transform directly, so
+    /// this is `Some(source_node_id)`. Shape-valued generators have no spatial
+    /// owner until an explicit Transform operation is evaluated.
+    pub spatial_transform_node_id: Option<Uuid>,
+    /// Absolute transform evaluated directly from
+    /// `spatial_transform_node_id`, before optional element modulation.
+    pub spatial_transform: Box<Transform>,
     pub content_bounds: Option<FrameBounds>,
     pub content: FrameContent, // Renamed from entity: FrameEntity
 }

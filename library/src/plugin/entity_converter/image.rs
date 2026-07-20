@@ -133,7 +133,8 @@ impl EntityConverterPlugin for ImageEntityConverterPlugin {
 
         Some(FrameObject {
             source_node_id: node.id,
-            source_transform: Box::new(transform),
+            spatial_transform_node_id: Some(node.id),
+            spatial_transform: Box::new(transform),
             content_bounds: asset.and_then(|asset| match (asset.width, asset.height) {
                 (Some(width), Some(height)) => {
                     Some(FrameBounds::new(0.0, 0.0, width as f32, height as f32))
