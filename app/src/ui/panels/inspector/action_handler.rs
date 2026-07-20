@@ -248,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn inspector_materializes_a_missing_property_as_a_typed_keyframe() {
+    fn inspector_rejects_an_undeclared_property_without_mutation_or_history() {
         let node = Node::new_merge("sparse");
         let node_id = node.id;
         let mut initial = Project::new("missing property");
@@ -262,16 +262,22 @@ mod tests {
         .unwrap();
         let mut history = HistoryManager::new();
         history.push_project_state(project.read().unwrap().clone());
-        let mut context = ActionContext::new(
-            &mut service,
-            &mut history,
-            PropertyOwner::Node(node_id),
-            1.25,
-        );
+        let before = project.read().unwrap().clone();
+        let initial_depth = history.undo_depth();
 
-        assert!(context.handle_toggle_keyframe("new_amount", number(7.5), |_| None,));
-        let property = node_property(&project.read().unwrap(), node_id, "new_amount").unwrap();
-        assert_eq!(property.evaluator, "keyframe");
-        assert_eq!(property.keyframes()[0].value, number(7.5));
+        {
+            let mut context = ActionContext::new(
+                &mut service,
+                &mut history,
+                PropertyOwner::Node(node_id),
+                1.25,
+            );
+
+            assert!(!context.handle_toggle_keyframe("new_amount", number(7.5), |_| None,));
+        }
+
+        assert_eq!(*project.read().unwrap(), before);
+        assert_eq!(history.undo_depth(), initial_depth);
+        assert!(node_property(&project.read().unwrap(), node_id, "new_amount").is_none());
     }
 }
