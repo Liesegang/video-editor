@@ -11,7 +11,7 @@ use library::model::project::{
     IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT,
 };
 use library::model::property::{PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue};
-use library::model::{Clip, Composition, GeneratorContent, Node, NodeContent, Track, ValueContent};
+use library::model::{Clip, Composition, GeneratorContent, Node, NodeContent, Track};
 use library::plugin::PluginManager;
 use library::{EditorService, PropertyOwner};
 use ordered_float::OrderedFloat;
@@ -769,14 +769,14 @@ fn render_value_category(
     }
     ui.add_space(10.0);
     ui.horizontal(|ui| {
-        ui.heading("Timing / Values");
-        ui.label(egui::RichText::new("Explicit time remap").small().weak());
+        ui.heading("Math / Values");
+        ui.label(egui::RichText::new("Explicit numeric graph").small().weak());
     });
     ui.separator();
 
     for node in values {
-        let label = match node.content() {
-            NodeContent::Value(ValueContent::TimeModulo) => "Time Modulo / Loop",
+        let value = match node.content() {
+            NodeContent::Value(value) => *value,
             _ => continue,
         };
         let incoming = connections
@@ -796,7 +796,7 @@ fn render_value_category(
         } else {
             format!("Wired to {} inputs", outgoing.len())
         };
-        let response = egui::CollapsingHeader::new(format!("{label} · {state}"))
+        let response = egui::CollapsingHeader::new(format!("{} · {state}", value.label()))
             .id_salt(("inspector_value", node.id))
             .default_open(outgoing.len() == 1)
             .show(ui, |ui| {
@@ -844,8 +844,8 @@ fn render_value_category(
             true,
             Some(serde_json::json!({
                 "value_id": node.id,
-                "category": "timing_values",
-                "operation": "time_modulo",
+                "category": "math_values",
+                "operation": value.operation_key(),
                 "enabled": node.enabled,
                 "input_connection_count": incoming.len(),
                 "output_connection_count": outgoing.len(),
@@ -1251,7 +1251,7 @@ fn source_kind(node: &Node) -> &'static str {
             "effect" => "Effect",
             _ => "Plug-in",
         },
-        NodeContent::Value(ValueContent::TimeModulo) => "Time Modulo",
+        NodeContent::Value(value) => value.label(),
         NodeContent::Merge => "Composite",
     }
 }
@@ -1735,7 +1735,7 @@ fn node_display_type(node: &Node) -> String {
             "Plugin Operation · {} / {}",
             operation.category, operation.operation
         ),
-        NodeContent::Value(ValueContent::TimeModulo) => "Time Modulo".to_string(),
+        NodeContent::Value(value) => value.label().to_string(),
         NodeContent::Merge => "Merge".to_string(),
     }
 }
@@ -2202,33 +2202,33 @@ mod tests {
     }
 
     #[test]
-    fn time_modulo_uses_canonical_period_metadata_instead_of_inferred_ranges() {
-        let node = Node::new_time_modulo("Time Modulo");
+    fn fmod_uses_canonical_divisor_metadata_instead_of_inferred_ranges() {
+        let node = Node::new_fmod("Fmod");
         let definitions = canonical_value_property_definitions(&node).unwrap();
-        let period = definitions
+        let divisor = definitions
             .iter()
-            .find(|definition| definition.name() == "period")
+            .find(|definition| definition.name() == "divisor")
             .unwrap();
-        assert_eq!(period.label(), "Period");
-        assert_eq!(period.default_value(), &PropertyValue::from(1.0));
+        assert_eq!(divisor.label(), "Divisor");
+        assert_eq!(divisor.default_value(), &PropertyValue::from(1.0));
         assert!(matches!(
-            period.ui_type(),
+            divisor.ui_type(),
             PropertyUiType::Float {
-                min: 0.001,
-                max: 86_400.0,
-                step: 0.001,
+                min: -1_000_000.0,
+                max: 1_000_000.0,
+                step: 0.01,
                 suffix,
-                min_hard_limit: true,
+                min_hard_limit: false,
                 max_hard_limit: false,
-            } if suffix == " s"
+            } if suffix.is_empty()
         ));
 
         let inferred = inferred_property_definitions(node.properties(), 0.0);
-        assert_ne!(inferred[0].ui_type(), period.ui_type());
+        assert_ne!(inferred[0].ui_type(), divisor.ui_type());
     }
 
     #[test]
-    fn value_nodes_are_timing_values_and_never_visual_sources() {
+    fn value_nodes_are_numeric_operations_and_never_visual_sources() {
         let source = generator_node(
             "Solid",
             GeneratorNodeRequest::Solid {
@@ -2236,7 +2236,7 @@ mod tests {
             },
         );
         let source_id = source.id;
-        let value = Node::new_time_modulo("Time Modulo");
+        let value = Node::new_fmod("Fmod");
         let value_id = value.id;
         let merge = Node::new_merge("Merge");
         let nodes = vec![source, value, merge];
@@ -2255,7 +2255,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![value_id]
         );
-        assert_eq!(source_kind(&nodes[1]), "Time Modulo");
+        assert_eq!(source_kind(&nodes[1]), "Fmod");
     }
 
     #[test]

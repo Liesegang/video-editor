@@ -450,21 +450,63 @@ pub enum PropertyUiV1 {
     MultilineText,
     Bool,
     Vec2 {
+        #[serde(default = "default_vector_min")]
+        min: f64,
+        #[serde(default = "default_vector_max")]
+        max: f64,
+        #[serde(default = "default_vector_step")]
+        step: f64,
         #[serde(default)]
         suffix: String,
+        #[serde(default)]
+        min_hard_limit: bool,
+        #[serde(default)]
+        max_hard_limit: bool,
     },
     Vec3 {
+        #[serde(default = "default_vector_min")]
+        min: f64,
+        #[serde(default = "default_vector_max")]
+        max: f64,
+        #[serde(default = "default_vector_step")]
+        step: f64,
         #[serde(default)]
         suffix: String,
+        #[serde(default)]
+        min_hard_limit: bool,
+        #[serde(default)]
+        max_hard_limit: bool,
     },
     Vec4 {
+        #[serde(default = "default_vector_min")]
+        min: f64,
+        #[serde(default = "default_vector_max")]
+        max: f64,
+        #[serde(default = "default_vector_step")]
+        step: f64,
         #[serde(default)]
         suffix: String,
+        #[serde(default)]
+        min_hard_limit: bool,
+        #[serde(default)]
+        max_hard_limit: bool,
     },
     Dropdown {
         options: Vec<String>,
     },
     Font,
+}
+
+fn default_vector_min() -> f64 {
+    -1_000_000.0
+}
+
+fn default_vector_max() -> f64 {
+    1_000_000.0
+}
+
+fn default_vector_step() -> f64 {
+    0.1
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

@@ -1388,7 +1388,7 @@ mod tests {
     #[test]
     fn value_output_is_never_projected_as_a_timeline_image_source() {
         let (mut project, clip_id) = project_with_clip("value output");
-        let value_id = attach_node(&mut project, clip_id, Node::new_time_modulo("Time Modulo"));
+        let value_id = attach_node(&mut project, clip_id, Node::new_fmod("Fmod"));
         project.get_clip_mut(clip_id).unwrap().output_node_id = Some(value_id);
 
         let graph = clip_graph_nodes(project.get_clip(clip_id).unwrap(), &project);

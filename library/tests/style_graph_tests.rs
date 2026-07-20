@@ -257,9 +257,7 @@ fn operation_descriptor_rejects_malformed_properties_and_terminal_ports() -> Any
     ));
     let non_finite_vec = PropertyDefinition::new(
         "point",
-        PropertyUiType::Vec2 {
-            suffix: String::new(),
-        },
+        PropertyUiType::vec2(""),
         "Point",
         PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(f64::NAN),

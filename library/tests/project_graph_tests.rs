@@ -11,11 +11,11 @@ use library::model::frame::Image;
 use library::model::frame::color::Color;
 use library::model::frame::entity::{FrameContent, FrameGroup, FrameGroupKind, FrameItem};
 use library::model::project::{
-    Composition, CompositionSettingsError, DURATION_PORT, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT,
-    IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, NodeGraphBundle, PortAddress,
-    PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner,
-    PortSide, Project, ProjectConnection, ProjectGraphError, RESOLUTION_PORT, SHAPE_INPUT_PORT,
-    SHAPE_OUTPUT_PORT, TIME_PORT, VALUE_INPUT_PORT, VALUE_OUTPUT_PORT,
+    Composition, CompositionSettingsError, DURATION_PORT, FMOD_X_INPUT_PORT, FPS_PORT, FRAME_PORT,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NUMBER_RESULT_OUTPUT_PORT,
+    NodeContainer, NodeGraphBundle, PortAddress, PortDataType, PortDefinition, PortDirection,
+    PortExposure, PortMultiplicity, PortOwner, PortSide, Project, ProjectConnection,
+    ProjectGraphError, RESOLUTION_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{Keyframe, Property, PropertyValue};
 use library::model::{
@@ -2658,7 +2658,7 @@ fn nested_reference_does_not_materialize_target_background_after_its_duration() 
 }
 
 #[test]
-fn time_modulo_cannot_resurrect_a_composition_after_its_duration() -> Result<()> {
+fn explicit_fmod_time_loop_cannot_resurrect_a_composition_after_its_duration() -> Result<()> {
     let mut project = Project::new("Composition activity before Time remap");
     let (target, target_track) = Composition::new("short target", 320, 180, 30.0, 1.0);
     let target_id = target.id;
@@ -2679,14 +2679,14 @@ fn time_modulo_cannot_resurrect_a_composition_after_its_duration() -> Result<()>
         .set_output_node(NodeContainer::Composition(target_id), Some(target_node_id))
         .map_err(|error| anyhow!(error))?;
 
-    let modulo = Node::new_time_modulo("one-second loop");
-    let modulo_id = add_node(&mut project, NodeContainer::Composition(driver_id), modulo)?;
+    let fmod = Node::new_fmod("one-second loop");
+    let fmod_id = add_node(&mut project, NodeContainer::Composition(driver_id), fmod)?;
     project.connect_ports(
         address(PortOwner::Composition(driver_id), TIME_PORT),
-        address(PortOwner::Node(modulo_id), VALUE_INPUT_PORT),
+        address(PortOwner::Node(fmod_id), FMOD_X_INPUT_PORT),
     )?;
     project.connect_ports(
-        address(PortOwner::Node(modulo_id), VALUE_OUTPUT_PORT),
+        address(PortOwner::Node(fmod_id), NUMBER_RESULT_OUTPUT_PORT),
         address(PortOwner::Composition(target_id), TIME_PORT),
     )?;
 

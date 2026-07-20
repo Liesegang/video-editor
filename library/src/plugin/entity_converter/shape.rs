@@ -52,9 +52,7 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
             // Transform Properties
             PropertyDefinition::new(
                 "position",
-                PropertyUiType::Vec2 {
-                    suffix: "px".to_string(),
-                },
+                PropertyUiType::vec2("px"),
                 "Position",
                 PropertyValue::Vec2(Vec2 {
                     x: OrderedFloat(canvas_width as f64 / 2.0),
@@ -63,9 +61,7 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
             ),
             PropertyDefinition::new(
                 "scale",
-                PropertyUiType::Vec2 {
-                    suffix: "%".to_string(),
-                },
+                PropertyUiType::vec2_with_range(0.0, 1_000.0, 0.1, "%", true, false),
                 "Scale",
                 PropertyValue::Vec2(Vec2 {
                     x: OrderedFloat(100.0),
@@ -87,9 +83,7 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
             ),
             PropertyDefinition::new(
                 "anchor",
-                PropertyUiType::Vec2 {
-                    suffix: "px".to_string(),
-                },
+                PropertyUiType::vec2("px"),
                 "Anchor",
                 PropertyValue::Vec2(Vec2 {
                     x: OrderedFloat(clip_width as f64 / 2.0),
