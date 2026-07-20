@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
+use anyhow::{Context, Result as AnyResult, anyhow, bail};
 use library::animation::EasingFunction;
 use library::editor::project_service::ProjectManager;
 use library::framing::get_frame_from_project;
@@ -43,23 +44,27 @@ fn setup_project() -> (Project, Uuid, Uuid) {
     (project, composition_id, track_id)
 }
 
-fn project_with_graph(graph: NodeGraphBundle, start_time: f64, duration: f64) -> Project {
+fn project_with_graph(
+    graph: NodeGraphBundle,
+    start_time: f64,
+    duration: f64,
+) -> AnyResult<Project> {
     let (mut project, _composition_id, track_id) = setup_project();
     let clip = Clip::new("graph", start_time, duration);
     let clip_id = clip.id;
     project.add_clip(clip);
-    project.attach_clip_to_track(track_id, clip_id).unwrap();
+    project.attach_clip_to_track(track_id, clip_id)?;
     project
         .insert_node_graph(NodeContainer::Clip(clip_id), graph)
-        .unwrap();
-    project
+        .context("insert style graph into Clip")?;
+    Ok(project)
 }
 
 fn frame(
     project: &Project,
     plugins: &Arc<PluginManager>,
     frame_number: u64,
-) -> library::model::frame::frame::FrameInfo {
+) -> AnyResult<library::model::frame::frame::FrameInfo> {
     get_frame_from_project(
         project,
         0,
@@ -69,7 +74,7 @@ fn frame(
         &plugins.get_property_evaluators(),
         plugins,
     )
-    .unwrap()
+    .context("evaluate style graph frame")
 }
 
 fn first_content(items: &[FrameItem]) -> Option<&FrameContent> {
@@ -79,10 +84,10 @@ fn first_content(items: &[FrameItem]) -> Option<&FrameContent> {
     })
 }
 
-fn content_styles(content: &FrameContent) -> &[StyleConfig] {
+fn content_styles(content: &FrameContent) -> AnyResult<&[StyleConfig]> {
     match content {
-        FrameContent::Text { styles, .. } | FrameContent::Shape { styles, .. } => styles,
-        other => panic!("expected styled content, got {other:?}"),
+        FrameContent::Text { styles, .. } | FrameContent::Shape { styles, .. } => Ok(styles),
+        other => bail!("expected styled content, got {other:?}"),
     }
 }
 
@@ -90,23 +95,24 @@ fn draw_styles(
     project: &Project,
     plugins: &Arc<PluginManager>,
     frame_number: u64,
-) -> Vec<DrawStyle> {
-    let rendered = frame(project, plugins, frame_number);
-    fn collect(items: &[FrameItem], styles: &mut Vec<DrawStyle>) {
+) -> AnyResult<Vec<DrawStyle>> {
+    let rendered = frame(project, plugins, frame_number)?;
+    fn collect(items: &[FrameItem], styles: &mut Vec<DrawStyle>) -> AnyResult<()> {
         for item in items {
             match item {
                 FrameItem::Object(object) => styles.extend(
-                    content_styles(&object.content)
+                    content_styles(&object.content)?
                         .iter()
                         .map(|style| style.style.clone()),
                 ),
-                FrameItem::Group(group) => collect(&group.items, styles),
+                FrameItem::Group(group) => collect(&group.items, styles)?,
             }
         }
+        Ok(())
     }
     let mut styles = Vec::new();
-    collect(&rendered.items, &mut styles);
-    styles
+    collect(&rendered.items, &mut styles)?;
+    Ok(styles)
 }
 
 fn style_kinds(styles: &[DrawStyle]) -> Vec<&'static str> {
@@ -135,15 +141,15 @@ fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
 }
 
 #[test]
-fn style_descriptors_materialize_all_defaults_and_namespaced_typed_ports() {
+fn style_descriptors_materialize_all_defaults_and_namespaced_typed_ports() -> AnyResult<()> {
     let plugins = PluginManager::default();
     for component_id in ["fill", "stroke"] {
         let descriptor = plugins
             .operation_descriptor(STYLE_CATEGORY, component_id, STYLE_APPLY_OPERATION)
-            .unwrap();
-        let node = plugins.create_style_operation_node(component_id).unwrap();
+            .with_context(|| format!("missing descriptor for Style component {component_id}"))?;
+        let node = plugins.create_style_operation_node(component_id)?;
         let NodeContent::PluginOperation(operation) = node.content() else {
-            panic!("factory must create a plugin operation");
+            bail!("factory must create a plugin operation");
         };
         assert_eq!(operation.category, STYLE_CATEGORY);
         assert_eq!(operation.component_id, component_id);
@@ -163,7 +169,7 @@ fn style_descriptors_materialize_all_defaults_and_namespaced_typed_ports() {
                 .declared_ports
                 .iter()
                 .find(|port| port.key == key)
-                .expect("every property must have one port");
+                .with_context(|| format!("property {} has no port", definition.name()))?;
             assert_eq!(port.direction, PortDirection::Input);
             assert_eq!(
                 port.data_type,
@@ -181,22 +187,23 @@ fn style_descriptors_materialize_all_defaults_and_namespaced_typed_ports() {
             .declared_ports
             .iter()
             .find(|port| port.key == SHAPE_INPUT_PORT)
-            .unwrap();
+            .context("Style operation has no Shape input")?;
         assert_eq!(shape_input.direction, PortDirection::Input);
         assert_eq!(shape_input.data_type, PortDataType::Shape);
         let image_output = operation
             .declared_ports
             .iter()
             .find(|port| port.key == IMAGE_OUTPUT_PORT)
-            .unwrap();
+            .context("Style operation has no Image output")?;
         assert_eq!(image_output.direction, PortDirection::Output);
         assert_eq!(image_output.data_type, PortDataType::Image);
         assert_eq!(image_output.side, PortSide::Right);
     }
+    Ok(())
 }
 
 #[test]
-fn operation_descriptor_rejects_malformed_properties_and_terminal_ports() {
+fn operation_descriptor_rejects_malformed_properties_and_terminal_ports() -> AnyResult<()> {
     let float = |name: &str, min: f64, max: f64, step: f64, default: f64| {
         PropertyDefinition::new(
             name,
@@ -283,10 +290,11 @@ fn operation_descriptor_rejects_malformed_properties_and_terminal_ports() {
         ),
         Err(OperationDescriptorError::InvalidOperationPortKey { .. })
     ));
+    Ok(())
 }
 
 #[test]
-fn execution_contract_ignores_labels_but_rejects_typed_breakage() {
+fn execution_contract_ignores_labels_but_rejects_typed_breakage() -> AnyResult<()> {
     let descriptor = OperationDescriptor::style(
         "test",
         "Test",
@@ -304,7 +312,7 @@ fn execution_contract_ignores_labels_but_rejects_typed_breakage() {
             1.0.into(),
         )],
     )
-    .unwrap();
+    .context("construct Style operation descriptor")?;
     let mut persisted = descriptor.declared_ports().to_vec();
     persisted.reverse();
     for port in &mut persisted {
@@ -315,17 +323,18 @@ fn execution_contract_ignores_labels_but_rejects_typed_breakage() {
 
     persisted[0].data_type = PortDataType::Boolean;
     assert!(!descriptor.is_execution_compatible_with_ports(&persisted));
+    Ok(())
 }
 
 #[test]
-fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority() {
+fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let project = Arc::new(RwLock::new(Project::new("factory")));
     let manager = ProjectManager::new(project, plugins);
 
     let text = manager
         .create_text_graph("hello", "Arial", WIDTH, HEIGHT)
-        .unwrap();
+        .context("create Text graph")?;
     assert_eq!(text.nodes.len(), 2);
     let text_consumer = text
         .nodes
@@ -336,12 +345,12 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
                 NodeContent::Generator(GeneratorContent::Text)
             )
         })
-        .unwrap();
+        .context("Text graph has no Text source")?;
     let fill = text
         .nodes
         .iter()
         .find(|node| operation_component(node) == Some("fill"))
-        .unwrap();
+        .context("Text graph has no Fill operation")?;
     assert_eq!(text_consumer.ui_position, [0.0, 0.0]);
     assert_eq!(fill.ui_position, [360.0, 0.0]);
     assert_eq!(text.output_node_id, Some(fill.id));
@@ -352,7 +361,7 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
 
     let shape = manager
         .create_shape_graph("M0 0 L10 0 L10 10 Z", WIDTH, HEIGHT, 10, 10)
-        .unwrap();
+        .context("create Shape graph")?;
     let shape_consumer = shape
         .nodes
         .iter()
@@ -362,13 +371,13 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
                 NodeContent::Generator(GeneratorContent::Shape)
             )
         })
-        .unwrap();
+        .context("Shape graph has no Shape source")?;
     assert_eq!(shape_consumer.ui_position, [0.0, 110.0]);
     let merge = shape
         .nodes
         .iter()
         .find(|node| matches!(node.content(), NodeContent::Merge))
-        .unwrap();
+        .context("Shape graph has no Merge operation")?;
     assert_eq!(shape.output_node_id, Some(merge.id));
     assert_eq!(shape.nodes.len(), 4);
     assert_eq!(shape.connections.len(), 4);
@@ -378,19 +387,20 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
         .filter(|connection| connection.to.port == MERGE_IMAGES_PORT)
         .collect::<Vec<_>>();
     ordered.sort_by_key(|connection| connection.order);
-    assert_eq!(
-        ordered
+    let mut ordered_components = Vec::new();
+    for connection in &ordered {
+        let PortOwner::Node(source) = connection.from.owner else {
+            bail!("Merge source must be a Node");
+        };
+        let source = shape
+            .nodes
             .iter()
-            .map(|connection| {
-                let PortOwner::Node(source) = connection.from.owner else {
-                    panic!()
-                };
-                operation_component(shape.nodes.iter().find(|node| node.id == source).unwrap())
-                    .unwrap()
-            })
-            .collect::<Vec<_>>(),
-        vec!["fill", "stroke"]
-    );
+            .find(|node| node.id == source)
+            .context("Merge source Node is missing")?;
+        ordered_components
+            .push(operation_component(source).context("Merge source is not a plugin operation")?);
+    }
+    assert_eq!(ordered_components, vec!["fill", "stroke"]);
     assert_eq!(
         ordered
             .iter()
@@ -399,20 +409,14 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
         vec![0, 1]
     );
 
-    let expected = draw_styles(
-        &project_with_graph(shape.clone(), 0.0, 2.0),
-        &Arc::new(PluginManager::default()),
-        0,
-    );
+    let expected_project = project_with_graph(shape.clone(), 0.0, 2.0)?;
+    let expected = draw_styles(&expected_project, &Arc::new(PluginManager::default()), 0)?;
     assert_eq!(style_kinds(&expected), vec!["fill", "stroke"]);
 
     let mut reversed_storage = shape.clone();
     reversed_storage.connections.reverse();
-    let rendered = draw_styles(
-        &project_with_graph(reversed_storage, 0.0, 2.0),
-        &Arc::new(PluginManager::default()),
-        0,
-    );
+    let reversed_project = project_with_graph(reversed_storage, 0.0, 2.0)?;
+    let rendered = draw_styles(&reversed_project, &Arc::new(PluginManager::default()), 0)?;
     assert_eq!(style_kinds(&rendered), vec!["fill", "stroke"]);
 
     let mut swapped_order = shape;
@@ -421,62 +425,75 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
             connection.order = 1 - connection.order;
         }
     }
-    let rendered = draw_styles(
-        &project_with_graph(swapped_order, 0.0, 2.0),
-        &Arc::new(PluginManager::default()),
-        0,
-    );
+    let swapped_project = project_with_graph(swapped_order, 0.0, 2.0)?;
+    let rendered = draw_styles(&swapped_project, &Arc::new(PluginManager::default()), 0)?;
     assert_eq!(style_kinds(&rendered), vec!["stroke", "fill"]);
+    Ok(())
 }
 
 #[test]
-fn text_and_shape_clip_graphs_roundtrip_with_explicit_raster_boundaries() {
+fn text_and_shape_clip_graphs_roundtrip_with_explicit_raster_boundaries() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let shared = Arc::new(RwLock::new(setup_project().0));
     let manager = ProjectManager::new(shared.clone(), plugins.clone());
-    let composition_id = shared.read().unwrap().compositions[0].id;
-    let track_id = shared.read().unwrap().compositions[0].track_ids[0];
+    let (composition_id, track_id) = {
+        let project = shared
+            .read()
+            .map_err(|error| anyhow!("project lock poisoned: {error}"))?;
+        let composition = project
+            .compositions
+            .first()
+            .context("setup project has no Composition")?;
+        let track_id = *composition
+            .track_ids
+            .first()
+            .context("setup Composition has no Track")?;
+        (composition.id, track_id)
+    };
 
     let text_bundle = manager
         .create_text_clip("hello", 0.0, 2.0, WIDTH as u32, HEIGHT as u32)
-        .unwrap();
+        .context("create Text Clip graph")?;
     assert!(text_bundle.clip.node_ids.is_empty());
     assert!(text_bundle.graph.output_node().is_some());
     manager
         .add_clip_to_track(composition_id, track_id, text_bundle, None)
-        .unwrap();
-    let saved = shared.read().unwrap().save().unwrap();
-    let loaded = Project::load(&saved).unwrap();
+        .context("add Text Clip to Track")?;
+    let saved = shared
+        .read()
+        .map_err(|error| anyhow!("project lock poisoned: {error}"))?
+        .save()?;
+    let loaded = Project::load(&saved)?;
     assert!(loaded.validation_issues().is_empty());
-    assert_eq!(loaded, *shared.read().unwrap());
+    assert_eq!(
+        loaded,
+        *shared
+            .read()
+            .map_err(|error| anyhow!("project lock poisoned: {error}"))?
+    );
 
     let graph_text = manager
         .create_text_graph("hello", "Arial", WIDTH, HEIGHT)
-        .unwrap();
+        .context("create Text graph")?;
+    let graph_text_project = project_with_graph(graph_text, 0.0, 2.0)?;
     assert_eq!(
-        style_kinds(&draw_styles(
-            &project_with_graph(graph_text, 0.0, 2.0),
-            &plugins,
-            0
-        )),
+        style_kinds(&draw_styles(&graph_text_project, &plugins, 0)?),
         vec!["fill"]
     );
 
     let graph_shape = manager
         .create_shape_graph("M0 0 L10 0 L10 10 Z", WIDTH, HEIGHT, 10, 10)
-        .unwrap();
+        .context("create Shape graph")?;
+    let graph_shape_project = project_with_graph(graph_shape, 0.0, 2.0)?;
     assert_eq!(
-        style_kinds(&draw_styles(
-            &project_with_graph(graph_shape, 0.0, 2.0),
-            &plugins,
-            0
-        )),
+        style_kinds(&draw_styles(&graph_shape_project, &plugins, 0)?),
         vec!["fill", "stroke"]
     );
+    Ok(())
 }
 
 #[test]
-fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only() {
+fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -484,12 +501,12 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
     );
     let graph = manager
         .create_text_graph("hello", "Arial", WIDTH, HEIGHT)
-        .unwrap();
+        .context("create Text graph")?;
     let fill_id = graph
         .nodes
         .iter()
         .find(|node| operation_component(node) == Some("fill"))
-        .unwrap()
+        .context("Text graph has no Fill operation")?
         .id;
     let source = graph
         .nodes
@@ -500,12 +517,17 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
                 NodeContent::Generator(GeneratorContent::Text)
             )
         })
-        .unwrap()
+        .context("Text graph has no Text source")?
         .clone();
-    let mut project = project_with_graph(graph, 0.0, 2.0);
-    let clip_id = project.find_node_container(fill_id).unwrap().id();
+    let mut project = project_with_graph(graph, 0.0, 2.0)?;
+    let clip_id = project
+        .find_node_container(fill_id)
+        .context("Fill operation has no container")?
+        .id();
 
-    let fill = project.get_node_mut(fill_id).unwrap();
+    let fill = project
+        .get_node_mut(fill_id)
+        .context("Fill operation is missing")?;
     set_constant(
         fill,
         "color",
@@ -517,7 +539,7 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
         }),
     );
     set_constant(fill, "opacity", 0.5.into());
-    let rendered = draw_styles(&project, &plugins, 0);
+    let rendered = draw_styles(&project, &plugins, 0)?;
     assert!(matches!(
         rendered.as_slice(),
         [DrawStyle::Fill {
@@ -528,7 +550,7 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
 
     project
         .get_node_mut(fill_id)
-        .unwrap()
+        .context("Fill operation is missing")?
         .set_property(
             "opacity".into(),
             Property::keyframe(vec![
@@ -536,9 +558,9 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
                 Keyframe::new(1.0, 0.8.into(), EasingFunction::Linear),
             ]),
         )
-        .expect("fill descriptor initializes opacity");
-    let at_start = draw_styles(&project, &plugins, 0);
-    let at_one_second = draw_styles(&project, &plugins, 10);
+        .map_err(|error| anyhow!("Fill descriptor must initialize opacity: {error}"))?;
+    let at_start = draw_styles(&project, &plugins, 0)?;
+    let at_one_second = draw_styles(&project, &plugins, 10)?;
     assert!(matches!(
         at_start.as_slice(),
         [DrawStyle::Fill {
@@ -559,8 +581,8 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
             PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
             PortAddress::new(PortOwner::Node(fill_id), property_port_key("opacity")),
         )
-        .unwrap();
-    let connected = draw_styles(&project, &plugins, 5);
+        .context("connect Clip time to Fill opacity")?;
+    let connected = draw_styles(&project, &plugins, 5)?;
     assert!(matches!(
         connected.as_slice(),
         [DrawStyle::Fill {
@@ -569,10 +591,12 @@ fn editing_style_constants_keyframes_and_connected_scalars_changes_render_only()
         }]
     ));
     assert_eq!(project.get_node(source.id), Some(&source));
+    Ok(())
 }
 
 #[test]
-fn text_converter_exposes_grapheme_source_ranges_without_claiming_glyph_metadata() {
+fn text_converter_exposes_grapheme_source_ranges_without_claiming_glyph_metadata() -> AnyResult<()>
+{
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -580,7 +604,7 @@ fn text_converter_exposes_grapheme_source_ranges_without_claiming_glyph_metadata
     );
     let graph = manager
         .create_text_graph("A日e\u{301}", "Arial", WIDTH, HEIGHT)
-        .unwrap();
+        .context("create Text graph")?;
     let node = graph
         .nodes
         .iter()
@@ -590,7 +614,7 @@ fn text_converter_exposes_grapheme_source_ranges_without_claiming_glyph_metadata
                 NodeContent::Generator(GeneratorContent::Text)
             )
         })
-        .unwrap();
+        .context("Text graph has no Text source")?;
     let (composition, _) = Composition::new("main", WIDTH, HEIGHT, FPS, 2.0);
     let project = Project::new("bounds");
     let evaluators = plugins.get_property_evaluators();
@@ -601,10 +625,14 @@ fn text_converter_exposes_grapheme_source_ranges_without_claiming_glyph_metadata
         plugin_manager: &plugins,
         resolved_inputs: None,
     };
-    let converter = plugins.get_entity_converter("text").unwrap();
-    let shape = converter.convert_shape(&context, node, 0.0).unwrap();
+    let converter = plugins
+        .get_entity_converter("text")
+        .context("Text entity converter is missing")?;
+    let shape = converter
+        .convert_shape(&context, node, 0.0)
+        .context("Text converter produced no Shape")?;
     let RuntimeShapeGeometry::Text(text) = shape.geometry else {
-        panic!("text converter must produce RuntimeShapeGeometry::Text")
+        bail!("text converter must produce RuntimeShapeGeometry::Text");
     };
     assert_eq!(text.elements.len(), 3);
     assert_eq!(text.elements[0].utf8_range, 0..1);
@@ -613,10 +641,11 @@ fn text_converter_exposes_grapheme_source_ranges_without_claiming_glyph_metadata
     assert_eq!(text.elements[2].utf8_range, 4..7);
     assert_eq!(text.elements[2].utf16_range, 2..4);
     assert!(text.elements.iter().all(|element| element.advance > 0.0));
+    Ok(())
 }
 
 #[test]
-fn unknown_missing_invalid_and_scalar_no_output_styles_are_safe() {
+fn unknown_missing_invalid_and_scalar_no_output_styles_are_safe() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -624,23 +653,23 @@ fn unknown_missing_invalid_and_scalar_no_output_styles_are_safe() {
     );
     let mut graph = manager
         .create_text_graph("unknown", "Arial", WIDTH, HEIGHT)
-        .unwrap();
+        .context("create Text graph")?;
     let fill_index = graph
         .nodes
         .iter()
         .position(|node| operation_component(node) == Some("fill"))
-        .unwrap();
-    let mut persisted = serde_json::to_value(&graph.nodes[fill_index]).unwrap();
+        .context("Text graph has no Fill operation")?;
+    let mut persisted = serde_json::to_value(&graph.nodes[fill_index])?;
     persisted["content"]["data"]["component_id"] =
         serde_json::Value::String("unavailable-style".into());
-    graph.nodes[fill_index] = serde_json::from_value(persisted).unwrap();
-    let project = project_with_graph(graph, 0.0, 2.0);
-    let rendered = frame(&project, &plugins, 0);
+    graph.nodes[fill_index] = serde_json::from_value(persisted)?;
+    let project = project_with_graph(graph, 0.0, 2.0)?;
+    let rendered = frame(&project, &plugins, 0)?;
     assert!(rendered.items.is_empty());
-    let saved = project.save().unwrap();
-    assert_eq!(Project::load(&saved).unwrap(), project);
+    let saved = project.save()?;
+    assert_eq!(Project::load(&saved)?, project);
 
-    let fill = plugins.create_style_operation_node("fill").unwrap();
+    let fill = plugins.create_style_operation_node("fill")?;
     let (composition, _) = Composition::new("main", WIDTH, HEIGHT, FPS, 2.0);
     let project = Project::new("scalar NoOutput");
     let evaluators = plugins.get_property_evaluators();
@@ -683,7 +712,7 @@ fn unknown_missing_invalid_and_scalar_no_output_styles_are_safe() {
         EvalOutput::NoOutput
     );
 
-    let stroke = plugins.create_style_operation_node("stroke").unwrap();
+    let stroke = plugins.create_style_operation_node("stroke")?;
     let mut invalid_keyframe = stroke.properties().clone();
     invalid_keyframe.set(
         "join".into(),
@@ -714,6 +743,7 @@ fn unknown_missing_invalid_and_scalar_no_output_styles_are_safe() {
         plugins.evaluate_style_operation(&context, "stroke", stroke.id, stroke.properties(), 0.0),
         EvalOutput::NoOutput
     );
+    Ok(())
 }
 
 struct CountingStylePlugin {
@@ -762,7 +792,7 @@ impl StylePlugin for CountingStylePlugin {
 }
 
 #[test]
-fn inactive_clip_style_plugin_is_not_evaluated() {
+fn inactive_clip_style_plugin_is_not_evaluated() -> AnyResult<()> {
     let evaluations = Arc::new(AtomicUsize::new(0));
     let plugins = Arc::new(PluginManager::default());
     plugins.register_style_plugin(Arc::new(CountingStylePlugin {
@@ -774,21 +804,22 @@ fn inactive_clip_style_plugin_is_not_evaluated() {
     );
     let mut graph = manager
         .create_text_graph("inactive", "Arial", WIDTH, HEIGHT)
-        .unwrap();
+        .context("create Text graph")?;
     let old_fill = graph
         .nodes
         .iter()
         .position(|node| operation_component(node) == Some("fill"))
-        .unwrap();
-    let counting = plugins.create_style_operation_node("counting").unwrap();
+        .context("Text graph has no Fill operation")?;
+    let counting = plugins.create_style_operation_node("counting")?;
     let counting_id = counting.id;
     graph.nodes[old_fill] = counting;
     graph.output_node_id = Some(counting_id);
     graph.connections[0].to = PortAddress::new(PortOwner::Node(counting_id), SHAPE_INPUT_PORT);
-    let project = project_with_graph(graph, 5.0, 2.0);
+    let project = project_with_graph(graph, 5.0, 2.0)?;
 
-    assert!(frame(&project, &plugins, 0).items.is_empty());
+    assert!(frame(&project, &plugins, 0)?.items.is_empty());
     assert_eq!(evaluations.load(Ordering::SeqCst), 0);
-    assert!(first_content(&frame(&project, &plugins, 50).items).is_some());
+    assert!(first_content(&frame(&project, &plugins, 50)?.items).is_some());
     assert_eq!(evaluations.load(Ordering::SeqCst), 1);
+    Ok(())
 }

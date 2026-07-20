@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
+use anyhow::{Context, Result as AnyResult, anyhow, bail};
 use library::animation::EasingFunction;
 use library::cache::CacheManager;
 use library::editor::project_service::ProjectManager;
@@ -75,19 +76,27 @@ fn setup_project() -> (Project, Uuid, Uuid) {
     (project, composition_id, track_id)
 }
 
-fn project_with_graph(graph: NodeGraphBundle, start_time: f64, duration: f64) -> (Project, Uuid) {
+fn project_with_graph(
+    graph: NodeGraphBundle,
+    start_time: f64,
+    duration: f64,
+) -> AnyResult<(Project, Uuid)> {
     let (mut project, _composition_id, track_id) = setup_project();
     let clip = Clip::new("effect clip", start_time, duration);
     let clip_id = clip.id;
     project.add_clip(clip);
-    project.attach_clip_to_track(track_id, clip_id).unwrap();
+    project.attach_clip_to_track(track_id, clip_id)?;
     project
         .insert_node_graph(NodeContainer::Clip(clip_id), graph)
-        .unwrap();
-    (project, clip_id)
+        .context("insert Effect graph into Clip")?;
+    Ok((project, clip_id))
 }
 
-fn evaluate(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -> FrameInfo {
+fn evaluate(
+    project: &Project,
+    plugins: &Arc<PluginManager>,
+    frame_number: u64,
+) -> AnyResult<FrameInfo> {
     get_frame_from_project(
         project,
         0,
@@ -97,11 +106,11 @@ fn evaluate(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) 
         &plugins.get_property_evaluators(),
         plugins,
     )
-    .unwrap()
+    .context("evaluate Effect graph frame")
 }
 
-fn preview(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -> Image {
-    let frame = evaluate(project, plugins, frame_number);
+fn preview(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -> AnyResult<Image> {
+    let frame = evaluate(project, plugins, frame_number)?;
     let renderer = SkiaRenderer::new(
         frame.width as u32,
         frame.height as u32,
@@ -110,11 +119,11 @@ fn preview(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -
         None,
         None,
     )
-    .unwrap();
+    .context("create CPU renderer")?;
     let mut service = RenderService::new(renderer, plugins.clone(), Arc::new(CacheManager::new()));
-    match service.render_from_frame_info(&frame).unwrap() {
-        RenderOutput::Image(image) => image,
-        RenderOutput::Texture(_) => panic!("CPU renderer unexpectedly returned a texture"),
+    match service.render_from_frame_info(&frame)? {
+        RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Texture(_) => bail!("CPU renderer unexpectedly returned a texture"),
     }
 }
 
@@ -141,15 +150,15 @@ fn object_source_ids(items: &[FrameItem]) -> Vec<Uuid> {
 }
 
 #[test]
-fn effect_descriptor_factory_materializes_defaults_and_distinct_image_ports() {
+fn effect_descriptor_factory_materializes_defaults_and_distinct_image_ports() -> AnyResult<()> {
     let plugins = PluginManager::default();
     for (component_id, _, _) in plugins.get_available_effects() {
         let descriptor = plugins
             .operation_descriptor(EFFECT_CATEGORY, &component_id, EFFECT_APPLY_OPERATION)
-            .unwrap();
-        let node = plugins.create_effect_operation_node(&component_id).unwrap();
+            .with_context(|| format!("missing descriptor for Effect component {component_id}"))?;
+        let node = plugins.create_effect_operation_node(&component_id)?;
         let NodeContent::PluginOperation(operation) = node.content() else {
-            panic!("Effect factory must create a plugin operation");
+            bail!("Effect factory must create a plugin operation");
         };
         assert_eq!(operation.category, EFFECT_CATEGORY);
         assert_eq!(operation.operation, EFFECT_APPLY_OPERATION);
@@ -172,7 +181,7 @@ fn effect_descriptor_factory_materializes_defaults_and_distinct_image_ports() {
             .declared_ports
             .iter()
             .find(|port| port.key == IMAGE_INPUT_PORT)
-            .unwrap();
+            .context("Effect operation has no Image input")?;
         assert_eq!(
             image_input.direction,
             library::model::project::PortDirection::Input
@@ -183,7 +192,7 @@ fn effect_descriptor_factory_materializes_defaults_and_distinct_image_ports() {
             .declared_ports
             .iter()
             .find(|port| port.key == IMAGE_OUTPUT_PORT)
-            .unwrap();
+            .context("Effect operation has no Image output")?;
         assert_eq!(
             image_output.direction,
             library::model::project::PortDirection::Output
@@ -207,10 +216,11 @@ fn effect_descriptor_factory_materializes_defaults_and_distinct_image_ports() {
         collision,
         Err(OperationDescriptorError::PortCollision { .. })
     ));
+    Ok(())
 }
 
 #[test]
-fn effect_chain_uses_wiring_order_and_evaluates_keyframes_and_scalar_overrides() {
+fn effect_chain_uses_wiring_order_and_evaluates_keyframes_and_scalar_overrides() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -218,9 +228,9 @@ fn effect_chain_uses_wiring_order_and_evaluates_keyframes_and_scalar_overrides()
     );
     let source = manager
         .create_solid_node(Color::white(), WIDTH, HEIGHT)
-        .unwrap();
-    let mut blur = plugins.create_effect_operation_node("blur").unwrap();
-    let dilate = plugins.create_effect_operation_node("dilate").unwrap();
+        .context("create Solid source")?;
+    let mut blur = plugins.create_effect_operation_node("blur")?;
+    let dilate = plugins.create_effect_operation_node("dilate")?;
     blur.set_property(
         "sigma_x".into(),
         Property::keyframe(vec![
@@ -228,7 +238,7 @@ fn effect_chain_uses_wiring_order_and_evaluates_keyframes_and_scalar_overrides()
             Keyframe::new(1.0, 10.0.into(), EasingFunction::Linear),
         ]),
     )
-    .expect("blur descriptor initializes sigma_x");
+    .map_err(|error| anyhow!("Blur descriptor must initialize sigma_x: {error}"))?;
     let source_id = source.id;
     let blur_id = blur.id;
     let dilate_id = dilate.id;
@@ -240,19 +250,19 @@ fn effect_chain_uses_wiring_order_and_evaluates_keyframes_and_scalar_overrides()
         ],
         Some(dilate_id),
     );
-    let (mut project, clip_id) = project_with_graph(graph, 0.0, 2.0);
+    let (mut project, clip_id) = project_with_graph(graph, 0.0, 2.0)?;
     project
         .connect_ports(
             PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
             PortAddress::new(PortOwner::Node(blur_id), property_port_key("sigma_y")),
         )
-        .unwrap();
+        .context("connect Clip time to Blur sigma_y")?;
 
-    let rendered = evaluate(&project, &plugins, 5);
-    let outer = find_group(&rendered.items, dilate_id).unwrap();
+    let rendered = evaluate(&project, &plugins, 5)?;
+    let outer = find_group(&rendered.items, dilate_id).context("Dilate group is missing")?;
     assert_eq!(outer.kind, FrameGroupKind::Effect);
     assert_eq!(outer.effects[0].effect_type, "dilate");
-    let inner = find_group(&outer.items, blur_id).unwrap();
+    let inner = find_group(&outer.items, blur_id).context("Blur group is missing")?;
     assert_eq!(inner.kind, FrameGroupKind::Effect);
     assert_eq!(inner.effects[0].effect_type, "blur");
     assert_eq!(
@@ -269,38 +279,39 @@ fn effect_chain_uses_wiring_order_and_evaluates_keyframes_and_scalar_overrides()
         "Effect sinks must preserve the actual visual source Node"
     );
 
-    let saved = project.save().unwrap();
-    let loaded = Project::load(&saved).unwrap();
+    let saved = project.save()?;
+    let loaded = Project::load(&saved)?;
     assert_eq!(loaded, project);
     assert!(loaded.validation_issues().is_empty());
+    Ok(())
 }
 
 #[test]
-fn unknown_missing_input_and_scalar_no_output_effects_are_safe_no_output() {
+fn unknown_missing_input_and_scalar_no_output_effects_are_safe_no_output() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
         plugins.clone(),
     );
-    let missing = plugins.create_effect_operation_node("blur").unwrap();
+    let missing = plugins.create_effect_operation_node("blur")?;
     let missing_id = missing.id;
     let (project, _) = project_with_graph(
         NodeGraphBundle::new(vec![missing], Vec::new(), Some(missing_id)),
         0.0,
         2.0,
-    );
-    assert!(evaluate(&project, &plugins, 0).items.is_empty());
+    )?;
+    assert!(evaluate(&project, &plugins, 0)?.items.is_empty());
 
     let source = manager
         .create_solid_node(Color::white(), WIDTH, HEIGHT)
-        .unwrap();
-    let unknown = plugins.create_effect_operation_node("blur").unwrap();
+        .context("create Solid source")?;
+    let unknown = plugins.create_effect_operation_node("blur")?;
     let source_id = source.id;
     let unknown_id = unknown.id;
-    let mut unknown_json = serde_json::to_value(unknown).unwrap();
+    let mut unknown_json = serde_json::to_value(unknown)?;
     unknown_json["content"]["data"]["component_id"] =
         serde_json::Value::String("unavailable-effect".to_string());
-    let unknown: Node = serde_json::from_value(unknown_json).unwrap();
+    let unknown: Node = serde_json::from_value(unknown_json)?;
     let (project, _) = project_with_graph(
         NodeGraphBundle::new(
             vec![source, unknown],
@@ -309,14 +320,14 @@ fn unknown_missing_input_and_scalar_no_output_effects_are_safe_no_output() {
         ),
         0.0,
         2.0,
-    );
-    assert!(evaluate(&project, &plugins, 0).items.is_empty());
-    assert_eq!(Project::load(&project.save().unwrap()).unwrap(), project);
+    )?;
+    assert!(evaluate(&project, &plugins, 0)?.items.is_empty());
+    assert_eq!(Project::load(&project.save()?)?, project);
 
-    let blur = plugins.create_effect_operation_node("blur").unwrap();
+    let blur = plugins.create_effect_operation_node("blur")?;
     let descriptor = plugins
         .operation_descriptor(EFFECT_CATEGORY, "blur", EFFECT_APPLY_OPERATION)
-        .unwrap();
+        .context("Blur descriptor is missing")?;
     let (composition, _) = Composition::new("main", WIDTH, HEIGHT, FPS, 2.0);
     let project = Project::new("scalar NoOutput");
     let evaluators = plugins.get_property_evaluators();
@@ -370,6 +381,7 @@ fn unknown_missing_input_and_scalar_no_output_effects_are_safe_no_output() {
             .build_operation_effect("blur", descriptor.properties(), &invalid_keyframe, 0.0)
             .is_none()
     );
+    Ok(())
 }
 
 struct PostCompositeProbe {
@@ -438,16 +450,16 @@ impl EffectPlugin for PostCompositeProbe {
     }
 }
 
-fn half_solid(manager: &ProjectManager, color: Color, x: f64) -> Node {
-    let mut node = manager.create_solid_node(color, WIDTH, HEIGHT).unwrap();
+fn half_solid(manager: &ProjectManager, color: Color, x: f64) -> AnyResult<Node> {
+    let mut node = manager.create_solid_node(color, WIDTH, HEIGHT)?;
     set_constant(&mut node, "anchor", vec2(0.0, 0.0));
     set_constant(&mut node, "scale", vec2(50.0, 100.0));
     set_constant(&mut node, "position", vec2(x, 0.0));
-    node
+    Ok(node)
 }
 
 #[test]
-fn merge_is_composited_before_effect_and_effect_is_applied_exactly_once() {
+fn merge_is_composited_before_effect_and_effect_is_applied_exactly_once() -> AnyResult<()> {
     let calls = Arc::new(AtomicUsize::new(0));
     let plugins = Arc::new(PluginManager::default());
     plugins.register_effect(Arc::new(PostCompositeProbe {
@@ -466,7 +478,7 @@ fn merge_is_composited_before_effect_and_effect_is_applied_exactly_once() {
             a: 255,
         },
         0.0,
-    );
+    )?;
     let blue = half_solid(
         &manager,
         Color {
@@ -476,11 +488,11 @@ fn merge_is_composited_before_effect_and_effect_is_applied_exactly_once() {
             a: 255,
         },
         WIDTH as f64 / 2.0,
-    );
+    )?;
     let merge = Node::new_merge("Merge");
     let effect = plugins
         .create_effect_operation_node("post_composite_probe")
-        .unwrap();
+        .context("create probe Effect operation")?;
     let red_id = red.id;
     let blue_id = blue.id;
     let merge_id = merge.id;
@@ -503,16 +515,18 @@ fn merge_is_composited_before_effect_and_effect_is_applied_exactly_once() {
         ],
         Some(effect_id),
     );
-    let (project, _) = project_with_graph(graph, 0.0, 2.0);
-    let frame = evaluate(&project, &plugins, 0);
-    let effect_group = find_group(&frame.items, effect_id).unwrap();
+    let (project, _) = project_with_graph(graph, 0.0, 2.0)?;
+    let frame = evaluate(&project, &plugins, 0)?;
+    let effect_group = find_group(&frame.items, effect_id).context("Effect group is missing")?;
     assert_eq!(effect_group.kind, FrameGroupKind::Effect);
     assert_eq!(
-        find_group(&effect_group.items, merge_id).unwrap().kind,
+        find_group(&effect_group.items, merge_id)
+            .context("Merge group is missing")?
+            .kind,
         FrameGroupKind::Merge
     );
 
-    let image = preview(&project, &plugins, 0);
+    let image = preview(&project, &plugins, 0)?;
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let green_pixels = image
         .data
@@ -520,10 +534,11 @@ fn merge_is_composited_before_effect_and_effect_is_applied_exactly_once() {
         .filter(|pixel| pixel[1] > 200 && pixel[0] < 30 && pixel[2] < 30)
         .count();
     assert!(green_pixels >= (WIDTH * HEIGHT) as usize - HEIGHT as usize);
+    Ok(())
 }
 
 #[test]
-fn inactive_effect_operation_never_invokes_plugin() {
+fn inactive_effect_operation_never_invokes_plugin() -> AnyResult<()> {
     let calls = Arc::new(AtomicUsize::new(0));
     let plugins = Arc::new(PluginManager::default());
     plugins.register_effect(Arc::new(PostCompositeProbe {
@@ -535,10 +550,10 @@ fn inactive_effect_operation_never_invokes_plugin() {
     );
     let source = manager
         .create_solid_node(Color::white(), WIDTH, HEIGHT)
-        .unwrap();
+        .context("create Solid source")?;
     let effect = plugins
         .create_effect_operation_node("post_composite_probe")
-        .unwrap();
+        .context("create probe Effect operation")?;
     let source_id = source.id;
     let effect_id = effect.id;
     let (project, _) = project_with_graph(
@@ -549,10 +564,11 @@ fn inactive_effect_operation_never_invokes_plugin() {
         ),
         5.0,
         2.0,
-    );
+    )?;
 
-    let _ = preview(&project, &plugins, 0);
+    preview(&project, &plugins, 0)?;
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    let _ = preview(&project, &plugins, 50);
+    preview(&project, &plugins, 50)?;
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    Ok(())
 }

@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
+use anyhow::{Context, Result as AnyResult, anyhow, bail, ensure};
 use library::animation::EasingFunction;
 use library::cache::CacheManager;
 use library::core::ensemble::effectors::OpacityMode;
@@ -54,7 +55,7 @@ fn shape_wire(from: Uuid, to: Uuid) -> ProjectConnection {
     )
 }
 
-fn insert_effector_chain(graph: &mut NodeGraphBundle, effector_ids: &[Uuid]) {
+fn insert_effector_chain(graph: &mut NodeGraphBundle, effector_ids: &[Uuid]) -> AnyResult<()> {
     let source_id = graph
         .nodes
         .iter()
@@ -67,7 +68,7 @@ fn insert_effector_chain(graph: &mut NodeGraphBundle, effector_ids: &[Uuid]) {
                 )
             )
         })
-        .expect("shape source")
+        .context("graph has no Shape source")?
         .id;
     let mut targets = Vec::new();
     graph.connections.retain(|connection| {
@@ -79,7 +80,7 @@ fn insert_effector_chain(graph: &mut NodeGraphBundle, effector_ids: &[Uuid]) {
         }
         !is_shape_fanout
     });
-    assert!(!targets.is_empty(), "factory must expose a Shape consumer");
+    ensure!(!targets.is_empty(), "factory must expose a Shape consumer");
     let mut upstream = source_id;
     for effector_id in effector_ids {
         graph.connections.push(shape_wire(upstream, *effector_id));
@@ -92,6 +93,7 @@ fn insert_effector_chain(graph: &mut NodeGraphBundle, effector_ids: &[Uuid]) {
             0,
         ));
     }
+    Ok(())
 }
 
 fn setup_project() -> (Project, Uuid, Uuid) {
@@ -105,16 +107,20 @@ fn setup_project() -> (Project, Uuid, Uuid) {
     (project, composition_id, track_id)
 }
 
-fn project_with_graph(graph: NodeGraphBundle, start_time: f64, duration: f64) -> (Project, Uuid) {
+fn project_with_graph(
+    graph: NodeGraphBundle,
+    start_time: f64,
+    duration: f64,
+) -> AnyResult<(Project, Uuid)> {
     let (mut project, _composition_id, track_id) = setup_project();
     let clip = Clip::new("effector clip", start_time, duration);
     let clip_id = clip.id;
     project.add_clip(clip);
-    project.attach_clip_to_track(track_id, clip_id).unwrap();
+    project.attach_clip_to_track(track_id, clip_id)?;
     project
         .insert_node_graph(NodeContainer::Clip(clip_id), graph)
-        .unwrap();
-    (project, clip_id)
+        .context("insert Effector graph into Clip")?;
+    Ok((project, clip_id))
 }
 
 fn evaluate_result(
@@ -133,16 +139,20 @@ fn evaluate_result(
     )
 }
 
-fn evaluate(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -> FrameInfo {
-    evaluate_result(project, plugins, frame_number).unwrap()
+fn evaluate(
+    project: &Project,
+    plugins: &Arc<PluginManager>,
+    frame_number: u64,
+) -> AnyResult<FrameInfo> {
+    evaluate_result(project, plugins, frame_number).context("evaluate Effector graph frame")
 }
 
-fn preview(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -> Image {
-    let frame = evaluate(project, plugins, frame_number);
+fn preview(project: &Project, plugins: &Arc<PluginManager>, frame_number: u64) -> AnyResult<Image> {
+    let frame = evaluate(project, plugins, frame_number)?;
     render_frame(&frame, plugins)
 }
 
-fn render_frame(frame: &FrameInfo, plugins: &Arc<PluginManager>) -> Image {
+fn render_frame(frame: &FrameInfo, plugins: &Arc<PluginManager>) -> AnyResult<Image> {
     let renderer = SkiaRenderer::new(
         frame.width as u32,
         frame.height as u32,
@@ -151,11 +161,11 @@ fn render_frame(frame: &FrameInfo, plugins: &Arc<PluginManager>) -> Image {
         None,
         None,
     )
-    .unwrap();
+    .context("create CPU renderer")?;
     let mut service = RenderService::new(renderer, plugins.clone(), Arc::new(CacheManager::new()));
-    match service.render_from_frame_info(&frame).unwrap() {
-        RenderOutput::Image(image) => image,
-        RenderOutput::Texture(_) => panic!("CPU renderer unexpectedly returned a texture"),
+    match service.render_from_frame_info(frame)? {
+        RenderOutput::Image(image) => Ok(image),
+        RenderOutput::Texture(_) => bail!("CPU renderer unexpectedly returned a texture"),
     }
 }
 
@@ -186,16 +196,16 @@ fn collect_projected_bounds(
     items: &[FrameItem],
     parent: Affine2D,
     bounds: &mut Option<(f64, f64, f64, f64)>,
-) {
+) -> AnyResult<()> {
     for item in items {
         match item {
             FrameItem::Object(object) => {
-                let Some(local) = object.content_bounds else {
-                    panic!(
+                let local = object.content_bounds.with_context(|| {
+                    format!(
                         "rendered object {} omitted Preview bounds",
                         object.source_node_id
                     )
-                };
+                })?;
                 let transform = parent.compose(Affine2D::from(object.content.transform()));
                 let (x, y, width, height) = local.as_tuple();
                 for (local_x, local_y) in [
@@ -223,9 +233,10 @@ fn collect_projected_bounds(
                 &group.items,
                 parent.compose(Affine2D::from(&group.transform)),
                 bounds,
-            ),
+            )?,
         }
     }
+    Ok(())
 }
 
 fn alpha_bounds(image: &Image) -> Option<(f64, f64, f64, f64)> {
@@ -248,11 +259,11 @@ fn alpha_bounds(image: &Image) -> Option<(f64, f64, f64, f64)> {
     bounds
 }
 
-fn assert_alpha_inside_preview_bounds(frame: &FrameInfo, image: &Image) {
+fn assert_alpha_inside_preview_bounds(frame: &FrameInfo, image: &Image) -> AnyResult<()> {
     let mut preview = None;
-    collect_projected_bounds(&frame.items, Affine2D::IDENTITY, &mut preview);
-    let preview = preview.expect("frame must expose evaluated Preview bounds");
-    let alpha = alpha_bounds(image).expect("fixture must render non-transparent pixels");
+    collect_projected_bounds(&frame.items, Affine2D::IDENTITY, &mut preview)?;
+    let preview = preview.context("frame must expose evaluated Preview bounds")?;
+    let alpha = alpha_bounds(image).context("fixture must render non-transparent pixels")?;
     assert!(
         alpha.0 >= preview.0 && alpha.1 >= preview.1,
         "alpha starts outside Preview bounds: alpha={alpha:?}, preview={preview:?}"
@@ -265,6 +276,7 @@ fn assert_alpha_inside_preview_bounds(frame: &FrameInfo, image: &Image) {
         preview.2 - preview.0 < frame.width as f64 && preview.3 - preview.1 < frame.height as f64,
         "regression must not pass through a full-composition fallback: {preview:?}"
     );
+    Ok(())
 }
 
 fn assert_clean_straight_rgba(image: &Image) {
@@ -292,7 +304,7 @@ fn assert_clean_straight_rgba(image: &Image) {
 }
 
 #[test]
-fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts() {
+fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let mut available = plugins.get_available_effectors();
     available.sort();
@@ -304,12 +316,12 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
     for component_id in available {
         let descriptor = plugins
             .operation_descriptor(EFFECTOR_CATEGORY, &component_id, EFFECTOR_APPLY_OPERATION)
-            .unwrap();
+            .with_context(|| format!("missing descriptor for Effector component {component_id}"))?;
         let node = plugins
             .create_effector_operation_node(&component_id)
-            .unwrap();
+            .with_context(|| format!("create Effector operation {component_id}"))?;
         let NodeContent::PluginOperation(operation) = node.content() else {
-            panic!("Effector factory must create a plugin operation")
+            bail!("Effector factory must create a plugin operation");
         };
         assert_eq!(operation.category, EFFECTOR_CATEGORY);
         assert_eq!(operation.component_id, component_id);
@@ -326,7 +338,7 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
                 .declared_ports
                 .iter()
                 .find(|port| port.key == property_port_key(definition.name()))
-                .unwrap();
+                .with_context(|| format!("property {} has no port", definition.name()))?;
             assert_eq!(port.direction, PortDirection::Input);
             assert_eq!(
                 port.data_type,
@@ -337,7 +349,7 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
             .declared_ports
             .iter()
             .find(|port| port.key == SHAPE_INPUT_PORT)
-            .unwrap();
+            .context("Effector operation has no Shape input")?;
         assert_eq!(input.direction, PortDirection::Input);
         assert_eq!(input.data_type, PortDataType::Shape);
         assert_eq!(input.multiplicity, PortMultiplicity::Single);
@@ -345,17 +357,17 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
             .declared_ports
             .iter()
             .find(|port| port.key == SHAPE_OUTPUT_PORT)
-            .unwrap();
+            .context("Effector operation has no Shape output")?;
         assert_eq!(output.direction, PortDirection::Output);
         assert_eq!(output.side, PortSide::Right);
         assert_eq!(output.data_type, PortDataType::Shape);
     }
 
-    let transform = plugins.create_effector_operation_node("transform").unwrap();
+    let transform = plugins.create_effector_operation_node("transform")?;
     for key in ["tx", "ty", "scale_x", "scale_y", "rotation", "target"] {
         assert!(transform.properties().get(key).is_some(), "missing {key}");
     }
-    let opacity = plugins.create_effector_operation_node("opacity").unwrap();
+    let opacity = plugins.create_effector_operation_node("opacity")?;
     for key in ["opacity", "mode", "target"] {
         assert!(opacity.properties().get(key).is_some(), "missing {key}");
     }
@@ -363,10 +375,10 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
     let manager = ProjectManager::new(Arc::new(RwLock::new(Project::new("factory"))), plugins);
     let text = manager
         .create_text_node("typed", "Arial", WIDTH, HEIGHT)
-        .unwrap();
+        .context("create Text source")?;
     let shape = manager
         .create_shape_node("M0 0 L10 0 L10 10 Z", WIDTH, HEIGHT, 10, 10)
-        .unwrap();
+        .context("create Shape source")?;
     let (mut project, composition_id, _) = setup_project();
     let text_id = text.id;
     let shape_id = shape.id;
@@ -374,25 +386,27 @@ fn descriptors_factories_and_text_shape_consumers_have_complete_typed_contracts(
     project.add_node(shape);
     project
         .attach_node_to_container(NodeContainer::Composition(composition_id), text_id)
-        .unwrap();
+        .context("attach Text source to Composition")?;
     project
         .attach_node_to_container(NodeContainer::Composition(composition_id), shape_id)
-        .unwrap();
+        .context("attach Shape source to Composition")?;
     for source in [text_id, shape_id] {
         let output = project
             .port_definition(
                 &PortAddress::new(PortOwner::Node(source), SHAPE_OUTPUT_PORT),
                 PortDirection::Output,
             )
-            .unwrap();
+            .context("source has no Shape output port")?;
         assert_eq!(output.data_type, PortDataType::Shape);
         assert_eq!(output.multiplicity, PortMultiplicity::Single);
         assert_eq!(output.side, PortSide::Right);
     }
+    Ok(())
 }
 
 #[test]
-fn graph_order_keyframes_and_scalar_overrides_produce_one_ensemble_and_roundtrip() {
+fn graph_order_keyframes_and_scalar_overrides_produce_one_ensemble_and_roundtrip() -> AnyResult<()>
+{
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -400,8 +414,8 @@ fn graph_order_keyframes_and_scalar_overrides_produce_one_ensemble_and_roundtrip
     );
     let mut graph = manager
         .create_text_graph("ORDER", "Arial", WIDTH, HEIGHT)
-        .unwrap();
-    let mut transform = plugins.create_effector_operation_node("transform").unwrap();
+        .context("create Text graph")?;
+    let mut transform = plugins.create_effector_operation_node("transform")?;
     transform
         .set_property(
             "tx".into(),
@@ -410,32 +424,32 @@ fn graph_order_keyframes_and_scalar_overrides_produce_one_ensemble_and_roundtrip
                 Keyframe::new(1.0, 20.0.into(), EasingFunction::Linear),
             ]),
         )
-        .expect("transform descriptor initializes tx");
+        .map_err(|error| anyhow!("Transform descriptor must initialize tx: {error}"))?;
     set_constant(
         &mut transform,
         "target",
         PropertyValue::String("Char".into()),
     );
-    let opacity = plugins.create_effector_operation_node("opacity").unwrap();
+    let opacity = plugins.create_effector_operation_node("opacity")?;
     let transform_id = transform.id;
     let opacity_id = opacity.id;
     graph.nodes.extend([transform, opacity]);
-    insert_effector_chain(&mut graph, &[transform_id, opacity_id]);
-    let (mut project, clip_id) = project_with_graph(graph, 0.0, 2.0);
+    insert_effector_chain(&mut graph, &[transform_id, opacity_id])?;
+    let (mut project, clip_id) = project_with_graph(graph, 0.0, 2.0)?;
     project
         .connect_ports(
             PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
             PortAddress::new(PortOwner::Node(opacity_id), property_port_key("opacity")),
         )
-        .unwrap();
+        .context("connect Clip time to Opacity")?;
 
-    let rendered = evaluate(&project, &plugins, 5);
+    let rendered = evaluate(&project, &plugins, 5)?;
     let FrameContent::Text {
         ensemble: Some(ensemble),
         ..
-    } = first_content(&rendered.items).unwrap()
+    } = first_content(&rendered.items).context("rendered Text content is missing")?
     else {
-        panic!("wired Effectors must produce EnsembleData")
+        bail!("wired Effectors must produce EnsembleData");
     };
     assert_eq!(ensemble.effector_configs.len(), 2);
     assert!(matches!(
@@ -455,21 +469,23 @@ fn graph_order_keyframes_and_scalar_overrides_produce_one_ensemble_and_roundtrip
         } if (target_opacity - 0.5).abs() < f32::EPSILON
     ));
 
-    let saved = project.save().unwrap();
+    let saved = project.save()?;
     assert!(!saved.contains("schema_version"));
-    let loaded = Project::load(&saved).unwrap();
+    let loaded = Project::load(&saved)?;
     assert_eq!(loaded, project);
     assert!(loaded.validation_issues().is_empty());
     assert_eq!(
-        first_content(&evaluate(&loaded, &plugins, 5).items),
+        first_content(&evaluate(&loaded, &plugins, 5)?.items),
         first_content(&rendered.items)
     );
+    Ok(())
 }
 
 #[test]
-fn missing_invalid_unknown_and_scalar_no_output_never_restore_embedded_effectors() {
+fn missing_invalid_unknown_and_scalar_no_output_never_restore_embedded_effectors() -> AnyResult<()>
+{
     let plugins = Arc::new(PluginManager::default());
-    let opacity = plugins.create_effector_operation_node("opacity").unwrap();
+    let opacity = plugins.create_effector_operation_node("opacity")?;
     let (composition, _) = Composition::new("main", WIDTH, HEIGHT, FPS, 2.0);
     let project = Project::new("validation");
     let evaluators = plugins.get_property_evaluators();
@@ -530,19 +546,20 @@ fn missing_invalid_unknown_and_scalar_no_output_never_restore_embedded_effectors
     );
     let mut graph = manager
         .create_text_graph("unknown", "Arial", WIDTH, HEIGHT)
-        .unwrap();
-    let unknown = plugins.create_effector_operation_node("opacity").unwrap();
+        .context("create Text graph")?;
+    let unknown = plugins.create_effector_operation_node("opacity")?;
     let unknown_id = unknown.id;
-    let mut persisted = serde_json::to_value(unknown).unwrap();
+    let mut persisted = serde_json::to_value(unknown)?;
     persisted["content"]["data"]["component_id"] =
         serde_json::Value::String("unavailable-effector".into());
-    let unknown: Node = serde_json::from_value(persisted).unwrap();
+    let unknown: Node = serde_json::from_value(persisted)?;
     graph.nodes.push(unknown);
-    insert_effector_chain(&mut graph, &[unknown_id]);
-    let (project, _) = project_with_graph(graph, 0.0, 2.0);
-    let rendered = evaluate(&project, &plugins, 0);
+    insert_effector_chain(&mut graph, &[unknown_id])?;
+    let (project, _) = project_with_graph(graph, 0.0, 2.0)?;
+    let rendered = evaluate(&project, &plugins, 0)?;
     assert!(rendered.items.is_empty());
-    assert_eq!(Project::load(&project.save().unwrap()).unwrap(), project);
+    assert_eq!(Project::load(&project.save()?)?, project);
+    Ok(())
 }
 
 struct CountingEffectorPlugin {
@@ -595,7 +612,7 @@ impl EffectorPlugin for CountingEffectorPlugin {
 }
 
 #[test]
-fn disabled_and_inactive_effector_operations_short_circuit_before_plugin_work() {
+fn disabled_and_inactive_effector_operations_short_circuit_before_plugin_work() -> AnyResult<()> {
     let evaluations = Arc::new(AtomicUsize::new(0));
     let descriptors = Arc::new(AtomicUsize::new(0));
     let plugins = Arc::new(PluginManager::default());
@@ -609,16 +626,16 @@ fn disabled_and_inactive_effector_operations_short_circuit_before_plugin_work() 
     );
     let mut graph = manager
         .create_text_graph("inactive", "Arial", WIDTH, HEIGHT)
-        .unwrap();
-    let mut counting = plugins.create_effector_operation_node("counting").unwrap();
+        .context("create Text graph")?;
+    let mut counting = plugins.create_effector_operation_node("counting")?;
     counting.enabled = false;
     let counting_id = counting.id;
     graph.nodes.push(counting);
-    insert_effector_chain(&mut graph, &[counting_id]);
+    insert_effector_chain(&mut graph, &[counting_id])?;
     let descriptor_baseline = descriptors.load(Ordering::SeqCst);
-    let (mut project, _) = project_with_graph(graph, 0.0, 2.0);
+    let (mut project, _) = project_with_graph(graph, 0.0, 2.0)?;
 
-    assert!(evaluate(&project, &plugins, 0).items.is_empty());
+    assert!(evaluate(&project, &plugins, 0)?.items.is_empty());
     assert_eq!(evaluations.load(Ordering::SeqCst), 0);
     assert_eq!(
         descriptors.load(Ordering::SeqCst),
@@ -626,7 +643,7 @@ fn disabled_and_inactive_effector_operations_short_circuit_before_plugin_work() 
         "disabled Shape operations must not look up a plugin descriptor"
     );
 
-    let mut persisted = serde_json::to_value(Node::new_merge("broken time")).unwrap();
+    let mut persisted = serde_json::to_value(Node::new_merge("broken time"))?;
     persisted["content"] = serde_json::json!({
         "type": "PluginOperation",
         "data": {
@@ -642,54 +659,63 @@ fn disabled_and_inactive_effector_operations_short_circuit_before_plugin_work() 
             )],
         }
     });
-    let mut broken_time: Node = serde_json::from_value(persisted).unwrap();
+    let mut broken_time: Node = serde_json::from_value(persisted)?;
     broken_time.ui_position = [-400.0, -200.0];
     let broken_time_id = broken_time.id;
-    let container = project.find_node_container(counting_id).unwrap();
+    let container = project
+        .find_node_container(counting_id)
+        .context("Counting Effector has no container")?;
     project.add_node(broken_time);
     project
         .attach_node_to_container(container, broken_time_id)
-        .unwrap();
+        .context("attach broken-time Node to container")?;
     let broken_connection = project
         .connect_ports(
             PortAddress::new(PortOwner::Node(broken_time_id), "broken_time"),
             PortAddress::new(PortOwner::Node(counting_id), TIME_PORT),
         )
-        .unwrap();
+        .context("connect broken Time output to Counting Effector")?;
     assert!(
-        evaluate(&project, &plugins, 0).items.is_empty(),
+        evaluate(&project, &plugins, 0)?.items.is_empty(),
         "a disabled Node must not resolve its Time wire"
     );
-    project.get_node_mut(counting_id).unwrap().enabled = true;
+    project
+        .get_node_mut(counting_id)
+        .context("Counting Effector is missing")?
+        .enabled = true;
+    let enabled_error = match evaluate_result(&project, &plugins, 0) {
+        Ok(_) => bail!("enabled broken Time wire unexpectedly evaluated"),
+        Err(error) => error,
+    };
     assert!(
-        evaluate_result(&project, &plugins, 0)
-            .unwrap_err()
+        enabled_error
             .to_string()
             .contains("Unsupported value output port"),
         "the fixture Time wire must fail when the gate is enabled"
     );
     project.disconnect_connection(broken_connection);
 
-    assert!(first_content(&evaluate(&project, &plugins, 0).items).is_some());
+    assert!(first_content(&evaluate(&project, &plugins, 0)?.items).is_some());
     assert_eq!(evaluations.load(Ordering::SeqCst), 1);
 
     let inactive_graph = {
         let mut graph = manager
             .create_text_graph("inactive", "Arial", WIDTH, HEIGHT)
-            .unwrap();
-        let counting = plugins.create_effector_operation_node("counting").unwrap();
+            .context("create inactive Text graph")?;
+        let counting = plugins.create_effector_operation_node("counting")?;
         let counting_id = counting.id;
         graph.nodes.push(counting);
-        insert_effector_chain(&mut graph, &[counting_id]);
+        insert_effector_chain(&mut graph, &[counting_id])?;
         graph
     };
-    let (inactive, _) = project_with_graph(inactive_graph, 5.0, 2.0);
-    assert!(evaluate(&inactive, &plugins, 0).items.is_empty());
+    let (inactive, _) = project_with_graph(inactive_graph, 5.0, 2.0)?;
+    assert!(evaluate(&inactive, &plugins, 0)?.items.is_empty());
     assert_eq!(evaluations.load(Ordering::SeqCst), 1);
+    Ok(())
 }
 
 #[test]
-fn normal_nonensemble_text_pixels_are_stable_across_project_roundtrip() {
+fn normal_nonensemble_text_pixels_are_stable_across_project_roundtrip() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -697,26 +723,29 @@ fn normal_nonensemble_text_pixels_are_stable_across_project_roundtrip() {
     );
     let graph = manager
         .create_text_graph("PARITY", "Arial", WIDTH, HEIGHT)
-        .unwrap();
-    let (project, _) = project_with_graph(graph, 0.0, 2.0);
-    let frame = evaluate(&project, &plugins, 0);
-    let FrameContent::Text { ensemble, .. } = first_content(&frame.items).unwrap() else {
-        panic!()
+        .context("create Text graph")?;
+    let (project, _) = project_with_graph(graph, 0.0, 2.0)?;
+    let frame = evaluate(&project, &plugins, 0)?;
+    let FrameContent::Text { ensemble, .. } =
+        first_content(&frame.items).context("rendered Text content is missing")?
+    else {
+        bail!("plain Style graph did not render Text content");
     };
     assert!(
         ensemble.is_none(),
         "a plain Style branch must stay non-Ensemble"
     );
-    let expected = preview(&project, &plugins, 0);
+    let expected = preview(&project, &plugins, 0)?;
     assert!(expected.data.iter().any(|channel| *channel != 0));
 
-    let loaded = Project::load(&project.save().unwrap()).unwrap();
+    let loaded = Project::load(&project.save()?)?;
     assert_eq!(loaded, project);
-    assert_eq!(preview(&loaded, &plugins, 0).data, expected.data);
+    assert_eq!(preview(&loaded, &plugins, 0)?.data, expected.data);
+    Ok(())
 }
 
 #[test]
-fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
+fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -724,7 +753,7 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
     );
     let mut graph = manager
         .create_text_graph("AA\nAA", "Arial", WIDTH, HEIGHT)
-        .unwrap();
+        .context("create Text graph")?;
     let text_id = graph
         .nodes
         .iter()
@@ -734,9 +763,9 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
                 NodeContent::Generator(library::model::GeneratorContent::Text)
             )
         })
-        .unwrap()
+        .context("Text graph has no Text source")?
         .id;
-    let mut random = plugins.create_effector_operation_node("randomize").unwrap();
+    let mut random = plugins.create_effector_operation_node("randomize")?;
     set_constant(&mut random, "seed", 7.0.into());
     set_constant(&mut random, "translate_range", 8.0.into());
     set_constant(&mut random, "rotate_range", 12.0.into());
@@ -744,71 +773,84 @@ fn graph_randomize_char_is_deterministic_and_seeded_by_element_identity() {
     set_constant(&mut random, "target", PropertyValue::String("Char".into()));
     let random_id = random.id;
     graph.nodes.push(random);
-    insert_effector_chain(&mut graph, &[random_id]);
-    let (project, _) = project_with_graph(graph, 0.0, 2.0);
+    insert_effector_chain(&mut graph, &[random_id])?;
+    let (project, _) = project_with_graph(graph, 0.0, 2.0)?;
 
-    let image_a = preview(&project, &plugins, 0);
-    let image_b = preview(&project, &plugins, 0);
+    let image_a = preview(&project, &plugins, 0)?;
+    let image_b = preview(&project, &plugins, 0)?;
     assert_eq!(image_a.data, image_b.data);
 
-    let frame = evaluate(&project, &plugins, 0);
+    let frame = evaluate(&project, &plugins, 0)?;
     let FrameContent::Text {
         ensemble: Some(ensemble),
         ..
-    } = first_content(&frame.items).unwrap()
+    } = first_content(&frame.items).context("rendered Text content is missing")?
     else {
-        panic!()
+        bail!("Randomize graph did not produce Text EnsembleData");
     };
 
     let evaluators = plugins.get_property_evaluators();
     let context = FrameEvaluationContext {
         project: &project,
-        composition: &project.compositions[0],
+        composition: project
+            .compositions
+            .first()
+            .context("project has no Composition")?,
         property_evaluators: &evaluators,
         plugin_manager: &plugins,
         resolved_inputs: None,
     };
     let RuntimeShapeGeometry::Text(runtime_text) = plugins
         .get_entity_converter("text")
-        .unwrap()
-        .convert_shape(&context, project.get_node(text_id).unwrap(), 0.0)
-        .unwrap()
+        .context("Text entity converter is missing")?
+        .convert_shape(
+            &context,
+            project
+                .get_node(text_id)
+                .context("Text source is missing")?,
+            0.0,
+        )
+        .context("Text converter produced no Shape")?
         .geometry
     else {
-        panic!("Text converter did not produce runtime text geometry")
+        bail!("Text converter did not produce runtime text geometry");
     };
     assert_eq!(runtime_text.elements.len(), 4);
     assert_ne!(
         runtime_text.elements[0].line_group_id, runtime_text.elements[2].line_group_id,
         "repeated characters on separate lines need distinct line identities"
     );
-    let transforms = evaluate_text_element_transforms(&runtime_text, ensemble, 0.0).unwrap();
+    let transforms = evaluate_text_element_transforms(&runtime_text, ensemble, 0.0)?;
     assert_eq!(
         transforms,
-        evaluate_text_element_transforms(&runtime_text, ensemble, 0.0).unwrap(),
+        evaluate_text_element_transforms(&runtime_text, ensemble, 0.0)?,
         "the same seed and element identities must reproduce exactly"
     );
     assert!(
         transforms
             .iter()
             .skip(1)
-            .any(|transform| transform != &transforms[0]),
+            .any(|transform| { transforms.first().is_some_and(|first| transform != first) }),
         "all character identities reused one seeded transform"
     );
-    let loaded = Project::load(&project.save().unwrap()).unwrap();
-    assert_eq!(image_a.data, preview(&loaded, &plugins, 0).data);
+    let loaded = Project::load(&project.save()?)?;
+    assert_eq!(image_a.data, preview(&loaded, &plugins, 0)?.data);
 
     let mut changed_seed = project;
     set_constant(
-        changed_seed.get_node_mut(random_id).unwrap(),
+        changed_seed
+            .get_node_mut(random_id)
+            .context("Randomize operation is missing")?,
         "seed",
         8.0.into(),
     );
-    assert_ne!(image_a.data, preview(&changed_seed, &plugins, 0).data);
+    assert_ne!(image_a.data, preview(&changed_seed, &plugins, 0)?.data);
+    Ok(())
 }
 
 #[test]
-fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds() {
+fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds() -> AnyResult<()>
+{
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -816,7 +858,7 @@ fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds
     );
     let mut graph = manager
         .create_shape_graph("M 0 0 H 30 V 20 H 0 Z", WIDTH, HEIGHT, 30, 20)
-        .unwrap();
+        .context("create Shape graph")?;
     let source_id = graph
         .nodes
         .iter()
@@ -826,13 +868,13 @@ fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds
                 NodeContent::Generator(library::model::GeneratorContent::Shape)
             )
         })
-        .unwrap()
+        .context("Shape graph has no Shape source")?
         .id;
     let source = graph
         .nodes
         .iter_mut()
         .find(|node| node.id == source_id)
-        .unwrap();
+        .context("Shape source is missing")?;
     set_constant(
         source,
         "position",
@@ -894,12 +936,12 @@ fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds
         }
     }
 
-    let mut opacity = plugins.create_effector_operation_node("opacity").unwrap();
+    let mut opacity = plugins.create_effector_operation_node("opacity")?;
     set_constant(&mut opacity, "opacity", 65.0.into());
     set_constant(&mut opacity, "mode", PropertyValue::String("Set".into()));
     let mut backplate = plugins
         .create_decorator_operation_node("backplate")
-        .unwrap();
+        .context("create Backplate operation")?;
     set_constant(&mut backplate, "padding", 4.0.into());
     set_constant(
         &mut backplate,
@@ -913,32 +955,37 @@ fn explicit_shape_effector_decorator_style_merge_keeps_straight_alpha_and_bounds
     );
     let chain = [opacity.id, backplate.id];
     graph.nodes.extend([opacity, backplate]);
-    insert_effector_chain(&mut graph, &chain);
+    insert_effector_chain(&mut graph, &chain)?;
     let merge_wire = graph
         .connections
         .iter_mut()
         .find(|connection| connection.to.port == MERGE_IMAGES_PORT && connection.order == 1)
-        .expect("Shape factory must merge its Fill and Stroke branches");
+        .context("Shape factory must merge its Fill and Stroke branches")?;
     merge_wire.blend_mode = BlendMode::Screen;
 
-    let (mut project, _) = project_with_graph(graph, 0.0, 2.0);
-    project.compositions[0].background_color = Color {
+    let (mut project, _) = project_with_graph(graph, 0.0, 2.0)?;
+    project
+        .compositions
+        .first_mut()
+        .context("project has no Composition")?
+        .background_color = Color {
         r: 0,
         g: 0,
         b: 0,
         a: 0,
     };
-    let frame = evaluate(&project, &plugins, 0);
-    let rendered = render_frame(&frame, &plugins);
+    let frame = evaluate(&project, &plugins, 0)?;
+    let rendered = render_frame(&frame, &plugins)?;
     assert_clean_straight_rgba(&rendered);
-    assert_alpha_inside_preview_bounds(&frame, &rendered);
+    assert_alpha_inside_preview_bounds(&frame, &rendered)?;
 
-    let loaded = Project::load(&project.save().unwrap()).unwrap();
-    assert_eq!(rendered.data, preview(&loaded, &plugins, 0).data);
+    let loaded = Project::load(&project.save()?)?;
+    assert_eq!(rendered.data, preview(&loaded, &plugins, 0)?.data);
+    Ok(())
 }
 
 #[test]
-fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
+fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -947,7 +994,7 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
 
     let mut text_graph = manager
         .create_text_graph("AB\nCD", "Arial", WIDTH, HEIGHT)
-        .unwrap();
+        .context("create Text graph")?;
     let text_id = text_graph
         .nodes
         .iter()
@@ -957,13 +1004,13 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
                 NodeContent::Generator(library::model::GeneratorContent::Text)
             )
         })
-        .unwrap()
+        .context("Text graph has no Text source")?
         .id;
     let text = text_graph
         .nodes
         .iter_mut()
         .find(|node| node.id == text_id)
-        .unwrap();
+        .context("Text source is missing")?;
     set_constant(text, "size", 18.0.into());
     set_constant(
         text,
@@ -982,7 +1029,7 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
         }),
     );
 
-    let mut line_transform = plugins.create_effector_operation_node("transform").unwrap();
+    let mut line_transform = plugins.create_effector_operation_node("transform")?;
     set_constant(&mut line_transform, "tx", 6.0.into());
     set_constant(&mut line_transform, "ty", 3.0.into());
     set_constant(&mut line_transform, "rotation", 12.0.into());
@@ -993,7 +1040,7 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
         "target",
         PropertyValue::String("Line".into()),
     );
-    let mut char_random = plugins.create_effector_operation_node("randomize").unwrap();
+    let mut char_random = plugins.create_effector_operation_node("randomize")?;
     set_constant(&mut char_random, "seed", 17.0.into());
     set_constant(&mut char_random, "translate_range", 5.0.into());
     set_constant(&mut char_random, "rotate_range", 8.0.into());
@@ -1005,7 +1052,7 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
     );
     let mut char_backplate = plugins
         .create_decorator_operation_node("backplate")
-        .unwrap();
+        .context("create Backplate operation")?;
     set_constant(
         &mut char_backplate,
         "target",
@@ -1022,35 +1069,43 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
     text_graph
         .nodes
         .extend([line_transform, char_random, char_backplate]);
-    insert_effector_chain(&mut text_graph, &text_chain);
-    let (mut text_project, _) = project_with_graph(text_graph, 0.0, 2.0);
-    text_project.compositions[0].background_color = Color {
+    insert_effector_chain(&mut text_graph, &text_chain)?;
+    let (mut text_project, _) = project_with_graph(text_graph, 0.0, 2.0)?;
+    text_project
+        .compositions
+        .first_mut()
+        .context("Text project has no Composition")?
+        .background_color = Color {
         r: 0,
         g: 0,
         b: 0,
         a: 0,
     };
-    let text_frame = evaluate(&text_project, &plugins, 0);
+    let text_frame = evaluate(&text_project, &plugins, 0)?;
     assert_eq!(
-        first_object(&text_frame.items).unwrap().source_node_id,
+        first_object(&text_frame.items)
+            .context("Text frame has no object")?
+            .source_node_id,
         text_id
     );
-    let text_image = render_frame(&text_frame, &plugins);
-    assert_alpha_inside_preview_bounds(&text_frame, &text_image);
+    let text_image = render_frame(&text_frame, &plugins)?;
+    assert_alpha_inside_preview_bounds(&text_frame, &text_image)?;
     for target in ["Line", "Block"] {
         set_constant(
-            text_project.get_node_mut(char_backplate_id).unwrap(),
+            text_project
+                .get_node_mut(char_backplate_id)
+                .context("Text Backplate operation is missing")?,
             "target",
             PropertyValue::String(target.into()),
         );
-        let frame = evaluate(&text_project, &plugins, 0);
-        let image = render_frame(&frame, &plugins);
-        assert_alpha_inside_preview_bounds(&frame, &image);
+        let frame = evaluate(&text_project, &plugins, 0)?;
+        let image = render_frame(&frame, &plugins)?;
+        assert_alpha_inside_preview_bounds(&frame, &image)?;
     }
 
     let mut path_graph = manager
         .create_shape_graph("M 0 0 H 30 V 20 H 0 Z", WIDTH, HEIGHT, 30, 20)
-        .unwrap();
+        .context("create Shape graph")?;
     let path_id = path_graph
         .nodes
         .iter()
@@ -1060,13 +1115,13 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
                 NodeContent::Generator(library::model::GeneratorContent::Shape)
             )
         })
-        .unwrap()
+        .context("Shape graph has no Shape source")?
         .id;
     let path = path_graph
         .nodes
         .iter_mut()
         .find(|node| node.id == path_id)
-        .unwrap();
+        .context("Shape source is missing")?;
     set_constant(path, "rotation", 23.0.into());
     set_constant(
         path,
@@ -1078,7 +1133,7 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
     );
     let mut path_backplate = plugins
         .create_decorator_operation_node("backplate")
-        .unwrap();
+        .context("create Path Backplate operation")?;
     set_constant(&mut path_backplate, "padding", 11.0.into());
     set_constant(
         &mut path_backplate,
@@ -1087,25 +1142,32 @@ fn preview_bounds_contain_ensemble_text_and_path_backplate_alpha() {
     );
     let path_backplate_id = path_backplate.id;
     path_graph.nodes.push(path_backplate);
-    insert_effector_chain(&mut path_graph, &[path_backplate_id]);
-    let (mut path_project, _) = project_with_graph(path_graph, 0.0, 2.0);
-    path_project.compositions[0].background_color = Color {
+    insert_effector_chain(&mut path_graph, &[path_backplate_id])?;
+    let (mut path_project, _) = project_with_graph(path_graph, 0.0, 2.0)?;
+    path_project
+        .compositions
+        .first_mut()
+        .context("Path project has no Composition")?
+        .background_color = Color {
         r: 0,
         g: 0,
         b: 0,
         a: 0,
     };
-    let path_frame = evaluate(&path_project, &plugins, 0);
-    let path_object = first_object(&path_frame.items).unwrap();
-    let path_bounds = path_object.content_bounds.unwrap();
+    let path_frame = evaluate(&path_project, &plugins, 0)?;
+    let path_object = first_object(&path_frame.items).context("Path frame has no object")?;
+    let path_bounds = path_object
+        .content_bounds
+        .context("Path object has no Preview bounds")?;
     assert!(path_bounds.width.into_inner() >= 52.0);
     assert!(path_bounds.height.into_inner() >= 42.0);
-    let path_image = render_frame(&path_frame, &plugins);
-    assert_alpha_inside_preview_bounds(&path_frame, &path_image);
+    let path_image = render_frame(&path_frame, &plugins)?;
+    assert_alpha_inside_preview_bounds(&path_frame, &path_image)?;
+    Ok(())
 }
 
 #[test]
-fn style_local_scope_time_drives_ensemble_bounds_and_pixels() {
+fn style_local_scope_time_drives_ensemble_bounds_and_pixels() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -1113,7 +1175,7 @@ fn style_local_scope_time_drives_ensemble_bounds_and_pixels() {
     );
     let mut graph = manager
         .create_text_graph("ABCD", "Arial", WIDTH, HEIGHT)
-        .unwrap();
+        .context("create Text graph")?;
     let source_id = graph
         .nodes
         .iter()
@@ -1123,7 +1185,7 @@ fn style_local_scope_time_drives_ensemble_bounds_and_pixels() {
                 NodeContent::Generator(library::model::GeneratorContent::Text)
             )
         })
-        .unwrap()
+        .context("Text graph has no Text source")?
         .id;
     let style_id = graph
         .nodes
@@ -1134,13 +1196,13 @@ fn style_local_scope_time_drives_ensemble_bounds_and_pixels() {
                 NodeContent::PluginOperation(operation) if operation.category == "style"
             )
         })
-        .unwrap()
+        .context("Text graph has no Style operation")?
         .id;
     let source = graph
         .nodes
         .iter_mut()
         .find(|node| node.id == source_id)
-        .unwrap();
+        .context("Text source is missing")?;
     set_constant(source, "size", 18.0.into());
     set_constant(
         source,
@@ -1160,7 +1222,7 @@ fn style_local_scope_time_drives_ensemble_bounds_and_pixels() {
     );
     let mut delay = plugins
         .create_effector_operation_node("step_delay")
-        .unwrap();
+        .context("create StepDelay operation")?;
     set_constant(&mut delay, "delay", 0.5.into());
     set_constant(&mut delay, "duration", 0.0.into());
     set_constant(&mut delay, "from_opacity", 0.0.into());
@@ -1168,12 +1230,16 @@ fn style_local_scope_time_drives_ensemble_bounds_and_pixels() {
     set_constant(&mut delay, "target", PropertyValue::String("Block".into()));
     let delay_id = delay.id;
     graph.nodes.push(delay);
-    insert_effector_chain(&mut graph, &[delay_id]);
+    insert_effector_chain(&mut graph, &[delay_id])?;
 
-    let (mut local_project, _) = project_with_graph(graph.clone(), 2.0, 4.0);
-    let (mut global_project, _) = project_with_graph(graph, 0.0, 4.0);
+    let (mut local_project, _) = project_with_graph(graph.clone(), 2.0, 4.0)?;
+    let (mut global_project, _) = project_with_graph(graph, 0.0, 4.0)?;
     for project in [&mut local_project, &mut global_project] {
-        project.compositions[0].background_color = Color {
+        project
+            .compositions
+            .first_mut()
+            .context("project has no Composition")?
+            .background_color = Color {
             r: 0,
             g: 0,
             b: 0,
@@ -1181,34 +1247,37 @@ fn style_local_scope_time_drives_ensemble_bounds_and_pixels() {
         };
     }
 
-    let local_frame = evaluate(&local_project, &plugins, 21);
-    let global_frame = evaluate(&global_project, &plugins, 21);
-    let local_time = group_effect_time(&local_frame.items, style_id).unwrap();
-    let global_time = group_effect_time(&global_frame.items, style_id).unwrap();
+    let local_frame = evaluate(&local_project, &plugins, 21)?;
+    let global_frame = evaluate(&global_project, &plugins, 21)?;
+    let local_time = group_effect_time(&local_frame.items, style_id)
+        .context("local Style effect time is missing")?;
+    let global_time = group_effect_time(&global_frame.items, style_id)
+        .context("global Style effect time is missing")?;
     assert!((local_time - 0.1).abs() < 1e-9);
     assert!((global_time - 2.1).abs() < 1e-9);
 
     let local_bounds = first_object(&local_frame.items)
-        .unwrap()
+        .context("local frame has no object")?
         .content_bounds
-        .unwrap();
+        .context("local object has no Preview bounds")?;
     let global_bounds = first_object(&global_frame.items)
-        .unwrap()
+        .context("global frame has no object")?
         .content_bounds
-        .unwrap();
+        .context("global object has no Preview bounds")?;
     assert!(
         local_bounds.width < global_bounds.width,
         "bounds must evaluate StepDelay at Style-local time, not global time"
     );
-    let local_image = render_frame(&local_frame, &plugins);
-    let global_image = render_frame(&global_frame, &plugins);
-    assert_alpha_inside_preview_bounds(&local_frame, &local_image);
-    assert_alpha_inside_preview_bounds(&global_frame, &global_image);
+    let local_image = render_frame(&local_frame, &plugins)?;
+    let global_image = render_frame(&global_frame, &plugins)?;
+    assert_alpha_inside_preview_bounds(&local_frame, &local_image)?;
+    assert_alpha_inside_preview_bounds(&global_frame, &global_image)?;
     assert_ne!(local_image.data, global_image.data);
+    Ok(())
 }
 
 #[test]
-fn shape_variadic_effector_input_applies_single_element_transform() {
+fn shape_variadic_effector_input_applies_single_element_transform() -> AnyResult<()> {
     let plugins = Arc::new(PluginManager::default());
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
@@ -1216,7 +1285,7 @@ fn shape_variadic_effector_input_applies_single_element_transform() {
     );
     let mut graph = manager
         .create_shape_graph("M0 0 L20 0 L20 20 L0 20 Z", WIDTH, HEIGHT, 20, 20)
-        .unwrap();
+        .context("create Shape graph")?;
     let shape_id = graph
         .nodes
         .iter()
@@ -1226,23 +1295,23 @@ fn shape_variadic_effector_input_applies_single_element_transform() {
                 NodeContent::Generator(library::model::GeneratorContent::Shape)
             )
         })
-        .unwrap()
+        .context("Shape graph has no Shape source")?
         .id;
-    let mut transform = plugins.create_effector_operation_node("transform").unwrap();
+    let mut transform = plugins.create_effector_operation_node("transform")?;
     set_constant(&mut transform, "tx", 8.0.into());
     set_constant(&mut transform, "ty", 3.0.into());
     let transform_id = transform.id;
-    let mut opacity = plugins.create_effector_operation_node("opacity").unwrap();
+    let mut opacity = plugins.create_effector_operation_node("opacity")?;
     set_constant(&mut opacity, "opacity", 50.0.into());
     let opacity_id = opacity.id;
     graph.nodes.extend([transform, opacity]);
-    insert_effector_chain(&mut graph, &[transform_id, opacity_id]);
-    let (mut project, _) = project_with_graph(graph, 0.0, 2.0);
+    insert_effector_chain(&mut graph, &[transform_id, opacity_id])?;
+    let (mut project, _) = project_with_graph(graph, 0.0, 2.0)?;
 
-    let rendered = evaluate(&project, &plugins, 0);
-    let object = first_object(&rendered.items).unwrap();
+    let rendered = evaluate(&project, &plugins, 0)?;
+    let object = first_object(&rendered.items).context("Shape frame has no object")?;
     let FrameContent::Shape { transform, .. } = &object.content else {
-        panic!()
+        bail!("Shape graph did not render Shape content");
     };
     assert_eq!(object.source_node_id, shape_id);
     assert_eq!(
@@ -1255,17 +1324,19 @@ fn shape_variadic_effector_input_applies_single_element_transform() {
     );
     assert_eq!((transform.position.x, transform.position.y), (72.0, 43.0));
     assert!((transform.opacity - 0.5).abs() < f64::EPSILON);
-    let before = preview(&project, &plugins, 0);
+    let before = preview(&project, &plugins, 0)?;
     set_constant(
-        project.get_node_mut(shape_id).unwrap(),
+        project
+            .get_node_mut(shape_id)
+            .context("Shape source is missing")?,
         "position",
         PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(70.0),
             y: OrderedFloat(44.0),
         }),
     );
-    let moved = evaluate(&project, &plugins, 0);
-    let moved_object = first_object(&moved.items).unwrap();
+    let moved = evaluate(&project, &plugins, 0)?;
+    let moved_object = first_object(&moved.items).context("moved frame has no object")?;
     assert_eq!(
         (
             moved_object.source_transform.position.x,
@@ -1283,7 +1354,8 @@ fn shape_variadic_effector_input_applies_single_element_transform() {
     );
     assert_ne!(
         before.data,
-        preview(&project, &plugins, 0).data,
+        preview(&project, &plugins, 0)?.data,
         "editing the direct source transform must change real rendered pixels"
     );
+    Ok(())
 }
