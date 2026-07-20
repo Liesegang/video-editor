@@ -1,5 +1,6 @@
 use library::editor::project_service::{GeneratorNodeRequest, MediaNodeRequest, ProjectManager};
-use library::model::{Node, Project};
+use library::model::project::ProjectGraphError;
+use library::model::{Node, NodeContainer, Project};
 use library::plugin::PluginManager;
 use std::sync::{Arc, RwLock};
 
@@ -70,6 +71,32 @@ pub fn media_node_for_canvas(
         "built-in Media factory must create a complete test Node: {result:?}"
     );
     result.unwrap_or_else(|_| Node::new_merge("invalid Media test fallback"))
+}
+
+#[allow(
+    dead_code,
+    reason = "each integration-test crate compiles this shared helper independently"
+)]
+pub fn attach_audio_output(
+    project: &mut Project,
+    container: NodeContainer,
+    node_id: uuid::Uuid,
+) -> Result<(), ProjectGraphError> {
+    project.attach_node_to_container(container, node_id)?;
+    project.set_audio_output_node(container, Some(node_id))
+}
+
+#[allow(
+    dead_code,
+    reason = "each integration-test crate compiles this shared helper independently"
+)]
+pub fn bind_av_output(
+    project: &mut Project,
+    container: NodeContainer,
+    node_id: uuid::Uuid,
+) -> Result<(), ProjectGraphError> {
+    project.set_output_node(container, Some(node_id))?;
+    project.set_audio_output_node(container, Some(node_id))
 }
 
 #[allow(
