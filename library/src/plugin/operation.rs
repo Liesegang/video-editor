@@ -22,6 +22,12 @@ pub const EFFECTOR_CATEGORY: &str = "effector";
 pub const EFFECTOR_APPLY_OPERATION: &str = "effector.apply.v1";
 pub const DECORATOR_CATEGORY: &str = "decorator";
 pub const DECORATOR_APPLY_OPERATION: &str = "decorator.apply.v1";
+/// Native whole-Shape spatial placement. This is intentionally distinct from
+/// `EFFECTOR_CATEGORY`: Effectors modulate grouped elements, while this
+/// operation owns the absolute root transform edited by Preview/Inspector.
+pub const TRANSFORM_CATEGORY: &str = "transform";
+pub const TRANSFORM_COMPONENT_ID: &str = "transform";
+pub const TRANSFORM_APPLY_OPERATION: &str = "transform.apply.v1";
 pub const PROPERTY_PORT_PREFIX: &str = "property:";
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -211,6 +217,29 @@ impl OperationDescriptor {
             component_id,
             DECORATOR_APPLY_OPERATION,
             label,
+            properties,
+            [
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                PortDefinition::input(SHAPE_INPUT_PORT, "Shape", PortDataType::Shape),
+                PortDefinition::output(
+                    SHAPE_OUTPUT_PORT,
+                    "Shape",
+                    PortDataType::Shape,
+                    PortSide::Right,
+                    PortExposure::Graph,
+                ),
+            ],
+        )
+    }
+
+    pub fn transform(
+        properties: Vec<PropertyDefinition>,
+    ) -> Result<Self, OperationDescriptorError> {
+        Self::new(
+            TRANSFORM_CATEGORY,
+            TRANSFORM_COMPONENT_ID,
+            TRANSFORM_APPLY_OPERATION,
+            "Transform",
             properties,
             [
                 PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),

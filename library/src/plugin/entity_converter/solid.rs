@@ -1,4 +1,6 @@
-use super::{EntityConverterPlugin, FrameEvaluationContext, ShapeEntityConverterPlugin};
+use super::{
+    EntityConverterPlugin, FrameEvaluationContext, raster_source_transform_property_definitions,
+};
 use crate::model::frame::draw_type::DrawStyle;
 use crate::model::frame::entity::{FrameBounds, FrameContent, FrameObject, StyleConfig};
 use crate::model::{GeneratorContent, NodeContent};
@@ -42,11 +44,12 @@ impl EntityConverterPlugin for SolidEntityConverterPlugin {
         clip_width: u64,
         clip_height: u64,
     ) -> Vec<crate::model::property::PropertyDefinition> {
-        let mut definitions = ShapeEntityConverterPlugin::new()
-            .get_property_definitions(canvas_width, canvas_height, clip_width, clip_height)
-            .into_iter()
-            .filter(|definition| definition.name() != "path")
-            .collect::<Vec<_>>();
+        let mut definitions = raster_source_transform_property_definitions(
+            canvas_width,
+            canvas_height,
+            clip_width,
+            clip_height,
+        );
         definitions.push(crate::model::property::PropertyDefinition::new(
             "color",
             crate::model::property::PropertyUiType::Color,

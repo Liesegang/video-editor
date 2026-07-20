@@ -172,8 +172,6 @@ impl KeyframeHandler {
 mod tests {
     use super::*;
     use crate::animation::EasingFunction;
-    use crate::editor::project_service::{GeneratorNodeRequest, test_generator_node};
-    use crate::model::frame::color::Color;
     use crate::model::property::{Keyframe, PropertyValue};
     use crate::plugin::PluginManager;
     use ordered_float::OrderedFloat;
@@ -191,12 +189,9 @@ mod tests {
     #[test]
     fn handler_uses_stable_identity_across_sorted_index_changes() {
         let mut project = Project::new("keyframes");
-        let node = test_generator_node(
-            "solid",
-            GeneratorNodeRequest::Solid {
-                color: Color::white(),
-            },
-        );
+        let node = PluginManager::default()
+            .create_style_operation_node("fill")
+            .expect("Fill Style should be registered");
         let node_id = node.id;
         project.add_node(node);
         let project = Arc::new(RwLock::new(project));
@@ -207,7 +202,7 @@ mod tests {
             owner,
             "opacity",
             1.0,
-            number(10.0),
+            number(0.1),
             None,
         )
         .expect("initialized constant property should be promoted");
@@ -216,7 +211,7 @@ mod tests {
             owner,
             "opacity",
             2.0,
-            number(20.0),
+            number(0.2),
             None,
         )
         .expect("second key should be inserted");
@@ -228,7 +223,7 @@ mod tests {
             moving_id,
             KeyframeUpdate {
                 time: Some(3.0),
-                value: Some(number(30.0)),
+                value: Some(number(0.3)),
                 ..Default::default()
             },
         )
@@ -239,7 +234,7 @@ mod tests {
             "opacity",
             moving_id,
             KeyframeUpdate {
-                value: Some(number(40.0)),
+                value: Some(number(0.4)),
                 ..Default::default()
             },
         )
@@ -255,14 +250,14 @@ mod tests {
                 .keyframe_by_id(moving_id)
                 .expect("moving key should exist")
                 .value,
-            number(40.0)
+            number(0.4)
         );
         assert_eq!(
             property
                 .keyframe_by_id(stationary_id)
                 .expect("stationary key should exist")
                 .value,
-            number(20.0)
+            number(0.2)
         );
     }
 

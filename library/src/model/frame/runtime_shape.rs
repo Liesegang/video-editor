@@ -391,10 +391,16 @@ fn measure_path_decorator_bounds(
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeShape {
+    /// Generator identity for the geometry and stable element/group metadata.
+    /// Whole-Shape Transform operations must not replace this identity.
     pub source_id: Uuid,
     pub geometry: RuntimeShapeGeometry,
-    /// Transform evaluated directly from `source_id`. Downstream Effectors
-    /// may mutate `transform`, but must not change this edit baseline.
+    /// The downstream whole-Shape Transform that owns absolute placement.
+    /// `None` means the generator remains the visual source at identity.
+    pub transform_source_id: Option<Uuid>,
+    /// Direct transform evaluated from `transform_source_id`, or identity when
+    /// the graph has no whole-Shape Transform. Element modulation may mutate
+    /// `transform`, but must not change this edit baseline.
     pub source_transform: Transform,
     pub transform: Transform,
     pub effects: Vec<ImageEffect>,
@@ -403,6 +409,31 @@ pub struct RuntimeShape {
 }
 
 impl RuntimeShape {
+    /// Apply an absolute transform to the whole grouped Shape value.
+    ///
+    /// This intentionally does not enter `effector_configs`: text glyphs and
+    /// path parts retain their local/group metadata and the renderer applies
+    /// one root matrix around the authored anchor. Multiple absolute Transform
+    /// nodes require an affine stack: non-uniform scale plus rotation can
+    /// introduce skew that editable position/rotation/scale/anchor cannot
+    /// represent. Reject that chain explicitly until FrameInfo and Preview
+    /// carry the matrix contract together.
+    pub fn set_root_transform(
+        &mut self,
+        source_id: Uuid,
+        transform: Transform,
+    ) -> Result<(), LibraryError> {
+        if let Some(existing_id) = self.transform_source_id {
+            return Err(LibraryError::Validation(format!(
+                "Shape Transform chain {existing_id} -> {source_id} requires an affine transform stack"
+            )));
+        }
+        self.transform_source_id = Some(source_id);
+        self.source_transform = transform.clone();
+        self.transform = transform;
+        Ok(())
+    }
+
     pub fn apply_effector(
         &mut self,
         config: EffectorConfig,
@@ -455,7 +486,7 @@ impl RuntimeShape {
         style: StyleConfig,
         current_time: f32,
     ) -> Result<FrameObject, LibraryError> {
-        let source_node_id = self.source_id;
+        let source_node_id = self.transform_source_id.unwrap_or(self.source_id);
         let ensemble = if self.effector_configs.is_empty() && self.decorator_configs.is_empty() {
             None
         } else {

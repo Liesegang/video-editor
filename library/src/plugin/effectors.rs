@@ -58,14 +58,15 @@ pub trait EffectorPlugin: Plugin {
     }
 }
 
-// Transform Effector
+// Optional per-element transform modulation. Base whole-Shape placement is
+// owned by the distinct native Transform operation.
 pub struct TransformEffectorPlugin;
 impl Plugin for TransformEffectorPlugin {
     fn id(&self) -> &'static str {
         "transform"
     }
     fn name(&self) -> String {
-        "Transform".to_string()
+        "Transform Modulation".to_string()
     }
     fn category(&self) -> String {
         "Built-in".to_string()
@@ -377,14 +378,14 @@ impl EffectorPlugin for RandomizeEffectorPlugin {
     }
 }
 
-// Opacity Effector
+// Optional per-element opacity modulation. Base/static opacity is Style-owned.
 pub struct OpacityEffectorPlugin;
 impl Plugin for OpacityEffectorPlugin {
     fn id(&self) -> &'static str {
         "opacity"
     }
     fn name(&self) -> String {
-        "Opacity".to_string()
+        "Opacity Modulation".to_string()
     }
     fn category(&self) -> String {
         "Built-in".to_string()
@@ -406,7 +407,7 @@ impl EffectorPlugin for OpacityEffectorPlugin {
                     min_hard_limit: true,
                     max_hard_limit: true,
                 },
-                "Opacity",
+                "Element Opacity",
                 PropertyValue::from(0.0),
             ),
             PropertyDefinition::new(

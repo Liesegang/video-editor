@@ -300,7 +300,30 @@ impl ProjectManager {
             .map_err(LibraryError::Validation)
     }
 
-    /// Builds a detached Text -> Fill graph. Text produces only Shape; Fill is
+    fn create_positioned_transform_node(
+        &self,
+        position: [f64; 2],
+        anchor: [f64; 2],
+    ) -> Result<Node, LibraryError> {
+        let mut node = self.plugin_manager.create_transform_operation_node()?;
+        for (key, value) in [
+            (
+                "position",
+                crate::plugin::transforms::vec2_value(position[0], position[1]),
+            ),
+            (
+                "anchor",
+                crate::plugin::transforms::vec2_value(anchor[0], anchor[1]),
+            ),
+        ] {
+            node.set_property(key.to_string(), Property::constant(value))
+                .map_err(LibraryError::Validation)?;
+        }
+        Ok(node)
+    }
+
+    /// Builds a detached Text -> Transform -> Fill graph. Text produces only
+    /// grouped Shape metadata, Transform owns absolute placement, and Fill is
     /// the explicit Shape -> Image boundary and therefore the graph output.
     pub fn create_text_graph(
         &self,
@@ -320,25 +343,40 @@ impl ProjectManager {
             text_width as u64,
             text_height as u64,
         )?;
+        let mut transform_node = self.create_positioned_transform_node(
+            [canvas_width as f64 / 2.0, canvas_height as f64 / 2.0],
+            [
+                f64::from(text_width.trunc()) / 2.0,
+                f64::from(text_height.trunc()) / 2.0,
+            ],
+        )?;
         let mut fill_node = self.plugin_manager.create_style_operation_node("fill")?;
         text_node.ui_position = [0.0, 0.0];
-        fill_node.ui_position = [360.0, 0.0];
+        transform_node.ui_position = [320.0, 0.0];
+        fill_node.ui_position = [640.0, 0.0];
         let output_node_id = fill_node.id;
-        let connection = ProjectConnection::new(
-            PortAddress::new(PortOwner::Node(text_node.id), SHAPE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(fill_node.id), SHAPE_INPUT_PORT),
-            0,
-        );
+        let connections = vec![
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(text_node.id), SHAPE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(transform_node.id), SHAPE_INPUT_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(transform_node.id), SHAPE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(fill_node.id), SHAPE_INPUT_PORT),
+                0,
+            ),
+        ];
         Ok(NodeGraphBundle::new(
-            vec![text_node, fill_node],
-            vec![connection],
+            vec![text_node, transform_node, fill_node],
+            connections,
             Some(output_node_id),
         ))
     }
 
-    /// Builds Shape fan-out into Fill and Stroke, then explicitly merges both
-    /// Image branches. ProjectConnection order on Merge is the raster layer
-    /// authority; vector storage order and UI pin indices are irrelevant.
+    /// Builds Shape -> Transform, fans the placed Shape into Fill and Stroke,
+    /// then explicitly merges both Image branches. ProjectConnection order on
+    /// Merge is the raster layer authority; storage/UI order is irrelevant.
     pub fn create_shape_graph(
         &self,
         path: &str,
@@ -356,22 +394,32 @@ impl ProjectManager {
             shape_width,
             shape_height,
         )?;
+        let mut transform_node = self.create_positioned_transform_node(
+            [canvas_width as f64 / 2.0, canvas_height as f64 / 2.0],
+            [shape_width as f64 / 2.0, shape_height as f64 / 2.0],
+        )?;
         let mut fill_node = self.plugin_manager.create_style_operation_node("fill")?;
         let mut stroke_node = self.plugin_manager.create_style_operation_node("stroke")?;
         let mut merge_node = Node::new_merge("Merge");
         shape_node.ui_position = [0.0, 110.0];
-        fill_node.ui_position = [360.0, 0.0];
-        stroke_node.ui_position = [360.0, 220.0];
-        merge_node.ui_position = [720.0, 110.0];
+        transform_node.ui_position = [320.0, 110.0];
+        fill_node.ui_position = [640.0, 0.0];
+        stroke_node.ui_position = [640.0, 220.0];
+        merge_node.ui_position = [960.0, 110.0];
         let output_node_id = merge_node.id;
         let connections = vec![
             ProjectConnection::new(
                 PortAddress::new(PortOwner::Node(shape_node.id), SHAPE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(transform_node.id), SHAPE_INPUT_PORT),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(transform_node.id), SHAPE_OUTPUT_PORT),
                 PortAddress::new(PortOwner::Node(fill_node.id), SHAPE_INPUT_PORT),
                 0,
             ),
             ProjectConnection::new(
-                PortAddress::new(PortOwner::Node(shape_node.id), SHAPE_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(transform_node.id), SHAPE_OUTPUT_PORT),
                 PortAddress::new(PortOwner::Node(stroke_node.id), SHAPE_INPUT_PORT),
                 0,
             ),
@@ -387,7 +435,13 @@ impl ProjectManager {
             ),
         ];
         Ok(NodeGraphBundle::new(
-            vec![shape_node, fill_node, stroke_node, merge_node],
+            vec![
+                shape_node,
+                transform_node,
+                fill_node,
+                stroke_node,
+                merge_node,
+            ],
             connections,
             Some(output_node_id),
         ))
@@ -1435,12 +1489,9 @@ mod keyframe_tests {
     #[test]
     fn project_manager_exposes_identity_based_keyframe_edits() {
         let mut project = Project::new("keyframe service");
-        let node = test_generator_node(
-            "solid",
-            GeneratorNodeRequest::Solid {
-                color: Color::white(),
-            },
-        );
+        let node = PluginManager::default()
+            .create_style_operation_node("fill")
+            .expect("Fill Style should be registered");
         let node_id = node.id;
         project.add_node(node);
         let shared = Arc::new(RwLock::new(project));
@@ -1452,7 +1503,7 @@ mod keyframe_tests {
                 owner,
                 "opacity",
                 1.0,
-                PropertyValue::Number(OrderedFloat(100.0)),
+                PropertyValue::Number(OrderedFloat(1.0)),
                 Some(crate::animation::EasingFunction::EaseOutQuad),
             )
             .expect("service should promote an initialized constant property");
@@ -1463,7 +1514,7 @@ mod keyframe_tests {
                 id,
                 KeyframeUpdate {
                     time: Some(2.0),
-                    value: Some(PropertyValue::Number(OrderedFloat(75.0))),
+                    value: Some(PropertyValue::Number(OrderedFloat(0.75))),
                     ..Default::default()
                 },
             )
@@ -1477,7 +1528,7 @@ mod keyframe_tests {
                 .and_then(|property| property.keyframe_by_id(id))
                 .expect("identified key should exist");
             assert_eq!(keyframe.time, OrderedFloat(2.0));
-            assert_eq!(keyframe.value, PropertyValue::Number(OrderedFloat(75.0)));
+            assert_eq!(keyframe.value, PropertyValue::Number(OrderedFloat(0.75)));
             assert_eq!(
                 keyframe.easing,
                 crate::animation::EasingFunction::EaseOutQuad
@@ -1508,7 +1559,7 @@ mod keyframe_tests {
         assert_eq!(property.evaluator, "constant");
         assert_eq!(
             property.value(),
-            Some(&PropertyValue::Number(OrderedFloat(75.0)))
+            Some(&PropertyValue::Number(OrderedFloat(0.75)))
         );
     }
 
@@ -1772,14 +1823,21 @@ mod keyframe_tests {
         );
         assert_property_value(&solid_node, "color", PropertyValue::Color(color.clone()));
 
-        for node in [&text_node, &shape_node, &sksl_node, &solid_node] {
-            for required_transform in ["position", "scale", "rotation", "anchor", "opacity"] {
+        for node in [&text_node, &shape_node] {
+            for detached_property in ["position", "scale", "rotation", "anchor", "opacity"] {
                 assert!(
-                    node.properties().get(required_transform).is_some(),
-                    "{} omitted {required_transform}",
+                    node.properties().get(detached_property).is_none(),
+                    "{} must not embed {detached_property}; use Transform/Style",
                     node.name
                 );
             }
+        }
+        for required_transform in ["position", "scale", "rotation", "anchor", "opacity"] {
+            assert!(
+                sksl_node.properties().get(required_transform).is_some(),
+                "{} omitted {required_transform}",
+                sksl_node.name
+            );
         }
 
         for (node, expected_kind) in [
@@ -1845,9 +1903,15 @@ mod keyframe_tests {
             text_bundle.primary_node().map(Node::content),
             Some(NodeContent::PluginOperation(_))
         ));
-        assert_eq!(text_bundle.graph.nodes.len(), 2);
-        assert_eq!(text_bundle.graph.connections.len(), 1);
-        assert_eq!(text_bundle.graph.connections[0].order, 0);
+        assert_eq!(text_bundle.graph.nodes.len(), 3);
+        assert_eq!(text_bundle.graph.connections.len(), 2);
+        assert!(
+            text_bundle
+                .graph
+                .connections
+                .iter()
+                .all(|connection| connection.order == 0)
+        );
 
         let Ok(direct_shape) = manager.create_shape_node(DEFAULT_SHAPE_PATH, 640, 480, 100, 100)
         else {
@@ -1867,7 +1931,7 @@ mod keyframe_tests {
             shape_bundle.primary_node().map(Node::content),
             Some(NodeContent::Merge)
         ));
-        assert_eq!(shape_bundle.graph.nodes.len(), 4);
+        assert_eq!(shape_bundle.graph.nodes.len(), 5);
         assert_eq!(
             shape_bundle
                 .graph
@@ -1875,7 +1939,7 @@ mod keyframe_tests {
                 .iter()
                 .map(|connection| connection.order)
                 .collect::<Vec<_>>(),
-            vec![0, 0, 0, 1]
+            vec![0, 0, 0, 0, 1]
         );
 
         let Ok(direct_sksl) = manager.create_sksl_node(DEFAULT_SKSL_SHADER, 640, 480) else {
@@ -1967,10 +2031,22 @@ mod keyframe_tests {
             })
             .unwrap()
             .id;
+        let transform_id = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                matches!(
+                    node.content(),
+                    NodeContent::PluginOperation(operation)
+                        if operation.category == crate::plugin::TRANSFORM_CATEGORY
+                )
+            })
+            .expect("Text graph must contain Transform")
+            .id;
         let original = graph
             .connections
             .iter()
-            .find(|connection| connection.from.owner == PortOwner::Node(source_id))
+            .find(|connection| connection.from.owner == PortOwner::Node(transform_id))
             .unwrap()
             .clone();
         shared
@@ -2009,10 +2085,22 @@ mod keyframe_tests {
             })
             .unwrap()
             .id;
+        let transform_id = graph
+            .nodes
+            .iter()
+            .find(|node| {
+                matches!(
+                    node.content(),
+                    NodeContent::PluginOperation(operation)
+                        if operation.category == crate::plugin::TRANSFORM_CATEGORY
+                )
+            })
+            .expect("Shape graph must contain Transform")
+            .id;
         let originals = graph
             .connections
             .iter()
-            .filter(|connection| connection.from.owner == PortOwner::Node(source_id))
+            .filter(|connection| connection.from.owner == PortOwner::Node(transform_id))
             .cloned()
             .collect::<Vec<_>>();
         assert_eq!(originals.len(), 2);

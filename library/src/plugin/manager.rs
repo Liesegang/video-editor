@@ -36,6 +36,7 @@ use crate::plugin::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, DecoratorPlugin, EFFECT_APPLY_OPERATION,
     EFFECT_CATEGORY, EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin,
     OperationDescriptor, STYLE_APPLY_OPERATION, STYLE_CATEGORY, StylePlugin,
+    TRANSFORM_APPLY_OPERATION, TRANSFORM_CATEGORY, TRANSFORM_COMPONENT_ID,
 };
 
 fn materialize_validated_operation_properties(
@@ -308,6 +309,12 @@ impl PluginManager {
                 })?
                 .descriptor()
                 .map_err(|error| LibraryError::Plugin(error.to_string()))?,
+            (TRANSFORM_CATEGORY, TRANSFORM_APPLY_OPERATION)
+                if component_id == TRANSFORM_COMPONENT_ID =>
+            {
+                crate::plugin::transforms::descriptor()
+                    .map_err(|error| LibraryError::Plugin(error.to_string()))?
+            }
             _ => {
                 return Err(LibraryError::Plugin(format!(
                     "Operation {category}/{component_id}/{operation} not found"
@@ -364,6 +371,17 @@ impl PluginManager {
         component_id: &str,
     ) -> Result<crate::model::Node, LibraryError> {
         self.create_operation_node(DECORATOR_CATEGORY, component_id, DECORATOR_APPLY_OPERATION)
+    }
+
+    /// Creates the native whole-Shape absolute placement operation. Its four
+    /// properties are complete at construction; callers may then author a
+    /// context-specific position and anchor through normal Node mutations.
+    pub fn create_transform_operation_node(&self) -> Result<crate::model::Node, LibraryError> {
+        self.create_operation_node(
+            TRANSFORM_CATEGORY,
+            TRANSFORM_COMPONENT_ID,
+            TRANSFORM_APPLY_OPERATION,
+        )
     }
 
     /// Evaluates one Style producer through its descriptor-backed render-only
@@ -450,6 +468,39 @@ impl PluginManager {
             .evaluate_source(context, source_id, &properties, eval_time)
             .map(crate::model::project::EvalOutput::Produced)
             .unwrap_or(crate::model::project::EvalOutput::NoOutput)
+    }
+
+    /// Evaluates the native whole-Shape absolute placement. This stays on the
+    /// same descriptor/port/property contract as runtime plugin operations,
+    /// while avoiding an ABI call in the render hot path.
+    pub fn evaluate_transform_operation(
+        &self,
+        context: &crate::plugin::FrameEvaluationContext,
+        component_id: &str,
+        properties: &crate::model::property::PropertyMap,
+        eval_time: f64,
+    ) -> crate::model::project::EvalOutput<crate::model::frame::transform::Transform> {
+        let descriptor = match self.operation_descriptor(
+            TRANSFORM_CATEGORY,
+            component_id,
+            TRANSFORM_APPLY_OPERATION,
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                log::warn!(
+                    "Transform operation {component_id} is unavailable: {error}; producing NoOutput"
+                );
+                return crate::model::project::EvalOutput::NoOutput;
+            }
+        };
+        crate::plugin::transforms::evaluate_source(
+            context,
+            descriptor.properties(),
+            properties,
+            eval_time,
+        )
+        .map(crate::model::project::EvalOutput::Produced)
+        .unwrap_or(crate::model::project::EvalOutput::NoOutput)
     }
 
     /// Evaluates one standalone Decorator producer only after every
@@ -1305,7 +1356,14 @@ mod tests {
             crate::model::ValueContent::TimeModulo.property_definitions(),
             &mut failures,
         );
+        let transform_definitions = crate::plugin::transforms::property_definitions();
+        check_definitions("native Transform", &transform_definitions, &mut failures);
         let mut operation_contracts = Vec::<(&'static str, String, usize)>::new();
+        operation_contracts.push((
+            TRANSFORM_CATEGORY,
+            TRANSFORM_COMPONENT_ID.to_string(),
+            transform_definitions.len(),
+        ));
         let registered_effect_ids;
         {
             let registry = manager.read_registry();
@@ -1400,6 +1458,7 @@ mod tests {
                 "effector" => manager.create_effector_operation_node(&component_id),
                 "decorator" => manager.create_decorator_operation_node(&component_id),
                 "style" => manager.create_style_operation_node(&component_id),
+                TRANSFORM_CATEGORY => manager.create_transform_operation_node(),
                 unknown => {
                     failures.push(format!(
                         "operation contract uses unknown category {unknown} for {component_id}"

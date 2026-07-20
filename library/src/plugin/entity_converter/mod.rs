@@ -24,6 +24,82 @@ pub use text::TextEntityConverterPlugin;
 pub use text::measure_text_size;
 pub use video::VideoEntityConverterPlugin;
 
+/// Embedded transform contract for generators that still cross directly into
+/// Image/FrameObject. Shape-valued Text/Path generators must not reuse this:
+/// their base placement belongs to the explicit Transform operation and alpha
+/// belongs to Style.
+pub(crate) fn raster_source_transform_property_definitions(
+    canvas_width: u64,
+    canvas_height: u64,
+    source_width: u64,
+    source_height: u64,
+) -> Vec<crate::model::property::PropertyDefinition> {
+    use crate::model::property::{PropertyDefinition, PropertyUiType};
+    use ordered_float::OrderedFloat;
+
+    vec![
+        PropertyDefinition::new(
+            "position",
+            PropertyUiType::Vec2 {
+                suffix: "px".to_string(),
+            },
+            "Position",
+            PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(canvas_width as f64 / 2.0),
+                y: OrderedFloat(canvas_height as f64 / 2.0),
+            }),
+        ),
+        PropertyDefinition::new(
+            "scale",
+            PropertyUiType::Vec2 {
+                suffix: "%".to_string(),
+            },
+            "Scale",
+            PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(100.0),
+                y: OrderedFloat(100.0),
+            }),
+        ),
+        PropertyDefinition::new(
+            "rotation",
+            PropertyUiType::Float {
+                min: -360.0,
+                max: 360.0,
+                step: 1.0,
+                suffix: "deg".to_string(),
+                min_hard_limit: false,
+                max_hard_limit: false,
+            },
+            "Rotation",
+            PropertyValue::Number(OrderedFloat(0.0)),
+        ),
+        PropertyDefinition::new(
+            "anchor",
+            PropertyUiType::Vec2 {
+                suffix: "px".to_string(),
+            },
+            "Anchor",
+            PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(source_width as f64 / 2.0),
+                y: OrderedFloat(source_height as f64 / 2.0),
+            }),
+        ),
+        PropertyDefinition::new(
+            "opacity",
+            PropertyUiType::Float {
+                min: 0.0,
+                max: 100.0,
+                step: 1.0,
+                suffix: "%".to_string(),
+                min_hard_limit: true,
+                max_hard_limit: true,
+            },
+            "Opacity",
+            PropertyValue::Number(OrderedFloat(100.0)),
+        ),
+    ]
+}
+
 /// Render-only typed values resolved from canonical Project connections.
 /// These values are never persisted and never become a second authored model.
 #[derive(Clone, Debug, Default, PartialEq)]
