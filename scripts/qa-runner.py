@@ -139,6 +139,9 @@ def suite_specs(mode: str) -> tuple[SuiteSpec, ...]:
             SuiteSpec("node-editor", "qa-node-editor-e2e.py"),
             SuiteSpec("node-reparent", "qa-reparent-e2e.py"),
             SuiteSpec("merge-reorder", "qa-merge-reorder-e2e.py"),
+            SuiteSpec(
+                "container-output-hit", "qa-container-output-hit-e2e.py"
+            ),
             *blend_suite_specs(),
             SuiteSpec(
                 "composition-drop",
@@ -760,6 +763,7 @@ def run_self_test() -> int:
         "unittest",
         "scripts/test_qa_runner.py",
         "scripts/test_qa_node_editor_e2e.py",
+        "scripts/test_qa_container_output_hit_e2e.py",
         "scripts/test_qa_reparent_e2e.py",
         "scripts/test_qa_preview_e2e.py",
     ]

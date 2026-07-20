@@ -437,6 +437,7 @@ class QaRunnerTests(unittest.TestCase):
                 "node-editor",
                 "node-reparent",
                 "merge-reorder",
+                "container-output-hit",
                 "blend-modes-normal-darken",
                 "blend-modes-lighten",
                 "blend-modes-contrast",
@@ -462,6 +463,15 @@ class QaRunnerTests(unittest.TestCase):
             if item.name == "composition-drop"
         )
         self.assertEqual(composition_drop.fixture, "composition_drop_e2e")
+        container_output_hit = next(
+            item
+            for item in RUNNER.suite_specs("full")
+            if item.name == "container-output-hit"
+        )
+        self.assertEqual(
+            container_output_hit.script, "qa-container-output-hit-e2e.py"
+        )
+        self.assertEqual(container_output_hit.fixture, RUNNER.FIXTURE_NAME)
         self.assertEqual(
             [item.name for item in RUNNER.suite_specs("blend")],
             [
