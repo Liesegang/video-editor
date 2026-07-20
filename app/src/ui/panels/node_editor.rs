@@ -4112,6 +4112,7 @@ pub fn node_editor_panel(
         // the raw salt here creates an unrelated, untransformed layer and
         // leaks graph-space chrome over the rest of the application.
         let snarl_id = ui.make_persistent_id(graph_id);
+        let captured_drag_node_id = captured_snarl_drag_node(ui.ctx(), &snarl, snarl_id);
         let graph_layer = egui::LayerId::new(ui.layer_id().order, snarl_id);
         // `Context::layer_painter` starts with a *global* content clip. Calling
         // `with_clip_rect` with this graph-space rect would intersect two
@@ -4240,7 +4241,7 @@ pub fn node_editor_panel(
             if let Some(state) = node_editor_state.node_reparent.as_mut() {
                 if state.primary_node_id.is_none() {
                     state.primary_node_id =
-                        primary_drag_node_at_point(state, &node_rects, graph_drop_point);
+                        captured_drag_node_id.filter(|node_id| state.origins.contains_key(node_id));
                 }
             }
             if let Some(gesture) = node_editor_state.node_reparent.as_ref().cloned() {
@@ -4320,31 +4321,38 @@ pub fn node_editor_panel(
             layout_changed |= apply_layout_edit(&mut project, edit);
         }
         if primary_released {
-            let moved_node_ids = node_editor_state
-                .node_reparent
-                .take()
-                .map(|gesture| gesture.origins.into_keys().collect::<HashSet<_>>())
+            let reparent_gesture = node_editor_state.node_reparent.take();
+            let moved_node_ids = reparent_gesture
+                .as_ref()
+                .map(|gesture| gesture.origins.keys().copied().collect::<HashSet<_>>())
                 .unwrap_or_default();
+            let captured_primary_node_id = reparent_gesture
+                .as_ref()
+                .and_then(|gesture| gesture.primary_node_id);
             node_editor_state.moved_node_ids.clear();
-            let reparented = reparent_nodes_from_intents(&mut project, &drop_intents);
-            layout_changed |= reparented;
+            let reparent_outcome =
+                finish_node_reparent(&mut project, &drop_intents, reparent_gesture.as_ref());
+            layout_changed |= reparent_outcome != ReparentReleaseOutcome::NoIntent;
             let dropped_wire = ui
                 .input(|input| input.pointer.interact_pos())
                 .and_then(|position| rendered_edge_at_position(&rendered_edges, position))
                 .and_then(|edge| edge.kind.connection_id());
-            if !reparented && moved_node_ids.len() == 1 {
-                if let (Some(connection_id), Some(node_id)) =
-                    (dropped_wire, moved_node_ids.iter().next().copied())
-                {
-                    if node_can_splice_connection(&project, connection_id, node_id) {
-                        layout_changed |= apply_edit(
-                            &mut project,
-                            NodeEdit::SpliceExistingNode {
-                                connection_id,
-                                node_id,
-                            },
-                        );
-                    }
+            if let (Some(connection_id), Some(node_id)) = (
+                dropped_wire,
+                splice_node_for_release(
+                    reparent_outcome,
+                    &moved_node_ids,
+                    captured_primary_node_id,
+                ),
+            ) {
+                if node_can_splice_connection(&project, connection_id, node_id) {
+                    layout_changed |= apply_edit(
+                        &mut project,
+                        NodeEdit::SpliceExistingNode {
+                            connection_id,
+                            node_id,
+                        },
+                    );
                 }
             }
         }
@@ -4852,6 +4860,73 @@ fn layout_needs_reflow(project: &Project, composition_id: Uuid) -> bool {
                         from_rect.right() + AUTO_LAYOUT_NODE_PADDING > to_rect.left()
                     })
         })
+}
+
+fn container_hierarchy_needs_reflow(project: &Project, composition_id: Uuid) -> bool {
+    let Some(composition) = project.get_composition(composition_id) else {
+        return false;
+    };
+    let composition_content =
+        composition_content_rect(container_rect(composition.ui_position, composition.ui_size));
+    if composition.node_ids.iter().any(|node_id| {
+        estimated_node_rect(project, *node_id)
+            .is_some_and(|rect| !rect_contains_rect(composition_content, rect))
+    }) {
+        return true;
+    }
+    let mut track_rects = Vec::new();
+    for track_id in &composition.track_ids {
+        let Some(track) = project.get_track(*track_id) else {
+            continue;
+        };
+        let track_rect = container_rect(track.ui_position, track.ui_size);
+        if !rect_contains_rect(composition_content, track_rect)
+            || track_rects
+                .iter()
+                .any(|other| padded_intersection(*other, track_rect))
+            || composition.node_ids.iter().any(|node_id| {
+                estimated_node_rect(project, *node_id)
+                    .is_some_and(|rect| padded_intersection(rect, track_rect))
+            })
+        {
+            return true;
+        }
+        track_rects.push(track_rect);
+        let track_content = nested_content_rect(track_rect, AUTO_LAYOUT_TRACK_TOP);
+        if track.node_ids.iter().any(|node_id| {
+            estimated_node_rect(project, *node_id)
+                .is_some_and(|rect| !rect_contains_rect(track_content, rect))
+        }) {
+            return true;
+        }
+        let mut clip_rects = Vec::new();
+        for clip_id in &track.clip_ids {
+            let Some(clip) = project.get_clip(*clip_id) else {
+                continue;
+            };
+            let clip_rect = container_rect(clip.ui_position, clip.ui_size);
+            if !rect_contains_rect(track_content, clip_rect)
+                || clip_rects
+                    .iter()
+                    .any(|other| padded_intersection(*other, clip_rect))
+                || track.node_ids.iter().any(|node_id| {
+                    estimated_node_rect(project, *node_id)
+                        .is_some_and(|rect| padded_intersection(rect, clip_rect))
+                })
+            {
+                return true;
+            }
+            let clip_content = nested_content_rect(clip_rect, AUTO_LAYOUT_CLIP_TOP);
+            if clip.node_ids.iter().any(|node_id| {
+                estimated_node_rect(project, *node_id)
+                    .is_some_and(|rect| !rect_contains_rect(clip_content, rect))
+            }) {
+                return true;
+            }
+            clip_rects.push(clip_rect);
+        }
+    }
+    false
 }
 
 fn estimated_node_rect(project: &Project, node_id: Uuid) -> Option<egui::Rect> {
@@ -7980,11 +8055,11 @@ fn container_geometry(
     }
 }
 
-/// Resolves the deepest visible container chrome under a Node drop. Expanded
-/// headers and collapsed headers intentionally remain valid targets: a user
-/// can reparent into a container without first expanding it. A collapsed
-/// container's stored (hidden) body is not hit-testable because `rect()` is
-/// reduced to the visible header height.
+/// Resolves the deepest visible container chrome for pointer-only creation and
+/// insertion callers. Those callers intentionally accept headers. Geometry
+/// reparenting uses `reparent_container_geometries` and content-only target
+/// evaluation instead, so neither a collapsed header nor its stored body can
+/// acquire an existing Node.
 fn node_container_at_position(
     project: &Project,
     composition_id: Uuid,
@@ -8027,6 +8102,23 @@ struct ReparentContainerGeometry {
     collapsed: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReparentTargetKind {
+    Geometry,
+    RetainedOrigin,
+    RootFallback,
+}
+
+impl ReparentTargetKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Geometry => "geometry",
+            Self::RetainedOrigin => "retained_origin",
+            Self::RootFallback => "root_fallback",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ReparentTargetEvaluation {
     container: NodeContainer,
@@ -8039,6 +8131,7 @@ struct ReparentTargetEvaluation {
     pointer_inside: bool,
     root_fallback: bool,
     score: f32,
+    kind: ReparentTargetKind,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -8046,6 +8139,13 @@ struct NodeDropIntent {
     node_id: Uuid,
     final_rect: egui::Rect,
     target: ReparentTargetEvaluation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReparentReleaseOutcome {
+    NoIntent,
+    Applied,
+    Rejected,
 }
 
 fn reparent_container_geometries(
@@ -8159,9 +8259,9 @@ fn evaluate_reparent_target(
     let overlap_ratio = overlap_ratio(content_rect, node_rect);
     let center_inside = content_rect.contains(node_rect.center());
     let pointer_inside = content_rect.contains(drop_point);
-    if !(center_inside
-        || pointer_inside && overlap_ratio >= NODE_REPARENT_POINTER_OVERLAP_THRESHOLD)
-    {
+    let eligible =
+        center_inside || pointer_inside && overlap_ratio >= NODE_REPARENT_POINTER_OVERLAP_THRESHOLD;
+    if !eligible {
         return None;
     }
     let score = f32::from(geometry.depth) * 10_000.0
@@ -8180,6 +8280,7 @@ fn evaluate_reparent_target(
         pointer_inside,
         root_fallback: false,
         score,
+        kind: ReparentTargetKind::Geometry,
     })
 }
 
@@ -8225,6 +8326,7 @@ fn deepest_legal_reparent_target(
         pointer_inside: false,
         root_fallback: true,
         score: -1.0,
+        kind: ReparentTargetKind::RootFallback,
     })
 }
 
@@ -8240,14 +8342,7 @@ fn node_drop_intents(
     let scale = sanitized_node_editor_scale(canvas_scale);
     let mut node_ids = gesture.origins.keys().copied().collect::<Vec<_>>();
     node_ids.sort_unstable();
-    let primary_node_id = gesture.primary_node_id.or_else(|| {
-        node_ids.iter().copied().find(|node_id| {
-            rendered_node_rects
-                .get(node_id)
-                .is_some_and(|rect| rect.contains(drop_point))
-        })
-    });
-    let Some(primary_node_id) = primary_node_id else {
+    let Some(primary_node_id) = gesture.primary_node_id else {
         return Vec::new();
     };
     let Some(primary_origin) = gesture.origins.get(&primary_node_id) else {
@@ -8266,26 +8361,51 @@ fn node_drop_intents(
         primary_final_position[0] - primary_origin.position[0],
         primary_final_position[1] - primary_origin.position[1],
     );
-    if displacement.length() * scale < NODE_REPARENT_DRAG_THRESHOLD {
-        return Vec::new();
-    }
     let Some(primary_rect) = rendered_node_rects.get(&primary_node_id).copied() else {
         return Vec::new();
     };
-    let Some(target) =
+    if displacement.length() * scale < NODE_REPARENT_DRAG_THRESHOLD {
+        return retained_origin_intents(
+            project,
+            composition_id,
+            gesture,
+            rendered_node_rects,
+            drop_point,
+        );
+    }
+    let Some(resolved_target) =
         deepest_legal_reparent_target(project, composition_id, primary_rect, drop_point)
     else {
         return Vec::new();
     };
-    if !node_has_clearly_exited_origin(
+    if resolved_target.container == primary_origin.container {
+        if !resolved_target.root_fallback {
+            return retained_origin_intents(
+                project,
+                composition_id,
+                gesture,
+                rendered_node_rects,
+                drop_point,
+            );
+        }
+    } else if !node_has_clearly_exited_origin(
         project,
         composition_id,
         primary_origin.container,
-        target.container,
+        resolved_target.container,
         primary_rect,
         drop_point,
     ) {
-        return Vec::new();
+        // Header/padding hysteresis retains canonical ownership, but the Node
+        // still has an exact final position. Grow the old owner around that
+        // position atomically so a later auto-layout pass cannot move it.
+        return retained_origin_intents(
+            project,
+            composition_id,
+            gesture,
+            rendered_node_rects,
+            drop_point,
+        );
     }
 
     // A multi-selected drag is one semantic move. Resolve ownership from the
@@ -8300,10 +8420,66 @@ fn node_drop_intents(
                 .map(|final_rect| NodeDropIntent {
                     node_id,
                     final_rect,
-                    target,
+                    target: resolved_target,
                 })
         })
         .collect()
+}
+
+fn retained_origin_intents(
+    project: &Project,
+    composition_id: Uuid,
+    gesture: &NodeEditorReparentGesture,
+    rendered_node_rects: &HashMap<Uuid, egui::Rect>,
+    drop_point: egui::Pos2,
+) -> Vec<NodeDropIntent> {
+    let mut node_ids = gesture.origins.keys().copied().collect::<Vec<_>>();
+    node_ids.sort_unstable();
+    node_ids
+        .into_iter()
+        .filter_map(|node_id| {
+            let origin = gesture.origins.get(&node_id)?.container;
+            let final_rect = rendered_node_rects.get(&node_id).copied()?;
+            let target = retained_origin_reparent_target(
+                project,
+                composition_id,
+                origin,
+                final_rect,
+                drop_point,
+            )?;
+            (!rect_contains_rect(target.content_rect, final_rect)).then_some(NodeDropIntent {
+                node_id,
+                final_rect,
+                target,
+            })
+        })
+        .collect()
+}
+
+fn retained_origin_reparent_target(
+    project: &Project,
+    composition_id: Uuid,
+    origin: NodeContainer,
+    node_rect: egui::Rect,
+    drop_point: egui::Pos2,
+) -> Option<ReparentTargetEvaluation> {
+    let geometry = reparent_container_geometries(project, composition_id)
+        .into_iter()
+        .find(|geometry| geometry.container == origin)?;
+    let content_rect = geometry.content_rect.unwrap_or(geometry.visible_rect);
+    Some(ReparentTargetEvaluation {
+        container: origin,
+        visible_rect: geometry.visible_rect,
+        content_rect,
+        depth: geometry.depth,
+        stacking_order: geometry.stacking_order,
+        overlap_ratio: overlap_ratio(content_rect, node_rect),
+        center_inside: content_rect.contains(node_rect.center()),
+        pointer_inside: content_rect.contains(drop_point),
+        root_fallback: false,
+        score: -0.5,
+        kind: ReparentTargetKind::RetainedOrigin,
+    })
 }
 
 fn target_is_deeper_within_origin(
@@ -8328,6 +8504,29 @@ fn target_is_deeper_within_origin(
     }
 }
 
+fn target_is_authoritative_sibling(
+    project: &Project,
+    composition_id: Uuid,
+    origin: NodeContainer,
+    target: NodeContainer,
+    drop_point: egui::Pos2,
+) -> bool {
+    let origin_parent = parent_container_owner(project, port_owner_for_node_container(origin));
+    let target_parent = parent_container_owner(project, port_owner_for_node_container(target));
+    if origin == target || origin_parent.is_none() || origin_parent != target_parent {
+        return false;
+    }
+    reparent_container_geometries(project, composition_id)
+        .into_iter()
+        .find(|geometry| geometry.container == target)
+        .is_some_and(|geometry| {
+            geometry
+                .content_rect
+                .unwrap_or(geometry.visible_rect)
+                .contains(drop_point)
+        })
+}
+
 fn node_has_clearly_exited_origin(
     project: &Project,
     composition_id: Uuid,
@@ -8336,16 +8535,17 @@ fn node_has_clearly_exited_origin(
     final_rect: egui::Rect,
     drop_point: egui::Pos2,
 ) -> bool {
-    if origin == target || target_is_deeper_within_origin(project, origin, target) {
+    if target_is_deeper_within_origin(project, origin, target)
+        || target_is_authoritative_sibling(project, composition_id, origin, target, drop_point)
+    {
         return true;
     }
-    reparent_container_geometries(project, composition_id)
+    let origin_geometry = reparent_container_geometries(project, composition_id)
         .into_iter()
-        .find(|geometry| geometry.container == origin)
-        .is_some_and(|geometry| {
-            !geometry.visible_rect.intersects(final_rect)
-                && !geometry.visible_rect.contains(drop_point)
-        })
+        .find(|geometry| geometry.container == origin);
+    origin_geometry.is_some_and(|geometry| {
+        !geometry.visible_rect.intersects(final_rect) && !geometry.visible_rect.contains(drop_point)
+    })
 }
 
 fn record_node_reparent_origins(
@@ -8422,18 +8622,37 @@ fn primary_node_drop_intent(
         .or_else(|| intents.first().copied())
 }
 
-fn primary_drag_node_at_point(
-    gesture: &NodeEditorReparentGesture,
-    rendered_node_rects: &HashMap<Uuid, egui::Rect>,
-    point: egui::Pos2,
+fn captured_snarl_drag_node(
+    context: &egui::Context,
+    snarl: &Snarl<GraphItem>,
+    snarl_id: egui::Id,
 ) -> Option<Uuid> {
-    let mut node_ids = gesture.origins.keys().copied().collect::<Vec<_>>();
-    node_ids.sort_unstable();
-    node_ids.into_iter().find(|node_id| {
-        rendered_node_rects
-            .get(node_id)
-            .is_some_and(|rect| rect.contains(point))
+    let dragged_id = context.dragged_id()?;
+    snarl.node_ids().find_map(|(node_id, item)| {
+        if snarl_id.with(("snarl-node", node_id)).with("frame") != dragged_id {
+            return None;
+        }
+        match item {
+            GraphItem::Node(project_node_id) => Some(*project_node_id),
+            GraphItem::Container(_) | GraphItem::PortAnchor { .. } => None,
+        }
     })
+}
+
+fn reparent_ineligible_reason(geometry: ReparentContainerGeometry) -> Option<&'static str> {
+    geometry.collapsed.then_some("collapsed_hidden_content")
+}
+
+fn reported_reparent_target(
+    evaluation: Option<ReparentTargetEvaluation>,
+    selected: bool,
+    active: NodeDropIntent,
+) -> Option<ReparentTargetEvaluation> {
+    if selected {
+        Some(active.target)
+    } else {
+        evaluation
+    }
 }
 
 fn register_reparent_drop_targets(
@@ -8448,12 +8667,13 @@ fn register_reparent_drop_targets(
     for geometry in reparent_container_geometries(project, composition_id) {
         let evaluation = evaluate_reparent_target(geometry, active.final_rect, drop_point);
         let selected = active.target.container == geometry.container;
+        let reported = reported_reparent_target(evaluation, selected, active);
         let graph_rect = geometry.content_rect.unwrap_or(geometry.visible_rect);
         let unclipped_rect = to_global * graph_rect;
         let rect = clipped_qa_rect(unclipped_rect, canvas_clip);
         let owner = qa_container_key(port_owner_for_node_container(geometry.container));
         let (overlap, center_inside, pointer_inside, score) =
-            evaluation.map_or((0.0, false, false, None), |evaluation| {
+            reported.map_or((0.0, false, false, None), |evaluation| {
                 (
                     evaluation.overlap_ratio,
                     evaluation.center_inside,
@@ -8465,13 +8685,16 @@ fn register_reparent_drop_targets(
             format!("node_editor.reparent_target.{owner}"),
             "node_reparent_target",
             rect,
-            evaluation.is_some() || selected,
+            reported.is_some(),
             Some(serde_json::json!({
                 "owner": owner,
                 "active_node_id": active.node_id,
                 "selected": selected,
-                "eligible": evaluation.is_some(),
+                "eligible": reported.is_some(),
+                "geometry_eligible": evaluation.is_some(),
                 "collapsed": geometry.collapsed,
+                "ineligible_reason": reparent_ineligible_reason(geometry),
+                "selection_kind": selected.then_some(active.target.kind.as_str()),
                 "depth": geometry.depth,
                 "stacking_order": geometry.stacking_order,
                 "overlap_ratio": overlap,
@@ -8482,6 +8705,7 @@ fn register_reparent_drop_targets(
                 "drop_point": {"x": drop_point.x, "y": drop_point.y},
                 "node_rect": qa_rect_metadata(active.final_rect),
                 "content_rect": geometry.content_rect.map(qa_rect_metadata),
+                "drop_target_rect": qa_rect_metadata(graph_rect),
                 "unclipped_rect": qa_rect_metadata(unclipped_rect),
                 "visible_in_canvas": rect.is_positive(),
             })),
@@ -8515,14 +8739,18 @@ fn reparent_nodes_from_intents(project: &mut Project, intents: &[NodeDropIntent]
     for intent in intents {
         let node_id = intent.node_id;
         let destination = intent.target.container;
+        let containment_rect = estimated_node_rect(&candidate, node_id)
+            .map_or(intent.final_rect, |estimated| {
+                estimated.union(intent.final_rect)
+            });
         if candidate.find_node_container(node_id) == Some(destination) {
             changed |=
-                ensure_reparent_hierarchy_contains(&mut candidate, destination, intent.final_rect);
+                ensure_reparent_hierarchy_contains(&mut candidate, destination, containment_rect);
             continue;
         }
         match candidate.attach_node_to_container(destination, node_id) {
             Ok(()) => {
-                ensure_reparent_hierarchy_contains(&mut candidate, destination, intent.final_rect);
+                ensure_reparent_hierarchy_contains(&mut candidate, destination, containment_rect);
                 changed = true;
             }
             Err(error) => {
@@ -8537,6 +8765,71 @@ fn reparent_nodes_from_intents(project: &mut Project, intents: &[NodeDropIntent]
     changed
 }
 
+fn finish_node_reparent(
+    project: &mut Project,
+    intents: &[NodeDropIntent],
+    gesture: Option<&NodeEditorReparentGesture>,
+) -> ReparentReleaseOutcome {
+    if intents.is_empty() {
+        return ReparentReleaseOutcome::NoIntent;
+    }
+    let mut baseline = project.clone();
+    restore_reparent_origins(&mut baseline, gesture);
+    let mut candidate = project.clone();
+    if reparent_nodes_from_intents(&mut candidate, intents) {
+        let composition_ids = intents
+            .iter()
+            .filter_map(|intent| {
+                let owner = port_owner_for_node_container(intent.target.container);
+                let id = match owner {
+                    PortOwner::Composition(id)
+                    | PortOwner::Track(id)
+                    | PortOwner::Clip(id)
+                    | PortOwner::Node(id) => id,
+                };
+                candidate.find_containing_composition(id)
+            })
+            .collect::<HashSet<_>>();
+        let introduces_invalid_layout = composition_ids.into_iter().any(|composition_id| {
+            !container_hierarchy_needs_reflow(&baseline, composition_id)
+                && container_hierarchy_needs_reflow(&candidate, composition_id)
+        });
+        if !introduces_invalid_layout {
+            *project = candidate;
+            return ReparentReleaseOutcome::Applied;
+        }
+        log::warn!("Rejected Node reparent because it would require automatic layout repair");
+    }
+
+    // The live graph follows the pointer during the drag. If the semantic
+    // candidate is rejected, roll every participating Node back together so
+    // a half-applied layout cannot remain under the old owner or splice a wire.
+    restore_reparent_origins(project, gesture);
+    ReparentReleaseOutcome::Rejected
+}
+
+fn restore_reparent_origins(project: &mut Project, gesture: Option<&NodeEditorReparentGesture>) {
+    if let Some(gesture) = gesture {
+        for (node_id, origin) in &gesture.origins {
+            if let Some(node) = project.get_node_mut(*node_id) {
+                node.ui_position = origin.position;
+            }
+        }
+    }
+}
+
+fn splice_node_for_release(
+    outcome: ReparentReleaseOutcome,
+    moved_node_ids: &HashSet<Uuid>,
+    captured_primary_node_id: Option<Uuid>,
+) -> Option<Uuid> {
+    if outcome != ReparentReleaseOutcome::NoIntent || moved_node_ids.len() != 1 {
+        return None;
+    }
+    let node_id = moved_node_ids.iter().next().copied()?;
+    (captured_primary_node_id == Some(node_id)).then_some(node_id)
+}
+
 #[cfg(test)]
 fn reparent_test_node_at_drop(
     project: &mut Project,
@@ -8544,9 +8837,12 @@ fn reparent_test_node_at_drop(
     node_id: Uuid,
     drop_point: egui::Pos2,
 ) -> bool {
-    let Some(final_rect) = estimated_node_rect(project, node_id) else {
+    let node_size = estimated_node_size(project, node_id);
+    let final_rect = egui::Rect::from_center_size(drop_point, node_size);
+    let Some(node) = project.get_node_mut(node_id) else {
         return false;
     };
+    node.ui_position = [final_rect.min.x, final_rect.min.y];
     let Some(target) =
         deepest_legal_reparent_target(project, composition_id, final_rect, drop_point)
     else {
@@ -12845,7 +13141,7 @@ mod tests {
     }
 
     #[test]
-    fn reparent_drop_targets_exclude_collapsed_containers_until_their_content_is_visible() {
+    fn collapsed_reparent_excludes_both_the_header_and_stored_body() {
         let (mut project, composition_id, track_id, clip_id, _, _) = fixture();
         let clip_header = egui::pos2(500.0, 280.0);
         let hidden_clip_body = egui::pos2(500.0, 400.0);
@@ -12858,19 +13154,31 @@ mod tests {
         let clip = project.get_clip_mut(clip_id).unwrap();
         clip.ui_collapsed = true;
         assert!(container_rect(clip.ui_position, clip.ui_size).contains(hidden_clip_body));
+        let collapsed_geometry = reparent_container_geometries(&project, composition_id)
+            .into_iter()
+            .find(|geometry| geometry.container == NodeContainer::Clip(clip_id));
+        assert!(collapsed_geometry.is_some_and(|geometry| {
+            reparent_ineligible_reason(geometry) == Some("collapsed_hidden_content")
+        }));
 
         let node_id = project.get_clip(clip_id).unwrap().node_ids[0];
-        // Neither the collapsed header nor its stored hidden body can become
-        // a semantic reparent owner. The exact Node rectangle resolves
-        // through the visible Track content instead.
-        let node_rect = estimated_node_rect(&project, node_id).unwrap();
-        for drop_point in [clip_header, hidden_clip_body] {
-            assert_eq!(
-                deepest_legal_reparent_target(&project, composition_id, node_rect, drop_point,)
-                    .map(|target| target.container),
-                Some(NodeContainer::Track(track_id))
-            );
-        }
+        // A collapsed owner has no valid content surface. Neither its visible
+        // header nor its stored hidden body may become a semantic destination;
+        // an explicit expand-on-hover policy can add that later without moving
+        // the header or violating exact drop coordinates.
+        let node_size = estimated_node_size(&project, node_id);
+        let hidden_rect = egui::Rect::from_center_size(hidden_clip_body, node_size);
+        assert_eq!(
+            deepest_legal_reparent_target(&project, composition_id, hidden_rect, hidden_clip_body,)
+                .map(|target| target.container),
+            Some(NodeContainer::Track(track_id))
+        );
+        let header_rect = egui::Rect::from_center_size(clip_header, node_size);
+        assert_eq!(
+            deepest_legal_reparent_target(&project, composition_id, header_rect, clip_header,)
+                .map(|target| target.container),
+            Some(NodeContainer::Track(track_id))
+        );
 
         assert!(reparent_test_node_at_drop(
             &mut project,
@@ -12882,23 +13190,26 @@ mod tests {
             project.find_node_container(node_id),
             Some(NodeContainer::Track(track_id))
         );
-        assert!(!reparent_test_node_at_drop(
-            &mut project,
-            composition_id,
-            node_id,
-            clip_header,
-        ));
-        assert_eq!(
-            project.find_node_container(node_id),
-            Some(NodeContainer::Track(track_id))
-        );
         project.get_clip_mut(clip_id).unwrap().ui_collapsed = false;
-        let node_center = estimated_node_rect(&project, node_id).unwrap().center();
+        assert!(project
+            .attach_node_to_container(NodeContainer::Track(track_id), node_id)
+            .is_ok());
+        let expanded_drop = project.get_clip(clip_id).map(|clip| {
+            nested_content_rect(
+                container_rect(clip.ui_position, clip.ui_size),
+                AUTO_LAYOUT_CLIP_TOP,
+            )
+            .center()
+        });
+        assert!(expanded_drop.is_some());
+        let Some(expanded_drop) = expanded_drop else {
+            return;
+        };
         assert!(reparent_test_node_at_drop(
             &mut project,
             composition_id,
             node_id,
-            node_center,
+            expanded_drop,
         ));
         assert_eq!(
             project.find_node_container(node_id),
@@ -12911,10 +13222,28 @@ mod tests {
             track.ui_position[0] + 24.0,
             track.ui_position[1] + CONTAINER_HEADER_HEIGHT * 0.5,
         );
-        let node_rect = estimated_node_rect(&project, node_id).unwrap();
+        let node_size = estimated_node_size(&project, node_id);
+        let track_header_rect = egui::Rect::from_center_size(track_header, node_size);
         assert_eq!(
-            deepest_legal_reparent_target(&project, composition_id, node_rect, track_header,)
-                .map(|target| target.container),
+            deepest_legal_reparent_target(
+                &project,
+                composition_id,
+                track_header_rect,
+                track_header,
+            )
+            .map(|target| target.container),
+            Some(NodeContainer::Composition(composition_id))
+        );
+        let hidden_track_body = egui::pos2(track_header.x, track_header.y + 180.0);
+        let hidden_track_rect = egui::Rect::from_center_size(hidden_track_body, node_size);
+        assert_eq!(
+            deepest_legal_reparent_target(
+                &project,
+                composition_id,
+                hidden_track_rect,
+                hidden_track_body,
+            )
+            .map(|target| target.container),
             Some(NodeContainer::Composition(composition_id))
         );
         assert!(project.validate_containment().is_empty());
@@ -12939,7 +13268,12 @@ mod tests {
         let first_rect = container_rect(first_clip.ui_position, first_clip.ui_size);
         let content = nested_content_rect(first_rect, AUTO_LAYOUT_CLIP_TOP);
         let node_size = estimated_node_size(&project, node_id);
-        let node_position = content.min + egui::vec2(24.0, 24.0);
+        let node_position = content.center() - node_size * 0.5;
+        let origin_position = project.get_node(node_id).map(|node| node.ui_position);
+        assert!(origin_position.is_some());
+        let Some(origin_position) = origin_position else {
+            return;
+        };
         let Some(node) = project.get_node_mut(node_id) else {
             assert!(project.get_node(node_id).is_some());
             return;
@@ -12954,6 +13288,32 @@ mod tests {
             Some(NodeContainer::Clip(second_clip_id))
         );
         assert!(selected.is_some_and(|target| target.depth == 2 && target.center_inside));
+        let gesture = NodeEditorReparentGesture {
+            origins: HashMap::from([(
+                node_id,
+                NodeEditorNodeDragOrigin {
+                    container: NodeContainer::Clip(clip_id),
+                    position: origin_position,
+                },
+            )]),
+            primary_node_id: Some(node_id),
+            hovered_target: None,
+            hovered_node_id: None,
+            hovered_score: None,
+        };
+        let intents = node_drop_intents(
+            &project,
+            composition_id,
+            &gesture,
+            &HashMap::from([(node_id, node_rect)]),
+            &HashMap::from([(node_id, [node_position.x, node_position.y])]),
+            drop_point,
+            1.0,
+        );
+        assert_eq!(intents.len(), 1);
+        assert!(intents.first().is_some_and(|intent| {
+            intent.target.container == NodeContainer::Clip(second_clip_id)
+        }));
 
         let Some(second_clip) = project.get_clip_mut(second_clip_id) else {
             assert!(project.get_clip(second_clip_id).is_some());
@@ -12976,6 +13336,21 @@ mod tests {
         if let Some(composition) = project.get_composition_mut(composition_id) {
             composition.ui_size = [2_200.0, 1_400.0];
         }
+        let exact_node_size = egui::vec2(120.0, 60.0);
+        let origin_position = project.get_clip(clip_id).map(|clip| {
+            nested_content_rect(
+                container_rect(clip.ui_position, clip.ui_size),
+                AUTO_LAYOUT_CLIP_TOP,
+            )
+            .min + egui::vec2(32.0, 32.0)
+        });
+        assert!(origin_position.is_some());
+        let Some(origin_position) = origin_position else {
+            return;
+        };
+        if let Some(node) = project.get_node_mut(node_id) {
+            node.ui_position = [origin_position.x, origin_position.y];
+        }
         let Some(origin_node) = project.get_node(node_id) else {
             assert!(project.get_node(node_id).is_some());
             return;
@@ -12992,8 +13367,7 @@ mod tests {
             hovered_score: None,
         };
         let small_min = egui::pos2(origin.position[0] + 4.0, origin.position[1] + 3.0);
-        let small_rect =
-            egui::Rect::from_min_size(small_min, estimated_node_size(&project, node_id));
+        let small_rect = egui::Rect::from_min_size(small_min, exact_node_size);
         assert!(node_drop_intents(
             &project,
             composition_id,
@@ -13026,12 +13400,11 @@ mod tests {
             return;
         };
         let clip_rect = container_rect(clip.ui_position, clip.ui_size);
-        let node_size = estimated_node_size(&project, node_id);
         let padding_min = clip_rect.min + egui::vec2(12.0, 12.0);
-        let padding_rect = egui::Rect::from_min_size(padding_min, node_size);
+        let padding_rect = egui::Rect::from_min_size(padding_min, exact_node_size);
         let padding_positions = HashMap::from([(node_id, [padding_min.x, padding_min.y])]);
         let padding_rects = HashMap::from([(node_id, padding_rect)]);
-        assert!(node_drop_intents(
+        let padding_intents = node_drop_intents(
             &project,
             composition_id,
             &gesture,
@@ -13039,11 +13412,37 @@ mod tests {
             &padding_positions,
             padding_rect.center(),
             1.0,
-        )
-        .is_empty());
+        );
+        assert_eq!(padding_intents.len(), 1);
+        assert!(padding_intents.first().is_some_and(|intent| {
+            intent.target.container == NodeContainer::Clip(clip_id)
+                && intent.target.kind == ReparentTargetKind::RetainedOrigin
+        }));
+        let mut retained_project = project.clone();
+        if let Some(node) = retained_project.get_node_mut(node_id) {
+            node.ui_position = [padding_min.x, padding_min.y];
+        }
+        assert!(reparent_nodes_from_intents(
+            &mut retained_project,
+            &padding_intents,
+        ));
+        assert_eq!(
+            retained_project.find_node_container(node_id),
+            Some(NodeContainer::Clip(clip_id))
+        );
+        let retained_content = retained_project.get_clip(clip_id).map(|clip| {
+            nested_content_rect(
+                container_rect(clip.ui_position, clip.ui_size),
+                AUTO_LAYOUT_CLIP_TOP,
+            )
+        });
+        assert!(
+            retained_content.is_some_and(|content| { rect_contains_rect(content, padding_rect) })
+        );
+        assert!(retained_project.validate_containment().is_empty());
 
         let exited_min = egui::pos2(1_120.0, 470.0);
-        let exited_rect = egui::Rect::from_min_size(exited_min, node_size);
+        let exited_rect = egui::Rect::from_min_size(exited_min, exact_node_size);
         let exited_positions = HashMap::from([(node_id, [exited_min.x, exited_min.y])]);
         let exited_rects = HashMap::from([(node_id, exited_rect)]);
         let intents = node_drop_intents(
@@ -13059,6 +13458,247 @@ mod tests {
         assert!(intents
             .first()
             .is_some_and(|intent| intent.target.container == NodeContainer::Track(track_id)));
+    }
+
+    #[test]
+    fn subthreshold_screen_drag_repairs_containment_without_changing_owner() {
+        let (mut project, composition_id, _, clip_id, _, node_id) = fixture();
+        let plan = compute_auto_layout(&project, composition_id, AutoLayoutScope::All);
+        assert!(plan.is_some());
+        let Some(plan) = plan else {
+            return;
+        };
+        apply_auto_layout(&mut project, composition_id, &plan);
+        assert!(!layout_needs_reflow(&project, composition_id));
+        let origin_position = project.get_node(node_id).map(|node| node.ui_position);
+        assert!(origin_position.is_some());
+        let Some(origin_position) = origin_position else {
+            return;
+        };
+        let gesture = NodeEditorReparentGesture {
+            origins: HashMap::from([(
+                node_id,
+                NodeEditorNodeDragOrigin {
+                    container: NodeContainer::Clip(clip_id),
+                    position: origin_position,
+                },
+            )]),
+            primary_node_id: Some(node_id),
+            hovered_target: None,
+            hovered_node_id: None,
+            hovered_score: None,
+        };
+        let screen_delta = NODE_REPARENT_DRAG_THRESHOLD - 1.0;
+        let graph_delta = screen_delta / NODE_EDITOR_MIN_SCALE;
+        let final_min = egui::pos2(origin_position[0] + graph_delta, origin_position[1]);
+        let exact_rect =
+            egui::Rect::from_min_size(final_min, estimated_node_size(&project, node_id) * 0.4);
+        let intents = node_drop_intents(
+            &project,
+            composition_id,
+            &gesture,
+            &HashMap::from([(node_id, exact_rect)]),
+            &HashMap::from([(node_id, [final_min.x, final_min.y])]),
+            exact_rect.center(),
+            NODE_EDITOR_MIN_SCALE,
+        );
+        assert_eq!(intents.len(), 1);
+        assert!(intents.first().is_some_and(|intent| {
+            intent.target.container == NodeContainer::Clip(clip_id)
+                && intent.target.kind == ReparentTargetKind::RetainedOrigin
+        }));
+        if let Some(node) = project.get_node_mut(node_id) {
+            node.ui_position = [final_min.x, final_min.y];
+        }
+        assert!(reparent_nodes_from_intents(&mut project, &intents));
+        assert_eq!(
+            project.find_node_container(node_id),
+            Some(NodeContainer::Clip(clip_id))
+        );
+        let estimated_rect = estimated_node_rect(&project, node_id);
+        let content = project.get_clip(clip_id).map(|clip| {
+            nested_content_rect(
+                container_rect(clip.ui_position, clip.ui_size),
+                AUTO_LAYOUT_CLIP_TOP,
+            )
+        });
+        assert!(content
+            .zip(estimated_rect)
+            .is_some_and(|(content, estimated)| rect_contains_rect(content, estimated)));
+        assert!(!layout_needs_reflow(&project, composition_id));
+    }
+
+    #[test]
+    fn retained_growth_rolls_back_when_it_would_overlap_a_sibling_container() {
+        let (mut project, composition_id, track_id, clip_id, _, node_id) = fixture();
+        let plan = compute_auto_layout(&project, composition_id, AutoLayoutScope::All);
+        assert!(plan.is_some());
+        let Some(plan) = plan else {
+            return;
+        };
+        apply_auto_layout(&mut project, composition_id, &plan);
+        let first_clip = project.get_clip(clip_id).cloned();
+        assert!(first_clip.is_some());
+        let Some(first_clip) = first_clip else {
+            return;
+        };
+        let first_rect = container_rect(first_clip.ui_position, first_clip.ui_size);
+        let mut sibling = Clip::new("Sibling", 0.0, 5.0);
+        sibling.ui_position = [
+            first_rect.right() + AUTO_LAYOUT_CLIP_GAP,
+            first_clip.ui_position[1],
+        ];
+        sibling.ui_size = first_clip.ui_size;
+        let sibling_id = sibling.id;
+        project.add_clip(sibling);
+        assert!(project.attach_clip_to_track(track_id, sibling_id).is_ok());
+        let sibling_rect = project
+            .get_clip(sibling_id)
+            .map(|clip| container_rect(clip.ui_position, clip.ui_size));
+        assert!(sibling_rect.is_some());
+        let Some(sibling_rect) = sibling_rect else {
+            return;
+        };
+        ensure_container_hierarchy_contains(
+            &mut project,
+            NodeContainer::Track(track_id),
+            sibling_rect,
+        );
+        assert!(!layout_needs_reflow(&project, composition_id));
+
+        let origin_position = project.get_node(node_id).map(|node| node.ui_position);
+        assert!(origin_position.is_some());
+        let Some(origin_position) = origin_position else {
+            return;
+        };
+        let gesture = NodeEditorReparentGesture {
+            origins: HashMap::from([(
+                node_id,
+                NodeEditorNodeDragOrigin {
+                    container: NodeContainer::Clip(clip_id),
+                    position: origin_position,
+                },
+            )]),
+            primary_node_id: Some(node_id),
+            hovered_target: None,
+            hovered_node_id: None,
+            hovered_score: None,
+        };
+        let graph_delta = (NODE_REPARENT_DRAG_THRESHOLD - 1.0) / NODE_EDITOR_MIN_SCALE;
+        let final_min = egui::pos2(origin_position[0] + graph_delta, origin_position[1]);
+        let final_rect =
+            egui::Rect::from_min_size(final_min, estimated_node_size(&project, node_id) * 0.4);
+        let intents = node_drop_intents(
+            &project,
+            composition_id,
+            &gesture,
+            &HashMap::from([(node_id, final_rect)]),
+            &HashMap::from([(node_id, [final_min.x, final_min.y])]),
+            final_rect.center(),
+            NODE_EDITOR_MIN_SCALE,
+        );
+        assert_eq!(intents.len(), 1);
+        if let Some(node) = project.get_node_mut(node_id) {
+            node.ui_position = [final_min.x, final_min.y];
+        }
+        let initial_clip_geometry = project
+            .get_clip(clip_id)
+            .map(|clip| (clip.ui_position, clip.ui_size));
+        assert_eq!(
+            finish_node_reparent(&mut project, &intents, Some(&gesture)),
+            ReparentReleaseOutcome::Rejected
+        );
+        assert_eq!(
+            project.get_node(node_id).map(|node| node.ui_position),
+            Some(origin_position)
+        );
+        assert_eq!(
+            project
+                .get_clip(clip_id)
+                .map(|clip| (clip.ui_position, clip.ui_size)),
+            initial_clip_geometry
+        );
+        assert_eq!(
+            project.find_node_container(node_id),
+            Some(NodeContainer::Clip(clip_id))
+        );
+        assert!(!layout_needs_reflow(&project, composition_id));
+    }
+
+    #[test]
+    fn reparent_applies_when_only_node_overlap_requires_optional_auto_layout() {
+        let (mut project, composition_id, track_id, clip_id, _, node_id) = fixture();
+        let overlap_node = Node::new_merge("Intentional overlap");
+        let overlap_node_id = overlap_node.id;
+        project.add_node(overlap_node);
+        assert!(project
+            .attach_node_to_container(NodeContainer::Track(track_id), overlap_node_id)
+            .is_ok());
+        let plan = compute_auto_layout(&project, composition_id, AutoLayoutScope::All);
+        assert!(plan.is_some());
+        let Some(plan) = plan else {
+            return;
+        };
+        assert!(apply_auto_layout(&mut project, composition_id, &plan));
+        assert!(!container_hierarchy_needs_reflow(&project, composition_id));
+
+        let origin_position = project.get_node(node_id).map(|node| node.ui_position);
+        let final_position = project
+            .get_node(overlap_node_id)
+            .map(|node| node.ui_position);
+        assert!(origin_position.is_some());
+        assert!(final_position.is_some());
+        let (Some(origin_position), Some(final_position)) = (origin_position, final_position)
+        else {
+            return;
+        };
+        let gesture = NodeEditorReparentGesture {
+            origins: HashMap::from([(
+                node_id,
+                NodeEditorNodeDragOrigin {
+                    container: NodeContainer::Clip(clip_id),
+                    position: origin_position,
+                },
+            )]),
+            primary_node_id: Some(node_id),
+            hovered_target: None,
+            hovered_node_id: None,
+            hovered_score: None,
+        };
+        let final_rect = egui::Rect::from_min_size(
+            egui::pos2(final_position[0], final_position[1]),
+            estimated_node_size(&project, node_id),
+        );
+        let intents = node_drop_intents(
+            &project,
+            composition_id,
+            &gesture,
+            &HashMap::from([(node_id, final_rect)]),
+            &HashMap::from([(node_id, final_position)]),
+            final_rect.center(),
+            1.0,
+        );
+        assert!(intents
+            .first()
+            .is_some_and(|intent| { intent.target.container == NodeContainer::Track(track_id) }));
+        if let Some(node) = project.get_node_mut(node_id) {
+            node.ui_position = final_position;
+        }
+
+        assert_eq!(
+            finish_node_reparent(&mut project, &intents, Some(&gesture)),
+            ReparentReleaseOutcome::Applied
+        );
+        assert_eq!(
+            project.find_node_container(node_id),
+            Some(NodeContainer::Track(track_id))
+        );
+        assert_eq!(
+            project.get_node(node_id).map(|node| node.ui_position),
+            Some(final_position)
+        );
+        assert!(layout_needs_reflow(&project, composition_id));
+        assert!(!container_hierarchy_needs_reflow(&project, composition_id));
     }
 
     #[test]
@@ -13164,6 +13804,19 @@ mod tests {
     #[test]
     fn reparent_min_edge_growth_keeps_node_drop_position_and_contains_every_ancestor() {
         let (mut project, composition_id, track_id, clip_id, node_id, _) = fixture();
+        let other_node_ids = project
+            .get_clip(clip_id)
+            .map(|clip| {
+                clip.node_ids
+                    .iter()
+                    .copied()
+                    .filter(|candidate| *candidate != node_id)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for other_node_id in other_node_ids {
+            project.remove_node(other_node_id);
+        }
         let Some(composition) = project.get_composition_mut(composition_id) else {
             assert!(project.get_composition(composition_id).is_some());
             return;
@@ -13200,8 +13853,9 @@ mod tests {
             AUTO_LAYOUT_CLIP_TOP,
         );
         let node_size = estimated_node_size(&project, node_id);
-        let final_min = clip_content.min - node_size * 0.4;
-        let final_rect = egui::Rect::from_min_size(final_min, node_size);
+        let exact_snarl_size = node_size * 0.45;
+        let final_min = clip_content.min - exact_snarl_size * 0.4;
+        let final_rect = egui::Rect::from_min_size(final_min, exact_snarl_size);
         let Some(node) = project.get_node_mut(node_id) else {
             return;
         };
@@ -13256,9 +13910,14 @@ mod tests {
             return;
         };
         let clip_rect = container_rect(clip.ui_position, clip.ui_size);
+        let persisted_rect = egui::Rect::from_min_size(final_min, node_size);
         assert!(rect_contains_rect(
             nested_content_rect(clip_rect, AUTO_LAYOUT_CLIP_TOP),
             final_rect,
+        ));
+        assert!(rect_contains_rect(
+            nested_content_rect(clip_rect, AUTO_LAYOUT_CLIP_TOP),
+            persisted_rect,
         ));
         let Some(track) = project.get_track(track_id) else {
             return;
@@ -13275,6 +13934,7 @@ mod tests {
             composition_content_rect(container_rect(composition.ui_position, composition.ui_size,)),
             track_rect,
         ));
+        assert!(!layout_needs_reflow(&project, composition_id));
     }
 
     #[test]
@@ -13283,6 +13943,13 @@ mod tests {
         assert!(project
             .attach_node_to_container(NodeContainer::Composition(composition_id), node_id)
             .is_ok());
+        let plan = compute_auto_layout(&project, composition_id, AutoLayoutScope::All);
+        assert!(plan.is_some());
+        let Some(plan) = plan else {
+            return;
+        };
+        assert!(apply_auto_layout(&mut project, composition_id, &plan));
+        assert!(!container_hierarchy_needs_reflow(&project, composition_id));
         let Some(origin_node) = project.get_node(node_id) else {
             return;
         };
@@ -13299,9 +13966,9 @@ mod tests {
             hovered_node_id: None,
             hovered_score: None,
         };
-        let final_min = egui::pos2(-320.0, -260.0);
-        let final_rect =
-            egui::Rect::from_min_size(final_min, estimated_node_size(&project, node_id));
+        let final_min = egui::pos2(-800.0, -260.0);
+        let estimated_size = estimated_node_size(&project, node_id);
+        let final_rect = egui::Rect::from_min_size(final_min, estimated_size * 0.4);
         let final_positions = HashMap::from([(node_id, [final_min.x, final_min.y])]);
         let final_rects = HashMap::from([(node_id, final_rect)]);
         let intents = node_drop_intents(
@@ -13317,6 +13984,15 @@ mod tests {
         assert!(intents.first().is_some_and(|intent| {
             intent.target.container == NodeContainer::Composition(composition_id)
                 && intent.target.root_fallback
+                && intent.target.kind == ReparentTargetKind::RootFallback
+        }));
+        let reported = intents
+            .first()
+            .copied()
+            .and_then(|active| reported_reparent_target(None, true, active));
+        assert!(reported.is_some_and(|target| {
+            target.kind == ReparentTargetKind::RootFallback
+                && (target.score + 1.0).abs() <= f32::EPSILON
         }));
         if let Some(node) = project.get_node_mut(node_id) {
             node.ui_position = [final_min.x, final_min.y];
@@ -13343,12 +14019,22 @@ mod tests {
             project.get_node(node_id).map(|node| node.ui_position),
             Some([final_min.x, final_min.y])
         );
+        let root_content = project.get_composition(composition_id).map(|composition| {
+            composition_content_rect(container_rect(composition.ui_position, composition.ui_size))
+        });
+        assert!(root_content.is_some_and(|content| {
+            rect_contains_rect(
+                content,
+                egui::Rect::from_min_size(final_min, estimated_size),
+            )
+        }));
+        assert!(!container_hierarchy_needs_reflow(&project, composition_id));
     }
 
     #[test]
     fn reparent_clears_only_old_output_binding_and_preserves_typed_wire_identity_and_history() {
         let (mut project, composition_id, track_id, clip_id, solid_id, merge_id) = fixture();
-        let mut track_output = Node::new("Track Output", NodeContent::Merge);
+        let mut track_output = Node::new_merge("Track Output");
         track_output.ui_position = [1_350.0, 420.0];
         let track_output_id = track_output.id;
         project.add_node(track_output);
@@ -13459,6 +14145,364 @@ mod tests {
         assert!(project.validate_connections().is_empty());
         let edited = project.clone();
         assert_single_gesture_undo_redo(&mut history, &initial, &edited);
+    }
+
+    #[test]
+    fn rejected_reparent_restores_all_live_positions_without_history_or_wire_mutation() {
+        let (mut project, composition_id, _, clip_id, node_id, _) = fixture();
+        let initial = project.clone();
+        let origin_position = project.get_node(node_id).map(|node| node.ui_position);
+        assert!(origin_position.is_some());
+        let Some(origin_position) = origin_position else {
+            return;
+        };
+        let gesture = NodeEditorReparentGesture {
+            origins: HashMap::from([(
+                node_id,
+                NodeEditorNodeDragOrigin {
+                    container: NodeContainer::Clip(clip_id),
+                    position: origin_position,
+                },
+            )]),
+            primary_node_id: Some(node_id),
+            hovered_target: None,
+            hovered_node_id: None,
+            hovered_score: None,
+        };
+        let final_min = egui::pos2(origin_position[0] + 700.0, origin_position[1] + 120.0);
+        let final_rect =
+            egui::Rect::from_min_size(final_min, estimated_node_size(&project, node_id) * 0.5);
+        if let Some(node) = project.get_node_mut(node_id) {
+            node.ui_position = [final_min.x, final_min.y];
+        }
+        let target = deepest_legal_reparent_target(
+            &project,
+            composition_id,
+            final_rect,
+            final_rect.center(),
+        );
+        assert!(target.is_some());
+        let Some(mut target) = target else {
+            return;
+        };
+        target.container = NodeContainer::Clip(Uuid::from_u128(0xdead_beef));
+        let outcome = finish_node_reparent(
+            &mut project,
+            &[NodeDropIntent {
+                node_id,
+                final_rect,
+                target,
+            }],
+            Some(&gesture),
+        );
+        assert_eq!(outcome, ReparentReleaseOutcome::Rejected);
+        let moved_node_ids = HashSet::from([node_id]);
+        assert_eq!(
+            splice_node_for_release(outcome, &moved_node_ids, Some(node_id)),
+            None
+        );
+        assert_eq!(
+            splice_node_for_release(ReparentReleaseOutcome::NoIntent, &moved_node_ids, None,),
+            None
+        );
+        assert_eq!(
+            splice_node_for_release(
+                ReparentReleaseOutcome::NoIntent,
+                &moved_node_ids,
+                Some(node_id),
+            ),
+            Some(node_id)
+        );
+        assert_eq!(project, initial);
+        let mut history = HistoryManager::new();
+        history.push_project_state(initial);
+        history.push_project_state(project);
+        assert_eq!(history.undo_depth(), 1);
+    }
+
+    #[test]
+    fn real_egui_capture_selects_the_top_overlapping_node_for_a_multi_drag() {
+        let (mut project, composition_id, track_id, clip_id, _, _) = fixture();
+        if let Some(clip) = project.get_clip_mut(clip_id) {
+            clip.ui_size = [1_300.0, 760.0];
+        }
+        if let Some(track) = project.get_track_mut(track_id) {
+            track.ui_size = [1_800.0, 1_050.0];
+        }
+        if let Some(composition) = project.get_composition_mut(composition_id) {
+            composition.ui_size = [2_200.0, 1_400.0];
+        }
+        let clip_content = project.get_clip(clip_id).map(|clip| {
+            nested_content_rect(
+                container_rect(clip.ui_position, clip.ui_size),
+                AUTO_LAYOUT_CLIP_TOP,
+            )
+        });
+        assert!(clip_content.is_some());
+        let Some(clip_content) = clip_content else {
+            return;
+        };
+        let mut lower = Node::new_merge("Capture Lower");
+        lower.id = Uuid::from_u128(1);
+        lower.ui_position = [clip_content.min.x + 40.0, clip_content.min.y + 40.0];
+        let lower_id = lower.id;
+        let mut upper = Node::new_merge("Capture Upper");
+        upper.id = Uuid::from_u128(2);
+        upper.ui_position = [clip_content.min.x + 520.0, clip_content.min.y + 40.0];
+        let upper_id = upper.id;
+        project.add_node(lower);
+        project.add_node(upper);
+        assert!(project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), lower_id)
+            .is_ok());
+        assert!(project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), upper_id)
+            .is_ok());
+
+        let context = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1800.0, 1200.0));
+        let graph_id = egui::Id::new(("captured-overlap-drag", composition_id));
+        let (mut snarl, containers) = build_snarl(&project, composition_id);
+        let rendered_node_rects = Arc::new(Mutex::new(HashMap::new()));
+        reset_test_rects();
+        let render_frame = |project: &Project,
+                            snarl: &mut Snarl<GraphItem>,
+                            frame: usize,
+                            events: Vec<egui::Event>,
+                            modifiers: egui::Modifiers| {
+            let mut layout_edits = Vec::new();
+            let mut captured = None;
+            let mut persistent_snarl_id = None;
+            drop(context.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(frame as f64 / 60.0),
+                    events,
+                    modifiers,
+                    ..Default::default()
+                },
+                |context| {
+                    egui::CentralPanel::default().show(context, |ui| {
+                        let mut edits = Vec::new();
+                        let mut navigation = None;
+                        let mut selection = None;
+                        let mut wire_context_request = None;
+                        let mut exclusions = Vec::new();
+                        let mut to_global = egui::emath::TSTransform::IDENTITY;
+                        let mut canvas_clip = ui.clip_rect();
+                        let mut viewer = ProjectNodeViewer {
+                            project,
+                            plugin_manager: None,
+                            containers: &containers,
+                            edits: &mut edits,
+                            pending_navigation: &mut navigation,
+                            pending_selection: &mut selection,
+                            current_time: 0.0,
+                            context_menu_exclusion_rects: &mut exclusions,
+                            wire_context_request: &mut wire_context_request,
+                            suppress_wire_connect: false,
+                            locked_canvas_transform: None,
+                            to_global: &mut to_global,
+                            canvas_clip: &mut canvas_clip,
+                            rendered_ports: Arc::new(Mutex::new(HashMap::new())),
+                            rendered_node_rects: Arc::clone(&rendered_node_rects),
+                        };
+                        snarl.show(&mut viewer, &node_editor_snarl_style(), graph_id, ui);
+                        drop(viewer);
+                        let snarl_id = ui.make_persistent_id(graph_id);
+                        persistent_snarl_id = Some(snarl_id);
+                        captured = captured_snarl_drag_node(ui.ctx(), snarl, snarl_id);
+                        layout_edits = collect_layout_edits(project, snarl);
+                    });
+                },
+            ));
+            (layout_edits, captured, persistent_snarl_id)
+        };
+
+        let mut persistent_snarl_id = None;
+        for frame in 0..4 {
+            let (_, _, frame_snarl_id) = render_frame(
+                &project,
+                &mut snarl,
+                frame,
+                Vec::new(),
+                egui::Modifiers::NONE,
+            );
+            persistent_snarl_id = frame_snarl_id;
+        }
+        let lower_rect = test_rect(&format!("node_editor.node:{lower_id}"));
+        let upper_rect = test_rect(&format!("node_editor.node:{upper_id}"));
+        assert!(lower_rect.is_some_and(|rect| rect.is_positive()));
+        assert!(upper_rect.is_some_and(|rect| rect.is_positive()));
+        let upper_header = test_rect(&format!("node_editor.node_header:{upper_id}"));
+        assert!(upper_header.is_some_and(|rect| rect.is_positive()));
+        let Some(upper_header) = upper_header else {
+            return;
+        };
+        let Some(persistent_snarl_id) = persistent_snarl_id else {
+            return;
+        };
+        let snarl_node_ids = snarl
+            .node_ids()
+            .filter_map(|(snarl_id, item)| match item {
+                GraphItem::Node(project_id) if [lower_id, upper_id].contains(project_id) => {
+                    Some((*project_id, snarl_id))
+                }
+                _ => None,
+            })
+            .collect::<HashMap<_, _>>();
+        let (Some(lower_snarl_id), Some(upper_snarl_id)) = (
+            snarl_node_ids.get(&lower_id).copied(),
+            snarl_node_ids.get(&upper_id).copied(),
+        ) else {
+            return;
+        };
+        // Establish the group through Snarl's real rectangle-selection path.
+        // Starting in the canvas margin avoids invisible container controls;
+        // selecting the other graph items too is harmless for this capture
+        // test and exercises the same group-drag path.
+        let shift = egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let mut frame = 4;
+        let selection_start = screen.min + egui::vec2(20.0, 20.0);
+        let selection_drag_start = selection_start + egui::vec2(10.0, 10.0);
+        let selection_end = screen.max - egui::vec2(20.0, 20.0);
+        for events in [
+            vec![egui::Event::PointerMoved(selection_start)],
+            vec![egui::Event::PointerButton {
+                pos: selection_start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: shift,
+            }],
+            vec![egui::Event::PointerMoved(selection_drag_start)],
+            vec![egui::Event::PointerMoved(selection_end)],
+            vec![egui::Event::PointerButton {
+                pos: selection_end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: shift,
+            }],
+        ] {
+            render_frame(&project, &mut snarl, frame, events, shift);
+            frame += 1;
+        }
+        let selected = egui_snarl::ui::get_selected_nodes(persistent_snarl_id, &context);
+        assert!(
+            selected.contains(&lower_snarl_id),
+            "lower {lower_snarl_id:?} selection missing from {selected:?}; upper is {upper_snarl_id:?}"
+        );
+        assert!(
+            selected.contains(&upper_snarl_id),
+            "upper selection missing from {selected:?}"
+        );
+        let upper_header_center = upper_header.center();
+        for events in [
+            vec![egui::Event::PointerMoved(upper_header_center)],
+            vec![egui::Event::PointerButton {
+                pos: upper_header_center,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: shift,
+            }],
+            vec![egui::Event::PointerButton {
+                pos: upper_header_center,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: shift,
+            }],
+        ] {
+            render_frame(&project, &mut snarl, frame, events, shift);
+            frame += 1;
+        }
+
+        let overlap_position = egui::pos2(clip_content.min.x + 260.0, clip_content.min.y + 220.0);
+        for node_id in [lower_id, upper_id] {
+            if let Some(node) = project.get_node_mut(node_id) {
+                node.ui_position = [overlap_position.x, overlap_position.y];
+            }
+        }
+        for node_id in [lower_id, upper_id] {
+            if let Some(snarl_id) = snarl_node_ids.get(&node_id).copied() {
+                if let Some(node) = snarl.get_node_info_mut(snarl_id) {
+                    node.pos = overlap_position;
+                }
+            }
+        }
+        for _ in 0..2 {
+            render_frame(
+                &project,
+                &mut snarl,
+                frame,
+                Vec::new(),
+                egui::Modifiers::NONE,
+            );
+            frame += 1;
+        }
+        let top_header = test_rect(&format!("node_editor.node_header:{upper_id}"));
+        assert!(top_header.is_some_and(|rect| rect.is_positive()));
+        let Some(top_header) = top_header else {
+            return;
+        };
+        let start = top_header.center();
+        render_frame(
+            &project,
+            &mut snarl,
+            frame,
+            vec![egui::Event::PointerMoved(start)],
+            egui::Modifiers::NONE,
+        );
+        frame += 1;
+        render_frame(
+            &project,
+            &mut snarl,
+            frame,
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            egui::Modifiers::NONE,
+        );
+        frame += 1;
+        let end = start + egui::vec2(48.0, 24.0);
+        let (layout_edits, captured, _) = render_frame(
+            &project,
+            &mut snarl,
+            frame,
+            vec![egui::Event::PointerMoved(end)],
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(captured, Some(upper_id));
+        assert_ne!(captured, Some(lower_id));
+        let moved_nodes = layout_edits
+            .iter()
+            .filter_map(|edit| match edit {
+                LayoutEdit::MoveNode { node_id, .. }
+                    if *node_id == lower_id || *node_id == upper_id =>
+                {
+                    Some(*node_id)
+                }
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(moved_nodes, HashSet::from([lower_id, upper_id]));
+        let mut state = NodeEditorState::default();
+        record_node_reparent_origins(&project, &layout_edits, &mut state, true);
+        if let Some(gesture) = state.node_reparent.as_mut() {
+            gesture.primary_node_id =
+                captured.filter(|node_id| gesture.origins.contains_key(node_id));
+        }
+        assert_eq!(
+            state
+                .node_reparent
+                .as_ref()
+                .and_then(|gesture| gesture.primary_node_id),
+            Some(upper_id)
+        );
     }
 
     #[test]
@@ -13576,6 +14620,7 @@ mod tests {
             }],
         ];
         let mut history_commits = 0;
+        let mut release_outcome = ReparentReleaseOutcome::NoIntent;
         for (offset, events) in event_frames.into_iter().enumerate() {
             let mut frame_layout_edits = Vec::new();
             let mut frame_drop_intents = Vec::new();
@@ -13616,13 +14661,14 @@ mod tests {
                             rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                             rendered_node_rects: Arc::clone(&rendered_node_rects),
                         };
-                        snarl.show(
-                            &mut viewer,
-                            &node_editor_snarl_style(),
-                            egui::Id::new(("real-reparent-drag", composition_id)),
-                            ui,
-                        );
+                        let graph_id = egui::Id::new(("real-reparent-drag", composition_id));
+                        snarl.show(&mut viewer, &node_editor_snarl_style(), graph_id, ui);
                         drop(viewer);
+                        let captured_drag_node_id = captured_snarl_drag_node(
+                            ui.ctx(),
+                            &snarl,
+                            ui.make_persistent_id(graph_id),
+                        );
                         frame_layout_edits = collect_layout_edits(&project, &snarl);
                         let (primary_down, primary_released, pointer) = ui.input(|input| {
                             (
@@ -13647,8 +14693,8 @@ mod tests {
                         };
                         if let Some(gesture) = state.node_reparent.as_mut() {
                             if gesture.primary_node_id.is_none() {
-                                gesture.primary_node_id =
-                                    primary_drag_node_at_point(gesture, &rects, graph_point);
+                                gesture.primary_node_id = captured_drag_node_id
+                                    .filter(|node_id| gesture.origins.contains_key(node_id));
                             }
                         }
                         if let Some(gesture) = state.node_reparent.as_ref() {
@@ -13670,8 +14716,13 @@ mod tests {
                 frame_changed |= apply_layout_edit(&mut project, edit);
             }
             if frame_released {
-                frame_changed |= reparent_nodes_from_intents(&mut project, &frame_drop_intents);
-                state.node_reparent = None;
+                let reparent_gesture = state.node_reparent.take();
+                release_outcome = finish_node_reparent(
+                    &mut project,
+                    &frame_drop_intents,
+                    reparent_gesture.as_ref(),
+                );
+                frame_changed |= release_outcome != ReparentReleaseOutcome::NoIntent;
                 state.moved_node_ids.clear();
                 if frame_changed {
                     history.push_project_state(project.clone());
@@ -13680,6 +14731,7 @@ mod tests {
             }
         }
 
+        assert_eq!(release_outcome, ReparentReleaseOutcome::Applied);
         assert_eq!(history_commits, 1);
         assert_eq!(history.undo_depth(), 2);
         assert_eq!(
