@@ -24,9 +24,11 @@ use crate::{
 };
 
 pub mod action_handler;
+mod evaluation;
 pub mod properties;
 
 use action_handler::ActionContext;
+use evaluation::{evaluate_property_map, render_evaluation_issues};
 use properties::{render_property_rows, PropertyRenderContext};
 
 #[derive(Clone, Debug)]
@@ -1405,6 +1407,11 @@ fn render_property_map(
         definitions: Vec<PropertyDefinition>,
     }
 
+    let qa_scope = qa_owner_scope(owner);
+    let evaluated =
+        evaluate_property_map(project_service, properties, current_time, fps, resolution);
+    render_evaluation_issues(ui, &qa_scope, evaluated.issues());
+
     let mut chunks = Vec::new();
     let mut grid_definitions = Vec::new();
     for definition in definitions {
@@ -1435,7 +1442,7 @@ fn render_property_map(
             available_fonts: &editor_context.available_fonts,
             in_grid: chunk.in_grid,
             current_time,
-            qa_scope: qa_owner_scope(owner),
+            qa_scope: qa_scope.clone(),
         };
         let actions = if chunk.in_grid {
             let mut actions = Vec::new();
@@ -1445,19 +1452,7 @@ fn render_property_map(
                     actions = render_property_rows(
                         ui,
                         &chunk.definitions,
-                        |name| {
-                            properties.get(name).and_then(|property| {
-                                project_service
-                                    .evaluate_property_value(
-                                        property,
-                                        properties,
-                                        current_time,
-                                        fps,
-                                        resolution,
-                                    )
-                                    .ok()
-                            })
-                        },
+                        |name| evaluated.value(name).cloned(),
                         |name| properties.get(name).cloned(),
                         &context,
                     );
@@ -1468,19 +1463,7 @@ fn render_property_map(
             render_property_rows(
                 ui,
                 &chunk.definitions,
-                |name| {
-                    properties.get(name).and_then(|property| {
-                        project_service
-                            .evaluate_property_value(
-                                property,
-                                properties,
-                                current_time,
-                                fps,
-                                resolution,
-                            )
-                            .ok()
-                    })
-                },
+                |name| evaluated.value(name).cloned(),
                 |name| properties.get(name).cloned(),
                 &context,
             )
