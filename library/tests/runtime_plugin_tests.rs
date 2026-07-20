@@ -40,8 +40,12 @@ fn common_effector_operation_factory_materializes_all_known_defaults() -> Result
     let node_id = node.id;
 
     let mut project = Project::new("Service boundary");
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
     project.add_node(node);
     project
         .attach_node_to_container(NodeContainer::Composition(composition_id), node_id)

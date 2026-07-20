@@ -39,8 +39,12 @@ fn setup_project() -> (Project, Uuid, Uuid) {
     let (composition, track) = Composition::new("main", WIDTH, HEIGHT, FPS, 10.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
     (project, composition_id, track_id)
 }
 

@@ -496,8 +496,12 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() -> Result<
     let (mut composition, track) = Composition::new("main", 16, 16, 30.0, source_duration + 1.0);
     composition.background_color = Color::black();
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
 
     let mut asset = Asset::new("test.mp4", &path, AssetKind::Video);
     asset.duration = Some(source_duration);

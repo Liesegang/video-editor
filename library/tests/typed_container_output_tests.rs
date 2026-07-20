@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use library::editor::project_service::{MediaNodeRequest, ProjectManager};
 use library::model::asset::{Asset, AssetKind};
 use library::model::project::{
-    AUDIO_OUTPUT_PORT, Composition, ContainerAudioSourceKind, IMAGE_OUTPUT_PORT, NodeContainer,
-    PortDataType, PortDirection, PortOwner, Project, ProjectGraphError,
+    AUDIO_OUTPUT_PORT, Composition, ContainerAudioSourceKind, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
+    NodeContainer, PortAddress, PortDataType, PortDirection, PortOwner, Project, ProjectGraphError,
 };
 use library::model::{Clip, Node};
 use library::plugin::PluginManager;
@@ -15,8 +15,12 @@ fn project_with_clip() -> Result<(Project, Uuid, Uuid, Uuid)> {
     let (composition, track) = Composition::new("main", 64, 64, 24.0, 2.0);
     let composition_id = composition.id;
     let track_id = track.id;
-    project.add_track(track);
-    project.add_composition(composition);
+    project
+        .add_track(track)
+        .expect("container structural Merge insertion must succeed");
+    project
+        .add_composition(composition)
+        .expect("container structural Merge insertion must succeed");
     let clip = Clip::new("media", 0.0, 2.0);
     let clip_id = clip.id;
     project.add_clip(clip);
@@ -214,7 +218,14 @@ fn detach_and_reparent_clear_source_bindings_and_preserve_destination_bindings()
 
     project.set_output_node(NodeContainer::Clip(clip_id), Some(first_video))?;
     project.set_audio_output_node(NodeContainer::Clip(clip_id), Some(first_video))?;
-    project.set_output_node(NodeContainer::Track(track_id), Some(second_video_id))?;
+    let track_merge_id = project
+        .get_track(track_id)
+        .context("Track disappeared")?
+        .structural_merge_node_id;
+    project.connect_ports(
+        PortAddress::new(PortOwner::Node(second_video_id), IMAGE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(track_merge_id), MERGE_IMAGES_PORT),
+    )?;
     project.set_audio_output_node(NodeContainer::Track(track_id), Some(second_video_id))?;
 
     project.attach_node_to_container(NodeContainer::Track(track_id), first_video)?;
@@ -222,12 +233,12 @@ fn detach_and_reparent_clear_source_bindings_and_preserve_destination_bindings()
     assert_eq!(clip.output_node_id, None);
     assert_eq!(clip.audio_output_node_id, None);
     let track = project.get_track(track_id).context("Track disappeared")?;
-    assert_eq!(track.output_node_id, Some(second_video_id));
+    assert_eq!(track.output_node_id, Some(track_merge_id));
     assert_eq!(track.audio_output_node_id, Some(second_video_id));
 
     assert!(project.detach_node(second_video_id));
     let track = project.get_track(track_id).context("Track disappeared")?;
-    assert_eq!(track.output_node_id, None);
+    assert_eq!(track.output_node_id, Some(track_merge_id));
     assert_eq!(track.audio_output_node_id, None);
     Ok(())
 }
