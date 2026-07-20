@@ -4,7 +4,8 @@ use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwne
 use library::model::{NodeContainer, Project};
 
 use crate::ui::panels::node_editor::{
-    input_definitions, merge_input_slots, output_definitions, ContainerVisual, GraphItem, NodeEdit,
+    input_definitions, merge_images_target_node_id, merge_input_slots, output_definitions,
+    ContainerVisual, GraphItem, NodeEdit,
 };
 
 pub(in crate::ui::panels::node_editor) fn edit_for_wire(
@@ -21,8 +22,18 @@ pub(in crate::ui::panels::node_editor) fn edit_for_wire(
     let output = output_definitions(project, source_item)
         .get(output_index)?
         .clone();
-    let merge_connection = match target_item {
-        GraphItem::Node(merge_id) => merge_input_slots(project, merge_id)
+    let target_merge_id = match target_item {
+        GraphItem::Node(node_id) => merge_images_target_node_id(
+            project,
+            &PortAddress::new(
+                PortOwner::Node(node_id),
+                library::model::project::MERGE_IMAGES_PORT,
+            ),
+        ),
+        GraphItem::Container(_) | GraphItem::PortAnchor { .. } => None,
+    };
+    let merge_connection = target_merge_id.and_then(|merge_id| {
+        merge_input_slots(project, merge_id)
             .get(input_index)
             .and_then(|slot| match &slot.role {
                 crate::ui::panels::node_editor::MergeInputSlotRole::Connected(row) => {
@@ -30,21 +41,14 @@ pub(in crate::ui::panels::node_editor) fn edit_for_wire(
                 }
                 crate::ui::panels::node_editor::MergeInputSlotRole::Canonical
                 | crate::ui::panels::node_editor::MergeInputSlotRole::VacantImages => None,
-            }),
-        GraphItem::Container(_) | GraphItem::PortAnchor { .. } => None,
-    };
-    let input = match target_item {
-        GraphItem::Node(merge_id)
-            if project.get_node(merge_id).is_some_and(|node| {
-                matches!(node.content(), library::model::NodeContent::Merge)
-            }) =>
-        {
-            merge_input_slots(project, merge_id)
-                .get(input_index)?
-                .definition
-                .clone()
-        }
-        _ => input_definitions(project, target_item)
+            })
+    });
+    let input = match target_merge_id {
+        Some(merge_id) => merge_input_slots(project, merge_id)
+            .get(input_index)?
+            .definition
+            .clone(),
+        None => input_definitions(project, target_item)
             .get(input_index)?
             .clone(),
     };

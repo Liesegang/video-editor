@@ -11,9 +11,10 @@ use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
     blend_mode_qa_key, clipped_qa_rect, connection_supports_authored_blend, container_inactive,
     container_output_node_id, container_output_type_key, edge_endpoint_qa_metadata,
-    overview_wire_graph_points, pin_color, qa_container_key, qa_rect_metadata,
-    screen_stroke_in_graph_units, wire_order_menu_states, ContainerKind, ContainerVisual,
-    EdgeComponent, OverviewWirePainter, RenderedEdge, RenderedEdgeKind, RenderedPortKey,
+    merge_images_target_node_id, overview_wire_graph_points, pin_color, qa_container_key,
+    qa_rect_metadata, screen_stroke_in_graph_units, wire_order_menu_states, ContainerKind,
+    ContainerVisual, EdgeComponent, OverviewWirePainter, RenderedEdge, RenderedEdgeKind,
+    RenderedPortKey,
 };
 
 pub(in crate::ui::panels::node_editor) fn register_container_chrome(
@@ -105,6 +106,7 @@ pub(in crate::ui::panels::node_editor) fn register_rendered_edges(
     let order_states = wire_order_menu_states(project);
     for connection in &project.connections {
         let order = order_states.get(&connection.id).copied();
+        let physical_merge_target = merge_images_target_node_id(project, &connection.to).is_some();
         let authored_blend_available = connection_supports_authored_blend(project, connection);
         let edge = register_edge_component(
             EdgeComponent {
@@ -123,6 +125,7 @@ pub(in crate::ui::panels::node_editor) fn register_rendered_edges(
                 authored_order: Some(connection.order),
                 back_to_front_index: order.map(|order| order.back_to_front_index),
                 layer_count: order.map(|order| order.layer_count),
+                physical_merge_target,
                 authored_blend_mode: authored_blend_available
                     .then(|| blend_mode_qa_key(connection.blend_mode)),
                 authored_blend_available,
@@ -172,7 +175,7 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
     let exact_connection_id = edge
         .kind
         .connection_id()
-        .filter(|_| edge.to.port == library::model::project::MERGE_IMAGES_PORT);
+        .filter(|_| edge.physical_merge_target);
     let to_rect = ports
         .get(&RenderedPortKey {
             address: edge.to.clone(),

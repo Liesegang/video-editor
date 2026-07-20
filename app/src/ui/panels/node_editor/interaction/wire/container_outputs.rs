@@ -124,6 +124,7 @@ fn register_typed_sources(
                 authored_order: None,
                 back_to_front_index: None,
                 layer_count: None,
+                physical_merge_target: false,
                 authored_blend_mode: None,
                 authored_blend_available: false,
             },

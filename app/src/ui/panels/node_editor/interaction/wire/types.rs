@@ -121,6 +121,7 @@ pub(in crate::ui::panels::node_editor) struct EdgeComponent<'a> {
     pub(in crate::ui::panels::node_editor) authored_order: Option<i64>,
     pub(in crate::ui::panels::node_editor) back_to_front_index: Option<usize>,
     pub(in crate::ui::panels::node_editor) layer_count: Option<usize>,
+    pub(in crate::ui::panels::node_editor) physical_merge_target: bool,
     pub(in crate::ui::panels::node_editor) authored_blend_mode: Option<&'static str>,
     pub(in crate::ui::panels::node_editor) authored_blend_available: bool,
 }

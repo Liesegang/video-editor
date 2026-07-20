@@ -10,9 +10,9 @@ mod container_outputs;
 use container_outputs::connect_container_output_wires;
 
 use super::{
-    input_definitions, merge_input_index_for_connection, output_definitions, ContainerKind,
-    ContainerVisual, GraphItem, PortAnchorKind, CONTAINER_CONTROL_OFFSET, CONTAINER_PORT_Y,
-    CONTAINER_RIGHT_PORT_Y, MIN_CONTAINER_SIZE,
+    input_definitions, merge_images_target_node_id, merge_input_index_for_connection,
+    output_definitions, ContainerKind, ContainerVisual, GraphItem, PortAnchorKind,
+    CONTAINER_CONTROL_OFFSET, CONTAINER_PORT_Y, CONTAINER_RIGHT_PORT_Y, MIN_CONTAINER_SIZE,
 };
 
 pub(super) fn build_snarl(
@@ -93,13 +93,9 @@ pub(super) fn build_snarl(
         else {
             continue;
         };
-        let input_index = match connection.to.owner {
-            PortOwner::Node(merge_id)
-                if connection.to.port == library::model::project::MERGE_IMAGES_PORT =>
-            {
-                merge_input_index_for_connection(project, merge_id, connection.id)
-            }
-            _ => input_definitions(project, target_item)
+        let input_index = match merge_images_target_node_id(project, &connection.to) {
+            Some(merge_id) => merge_input_index_for_connection(project, merge_id, connection.id),
+            None => input_definitions(project, target_item)
                 .iter()
                 .position(|input| input.key == connection.to.port),
         };

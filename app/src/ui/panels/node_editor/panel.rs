@@ -17,15 +17,15 @@ use super::{
     compute_auto_layout, compute_full_composition_layout, container_inactive,
     container_resize_interactions, final_node_positions, finish_node_reparent,
     flush_pending_continuous_edit, handle_context_menu, layout_needs_reflow,
-    node_can_splice_connection, node_drop_intents, node_editor_canvas_metadata,
-    node_editor_details_visible, node_editor_snarl_style, node_selection_after_snarl_click,
-    non_selectable_label, paint_container_foreground, port_owner_composition,
-    port_owner_for_node_container, primary_node_drop_intent, push_history_snapshot,
-    record_node_reparent_origins, register_container_chrome, register_rendered_edges,
-    register_reparent_drop_targets, rendered_edge_at_position, show_wire_context_menu,
-    splice_node_for_release, wire_interactions, wire_secondary_click_hit, AutoLayoutScope,
-    GraphItem, NodeContextMenuFrame, NodeEdit, OverviewWirePainter, ProjectNodeViewer,
-    ReparentReleaseOutcome, WireInteractionFrame, WireSecondaryClickHit,
+    merge_images_target_node_id, node_can_splice_connection, node_drop_intents,
+    node_editor_canvas_metadata, node_editor_details_visible, node_editor_snarl_style,
+    node_selection_after_snarl_click, non_selectable_label, paint_container_foreground,
+    port_owner_composition, port_owner_for_node_container, primary_node_drop_intent,
+    push_history_snapshot, record_node_reparent_origins, register_container_chrome,
+    register_rendered_edges, register_reparent_drop_targets, rendered_edge_at_position,
+    show_wire_context_menu, splice_node_for_release, wire_interactions, wire_secondary_click_hit,
+    AutoLayoutScope, GraphItem, NodeContextMenuFrame, NodeEdit, OverviewWirePainter,
+    ProjectNodeViewer, ReparentReleaseOutcome, WireInteractionFrame, WireSecondaryClickHit,
 };
 
 pub fn node_editor_panel(
@@ -69,8 +69,8 @@ pub fn node_editor_panel(
                 let connection_exists = project_lock.read().is_ok_and(|project| {
                     project.connections.iter().any(|connection| {
                         connection.id == gesture.connection_id
-                            && connection.to.owner == PortOwner::Node(gesture.merge_id)
-                            && connection.to.port == library::model::project::MERGE_IMAGES_PORT
+                            && merge_images_target_node_id(&project, &connection.to)
+                                == Some(gesture.merge_id)
                     })
                 });
                 !connection_exists || (!primary_down && !primary_released && !gesture.finished)

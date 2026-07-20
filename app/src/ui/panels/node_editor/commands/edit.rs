@@ -17,13 +17,22 @@ pub(in crate::ui::panels::node_editor) fn apply_edit(
     edit: NodeEdit,
 ) -> bool {
     match edit {
-        NodeEdit::Connect { from, to } => match project.connect_ports(from, to) {
-            Ok(_) => true,
-            Err(error) => {
-                log::warn!("Cannot connect project ports: {error}");
-                false
+        NodeEdit::Connect { from, to } => {
+            if project
+                .connections
+                .iter()
+                .any(|connection| connection.from == from && connection.to == to)
+            {
+                return false;
             }
-        },
+            match project.connect_ports(from, to) {
+                Ok(_) => true,
+                Err(error) => {
+                    log::warn!("Cannot connect project ports: {error}");
+                    false
+                }
+            }
+        }
         NodeEdit::Disconnect { from, to } => project.disconnect_ports(&from, &to),
         NodeEdit::DisconnectConnection { connection_id } => {
             project.disconnect_connection(connection_id)

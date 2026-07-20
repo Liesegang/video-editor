@@ -7,11 +7,19 @@ use egui_snarl::{
     ui::{BackgroundPattern, NodeLayout, SnarlPin, SnarlStyle, SnarlViewer},
     InPin, OutPin, Snarl,
 };
-use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwner};
+use library::model::project::{
+    PortAddress, PortDataType, PortDirection, PortOwner, MERGE_IMAGES_PORT,
+};
 use library::model::property::PropertyValue;
-use library::model::{GeneratorContent, NodeContent};
+use library::model::{GeneratorContent, NodeContent, Project};
 use library::plugin::property_name_from_port;
 use std::sync::Arc;
+use uuid::Uuid;
+
+fn is_physical_merge_node(project: &Project, node_id: Uuid) -> bool {
+    let target = PortAddress::new(PortOwner::Node(node_id), MERGE_IMAGES_PORT);
+    merge_images_target_node_id(project, &target).is_some()
+}
 
 impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     fn node_layout(
@@ -308,12 +316,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
 
     fn inputs(&mut self, item: &GraphItem) -> usize {
         match item {
-            GraphItem::Node(node_id)
-                if self
-                    .project
-                    .get_node(*node_id)
-                    .is_some_and(|node| matches!(node.content(), NodeContent::Merge)) =>
-            {
+            GraphItem::Node(node_id) if is_physical_merge_node(self.project, *node_id) => {
                 merge_input_slots(self.project, *node_id).len()
             }
             GraphItem::Node(_) | GraphItem::Container(_) | GraphItem::PortAnchor { .. } => {
@@ -334,12 +337,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
     ) -> impl SnarlPin + 'static {
         let item = snarl.get_node(pin.id.node).copied();
         let merge_slot = match item {
-            Some(GraphItem::Node(node_id))
-                if self
-                    .project
-                    .get_node(node_id)
-                    .is_some_and(|node| matches!(node.content(), NodeContent::Merge)) =>
-            {
+            Some(GraphItem::Node(node_id)) if is_physical_merge_node(self.project, node_id) => {
                 merge_input_slots(self.project, node_id)
                     .get(pin.id.input)
                     .cloned()

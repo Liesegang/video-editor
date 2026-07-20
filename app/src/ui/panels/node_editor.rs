@@ -161,10 +161,10 @@ use commands::{insert_node_on_connection, splice_existing_node_on_connection};
 use components::WireOrderMenuState;
 use components::{
     blend_mode_label, blend_mode_qa_key, connection_supports_authored_blend,
-    merge_input_index_for_connection, merge_input_slots, merge_layer_rows,
-    register_merge_layer_component, register_merge_layer_popup_component, wire_order_menu_state,
-    wire_order_menu_states, wire_order_qa_metadata, MergeInputSlot, MergeInputSlotRole,
-    AUTHORED_BLEND_MODES,
+    merge_images_target_node_id, merge_input_index_for_connection, merge_input_slots,
+    merge_layer_rows, register_merge_layer_component, register_merge_layer_popup_component,
+    wire_order_menu_state, wire_order_menu_states, wire_order_qa_metadata, MergeInputSlot,
+    MergeInputSlotRole, AUTHORED_BLEND_MODES,
 };
 use graph_build::{build_snarl, container_visual};
 use interaction::show_wire_context_menu;
@@ -4877,7 +4877,6 @@ mod tests {
                 egui::Rect::from_center_size(end, egui::Vec2::ZERO),
             ),
         ]);
-
         let output = context.run(
             egui::RawInput {
                 screen_rect: Some(canvas),
@@ -4903,6 +4902,7 @@ mod tests {
                         authored_order: None,
                         back_to_front_index: None,
                         layer_count: None,
+                        physical_merge_target: false,
                         authored_blend_mode: None,
                         authored_blend_available: false,
                     },
