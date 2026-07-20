@@ -27,6 +27,38 @@ def rect(min_x, min_y, max_x, max_y):
 
 
 class NodeWireQaTests(unittest.TestCase):
+    def test_wire_hit_click_uses_fresh_bezier_point_instead_of_bbox_center(self):
+        component = {
+            "id": "node_editor.edge.derived:track:clip",
+            "rect_points": rect(10.0, 20.0, 110.0, 80.0),
+            "metadata": {"hit_point": {"x": 35.0, "y": 52.0}},
+        }
+
+        class Client:
+            injected = None
+
+            def component(self, component_id):
+                if component_id != component["id"]:
+                    raise AssertionError("unexpected component id")
+                return {"frame": 17}, component
+
+            def inject(self, endpoint, payload, evidence):
+                self.injected = (endpoint, payload, evidence)
+
+        client = Client()
+        snapshot, clicked_component, point = QA.click_node_wire_hit_point(
+            client, component["id"]
+        )
+
+        self.assertEqual(snapshot["frame"], 17)
+        self.assertIs(clicked_component, component)
+        self.assertEqual(point, {"x": 35.0, "y": 52.0})
+        self.assertEqual(client.injected[0], "click")
+        self.assertEqual(client.injected[1]["x"], 35.0)
+        self.assertEqual(client.injected[1]["y"], 52.0)
+        self.assertEqual(client.injected[1]["button"], "secondary")
+        self.assertEqual(client.injected[2]["component_frame"], 17)
+
     def test_free_canvas_wire_distance_uses_rendered_bezier_not_only_midpoint(self):
         wire = {
             "metadata": {

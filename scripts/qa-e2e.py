@@ -1272,6 +1272,81 @@ def point_in_component_rect(point, rect, padding=0.0):
     )
 
 
+def click_node_wire_hit_point(
+    client, component_id, button="secondary", require_display_only=False
+):
+    """Click the latest rendered Bezier midpoint, not its bounding-box center."""
+    snapshot, component = client.component(component_id)
+    metadata = component.get("metadata") or {}
+    hit_point = metadata.get("hit_point")
+    if hit_point is None:
+        raise QaFailure("wire {!r} omitted its rendered hit point".format(component_id))
+    rect = component["rect_points"]
+    if not point_in_component_rect(hit_point, rect):
+        raise QaFailure(
+            "wire {!r} hit point is outside its fresh component rect".format(
+                component_id
+            )
+        )
+    if require_display_only:
+        if not (
+            metadata.get("kind") == "derived_output"
+            and metadata.get("editable") is False
+        ):
+            raise QaFailure("wire {!r} is not display-only".format(component_id))
+        graph_item_prefixes = (
+            "node_editor.node:",
+            "node_editor.node_header:",
+            "node_editor.container_header.",
+            "node_editor.port.",
+            "node_editor.container_port.",
+            "node_editor.resize_edge.",
+        )
+        overlapping_graph_items = [
+            item["id"]
+            for item in snapshot["components"]
+            if item.get("visible", False)
+            and item["id"].startswith(graph_item_prefixes)
+            and point_in_component_rect(hit_point, item["rect_points"])
+        ]
+        if overlapping_graph_items:
+            raise QaFailure(
+                "display-only wire hit point is owned by a graph item: {}".format(
+                    overlapping_graph_items
+                )
+            )
+        overlapping_editable_wires = [
+            item["id"]
+            for item in snapshot["components"]
+            if (item.get("metadata") or {}).get("kind")
+            in ("explicit", "output_binding")
+            and point_near_node_wire(hit_point, item, radius=10.0)
+        ]
+        if overlapping_editable_wires:
+            raise QaFailure(
+                "display-only wire hit point is shadowed by an editable wire: {}".format(
+                    overlapping_editable_wires
+                )
+            )
+    client.inject(
+        "click",
+        {
+            "x": hit_point["x"],
+            "y": hit_point["y"],
+            "coordinate_space": "points",
+            "button": button,
+        },
+        {
+            "component_id": component_id,
+            "component_frame": snapshot["frame"],
+            "component_rect_points": rect,
+            "component_hit_point": hit_point,
+            "coordinate_reason": "fresh rendered Bezier hit point",
+        },
+    )
+    return snapshot, component, hit_point
+
+
 def line_span_inside_rect(first, second, rect, margin=10.0):
     """Return the two boundary points where an infinite line crosses a rect."""
     dx = second["x"] - first["x"]
@@ -2581,6 +2656,75 @@ def run_node_wire_suite(client):
     )
     assert_history_delta(disabled, reenabled, 1, "Node Enable command")
 
+    # A containment-derived wire is visible graph information, not an authored
+    # connection. Its real secondary-click hit belongs to the wire surface but
+    # opens neither wire commands nor the blank-canvas Add menu.
+    derived_edge_id = "node_editor.edge.derived:track:{}:clip:{}".format(
+        TRACK_A, CLIP_A1
+    )
+    reveal_node_editor_component(client, derived_edge_id)
+    open_create_menu(client, operation="derived wire Add-menu precondition")
+    client.wait_component("node_editor.menu.create.text")
+    if not client.state()["editor"]["node_editor"]["context_menu_open"]:
+        raise QaFailure("derived wire regression did not begin with an open Add menu")
+    derived_before = client.wait_preview_settled("derived wire context no-op")
+    _, derived_component, derived_hit_point = click_node_wire_hit_point(
+        client,
+        derived_edge_id,
+        button="secondary",
+        require_display_only=True,
+    )
+    derived_metadata = derived_component.get("metadata") or {}
+    if not (
+        derived_metadata.get("kind") == "derived_output"
+        and derived_metadata.get("editable") is False
+        and derived_metadata.get("action") is None
+        and derived_metadata.get("edit_blocked_reason")
+    ):
+        raise QaFailure("derived wire omitted display-only QA semantics")
+    derived_after = client.state()
+
+    def fresh_derived_menu_snapshot():
+        snapshot = client.component_snapshot()
+        return snapshot if snapshot["frame"] >= derived_after["frame"] else None
+
+    derived_snapshot = client.wait_until(
+        "component registry after derived wire secondary click",
+        fresh_derived_menu_snapshot,
+    )
+    node_editor_after = derived_after["editor"]["node_editor"]
+    if (
+        node_editor_after["context_menu_open"]
+        or node_editor_after["wire_context_menu_open"]
+        or node_editor_after["wire_context_menu_target"] is not None
+    ):
+        raise QaFailure("derived wire secondary click opened an editor menu")
+    component_ids = {item["id"] for item in derived_snapshot["components"]}
+    if any(
+        component_id.startswith("node_editor.menu.create.")
+        or component_id.startswith("node_editor.wire_menu")
+        for component_id in component_ids
+    ) or "node_editor.menu.search" in component_ids:
+        raise QaFailure("derived wire secondary click exposed an Add or wire menu item")
+    if derived_after["project"] != derived_before["project"]:
+        raise QaFailure("derived wire secondary click changed the Project")
+    if derived_after["history"] != derived_before["history"]:
+        raise QaFailure("derived wire secondary click changed Project history")
+    preview_fields = (
+        "pixel_hash",
+        "nontransparent_pixels",
+        "modal_error",
+        "texture_width",
+        "texture_height",
+        "region",
+    )
+    if any(
+        derived_after["editor"]["preview"][field]
+        != derived_before["editor"]["preview"][field]
+        for field in preview_fields
+    ):
+        raise QaFailure("derived wire secondary click changed the Preview")
+
     original = find_project_connection(
         reenabled["project"], "Node", SOLID, "image", "Node", MERGE, "images"
     )
@@ -3229,6 +3373,12 @@ def run_node_wire_suite(client):
         "initial_frame": initial["frame"],
         "final_frame": final["frame"],
         "removed_by_knife": sorted(removed_ids),
+        "derived_wire_context": {
+            "edge_id": derived_edge_id,
+            "hit_point": derived_hit_point,
+            "blocked_reason": derived_metadata["edit_blocked_reason"],
+            "preview_hash": derived_before["editor"]["preview"]["pixel_hash"],
+        },
         "output_binding_wire": {
             "edge_id": binding_edge_id,
             "owner": binding_owner_key,
