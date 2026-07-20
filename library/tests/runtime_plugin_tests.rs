@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Barrier};
 
+use anyhow::{Context, Result, anyhow};
 use library::model::property::{Property, PropertyMap, PropertyValue};
 use library::model::{Composition, NodeContainer, Project};
 use library::plugin::native_plugin_api::{
@@ -19,24 +20,23 @@ const LOADER_COMPONENT_ID: &str = "runtime_rgba_fixture_loader";
 const DESCRIPTOR_CALLS_OPERATION: &str = "random_property.descriptor_calls.v1";
 
 #[test]
-fn common_effector_operation_factory_materializes_all_known_defaults() {
+fn common_effector_operation_factory_materializes_all_known_defaults() -> Result<()> {
     let manager = PluginManager::default();
     let opacity = manager
         .create_effector_operation_node("opacity")
-        .expect("built-in descriptor creates an explicit operation Node");
+        .context("built-in descriptor creates an explicit operation Node")?;
     assert!(opacity.properties().get("opacity").is_some());
     assert!(opacity.properties().get("mode").is_some());
     assert!(opacity.properties().get("target").is_some());
     let (composition, track) = Composition::new("Main", 640, 360, 30.0, 1.0);
     let composition_id = composition.id;
-    let mut encoded_node = serde_json::to_value(opacity).unwrap();
+    let mut encoded_node = serde_json::to_value(opacity)?;
     encoded_node["content"]["data"]["component_id"] =
         serde_json::Value::String("not.installed".to_string());
     encoded_node["properties"]["private"] = serde_json::to_value(Property::constant(
         PropertyValue::String("preserve".to_string()),
-    ))
-    .unwrap();
-    let node: library::model::Node = serde_json::from_value(encoded_node).unwrap();
+    ))?;
+    let node: library::model::Node = serde_json::from_value(encoded_node)?;
     let node_id = node.id;
 
     let mut project = Project::new("Service boundary");
@@ -45,9 +45,9 @@ fn common_effector_operation_factory_materializes_all_known_defaults() {
     project.add_node(node);
     project
         .attach_node_to_container(NodeContainer::Composition(composition_id), node_id)
-        .expect("test containment is valid");
-    let saved = project.save().unwrap();
-    let loaded = Project::load(&saved).unwrap();
+        .context("test containment is valid")?;
+    let saved = project.save()?;
+    let loaded = Project::load(&saved)?;
     assert_eq!(loaded, project);
     assert_eq!(
         loaded
@@ -56,18 +56,19 @@ fn common_effector_operation_factory_materializes_all_known_defaults() {
             .and_then(Property::value),
         Some(&PropertyValue::String("preserve".to_string()))
     );
+    Ok(())
 }
 
-fn bundle_from_environment() -> PathBuf {
+fn bundle_from_environment() -> Result<PathBuf> {
     std::env::var_os("RUVIE_TEST_PLUGIN_BUNDLE")
         .map(PathBuf::from)
-        .expect("RUVIE_TEST_PLUGIN_BUNDLE must name the independently built test bundle")
+        .context("RUVIE_TEST_PLUGIN_BUNDLE must name the independently built test bundle")
 }
 
 #[test]
 #[ignore = "requires the independently built bundle from scripts/test-runtime-plugin.sh"]
-fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
-    let bundle = bundle_from_environment();
+fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() -> Result<()> {
+    let bundle = bundle_from_environment()?;
     let manager = Arc::new(PluginManager::default());
     let workers = 12;
     let barrier = Arc::new(Barrier::new(workers));
@@ -84,8 +85,12 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
         .collect::<Vec<_>>();
     let reports = scans
         .into_iter()
-        .map(|worker| worker.join().expect("runtime scan worker panicked"))
-        .collect::<Vec<_>>();
+        .map(|worker| {
+            worker
+                .join()
+                .map_err(|_| anyhow!("runtime scan worker panicked"))
+        })
+        .collect::<Result<Vec<_>>>()?;
     assert!(
         reports.iter().all(|report| report.failures.is_empty()),
         "concurrent scan failures: {reports:?}"
@@ -117,7 +122,7 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
             DESCRIPTOR_CALLS_OPERATION,
             serde_json::json!({}),
         )
-        .expect("test plugin reports descriptor callback count");
+        .context("test plugin reports descriptor callback count")?;
     assert_eq!(
         descriptor_calls
             .get("calls")
@@ -129,7 +134,7 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
     let report = reports
         .iter()
         .find(|report| !report.loaded_bundles.is_empty())
-        .expect("one scan loaded the runtime bundle");
+        .context("one scan loaded the runtime bundle")?;
     assert_eq!(
         report.registered_components,
         vec![
@@ -153,7 +158,7 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
         .components
         .iter()
         .find(|component| component.category == PROPERTY_CATEGORY)
-        .expect("bundle has its property component");
+        .context("bundle has its property component")?;
     assert_eq!(component.id, COMPONENT_ID);
     assert_eq!(component.category, PROPERTY_CATEGORY);
     assert!(matches!(
@@ -166,42 +171,30 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
         .map(|definition| definition.name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(names, vec!["amplitude", "seed"]);
+    let fill = manager
+        .create_style_operation_node(FILL_COMPONENT_ID)
+        .context("runtime Fill creates a graph Node")?;
+    let stroke = manager
+        .create_style_operation_node(STROKE_COMPONENT_ID)
+        .context("runtime Stroke creates a graph Node")?;
+    let backplate = manager
+        .create_decorator_operation_node(BACKPLATE_COMPONENT_ID)
+        .context("runtime Backplate creates a graph Node")?;
+    let effect = manager
+        .create_effect_operation_node(EFFECT_COMPONENT_ID)
+        .context("runtime Effect creates a graph Node")?;
     for (category, id, node) in [
-        (
-            STYLE_CATEGORY,
-            FILL_COMPONENT_ID,
-            manager
-                .create_style_operation_node(FILL_COMPONENT_ID)
-                .expect("runtime Fill creates a graph Node"),
-        ),
-        (
-            STYLE_CATEGORY,
-            STROKE_COMPONENT_ID,
-            manager
-                .create_style_operation_node(STROKE_COMPONENT_ID)
-                .expect("runtime Stroke creates a graph Node"),
-        ),
-        (
-            DECORATOR_CATEGORY,
-            BACKPLATE_COMPONENT_ID,
-            manager
-                .create_decorator_operation_node(BACKPLATE_COMPONENT_ID)
-                .expect("runtime Backplate creates a graph Node"),
-        ),
-        (
-            EFFECT_CATEGORY,
-            EFFECT_COMPONENT_ID,
-            manager
-                .create_effect_operation_node(EFFECT_COMPONENT_ID)
-                .expect("runtime Effect creates a graph Node"),
-        ),
+        (STYLE_CATEGORY, FILL_COMPONENT_ID, fill),
+        (STYLE_CATEGORY, STROKE_COMPONENT_ID, stroke),
+        (DECORATOR_CATEGORY, BACKPLATE_COMPONENT_ID, backplate),
+        (EFFECT_CATEGORY, EFFECT_COMPONENT_ID, effect),
     ] {
         let component = descriptors[0]
             .descriptor
             .components
             .iter()
             .find(|component| component.category == category && component.id == id)
-            .expect("runtime config component stays in the accepted descriptor");
+            .context("runtime config component stays in the accepted descriptor")?;
         let descriptor_names = component
             .properties
             .iter()
@@ -220,7 +213,7 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
 
     let instance = manager
         .create_property_instance(COMPONENT_ID)
-        .expect("descriptor-backed factory creates the runtime property");
+        .context("descriptor-backed factory creates the runtime property")?;
     assert_eq!(
         instance.properties.get("amplitude"),
         Some(&PropertyValue::from(1.0))
@@ -254,10 +247,8 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
             PropertyValue::String("preserve".to_string()),
         )]),
     };
-    let unavailable_json =
-        serde_json::to_string(&unavailable).expect("unknown property serializes");
-    let preserved: Property =
-        serde_json::from_str(&unavailable_json).expect("unknown property stays loadable");
+    let unavailable_json = serde_json::to_string(&unavailable)?;
+    let preserved: Property = serde_json::from_str(&unavailable_json)?;
     assert_eq!(preserved, unavailable);
     let _safe_unknown_output = evaluators.evaluate(&preserved, 0.25, &context);
     assert!(
@@ -280,7 +271,7 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
         let library_path = descriptors[0].library_path.clone();
         let backup_path = library_path.with_extension("loaded-test-backup");
         std::fs::rename(&library_path, &backup_path)
-            .expect("temporarily move the already-loaded plugin binary");
+            .context("temporarily move the already-loaded plugin binary")?;
         Some((library_path, backup_path))
     };
     #[cfg(not(unix))]
@@ -289,14 +280,14 @@ fn standalone_runtime_bundle_loads_builds_nodes_and_invokes() {
     let second = manager.rescan_runtime_plugin_path(&bundle);
     if let Some((library_path, backup_path)) = moved_library {
         std::fs::rename(backup_path, library_path)
-            .expect("restore the independently built plugin binary");
+            .context("restore the independently built plugin binary")?;
     }
     assert!(second.failures.is_empty());
     assert_eq!(second.already_loaded_bundles.len(), 1);
 
-    let serialized = serde_json::to_string(&instance).expect("property instance serializes");
+    let serialized = serde_json::to_string(&instance)?;
     drop(manager);
-    let preserved: Property =
-        serde_json::from_str(&serialized).expect("unavailable plugin config stays loadable");
+    let preserved: Property = serde_json::from_str(&serialized)?;
     assert_eq!(preserved, instance);
+    Ok(())
 }
