@@ -365,7 +365,15 @@ class QaRunnerTests(unittest.TestCase):
         self.assertEqual([item.name for item in RUNNER.suite_specs("smoke")], ["smoke"])
         self.assertEqual(
             [item.name for item in RUNNER.suite_specs("full")],
-            ["all", "timeline", "keyframe", "node-editor", "node-wire", "preview"],
+            [
+                "all",
+                "timeline",
+                "keyframe",
+                "node-editor",
+                "node-reparent",
+                "node-wire",
+                "preview",
+            ],
         )
         with self.assertRaises(ValueError):
             RUNNER.suite_specs("unknown")
