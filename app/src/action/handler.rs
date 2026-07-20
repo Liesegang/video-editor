@@ -451,7 +451,10 @@ mod tests {
             origins: Vec::new(),
             changed: true,
         });
-        project.write().unwrap().name = "uncommitted old edit".to_string();
+        project
+            .write()
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+            .name = "uncommitted old edit".to_string();
         let mut history = HistoryManager::new();
         history.push_project_state(initial);
         let mut dock_state = create_initial_dock_state();
@@ -467,7 +470,10 @@ mod tests {
             },
         );
 
-        let current = project.read().unwrap().clone();
+        let current = project
+            .read()
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+            .clone();
         assert_eq!(history.undo_depth(), 1);
         assert_eq!(history.undo(&current), None);
         assert!(editor_context.graph_editor.keyframe_drag.is_none());
