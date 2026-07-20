@@ -1,5 +1,6 @@
 mod support;
 
+use anyhow::{Context, Result, anyhow};
 use std::sync::Arc;
 
 use library::animation::EasingFunction;
@@ -34,7 +35,7 @@ fn time_graph_fixture(
     trim_in: f64,
     time_stretch: f64,
     wire_value: bool,
-) -> TimeGraphFixture {
+) -> Result<TimeGraphFixture> {
     let mut project = Project::new("time graph");
     let (composition, track) = Composition::new("main", 320, 180, FPS, 20.0);
     let track_id = track.id;
@@ -46,7 +47,7 @@ fn time_graph_fixture(
     clip.time_stretch = OrderedFloat(time_stretch);
     let clip_id = clip.id;
     project.add_clip(clip);
-    project.attach_clip_to_track(track_id, clip_id).unwrap();
+    project.attach_clip_to_track(track_id, clip_id)?;
 
     let mut asset = Asset::new("virtual", "virtual.mp4", AssetKind::Video);
     asset.duration = Some(100.0);
@@ -72,40 +73,35 @@ fn time_graph_fixture(
     for node in [modulo, media] {
         let id = node.id;
         project.add_node(node);
-        project
-            .attach_node_to_container(NodeContainer::Clip(clip_id), id)
-            .unwrap();
+        project.attach_node_to_container(NodeContainer::Clip(clip_id), id)?;
     }
     if wire_value {
-        project
-            .connect_ports(
-                PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
-                PortAddress::new(PortOwner::Node(modulo_id), VALUE_INPUT_PORT),
-            )
-            .unwrap();
+        project.connect_ports(
+            PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
+            PortAddress::new(PortOwner::Node(modulo_id), VALUE_INPUT_PORT),
+        )?;
     }
-    project
-        .connect_ports(
-            PortAddress::new(PortOwner::Node(modulo_id), VALUE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(media_id), TIME_PORT),
-        )
-        .unwrap();
-    project
-        .set_output_node(NodeContainer::Clip(clip_id), Some(media_id))
-        .unwrap();
+    project.connect_ports(
+        PortAddress::new(PortOwner::Node(modulo_id), VALUE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(media_id), TIME_PORT),
+    )?;
+    project.set_output_node(NodeContainer::Clip(clip_id), Some(media_id))?;
     assert!(project.validate_connections().is_empty());
 
-    TimeGraphFixture {
+    Ok(TimeGraphFixture {
         project,
         clip_id,
         modulo_id,
         media_id,
-    }
+    })
 }
 
-fn evaluate(project: &Project, frame_number: u64) -> library::model::frame::frame::FrameInfo {
+fn evaluate(
+    project: &Project,
+    frame_number: u64,
+) -> Result<library::model::frame::frame::FrameInfo> {
     let plugins = Arc::new(PluginManager::default());
-    get_frame_from_project(
+    Ok(get_frame_from_project(
         project,
         0,
         frame_number,
@@ -113,8 +109,7 @@ fn evaluate(project: &Project, frame_number: u64) -> library::model::frame::fram
         None,
         &plugins.get_property_evaluators(),
         &plugins,
-    )
-    .unwrap()
+    )?)
 }
 
 fn first_video_object(items: &[FrameItem]) -> Option<&FrameObject> {
@@ -151,20 +146,27 @@ fn assert_close(actual: f64, expected: f64) {
 }
 
 #[test]
-fn direct_clip_output_applies_its_node_time_remap() {
-    let fixture = time_graph_fixture(0.0, 0.0, 1.0, true);
+fn direct_clip_output_applies_its_node_time_remap() -> Result<()> {
+    let fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
 
     // This direct output binding used to receive the Clip scope (2.5)
     // directly and therefore bypass the Media Node's explicit Time input.
-    assert_close(video_time(&evaluate(&fixture.project, 25)).unwrap(), 0.5);
-    assert_close(video_time(&evaluate(&fixture.project, 35)).unwrap(), 0.5);
+    assert_close(
+        video_time(&evaluate(&fixture.project, 25)?).context("frame 25 must contain Video time")?,
+        0.5,
+    );
+    assert_close(
+        video_time(&evaluate(&fixture.project, 35)?).context("frame 35 must contain Video time")?,
+        0.5,
+    );
+    Ok(())
 }
 
 #[test]
-fn operation_and_merge_paths_use_the_same_source_node_time_remap() {
-    let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true);
+fn operation_and_merge_paths_use_the_same_source_node_time_remap() -> Result<()> {
+    let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
     let plugins = PluginManager::default();
-    let mut effect = plugins.create_effect_operation_node("blur").unwrap();
+    let mut effect = plugins.create_effect_operation_node("blur")?;
     effect
         .set_property(
             "sigma_x".to_string(),
@@ -173,7 +175,7 @@ fn operation_and_merge_paths_use_the_same_source_node_time_remap() {
                 Keyframe::new(1.0, 10.0.into(), EasingFunction::Linear),
             ]),
         )
-        .expect("blur descriptor initializes sigma_x");
+        .map_err(|error| anyhow!(error))?;
     let effect_id = effect.id;
     let merge = Node::new_merge("Merge");
     let merge_id = merge.id;
@@ -182,155 +184,172 @@ fn operation_and_merge_paths_use_the_same_source_node_time_remap() {
         fixture.project.add_node(node);
         fixture
             .project
-            .attach_node_to_container(NodeContainer::Clip(fixture.clip_id), id)
-            .unwrap();
+            .attach_node_to_container(NodeContainer::Clip(fixture.clip_id), id)?;
     }
+    fixture.project.connect_ports(
+        PortAddress::new(PortOwner::Node(fixture.media_id), IMAGE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(effect_id), IMAGE_INPUT_PORT),
+    )?;
+    fixture.project.connect_ports(
+        PortAddress::new(PortOwner::Node(fixture.modulo_id), VALUE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(effect_id), TIME_PORT),
+    )?;
+    fixture.project.connect_ports(
+        PortAddress::new(PortOwner::Node(effect_id), IMAGE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+    )?;
     fixture
         .project
-        .connect_ports(
-            PortAddress::new(PortOwner::Node(fixture.media_id), IMAGE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(effect_id), IMAGE_INPUT_PORT),
-        )
-        .unwrap();
-    fixture
-        .project
-        .connect_ports(
-            PortAddress::new(PortOwner::Node(fixture.modulo_id), VALUE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(effect_id), TIME_PORT),
-        )
-        .unwrap();
-    fixture
-        .project
-        .connect_ports(
-            PortAddress::new(PortOwner::Node(effect_id), IMAGE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
-        )
-        .unwrap();
-    fixture
-        .project
-        .set_output_node(NodeContainer::Clip(fixture.clip_id), Some(merge_id))
-        .unwrap();
+        .set_output_node(NodeContainer::Clip(fixture.clip_id), Some(merge_id))?;
     assert!(fixture.project.validate_connections().is_empty());
 
-    let frame = evaluate(&fixture.project, 25);
-    assert_close(video_time(&frame).unwrap(), 0.5);
-    let effect_group = find_group(&frame.items, effect_id).unwrap();
+    let frame = evaluate(&fixture.project, 25)?;
+    assert_close(
+        video_time(&frame).context("effect frame must contain Video time")?,
+        0.5,
+    );
+    let effect_group = find_group(&frame.items, effect_id).context("effect group must exist")?;
     assert_close(effect_group.effect_time.into_inner(), 0.5);
     assert_close(
         effect_group.effects[0].properties["sigma_x"]
             .get_as::<f64>()
-            .unwrap(),
+            .context("sigma_x must be numeric")?,
         5.0,
     );
+    Ok(())
 }
 
 #[test]
-fn scalar_result_can_drive_a_number_property_and_a_time_input() {
-    let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true);
-    fixture
-        .project
-        .connect_ports(
-            PortAddress::new(PortOwner::Node(fixture.modulo_id), VALUE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(fixture.media_id), "opacity"),
-        )
-        .unwrap();
+fn scalar_result_can_drive_a_number_property_and_a_time_input() -> Result<()> {
+    let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
+    fixture.project.connect_ports(
+        PortAddress::new(PortOwner::Node(fixture.modulo_id), VALUE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(fixture.media_id), "opacity"),
+    )?;
 
-    let frame = evaluate(&fixture.project, 15);
-    let object = first_video_object(&frame.items).unwrap();
-    assert_close(video_time(&frame).unwrap(), 0.5);
+    let frame = evaluate(&fixture.project, 15)?;
+    let object = first_video_object(&frame.items).context("Video object must exist")?;
+    assert_close(
+        video_time(&frame).context("scalar frame must contain Video time")?,
+        0.5,
+    );
     assert_close(object.source_transform.opacity, 0.005);
+    Ok(())
 }
 
 #[test]
-fn a_period_wire_overrides_the_authored_period_property() {
-    let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true);
-    fixture
-        .project
-        .connect_ports(
-            PortAddress::new(PortOwner::Clip(fixture.clip_id), FPS_PORT),
-            PortAddress::new(PortOwner::Node(fixture.modulo_id), PERIOD_INPUT_PORT),
-        )
-        .unwrap();
+fn a_period_wire_overrides_the_authored_period_property() -> Result<()> {
+    let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
+    fixture.project.connect_ports(
+        PortAddress::new(PortOwner::Clip(fixture.clip_id), FPS_PORT),
+        PortAddress::new(PortOwner::Node(fixture.modulo_id), PERIOD_INPUT_PORT),
+    )?;
 
     // FPS=10 overrides the authored period=1, so 2.5 remains 2.5.
-    assert_close(video_time(&evaluate(&fixture.project, 25)).unwrap(), 2.5);
+    assert_close(
+        video_time(&evaluate(&fixture.project, 25)?)
+            .context("period override frame must contain Video time")?,
+        2.5,
+    );
+    Ok(())
 }
 
 #[test]
-fn missing_invalid_and_disabled_modulo_inputs_produce_no_output() {
+fn missing_invalid_and_disabled_modulo_inputs_produce_no_output() -> Result<()> {
     let mut cases = Vec::new();
 
-    cases.push(("missing value", time_graph_fixture(0.0, 0.0, 1.0, false)));
+    cases.push(("missing value", time_graph_fixture(0.0, 0.0, 1.0, false)?));
     for (label, period) in [
         ("zero period", 0.0),
         ("negative period", -1.0),
         ("non-finite period", f64::NAN),
     ] {
-        let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true);
+        let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
         fixture
             .project
             .get_node_mut(fixture.modulo_id)
-            .unwrap()
+            .context("Time Modulo Node must exist")?
             .set_property(
                 TIME_MODULO_PERIOD_PROPERTY.to_string(),
                 Property::constant(PropertyValue::Number(OrderedFloat(period))),
             )
-            .expect("time-modulo factory initializes period");
+            .map_err(|error| anyhow!(error))?;
         cases.push((label, fixture));
     }
-    let mut disabled = time_graph_fixture(0.0, 0.0, 1.0, true);
+    let mut disabled = time_graph_fixture(0.0, 0.0, 1.0, true)?;
     disabled
         .project
         .get_node_mut(disabled.modulo_id)
-        .unwrap()
+        .context("disabled Time Modulo Node must exist")?
         .enabled = false;
     cases.push(("disabled", disabled));
 
     for (label, fixture) in cases {
         assert!(
-            video_time(&evaluate(&fixture.project, 5)).is_none(),
+            video_time(&evaluate(&fixture.project, 5)?).is_none(),
             "{label} must propagate NoOutput"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn missing_authored_period_produces_no_output_instead_of_a_default() {
-    let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true);
-    let node = fixture.project.get_node(fixture.modulo_id).unwrap();
-    let mut json = serde_json::to_value(node).unwrap();
+fn missing_authored_period_produces_no_output_instead_of_a_default() -> Result<()> {
+    let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
+    let node = fixture
+        .project
+        .get_node(fixture.modulo_id)
+        .context("Time Modulo Node must exist")?;
+    let mut json = serde_json::to_value(node)?;
     json["properties"]
         .as_object_mut()
-        .unwrap()
+        .context("serialized properties must be an object")?
         .remove(TIME_MODULO_PERIOD_PROPERTY);
-    let without_period: Node = serde_json::from_value(json).unwrap();
-    *fixture.project.get_node_mut(fixture.modulo_id).unwrap() = without_period;
+    let without_period: Node = serde_json::from_value(json)?;
+    *fixture
+        .project
+        .get_node_mut(fixture.modulo_id)
+        .context("Time Modulo Node must remain mutable")? = without_period;
 
-    assert!(video_time(&evaluate(&fixture.project, 5)).is_none());
+    assert!(video_time(&evaluate(&fixture.project, 5)?).is_none());
+    Ok(())
 }
 
 #[test]
-fn clip_local_time_is_computed_before_the_explicit_node_remap() {
-    let fixture = time_graph_fixture(2.0, 0.25, 2.0, true);
+fn clip_local_time_is_computed_before_the_explicit_node_remap() -> Result<()> {
+    let fixture = time_graph_fixture(2.0, 0.25, 2.0, true)?;
 
     // Clip-local time = (3.6 - 2.0) * 2.0 + 0.25 = 3.45, followed by
     // the Media Node's explicit modulo remap = 0.45.
-    assert_close(video_time(&evaluate(&fixture.project, 36)).unwrap(), 0.45);
+    assert_close(
+        video_time(&evaluate(&fixture.project, 36)?)
+            .context("local-time frame must contain Video time")?,
+        0.45,
+    );
+    Ok(())
 }
 
 #[test]
-fn modulo_wraps_negative_time_into_the_positive_loop_interval() {
-    let fixture = time_graph_fixture(0.0, -2.0, 1.0, true);
+fn modulo_wraps_negative_time_into_the_positive_loop_interval() -> Result<()> {
+    let fixture = time_graph_fixture(0.0, -2.0, 1.0, true)?;
 
     // The Clip supplies -1.5 at global t=0.5. rem_euclid gives the loop-safe
     // [0, period) result rather than the negative remainder produced by `%`.
-    assert_close(video_time(&evaluate(&fixture.project, 5)).unwrap(), 0.5);
+    assert_close(
+        video_time(&evaluate(&fixture.project, 5)?)
+            .context("negative-time frame must contain Video time")?,
+        0.5,
+    );
+    Ok(())
 }
 
 #[test]
-fn time_modulo_factory_ports_and_roundtrip_are_authoritative() {
-    let fixture = time_graph_fixture(0.0, 0.0, 1.0, true);
-    let node = fixture.project.get_node(fixture.modulo_id).unwrap();
+fn time_modulo_factory_ports_and_roundtrip_are_authoritative() -> Result<()> {
+    let fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
+    let node = fixture
+        .project
+        .get_node(fixture.modulo_id)
+        .context("Time Modulo Node must exist")?;
     assert_eq!(
         node.content(),
         &NodeContent::Value(ValueContent::TimeModulo)
@@ -360,23 +379,24 @@ fn time_modulo_factory_ports_and_roundtrip_are_authoritative() {
         let port = ports
             .iter()
             .find(|port| port.key == key && port.direction == direction)
-            .unwrap();
+            .with_context(|| format!("{key} {direction:?} port must exist"))?;
         assert_eq!(port.data_type, PortDataType::Number);
         assert_eq!(port.exposure, PortExposure::Graph);
     }
     assert!(ports.iter().all(|port| port.key != TIME_PORT));
 
-    let loaded = Project::load(&fixture.project.save().unwrap()).unwrap();
+    let loaded = Project::load(&fixture.project.save()?)?;
     assert_eq!(loaded, fixture.project);
     assert_eq!(
         loaded.port_definitions(PortOwner::Node(fixture.modulo_id)),
         ports
     );
+    Ok(())
 }
 
 #[test]
-fn scalar_connections_keep_cycle_validation() {
-    let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true);
+fn scalar_connections_keep_cycle_validation() -> Result<()> {
+    let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
     assert!(matches!(
         fixture.project.connect_ports(
             PortAddress::new(PortOwner::Node(fixture.modulo_id), VALUE_OUTPUT_PORT),
@@ -385,6 +405,7 @@ fn scalar_connections_keep_cycle_validation() {
         Err(ProjectGraphError::ConnectionCycle { .. })
     ));
     assert!(fixture.project.validate_connections().is_empty());
+    Ok(())
 }
 
 #[test]

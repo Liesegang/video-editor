@@ -1,5 +1,6 @@
 mod support;
 
+use anyhow::{Context, Result, anyhow, bail};
 use std::sync::{Arc, RwLock};
 
 use library::editor::handlers::clip_handler::ClipHandler;
@@ -27,12 +28,12 @@ fn add_composition(project: &mut Project, name: &str) -> (Uuid, Uuid) {
     (composition_id, track_id)
 }
 
-fn add_clip(project: &mut Project, track_id: Uuid, name: &str, start: f64) -> Uuid {
+fn add_clip(project: &mut Project, track_id: Uuid, name: &str, start: f64) -> Result<Uuid> {
     let clip = Clip::new(name, start, 5.0);
     let clip_id = clip.id;
     project.add_clip(clip);
-    project.attach_clip_to_track(track_id, clip_id).unwrap();
-    clip_id
+    project.attach_clip_to_track(track_id, clip_id)?;
+    Ok(clip_id)
 }
 
 fn solid(name: &str) -> Node {
@@ -44,54 +45,63 @@ fn solid(name: &str) -> Node {
     )
 }
 
-fn add_node(project: &mut Project, clip_id: Uuid, node: Node) -> Uuid {
+fn add_node(project: &mut Project, clip_id: Uuid, node: Node) -> Result<Uuid> {
     let node_id = node.id;
     project.add_node(node);
+    project.attach_node_to_container(NodeContainer::Clip(clip_id), node_id)?;
+    Ok(node_id)
+}
+
+fn read_project(project: &RwLock<Project>) -> Result<std::sync::RwLockReadGuard<'_, Project>> {
     project
-        .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
-        .unwrap();
-    node_id
+        .read()
+        .map_err(|error| anyhow!("project lock poisoned: {error}"))
 }
 
 #[test]
-fn property_serialization_roundtrip() {
+fn property_serialization_roundtrip() -> Result<()> {
     let mut properties = PropertyMap::new();
     properties.set(
         "opacity".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(0.5))),
     );
 
-    let json = serde_json::to_string(&properties).expect("property map should serialize");
-    let loaded: PropertyMap = serde_json::from_str(&json).expect("property map should deserialize");
+    let json = serde_json::to_string(&properties).context("property map should serialize")?;
+    let loaded: PropertyMap =
+        serde_json::from_str(&json).context("property map should deserialize")?;
 
     assert_eq!(
         loaded.get("opacity").and_then(Property::value),
         Some(&PropertyValue::Number(OrderedFloat(0.5)))
     );
+    Ok(())
 }
 
 #[test]
-fn media_audio_stream_selection_is_required_pre_v1_state() {
+fn media_audio_stream_selection_is_required_pre_v1_state() -> Result<()> {
     let asset_id = Uuid::new_v4();
     let missing_audio_stream = serde_json::json!({
         "asset_id": asset_id,
         "stream_index": 0
     });
-    let error = serde_json::from_value::<MediaContent>(missing_audio_stream).unwrap_err();
+    let error = match serde_json::from_value::<MediaContent>(missing_audio_stream) {
+        Ok(_) => bail!("MediaContent without audio_stream_index unexpectedly decoded"),
+        Err(error) => error,
+    };
     assert!(error.to_string().contains("audio_stream_index"));
 
     let media = serde_json::from_value::<MediaContent>(serde_json::json!({
         "asset_id": asset_id,
         "stream_index": 0,
         "audio_stream_index": 2
-    }))
-    .unwrap();
+    }))?;
     assert_eq!(media.stream_index, Some(0));
     assert_eq!(media.audio_stream_index, Some(2));
+    Ok(())
 }
 
 #[test]
-fn clip_timing_metadata_validates_freeze_and_never_duplicates_structural_values() {
+fn clip_timing_metadata_validates_freeze_and_never_duplicates_structural_values() -> Result<()> {
     let definitions = Clip::timing_property_definitions();
     assert_eq!(definitions.len(), 4);
     assert_eq!(
@@ -101,7 +111,8 @@ fn clip_timing_metadata_validates_freeze_and_never_duplicates_structural_values(
             .collect::<Vec<_>>(),
         vec!["start_time", "duration", "trim_in", "time_stretch"]
     );
-    let stretch = Clip::timing_property_definition("time_stretch").unwrap();
+    let stretch = Clip::timing_property_definition("time_stretch")
+        .context("time_stretch definition must exist")?;
     assert!(
         stretch
             .validate_value(&PropertyValue::Number(OrderedFloat(0.0)))
@@ -137,11 +148,10 @@ fn clip_timing_metadata_validates_freeze_and_never_duplicates_structural_values(
         42.0,
         PropertyValue::Number(OrderedFloat(0.0)),
         None,
-    )
-    .unwrap();
+    )?;
 
-    let read = shared.read().unwrap();
-    let clip = read.get_clip(clip_id).unwrap();
+    let read = read_project(&shared)?;
+    let clip = read.get_clip(clip_id).context("freeze Clip must exist")?;
     assert_eq!(clip.time_stretch, OrderedFloat(0.0));
     for definition in definitions {
         assert!(
@@ -150,10 +160,12 @@ fn clip_timing_metadata_validates_freeze_and_never_duplicates_structural_values(
             definition.name()
         );
     }
-    let saved = read.save().unwrap();
+    let saved = read.save()?;
     drop(read);
-    let loaded = Project::load(&saved).unwrap();
-    let clip = loaded.get_clip(clip_id).unwrap();
+    let loaded = Project::load(&saved)?;
+    let clip = loaded
+        .get_clip(clip_id)
+        .context("round-tripped freeze Clip must exist")?;
     assert_eq!(clip.time_stretch, OrderedFloat(0.0));
     assert_eq!(clip.local_time(999.0), clip.trim_in.into_inner());
     assert!(
@@ -162,7 +174,7 @@ fn clip_timing_metadata_validates_freeze_and_never_duplicates_structural_values(
             .all(|definition| clip.properties.get(definition.name()).is_none())
     );
 
-    let before = shared.read().unwrap().clone();
+    let before = read_project(&shared)?.clone();
     assert!(
         ClipHandler::update_property_or_keyframe(
             &shared,
@@ -174,11 +186,12 @@ fn clip_timing_metadata_validates_freeze_and_never_duplicates_structural_values(
         )
         .is_err()
     );
-    assert_eq!(*shared.read().unwrap(), before);
+    assert_eq!(*read_project(&shared)?, before);
+    Ok(())
 }
 
 #[test]
-fn node_properties_are_the_only_generator_value_authority() {
+fn node_properties_are_the_only_generator_value_authority() -> Result<()> {
     let mut node = generator_node(
         "Text",
         GeneratorNodeRequest::Text {
@@ -190,7 +203,7 @@ fn node_properties_are_the_only_generator_value_authority() {
         "font_family".to_string(),
         Property::constant(PropertyValue::String("Arial".to_string())),
     )
-    .expect("text factory initializes font_family");
+    .map_err(|error| anyhow!(error))?;
     let mut clip = Clip::new("placement", 0.0, 5.0);
 
     assert!(node.update_property_or_keyframe(
@@ -215,14 +228,15 @@ fn node_properties_are_the_only_generator_value_authority() {
         &NodeContent::Generator(GeneratorContent::Text)
     );
     assert_eq!(clip.start_time, OrderedFloat(2.5));
-    let serialized = serde_json::to_value(node).unwrap();
+    let serialized = serde_json::to_value(node)?;
     assert_eq!(serialized["content"]["data"], "Text");
     assert!(serialized.get("start_time").is_none());
     assert!(serialized.get("duration").is_none());
+    Ok(())
 }
 
 #[test]
-fn explicit_keyframe_insert_promotes_a_constant_property() {
+fn explicit_keyframe_insert_promotes_a_constant_property() -> Result<()> {
     let mut properties = PropertyMap::new();
     properties.set(
         "opacity".to_string(),
@@ -236,32 +250,31 @@ fn explicit_keyframe_insert_promotes_a_constant_property() {
         None,
     ));
 
-    let property = properties.get("opacity").unwrap();
+    let property = properties
+        .get("opacity")
+        .context("opacity property must remain present")?;
     assert_eq!(property.evaluator, "keyframe");
     assert_eq!(property.keyframes().len(), 1);
     assert_eq!(property.keyframes()[0].time, OrderedFloat(1.25));
+    Ok(())
 }
 
 #[test]
-fn clip_move_updates_timing_and_parent_without_reordering_horizontal_drags() {
+fn clip_move_updates_timing_and_parent_without_reordering_horizontal_drags() -> Result<()> {
     let mut project = Project::new("Move Test");
     let (composition_id, first_track_id) = add_composition(&mut project, "Comp");
     let target = Track::new("Target");
     let target_id = target.id;
     project.add_track(target);
-    project
-        .attach_track_to_composition(composition_id, target_id)
-        .unwrap();
+    project.attach_track_to_composition(composition_id, target_id)?;
 
-    let first_id = add_clip(&mut project, first_track_id, "First", 1.0);
-    let moving_id = add_clip(&mut project, first_track_id, "Moving", 1.0);
-    let last_id = add_clip(&mut project, first_track_id, "Last", 1.0);
-    let metadata_connection_id = project
-        .connect_ports(
-            PortAddress::new(PortOwner::Track(first_track_id), TIME_PORT),
-            PortAddress::new(PortOwner::Clip(moving_id), TIME_PORT),
-        )
-        .unwrap();
+    let first_id = add_clip(&mut project, first_track_id, "First", 1.0)?;
+    let moving_id = add_clip(&mut project, first_track_id, "Moving", 1.0)?;
+    let last_id = add_clip(&mut project, first_track_id, "Last", 1.0)?;
+    let metadata_connection_id = project.connect_ports(
+        PortAddress::new(PortOwner::Track(first_track_id), TIME_PORT),
+        PortAddress::new(PortOwner::Clip(moving_id), TIME_PORT),
+    )?;
     let project = Arc::new(RwLock::new(project));
 
     ClipHandler::move_clip_to_track_at_index(
@@ -272,16 +285,21 @@ fn clip_move_updates_timing_and_parent_without_reordering_horizontal_drags() {
         first_track_id,
         3.0,
         None,
-    )
-    .unwrap();
+    )?;
     {
-        let project = project.read().unwrap();
+        let project = read_project(&project)?;
         assert_eq!(
-            project.get_track(first_track_id).unwrap().clip_ids,
+            project
+                .get_track(first_track_id)
+                .context("source Track must exist")?
+                .clip_ids,
             vec![first_id, moving_id, last_id]
         );
         assert_eq!(
-            project.get_clip(moving_id).unwrap().start_time,
+            project
+                .get_clip(moving_id)
+                .context("moving Clip must exist")?
+                .start_time,
             OrderedFloat(3.0)
         );
         assert_eq!(
@@ -289,7 +307,7 @@ fn clip_move_updates_timing_and_parent_without_reordering_horizontal_drags() {
                 .connections
                 .iter()
                 .find(|connection| connection.id == metadata_connection_id)
-                .unwrap()
+                .context("metadata connection must survive horizontal move")?
                 .from,
             PortAddress::new(PortOwner::Track(first_track_id), TIME_PORT)
         );
@@ -303,15 +321,20 @@ fn clip_move_updates_timing_and_parent_without_reordering_horizontal_drags() {
         target_id,
         4.0,
         Some(0),
-    )
-    .unwrap();
-    let project = project.read().unwrap();
+    )?;
+    let project = read_project(&project)?;
     assert_eq!(
-        project.get_track(first_track_id).unwrap().clip_ids,
+        project
+            .get_track(first_track_id)
+            .context("source Track must exist after move")?
+            .clip_ids,
         vec![first_id, last_id]
     );
     assert_eq!(
-        project.get_track(target_id).unwrap().clip_ids,
+        project
+            .get_track(target_id)
+            .context("target Track must exist after move")?
+            .clip_ids,
         vec![moving_id]
     );
     assert_eq!(project.find_track_for_clip(moving_id), Some(target_id));
@@ -319,7 +342,7 @@ fn clip_move_updates_timing_and_parent_without_reordering_horizontal_drags() {
         .connections
         .iter()
         .find(|connection| connection.id == metadata_connection_id)
-        .unwrap();
+        .context("metadata connection must survive cross-Track move")?;
     assert_eq!(metadata_connection.id, metadata_connection_id);
     assert_eq!(metadata_connection.order, 0);
     assert_eq!(
@@ -331,27 +354,32 @@ fn clip_move_updates_timing_and_parent_without_reordering_horizontal_drags() {
         PortAddress::new(PortOwner::Clip(moving_id), TIME_PORT)
     );
     assert_eq!(
-        project.get_clip(moving_id).unwrap().start_time,
+        project
+            .get_clip(moving_id)
+            .context("moved Clip must exist")?
+            .start_time,
         OrderedFloat(4.0)
     );
     assert_eq!(
-        project.get_clip(moving_id).unwrap().duration,
+        project
+            .get_clip(moving_id)
+            .context("moved Clip must exist")?
+            .duration,
         OrderedFloat(5.0)
     );
+    Ok(())
 }
 
 #[test]
-fn removal_cleans_owned_registries_output_pointers_references_and_connections() {
+fn removal_cleans_owned_registries_output_pointers_references_and_connections() -> Result<()> {
     let mut project = Project::new("cleanup");
     let (first_composition_id, first_track_id) = add_composition(&mut project, "first");
-    let first_clip_id = add_clip(&mut project, first_track_id, "source clip", 0.0);
-    let source_id = add_node(&mut project, first_clip_id, solid("source"));
-    project
-        .set_output_node(NodeContainer::Clip(first_clip_id), Some(source_id))
-        .unwrap();
+    let first_clip_id = add_clip(&mut project, first_track_id, "source clip", 0.0)?;
+    let source_id = add_node(&mut project, first_clip_id, solid("source"))?;
+    project.set_output_node(NodeContainer::Clip(first_clip_id), Some(source_id))?;
 
     let (second_composition_id, second_track_id) = add_composition(&mut project, "second");
-    let second_clip_id = add_clip(&mut project, second_track_id, "reference clip", 0.0);
+    let second_clip_id = add_clip(&mut project, second_track_id, "reference clip", 0.0)?;
     let reference_id = add_node(
         &mut project,
         second_clip_id,
@@ -362,15 +390,15 @@ fn removal_cleans_owned_registries_output_pointers_references_and_connections() 
                 sync_global_time: false,
             },
         ),
-    );
-    project
-        .connect_ports(
-            PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(reference_id), IMAGE_INPUT_PORT),
-        )
-        .unwrap();
+    )?;
+    project.connect_ports(
+        PortAddress::new(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(reference_id), IMAGE_INPUT_PORT),
+    )?;
 
-    project.remove_composition(first_composition_id).unwrap();
+    project
+        .remove_composition(first_composition_id)
+        .context("first Composition must be removable")?;
     assert!(project.get_composition(first_composition_id).is_none());
     assert!(project.get_track(first_track_id).is_none());
     assert!(project.get_clip(first_clip_id).is_none());
@@ -381,9 +409,10 @@ fn removal_cleans_owned_registries_output_pointers_references_and_connections() 
     assert!(
         project
             .get_clip(second_clip_id)
-            .unwrap()
+            .context("unrelated Clip must remain")?
             .node_ids
             .is_empty()
     );
     assert!(project.validate_containment().is_empty());
+    Ok(())
 }
