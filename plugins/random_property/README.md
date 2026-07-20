@@ -11,6 +11,9 @@ deterministic value for each rounded millisecond time bucket. The same bundle
 also exposes descriptor-backed Fill/Stroke Style components and a Backplate
 Decorator component so the fixture exercises every low-bandwidth config
 adapter supported by ABI v1.
+The typed Loader accepts separate image and custom-video RGBA fixtures. Its
+video fixture verifies that source time, stream selection, and input/output
+color-space metadata cross the dynamic ABI intact.
 
 The repository's `scripts/test-runtime-plugin.sh` performs the stronger
 post-build proof: it builds RuViE and its probe first, builds this plugin in a
