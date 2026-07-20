@@ -175,6 +175,8 @@ impl EditorContext {
         self.node_editor_context_menu = None;
         self.node_editor_state.pending_navigation = None;
         self.node_editor_state.pending_continuous_edit = None;
+        self.node_editor_state.node_reparent = None;
+        self.node_editor_state.moved_node_ids.clear();
 
         self.preview_texture = None;
         self.preview_texture_id = None;

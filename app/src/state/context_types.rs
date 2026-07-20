@@ -5,7 +5,7 @@ use crate::model::ui_types::{GizmoHandle, TimelineDisplayMode, Vec2Def};
 use crate::model::vector::VectorEditorState;
 
 use library::animation::EasingFunction; // Added import
-use library::model::project::{PortAddress, PortOwner};
+use library::model::project::{NodeContainer, PortAddress, PortOwner};
 use library::model::property::KeyframeId;
 use library::PropertyOwner;
 
@@ -505,6 +505,11 @@ pub struct NodeEditorState {
     /// position so geometry and containment share one history transaction.
     #[serde(skip)]
     pub moved_node_ids: std::collections::HashSet<Uuid>,
+    /// One physical Node-body drag, from the first observed Snarl position
+    /// change through primary release.  The snapshot is transient UI gesture
+    /// state; authoritative positions and containment remain in `Project`.
+    #[serde(skip)]
+    pub node_reparent: Option<NodeEditorReparentGesture>,
     /// Compositions whose legacy/fixture layout has already received its one
     /// automatic repair. Manual drags must remain exactly where the user left
     /// them on subsequent frames.
@@ -546,6 +551,25 @@ pub struct NodeEditorState {
     /// Persistent right-click menu for a canonical wire.
     #[serde(skip)]
     pub wire_context_menu: Option<NodeEditorWireContextMenu>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NodeEditorNodeDragOrigin {
+    pub container: NodeContainer,
+    pub position: [f32; 2],
+}
+
+#[derive(Clone, Debug)]
+pub struct NodeEditorReparentGesture {
+    pub origins: std::collections::HashMap<Uuid, NodeEditorNodeDragOrigin>,
+    /// Node whose body/header physically captured the pointer. Multi-select
+    /// drags use this Node's one target for the complete moved set.
+    pub primary_node_id: Option<Uuid>,
+    /// The deterministic target selected from the most recent rendered Node
+    /// rectangle. Exposed through QA state for hover/debug evidence only.
+    pub hovered_target: Option<NodeContainer>,
+    pub hovered_node_id: Option<Uuid>,
+    pub hovered_score: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -3,9 +3,17 @@ use crate::model::ui_types::Tab;
 use crate::state::context::EditorContext;
 use crate::state::context_types::NodeEditorEditableWire;
 use egui_dock::DockState;
-use library::model::project::Project;
+use library::model::project::{NodeContainer, Project};
 use serde_json::{json, Value};
 use std::sync::mpsc::SyncSender;
+
+fn node_container_key(container: NodeContainer) -> String {
+    match container {
+        NodeContainer::Composition(id) => format!("composition:{id}"),
+        NodeContainer::Track(id) => format!("track:{id}"),
+        NodeContainer::Clip(id) => format!("clip:{id}"),
+    }
+}
 
 /// A one-shot request from the loopback HTTP thread to the UI thread.
 ///
@@ -138,6 +146,17 @@ pub fn snapshot(
                 "context_menu_open": editor_context.node_editor_context_menu.is_some(),
                 "pending_navigation": editor_context.node_editor_state.pending_navigation,
                 "selected_connection_id": editor_context.node_editor_state.selected_connection_id,
+                "reparent_gesture": editor_context.node_editor_state.node_reparent.as_ref().map(|gesture| {
+                    let mut node_ids = gesture.origins.keys().copied().collect::<Vec<_>>();
+                    node_ids.sort_unstable();
+                    serde_json::json!({
+                        "node_ids": node_ids,
+                        "primary_node_id": gesture.primary_node_id,
+                        "hovered_target": gesture.hovered_target.map(node_container_key),
+                        "hovered_node_id": gesture.hovered_node_id,
+                        "hovered_score": gesture.hovered_score,
+                    })
+                }),
                 "wire_context_menu_open": editor_context
                     .node_editor_state
                     .wire_context_menu
