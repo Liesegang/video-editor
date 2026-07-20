@@ -1,7 +1,14 @@
+mod resize;
+mod selection;
 mod wire;
 
+pub(in crate::ui::panels::node_editor) use resize::container_resize_interactions;
+#[cfg(test)]
+pub(in crate::ui::panels::node_editor) use resize::{resize_regions, resized_container_geometry};
+pub(in crate::ui::panels::node_editor) use selection::node_selection_after_snarl_click;
 #[cfg(test)]
 pub(in crate::ui::panels::node_editor) use wire::register_edge_component;
+pub(in crate::ui::panels::node_editor) use wire::show_wire_context_menu;
 #[cfg(test)]
 pub(in crate::ui::panels::node_editor) use wire::{cubic_bezier_point, segments_intersect};
 pub(in crate::ui::panels::node_editor) use wire::{

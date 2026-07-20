@@ -1,5 +1,6 @@
 mod gesture;
 mod hit;
+mod menu;
 mod model;
 mod render;
 mod types;
@@ -15,6 +16,7 @@ pub(in crate::ui::panels::node_editor) use hit::{
     rendered_normal_port_at_position, rendered_port_at_position, rendered_wire_drag_kind,
     wire_secondary_click_hit,
 };
+pub(in crate::ui::panels::node_editor) use menu::show_wire_context_menu;
 pub(in crate::ui::panels::node_editor) use model::{
     edit_for_wire, embedded_pin_center, graph_item_owner,
 };
