@@ -26,7 +26,8 @@ pub(in crate::ui::panels::node_editor) use wire::{
     overview_wire_graph_points, wire_interactions, WireInteractionFrame,
 };
 pub(in crate::ui::panels::node_editor) use wire::{
-    register_container_chrome, register_rendered_edges,
+    register_container_chrome, register_implicit_time_context_wires, register_rendered_edges,
+    TimeContextNode,
 };
 pub(in crate::ui::panels::node_editor) use wire::{
     EdgeComponent, OverviewWirePainter, QaPin, RenderedEdge, RenderedEdgeKind, RenderedPortKey,

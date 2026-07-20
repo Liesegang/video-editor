@@ -1,8 +1,9 @@
 use eframe::egui::{self, Color32};
-use library::model::project::{PortDataType, PortDirection, PortOwner};
+use library::model::project::{PortAddress, PortDataType, PortDirection, PortOwner, TIME_PORT};
 use library::model::Project;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 
 use super::container_outputs::register_container_output_edges;
 use super::hit::cubic_bezier_point;
@@ -16,6 +17,14 @@ use crate::ui::panels::node_editor::{
     ContainerVisual, EdgeComponent, OverviewWirePainter, RenderedEdge, RenderedEdgeKind,
     RenderedPortKey,
 };
+use crate::ui::panels::time_context::{time_source_state, TimeSourceState};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::ui::panels::node_editor) struct TimeContextNode {
+    pub(in crate::ui::panels::node_editor) node_id: Uuid,
+    pub(in crate::ui::panels::node_editor) selected: bool,
+    pub(in crate::ui::panels::node_editor) hovered: bool,
+}
 
 pub(in crate::ui::panels::node_editor) fn register_container_chrome(
     container: &ContainerVisual,
@@ -159,6 +168,120 @@ pub(in crate::ui::panels::node_editor) fn register_rendered_edges(
         ));
     }
     rendered_edges
+}
+
+/// Paint transient runtime context without adding an editable/rendered edge.
+/// The returned count is diagnostic only; callers must keep `rendered_edges`
+/// restricted to physical authored/binding/derived wires.
+pub(in crate::ui::panels::node_editor) fn register_implicit_time_context_wires(
+    project: &Project,
+    rendered_ports: &Arc<Mutex<HashMap<RenderedPortKey, egui::Rect>>>,
+    nodes: &[TimeContextNode],
+    canvas_clip: egui::Rect,
+    painter: &egui::Painter,
+) -> usize {
+    let Ok(ports) = rendered_ports.lock() else {
+        return 0;
+    };
+    let mut rendered_count = 0;
+    for node in nodes {
+        let Some(state) = time_source_state(project, PortOwner::Node(node.node_id)) else {
+            continue;
+        };
+        let TimeSourceState::Inherited { from } = &state else {
+            continue;
+        };
+        let target = PortAddress::new(PortOwner::Node(node.node_id), TIME_PORT);
+        let Some(from_rect) = ports.get(&RenderedPortKey {
+            address: from.clone(),
+            direction: PortDirection::Output,
+            connection_id: None,
+        }) else {
+            continue;
+        };
+        let Some(to_rect) = ports.get(&RenderedPortKey {
+            address: target.clone(),
+            direction: PortDirection::Input,
+            connection_id: None,
+        }) else {
+            continue;
+        };
+        let start = from_rect.center();
+        let end = to_rect.center();
+        if ![start, end]
+            .iter()
+            .all(|position| position.x.is_finite() && position.y.is_finite())
+        {
+            continue;
+        }
+        let frame = ((end.x - start.x).abs() * 0.45).clamp(36.0, 110.0);
+        let control_a = start + egui::vec2(frame, 0.0);
+        let control_b = end - egui::vec2(frame, 0.0);
+        let points = (0..=24)
+            .map(|sample| {
+                cubic_bezier_point(start, control_a, control_b, end, sample as f32 / 24.0)
+            })
+            .collect::<Vec<_>>();
+        let unclipped_bbox =
+            egui::Rect::from_points(&[start, control_a, control_b, end]).expand(6.0);
+        let bbox = clipped_qa_rect(unclipped_bbox, canvas_clip);
+        if bbox.is_positive() {
+            painter.extend(egui::Shape::dashed_line(
+                &points,
+                egui::Stroke::new(1.35, pin_color(PortDataType::Number).gamma_multiply(0.62)),
+                6.0,
+                4.0,
+            ));
+        }
+
+        let component_id = format!("node_editor.time_context_wire.node:{}", node.node_id);
+        let mut metadata = state.qa_metadata(PortOwner::Node(node.node_id));
+        if let Some(metadata) = metadata.as_object_mut() {
+            metadata.insert("kind".to_string(), "implicit_time".into());
+            metadata.insert("selected".to_string(), node.selected.into());
+            metadata.insert("hovered".to_string(), node.hovered.into());
+            metadata.insert("dashed".to_string(), true.into());
+            metadata.insert("hit_testable".to_string(), false.into());
+            metadata.insert("wire_collection".to_string(), "context_only".into());
+            metadata.insert("visible".to_string(), bbox.is_positive().into());
+            metadata.insert(
+                "from".to_string(),
+                serde_json::json!({
+                    "owner": qa_container_key(from.owner),
+                    "port": from.port,
+                    "x": start.x,
+                    "y": start.y,
+                }),
+            );
+            metadata.insert(
+                "to".to_string(),
+                serde_json::json!({
+                    "owner": qa_container_key(target.owner),
+                    "port": target.port,
+                    "x": end.x,
+                    "y": end.y,
+                }),
+            );
+            metadata.insert(
+                "unclipped_rect".to_string(),
+                qa_rect_metadata(unclipped_bbox),
+            );
+        }
+        #[cfg(test)]
+        {
+            capture_test_rect(&component_id, bbox);
+            crate::ui::panels::node_editor::capture_test_metadata(&component_id, &metadata);
+        }
+        crate::qa::register_component_with_metadata(
+            component_id,
+            "node_time_context_wire",
+            bbox,
+            false,
+            Some(metadata),
+        );
+        rendered_count += 1;
+    }
+    rendered_count
 }
 
 pub(in crate::ui::panels::node_editor) fn register_edge_component(

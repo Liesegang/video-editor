@@ -24,7 +24,8 @@ pub(in crate::ui::panels::node_editor) use model::{
 #[cfg(test)]
 pub(in crate::ui::panels::node_editor) use render::register_edge_component;
 pub(in crate::ui::panels::node_editor) use render::{
-    register_container_chrome, register_rendered_edges,
+    register_container_chrome, register_implicit_time_context_wires, register_rendered_edges,
+    TimeContextNode,
 };
 pub(in crate::ui::panels::node_editor) use types::{
     EdgeComponent, OverviewWirePainter, QaPin, RenderedEdge, RenderedEdgeKind, RenderedPortKey,
