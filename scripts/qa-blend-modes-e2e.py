@@ -23,14 +23,42 @@ QaClient = BASE.QaClient
 QaFailure = BASE.QaFailure
 
 
-MODES = (
+CATALOG = (
+    ("normal", "Normal", "normal"),
+    ("dissolve", "Dissolve", "normal"),
+    ("behind", "Behind", "normal"),
+    ("clear", "Clear", "normal"),
+    ("darken", "Darken", "darken"),
+    ("multiply", "Multiply", "darken"),
+    ("color_burn", "ColorBurn", "darken"),
     ("linear_burn", "LinearBurn", "darken"),
+    ("darker_color", "DarkerColor", "darken"),
+    ("lighten", "Lighten", "lighten"),
+    ("screen", "Screen", "lighten"),
+    ("color_dodge", "ColorDodge", "lighten"),
+    ("linear_dodge", "LinearDodge", "lighten"),
+    ("lighter_color", "LighterColor", "lighten"),
+    ("overlay", "Overlay", "contrast"),
+    ("soft_light", "SoftLight", "contrast"),
+    ("hard_light", "HardLight", "contrast"),
     ("vivid_light", "VividLight", "contrast"),
+    ("linear_light", "LinearLight", "contrast"),
+    ("pin_light", "PinLight", "contrast"),
+    ("hard_mix", "HardMix", "contrast"),
+    ("difference", "Difference", "comparative"),
+    ("exclusion", "Exclusion", "comparative"),
+    ("subtract", "Subtract", "comparative"),
     ("divide", "Divide", "comparative"),
     ("hue", "Hue", "hsl"),
-    ("clear", "Clear", "normal"),
-    ("dissolve", "Dissolve", "normal"),
+    ("saturation", "Saturation", "hsl"),
+    ("color", "Color", "hsl"),
+    ("luminosity", "Luminosity", "hsl"),
 )
+
+# The fixture starts at Normal. Rotate the complete catalog so every selection
+# changes the Project exactly once, while Dissolve remains last for a focused
+# deterministic Undo/Redo check.
+MODES = CATALOG[2:] + CATALOG[:2]
 
 GROUPS = ("Normal", "Darken", "Lighten", "Contrast", "Comparative", "HSL")
 
@@ -233,6 +261,7 @@ def run_suite(client):
     current_serialized = target["blend_mode"]
     mutations = []
     hashes = []
+    hashes_by_mode = {}
 
     for qa_key, serialized, group_key in MODES:
         before, changed, rendered = choose_mode(
@@ -253,20 +282,21 @@ def run_suite(client):
             }
         )
         hashes.append(rendered["editor"]["preview"]["pixel_hash"])
+        hashes_by_mode[serialized] = rendered["editor"]["preview"]["pixel_hash"]
         current_key = qa_key
         current_serialized = serialized
 
     if len(set(hashes)) < 4:
         raise QaFailure("representative blend modes did not produce distinct Preview pixels")
-    if hashes[-1] == hashes[-2]:
+    if hashes_by_mode["Clear"] == hashes_by_mode["Dissolve"]:
         raise QaFailure("Clear and Dissolve produced the same Preview checksum")
 
     dissolve_connections = list(mutations[-1]["after_connections"])
-    clear_connections = list(mutations[-1]["before_connections"])
+    pre_dissolve_connections = list(mutations[-1]["before_connections"])
     undone = BASE.undo_project_edit(
         client,
         "Dissolve blend",
-        lambda project: project["connections"] == clear_connections,
+        lambda project: project["connections"] == pre_dissolve_connections,
     )
     undone_rendered = client.wait_preview_render_after(undone, "Dissolve Undo")
     redone = BASE.redo_project_edit(

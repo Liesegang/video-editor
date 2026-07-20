@@ -460,17 +460,45 @@ class QaRunnerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             RUNNER.suite_specs("unknown")
 
-    def test_blend_suite_samples_all_catalog_groups_and_masks_only_target_blend(self):
+    def test_blend_suite_covers_every_catalog_mode_group_and_masks_only_target_blend(self):
+        expected_catalog = (
+            ("normal", "Normal", "normal"),
+            ("dissolve", "Dissolve", "normal"),
+            ("behind", "Behind", "normal"),
+            ("clear", "Clear", "normal"),
+            ("darken", "Darken", "darken"),
+            ("multiply", "Multiply", "darken"),
+            ("color_burn", "ColorBurn", "darken"),
+            ("linear_burn", "LinearBurn", "darken"),
+            ("darker_color", "DarkerColor", "darken"),
+            ("lighten", "Lighten", "lighten"),
+            ("screen", "Screen", "lighten"),
+            ("color_dodge", "ColorDodge", "lighten"),
+            ("linear_dodge", "LinearDodge", "lighten"),
+            ("lighter_color", "LighterColor", "lighten"),
+            ("overlay", "Overlay", "contrast"),
+            ("soft_light", "SoftLight", "contrast"),
+            ("hard_light", "HardLight", "contrast"),
+            ("vivid_light", "VividLight", "contrast"),
+            ("linear_light", "LinearLight", "contrast"),
+            ("pin_light", "PinLight", "contrast"),
+            ("hard_mix", "HardMix", "contrast"),
+            ("difference", "Difference", "comparative"),
+            ("exclusion", "Exclusion", "comparative"),
+            ("subtract", "Subtract", "comparative"),
+            ("divide", "Divide", "comparative"),
+            ("hue", "Hue", "hsl"),
+            ("saturation", "Saturation", "hsl"),
+            ("color", "Color", "hsl"),
+            ("luminosity", "Luminosity", "hsl"),
+        )
+        self.assertEqual(BLEND.CATALOG, expected_catalog)
+        self.assertEqual(BLEND.MODES, expected_catalog[2:] + expected_catalog[:2])
+        self.assertEqual(len({item[0] for item in BLEND.MODES}), 29)
+        self.assertEqual(len({item[1] for item in BLEND.MODES}), 29)
         self.assertEqual(
-            BLEND.MODES,
-            (
-                ("linear_burn", "LinearBurn", "darken"),
-                ("vivid_light", "VividLight", "contrast"),
-                ("divide", "Divide", "comparative"),
-                ("hue", "Hue", "hsl"),
-                ("clear", "Clear", "normal"),
-                ("dissolve", "Dissolve", "normal"),
-            ),
+            {item[2] for item in BLEND.MODES},
+            {"normal", "darken", "lighten", "contrast", "comparative", "hsl"},
         )
         before = {
             "name": "fixture",
