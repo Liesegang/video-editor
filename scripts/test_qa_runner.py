@@ -278,6 +278,33 @@ class QaRunnerTests(unittest.TestCase):
             ],
         )
 
+    def test_scroll_and_pinch_evidence_records_coordinate_raw_input(self):
+        self.assertEqual(
+            E2E.expected_pointer_frames(
+                "scroll",
+                {"x": 12.0, "y": 34.0, "delta_x": 5.0, "delta_y": -6.0},
+            ),
+            [
+                {
+                    "kind": "scroll",
+                    "point": {"x": 12.0, "y": 34.0},
+                    "delta": {"x": 5.0, "y": -6.0},
+                }
+            ],
+        )
+        self.assertEqual(
+            E2E.expected_pointer_frames(
+                "pinch", {"x": 56.0, "y": 78.0, "factor": 1.25}
+            ),
+            [
+                {
+                    "kind": "pinch",
+                    "point": {"x": 56.0, "y": 78.0},
+                    "factor": 1.25,
+                }
+            ],
+        )
+
     def test_capture_clients_send_an_explicit_empty_body_post(self):
         EmptyCaptureHandler.bodies = []
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), EmptyCaptureHandler)
@@ -398,10 +425,12 @@ class QaRunnerTests(unittest.TestCase):
                 "node-editor",
                 "node-reparent",
                 "merge-reorder",
+                "composition-drop",
                 "node-wire",
                 "node-wire-selection",
                 "implicit-time",
                 "preview",
+                "preview-trackpad",
                 "transform-preview",
             ],
         )
@@ -411,6 +440,12 @@ class QaRunnerTests(unittest.TestCase):
             if item.name == "transform-preview"
         )
         self.assertEqual(transform.fixture, "transform_preview_e2e")
+        composition_drop = next(
+            item
+            for item in RUNNER.suite_specs("full")
+            if item.name == "composition-drop"
+        )
+        self.assertEqual(composition_drop.fixture, "composition_drop_e2e")
         with self.assertRaises(ValueError):
             RUNNER.suite_specs("unknown")
 

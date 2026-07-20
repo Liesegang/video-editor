@@ -18,7 +18,7 @@ use crate::state::context::EditorContext;
 use crate::state::context_types::SelectionTarget;
 
 use crate::command::CommandId;
-use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
+use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportInputPolicy, ViewportState};
 
 struct GraphViewportState<'a> {
     pan: &'a mut Vec2,
@@ -282,7 +282,7 @@ pub fn graph_editor_panel(
                 let mut controller =
                     ViewportController::new(ui, ui.id().with("graph"), hand_tool_key).with_config(
                         ViewportConfig {
-                            zoom_uniform: false,
+                            input_policy: ViewportInputPolicy::AxisModifiers,
                             allow_zoom_x: true,
                             allow_zoom_y: true,
                             ..Default::default()
