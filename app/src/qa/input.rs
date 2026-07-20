@@ -712,7 +712,7 @@ mod tests {
         for _ in 0..3 {
             let mut raw_input = egui::RawInput::default();
             sequencer.inject_for_frame(&context, &mut raw_input, 1.0);
-            let _ = context.run(raw_input, |context| {
+            let _output = context.run(raw_input, |context| {
                 let modifiers = context.input(|input| input.modifiers);
                 assert!(modifiers.shift);
                 assert!(modifiers.command);
@@ -722,7 +722,7 @@ mod tests {
 
         let mut raw_input = egui::RawInput::default();
         sequencer.inject_for_frame(&context, &mut raw_input, 1.0);
-        let _ = context.run(raw_input, |context| {
+        let _output = context.run(raw_input, |context| {
             let modifiers = context.input(|input| input.modifiers);
             assert!(!modifiers.shift);
             assert!(!modifiers.command);

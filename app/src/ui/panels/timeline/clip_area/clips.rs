@@ -1920,7 +1920,7 @@ mod tests {
                 events,
                 ..egui::RawInput::default()
             };
-            let _ = context.run(input, |context| {
+            let _output = context.run(input, |context| {
                 egui::CentralPanel::default().show(context, |ui| {
                     let response = ui.interact(
                         egui::Rect::from_min_max(egui::pos2(20.0, 40.0), egui::pos2(220.0, 120.0)),
