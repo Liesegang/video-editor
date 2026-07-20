@@ -304,6 +304,11 @@ fn verify_config_operations(
 }
 
 fn verify_runtime_loader(manager: &PluginManager) -> anyhow::Result<()> {
+    verify_runtime_image_loader(manager)?;
+    verify_runtime_video_loader(manager)
+}
+
+fn verify_runtime_image_loader(manager: &PluginManager) -> anyhow::Result<()> {
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_nanos();
@@ -367,6 +372,103 @@ fn verify_runtime_loader(manager: &PluginManager) -> anyhow::Result<()> {
     })();
     let cleanup_result = std::fs::remove_file(&path)
         .with_context(|| format!("failed to remove runtime fixture {path_text}"));
+    match result {
+        Err(error) => Err(error),
+        Ok(()) => cleanup_result,
+    }
+}
+
+fn verify_runtime_video_loader(manager: &PluginManager) -> anyhow::Result<()> {
+    const SOURCE_TIME: f64 = 1.25;
+    const STREAM_INDEX: usize = 7;
+    const INPUT_COLOR_SPACE: &str = "fixture-linear";
+    const OUTPUT_COLOR_SPACE: &str = "fixture-display";
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "ruvie-runtime-video-loader-{}-{unique}.rgba-video-fixture",
+        std::process::id()
+    ));
+    let mut fixture = b"RUVVID01".to_vec();
+    fixture.extend_from_slice(&2_u32.to_le_bytes());
+    fixture.extend_from_slice(&1_u32.to_le_bytes());
+    fixture.extend_from_slice(&SOURCE_TIME.to_le_bytes());
+    fixture.extend_from_slice(&u32::try_from(STREAM_INDEX)?.to_le_bytes());
+    fixture.extend_from_slice(&u16::try_from(INPUT_COLOR_SPACE.len())?.to_le_bytes());
+    fixture.extend_from_slice(&u16::try_from(OUTPUT_COLOR_SPACE.len())?.to_le_bytes());
+    fixture.extend_from_slice(INPUT_COLOR_SPACE.as_bytes());
+    fixture.extend_from_slice(OUTPUT_COLOR_SPACE.as_bytes());
+    fixture.extend_from_slice(&[11, 22, 33, 255, 44, 55, 66, 128]);
+    std::fs::write(&path, &fixture)?;
+    let path_text = path.to_string_lossy().into_owned();
+    let request = |source_time| LoadRequest::VideoFrame {
+        path: path_text.clone(),
+        source_time,
+        stream_index: Some(STREAM_INDEX),
+        input_color_space: Some(INPUT_COLOR_SPACE.to_string()),
+        output_color_space: Some(OUTPUT_COLOR_SPACE.to_string()),
+    };
+    let result = (|| -> anyhow::Result<()> {
+        let streams = manager
+            .get_available_streams(&path_text)?
+            .context("runtime Loader did not inspect its custom video path")?;
+        let stream = streams
+            .first()
+            .context("runtime Loader returned no custom video stream")?;
+        if stream.kind != library::model::asset::AssetKind::Video
+            || stream.duration != Some(2.0)
+            || stream.fps != Some(24.0)
+            || stream.width != Some(2)
+            || stream.height != Some(1)
+            || stream.stream_index != Some(STREAM_INDEX)
+            || stream.frame_count != Some(48)
+            || stream.time_base != Some((1, 24))
+        {
+            bail!("runtime Loader returned wrong custom video metadata: {stream:?}")
+        }
+
+        let wrong_request_error = match manager.load_resource(&request(0.5), &CacheManager::new()) {
+            Ok(_) => bail!("runtime Loader accepted incorrect video request metadata"),
+            Err(error) => error.to_string(),
+        };
+        if !wrong_request_error.contains(&path_text)
+            || !wrong_request_error.contains("video request metadata mismatch")
+            || wrong_request_error.contains("No compatible load plugin")
+        {
+            bail!(
+                "runtime Loader did not validate transported video metadata: {wrong_request_error}"
+            )
+        }
+
+        let loaded = manager.load_resource(&request(SOURCE_TIME), &CacheManager::new())?;
+        if loaded.image.width != 2
+            || loaded.image.height != 1
+            || loaded.image.data != [11, 22, 33, 255, 44, 55, 66, 128]
+        {
+            bail!("runtime Loader returned wrong custom video pixels")
+        }
+
+        let corrupt_len = fixture
+            .len()
+            .checked_sub(4)
+            .context("custom video fixture is unexpectedly short")?;
+        std::fs::write(&path, &fixture[..corrupt_len])?;
+        let error = match manager.load_resource(&request(SOURCE_TIME), &CacheManager::new()) {
+            Ok(_) => bail!("corrupt runtime video fixture unexpectedly decoded"),
+            Err(error) => error.to_string(),
+        };
+        if !error.contains(&path_text)
+            || !error.contains("fixture payload length")
+            || error.contains("No compatible load plugin")
+        {
+            bail!("runtime video Loader lost the real path/cause: {error}")
+        }
+        Ok(())
+    })();
+    let cleanup_result = std::fs::remove_file(&path)
+        .with_context(|| format!("failed to remove runtime video fixture {path_text}"));
     match result {
         Err(error) => Err(error),
         Ok(()) => cleanup_result,

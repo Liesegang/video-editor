@@ -12,10 +12,12 @@ use ruvie_plugin_api::{
     RuvieEffectCpuRgba8ApiV1, RuvieExtensionResultV1, RuvieLoaderCpuRgba8ApiV1,
     RuvieLoaderRequestV1, RuvieOwnedRgba8FrameV1, RuviePluginApiV1, RuviePropertyMapViewV1,
     RuvieRgba8FrameViewV1, StrokeCapV1, StrokeJoinV1, StyleEvaluateRequestV1, StyleOutputV1,
-    ALPHA_MODE_STRAIGHT_V1, ASSET_KIND_IMAGE_V1, ASSET_METADATA_DIMENSIONS_V1,
-    COLOR_PROFILE_SRGB_V1, DECORATOR_CATEGORY, DECORATOR_EVALUATE_V1, EFFECT_CATEGORY,
-    EFFECT_CPU_RGBA8_EXTENSION_V1, EFFECT_PROCESS_CPU_RGBA8_V1, LOADER_CATEGORY,
-    LOADER_CPU_RGBA8_EXTENSION_V1, LOADER_LOAD_CPU_RGBA8_V1, LOADER_OPEN_V1, LOAD_REQUEST_IMAGE_V1,
+    ALPHA_MODE_STRAIGHT_V1, ASSET_KIND_IMAGE_V1, ASSET_KIND_VIDEO_V1, ASSET_METADATA_DIMENSIONS_V1,
+    ASSET_METADATA_DURATION_V1, ASSET_METADATA_FPS_V1, ASSET_METADATA_FRAME_COUNT_V1,
+    ASSET_METADATA_STREAM_INDEX_V1, ASSET_METADATA_TIME_BASE_V1, COLOR_PROFILE_SRGB_V1,
+    DECORATOR_CATEGORY, DECORATOR_EVALUATE_V1, EFFECT_CATEGORY, EFFECT_CPU_RGBA8_EXTENSION_V1,
+    EFFECT_PROCESS_CPU_RGBA8_V1, LOADER_CATEGORY, LOADER_CPU_RGBA8_EXTENSION_V1,
+    LOADER_LOAD_CPU_RGBA8_V1, LOADER_OPEN_V1, LOAD_REQUEST_IMAGE_V1, LOAD_REQUEST_VIDEO_FRAME_V1,
     MAX_CPU_RGBA8_DIMENSION_V1, MAX_CPU_RGBA8_FRAME_BYTES_V1, MAX_STYLE_DASH_INTERVALS_V1,
     PROPERTY_CATEGORY, PROPERTY_EVALUATE_V1, PROPERTY_VALUE_INTEGER_V1, RUVIE_PLUGIN_ABI_V1,
     STATUS_INVALID_REQUEST, STATUS_PANIC, STATUS_PLUGIN_ERROR, STYLE_CATEGORY, STYLE_EVALUATE_V1,
@@ -842,11 +844,38 @@ unsafe extern "C" fn effect_process(
 
 unsafe extern "C" fn effect_release_instance(_context: *mut c_void, _instance: u64) {}
 
-const FIXTURE_MAGIC: &[u8; 8] = b"RUVRGBA1";
+const IMAGE_FIXTURE_MAGIC: &[u8; 8] = b"RUVRGBA1";
+const VIDEO_FIXTURE_MAGIC: &[u8; 8] = b"RUVVID01";
+const IMAGE_FIXTURE_SUFFIX: &str = ".rgba-fixture";
+const VIDEO_FIXTURE_SUFFIX: &str = ".rgba-video-fixture";
+const VIDEO_DURATION_SECONDS: f64 = 2.0;
+const VIDEO_FPS: f64 = 24.0;
+const VIDEO_FRAME_COUNT: u64 = 48;
 
-fn read_rgba_fixture(path: &str) -> Result<(u32, u32, Vec<u8>), String> {
+enum FixtureRequest {
+    Image,
+    Video {
+        source_time: f64,
+        stream_index: u32,
+        input_color_space: String,
+        output_color_space: String,
+    },
+}
+
+struct RgbaFixture {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+    request: FixtureRequest,
+}
+
+fn fixture_path_is_supported(path: &str) -> bool {
+    path.ends_with(IMAGE_FIXTURE_SUFFIX) || path.ends_with(VIDEO_FIXTURE_SUFFIX)
+}
+
+fn read_rgba_fixture(path: &str) -> Result<RgbaFixture, String> {
     let bytes = std::fs::read(path).map_err(|error| format!("could not read fixture: {error}"))?;
-    if bytes.len() < 16 || &bytes[..8] != FIXTURE_MAGIC {
+    if bytes.len() < 16 {
         return Err("fixture header magic is invalid".to_string());
     }
     let width = u32::from_le_bytes(bytes[8..12].try_into().unwrap_or_default());
@@ -863,13 +892,69 @@ fn read_rgba_fixture(path: &str) -> Result<(u32, u32, Vec<u8>), String> {
         .and_then(|width| width.checked_mul(4))
         .and_then(|row| row.checked_mul(usize::try_from(height).unwrap_or(usize::MAX)))
         .ok_or_else(|| "fixture pixel length overflow".to_string())?;
-    if expected_pixels > MAX_CPU_RGBA8_FRAME_BYTES_V1 || bytes.len() != 16 + expected_pixels {
+    if expected_pixels > MAX_CPU_RGBA8_FRAME_BYTES_V1 {
+        return Err("fixture pixel length exceeds the ABI limit".to_string());
+    }
+
+    let (request, pixels_offset) = if &bytes[..8] == IMAGE_FIXTURE_MAGIC {
+        (FixtureRequest::Image, 16)
+    } else if &bytes[..8] == VIDEO_FIXTURE_MAGIC {
+        if bytes.len() < 32 {
+            return Err("video fixture request header is truncated".to_string());
+        }
+        let source_time = f64::from_le_bytes(bytes[16..24].try_into().unwrap_or_default());
+        if !source_time.is_finite() || source_time < 0.0 {
+            return Err("video fixture source time is invalid".to_string());
+        }
+        let stream_index = u32::from_le_bytes(bytes[24..28].try_into().unwrap_or_default());
+        let input_len = usize::from(u16::from_le_bytes(
+            bytes[28..30].try_into().unwrap_or_default(),
+        ));
+        let output_len = usize::from(u16::from_le_bytes(
+            bytes[30..32].try_into().unwrap_or_default(),
+        ));
+        let input_end = 32_usize
+            .checked_add(input_len)
+            .ok_or_else(|| "video fixture request header length overflow".to_string())?;
+        let output_end = input_end
+            .checked_add(output_len)
+            .ok_or_else(|| "video fixture request header length overflow".to_string())?;
+        if bytes.len() < output_end {
+            return Err("video fixture request header is truncated".to_string());
+        }
+        let input_color_space = std::str::from_utf8(&bytes[32..input_end])
+            .map_err(|error| format!("video fixture input color space is invalid: {error}"))?
+            .to_string();
+        let output_color_space = std::str::from_utf8(&bytes[input_end..output_end])
+            .map_err(|error| format!("video fixture output color space is invalid: {error}"))?
+            .to_string();
+        (
+            FixtureRequest::Video {
+                source_time,
+                stream_index,
+                input_color_space,
+                output_color_space,
+            },
+            output_end,
+        )
+    } else {
+        return Err("fixture header magic is invalid".to_string());
+    };
+    let expected_len = pixels_offset
+        .checked_add(expected_pixels)
+        .ok_or_else(|| "fixture payload length overflow".to_string())?;
+    if bytes.len() != expected_len {
         return Err(format!(
             "fixture payload length {} does not match expected {expected_pixels}",
-            bytes.len().saturating_sub(16)
+            bytes.len().saturating_sub(pixels_offset)
         ));
     }
-    Ok((width, height, bytes[16..].to_vec()))
+    Ok(RgbaFixture {
+        width,
+        height,
+        pixels: bytes[pixels_offset..].to_vec(),
+        request,
+    })
 }
 
 unsafe extern "C" fn loader_open(
@@ -891,26 +976,54 @@ unsafe extern "C" fn loader_open(
             Ok(value) => value,
             Err(error) => return invalid_extension(error),
         };
-        if component_id != LOADER_COMPONENT_ID || !path.ends_with(".rgba-fixture") {
+        if component_id != LOADER_COMPONENT_ID || !fixture_path_is_supported(path) {
             return RuvieExtensionResultV1::unsupported();
         }
         if metadata.is_null() || out_metadata_len.is_null() || metadata_capacity < 1 {
             return invalid_extension("Loader metadata output is invalid");
         }
-        let (width, height, _) = match read_rgba_fixture(path) {
+        let fixture = match read_rgba_fixture(path) {
             Ok(value) => value,
             Err(error) => return RuvieExtensionResultV1::error(STATUS_PLUGIN_ERROR, error),
+        };
+        let value = match &fixture.request {
+            FixtureRequest::Image if path.ends_with(IMAGE_FIXTURE_SUFFIX) => RuvieAssetMetadataV1 {
+                kind: ASSET_KIND_IMAGE_V1,
+                present_fields: ASSET_METADATA_DIMENSIONS_V1,
+                width: fixture.width,
+                height: fixture.height,
+                ..RuvieAssetMetadataV1::default()
+            },
+            FixtureRequest::Video { stream_index, .. } if path.ends_with(VIDEO_FIXTURE_SUFFIX) => {
+                RuvieAssetMetadataV1 {
+                    kind: ASSET_KIND_VIDEO_V1,
+                    present_fields: ASSET_METADATA_DURATION_V1
+                        | ASSET_METADATA_FPS_V1
+                        | ASSET_METADATA_DIMENSIONS_V1
+                        | ASSET_METADATA_STREAM_INDEX_V1
+                        | ASSET_METADATA_FRAME_COUNT_V1
+                        | ASSET_METADATA_TIME_BASE_V1,
+                    duration_seconds: VIDEO_DURATION_SECONDS,
+                    fps: VIDEO_FPS,
+                    width: fixture.width,
+                    height: fixture.height,
+                    stream_index: *stream_index,
+                    frame_count: VIDEO_FRAME_COUNT,
+                    time_base_numerator: 1,
+                    time_base_denominator: VIDEO_FPS as i32,
+                }
+            }
+            FixtureRequest::Image | FixtureRequest::Video { .. } => {
+                return RuvieExtensionResultV1::error(
+                    STATUS_PLUGIN_ERROR,
+                    "fixture magic does not match its path suffix",
+                );
+            }
         };
         // SAFETY: Capacity is at least one and both output pointers were
         // checked. The host initialized and owns this memory.
         unsafe {
-            *metadata = RuvieAssetMetadataV1 {
-                kind: ASSET_KIND_IMAGE_V1,
-                present_fields: ASSET_METADATA_DIMENSIONS_V1,
-                width,
-                height,
-                ..RuvieAssetMetadataV1::default()
-            };
+            *metadata = value;
             *out_metadata_len = 1;
         }
         RuvieExtensionResultV1::ok()
@@ -942,17 +1055,56 @@ unsafe extern "C" fn loader_load(
             Ok(value) => value,
             Err(error) => return invalid_extension(error),
         };
-        if component_id != LOADER_COMPONENT_ID
-            || request.request_kind != LOAD_REQUEST_IMAGE_V1
-            || !path.ends_with(".rgba-fixture")
-        {
+        if component_id != LOADER_COMPONENT_ID || !fixture_path_is_supported(path) {
             return RuvieExtensionResultV1::unsupported();
         }
-        let (width, height, pixels) = match read_rgba_fixture(path) {
+        let fixture = match read_rgba_fixture(path) {
             Ok(value) => value,
             Err(error) => return RuvieExtensionResultV1::error(STATUS_PLUGIN_ERROR, error),
         };
-        let stride_bytes = usize::try_from(width)
+        match &fixture.request {
+            FixtureRequest::Image
+                if request.request_kind == LOAD_REQUEST_IMAGE_V1
+                    && path.ends_with(IMAGE_FIXTURE_SUFFIX) => {}
+            FixtureRequest::Video {
+                source_time,
+                stream_index,
+                input_color_space,
+                output_color_space,
+            } if request.request_kind == LOAD_REQUEST_VIDEO_FRAME_V1
+                && path.ends_with(VIDEO_FIXTURE_SUFFIX) =>
+            {
+                // SAFETY: Color-space names are callback-scoped host views.
+                let input = match unsafe { utf8_from_view(request.input_color_space) } {
+                    Ok(value) => value,
+                    Err(error) => return invalid_extension(error),
+                };
+                // SAFETY: Same borrowed-view contract as above.
+                let output = match unsafe { utf8_from_view(request.output_color_space) } {
+                    Ok(value) => value,
+                    Err(error) => return invalid_extension(error),
+                };
+                if request.source_time.to_bits() != source_time.to_bits()
+                    || request.has_stream_index != 1
+                    || request.stream_index != *stream_index
+                    || input != input_color_space
+                    || output != output_color_space
+                {
+                    return RuvieExtensionResultV1::error(
+                        STATUS_PLUGIN_ERROR,
+                        format!(
+                            "video request metadata mismatch: time={}, stream={:?}, input={input:?}, output={output:?}",
+                            request.source_time,
+                            (request.has_stream_index == 1).then_some(request.stream_index),
+                        ),
+                    );
+                }
+            }
+            FixtureRequest::Image | FixtureRequest::Video { .. } => {
+                return RuvieExtensionResultV1::unsupported();
+            }
+        }
+        let stride_bytes = usize::try_from(fixture.width)
             .ok()
             .and_then(|width| width.checked_mul(4))
             .unwrap_or_default();
@@ -961,12 +1113,12 @@ unsafe extern "C" fn loader_load(
         unsafe {
             *output = RuvieOwnedRgba8FrameV1 {
                 struct_size: std::mem::size_of::<RuvieOwnedRgba8FrameV1>(),
-                width,
-                height,
+                width: fixture.width,
+                height: fixture.height,
                 stride_bytes,
                 alpha_mode: ALPHA_MODE_STRAIGHT_V1,
                 color_profile: COLOR_PROFILE_SRGB_V1,
-                pixels: RuvieBuffer::from_vec(pixels),
+                pixels: RuvieBuffer::from_vec(fixture.pixels),
             }
         };
         RuvieExtensionResultV1::ok()

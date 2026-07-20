@@ -74,12 +74,15 @@ contains neither `app` nor `library`, installs the bundle, and runs the
 unchanged prebuilt probe. The probe executes an explicit
 `Text -> runtime Backplate -> runtime Fill -> runtime Effect -> Clip` Project
 graph through the Frame evaluator and CPU renderer, then verifies the exact
-post-Effect visible pixel family. It also writes representative fixture bytes,
-loads them through the post-build Loader by path, and proves a corrupt fixture
-retains its path and decoder cause. The explicitly ignored external integration
-test concurrently rescans the bundle and uses plugin-side instrumentation to
-prove the descriptor callback ran exactly once; it cannot pass by silently
-skipping when the bundle is absent.
+post-Effect visible pixel family. It also loads image and custom-video fixture
+bytes through the post-build Loader by path. The video proof traverses the
+native Image and FFmpeg fallthrough before validating source time, stream
+selection, color-space names, video metadata, and pixels inside the dynamic
+plugin. Corrupt image and video fixtures retain their path and decoder cause.
+The explicitly ignored external integration test concurrently rescans the
+bundle and uses plugin-side instrumentation to prove the descriptor callback
+ran exactly once; it cannot pass by silently skipping when the bundle is
+absent.
 Set `CARGO_TARGET_DIR` to reuse its isolated
 `runtime-plugin-e2e/host` and `runtime-plugin-e2e/sample` build caches. When
 the variable is absent, both targets live under a self-cleaning temporary
