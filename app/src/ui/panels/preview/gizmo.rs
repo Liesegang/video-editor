@@ -243,6 +243,21 @@ pub fn draw_gizmo(
     let Some(spatial_layer) = visual.spatial_layer(spatial_id) else {
         return;
     };
+    if crate::qa::is_enabled() {
+        crate::qa::register_component_with_metadata(
+            "preview.gizmo.bounds",
+            "preview_gizmo",
+            Rect::from_points(&corners),
+            interaction_enabled,
+            Some(serde_json::json!({
+                "owner": edit_target.owner,
+                "content_node_id": edit_target.content_node_id,
+                "spatial_node_id": spatial_id,
+                "instance_path": &edit_target.instance_path,
+                "action": "transform_selected_preview_owner",
+            })),
+        );
+    }
     let rotation_distance = 10.0 / editor_context.view.zoom;
     let rotation_pos = top
         + egui::vec2(
@@ -270,14 +285,28 @@ pub fn draw_gizmo(
 
     for (position, handle, cursor) in handles {
         ui.painter().circle_filled(position, 5.0, color);
+        let handle_rect = Rect::from_center_size(position, Vec2::splat(15.0));
+        if crate::qa::is_enabled() {
+            let handle_name = gizmo_handle_name(handle);
+            crate::qa::register_component_with_metadata(
+                format!("preview.gizmo.handle:{handle_name}"),
+                "preview_gizmo_handle",
+                handle_rect,
+                interaction_enabled,
+                Some(serde_json::json!({
+                    "owner": edit_target.owner,
+                    "content_node_id": edit_target.content_node_id,
+                    "spatial_node_id": spatial_id,
+                    "instance_path": &edit_target.instance_path,
+                    "handle": handle_name,
+                    "action": "drag_preview_gizmo_handle",
+                })),
+            );
+        }
         if !interaction_enabled {
             continue;
         }
-        let response = ui.interact(
-            Rect::from_center_size(position, Vec2::splat(15.0)),
-            ui.id().with(handle),
-            Sense::drag(),
-        );
+        let response = ui.interact(handle_rect, ui.id().with(handle), Sense::drag());
         if response.hovered() {
             ui.ctx().set_cursor_icon(cursor);
         }
@@ -320,6 +349,20 @@ pub fn draw_gizmo(
                     original_height: height,
                 });
         }
+    }
+}
+
+const fn gizmo_handle_name(handle: GizmoHandle) -> &'static str {
+    match handle {
+        GizmoHandle::TopLeft => "top_left",
+        GizmoHandle::Top => "top",
+        GizmoHandle::TopRight => "top_right",
+        GizmoHandle::Left => "left",
+        GizmoHandle::Right => "right",
+        GizmoHandle::BottomLeft => "bottom_left",
+        GizmoHandle::Bottom => "bottom",
+        GizmoHandle::BottomRight => "bottom_right",
+        GizmoHandle::Rotation => "rotation",
     }
 }
 
