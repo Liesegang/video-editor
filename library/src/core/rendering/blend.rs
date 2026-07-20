@@ -124,10 +124,11 @@ impl BlendRuntime {
                 })?;
             self.dissolve_effect = Some(effect);
         }
-        let effect = self
-            .dissolve_effect
-            .as_ref()
-            .expect("Dissolve effect was initialized above");
+        let effect = self.dissolve_effect.as_ref().ok_or_else(|| {
+            LibraryError::Render(
+                "Dissolve runtime cache remained empty after compilation".to_string(),
+            )
+        })?;
         let child = image.to_shader(None, sampling, None).ok_or_else(|| {
             LibraryError::Render("Failed to create Dissolve source image shader".to_string())
         })?;
