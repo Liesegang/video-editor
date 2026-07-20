@@ -1,4 +1,4 @@
-use super::utils::time_mapper_for_entity;
+use super::utils::time_mapper_for_owner;
 use super::PropertyComponent;
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
@@ -106,7 +106,7 @@ fn prepare_move_batch(
     let node = project
         .get_node(entity_id)
         .ok_or_else(|| format!("Graph Node {entity_id} does not exist"))?;
-    let mapper = time_mapper_for_entity(project, entity_id);
+    let mapper = time_mapper_for_owner(project, PropertyOwner::Node(entity_id));
     let mut prepared: Vec<PreparedMove> = Vec::new();
 
     for movement in moves {
@@ -246,7 +246,8 @@ pub fn process_action(
             let prepared = project.read().ok().and_then(|project| {
                 let composition = project.get_composition(comp_id)?;
                 let node = project.get_node(entity_id)?;
-                let source_time = time_mapper_for_entity(&project, entity_id).to_source_time(time);
+                let source_time = time_mapper_for_owner(&project, PropertyOwner::Node(entity_id))
+                    .to_source_time(time);
                 let current = node.properties().get(&property_key).map(|property| {
                     project_service.evaluate_property_value(
                         property,
@@ -356,7 +357,7 @@ pub fn process_action(
                         .read()
                         .ok()
                         .map_or(keyframe.time.into_inner(), |project| {
-                            time_mapper_for_entity(&project, entity_id)
+                            time_mapper_for_owner(&project, PropertyOwner::Node(entity_id))
                                 .to_global_time(keyframe.time.into_inner())
                         });
                 editor_context.keyframe_dialog.value = match component {

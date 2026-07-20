@@ -1,4 +1,5 @@
 use crate::state::context::EditorContext;
+use crate::state::context_types::SelectionTarget;
 use crate::ui::panels::preview::{
     action::PreviewAction,
     clip::{visual_for_selection, PreviewClip},
@@ -81,14 +82,7 @@ impl<'a> PreviewInteractions<'a> {
                 pending_actions,
             );
         } else if active_tool == crate::state::context_types::PreviewTool::Shape {
-            if let Some(id) = self
-                .editor_context
-                .selection
-                .selected_entities
-                .iter()
-                .next()
-                .copied()
-            {
+            if let Some(SelectionTarget::Node(id)) = self.editor_context.selection.primary() {
                 if let Some(gc) = visual_for_selection(
                     self.gui_clips,
                     id,
@@ -174,6 +168,7 @@ impl<'a> PreviewInteractions<'a> {
             if response.drag_started_by(PointerButton::Primary) {
                 if let Some(hit) = hovered_hit.as_ref() {
                     let hovered = hit.node_id;
+                    let target = SelectionTarget::Node(hovered);
                     // Started drag on an entity
                     // Ensure it is selected (if not modifier click)
                     // If Shift/Ctrl is held, we might be adding it to selection?
@@ -181,34 +176,30 @@ impl<'a> PreviewInteractions<'a> {
                     // If not selected, select it.
                     let modifiers = self.ui.input(|i| i.modifiers);
                     let action = crate::ui::selection::SelectionAction::from_modifiers(&modifiers);
-                    let track_id = self.get_track_id(hovered, Some(&hit.instance_path));
                     let mut should_drag = true;
 
                     match action {
                         crate::ui::selection::SelectionAction::Remove => {
-                            if self.editor_context.is_selected(hovered) {
-                                self.editor_context
-                                    .toggle_entity_selection(hovered, track_id);
+                            if self.editor_context.is_selected(target) {
+                                self.editor_context.remove_selection(target);
                             }
                             should_drag = false;
                         }
                         crate::ui::selection::SelectionAction::Add
                         | crate::ui::selection::SelectionAction::Toggle => {
-                            if !self.editor_context.is_selected(hovered) {
-                                self.editor_context
-                                    .toggle_entity_selection(hovered, track_id);
+                            if !self.editor_context.is_selected(target) {
+                                self.editor_context.add_selection(target);
                             }
                         }
                         crate::ui::selection::SelectionAction::Replace => {
-                            if !self.editor_context.is_selected(hovered) {
-                                self.editor_context.select_entity(hovered, track_id);
+                            if !self.editor_context.is_selected(target) {
+                                self.editor_context.select_target(target);
                             }
                         }
                     }
 
-                    if should_drag && self.editor_context.is_selected(hovered) {
-                        self.editor_context.selection.last_selected_entity_id = Some(hovered);
-                        self.editor_context.selection.last_selected_track_id = track_id;
+                    if should_drag && self.editor_context.is_selected(target) {
+                        self.editor_context.set_primary_selection(target);
                         self.editor_context
                             .interaction
                             .preview_selected_instance_path = Some(hit.instance_path.clone());
@@ -312,10 +303,12 @@ impl<'a> PreviewInteractions<'a> {
     fn init_drag_state(&mut self, pointer_pos: Option<Pos2>) {
         if let Some(pointer_pos) = pointer_pos {
             let mut original_positions = std::collections::HashMap::new();
-            for selected_id in &self.editor_context.selection.selected_entities {
-                let instance_path = if Some(*selected_id)
-                    == self.editor_context.selection.last_selected_entity_id
-                {
+            let primary = self.editor_context.selection.primary();
+            for target in self.editor_context.selection.targets() {
+                let SelectionTarget::Node(selected_id) = *target else {
+                    continue;
+                };
+                let instance_path = if Some(*target) == primary {
                     self.editor_context
                         .interaction
                         .preview_selected_instance_path
@@ -323,10 +316,9 @@ impl<'a> PreviewInteractions<'a> {
                 } else {
                     None
                 };
-                if let Some(gc) = visual_for_selection(self.gui_clips, *selected_id, instance_path)
-                {
+                if let Some(gc) = visual_for_selection(self.gui_clips, selected_id, instance_path) {
                     original_positions.insert(
-                        *selected_id,
+                        selected_id,
                         [
                             gc.source_transform.position.x as f32,
                             gc.source_transform.position.y as f32,
@@ -343,7 +335,7 @@ impl<'a> PreviewInteractions<'a> {
     }
 
     fn handle_click_selection(&mut self, hovered_hit: Option<&PreviewHit>) {
-        let hovered_id = hovered_hit.map(|hit| hit.node_id);
+        let hovered_target = hovered_hit.map(|hit| SelectionTarget::Node(hit.node_id));
         if self.editor_context.view.active_tool == crate::state::context_types::PreviewTool::Text {
             if let Some(hit) = hovered_hit {
                 let id = hit.node_id;
@@ -374,64 +366,52 @@ impl<'a> PreviewInteractions<'a> {
 
         let modifiers = self.ui.input(|i| i.modifiers);
 
-        let action = crate::ui::selection::get_click_action(&modifiers, hovered_id);
+        let action = crate::ui::selection::get_click_action(&modifiers, hovered_target);
 
         match action {
-            crate::ui::selection::ClickAction::Select(id) => {
+            crate::ui::selection::ClickAction::Select(target) => {
                 let instance_path = hovered_hit
-                    .filter(|hit| hit.node_id == id)
+                    .filter(|hit| target == SelectionTarget::Node(hit.node_id))
                     .map(|hit| hit.instance_path.clone());
-                let track_id = self.get_track_id(id, instance_path.as_deref());
-                self.editor_context.select_entity(id, track_id);
+                self.editor_context.select_target(target);
                 self.editor_context
                     .interaction
                     .preview_selected_instance_path = instance_path;
             }
-            crate::ui::selection::ClickAction::Add(id) => {
+            crate::ui::selection::ClickAction::Add(target) => {
                 let instance_path = hovered_hit
-                    .filter(|hit| hit.node_id == id)
+                    .filter(|hit| target == SelectionTarget::Node(hit.node_id))
                     .map(|hit| hit.instance_path.clone());
-                let track_id = self.get_track_id(id, instance_path.as_deref());
-                if !self.editor_context.is_selected(id) {
-                    self.editor_context.toggle_entity_selection(id, track_id);
+                if !self.editor_context.is_selected(target) {
+                    self.editor_context.add_selection(target);
                     self.editor_context
                         .interaction
                         .preview_selected_instance_path = instance_path;
                 }
             }
-            crate::ui::selection::ClickAction::Remove(id) => {
-                let instance_path = hovered_hit
-                    .filter(|hit| hit.node_id == id)
-                    .map(|hit| hit.instance_path.clone());
-                let track_id = self.get_track_id(id, instance_path.as_deref());
-                if self.editor_context.is_selected(id) {
-                    self.editor_context.toggle_entity_selection(id, track_id);
+            crate::ui::selection::ClickAction::Remove(target) => {
+                if self.editor_context.is_selected(target) {
+                    self.editor_context.remove_selection(target);
                 }
                 self.editor_context
                     .interaction
                     .preview_selected_instance_path = None;
             }
-            crate::ui::selection::ClickAction::Toggle(id) => {
+            crate::ui::selection::ClickAction::Toggle(target) => {
                 let instance_path = hovered_hit
-                    .filter(|hit| hit.node_id == id)
+                    .filter(|hit| target == SelectionTarget::Node(hit.node_id))
                     .map(|hit| hit.instance_path.clone());
-                let track_id = self.get_track_id(id, instance_path.as_deref());
-                self.editor_context.toggle_entity_selection(id, track_id);
+                self.editor_context.toggle_selection(target);
                 self.editor_context
                     .interaction
                     .preview_selected_instance_path = self
                     .editor_context
-                    .is_selected(id)
+                    .is_selected(target)
                     .then_some(instance_path)
                     .flatten();
             }
             crate::ui::selection::ClickAction::Clear => {
-                self.editor_context.selection.selected_entities.clear();
-                self.editor_context.selection.last_selected_entity_id = None;
-                self.editor_context.selection.last_selected_track_id = None;
-                self.editor_context
-                    .interaction
-                    .preview_selected_instance_path = None;
+                self.editor_context.clear_selection();
             }
             crate::ui::selection::ClickAction::DoNothing => {}
         }
@@ -497,55 +477,22 @@ impl<'a> PreviewInteractions<'a> {
                     let selection_rect = Rect::from_two_pos(start_pos, current_pos);
                     let modifiers = self.ui.input(|i| i.modifiers);
 
-                    let found_clips = self.get_clips_in_box(selection_rect);
+                    let found_nodes = self.get_nodes_in_box(selection_rect);
 
-                    match crate::ui::selection::get_box_action(&modifiers, found_clips) {
-                        crate::ui::selection::BoxAction::Replace(ids) => {
-                            self.editor_context.selection.selected_entities.clear();
-                            self.editor_context.selection.last_selected_entity_id = None;
-                            self.editor_context.selection.last_selected_track_id = None;
-                            self.editor_context
-                                .interaction
-                                .preview_selected_instance_path = None;
-
-                            let mut last_id = None;
-                            let mut last_track = None;
-                            for id in ids {
-                                self.editor_context.selection.selected_entities.insert(id);
-                                last_id = Some(id);
-                                last_track = self.get_track_id(id, None);
-                            }
-                            if let Some(lid) = last_id {
-                                self.editor_context.selection.last_selected_entity_id = Some(lid);
-                                self.editor_context.selection.last_selected_track_id = last_track;
-                                self.editor_context
-                                    .interaction
-                                    .preview_selected_instance_path = None;
+                    match crate::ui::selection::get_box_action(&modifiers, found_nodes) {
+                        crate::ui::selection::BoxAction::Replace(targets) => {
+                            let primary = targets.last().copied();
+                            self.editor_context.replace_selection(targets, primary);
+                        }
+                        crate::ui::selection::BoxAction::Add(targets) => {
+                            for target in targets {
+                                self.editor_context.add_selection(target);
                             }
                         }
-                        crate::ui::selection::BoxAction::Add(ids) => {
-                            let mut last_id = None;
-                            let mut last_track = None;
-                            for id in ids {
-                                self.editor_context.selection.selected_entities.insert(id);
-                                last_id = Some(id);
-                                last_track = self.get_track_id(id, None);
+                        crate::ui::selection::BoxAction::Remove(targets) => {
+                            for target in targets {
+                                self.editor_context.remove_selection(target);
                             }
-                            if let Some(lid) = last_id {
-                                self.editor_context.selection.last_selected_entity_id = Some(lid);
-                                self.editor_context.selection.last_selected_track_id = last_track;
-                                self.editor_context
-                                    .interaction
-                                    .preview_selected_instance_path = None;
-                            }
-                        }
-                        crate::ui::selection::BoxAction::Remove(ids) => {
-                            for id in ids {
-                                self.editor_context.selection.selected_entities.remove(&id);
-                            }
-                            self.editor_context
-                                .interaction
-                                .preview_selected_instance_path = None;
                         }
                     }
                 }
@@ -554,7 +501,7 @@ impl<'a> PreviewInteractions<'a> {
         }
     }
 
-    fn get_clips_in_box(&self, selection_rect: Rect) -> Vec<Uuid> {
+    fn get_nodes_in_box(&self, selection_rect: Rect) -> Vec<SelectionTarget> {
         let mut found = Vec::new();
         let mut seen = HashSet::new();
 
@@ -588,28 +535,26 @@ impl<'a> PreviewInteractions<'a> {
                 Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y));
 
             if selection_rect.intersects(clip_screen_rect) && seen.insert(gc.id()) {
-                found.push(gc.id());
+                found.push(SelectionTarget::Node(gc.id()));
             }
         }
         found
     }
 
     fn selected_visual(&self, entity_id: Uuid) -> Option<&PreviewClip> {
-        let instance_path =
-            if Some(entity_id) == self.editor_context.selection.last_selected_entity_id {
-                self.editor_context
-                    .interaction
-                    .preview_selected_instance_path
-                    .as_deref()
-            } else {
-                None
-            };
+        let target = SelectionTarget::Node(entity_id);
+        if !self.editor_context.selection.contains(target) {
+            return None;
+        }
+        let instance_path = if self.editor_context.selection.primary() == Some(target) {
+            self.editor_context
+                .interaction
+                .preview_selected_instance_path
+                .as_deref()
+        } else {
+            None
+        };
         visual_for_selection(self.gui_clips, entity_id, instance_path)
-    }
-
-    fn get_track_id(&self, entity_id: Uuid, instance_path: Option<&[Uuid]>) -> Option<Uuid> {
-        visual_for_selection(self.gui_clips, entity_id, instance_path)
-            .and_then(|visual| visual.track_id)
     }
 
     pub fn draw_text_overlay(&mut self, pending_actions: &mut Vec<PreviewAction>) {

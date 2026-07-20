@@ -11,7 +11,7 @@ use crate::state::context::EditorContext;
 use crate::state::context_types::{
     KeyframeDialogEditControl, KeyframeDialogState, KeyframeDialogValues, KeyframeValueComponent,
 };
-use crate::ui::panels::graph_editor::utils::time_mapper_for_entity;
+use crate::ui::panels::graph_editor::utils::time_mapper_for_owner;
 
 struct PreparedKeyframeDialogUpdate {
     owner: library::PropertyOwner,
@@ -26,7 +26,6 @@ fn prepare_keyframe_dialog_update(
 ) -> Option<PreparedKeyframeDialogUpdate> {
     let owner = state.owner?;
     let keyframe_id = state.keyframe_id?;
-    let entity_id = state.entity_id?;
     let current_value = match owner {
         library::PropertyOwner::Node(node_id) => {
             project.get_node(node_id).map(|node| node.properties())
@@ -58,7 +57,7 @@ fn prepare_keyframe_dialog_update(
         property_key: state.property_key.clone(),
         keyframe_id,
         update: KeyframeUpdate {
-            time: Some(time_mapper_for_entity(project, entity_id).to_source_time(state.time)),
+            time: Some(time_mapper_for_owner(project, owner).to_source_time(state.time)),
             value: Some(value),
             easing: Some(state.easing.clone()),
         },

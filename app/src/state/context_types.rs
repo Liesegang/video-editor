@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::model::ui_types::{GizmoHandle, TimelineDisplayMode, Vec2Def};
@@ -243,8 +244,6 @@ pub struct GraphKeyframeDragState {
     pub changed: bool,
 }
 
-use std::collections::HashSet;
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum DragStateItem {
     Asset {
@@ -257,12 +256,108 @@ pub enum DragStateItem {
     },
 }
 
+/// Exact Project entity selected by the UI.
+///
+/// Project registries are intentionally allowed to contain the same UUID in
+/// different entity kinds during pre-v1 development. Keeping the kind in the
+/// selection identity prevents a Clip selection from being reinterpreted as
+/// a Node (or vice versa) by registry probing order.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+pub enum SelectionTarget {
+    Node(Uuid),
+    Clip(Uuid),
+    Track(Uuid),
+    Composition(Uuid),
+}
+
+impl SelectionTarget {
+    pub const fn node_id(self) -> Option<Uuid> {
+        match self {
+            Self::Node(id) => Some(id),
+            Self::Clip(_) | Self::Track(_) | Self::Composition(_) => None,
+        }
+    }
+
+    pub const fn clip_id(self) -> Option<Uuid> {
+        match self {
+            Self::Clip(id) => Some(id),
+            Self::Node(_) | Self::Track(_) | Self::Composition(_) => None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct SelectionState {
-    pub composition_id: Option<Uuid>,
-    pub selected_entities: HashSet<Uuid>,
-    pub last_selected_entity_id: Option<Uuid>,
-    pub last_selected_track_id: Option<Uuid>,
+    targets: Vec<SelectionTarget>,
+}
+
+impl SelectionState {
+    pub fn targets(&self) -> &[SelectionTarget] {
+        &self.targets
+    }
+
+    pub fn primary(&self) -> Option<SelectionTarget> {
+        self.targets.last().copied()
+    }
+
+    pub fn contains(&self, target: SelectionTarget) -> bool {
+        self.targets.contains(&target)
+    }
+
+    pub fn len(&self) -> usize {
+        self.targets.len()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.targets.clear();
+    }
+
+    pub(crate) fn replace(
+        &mut self,
+        targets: impl IntoIterator<Item = SelectionTarget>,
+        primary: Option<SelectionTarget>,
+    ) {
+        self.targets.clear();
+        for target in targets {
+            self.push_primary(target);
+        }
+        if let Some(primary) = primary.filter(|target| self.targets.contains(target)) {
+            self.make_primary(primary);
+        } else if !self.targets.is_empty() {
+            self.targets.sort_unstable();
+            let fallback = self.targets[0];
+            self.make_primary(fallback);
+        }
+    }
+
+    pub(crate) fn push_primary(&mut self, target: SelectionTarget) {
+        self.targets.retain(|candidate| *candidate != target);
+        self.targets.push(target);
+    }
+
+    pub(crate) fn make_primary(&mut self, target: SelectionTarget) -> bool {
+        let Some(index) = self
+            .targets
+            .iter()
+            .position(|candidate| *candidate == target)
+        else {
+            return false;
+        };
+        let target = self.targets.remove(index);
+        self.targets.push(target);
+        true
+    }
+
+    pub(crate) fn remove(&mut self, target: SelectionTarget) -> bool {
+        let previous_len = self.targets.len();
+        self.targets.retain(|candidate| *candidate != target);
+        self.targets.len() != previous_len
+    }
+
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(SelectionTarget) -> bool) {
+        self.targets.retain(|target| keep(*target));
+    }
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]

@@ -8,7 +8,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-use crate::{action::HistoryManager, state::context::EditorContext};
+use crate::{
+    action::HistoryManager,
+    state::{context::EditorContext, context_types::SelectionTarget},
+};
 
 /// Deferred actions to execute after read lock is released
 #[derive(Debug)]
@@ -151,7 +154,7 @@ pub fn show_track_list(
 
     let mut track_ids: Vec<uuid::Uuid> = Vec::new();
     let mut asset_names: HashMap<uuid::Uuid, String> = HashMap::new();
-    let selected_composition_id = editor_context.selection.composition_id;
+    let selected_composition_id = editor_context.active_composition_id;
 
     let proj_read = project.read().ok();
 
@@ -197,7 +200,10 @@ pub fn show_track_list(
     // Calculate Reorder State for Preview
     let mut reorder_state = None;
     if let (Some(dragged_id), Some(hovered_tid)) = (
-        editor_context.selection.last_selected_entity_id,
+        editor_context
+            .selection
+            .primary()
+            .and_then(SelectionTarget::clip_id),
         editor_context.interaction.dragged_entity_hovered_track_id,
     ) {
         if let Some(mouse_pos) = ui_content.ctx().pointer_latest_pos() {
@@ -337,7 +343,7 @@ pub fn show_track_list(
                     .on_hover_text(format!("Track ID: {}", track.id));
 
                 track_interaction_response.context_menu(|ui| {
-                    if let Some(comp_id) = editor_context.selection.composition_id {
+                    if let Some(comp_id) = editor_context.active_composition_id {
                         // Rename Track option
                         let rename = ui.button(format!("{} Rename", icons::PENCIL_SIMPLE));
                         crate::qa::register_component(
@@ -365,7 +371,7 @@ pub fn show_track_list(
                                 track_id: track.id,
                             });
                             // Mark for deselection if this track was selected
-                            if editor_context.selection.last_selected_track_id == Some(track.id) {
+                            if editor_context.is_selected(SelectionTarget::Track(track.id)) {
                                 tracks_to_deselect.push(track.id);
                             }
                             ui.close();
@@ -374,9 +380,7 @@ pub fn show_track_list(
                 });
 
                 if track_interaction_response.clicked_by(egui::PointerButton::Primary) {
-                    editor_context.selection.last_selected_track_id = Some(track.id);
-                    editor_context.selection.last_selected_entity_id = None;
-                    editor_context.selection.selected_entities.clear();
+                    editor_context.select_target(SelectionTarget::Track(track.id));
                 }
 
                 if track_interaction_response.drag_started_by(egui::PointerButton::Primary) {
@@ -399,7 +403,7 @@ pub fn show_track_list(
                 track_list_painter.rect_filled(
                     row_rect,
                     0.0,
-                    if editor_context.selection.last_selected_track_id == Some(track.id) {
+                    if editor_context.is_selected(SelectionTarget::Track(track.id)) {
                         egui::Color32::from_rgb(50, 80, 120)
                     } else if visible_row_index.is_multiple_of(2) {
                         egui::Color32::from_gray(50)
@@ -640,7 +644,7 @@ pub fn show_track_list(
     }
 
     track_list_response.context_menu(|ui_content| {
-        if let Some(comp_id) = editor_context.selection.composition_id {
+        if let Some(comp_id) = editor_context.active_composition_id {
             if ui_content
                 .add(egui::Button::new(egui::RichText::new(format!(
                     "{} Add Track",
@@ -701,11 +705,7 @@ pub fn show_track_list(
 
     // Apply deferred state changes
     for track_id in tracks_to_deselect {
-        if editor_context.selection.last_selected_track_id == Some(track_id) {
-            editor_context.selection.last_selected_track_id = None;
-            editor_context.selection.last_selected_entity_id = None;
-            editor_context.selection.selected_entities.clear();
-        }
+        editor_context.remove_selection(SelectionTarget::Track(track_id));
     }
 
     if needs_history_push {

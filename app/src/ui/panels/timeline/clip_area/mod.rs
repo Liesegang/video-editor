@@ -3,7 +3,10 @@ use library::model::project::Project;
 use library::EditorService as ProjectService;
 use std::sync::{Arc, RwLock};
 
-use crate::{action::HistoryManager, state::context::EditorContext};
+use crate::{
+    action::HistoryManager,
+    state::{context::EditorContext, context_types::SelectionTarget},
+};
 
 use crate::command::{CommandId, CommandRegistry};
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
@@ -86,7 +89,7 @@ pub(super) fn show_clip_area(
         ui_content.allocate_at_least(ui_content.available_size(), egui::Sense::hover());
 
     let is_dragging_item = editor_context.interaction.dragged_item.is_some();
-    let selected_composition_id = editor_context.selection.composition_id;
+    let selected_composition_id = editor_context.active_composition_id;
 
     // ===== PHASE 1: Extract owned data from project (scoped read lock) =====
     let (track_ids, num_visible_tracks, current_comp_duration) = {
@@ -276,38 +279,21 @@ pub(super) fn show_clip_area(
 
                 match action {
                     crate::ui::selection::BoxAction::Replace(items) => {
-                        editor_context.selection.selected_entities.clear();
-                        editor_context.selection.last_selected_entity_id = None;
-                        editor_context.selection.last_selected_track_id = None;
-
-                        let mut last_id = None;
-                        let mut last_track = None;
-                        for (id, tid) in items {
-                            editor_context.selection.selected_entities.insert(id);
-                            last_id = Some(id);
-                            last_track = Some(tid);
-                        }
-                        if let Some(lid) = last_id {
-                            editor_context.selection.last_selected_entity_id = Some(lid);
-                            editor_context.selection.last_selected_track_id = last_track;
-                        }
+                        let targets = items
+                            .into_iter()
+                            .map(|(id, _)| SelectionTarget::Clip(id))
+                            .collect::<Vec<_>>();
+                        let primary = targets.last().copied();
+                        editor_context.replace_selection(targets, primary);
                     }
                     crate::ui::selection::BoxAction::Add(items) => {
-                        let mut last_id = None;
-                        let mut last_track = None;
-                        for (id, tid) in items {
-                            editor_context.selection.selected_entities.insert(id);
-                            last_id = Some(id);
-                            last_track = Some(tid);
-                        }
-                        if let Some(lid) = last_id {
-                            editor_context.selection.last_selected_entity_id = Some(lid);
-                            editor_context.selection.last_selected_track_id = last_track;
+                        for (id, _) in items {
+                            editor_context.add_selection(SelectionTarget::Clip(id));
                         }
                     }
                     crate::ui::selection::BoxAction::Remove(items) => {
                         for (id, _tid) in items {
-                            editor_context.selection.selected_entities.remove(&id);
+                            editor_context.remove_selection(SelectionTarget::Clip(id));
                         }
                     }
                 }
@@ -322,9 +308,7 @@ pub(super) fn show_clip_area(
         && !clicked_on_entity
         && !is_dragging_item
     {
-        editor_context.selection.selected_entities.clear();
-        editor_context.selection.last_selected_entity_id = None;
-        editor_context.selection.last_selected_track_id = None;
+        editor_context.clear_selection();
     }
 
     (content_rect_for_clip_area, response)

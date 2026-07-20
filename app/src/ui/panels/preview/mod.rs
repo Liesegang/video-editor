@@ -9,7 +9,7 @@ use library::RenderServer;
 
 use crate::command::{CommandId, CommandRegistry};
 use crate::state::context_types::{
-    PreviewPrimaryGesture, PreviewTool, PreviewViewportRuntimeState,
+    PreviewPrimaryGesture, PreviewTool, PreviewViewportRuntimeState, SelectionTarget,
 };
 use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
 use crate::{action::HistoryManager, state::context::EditorContext};
@@ -977,10 +977,10 @@ pub fn preview_panel(
             );
         } else if editor_context.view.active_tool == PreviewTool::Shape {
             if let Some(state) = &editor_context.interaction.vector_editor_state {
-                if let Some(id) = editor_context.selection.selected_entities.iter().next() {
+                if let Some(SelectionTarget::Node(id)) = editor_context.selection.primary() {
                     if let Some(gc) = clip::visual_for_selection(
                         &gui_clips,
-                        *id,
+                        id,
                         editor_context
                             .interaction
                             .preview_selected_instance_path
@@ -1440,11 +1440,7 @@ mod tests {
         let project = Arc::new(RwLock::new(Project::new("preview gesture")));
         let project_before = project.read().unwrap().clone();
         let mut editor_context = EditorContext::new(composition_id);
-        editor_context
-            .selection
-            .selected_entities
-            .insert(selected_id);
-        editor_context.selection.last_selected_entity_id = Some(selected_id);
+        editor_context.select_target(SelectionTarget::Node(selected_id));
         let mut pending_actions = Vec::new();
         let hover = egui::pos2(40.0, 40.0);
 
@@ -1575,12 +1571,12 @@ mod tests {
         );
 
         assert_eq!(
-            editor_context.selection.selected_entities,
-            [selected_id].into_iter().collect()
+            editor_context.selection.targets(),
+            &[SelectionTarget::Node(selected_id)]
         );
         assert_eq!(
-            editor_context.selection.last_selected_entity_id,
-            Some(selected_id)
+            editor_context.selection.primary(),
+            Some(SelectionTarget::Node(selected_id))
         );
         assert!(!editor_context.interaction.is_moving_selected_entity);
         assert!(editor_context.interaction.body_drag_state.is_none());
@@ -1664,7 +1660,6 @@ mod tests {
             });
             clip::PreviewClip {
                 node: source.clone(),
-                track_id: None,
                 source_transform,
                 world_transform: parent_transform.compose(Affine2D::from(&transform)),
                 parent_transform,
@@ -1709,7 +1704,7 @@ mod tests {
         let context = egui::Context::default();
         let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
         editor_context.view.zoom = 1.0;
-        editor_context.select_entity(source.id, None);
+        editor_context.select_target(SelectionTarget::Node(source.id));
         editor_context.interaction.preview_selected_instance_path =
             Some(visual.instance_path.clone());
         let (center_x, center_y) = visual.world_transform.map_point(0.0, 0.0);
@@ -1758,7 +1753,7 @@ mod tests {
         let context = egui::Context::default();
         let mut editor_context = EditorContext::new(uuid::Uuid::new_v4());
         editor_context.view.zoom = 1.0;
-        editor_context.select_entity(source.id, None);
+        editor_context.select_target(SelectionTarget::Node(source.id));
         editor_context.interaction.preview_selected_instance_path =
             Some(visual.instance_path.clone());
         let (right_x, right_y) = visual.world_transform.map_point(20.0, 0.0);

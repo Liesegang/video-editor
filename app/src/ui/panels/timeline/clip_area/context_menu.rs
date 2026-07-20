@@ -33,7 +33,7 @@ pub(super) fn handle_context_menu(
 
         let mut comp_width = 1920;
         let mut comp_height = 1080;
-        if let Some(comp_id) = editor_context.selection.composition_id {
+        if let Some(comp_id) = editor_context.active_composition_id {
             if let Ok(proj_read) = project.read() {
                 if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
                     comp_width = comp.width;
@@ -134,7 +134,7 @@ fn add_clip_to_best_track(
 ) {
     let mut track_id_opt = None;
     if let Ok(proj_read) = project.read() {
-        if let Some(comp_id) = editor_context.selection.composition_id {
+        if let Some(comp_id) = editor_context.active_composition_id {
             if let Some(comp) = proj_read.compositions.iter().find(|c| c.id == comp_id) {
                 // If we have a calculated track index, use flattened display to find the track
                 if let Some(idx) = drop_track_index_opt {
@@ -162,7 +162,7 @@ fn add_clip_to_best_track(
     }
 
     if let Some(track_id) = track_id_opt {
-        if let Some(comp_id) = editor_context.selection.composition_id {
+        if let Some(comp_id) = editor_context.active_composition_id {
             if let Err(e) = project_service.add_clip_to_track(comp_id, track_id, bundle, None) {
                 log::error!("Failed to add clip: {}", e);
             } else {

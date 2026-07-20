@@ -18,6 +18,7 @@ use crate::config;
 use crate::model::ui_types::Tab;
 use crate::shortcut::ShortcutManager;
 use crate::state::context::EditorContext;
+use crate::state::context_types::SelectionTarget;
 use crate::ui::command_palette::CommandPalette;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::ui::dialogs::export_dialog::ExportDialog;
@@ -67,8 +68,7 @@ impl RuViEApp {
             cache_manager.clone(),
         )?;
 
-        let mut editor_context = EditorContext::new(default_comp_id); // Pass default_comp_id
-        editor_context.selection.composition_id = Some(default_comp_id); // Select the default composition
+        let mut editor_context = EditorContext::new(default_comp_id);
         if let Some(fixture) = &qa_fixture {
             editor_context
                 .timeline
@@ -175,7 +175,7 @@ impl eframe::App for RuViEApp {
         }
 
         if self.export_dialog.is_open {
-            let active_comp_id = self.editor_context.selection.composition_id;
+            let active_comp_id = self.editor_context.active_composition_id;
             self.export_dialog
                 .show(ctx, &self.project, &self.project_service, active_comp_id);
         }
@@ -214,10 +214,11 @@ impl eframe::App for RuViEApp {
                             log::error!("Failed to remove composition: {}", e);
                         } else {
                             // Clear selection if needed
-                            if self.editor_context.selection.composition_id == Some(id) {
-                                self.editor_context.selection.composition_id = None;
-                                self.editor_context.selection.selected_entities.clear();
+                            if self.editor_context.active_composition_id == Some(id) {
+                                self.editor_context.activate_composition(None);
                             }
+                            self.editor_context
+                                .remove_selection(SelectionTarget::Composition(id));
                             let project = self.project_service.get_project();
                             let current_state = read_or_recover(project.as_ref()).clone();
                             self.history_manager.push_project_state(current_state);
@@ -336,7 +337,7 @@ impl eframe::App for RuViEApp {
         // Selection is transient UI state; authored data remains exclusively
         // in the authoritative Project.
         self.project_service.set_active_composition(
-            self.editor_context.selection.composition_id,
+            self.editor_context.active_composition_id,
             self.editor_context.timeline.current_time as f64,
         );
 

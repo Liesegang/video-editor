@@ -4,7 +4,7 @@ use crate::state::context_types::{
     ContainerResizeEdge, ContainerResizeState, ContextMenuState, NodeEditorEditableWire,
     NodeEditorNodeDragOrigin, NodeEditorNormalConnectGesture, NodeEditorPendingEdit,
     NodeEditorReparentGesture, NodeEditorState, NodeEditorWireContextMenu, NodeEditorWireDragKind,
-    NodeEditorWireGesture, NodeEditorWireKnifeGesture,
+    NodeEditorWireGesture, NodeEditorWireKnifeGesture, SelectionTarget,
 };
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 use crate::ui::widgets::searchable_context_menu::{show_searchable_items_with_qa, SearchableItem};
@@ -3940,9 +3940,8 @@ pub fn node_editor_panel(
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
 ) {
-    let comp_id = editor_context.selection.composition_id;
+    let comp_id = editor_context.active_composition_id;
     let current_time = f64::from(editor_context.timeline.current_time);
-    let selection = &mut editor_context.selection;
     let context_menu_state = &mut editor_context.node_editor_context_menu;
     let node_editor_state = &mut editor_context.node_editor_state;
     let Some(comp_id) = comp_id else {
@@ -3955,7 +3954,7 @@ pub fn node_editor_panel(
         .as_ref()
         .is_some_and(|pending| {
             project_lock.read().map_or(true, |project| {
-                project.find_containing_composition(pending.owner.id()) != Some(comp_id)
+                port_owner_composition(&project, pending.owner) != Some(comp_id)
             })
         });
     if pending_owner_left_composition {
@@ -3963,12 +3962,27 @@ pub fn node_editor_panel(
     }
 
     let mut requested_layout = None;
-    let mut selected_nodes = selection
-        .selected_entities
+    let mut selected_nodes = editor_context
+        .selection
+        .targets()
         .iter()
-        .copied()
+        .filter_map(|target| target.node_id())
         .collect::<Vec<_>>();
     selected_nodes.sort_unstable();
+    let selected_container = editor_context
+        .selection
+        .primary()
+        .and_then(|target| match target {
+            SelectionTarget::Composition(id) => Some(PortOwner::Composition(id)),
+            SelectionTarget::Track(id) => Some(PortOwner::Track(id)),
+            SelectionTarget::Clip(id) => Some(PortOwner::Clip(id)),
+            SelectionTarget::Node(id) => project_lock
+                .read()
+                .ok()
+                .and_then(|project| project.find_node_container(id))
+                .map(port_owner_for_node_container),
+        })
+        .unwrap_or(PortOwner::Composition(comp_id));
     ui.horizontal(|ui| {
         non_selectable_label(ui, "Clean layout");
         if ui
@@ -3990,12 +4004,7 @@ pub fn node_editor_panel(
             .on_hover_text("Lay out the selected track, or the composition if no track is selected")
             .clicked()
         {
-            requested_layout = Some(AutoLayoutScope::Container(
-                selection
-                    .last_selected_track_id
-                    .map(PortOwner::Track)
-                    .unwrap_or(PortOwner::Composition(comp_id)),
-            ));
+            requested_layout = Some(AutoLayoutScope::Container(selected_container));
         }
     });
     ui.separator();
@@ -4051,6 +4060,7 @@ pub fn node_editor_panel(
     let mut pending_selection = None;
     let mut context_menu_exclusion_rects = Vec::new();
     let mut wire_context_request = None;
+    let mut snarl_selected_node_ids: Vec<Uuid>;
     let mut to_global = egui::emath::TSTransform::default();
     let mut canvas_clip = canvas_rect;
     let rendered_ports = Arc::new(Mutex::new(HashMap::new()));
@@ -4112,6 +4122,14 @@ pub fn node_editor_panel(
         // the raw salt here creates an unrelated, untransformed layer and
         // leaks graph-space chrome over the rest of the application.
         let snarl_id = ui.make_persistent_id(graph_id);
+        snarl_selected_node_ids = egui_snarl::ui::get_selected_nodes(snarl_id, ui.ctx())
+            .into_iter()
+            .filter_map(|snarl_node_id| match snarl.get_node(snarl_node_id) {
+                Some(GraphItem::Node(node_id)) => Some(*node_id),
+                Some(GraphItem::Container(_) | GraphItem::PortAnchor { .. }) | None => None,
+            })
+            .collect();
+        snarl_selected_node_ids.sort_unstable();
         let captured_drag_node_id = captured_snarl_drag_node(ui.ctx(), &snarl, snarl_id);
         let graph_layer = egui::LayerId::new(ui.layer_id().order, snarl_id);
         // `Context::layer_painter` starts with a *global* content clip. Calling
@@ -4281,35 +4299,70 @@ pub fn node_editor_panel(
         layout_edits = collected;
     }
 
-    let selection_changed = pending_selection.is_some();
+    let mut selection_changed = false;
     if let Some(owner) = pending_selection {
         if let Ok(project) = project_lock.read() {
             match owner {
                 PortOwner::Node(node_id) if project.get_node(node_id).is_some() => {
-                    selection.selected_entities.clear();
-                    selection.selected_entities.insert(node_id);
-                    selection.last_selected_entity_id = Some(node_id);
-                    selection.last_selected_track_id = project.find_parent_track(node_id);
+                    let targets = if snarl_selected_node_ids.contains(&node_id) {
+                        snarl_selected_node_ids
+                            .iter()
+                            .copied()
+                            .map(SelectionTarget::Node)
+                            .collect::<Vec<_>>()
+                    } else {
+                        vec![SelectionTarget::Node(node_id)]
+                    };
+                    editor_context
+                        .selection
+                        .replace(targets, Some(SelectionTarget::Node(node_id)));
+                    selection_changed = true;
                 }
                 PortOwner::Clip(clip_id) if project.get_clip(clip_id).is_some() => {
-                    selection.selected_entities.clear();
-                    selection.selected_entities.insert(clip_id);
-                    selection.last_selected_entity_id = Some(clip_id);
-                    selection.last_selected_track_id = project.find_track_for_clip(clip_id);
+                    editor_context.selection.replace(
+                        [SelectionTarget::Clip(clip_id)],
+                        Some(SelectionTarget::Clip(clip_id)),
+                    );
+                    selection_changed = true;
                 }
                 PortOwner::Track(track_id) if project.get_track(track_id).is_some() => {
-                    selection.selected_entities.clear();
-                    selection.last_selected_entity_id = None;
-                    selection.last_selected_track_id = Some(track_id);
+                    editor_context.selection.replace(
+                        [SelectionTarget::Track(track_id)],
+                        Some(SelectionTarget::Track(track_id)),
+                    );
+                    selection_changed = true;
                 }
-                PortOwner::Composition(composition_id)
-                    if project.get_composition(composition_id).is_some() =>
-                {
-                    selection.composition_id = Some(composition_id);
+                PortOwner::Composition(composition_id) if composition_id == comp_id => {
+                    editor_context.selection.replace(
+                        [SelectionTarget::Composition(composition_id)],
+                        Some(SelectionTarget::Composition(composition_id)),
+                    );
+                    selection_changed = true;
                 }
                 _ => {}
             }
         }
+    }
+
+    if !selection_changed
+        && ui.input(|input| input.pointer.primary_released())
+        && snarl_selected_node_ids.len() > 1
+    {
+        let targets = snarl_selected_node_ids
+            .iter()
+            .copied()
+            .map(SelectionTarget::Node)
+            .collect::<Vec<_>>();
+        let primary = editor_context
+            .selection
+            .primary()
+            .filter(|target| targets.contains(target))
+            .or_else(|| targets.first().copied());
+        editor_context.selection.replace(targets, primary);
+        selection_changed = true;
+    }
+    if selection_changed {
+        editor_context.interaction.preview_selected_instance_path = None;
     }
 
     let primary_released = ui.input(|input| input.pointer.primary_released());
@@ -4361,14 +4414,17 @@ pub fn node_editor_panel(
         flush_pending_continuous_edit(project_lock, history_manager, node_editor_state);
     }
 
-    if selection.last_selected_entity_id.is_some_and(|node_id| {
-        project_lock.read().map_or(true, |project| {
-            !project.nodes.contains_key(&node_id) && !project.clips.contains_key(&node_id)
+    let stale_primary = editor_context.selection.primary().is_some_and(|target| {
+        project_lock.read().map_or(true, |project| match target {
+            SelectionTarget::Node(id) => project.get_node(id).is_none(),
+            SelectionTarget::Clip(id) => project.get_clip(id).is_none(),
+            SelectionTarget::Track(id) => project.get_track(id).is_none(),
+            SelectionTarget::Composition(id) => project.get_composition(id).is_none(),
         })
-    }) {
-        selection.selected_entities.clear();
-        selection.last_selected_entity_id = None;
-        selection.last_selected_track_id = None;
+    });
+    if stale_primary {
+        editor_context.selection.clear();
+        editor_context.interaction.preview_selected_instance_path = None;
     }
 
     node_editor_state.layout_changed_during_drag |= layout_changed;
@@ -8780,14 +8836,10 @@ fn finish_node_reparent(
         let composition_ids = intents
             .iter()
             .filter_map(|intent| {
-                let owner = port_owner_for_node_container(intent.target.container);
-                let id = match owner {
-                    PortOwner::Composition(id)
-                    | PortOwner::Track(id)
-                    | PortOwner::Clip(id)
-                    | PortOwner::Node(id) => id,
-                };
-                candidate.find_containing_composition(id)
+                port_owner_composition(
+                    &candidate,
+                    port_owner_for_node_container(intent.target.container),
+                )
             })
             .collect::<HashSet<_>>();
         let introduces_invalid_layout = composition_ids.into_iter().any(|composition_id| {
@@ -8935,6 +8987,21 @@ fn port_owner_for_node_container(container: NodeContainer) -> PortOwner {
         NodeContainer::Composition(id) => PortOwner::Composition(id),
         NodeContainer::Track(id) => PortOwner::Track(id),
         NodeContainer::Clip(id) => PortOwner::Clip(id),
+    }
+}
+
+fn port_owner_composition(project: &Project, owner: PortOwner) -> Option<Uuid> {
+    match owner {
+        PortOwner::Composition(composition_id) => project
+            .get_composition(composition_id)
+            .map(|_| composition_id),
+        PortOwner::Track(track_id) => project.find_composition_for_track(track_id),
+        PortOwner::Clip(clip_id) => project
+            .find_track_for_clip(clip_id)
+            .and_then(|track_id| project.find_composition_for_track(track_id)),
+        PortOwner::Node(node_id) => project.find_node_container(node_id).and_then(|container| {
+            port_owner_composition(project, port_owner_for_node_container(container))
+        }),
     }
 }
 
@@ -9130,9 +9197,54 @@ mod tests {
         SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT, VALUE_INPUT_PORT,
     };
     use library::model::property::{Keyframe, Property, PropertyMap};
+    use library::model::Composition;
     use library::plugin::{
         FrameEvaluationContext, OperationDescriptor, OperationDescriptorError, Plugin, StylePlugin,
     };
+
+    #[test]
+    fn typed_port_owner_composition_ignores_same_uuid_clip() {
+        let shared_id = Uuid::new_v4();
+        let mut project = Project::new("typed owner composition");
+
+        let (clip_composition, clip_track) =
+            Composition::new("Clip composition", 1920, 1080, 30.0, 10.0);
+        let clip_composition_id = clip_composition.id;
+        let clip_track_id = clip_track.id;
+        let mut collision = Clip::new("same UUID Clip", 0.0, 5.0);
+        collision.id = shared_id;
+        project.add_track(clip_track);
+        project.add_composition(clip_composition);
+        project.add_clip(collision);
+        project
+            .attach_clip_to_track(clip_track_id, shared_id)
+            .unwrap();
+
+        let (node_composition, node_track) =
+            Composition::new("Node composition", 1920, 1080, 30.0, 10.0);
+        let node_composition_id = node_composition.id;
+        let mut node = Node::new_merge("same UUID Node");
+        node.id = shared_id;
+        project.add_track(node_track);
+        project.add_composition(node_composition);
+        project.add_node(node);
+        project
+            .attach_node_to_container(NodeContainer::Composition(node_composition_id), shared_id)
+            .unwrap();
+
+        assert_eq!(
+            project.find_containing_composition(shared_id),
+            Some(clip_composition_id)
+        );
+        assert_eq!(
+            port_owner_composition(&project, PortOwner::Node(shared_id)),
+            Some(node_composition_id)
+        );
+        assert_eq!(
+            port_owner_composition(&project, PortOwner::Clip(shared_id)),
+            Some(clip_composition_id)
+        );
+    }
 
     struct RuntimeCatalogStylePlugin {
         id: String,

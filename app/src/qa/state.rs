@@ -31,13 +31,6 @@ pub fn snapshot(
     dock_state: &DockState<Tab>,
     history_manager: &HistoryManager,
 ) -> Result<Value, String> {
-    let mut selected_entities = editor_context
-        .selection
-        .selected_entities
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    selected_entities.sort();
     let mut expanded_tracks = editor_context
         .timeline
         .expanded_tracks
@@ -109,11 +102,12 @@ pub fn snapshot(
         "frame": frame,
         "project": project,
         "editor": {
+            "navigation": {
+                "active_composition_id": editor_context.active_composition_id,
+            },
             "selection": {
-                "composition_id": editor_context.selection.composition_id,
-                "selected_entities": selected_entities,
-                "last_selected_entity_id": editor_context.selection.last_selected_entity_id,
-                "last_selected_track_id": editor_context.selection.last_selected_track_id,
+                "targets": editor_context.selection.targets(),
+                "primary": editor_context.selection.primary(),
             },
             "timeline": {
                 "current_time": editor_context.timeline.current_time,
@@ -249,6 +243,7 @@ pub fn snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::context_types::SelectionTarget;
     use crate::ui::tab_viewer::create_initial_dock_state;
     use library::model::project::Composition;
 
@@ -264,6 +259,9 @@ mod tests {
         context.timeline.current_time = 1.25;
         context.timeline.expanded_tracks.insert(track_id);
         context.view.pan = egui::vec2(12.0, 34.0);
+        let shared_id = uuid::Uuid::new_v4();
+        context.add_selection(SelectionTarget::Clip(shared_id));
+        context.add_selection(SelectionTarget::Node(shared_id));
 
         let mut history = HistoryManager::new();
         history.push_project_state(project.clone());
@@ -279,6 +277,21 @@ mod tests {
         assert_eq!(value["project"]["name"], "qa");
         assert_eq!(value["editor"]["timeline"]["current_time"], 1.25);
         assert_eq!(value["editor"]["preview"]["pan"]["x"], 12.0);
+        assert_eq!(
+            value["editor"]["navigation"]["active_composition_id"],
+            composition_id.to_string()
+        );
+        assert_eq!(
+            value["editor"]["selection"]["targets"],
+            json!([
+                {"kind": "clip", "id": shared_id},
+                {"kind": "node", "id": shared_id},
+            ])
+        );
+        assert_eq!(
+            value["editor"]["selection"]["primary"],
+            json!({"kind": "node", "id": shared_id})
+        );
         assert_eq!(
             value["editor"]["timeline"]["expanded_tracks"][0],
             track_id.to_string()

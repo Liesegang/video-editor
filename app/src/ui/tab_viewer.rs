@@ -120,7 +120,8 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                 if let Some(target_comp_id) =
                     self.editor_context.node_editor_state.pending_navigation
                 {
-                    self.editor_context.selection.composition_id = Some(target_comp_id);
+                    self.editor_context
+                        .activate_composition(Some(target_comp_id));
                     // Also switch tab to Timeline? Or stay in Node Editor?
                     // User probably wants to see the graph of the new container, so stay in Node Editor.
                     // But if it's a "Composite", maybe they want Timeline?

@@ -9,7 +9,9 @@ use std::sync::{Arc, RwLock};
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::utils::lock::read_or_recover;
 use crate::{
-    action::HistoryManager, state::context::EditorContext, state::context_types::DragStateItem,
+    action::HistoryManager,
+    state::context::EditorContext,
+    state::context_types::{DragStateItem, SelectionTarget},
 };
 
 fn push_project_history(project_service: &EditorService, history_manager: &mut HistoryManager) {
@@ -37,7 +39,8 @@ pub fn assets_panel(
             composition_dialog.duration,
         ) {
             Ok(new_comp_id) => {
-                editor_context.selection.composition_id = Some(new_comp_id);
+                editor_context.activate_composition(Some(new_comp_id));
+                editor_context.select_target(SelectionTarget::Composition(new_comp_id));
                 push_project_history(project_service, history_manager);
                 needs_refresh = true;
             }
@@ -289,9 +292,9 @@ pub fn assets_panel(
                                     // Name Column
                                     row.col(|ui| {
                                         ui.push_id(comp.id, |ui| {
-                                            let is_selected =
-                                                editor_context.selection.composition_id
-                                                    == Some(comp.id);
+                                            let is_selected = editor_context.is_selected(
+                                                SelectionTarget::Composition(comp.id),
+                                            );
                                             let response =
                                                 ui.selectable_label(is_selected, &comp.name);
 
@@ -330,13 +333,10 @@ pub fn assets_panel(
                                             });
 
                                             if response.clicked() {
-                                                editor_context.selection.composition_id =
-                                                    Some(comp.id);
-                                                editor_context.selection.last_selected_track_id =
-                                                    None;
-                                                editor_context.selection.last_selected_entity_id =
-                                                    None;
-                                                editor_context.selection.selected_entities.clear();
+                                                editor_context.activate_composition(Some(comp.id));
+                                                editor_context.select_target(
+                                                    SelectionTarget::Composition(comp.id),
+                                                );
                                             }
 
                                             if response.drag_started() {
@@ -512,14 +512,12 @@ pub fn assets_panel(
 
     // Handle deferred deletions (to avoid deadlock)
     if let Some(comp_id) = comp_to_remove {
-        if let Some(selected_id) = editor_context.selection.composition_id {
+        if let Some(selected_id) = editor_context.active_composition_id {
             if selected_id == comp_id {
-                editor_context.selection.composition_id = None;
-                editor_context.selection.last_selected_track_id = None;
-                editor_context.selection.last_selected_entity_id = None;
-                editor_context.selection.selected_entities.clear();
+                editor_context.activate_composition(None);
             }
         }
+        editor_context.remove_selection(SelectionTarget::Composition(comp_id));
 
         match project_service.remove_composition_fully(comp_id) {
             Ok(()) => {

@@ -35,7 +35,7 @@ pub(super) fn handle_drag_and_drop(
                     / (geometry.row_height + geometry.track_spacing))
                     .floor() as usize;
 
-                if let Some(comp_id) = editor_context.selection.composition_id {
+                if let Some(comp_id) = editor_context.active_composition_id {
                     // ===== PHASE 1: Read all needed data, extract owned values =====
                     let mut track_ids: Vec<Uuid> = Vec::new();
                     let mut comp_width = 1920u32;

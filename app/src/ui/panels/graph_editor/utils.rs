@@ -1,7 +1,7 @@
 use egui::{Pos2, Rect, Vec2};
 use library::model::project::Project;
 use library::model::Clip;
-use uuid::Uuid;
+use library::PropertyOwner;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum PropertyComponent {
@@ -82,15 +82,14 @@ impl TimeMapper {
     }
 }
 
-pub fn time_mapper_for_entity(project: &Project, entity_id: Uuid) -> TimeMapper {
-    project
-        .get_clip(entity_id)
-        .or_else(|| {
-            project
-                .find_parent_clip(entity_id)
-                .and_then(|clip_id| project.get_clip(clip_id))
-        })
-        .map_or_else(TimeMapper::identity, TimeMapper::from_clip)
+pub fn time_mapper_for_owner(project: &Project, owner: PropertyOwner) -> TimeMapper {
+    let clip = match owner {
+        PropertyOwner::Clip(clip_id) => project.get_clip(clip_id),
+        PropertyOwner::Node(node_id) => project
+            .find_parent_clip(node_id)
+            .and_then(|clip_id| project.get_clip(clip_id)),
+    };
+    clip.map_or_else(TimeMapper::identity, TimeMapper::from_clip)
 }
 
 #[cfg(test)]
@@ -120,5 +119,34 @@ mod tests {
 
         assert_eq!(mapper.to_source_time(99.0), 1.75);
         assert_eq!(mapper.to_global_time(123.0), 3.25);
+    }
+
+    #[test]
+    fn same_uuid_clip_does_not_hijack_node_time_scope() {
+        let shared_id = uuid::Uuid::new_v4();
+        let parent_clip_id = uuid::Uuid::new_v4();
+        let mut project = Project::new("typed graph time scope");
+
+        let mut colliding_clip = Clip::new("same UUID Clip", 100.0, 5.0);
+        colliding_clip.id = shared_id;
+        colliding_clip.trim_in = OrderedFloat(20.0);
+        let mut parent_clip = Clip::new("actual Node parent", 2.0, 5.0);
+        parent_clip.id = parent_clip_id;
+        parent_clip.trim_in = OrderedFloat(0.5);
+        let mut node = library::model::Node::new_merge("same UUID Node");
+        node.id = shared_id;
+        parent_clip.node_ids.push(shared_id);
+
+        project.add_clip(colliding_clip);
+        project.add_clip(parent_clip);
+        project.add_node(node);
+
+        let node_mapper = time_mapper_for_owner(&project, PropertyOwner::Node(shared_id));
+        let clip_mapper = time_mapper_for_owner(&project, PropertyOwner::Clip(shared_id));
+
+        assert_eq!(node_mapper.clip_start_time, 2.0);
+        assert_eq!(node_mapper.trim_in, 0.5);
+        assert_eq!(clip_mapper.clip_start_time, 100.0);
+        assert_eq!(clip_mapper.trim_in, 20.0);
     }
 }
