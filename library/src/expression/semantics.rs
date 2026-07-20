@@ -18,8 +18,8 @@ pub(super) fn compare(
     right: &RuntimeValue,
 ) -> Result<bool, RuntimeFailure> {
     match operator {
-        CmpOp::Eq => Ok(equal(left, right)),
-        CmpOp::NotEq => Ok(!equal(left, right)),
+        CmpOp::Eq => equal(left, right),
+        CmpOp::NotEq => Ok(!equal(left, right)?),
         CmpOp::Lt => Ok(ordering(left, right)? == Ordering::Less),
         CmpOp::LtE => Ok(ordering(left, right)? != Ordering::Greater),
         CmpOp::Gt => Ok(ordering(left, right)? == Ordering::Greater),
@@ -28,24 +28,30 @@ pub(super) fn compare(
     }
 }
 
-fn equal(left: &RuntimeValue, right: &RuntimeValue) -> bool {
+fn equal(left: &RuntimeValue, right: &RuntimeValue) -> Result<bool, RuntimeFailure> {
     if is_numeric(left) && is_numeric(right) {
-        return number(left).ok() == number(right).ok();
+        return Ok(numeric_ordering(left, right)? == Ordering::Equal);
     }
-    match (left, right) {
-        (RuntimeValue::Bool(left), RuntimeValue::Bool(right)) => left == right,
+    Ok(match (left, right) {
         (RuntimeValue::String(left), RuntimeValue::String(right)) => left == right,
         (RuntimeValue::Sequence(left_kind, left), RuntimeValue::Sequence(right_kind, right)) => {
-            left_kind == right_kind
-                && left.len() == right.len()
-                && left.iter().zip(right).all(|(a, b)| equal(a, b))
+            if left_kind != right_kind || left.len() != right.len() {
+                false
+            } else {
+                for (left, right) in left.iter().zip(right) {
+                    if !equal(left, right)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
         }
         (RuntimeValue::Vector(left_kind, left), RuntimeValue::Vector(right_kind, right)) => {
             left_kind == right_kind && left == right
         }
         (RuntimeValue::Color(left), RuntimeValue::Color(right)) => left == right,
         _ => false,
-    }
+    })
 }
 
 pub(super) fn ordering(
@@ -53,15 +59,62 @@ pub(super) fn ordering(
     right: &RuntimeValue,
 ) -> Result<Ordering, RuntimeFailure> {
     if is_numeric(left) && is_numeric(right) {
-        return number(left)?
-            .partial_cmp(&number(right)?)
-            .ok_or_else(|| RuntimeFailure::non_finite("comparison produced an invalid number"));
+        return numeric_ordering(left, right);
     }
     match (left, right) {
         (RuntimeValue::String(left), RuntimeValue::String(right)) => Ok(left.cmp(right)),
         _ => Err(RuntimeFailure::type_error(
             "ordered comparison requires two numbers or two strings",
         )),
+    }
+}
+
+fn numeric_ordering(left: &RuntimeValue, right: &RuntimeValue) -> Result<Ordering, RuntimeFailure> {
+    match (integral_value(left), integral_value(right)) {
+        (Some(left), Some(right)) => return Ok(left.cmp(&right)),
+        (Some(left), None) => return compare_integer_to_number(left, number(right)?),
+        (None, Some(right)) => {
+            return compare_integer_to_number(right, number(left)?).map(Ordering::reverse);
+        }
+        (None, None) => {}
+    }
+    number(left)?
+        .partial_cmp(&number(right)?)
+        .ok_or_else(|| RuntimeFailure::non_finite("comparison produced an invalid number"))
+}
+
+fn integral_value(value: &RuntimeValue) -> Option<i64> {
+    match value {
+        RuntimeValue::Integer(value) => Some(*value),
+        RuntimeValue::Bool(value) => Some(i64::from(*value)),
+        _ => None,
+    }
+}
+
+/// Compares an exact Python integer with an IEEE-754 number without first
+/// rounding the integer to `f64`. This preserves Python comparison semantics
+/// above 2^53 and at the signed 64-bit boundaries.
+fn compare_integer_to_number(integer: i64, number: f64) -> Result<Ordering, RuntimeFailure> {
+    if !number.is_finite() {
+        return Err(RuntimeFailure::non_finite(
+            "comparison operand is not finite",
+        ));
+    }
+
+    const I64_UPPER_EXCLUSIVE: f64 = 9_223_372_036_854_775_808.0;
+    if number >= I64_UPPER_EXCLUSIVE {
+        return Ok(Ordering::Less);
+    }
+    if number < i64::MIN as f64 {
+        return Ok(Ordering::Greater);
+    }
+
+    let truncated = number as i64;
+    match integer.cmp(&truncated) {
+        Ordering::Equal => 0.0_f64
+            .partial_cmp(&number.fract())
+            .ok_or_else(|| RuntimeFailure::non_finite("comparison operand is not finite")),
+        ordering => Ok(ordering),
     }
 }
 
@@ -174,7 +227,12 @@ pub(super) fn validate_runtime_value(
         RuntimeValue::Integer(_) | RuntimeValue::Bool(_) => true,
         RuntimeValue::Number(value) => value.is_finite(),
         RuntimeValue::String(value) => value.len() <= limits.max_string_bytes,
-        RuntimeValue::Sequence(_, values) => values.len() <= limits.max_collection_items,
+        RuntimeValue::Sequence(_, values) => {
+            values.len() <= limits.max_collection_items
+                && values
+                    .iter()
+                    .all(|value| runtime_value_is_valid(value, limits))
+        }
         RuntimeValue::Vector(_, values) => values.iter().all(|value| value.is_finite()),
         RuntimeValue::Color(values) => values.iter().all(|value| value.is_finite()),
     };
@@ -184,6 +242,22 @@ pub(super) fn validate_runtime_value(
         Err(RuntimeFailure::non_finite(
             "helper produced an invalid or oversized value",
         ))
+    }
+}
+
+fn runtime_value_is_valid(value: &RuntimeValue, limits: &ExpressionLimits) -> bool {
+    match value {
+        RuntimeValue::Integer(_) | RuntimeValue::Bool(_) => true,
+        RuntimeValue::Number(value) => value.is_finite(),
+        RuntimeValue::String(value) => value.len() <= limits.max_string_bytes,
+        RuntimeValue::Sequence(_, values) => {
+            values.len() <= limits.max_collection_items
+                && values
+                    .iter()
+                    .all(|value| runtime_value_is_valid(value, limits))
+        }
+        RuntimeValue::Vector(_, values) => values.iter().all(|value| value.is_finite()),
+        RuntimeValue::Color(values) => values.iter().all(|value| value.is_finite()),
     }
 }
 
@@ -268,13 +342,19 @@ pub(super) fn convert_output(
         (ExpressionOutputType::Integer, RuntimeValue::Integer(value)) => {
             ExpressionValue::Integer(value)
         }
-        (ExpressionOutputType::Vec2, RuntimeValue::Vector(VectorKind::Vec2, values)) => {
+        (ExpressionOutputType::Vec2, RuntimeValue::Vector(VectorKind::Vec2, values))
+            if values.len() == 2 && values.iter().all(|value| value.is_finite()) =>
+        {
             ExpressionValue::Vec2([values[0], values[1]])
         }
-        (ExpressionOutputType::Vec3, RuntimeValue::Vector(VectorKind::Vec3, values)) => {
+        (ExpressionOutputType::Vec3, RuntimeValue::Vector(VectorKind::Vec3, values))
+            if values.len() == 3 && values.iter().all(|value| value.is_finite()) =>
+        {
             ExpressionValue::Vec3([values[0], values[1], values[2]])
         }
-        (ExpressionOutputType::Vec4, RuntimeValue::Vector(VectorKind::Vec4, values)) => {
+        (ExpressionOutputType::Vec4, RuntimeValue::Vector(VectorKind::Vec4, values))
+            if values.len() == 4 && values.iter().all(|value| value.is_finite()) =>
+        {
             ExpressionValue::Vec4([values[0], values[1], values[2], values[3]])
         }
         (ExpressionOutputType::Color, RuntimeValue::Color(values))

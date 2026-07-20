@@ -432,16 +432,25 @@ fn normalize_vector(arguments: &[RuntimeValue]) -> Result<RuntimeValue, RuntimeF
         return Err(RuntimeFailure::type_error("normalize expects a vector"));
     };
     let length = values.iter().map(|value| value * value).sum::<f64>().sqrt();
+    if !length.is_finite() {
+        return Err(RuntimeFailure::non_finite("vector length is not finite"));
+    }
     if length == 0.0 {
         return Err(RuntimeFailure::new(
             ExpressionDiagnosticKind::DivisionByZero,
             "cannot normalize a zero-length vector",
         ));
     }
-    Ok(RuntimeValue::Vector(
-        *kind,
-        values.iter().map(|value| value / length).collect(),
-    ))
+    let normalized = values
+        .iter()
+        .map(|value| value / length)
+        .collect::<Vec<_>>();
+    if normalized.iter().any(|value| !value.is_finite()) {
+        return Err(RuntimeFailure::non_finite(
+            "normalized vector contains a non-finite component",
+        ));
+    }
+    Ok(RuntimeValue::Vector(*kind, normalized))
 }
 
 fn dot_product(arguments: &[RuntimeValue]) -> Result<RuntimeValue, RuntimeFailure> {

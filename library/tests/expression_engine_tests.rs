@@ -133,6 +133,34 @@ fn bool_compare_conditional_and_index_follow_the_supported_python_subset() -> Re
         evaluate("'abc'[-1]", ExpressionOutputType::String)?,
         ExpressionValue::String("c".to_string())
     );
+    assert_eq!(
+        evaluate(
+            "9007199254740993 == 9007199254740992",
+            ExpressionOutputType::Bool,
+        )?,
+        ExpressionValue::Bool(false)
+    );
+    assert_eq!(
+        evaluate(
+            "9007199254740993 > 9007199254740992.0",
+            ExpressionOutputType::Bool,
+        )?,
+        ExpressionValue::Bool(true)
+    );
+    assert_eq!(
+        evaluate(
+            "-9007199254740993 < -9007199254740992.0",
+            ExpressionOutputType::Bool,
+        )?,
+        ExpressionValue::Bool(true)
+    );
+    assert_eq!(
+        evaluate(
+            "9223372036854775807 < 9223372036854775808.0",
+            ExpressionOutputType::Bool,
+        )?,
+        ExpressionValue::Bool(true)
+    );
     Ok(())
 }
 
@@ -202,6 +230,18 @@ fn result_conversion_is_strict_and_rejects_non_finite_values() -> Result<()> {
     let non_finite =
         diagnostic(engine.evaluate("1e308 * 1e308", &context()?, ExpressionOutputType::Number))?;
     assert_eq!(non_finite.kind, ExpressionDiagnosticKind::NonFinite);
+
+    for (source, output) in [
+        ("vec2(1e308, 1e308) * 1e308", ExpressionOutputType::Vec2),
+        ("normalize(vec2(1e308, 1e308))", ExpressionOutputType::Vec2),
+        (
+            "[vec2(1e308, 1e308) * 1e308][0]",
+            ExpressionOutputType::Vec2,
+        ),
+    ] {
+        let error = diagnostic(engine.evaluate(source, &context()?, output))?;
+        assert_eq!(error.kind, ExpressionDiagnosticKind::NonFinite, "{source}");
+    }
     Ok(())
 }
 
