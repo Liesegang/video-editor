@@ -355,7 +355,7 @@ pub fn audio_stream_index_for_media(
 fn volume_at(properties: &PropertyMap, time: f64) -> f32 {
     properties
         .get("volume")
-        .map(|property| property.evaluate_at(time))
+        .and_then(|property| property.evaluate_at(time).ok())
         .and_then(|value| value.get_as::<f64>())
         .unwrap_or(1.0) as f32
 }

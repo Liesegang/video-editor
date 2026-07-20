@@ -1064,6 +1064,21 @@ impl ProjectManager {
             .evaluate(property, time, &eval_ctx)
     }
 
+    pub fn evaluate_property_with_diagnostics(
+        &self,
+        property: &crate::model::property::Property,
+        context: &crate::model::property::PropertyMap,
+        time: f64,
+        fps: f64,
+        resolution: (u64, u64),
+    ) -> Result<crate::plugin::PropertyEvaluationOutcome, crate::plugin::PropertyEvaluationError>
+    {
+        let eval_ctx = crate::plugin::EvaluationContext::new(context, fps, resolution);
+        self.plugin_manager
+            .get_property_evaluators()
+            .evaluate_with_diagnostics(property, time, &eval_ctx)
+    }
+
     pub fn add_keyframe(
         &self,
         owner: PropertyOwner,

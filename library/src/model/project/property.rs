@@ -10,6 +10,10 @@ use uuid::Uuid;
 use crate::animation::EasingFunction;
 use crate::model::frame::color::Color;
 
+mod evaluation;
+
+pub use evaluation::PropertySampleError;
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Vec2 {
     pub x: OrderedFloat<f64>,
@@ -539,9 +543,9 @@ impl Property {
     }
 
     /// Creates a Python Expression property with an authored, type-defining
-    /// fallback. The Inspector must supply a fallback compatible with the
-    /// property's [`PropertyDefinition`]. Evaluation errors preserve this
-    /// value instead of inventing a numeric zero.
+    /// input value. The Inspector must supply a value compatible with the
+    /// property's [`PropertyDefinition`]. Evaluation errors are reported by
+    /// the registered evaluator and never silently substitute this value.
     pub fn expression(expression: String, fallback: PropertyValue) -> Self {
         Self {
             evaluator: "expression".to_string(),
@@ -753,79 +757,6 @@ impl Property {
             }
         }
         true
-    }
-
-    /// Evaluate the property at a specific time.
-    /// If constant, returns the constant value.
-    /// If expression or another evaluator, returns its authored fallback.
-    /// If keyframes, interpolates between the two nearest keyframes.
-    pub fn evaluate_at(&self, time: f64) -> PropertyValue {
-        match self.evaluator.as_str() {
-            "constant" => {
-                // Return value or default
-                self.value()
-                    .cloned()
-                    .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)))
-            }
-            "keyframe" => {
-                let kfs = self.keyframes();
-                if kfs.is_empty() {
-                    return self
-                        .value()
-                        .cloned()
-                        .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
-                }
-
-                // If only one keyframe, return its value
-                if kfs.len() == 1 {
-                    return kfs[0].value.clone();
-                }
-
-                // If before first keyframe
-                if time <= kfs[0].time.into_inner() {
-                    return kfs[0].value.clone();
-                }
-
-                let Some(last_keyframe) = kfs.last() else {
-                    return self
-                        .value()
-                        .cloned()
-                        .unwrap_or(PropertyValue::Number(OrderedFloat(0.0)));
-                };
-
-                // If after last keyframe
-                if time >= last_keyframe.time.into_inner() {
-                    return last_keyframe.value.clone();
-                }
-
-                // Find the segment [k1, k2] containing time
-                for window in kfs.windows(2) {
-                    let k1 = &window[0];
-                    let k2 = &window[1];
-                    let t1 = k1.time.into_inner();
-                    let t2 = k2.time.into_inner();
-
-                    if time >= t1 && time < t2 {
-                        let duration = t2 - t1;
-                        if duration <= f64::EPSILON {
-                            return k1.value.clone();
-                        }
-
-                        let t_norm = (time - t1) / duration;
-                        let t_eased = k1.easing.apply(t_norm); // Use Easing from START keyframe
-
-                        return PropertyValue::interpolate(&k1.value, &k2.value, t_eased);
-                    }
-                }
-
-                // Should not reach here
-                last_keyframe.value.clone()
-            }
-            _ => self
-                .value()
-                .cloned()
-                .unwrap_or(PropertyValue::Number(OrderedFloat(0.0))),
-        }
     }
 }
 
@@ -1436,7 +1367,7 @@ mod keyframe_tests {
         let second = Keyframe::new(1.0, number(10.0), EasingFunction::Linear);
         let property = Property::keyframe(vec![second.clone(), first.clone()]);
 
-        assert_eq!(property.evaluate_at(0.5), number(2.5));
+        assert_eq!(property.evaluate_at(0.5).unwrap(), number(2.5));
         let json = serde_json::to_string(&property).expect("property should serialize");
         assert!(json.contains("\"id\""));
         let loaded: Property = serde_json::from_str(&json).expect("property should deserialize");
@@ -1450,6 +1381,6 @@ mod keyframe_tests {
                 .collect::<Vec<_>>(),
             vec![first.id, second.id]
         );
-        assert_eq!(loaded.evaluate_at(0.5), number(2.5));
+        assert_eq!(loaded.evaluate_at(0.5).unwrap(), number(2.5));
     }
 }
