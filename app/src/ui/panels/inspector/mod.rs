@@ -715,14 +715,7 @@ fn render_semantic_graph_facade(
 fn semantic_visual_sources(nodes: &[Node]) -> Vec<&Node> {
     nodes
         .iter()
-        .filter(|node| {
-            matches!(
-                node.content(),
-                NodeContent::Media(_)
-                    | NodeContent::Generator(_)
-                    | NodeContent::CompositionInstance(_)
-            )
-        })
+        .filter(|node| node.content().is_semantic_visual_source())
         .collect()
 }
 

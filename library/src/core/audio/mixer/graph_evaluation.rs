@@ -182,20 +182,18 @@ fn collect_audio_routes<'a>(
             }
         }
         PortOwner::Track(track_id) => {
-            if let Some(track) = project.get_track(track_id)
-                && let Some(step) =
-                    audio_gain_step(project, owner, AudioRouteStepKind::Gain, &track.properties)
-            {
+            if let Some(track) = project.get_track(track_id) {
+                let step =
+                    audio_gain_step(project, owner, AudioRouteStepKind::Gain, &track.properties);
                 steps.push(step);
                 collect_audio_container_routes(project, owner, path, steps, emitted, routes);
                 steps.pop();
             }
         }
         PortOwner::Clip(clip_id) => {
-            if let Some(clip) = project.get_clip(clip_id)
-                && let Some(step) =
-                    audio_gain_step(project, owner, AudioRouteStepKind::Gain, &clip.properties)
-            {
+            if let Some(clip) = project.get_clip(clip_id) {
+                let step =
+                    audio_gain_step(project, owner, AudioRouteStepKind::Gain, &clip.properties);
                 steps.push(step);
                 collect_audio_container_routes(project, owner, path, steps, emitted, routes);
                 steps.pop();
@@ -209,23 +207,22 @@ fn collect_audio_routes<'a>(
             if node.enabled && node_has_audio_output(project, owner) {
                 match node.content() {
                     NodeContent::Media(_) => {
-                        if let Some(step) = audio_gain_step(
+                        let step = audio_gain_step(
                             project,
                             owner,
                             AudioRouteStepKind::Media,
                             node.properties(),
-                        ) {
-                            steps.push(step);
-                            let route =
-                                AudioRoute(steps.iter().map(|step| step.owner).collect::<Vec<_>>());
-                            if emitted.insert(route) {
-                                routes.push(AudioRoutePlan {
-                                    steps: steps.clone(),
-                                    node_id,
-                                });
-                            }
-                            steps.pop();
+                        );
+                        steps.push(step);
+                        let route =
+                            AudioRoute(steps.iter().map(|step| step.owner).collect::<Vec<_>>());
+                        if emitted.insert(route) {
+                            routes.push(AudioRoutePlan {
+                                steps: steps.clone(),
+                                node_id,
+                            });
                         }
+                        steps.pop();
                     }
                     NodeContent::CompositionInstance(instance) => {
                         if !matches!(
@@ -235,14 +232,13 @@ fn collect_audio_routes<'a>(
                             log::trace!(
                                 "audio mixer skipped Composition Instance {node_id} outside a Clip"
                             );
-                        } else if project.get_composition(instance.composition_id).is_some()
-                            && let Some(step) = audio_gain_step(
+                        } else if project.get_composition(instance.composition_id).is_some() {
+                            let step = audio_gain_step(
                                 project,
                                 owner,
                                 AudioRouteStepKind::CompositionInstance,
                                 node.properties(),
-                            )
-                        {
+                            );
                             steps.push(step);
                             collect_audio_routes(
                                 project,
@@ -292,21 +288,20 @@ fn audio_gain_step<'a>(
     owner: PortOwner,
     kind: AudioRouteStepKind,
     properties: &'a PropertyMap,
-) -> Option<AudioRouteStep<'a>> {
-    let composition_id = project.find_containing_composition(owner.id())?;
+) -> AudioRouteStep<'a> {
     let prefix = match owner {
         PortOwner::Composition(_) => "composition",
         PortOwner::Track(_) => "track",
         PortOwner::Clip(_) => "clip",
         PortOwner::Node(_) => "node",
     };
-    Some(AudioRouteStep {
+    AudioRouteStep {
         owner,
         kind,
         properties: Some(properties),
-        composition_id: Some(composition_id),
+        composition_id: project.find_containing_composition(owner.id()),
         diagnostic_scope: Some(format!("{prefix}:{}", owner.id())),
-    })
+    }
 }
 
 fn node_has_audio_output(project: &Project, owner: PortOwner) -> bool {

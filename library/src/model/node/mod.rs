@@ -543,6 +543,15 @@ pub enum NodeContent {
     Merge,
 }
 
+impl NodeContent {
+    pub fn is_semantic_visual_source(&self) -> bool {
+        matches!(
+            self,
+            Self::Media(_) | Self::Generator(_) | Self::CompositionInstance(_)
+        )
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ValueContent {
     /// Generic component-wise floating-point remainder. The required `x`

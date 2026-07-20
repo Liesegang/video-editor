@@ -584,6 +584,11 @@ fn unsupported_audio_plugin_operation_is_no_output_instead_of_implicit_passthrou
         .set_audio_output_node(NodeContainer::Clip(clip_id), Some(operation_id))
         .unwrap();
 
+    assert!(
+        routed_audio_media_nodes(&project, PortOwner::Clip(clip_id)).is_empty(),
+        "waveform discovery must not present unsupported operations as pass-through audio"
+    );
+
     let composition = project.get_composition(composition_id).unwrap();
     assert_eq!(
         mix_samples(

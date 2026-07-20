@@ -64,13 +64,14 @@ fn add_target_audio(
     files: &mut TestAudioFiles,
     track_id: uuid::Uuid,
     samples: Vec<f32>,
-) {
+) -> uuid::Uuid {
     let media_id = add_audio_node(project, cache, files, samples);
     let clip = Clip::new("source audio", 0.0, 2.0);
     let clip_id = clip.id;
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id).unwrap();
     attach_audio_output(project, NodeContainer::Clip(clip_id), media_id);
+    media_id
 }
 
 #[test]
@@ -83,7 +84,7 @@ fn instances_mix_the_same_definition_with_independent_clip_times() {
     project.add_composition(target);
     let cache = CacheManager::new();
     let mut files = TestAudioFiles::default();
-    add_target_audio(
+    let media_id = add_target_audio(
         &mut project,
         &cache,
         &mut files,
@@ -96,8 +97,15 @@ fn instances_mix_the_same_definition_with_independent_clip_times() {
     let parent_track_id = parent_track.id;
     project.add_track(parent_track);
     project.add_composition(parent);
-    attach_composition_instance(&mut project, parent_track_id, target_id, 0.0, 1.0, 0.0);
+    let (first_instance_clip_id, _) =
+        attach_composition_instance(&mut project, parent_track_id, target_id, 0.0, 1.0, 0.0);
     attach_composition_instance(&mut project, parent_track_id, target_id, 0.0, 1.0, 0.5);
+
+    assert_eq!(
+        routed_audio_media_nodes(&project, PortOwner::Clip(first_instance_clip_id)),
+        vec![media_id],
+        "waveform discovery must recurse through the instance Audio route"
+    );
 
     let target_before = project.get_composition(target_id).unwrap().clone();
     assert_eq!(
@@ -282,5 +290,9 @@ fn reachable_self_and_transitive_instance_cycles_fail_closed() {
     );
     assert!(
         audio_window_requests_for_composition(&project, composition, 0, 4, 4, &plugins).is_empty()
+    );
+    assert!(
+        routed_audio_media_nodes(&project, PortOwner::Composition(root_id)).is_empty(),
+        "waveform discovery must fail closed on recursive instance topology"
     );
 }
