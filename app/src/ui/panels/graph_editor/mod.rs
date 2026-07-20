@@ -85,24 +85,23 @@ pub fn graph_editor_panel(
     project: &Arc<RwLock<Project>>,
     registry: &CommandRegistry,
 ) {
+    let graph_owner = editor_context
+        .active_composition_id
+        .zip(graph_node_selection(editor_context.selection.primary()))
+        .and_then(|(composition_id, node_id)| {
+            project.read().ok().and_then(|project| {
+                node_belongs_to_composition(&project, node_id, composition_id).then_some(node_id)
+            })
+        });
+    finish_graph_drag_if_owner_changed(graph_owner, editor_context, project, history_manager);
+
     let Some(comp_id) = editor_context.active_composition_id else {
         ui.label("No composition selected.");
         return;
     };
-    let Some(selected_node_id) = graph_node_selection(editor_context.selection.primary()) else {
+    let Some(entity_id) = graph_owner else {
         ui.label("Select a Node to edit its keyframes.");
         return;
-    };
-
-    let entity_id = {
-        let Ok(project) = project.read() else {
-            return;
-        };
-        if !node_belongs_to_composition(&project, selected_node_id, comp_id) {
-            ui.label("Select a Node to edit its keyframes.");
-            return;
-        }
-        selected_node_id
     };
     if editor_context.graph_editor.active_entity_id != Some(entity_id) {
         actions::finish_pending_move(editor_context, project, history_manager);
@@ -366,6 +365,23 @@ fn graph_node_selection(target: Option<SelectionTarget>) -> Option<uuid::Uuid> {
     target.and_then(SelectionTarget::node_id)
 }
 
+fn finish_graph_drag_if_owner_changed(
+    graph_owner: Option<uuid::Uuid>,
+    editor_context: &mut EditorContext,
+    project: &Arc<RwLock<Project>>,
+    history_manager: &mut HistoryManager,
+) -> bool {
+    if editor_context
+        .graph_editor
+        .keyframe_drag
+        .as_ref()
+        .is_some_and(|drag| graph_owner != Some(drag.entity_id))
+    {
+        return actions::finish_pending_move(editor_context, project, history_manager);
+    }
+    false
+}
+
 fn node_belongs_to_composition(
     project: &Project,
     node_id: uuid::Uuid,
@@ -393,7 +409,14 @@ fn node_belongs_to_composition(
 
 #[cfg(test)]
 mod tests {
-    use super::{graph_node_selection, SelectionTarget};
+    use super::{
+        finish_graph_drag_if_owner_changed, graph_node_selection, HistoryManager, SelectionTarget,
+    };
+    use crate::state::context::EditorContext;
+    use crate::state::context_types::GraphKeyframeDragState;
+    use library::model::project::Project;
+    use library::model::property::KeyframeId;
+    use std::sync::{Arc, RwLock};
     use uuid::Uuid;
 
     #[test]
@@ -408,5 +431,36 @@ mod tests {
             graph_node_selection(Some(SelectionTarget::Clip(shared_id))),
             None
         );
+    }
+
+    #[test]
+    fn non_node_owner_finishes_changed_drag_before_panel_early_return() {
+        let composition_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let keyframe_id = KeyframeId::new();
+        let original = Project::new("before interrupted graph drag");
+        let project = Arc::new(RwLock::new(original.clone()));
+        project.write().unwrap().name = "after interrupted graph drag".to_string();
+        let edited = project.read().unwrap().clone();
+        let mut context = EditorContext::new(composition_id);
+        context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
+            entity_id: node_id,
+            anchor: ("node:opacity".to_string(), keyframe_id),
+            origins: Vec::new(),
+            changed: true,
+        });
+        context.select_target(SelectionTarget::Clip(node_id));
+        let mut history = HistoryManager::new();
+        history.push_project_state(original.clone());
+
+        assert!(finish_graph_drag_if_owner_changed(
+            graph_node_selection(context.selection.primary()),
+            &mut context,
+            &project,
+            &mut history,
+        ));
+        assert_eq!(history.undo_depth(), 2);
+        assert_eq!(history.undo(&edited), Some(original));
+        assert!(context.graph_editor.keyframe_drag.is_none());
     }
 }

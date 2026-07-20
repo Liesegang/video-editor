@@ -2,6 +2,7 @@ use super::utils::time_mapper_for_owner;
 use super::PropertyComponent;
 use crate::action::HistoryManager;
 use crate::state::context::EditorContext;
+use crate::utils::lock::read_or_recover;
 use library::animation::EasingFunction;
 use library::model::project::Project;
 use library::model::property::{KeyframeId, KeyframeUpdate, PropertyValue};
@@ -165,9 +166,7 @@ fn prepare_move_batch(
 }
 
 fn push_history(project: &Arc<RwLock<Project>>, history_manager: &mut HistoryManager) {
-    if let Ok(project) = project.read() {
-        history_manager.push_project_state(project.clone());
-    }
+    history_manager.push_project_state(read_or_recover(project.as_ref()).clone());
 }
 
 pub fn finish_pending_move(

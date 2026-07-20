@@ -10,6 +10,7 @@ use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use crate::action::{
+    activate_composition_with_history, commit_live_project_edits,
     handler::{handle_command, ActionContext},
     HistoryManager,
 };
@@ -199,22 +200,38 @@ impl eframe::App for RuViEApp {
             if let Some(action) = dialog.show(ctx) {
                 match action {
                     crate::ui::dialogs::confirmation::ConfirmationAction::DeleteAsset(id) => {
+                        commit_live_project_edits(
+                            &mut self.editor_context,
+                            &mut self.history_manager,
+                            &self.project,
+                        );
                         if let Err(e) = self.project_service.remove_asset_fully(id) {
                             log::error!("Failed to remove asset: {}", e);
                         } else {
                             // Push history
                             let project = self.project_service.get_project();
                             let current_state = read_or_recover(project.as_ref()).clone();
+                            self.editor_context.reconcile_selection(&current_state);
                             self.history_manager.push_project_state(current_state);
                         }
                     }
                     crate::ui::dialogs::confirmation::ConfirmationAction::DeleteComposition(id) => {
+                        commit_live_project_edits(
+                            &mut self.editor_context,
+                            &mut self.history_manager,
+                            &self.project,
+                        );
                         if let Err(e) = self.project_service.remove_composition_fully(id) {
                             log::error!("Failed to remove composition: {}", e);
                         } else {
                             // Clear selection if needed
                             if self.editor_context.active_composition_id == Some(id) {
-                                self.editor_context.activate_composition(None);
+                                activate_composition_with_history(
+                                    &mut self.editor_context,
+                                    None,
+                                    &mut self.history_manager,
+                                    &self.project,
+                                );
                             }
                             let project = self.project_service.get_project();
                             let current_state = read_or_recover(project.as_ref()).clone();

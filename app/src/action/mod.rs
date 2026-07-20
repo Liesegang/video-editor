@@ -1,4 +1,10 @@
 use library::model::project::Project;
+use std::sync::{Arc, RwLock};
+use uuid::Uuid;
+
+use crate::state::context::EditorContext;
+use crate::state::context_types::PreviewPrimaryGesture;
+use crate::utils::lock::read_or_recover;
 
 pub mod handler;
 
@@ -84,10 +90,100 @@ impl HistoryManager {
     }
 }
 
+fn has_live_project_edit(editor_context: &EditorContext) -> bool {
+    editor_context
+        .graph_editor
+        .keyframe_drag
+        .as_ref()
+        .is_some_and(|drag| drag.changed)
+        || editor_context.interaction.dragged_entity_has_moved
+        || editor_context.interaction.is_resizing_entity
+        || editor_context.interaction.is_moving_selected_entity
+        || editor_context.interaction.body_drag_state.is_some()
+        || editor_context.interaction.gizmo_state.is_some()
+        || editor_context
+            .interaction
+            .vector_editor_state
+            .as_ref()
+            .is_some_and(|state| state.selected_handle.is_some())
+        || editor_context.interaction.preview_viewport.primary_gesture
+            == PreviewPrimaryGesture::Content
+        || editor_context.interaction.timeline_track_reorder.is_some()
+        || editor_context.node_editor_state.layout_changed_during_drag
+        || editor_context.node_editor_state.node_reparent.is_some()
+        || editor_context.node_editor_state.container_resize.is_some()
+        || editor_context
+            .node_editor_state
+            .pending_continuous_edit
+            .is_some()
+}
+
+/// Commit Project mutations already applied by an interrupted live UI gesture.
+///
+/// Timeline, Preview, Graph Editor, and Node Editor update the authoritative
+/// Project incrementally, then normally push history on pointer release. A
+/// Composition switch can invalidate their transient release state first, so
+/// it must snapshot the current Project once before clearing those gestures.
+/// HistoryManager deduplicates active gestures that have not changed Project.
+pub fn commit_live_project_edits(
+    editor_context: &mut EditorContext,
+    history_manager: &mut HistoryManager,
+    project: &Arc<RwLock<Project>>,
+) -> bool {
+    if !has_live_project_edit(editor_context) {
+        return false;
+    }
+    history_manager.push_project_state(read_or_recover(project.as_ref()).clone());
+
+    editor_context.graph_editor.keyframe_drag = None;
+    editor_context.interaction.dragged_entity_original_track_id = None;
+    editor_context.interaction.dragged_entity_hovered_track_id = None;
+    editor_context.interaction.dragged_entity_has_moved = false;
+    editor_context.interaction.timeline_track_reorder = None;
+    editor_context.interaction.is_resizing_entity = false;
+    editor_context.interaction.is_moving_selected_entity = false;
+    editor_context.interaction.body_drag_state = None;
+    editor_context.interaction.gizmo_state = None;
+    editor_context.interaction.timeline_selection_drag_start = None;
+    editor_context.interaction.preview_selection_drag_start = None;
+    if let Some(state) = &mut editor_context.interaction.vector_editor_state {
+        state.selected_handle = None;
+    }
+    editor_context.interaction.preview_viewport.primary_gesture = PreviewPrimaryGesture::Idle;
+    editor_context.node_editor_state.layout_changed_during_drag = false;
+    editor_context.node_editor_state.node_reparent = None;
+    editor_context.node_editor_state.moved_node_ids.clear();
+    editor_context.node_editor_state.container_resize = None;
+    editor_context.node_editor_state.pending_continuous_edit = None;
+    true
+}
+
+/// Navigate to a Composition without losing an in-flight authoritative edit.
+pub fn activate_composition_with_history(
+    editor_context: &mut EditorContext,
+    composition_id: Option<Uuid>,
+    history_manager: &mut HistoryManager,
+    project: &Arc<RwLock<Project>>,
+) -> bool {
+    if editor_context.active_composition_id == composition_id {
+        return false;
+    }
+    commit_live_project_edits(editor_context, history_manager, project);
+    editor_context.activate_composition(composition_id)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::HistoryManager;
-    use library::model::project::Project;
+    use super::{activate_composition_with_history, HistoryManager};
+    use crate::state::context::EditorContext;
+    use crate::state::context_types::{
+        BodyDragState, GraphKeyframeDragState, NodeEditorPendingEdit, PreviewPrimaryGesture,
+    };
+    use library::model::project::{PortOwner, Project};
+    use library::model::property::KeyframeId;
+    use std::collections::HashMap;
+    use std::sync::{Arc, RwLock};
+    use uuid::Uuid;
 
     #[test]
     fn undo_redo_restores_committed_project_states() {
@@ -129,5 +225,92 @@ mod tests {
         history.push_project_state(edited.clone());
         assert_eq!(history.undo(&edited), Some(initial));
         assert_eq!(history.redo(&divergent), None);
+    }
+
+    #[test]
+    fn composition_navigation_commits_all_interrupted_editors_once() {
+        let first_composition = Uuid::new_v4();
+        let second_composition = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let keyframe_id = KeyframeId::new();
+        let original = Project::new("before live gestures");
+        let project = Arc::new(RwLock::new(original.clone()));
+        project.write().unwrap().name = "after live gestures".to_string();
+        let edited = project.read().unwrap().clone();
+        let mut context = EditorContext::new(first_composition);
+        context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
+            entity_id: node_id,
+            anchor: ("node:opacity".to_string(), keyframe_id),
+            origins: Vec::new(),
+            changed: true,
+        });
+        context.interaction.dragged_entity_has_moved = true;
+        context.interaction.is_resizing_entity = true;
+        context.interaction.is_moving_selected_entity = true;
+        context.interaction.body_drag_state = Some(BodyDragState {
+            start_mouse_pos: egui::Pos2::ZERO,
+            original_positions: HashMap::new(),
+        });
+        context.interaction.preview_viewport.primary_gesture = PreviewPrimaryGesture::Content;
+        context.node_editor_state.layout_changed_during_drag = true;
+        context.node_editor_state.pending_continuous_edit = Some(NodeEditorPendingEdit {
+            owner: PortOwner::Node(node_id),
+            key: "opacity".to_string(),
+        });
+        let mut history = HistoryManager::new();
+        history.push_project_state(original.clone());
+
+        assert!(activate_composition_with_history(
+            &mut context,
+            Some(second_composition),
+            &mut history,
+            &project,
+        ));
+
+        assert_eq!(
+            history.undo_depth(),
+            2,
+            "all dirty editors share one commit"
+        );
+        assert_eq!(history.undo(&edited), Some(original));
+        assert!(context.graph_editor.keyframe_drag.is_none());
+        assert!(!context.interaction.dragged_entity_has_moved);
+        assert!(!context.interaction.is_resizing_entity);
+        assert!(!context.interaction.is_moving_selected_entity);
+        assert!(context.interaction.body_drag_state.is_none());
+        assert_eq!(
+            context.interaction.preview_viewport.primary_gesture,
+            PreviewPrimaryGesture::Idle
+        );
+        assert!(!context.node_editor_state.layout_changed_during_drag);
+        assert!(context.node_editor_state.pending_continuous_edit.is_none());
+    }
+
+    #[test]
+    fn activating_current_composition_does_not_flush_or_clear_live_edit() {
+        let composition_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let keyframe_id = KeyframeId::new();
+        let original = Project::new("before same-target navigation");
+        let project = Arc::new(RwLock::new(original.clone()));
+        project.write().unwrap().name = "uncommitted".to_string();
+        let mut context = EditorContext::new(composition_id);
+        context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
+            entity_id: node_id,
+            anchor: ("node:opacity".to_string(), keyframe_id),
+            origins: Vec::new(),
+            changed: true,
+        });
+        let mut history = HistoryManager::new();
+        history.push_project_state(original);
+
+        assert!(!activate_composition_with_history(
+            &mut context,
+            Some(composition_id),
+            &mut history,
+            &project,
+        ));
+        assert_eq!(history.undo_depth(), 1);
+        assert!(context.graph_editor.keyframe_drag.is_some());
     }
 }

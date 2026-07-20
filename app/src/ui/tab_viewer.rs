@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use crate::command::CommandRegistry;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::{
-    action::HistoryManager,
+    action::{activate_composition_with_history, HistoryManager},
     model::ui_types::Tab,
     state::context::EditorContext,
     ui::panels::{assets, inspector, node_editor, preview, timeline},
@@ -120,8 +120,12 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                 if let Some(target_comp_id) =
                     self.editor_context.node_editor_state.pending_navigation
                 {
-                    self.editor_context
-                        .activate_composition(Some(target_comp_id));
+                    activate_composition_with_history(
+                        self.editor_context,
+                        Some(target_comp_id),
+                        self.history_manager,
+                        self.project,
+                    );
                     // Also switch tab to Timeline? Or stay in Node Editor?
                     // User probably wants to see the graph of the new container, so stay in Node Editor.
                     // But if it's a "Composite", maybe they want Timeline?
