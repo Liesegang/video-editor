@@ -15,7 +15,7 @@ use library::model::project::{
     IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NodeContainer, NodeGraphBundle, PortAddress,
     PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner,
     PortSide, Project, ProjectConnection, ProjectGraphError, RESOLUTION_PORT, SHAPE_INPUT_PORT,
-    SHAPE_OUTPUT_PORT, TIME_PORT,
+    SHAPE_OUTPUT_PORT, TIME_PORT, VALUE_INPUT_PORT, VALUE_OUTPUT_PORT,
 };
 use library::model::property::{Keyframe, Property, PropertyValue};
 use library::model::{
@@ -2473,6 +2473,161 @@ fn disabled_and_out_of_range_nodes_never_expose_preview_source_identity() -> Res
         .context("visual Node must exist")?
         .enabled = false;
     assert!(object_source_ids(&frame(&project, 30)?.items).is_empty());
+    Ok(())
+}
+
+#[test]
+fn composition_duration_gates_direct_composition_and_track_nodes() -> Result<()> {
+    let (mut project, composition_id, track_id) = project_with_composition();
+    let composition_node_id = add_node(
+        &mut project,
+        NodeContainer::Composition(composition_id),
+        solid_node("composition direct"),
+    )?;
+    let track_node_id = add_node(
+        &mut project,
+        NodeContainer::Track(track_id),
+        solid_node("track direct"),
+    )?;
+    project
+        .set_output_node(NodeContainer::Track(track_id), Some(track_node_id))
+        .map_err(|error| anyhow!(error))?;
+
+    let active_ids = object_source_ids(&frame(&project, 299)?.items);
+    assert!(active_ids.contains(&track_node_id));
+
+    project
+        .set_output_node(
+            NodeContainer::Composition(composition_id),
+            Some(composition_node_id),
+        )
+        .map_err(|error| anyhow!(error))?;
+    assert!(object_source_ids(&frame(&project, 299)?.items).contains(&composition_node_id));
+
+    let expected_background = project
+        .get_composition(composition_id)
+        .context("root Composition must exist")?
+        .background_color
+        .clone();
+    let at_end = frame(&project, 300)?;
+    assert_eq!(at_end.background_color, expected_background);
+    assert!(
+        at_end.items.is_empty(),
+        "the root raster boundary may materialize its background, but direct Nodes must be NoOutput at the half-open duration end"
+    );
+
+    project
+        .set_output_node(NodeContainer::Composition(composition_id), None)
+        .map_err(|error| anyhow!(error))?;
+    assert!(
+        frame(&project, 300)?.items.is_empty(),
+        "Track-direct Nodes must inherit the same Composition activity gate"
+    );
+    Ok(())
+}
+
+#[test]
+fn nested_reference_does_not_materialize_target_background_after_its_duration() -> Result<()> {
+    let (mut project, parent_id, _parent_track_id) = project_with_composition();
+    let parent_background = Color {
+        r: 7,
+        g: 11,
+        b: 13,
+        a: 255,
+    };
+    project
+        .get_composition_mut(parent_id)
+        .context("parent Composition must exist")?
+        .background_color = parent_background.clone();
+
+    let (mut target, target_track) = Composition::new("short target", 320, 180, 30.0, 1.0);
+    target.background_color = Color {
+        r: 200,
+        g: 100,
+        b: 50,
+        a: 255,
+    };
+    let target_id = target.id;
+    project.add_track(target_track);
+    project.add_composition(target);
+    let target_node_id = add_node(
+        &mut project,
+        NodeContainer::Composition(target_id),
+        solid_node("target direct"),
+    )?;
+    project
+        .set_output_node(NodeContainer::Composition(target_id), Some(target_node_id))
+        .map_err(|error| anyhow!(error))?;
+
+    let reference = Node::new_reference(
+        "short target reference",
+        ReferenceContent {
+            target_id,
+            sync_global_time: true,
+        },
+    );
+    let reference_id = add_node(
+        &mut project,
+        NodeContainer::Composition(parent_id),
+        reference,
+    )?;
+    project
+        .set_output_node(NodeContainer::Composition(parent_id), Some(reference_id))
+        .map_err(|error| anyhow!(error))?;
+
+    assert!(
+        object_source_ids(&frame(&project, 29)?.items).contains(&target_node_id),
+        "the nested Composition must remain active immediately before its duration"
+    );
+    let at_target_end = frame(&project, 30)?;
+    assert_eq!(at_target_end.background_color, parent_background);
+    assert!(
+        at_target_end.items.is_empty(),
+        "an inactive nested Composition must be NoOutput, not a materialized background group"
+    );
+    Ok(())
+}
+
+#[test]
+fn time_modulo_cannot_resurrect_a_composition_after_its_duration() -> Result<()> {
+    let mut project = Project::new("Composition activity before Time remap");
+    let (target, target_track) = Composition::new("short target", 320, 180, 30.0, 1.0);
+    let target_id = target.id;
+    project.add_track(target_track);
+    project.add_composition(target);
+
+    let (driver, driver_track) = Composition::new("time driver", 320, 180, 30.0, 10.0);
+    let driver_id = driver.id;
+    project.add_track(driver_track);
+    project.add_composition(driver);
+
+    let target_node_id = add_node(
+        &mut project,
+        NodeContainer::Composition(target_id),
+        solid_node("short target output"),
+    )?;
+    project
+        .set_output_node(NodeContainer::Composition(target_id), Some(target_node_id))
+        .map_err(|error| anyhow!(error))?;
+
+    let modulo = Node::new_time_modulo("one-second loop");
+    let modulo_id = add_node(&mut project, NodeContainer::Composition(driver_id), modulo)?;
+    project.connect_ports(
+        address(PortOwner::Composition(driver_id), TIME_PORT),
+        address(PortOwner::Node(modulo_id), VALUE_INPUT_PORT),
+    )?;
+    project.connect_ports(
+        address(PortOwner::Node(modulo_id), VALUE_OUTPUT_PORT),
+        address(PortOwner::Composition(target_id), TIME_PORT),
+    )?;
+
+    assert!(
+        object_source_ids(&frame_for_composition(&project, 0, 29)?.items).contains(&target_node_id)
+    );
+    assert!(
+        frame_for_composition(&project, 0, 30)?.items.is_empty(),
+        "global t=1 is outside the target; its explicit t mod 1 = 0 remap must not reactivate it"
+    );
     Ok(())
 }
 
