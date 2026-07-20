@@ -38,7 +38,9 @@ use crate::model::property::{
     Property, PropertyDefinition, PropertyUiType, PropertyValue, Vec2, Vec3, Vec4,
 };
 use crate::plugin::entity_converter::FrameEvaluationContext;
-use crate::plugin::evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
+use crate::plugin::evaluator::{
+    EvaluationContext, PropertyEvaluationError, PropertyEvaluator, PropertyEvaluatorRegistry,
+};
 use crate::plugin::loaders::ffmpeg_video::FileIdentity;
 use crate::plugin::repository::PluginRepository;
 use crate::plugin::{
@@ -1706,7 +1708,17 @@ impl EffectorPlugin for RuntimeEffectorPlugin {
         }
         let mut properties = BTreeMap::new();
         for (name, property) in resolved_properties.iter() {
-            let value = context.evaluate_property_value(property, &resolved_properties, eval_time);
+            let value =
+                match context.evaluate_property_value(property, &resolved_properties, eval_time) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        log::error!(
+                            "Runtime effector '{}' property '{name}' failed: {error}",
+                            self.id()
+                        );
+                        return None;
+                    }
+                };
             properties.insert(name.clone(), serde_json::Value::from(&value));
         }
         let payload = match serde_json::to_value(EffectorEvaluateRequestV1 {
@@ -2246,7 +2258,7 @@ impl PropertyEvaluator for RuntimePropertyEvaluator {
         property: &Property,
         time: f64,
         context: &EvaluationContext,
-    ) -> PropertyValue {
+    ) -> Result<PropertyValue, PropertyEvaluationError> {
         let mut properties = BTreeMap::new();
         for definition in &self.definitions {
             let value = property
@@ -2254,18 +2266,18 @@ impl PropertyEvaluator for RuntimePropertyEvaluator {
                 .get(definition.name())
                 .unwrap_or_else(|| definition.default_value());
             if let Err(error) = definition.validate_value(value) {
-                return self.fallback(format!(
+                return Ok(self.fallback(format!(
                     "property '{}' is invalid: {error}",
                     definition.name()
-                ));
+                )));
             }
             let value = match property_value_to_wire(value) {
                 Ok(value) => value,
                 Err(error) => {
-                    return self.fallback(format!(
+                    return Ok(self.fallback(format!(
                         "property '{}' cannot cross ABI v1: {error}",
                         definition.name()
-                    ));
+                    )));
                 }
             };
             properties.insert(definition.name().to_string(), value);
@@ -2276,24 +2288,28 @@ impl PropertyEvaluator for RuntimePropertyEvaluator {
             properties,
         }) {
             Ok(payload) => payload,
-            Err(error) => return self.fallback(format!("request encoding failed: {error}")),
+            Err(error) => {
+                return Ok(self.fallback(format!("request encoding failed: {error}")));
+            }
         };
         let response = match self.component.invoke(PROPERTY_EVALUATE_V1, payload) {
             Ok(response) => response,
-            Err(error) => return self.fallback(error),
+            Err(error) => return Ok(self.fallback(error)),
         };
         let response: PropertyEvaluateResponseV1 = match serde_json::from_value(response) {
             Ok(response) => response,
-            Err(error) => return self.fallback(format!("invalid response: {error}")),
+            Err(error) => return Ok(self.fallback(format!("invalid response: {error}"))),
         };
         let value = match property_value_from_wire(&response.value) {
             Ok(value) => value,
-            Err(error) => return self.fallback(format!("invalid response value: {error}")),
+            Err(error) => {
+                return Ok(self.fallback(format!("invalid response value: {error}")));
+            }
         };
         if std::mem::discriminant(&value) != std::mem::discriminant(&self.output_default) {
-            return self.fallback("response type differs from output_default");
+            return Ok(self.fallback("response type differs from output_default"));
         }
-        value
+        Ok(value)
     }
 }
 
@@ -4038,13 +4054,10 @@ mod tests {
             properties: HashMap::new(),
         };
         let siblings = crate::model::property::PropertyMap::new();
-        let context = EvaluationContext {
-            property_map: &siblings,
-            fps: 30.0,
-        };
+        let context = EvaluationContext::new(&siblings, 30.0, (1920, 1080));
         assert_eq!(
             evaluator.evaluate(&property, 0.0, &context),
-            PropertyValue::Number(OrderedFloat(7.0)),
+            Ok(PropertyValue::Number(OrderedFloat(7.0))),
             "invalid plugin output must use the descriptor-declared fail-safe"
         );
     }
@@ -4076,13 +4089,10 @@ mod tests {
             properties: HashMap::new(),
         };
         let siblings = crate::model::property::PropertyMap::new();
-        let context = EvaluationContext {
-            property_map: &siblings,
-            fps: 30.0,
-        };
+        let context = EvaluationContext::new(&siblings, 30.0, (1920, 1080));
         assert_eq!(
             evaluator.evaluate(&property, 0.0, &context),
-            PropertyValue::Number(OrderedFloat(11.0)),
+            Ok(PropertyValue::Number(OrderedFloat(11.0))),
             "plugin errors must not be disguised as an invented zero/default"
         );
     }

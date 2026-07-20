@@ -1056,11 +1056,9 @@ impl ProjectManager {
         context: &crate::model::property::PropertyMap,
         time: f64,
         fps: f64,
-    ) -> PropertyValue {
-        let eval_ctx = crate::plugin::EvaluationContext {
-            property_map: context,
-            fps,
-        };
+        resolution: (u64, u64),
+    ) -> Result<PropertyValue, crate::plugin::PropertyEvaluationError> {
+        let eval_ctx = crate::plugin::EvaluationContext::new(context, fps, resolution);
         self.plugin_manager
             .get_property_evaluators()
             .evaluate(property, time, &eval_ctx)

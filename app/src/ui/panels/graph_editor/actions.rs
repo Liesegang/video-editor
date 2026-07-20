@@ -246,13 +246,16 @@ pub fn process_action(
                 let node = project.get_node(entity_id)?;
                 let source_time = time_mapper_for_owner(&project, PropertyOwner::Node(entity_id))
                     .to_source_time(time);
-                let current = node.properties().get(&property_key).map(|property| {
-                    project_service.evaluate_property_value(
-                        property,
-                        node.properties(),
-                        source_time,
-                        composition.fps,
-                    )
+                let current = node.properties().get(&property_key).and_then(|property| {
+                    project_service
+                        .evaluate_property_value(
+                            property,
+                            node.properties(),
+                            source_time,
+                            composition.fps,
+                            (composition.width, composition.height),
+                        )
+                        .ok()
                 });
                 Some((
                     PropertyOwner::Node(entity_id),

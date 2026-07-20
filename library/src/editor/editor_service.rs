@@ -501,9 +501,10 @@ impl EditorService {
         context: &crate::model::property::PropertyMap,
         time: f64,
         fps: f64,
-    ) -> PropertyValue {
+        resolution: (u64, u64),
+    ) -> Result<PropertyValue, crate::plugin::PropertyEvaluationError> {
         self.project_manager
-            .evaluate_property_value(property, context, time, fps)
+            .evaluate_property_value(property, context, time, fps, resolution)
     }
 
     pub fn add_keyframe(

@@ -847,6 +847,7 @@ pub(crate) fn property_definition_metadata(definition: &PropertyDefinition) -> s
 // Helper to standardise Grid + Property Evaluation loop
 #[allow(
     dead_code,
+    clippy::too_many_arguments,
     reason = "retained only for the legacy embedded extension renderers while Timeline Inspector uses operation Nodes"
 )]
 pub fn render_inspector_properties_grid(
@@ -857,6 +858,7 @@ pub fn render_inspector_properties_grid(
     project_service: &library::EditorService,
     context: &PropertyRenderContext,
     fps: f64,
+    resolution: (u64, u64),
 ) -> Vec<PropertyAction> {
     let mut pending_actions = Vec::new();
 
@@ -871,13 +873,16 @@ pub fn render_inspector_properties_grid(
             ui,
             definitions,
             |name| {
-                properties.get(name).map(|p| {
-                    project_service.evaluate_property_value(
-                        p,
-                        properties,
-                        context.current_time,
-                        fps,
-                    )
+                properties.get(name).and_then(|p| {
+                    project_service
+                        .evaluate_property_value(
+                            p,
+                            properties,
+                            context.current_time,
+                            fps,
+                            resolution,
+                        )
+                        .ok()
                 })
             },
             |name| properties.get(name).cloned(),

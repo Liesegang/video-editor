@@ -173,10 +173,10 @@ fn inspector_panel_content(
         return;
     };
 
-    let fps = project_service
+    let (fps, resolution) = project_service
         .get_composition(composition_id)
-        .map(|composition| composition.fps)
-        .unwrap_or(60.0);
+        .map(|composition| (composition.fps, (composition.width, composition.height)))
+        .unwrap_or((60.0, (1920, 1080)));
     let global_time = editor_context.timeline.current_time as f64;
     let mut needs_refresh = false;
 
@@ -209,6 +209,7 @@ fn inspector_panel_content(
                 None,
                 global_time,
                 fps,
+                resolution,
                 project_service,
                 history_manager,
                 editor_context,
@@ -241,6 +242,7 @@ fn inspector_panel_content(
                 Some(track.id),
                 global_time,
                 fps,
+                resolution,
                 project_service,
                 history_manager,
                 editor_context,
@@ -295,6 +297,7 @@ fn inspector_panel_content(
                     clip_definitions,
                     local_time,
                     fps,
+                    resolution,
                     &mut needs_refresh,
                 );
             }
@@ -311,6 +314,7 @@ fn inspector_panel_content(
                 track_id,
                 local_time,
                 fps,
+                resolution,
                 project_service,
                 history_manager,
                 editor_context,
@@ -341,6 +345,7 @@ fn inspector_panel_content(
                 track_id,
                 evaluation_time,
                 fps,
+                resolution,
                 project_service,
                 history_manager,
                 editor_context,
@@ -491,6 +496,7 @@ fn render_semantic_graph_facade(
     track_id: Option<Uuid>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     project_service: &mut EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
@@ -544,6 +550,7 @@ fn render_semantic_graph_facade(
                     track_id,
                     current_time,
                     fps,
+                    resolution,
                     project_service,
                     history_manager,
                     editor_context,
@@ -580,6 +587,7 @@ fn render_semantic_graph_facade(
         track_id,
         current_time,
         fps,
+        resolution,
         project_service,
         history_manager,
         editor_context,
@@ -615,6 +623,7 @@ fn render_semantic_graph_facade(
             track_id,
             current_time,
             fps,
+            resolution,
             project_service,
             history_manager,
             editor_context,
@@ -648,6 +657,7 @@ fn render_semantic_graph_facade(
             track_id,
             current_time,
             fps,
+            resolution,
             project_service,
             history_manager,
             editor_context,
@@ -665,6 +675,7 @@ fn render_semantic_graph_facade(
         track_id,
         current_time,
         fps,
+        resolution,
         project_service,
         history_manager,
         editor_context,
@@ -741,6 +752,7 @@ fn render_value_category(
     track_id: Option<Uuid>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     project_service: &mut EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
@@ -812,6 +824,7 @@ fn render_value_category(
                     track_id,
                     current_time,
                     fps,
+                    resolution,
                     project_service,
                     history_manager,
                     editor_context,
@@ -853,6 +866,7 @@ fn render_operation_category(
     track_id: Option<Uuid>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     project_service: &mut EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
@@ -925,6 +939,7 @@ fn render_operation_category(
                     track_id,
                     current_time,
                     fps,
+                    resolution,
                     project_service,
                     history_manager,
                     editor_context,
@@ -970,6 +985,7 @@ fn render_merge_category(
     track_id: Option<Uuid>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     project_service: &mut EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
@@ -1045,6 +1061,7 @@ fn render_merge_category(
                     track_id,
                     current_time,
                     fps,
+                    resolution,
                     project_service,
                     history_manager,
                     editor_context,
@@ -1244,6 +1261,7 @@ fn render_node(
     track_id: Option<Uuid>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     project_service: &mut EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
@@ -1261,6 +1279,7 @@ fn render_node(
         track_id,
         current_time,
         fps,
+        resolution,
         project_service,
         history_manager,
         editor_context,
@@ -1284,6 +1303,7 @@ fn render_node_properties(
     track_id: Option<Uuid>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     project_service: &mut EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
@@ -1322,6 +1342,7 @@ fn render_node_properties(
             definitions,
             current_time,
             fps,
+            resolution,
             needs_refresh,
         );
     }
@@ -1376,6 +1397,7 @@ fn render_property_map(
     definitions: Vec<PropertyDefinition>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     needs_refresh: &mut bool,
 ) {
     struct Chunk {
@@ -1424,13 +1446,16 @@ fn render_property_map(
                         ui,
                         &chunk.definitions,
                         |name| {
-                            properties.get(name).map(|property| {
-                                project_service.evaluate_property_value(
-                                    property,
-                                    properties,
-                                    current_time,
-                                    fps,
-                                )
+                            properties.get(name).and_then(|property| {
+                                project_service
+                                    .evaluate_property_value(
+                                        property,
+                                        properties,
+                                        current_time,
+                                        fps,
+                                        resolution,
+                                    )
+                                    .ok()
                             })
                         },
                         |name| properties.get(name).cloned(),
@@ -1444,13 +1469,16 @@ fn render_property_map(
                 ui,
                 &chunk.definitions,
                 |name| {
-                    properties.get(name).map(|property| {
-                        project_service.evaluate_property_value(
-                            property,
-                            properties,
-                            current_time,
-                            fps,
-                        )
+                    properties.get(name).and_then(|property| {
+                        project_service
+                            .evaluate_property_value(
+                                property,
+                                properties,
+                                current_time,
+                                fps,
+                                resolution,
+                            )
+                            .ok()
                     })
                 },
                 |name| properties.get(name).cloned(),

@@ -23,7 +23,9 @@ pub mod styles;
 
 // Re-export from submodules
 pub use entity_converter::{EntityConverterPlugin, FrameEvaluationContext, ResolvedNodeInputs};
-pub use evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
+pub use evaluator::{
+    EvaluationContext, PropertyEvaluationError, PropertyEvaluator, PropertyEvaluatorRegistry,
+};
 pub use manager::{PluginInfo, PluginManager};
 pub(crate) use operation::OperationNodeParts;
 pub use operation::{
@@ -59,7 +61,9 @@ pub use exporters::ffmpeg_export::FfmpegExportPlugin;
 pub use exporters::png_export::PngExportPlugin;
 // pub use loaders::ffmpeg_video::FfmpegVideoLoader;
 pub use loaders::native_image::NativeImageLoader;
-pub use properties::{ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin};
+pub use properties::{
+    ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin, expression_engine,
+};
 
 // Plugin category enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

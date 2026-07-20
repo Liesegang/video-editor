@@ -1,6 +1,7 @@
 mod support;
 
 use anyhow::{Context, Result, anyhow};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use library::animation::EasingFunction;
@@ -313,6 +314,33 @@ fn missing_authored_period_produces_no_output_instead_of_a_default() -> Result<(
         .context("Time Modulo Node must remain mutable")? = without_period;
 
     assert!(video_time(&evaluate(&fixture.project, 5)?).is_none());
+    Ok(())
+}
+
+#[test]
+fn expression_without_typed_fallback_propagates_no_output() -> Result<()> {
+    let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
+    let malformed_expression = Property {
+        evaluator: "expression".to_string(),
+        properties: HashMap::from([(
+            "expression".to_string(),
+            PropertyValue::String("1 +".to_string()),
+        )]),
+    };
+    fixture
+        .project
+        .get_node_mut(fixture.modulo_id)
+        .context("Time Modulo Node must exist")?
+        .set_property(
+            TIME_MODULO_PERIOD_PROPERTY.to_string(),
+            malformed_expression,
+        )
+        .map_err(|error| anyhow!(error))?;
+
+    assert!(
+        video_time(&evaluate(&fixture.project, 5)?).is_none(),
+        "a failed authored Expression must become NoOutput at the frame boundary"
+    );
     Ok(())
 }
 
