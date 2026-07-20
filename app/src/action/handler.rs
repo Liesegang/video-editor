@@ -6,7 +6,7 @@ use std::io::Write;
 
 use library::EditorService;
 
-use crate::action::HistoryManager;
+use crate::action::{activate_composition_with_history, commit_live_project_edits, HistoryManager};
 use crate::command::CommandId;
 use crate::model::ui_types::Tab;
 use crate::state::context::EditorContext;
@@ -64,26 +64,39 @@ pub fn handle_command(
 
 fn handle_file_command(_ctx: &egui::Context, action: CommandId, context: ActionContext) {
     match action {
-        CommandId::NewProject => match context.project_service.create_new_project() {
-            Ok(new_comp_id) => {
-                context
-                    .editor_context
-                    .activate_composition(Some(new_comp_id));
-                context.editor_context.timeline.current_time = 0.0;
-
-                context.history_manager.clear();
-                let project = context.project_service.get_project();
-                if let Ok(proj_read) = project.read() {
-                    context
-                        .editor_context
-                        .reconcile_project_replacement(&proj_read);
-                    context
-                        .history_manager
-                        .push_project_state(proj_read.clone());
-                };
+        CommandId::NewProject => {
+            let previous_project = context.project_service.get_project();
+            // New Project deliberately discards the old undo branch. Close
+            // any in-flight gesture against the old Project first so its
+            // transient state is never reinterpreted against the replacement.
+            commit_live_project_edits(
+                context.editor_context,
+                context.history_manager,
+                &previous_project,
+            );
+            match context.project_service.create_new_project() {
+                Ok(new_comp_id) => {
+                    context.history_manager.clear();
+                    let project = context.project_service.get_project();
+                    activate_composition_with_history(
+                        context.editor_context,
+                        Some(new_comp_id),
+                        context.history_manager,
+                        &project,
+                    );
+                    context.editor_context.timeline.current_time = 0.0;
+                    if let Ok(proj_read) = project.read() {
+                        context
+                            .editor_context
+                            .reconcile_project_replacement(&proj_read);
+                        context
+                            .history_manager
+                            .push_project_state(proj_read.clone());
+                    };
+                }
+                Err(e) => error!("Failed to create new project: {}", e),
             }
-            Err(e) => error!("Failed to create new project: {}", e),
-        },
+        }
         CommandId::LoadProject => {
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Project File", &["json"])
@@ -300,14 +313,15 @@ fn handle_view_command(action: CommandId, context: ActionContext) {
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_edit_command, ActionContext};
+    use super::{handle_edit_command, handle_file_command, ActionContext};
     use crate::action::HistoryManager;
     use crate::command::CommandId;
     use crate::state::context::EditorContext;
-    use crate::state::context_types::SelectionTarget;
+    use crate::state::context_types::{GraphKeyframeDragState, SelectionTarget};
     use crate::ui::tab_viewer::create_initial_dock_state;
     use library::cache::CacheManager;
     use library::model::project::{NodeContainer, Project};
+    use library::model::property::KeyframeId;
     use library::model::{Clip, Composition, Node};
     use library::plugin::PluginManager;
     use library::EditorService;
@@ -413,6 +427,53 @@ mod tests {
             editor_context.selection.targets(),
             &[SelectionTarget::Node(shared_id)]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn new_project_keeps_only_one_replacement_baseline_after_interrupted_edit(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut initial = Project::new("old project");
+        let (composition, track) = Composition::new("old", 320, 180, 30.0, 2.0);
+        let old_composition_id = composition.id;
+        initial.add_track(track);
+        initial.add_composition(composition);
+        let project = Arc::new(RwLock::new(initial.clone()));
+        let mut service = EditorService::new(
+            Arc::clone(&project),
+            Arc::new(PluginManager::default()),
+            Arc::new(CacheManager::new()),
+        )?;
+        let mut editor_context = EditorContext::new(old_composition_id);
+        editor_context.graph_editor.keyframe_drag = Some(GraphKeyframeDragState {
+            entity_id: Uuid::new_v4(),
+            anchor: ("node:opacity".to_string(), KeyframeId::new()),
+            origins: Vec::new(),
+            changed: true,
+        });
+        project.write().unwrap().name = "uncommitted old edit".to_string();
+        let mut history = HistoryManager::new();
+        history.push_project_state(initial);
+        let mut dock_state = create_initial_dock_state();
+
+        handle_file_command(
+            &egui::Context::default(),
+            CommandId::NewProject,
+            ActionContext {
+                editor_context: &mut editor_context,
+                project_service: &mut service,
+                history_manager: &mut history,
+                dock_state: &mut dock_state,
+            },
+        );
+
+        let current = project.read().unwrap().clone();
+        assert_eq!(history.undo_depth(), 1);
+        assert_eq!(history.undo(&current), None);
+        assert!(editor_context.graph_editor.keyframe_drag.is_none());
+        assert!(editor_context
+            .active_composition_id
+            .is_some_and(|id| current.get_composition(id).is_some()));
         Ok(())
     }
 }

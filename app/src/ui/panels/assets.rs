@@ -5,11 +5,12 @@ use library::model::asset::AssetKind;
 use library::model::project::Project;
 use library::EditorService;
 use std::sync::{Arc, RwLock};
+use uuid::Uuid;
 
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::utils::lock::read_or_recover;
 use crate::{
-    action::HistoryManager,
+    action::{activate_composition_with_history, commit_live_project_edits, HistoryManager},
     state::context::EditorContext,
     state::context_types::{DragStateItem, SelectionTarget},
 };
@@ -17,6 +18,25 @@ use crate::{
 fn push_project_history(project_service: &EditorService, history_manager: &mut HistoryManager) {
     let project = project_service.get_project();
     history_manager.push_project_state(read_or_recover(project.as_ref()).clone());
+}
+
+fn select_composition(
+    editor_context: &mut EditorContext,
+    composition_id: Uuid,
+    history_manager: &mut HistoryManager,
+    project: &Arc<RwLock<Project>>,
+) {
+    // Selecting the already active Composition still changes the typed owner
+    // to Composition. Close edits owned by the previous Clip/Node first even
+    // though navigation itself will be a no-op.
+    commit_live_project_edits(editor_context, history_manager, project);
+    activate_composition_with_history(
+        editor_context,
+        Some(composition_id),
+        history_manager,
+        project,
+    );
+    editor_context.select_target(SelectionTarget::Composition(composition_id));
 }
 
 pub fn assets_panel(
@@ -31,6 +51,7 @@ pub fn assets_panel(
 
     // Handle new composition dialog results
     if composition_dialog.confirmed && !composition_dialog.edit_mode {
+        commit_live_project_edits(editor_context, history_manager, project);
         match project_service.add_composition(
             &composition_dialog.name,
             composition_dialog.width as u32,
@@ -39,8 +60,7 @@ pub fn assets_panel(
             composition_dialog.duration,
         ) {
             Ok(new_comp_id) => {
-                editor_context.activate_composition(Some(new_comp_id));
-                editor_context.select_target(SelectionTarget::Composition(new_comp_id));
+                select_composition(editor_context, new_comp_id, history_manager, project);
                 push_project_history(project_service, history_manager);
                 needs_refresh = true;
             }
@@ -85,6 +105,7 @@ pub fn assets_panel(
     }
 
     let mut comp_to_remove = None;
+    let mut comp_to_activate = None;
     let mut asset_to_remove = None;
 
     // Layout: Controls at the bottom, Content filling the rest
@@ -333,10 +354,7 @@ pub fn assets_panel(
                                             });
 
                                             if response.clicked() {
-                                                editor_context.activate_composition(Some(comp.id));
-                                                editor_context.select_target(
-                                                    SelectionTarget::Composition(comp.id),
-                                                );
+                                                comp_to_activate = Some(comp.id);
                                             }
 
                                             if response.drag_started() {
@@ -510,17 +528,27 @@ pub fn assets_panel(
         });
     });
 
+    if let Some(comp_id) = comp_to_activate {
+        select_composition(editor_context, comp_id, history_manager, project);
+    }
+
     // Handle deferred deletions (to avoid deadlock)
     if let Some(comp_id) = comp_to_remove {
-        if let Some(selected_id) = editor_context.active_composition_id {
-            if selected_id == comp_id {
-                editor_context.activate_composition(None);
-            }
-        }
-        editor_context.remove_selection(SelectionTarget::Composition(comp_id));
-
+        let removed_active_composition = editor_context.active_composition_id == Some(comp_id);
+        commit_live_project_edits(editor_context, history_manager, project);
         match project_service.remove_composition_fully(comp_id) {
             Ok(()) => {
+                if removed_active_composition {
+                    activate_composition_with_history(
+                        editor_context,
+                        None,
+                        history_manager,
+                        project,
+                    );
+                }
+                if let Ok(project) = project.read() {
+                    editor_context.reconcile_selection(&project);
+                }
                 push_project_history(project_service, history_manager);
                 needs_refresh = true;
             }
@@ -532,9 +560,13 @@ pub fn assets_panel(
     }
 
     if let Some(asset_id) = asset_to_remove {
+        commit_live_project_edits(editor_context, history_manager, project);
         match project_service.remove_asset_fully(asset_id) {
             Ok(()) => {
-                push_project_history(project_service, history_manager);
+                let project = project_service.get_project();
+                let current_state = read_or_recover(project.as_ref()).clone();
+                editor_context.reconcile_selection(&current_state);
+                history_manager.push_project_state(current_state);
                 needs_refresh = true;
             }
             Err(error) => {
@@ -600,5 +632,49 @@ pub fn assets_panel(
 
     if needs_refresh {
         ui.ctx().request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_composition;
+    use crate::action::HistoryManager;
+    use crate::state::context::EditorContext;
+    use crate::state::context_types::{BodyDragState, SelectionTarget};
+    use library::model::project::Project;
+    use std::collections::HashMap;
+    use std::sync::{Arc, RwLock};
+    use uuid::Uuid;
+
+    #[test]
+    fn selecting_active_composition_commits_dirty_preview_and_timeline_once() {
+        let composition_id = Uuid::new_v4();
+        let node_id = Uuid::new_v4();
+        let original = Project::new("before same-composition selection");
+        let project = Arc::new(RwLock::new(original.clone()));
+        project.write().unwrap().name = "after live edit".to_string();
+        let edited = project.read().unwrap().clone();
+        let mut context = EditorContext::new(composition_id);
+        context.select_target(SelectionTarget::Node(node_id));
+        context.interaction.dragged_entity_has_moved = true;
+        context.interaction.is_moving_selected_entity = true;
+        context.interaction.body_drag_state = Some(BodyDragState {
+            start_mouse_pos: egui::Pos2::ZERO,
+            original_positions: HashMap::new(),
+        });
+        let mut history = HistoryManager::new();
+        history.push_project_state(original.clone());
+
+        select_composition(&mut context, composition_id, &mut history, &project);
+
+        assert_eq!(history.undo_depth(), 2);
+        assert_eq!(history.undo(&edited), Some(original));
+        assert!(!context.interaction.dragged_entity_has_moved);
+        assert!(!context.interaction.is_moving_selected_entity);
+        assert!(context.interaction.body_drag_state.is_none());
+        assert_eq!(
+            context.selection.primary(),
+            Some(SelectionTarget::Composition(composition_id))
+        );
     }
 }
