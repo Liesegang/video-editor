@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
-use library::expression::{
+use super::{
     ExpressionDiagnostic, ExpressionDiagnosticKind, ExpressionEngine, ExpressionEvaluationContext,
     ExpressionLimits, ExpressionOutputType, ExpressionPhase, ExpressionValue,
 };
+use anyhow::{Result, anyhow};
 
 fn context() -> Result<ExpressionEvaluationContext> {
     Ok(ExpressionEvaluationContext::new(2.0, 24.0, (1920, 1080))?)

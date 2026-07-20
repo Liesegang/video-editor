@@ -62,9 +62,7 @@ pub use exporters::ffmpeg_export::FfmpegExportPlugin;
 pub use exporters::png_export::PngExportPlugin;
 // pub use loaders::ffmpeg_video::FfmpegVideoLoader;
 pub use loaders::native_image::NativeImageLoader;
-pub use properties::{
-    ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin, expression_engine,
-};
+pub use properties::{ConstantPropertyPlugin, ExpressionPropertyPlugin, KeyframePropertyPlugin};
 
 // Plugin category enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

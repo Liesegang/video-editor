@@ -17,7 +17,7 @@ static EXPRESSION_ENGINE: OnceLock<ExpressionEngine> = OnceLock::new();
 
 /// Shared runtime-only compiler/cache used by render evaluation and Inspector
 /// validation. It is intentionally absent from the persisted Project model.
-pub fn expression_engine() -> &'static ExpressionEngine {
+pub(crate) fn expression_engine() -> &'static ExpressionEngine {
     EXPRESSION_ENGINE.get_or_init(ExpressionEngine::default)
 }
 

@@ -52,6 +52,7 @@ impl Default for ExpressionLimits {
 }
 
 /// Observable cache counters, primarily for performance regression tests.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ExpressionCacheStats {
     pub hits: u64,
@@ -64,23 +65,29 @@ pub struct CompiledExpression {
 }
 
 impl CompiledExpression {
+    #[cfg(test)]
     pub fn source(&self) -> &str {
         &self.inner.source
     }
 
+    #[cfg(test)]
     pub fn source_hash(&self) -> [u8; 32] {
         self.inner.source_hash
     }
 
+    #[cfg(test)]
     pub fn ast_node_count(&self) -> u64 {
         self.inner.ast_node_count
     }
 }
 
 struct CompiledExpressionInner {
+    #[cfg(test)]
     source: Arc<str>,
+    #[cfg(test)]
     source_hash: [u8; 32],
     ast: ast::Expr,
+    #[cfg(test)]
     ast_node_count: u64,
 }
 
@@ -118,10 +125,12 @@ impl ExpressionEngine {
         }
     }
 
+    #[cfg(test)]
     pub fn limits(&self) -> &ExpressionLimits {
         &self.inner.limits
     }
 
+    #[cfg(test)]
     pub fn cache_stats(&self) -> ExpressionCacheStats {
         ExpressionCacheStats {
             hits: self.inner.cache_hits.load(AtomicOrdering::Relaxed),
@@ -189,7 +198,7 @@ impl ExpressionEngine {
         convert_output(result, output_type, &self.inner.limits)
     }
 
-    fn compile_uncached(&self, source: &str, source_hash: [u8; 32]) -> CachedCompilation {
+    fn compile_uncached(&self, source: &str, _source_hash: [u8; 32]) -> CachedCompilation {
         if source.trim().is_empty() {
             return Err(ExpressionDiagnostic::compile(
                 ExpressionDiagnosticKind::Parse,
@@ -214,9 +223,12 @@ impl ExpressionEngine {
         };
         validation.validate(&ast, 1)?;
         Ok(Arc::new(CompiledExpressionInner {
+            #[cfg(test)]
             source: Arc::from(source),
-            source_hash,
+            #[cfg(test)]
+            source_hash: _source_hash,
             ast,
+            #[cfg(test)]
             ast_node_count: validation.nodes,
         }))
     }
