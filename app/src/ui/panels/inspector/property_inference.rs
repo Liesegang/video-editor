@@ -36,15 +36,9 @@ pub(super) fn inferred_property_definitions(
                     }
                 }
                 PropertyValue::Boolean(_) => PropertyUiType::Bool,
-                PropertyValue::Vec2(_) => PropertyUiType::Vec2 {
-                    suffix: String::new(),
-                },
-                PropertyValue::Vec3(_) => PropertyUiType::Vec3 {
-                    suffix: String::new(),
-                },
-                PropertyValue::Vec4(_) => PropertyUiType::Vec4 {
-                    suffix: String::new(),
-                },
+                PropertyValue::Vec2(_) => PropertyUiType::vec2(""),
+                PropertyValue::Vec3(_) => PropertyUiType::vec3(""),
+                PropertyValue::Vec4(_) => PropertyUiType::vec4(""),
                 PropertyValue::Color(_) => PropertyUiType::Color,
                 PropertyValue::Array(_) | PropertyValue::Map(_) => return None,
             };

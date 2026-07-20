@@ -2686,37 +2686,37 @@ def run_node_wire_suite(client):
         raise QaFailure("Blur Add item omitted descriptor/category QA metadata")
     delete_node_through_context_menu(client, added_blur)
 
-    # Native value operations live in the same categorized Add catalog. Time
+    # Native numeric operations live in the same categorized Add catalog. Time
     # is deliberately not implicit: zoom to real Snarl pin interaction and
     # drag the already-connected container Time output to a new value input.
     # This is a real fan-out gesture and must leave the original Time wire in
     # place while adding the canonical Time -> value connection.
-    time_node, time_state, time_metadata = create_node_from_add_search(
+    fmod_node, fmod_state, fmod_metadata = create_node_from_add_search(
         client,
         "loop value",
-        "node_editor.menu.create.time_modulo",
+        "node_editor.menu.create.value:fmod",
         "node_editor.container.clip:{}".format(CLIP_A1),
     )
-    time_content = time_state["project"]["nodes"][time_node]["content"]
-    if time_content != {"type": "Value", "data": "TimeModulo"}:
-        raise QaFailure("Time Modulo Add item did not create the native value Node")
+    fmod_content = fmod_state["project"]["nodes"][fmod_node]["content"]
+    if fmod_content != {"type": "Value", "data": "Fmod"}:
+        raise QaFailure("Fmod Add item did not create the native numeric Node")
     if not (
-        time_metadata.get("kind") == "time_modulo"
-        and time_metadata.get("category") == "Timing / Values"
+        fmod_metadata.get("kind") == "fmod"
+        and fmod_metadata.get("category") == "Math / Values"
     ):
-        raise QaFailure("Time Modulo Add item omitted value/category QA metadata")
-    owner_key = validate_canonical_ownership(time_state["project"])["node_owners"][
-        time_node
+        raise QaFailure("Fmod Add item omitted numeric/category QA metadata")
+    owner_key = validate_canonical_ownership(fmod_state["project"])["node_owners"][
+        fmod_node
     ]
     time_output = "node_editor.container_port.{}.internal_output:time".format(
         owner_key
     )
-    value_input = "node_editor.port.node:{}.input:value".format(time_node)
-    time_header = "node_editor.node_header:" + time_node
+    value_input = "node_editor.port.node:{}.input:x".format(fmod_node)
+    time_header = "node_editor.node_header:" + fmod_node
     move_snapshot, (header_component, output_component) = reveal_node_editor_components(
         client, [time_header, time_output]
     )
-    old_position = list(time_state["project"]["nodes"][time_node]["ui_position"])
+    old_position = list(fmod_state["project"]["nodes"][fmod_node]["ui_position"])
     start = client.point(header_component["rect_points"])
     output_point = client.point(output_component["rect_points"])
     canvas = next(
@@ -2745,8 +2745,8 @@ def run_node_wire_suite(client):
         },
     )
     client.wait_project(
-        "Time Modulo coordinate move near Time output",
-        lambda project: project["nodes"][time_node]["ui_position"] != old_position,
+        "Fmod coordinate move near Time output",
+        lambda project: project["nodes"][fmod_node]["ui_position"] != old_position,
     )
     ensure_node_editor_ports_interactive(client, [time_output, value_input])
     connect_before = client.state()
@@ -2768,14 +2768,14 @@ def run_node_wire_suite(client):
                 for connection in project["connections"]
                 if connection["from"]["port"] == "time"
                 and connection["to"]["owner"].get("owner_type") == "Node"
-                and connection["to"]["owner"].get("owner_id") == time_node
-                and connection["to"]["port"] == "value"
+                and connection["to"]["owner"].get("owner_id") == fmod_node
+                and connection["to"]["port"] == "x"
             ),
             None,
         )
 
     connected = client.wait_project(
-        "explicit container Time to Time Modulo value connection",
+        "explicit container Time to Fmod.x connection",
         lambda project: explicit_time_connection(project) is not None,
     )
     for original_connection in original_time_connections:
@@ -2793,7 +2793,7 @@ def run_node_wire_suite(client):
             for connection in project["connections"]
         ),
     )
-    delete_node_through_context_menu(client, time_node)
+    delete_node_through_context_menu(client, fmod_node)
 
     # Node right-click owns Node commands, not the blank-canvas Add menu.
     text_header = "node_editor.node_header:" + TEXT
@@ -2835,7 +2835,7 @@ def run_node_wire_suite(client):
     )
     reveal_node_editor_component(client, derived_edge_id)
     open_create_menu(client, operation="derived wire Add-menu precondition")
-    client.wait_component("node_editor.menu.create.text")
+    client.wait_component("node_editor.menu.search")
     if not client.state()["editor"]["node_editor"]["context_menu_open"]:
         raise QaFailure("derived wire regression did not begin with an open Add menu")
     derived_before = client.wait_preview_settled("derived wire context no-op")
@@ -3850,6 +3850,8 @@ def run_suite(client):
     positions_before = node_editor_layout_positions(node_create_before["project"])
     connections_before = node_create_before["project"]["connections"]
     open_create_menu(client)
+    client.wait_component("node_editor.menu.search")
+    client.replace_component_text("node_editor.menu.search", "Text")
     client.wait_component("node_editor.menu.create.text")
     client.click_component("node_editor.menu.create.text")
     created_state = client.wait_project(

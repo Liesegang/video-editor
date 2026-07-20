@@ -42,9 +42,7 @@ pub(crate) fn raster_source_transform_property_definitions(
     vec![
         PropertyDefinition::new(
             "position",
-            PropertyUiType::Vec2 {
-                suffix: "px".to_string(),
-            },
+            PropertyUiType::vec2("px"),
             "Position",
             PropertyValue::Vec2(Vec2 {
                 x: OrderedFloat(canvas_width as f64 / 2.0),
@@ -53,9 +51,7 @@ pub(crate) fn raster_source_transform_property_definitions(
         ),
         PropertyDefinition::new(
             "scale",
-            PropertyUiType::Vec2 {
-                suffix: "%".to_string(),
-            },
+            PropertyUiType::vec2_with_range(0.0, 1_000.0, 0.1, "%", true, false),
             "Scale",
             PropertyValue::Vec2(Vec2 {
                 x: OrderedFloat(100.0),
@@ -77,9 +73,7 @@ pub(crate) fn raster_source_transform_property_definitions(
         ),
         PropertyDefinition::new(
             "anchor",
-            PropertyUiType::Vec2 {
-                suffix: "px".to_string(),
-            },
+            PropertyUiType::vec2("px"),
             "Anchor",
             PropertyValue::Vec2(Vec2 {
                 x: OrderedFloat(source_width as f64 / 2.0),

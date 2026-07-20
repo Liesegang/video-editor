@@ -341,15 +341,30 @@ impl EffectPlugin for SkslEffectPlugin {
                     },
                     "Bool" => PropertyUiType::Bool,
                     "Color" => PropertyUiType::Color,
-                    "Vec2" => PropertyUiType::Vec2 {
-                        suffix: p.suffix.clone().unwrap_or_default(),
-                    },
-                    "Vec3" => PropertyUiType::Vec3 {
-                        suffix: p.suffix.clone().unwrap_or_default(),
-                    },
-                    "Vec4" => PropertyUiType::Vec4 {
-                        suffix: p.suffix.clone().unwrap_or_default(),
-                    },
+                    "Vec2" => PropertyUiType::vec2_with_range(
+                        p.min.unwrap_or(-1_000_000.0),
+                        p.max.unwrap_or(1_000_000.0),
+                        p.step.unwrap_or(0.1),
+                        p.suffix.clone().unwrap_or_default(),
+                        p.min_hard_limit.unwrap_or(false),
+                        p.max_hard_limit.unwrap_or(false),
+                    ),
+                    "Vec3" => PropertyUiType::vec3_with_range(
+                        p.min.unwrap_or(-1_000_000.0),
+                        p.max.unwrap_or(1_000_000.0),
+                        p.step.unwrap_or(0.1),
+                        p.suffix.clone().unwrap_or_default(),
+                        p.min_hard_limit.unwrap_or(false),
+                        p.max_hard_limit.unwrap_or(false),
+                    ),
+                    "Vec4" => PropertyUiType::vec4_with_range(
+                        p.min.unwrap_or(-1_000_000.0),
+                        p.max.unwrap_or(1_000_000.0),
+                        p.step.unwrap_or(0.1),
+                        p.suffix.clone().unwrap_or_default(),
+                        p.min_hard_limit.unwrap_or(false),
+                        p.max_hard_limit.unwrap_or(false),
+                    ),
                     _ => PropertyUiType::Text, // Fallback
                 };
 

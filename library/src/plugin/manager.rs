@@ -1370,11 +1370,15 @@ mod tests {
             crate::model::Clip::timing_property_definitions(),
             &mut failures,
         );
-        check_definitions(
-            "native Time Modulo",
-            crate::model::ValueContent::TimeModulo.property_definitions(),
-            &mut failures,
-        );
+        for (label, value) in [
+            ("native Fmod", crate::model::ValueContent::Fmod),
+            ("native Add", crate::model::ValueContent::Add),
+            ("native Subtract", crate::model::ValueContent::Subtract),
+            ("native Multiply", crate::model::ValueContent::Multiply),
+            ("native Divide", crate::model::ValueContent::Divide),
+        ] {
+            check_definitions(label, value.property_definitions(), &mut failures);
+        }
         let transform_definitions = crate::plugin::transforms::property_definitions();
         check_definitions("native Transform", &transform_definitions, &mut failures);
         let mut operation_contracts = Vec::<(&'static str, String, usize)>::new();

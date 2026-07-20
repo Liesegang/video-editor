@@ -17,9 +17,7 @@ pub fn property_definitions() -> Vec<PropertyDefinition> {
     vec![
         PropertyDefinition::new(
             "position",
-            PropertyUiType::Vec2 {
-                suffix: "px".to_string(),
-            },
+            PropertyUiType::vec2("px"),
             "Position",
             vec2_value(0.0, 0.0),
         ),
@@ -38,17 +36,13 @@ pub fn property_definitions() -> Vec<PropertyDefinition> {
         ),
         PropertyDefinition::new(
             "scale",
-            PropertyUiType::Vec2 {
-                suffix: "%".to_string(),
-            },
+            PropertyUiType::vec2_with_range(0.0, 1_000.0, 0.1, "%", true, false),
             "Scale",
             vec2_value(100.0, 100.0),
         ),
         PropertyDefinition::new(
             "anchor",
-            PropertyUiType::Vec2 {
-                suffix: "px".to_string(),
-            },
+            PropertyUiType::vec2("px"),
             "Anchor",
             vec2_value(0.0, 0.0),
         ),

@@ -172,7 +172,7 @@ mod tests {
         let composition_id = composition.id;
         project.add_track(track);
         project.add_composition(composition);
-        let node = Node::new_time_modulo("value");
+        let node = Node::new_fmod("value");
         let node_id = node.id;
         project.add_node(node);
         project
