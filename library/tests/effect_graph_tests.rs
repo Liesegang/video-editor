@@ -245,6 +245,23 @@ fn effect_descriptor_factory_materializes_defaults_and_distinct_image_ports() ->
             [output_port(key, data_type)],
         )?;
         assert_eq!(readable_output.declared_ports()[0].key, key);
+
+        let wrong_output_type = OperationDescriptor::new(
+            "test",
+            format!("wrong-{key}"),
+            format!("wrong-{key}.v1"),
+            format!("Wrong {key}"),
+            Vec::new(),
+            [output_port(key, PortDataType::String)],
+        );
+        assert_eq!(
+            wrong_output_type.err(),
+            Some(OperationDescriptorError::InvalidDerivedTimingOutputType {
+                key: key.to_string(),
+                expected: data_type,
+                actual: PortDataType::String,
+            })
+        );
     }
     Ok(())
 }
@@ -313,6 +330,128 @@ fn effect_chain_uses_wiring_order_and_evaluates_keyframes_and_scalar_overrides()
     let loaded = Project::load(&saved)?;
     assert_eq!(loaded, project);
     assert!(loaded.validation_issues().is_empty());
+    Ok(())
+}
+
+struct DerivedTimingProbe;
+
+impl Plugin for DerivedTimingProbe {
+    fn id(&self) -> &str {
+        "derived_timing_probe"
+    }
+
+    fn name(&self) -> String {
+        "Derived Timing Probe".into()
+    }
+
+    fn category(&self) -> String {
+        "Test".into()
+    }
+
+    fn version(&self) -> (u32, u32, u32) {
+        (0, 1, 0)
+    }
+}
+
+impl EffectPlugin for DerivedTimingProbe {
+    fn apply(
+        &self,
+        _input: &RenderOutput,
+        _params: &HashMap<String, PropertyValue>,
+        _gpu_context: Option<&mut library::rendering::skia_utils::GpuContext>,
+    ) -> Result<RenderOutput, library::LibraryError> {
+        Err(library::LibraryError::Render(
+            "the derived timing probe has no Image operation".into(),
+        ))
+    }
+
+    fn properties(&self) -> Vec<library::model::property::PropertyDefinition> {
+        Vec::new()
+    }
+
+    fn descriptor(&self) -> Result<OperationDescriptor, OperationDescriptorError> {
+        OperationDescriptor::new(
+            EFFECT_CATEGORY,
+            self.id(),
+            EFFECT_APPLY_OPERATION,
+            self.name(),
+            Vec::new(),
+            [
+                PortDefinition::input(TIME_PORT, "Time", PortDataType::Number),
+                output_port(FRAME_PORT, PortDataType::Integer),
+                output_port(FPS_PORT, PortDataType::Number),
+            ],
+        )
+    }
+}
+
+#[test]
+fn derived_timing_output_requires_an_available_enabled_operation() -> AnyResult<()> {
+    let plugins = Arc::new(PluginManager::default());
+    plugins.register_effect(Arc::new(DerivedTimingProbe));
+    let manager = ProjectManager::new(
+        Arc::new(RwLock::new(Project::new("factory"))),
+        plugins.clone(),
+    );
+    let timing = plugins.create_effect_operation_node("derived_timing_probe")?;
+    let timing_id = timing.id;
+    let visual = manager
+        .create_solid_node(Color::white(), WIDTH, HEIGHT)
+        .context("create derived timing consumer")?;
+    let visual_id = visual.id;
+    let graph = NodeGraphBundle::new(
+        vec![timing, visual],
+        vec![
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(timing_id), FRAME_PORT),
+                PortAddress::new(PortOwner::Node(visual_id), "rotation"),
+                0,
+            ),
+            ProjectConnection::new(
+                PortAddress::new(PortOwner::Node(timing_id), FPS_PORT),
+                PortAddress::new(PortOwner::Node(visual_id), "opacity"),
+                0,
+            ),
+        ],
+        Some(visual_id),
+    );
+    let (mut project, _) = project_with_graph(graph, 0.0, 2.0)?;
+
+    assert_eq!(
+        object_source_ids(&evaluate(&project, &plugins, 0)?.items),
+        vec![visual_id]
+    );
+    project
+        .get_node_mut(timing_id)
+        .context("derived timing operation must exist")?
+        .enabled = false;
+    assert!(evaluate(&project, &plugins, 0)?.items.is_empty());
+
+    let timing = project
+        .get_node_mut(timing_id)
+        .context("derived timing operation must remain mutable")?;
+    timing.enabled = true;
+    let original = serde_json::to_value(&*timing)?;
+    let mut mismatched = original.clone();
+    mismatched["content"]["data"]["declared_ports"]
+        .as_array_mut()
+        .context("persisted derived timing ports must be an array")?
+        .push(serde_json::to_value(output_port(
+            "extra",
+            PortDataType::Number,
+        ))?);
+    *timing = serde_json::from_value(mismatched)?;
+    assert!(evaluate(&project, &plugins, 0)?.items.is_empty());
+
+    let timing = project
+        .get_node_mut(timing_id)
+        .context("mismatched derived timing operation must remain mutable")?;
+    let mut unknown = original;
+    unknown["content"]["data"]["component_id"] =
+        serde_json::Value::String("unavailable-derived-timing".into());
+    *timing = serde_json::from_value(unknown)?;
+    assert!(evaluate(&project, &plugins, 0)?.items.is_empty());
+    assert_eq!(Project::load(&project.save()?)?, project);
     Ok(())
 }
 

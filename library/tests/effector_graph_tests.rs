@@ -683,16 +683,11 @@ fn disabled_and_inactive_effector_operations_short_circuit_before_plugin_work() 
         .get_node_mut(counting_id)
         .context("Counting Effector is missing")?
         .enabled = true;
-    let enabled_error = match evaluate_result(&project, &plugins, 0) {
-        Ok(_) => bail!("enabled broken Time wire unexpectedly evaluated"),
-        Err(error) => error,
-    };
     assert!(
-        enabled_error
-            .to_string()
-            .contains("Unsupported value output port"),
-        "the fixture Time wire must fail when the gate is enabled"
+        evaluate(&project, &plugins, 0)?.items.is_empty(),
+        "an unavailable scalar operation must propagate NoOutput when its consumer is enabled"
     );
+    assert_eq!(evaluations.load(Ordering::SeqCst), 0);
     project.disconnect_connection(broken_connection);
 
     assert!(first_content(&evaluate(&project, &plugins, 0)?.items).is_some());
