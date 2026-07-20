@@ -10266,7 +10266,7 @@ mod tests {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 420.0));
         let mut queued = Vec::new();
         for (frame, events) in frames.into_iter().enumerate() {
-            let _ = context.run(
+            drop(context.run(
                 egui::RawInput {
                     screen_rect: Some(screen),
                     time: Some(frame as f64 / 60.0),
@@ -10289,7 +10289,7 @@ mod tests {
                         ));
                     });
                 },
-            );
+            ));
         }
         queued
     }
@@ -11457,7 +11457,7 @@ mod tests {
                 time: Some(frame as f64 / 60.0),
                 ..Default::default()
             };
-            let _ = context.run(raw_input, |context| {
+            drop(context.run(raw_input, |context| {
                 egui::CentralPanel::default().show(context, |ui| {
                     let mut edits = Vec::new();
                     let mut navigation = None;
@@ -11484,10 +11484,12 @@ mod tests {
                         rendered_ports: Arc::clone(&rendered_ports),
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
                     };
-                    let mut style = SnarlStyle::default();
-                    style.collapsible = Some(false);
-                    style.min_scale = Some(0.05);
-                    style.max_scale = Some(1.0);
+                    let style = SnarlStyle {
+                        collapsible: Some(false),
+                        min_scale: Some(0.05),
+                        max_scale: Some(1.0),
+                        ..Default::default()
+                    };
                     snarl.show(
                         &mut viewer,
                         &style,
@@ -11502,7 +11504,7 @@ mod tests {
                     }
                     register_rendered_edges(project, &rendered_ports, canvas_clip, None);
                 });
-            });
+            }));
         }
         (
             test_rects(),
@@ -12901,7 +12903,7 @@ mod tests {
 
         let corner = ContainerResizeState {
             edge: ContainerResizeEdge::BottomRight,
-            ..base.clone()
+            ..base
         };
         let (position, size) = resized_container_geometry(&corner, egui::vec2(40.0, 70.0), None);
         assert_eq!(position, [100.0, 120.0]);
@@ -13216,7 +13218,7 @@ mod tests {
         let mut state = NodeEditorState::default();
         let mut queued = Vec::new();
         for (frame, events) in frames.into_iter().enumerate() {
-            let _ = context.run(
+            drop(context.run(
                 egui::RawInput {
                     screen_rect: Some(screen),
                     time: Some(frame as f64 / 60.0),
@@ -13240,7 +13242,7 @@ mod tests {
                         ));
                     });
                 },
-            );
+            ));
         }
         assert!(queued.is_empty());
         assert!(state.wire_knife.is_none());
@@ -13538,7 +13540,7 @@ mod tests {
         let (mut project, _, _, _, node_id, _) = fixture();
         let initial = project.clone();
         let mut history = HistoryManager::new();
-        history.push_project_state(initial.clone());
+        history.push_project_state(initial);
         let mut state = NodeEditorState::default();
 
         apply_queued_node_edits(
@@ -15778,7 +15780,7 @@ mod tests {
                 time: Some(frame as f64 / 60.0),
                 ..Default::default()
             };
-            let _ = context.run(raw_input, |context| {
+            drop(context.run(raw_input, |context| {
                 egui::CentralPanel::default().show(context, |ui| {
                     let (mut snarl, containers) = build_snarl(&project, composition_id);
                     let mut edits = Vec::new();
@@ -15805,9 +15807,11 @@ mod tests {
                         rendered_ports: Arc::new(Mutex::new(HashMap::new())),
                         rendered_node_rects: Arc::new(Mutex::new(HashMap::new())),
                     };
-                    let mut style = SnarlStyle::default();
-                    style.collapsible = Some(false);
-                    style.max_scale = Some(1.0);
+                    let style = SnarlStyle {
+                        collapsible: Some(false),
+                        max_scale: Some(1.0),
+                        ..Default::default()
+                    };
                     snarl.show(
                         &mut viewer,
                         &style,
@@ -15815,7 +15819,7 @@ mod tests {
                         ui,
                     );
                 });
-            });
+            }));
         }
 
         let node = test_rect(&format!("node_editor.node:{node_id}")).expect("rendered node rect");
