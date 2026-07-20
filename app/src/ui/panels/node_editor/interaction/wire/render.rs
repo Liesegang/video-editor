@@ -1,20 +1,19 @@
 use eframe::egui::{self, Color32};
-use library::model::project::{
-    ContainerImageSourceKind, PortAddress, PortDataType, PortDirection, PortOwner,
-};
+use library::model::project::{PortDataType, PortDirection, PortOwner};
 use library::model::Project;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use super::container_outputs::register_container_output_edges;
 use super::hit::cubic_bezier_point;
 #[cfg(test)]
 use crate::ui::panels::node_editor::capture_test_rect;
 use crate::ui::panels::node_editor::{
     blend_mode_qa_key, clipped_qa_rect, connection_supports_authored_blend, container_inactive,
-    container_output_node_id, edge_endpoint_qa_metadata, overview_wire_graph_points, pin_color,
-    qa_container_key, qa_rect_metadata, screen_stroke_in_graph_units, wire_order_menu_states,
-    ContainerKind, ContainerVisual, EdgeComponent, OverviewWirePainter, RenderedEdge,
-    RenderedEdgeKind, RenderedPortKey,
+    container_output_node_id, container_output_type_key, edge_endpoint_qa_metadata,
+    overview_wire_graph_points, pin_color, qa_container_key, qa_rect_metadata,
+    screen_stroke_in_graph_units, wire_order_menu_states, ContainerKind, ContainerVisual,
+    EdgeComponent, OverviewWirePainter, RenderedEdge, RenderedEdgeKind, RenderedPortKey,
 };
 
 pub(in crate::ui::panels::node_editor) fn register_container_chrome(
@@ -48,7 +47,21 @@ pub(in crate::ui::panels::node_editor) fn register_container_chrome(
             "owner": owner,
             "collapsed": container.collapsed,
             "inactive": container_inactive(project, container.owner, current_time),
-            "output_node_id": container_output_node_id(project, container.owner),
+            "output_node_id": container_output_node_id(
+                project,
+                container.owner,
+                PortDataType::Image,
+            ),
+            "image_output_node_id": container_output_node_id(
+                project,
+                container.owner,
+                PortDataType::Image,
+            ),
+            "audio_output_node_id": container_output_node_id(
+                project,
+                container.owner,
+                PortDataType::Audio,
+            ),
             "content_rect": graph_content.map(qa_rect_metadata),
             "content_area_ratio": content_ratio,
             "port_hit_policy": "localized_socket",
@@ -134,54 +147,13 @@ pub(in crate::ui::panels::node_editor) fn register_rendered_edges(
         )
         .chain(project.clips.values().map(|item| PortOwner::Clip(item.id)))
     {
-        let sink = PortAddress::new(owner, "output_binding");
-        for source in project.container_image_sources(owner) {
-            let from = PortAddress::new(source.source, library::model::project::IMAGE_OUTPUT_PORT);
-            let source_key = qa_container_key(source.source);
-            let (id, kind) = match source.kind {
-                ContainerImageSourceKind::OutputBinding => {
-                    let PortOwner::Node(node_id) = source.source else {
-                        continue;
-                    };
-                    (
-                        format!(
-                            "node_editor.edge.output_binding:{}:{node_id}",
-                            qa_container_key(owner),
-                        ),
-                        RenderedEdgeKind::OutputBinding { owner, node_id },
-                    )
-                }
-                ContainerImageSourceKind::DerivedChild => (
-                    format!(
-                        "node_editor.edge.derived:{}:{source_key}",
-                        qa_container_key(owner)
-                    ),
-                    RenderedEdgeKind::DerivedOutput {
-                        owner,
-                        source: source.source,
-                    },
-                ),
-            };
-            if let Some(edge) = register_edge_component(
-                EdgeComponent {
-                    id,
-                    kind,
-                    from: &from,
-                    to: &sink,
-                    wire_color: pin_color(PortDataType::Image),
-                    authored_order: None,
-                    back_to_front_index: None,
-                    layer_count: None,
-                    authored_blend_mode: None,
-                    authored_blend_available: false,
-                },
-                &ports,
-                canvas_clip,
-                overview,
-            ) {
-                rendered_edges.push(edge);
-            }
-        }
+        rendered_edges.extend(register_container_output_edges(
+            project,
+            owner,
+            &ports,
+            canvas_clip,
+            overview,
+        ));
     }
     rendered_edges
 }
@@ -245,18 +217,29 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
     } else {
         bbox
     };
-    let (binding_owner, binding_node_id) = match edge.kind {
-        RenderedEdgeKind::OutputBinding { owner, node_id } => {
-            (Some(qa_container_key(owner)), Some(node_id))
-        }
-        _ => (None, None),
+    let (binding_owner, binding_node_id, binding_output_type) = match edge.kind {
+        RenderedEdgeKind::OutputBinding {
+            owner,
+            node_id,
+            data_type,
+        } => (
+            Some(qa_container_key(owner)),
+            Some(node_id),
+            container_output_type_key(data_type),
+        ),
+        _ => (None, None, None),
     };
-    let (derived_owner, derived_source) = match edge.kind {
-        RenderedEdgeKind::DerivedOutput { owner, source } => (
+    let (derived_owner, derived_source, derived_output_type) = match edge.kind {
+        RenderedEdgeKind::DerivedOutput {
+            owner,
+            source,
+            data_type,
+        } => (
             Some(qa_container_key(owner)),
             Some(qa_container_key(source)),
+            container_output_type_key(data_type),
         ),
-        _ => (None, None),
+        _ => (None, None, None),
     };
     let action = match edge.kind {
         RenderedEdgeKind::ProjectConnection { .. } => Some("select_or_edit"),
@@ -278,8 +261,10 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
             "edit_blocked_reason": edge.kind.blocked_reason(),
             "binding_owner": binding_owner,
             "binding_node_id": binding_node_id,
+            "binding_output_type": binding_output_type,
             "derived_owner": derived_owner,
             "derived_source": derived_source,
+            "derived_output_type": derived_output_type,
             "from": {
                 "owner": qa_container_key(edge.from.owner),
                 "port": edge.from.port,

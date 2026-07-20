@@ -370,6 +370,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 pin.id.input,
             ),
             address,
+            data_type: definition.data_type,
             direction: PortDirection::Input,
             connected,
             canvas_clip: *self.canvas_clip,
@@ -425,6 +426,7 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 pin.id.output,
             ),
             address,
+            data_type: definition.data_type,
             direction: PortDirection::Output,
             connected,
             canvas_clip: *self.canvas_clip,
@@ -826,26 +828,38 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
             to.id.input,
             false,
         );
-        let context_target = match &edit {
-            Some(NodeEdit::Disconnect { from, to }) => self
-                .project
-                .connections
-                .iter()
-                .find(|connection| connection.from == *from && connection.to == *to)
-                .map(|connection| NodeEditorEditableWire::ProjectConnection {
-                    connection_id: connection.id,
-                }),
-            Some(NodeEdit::SetOutputNode {
-                owner,
-                node_id: None,
-            }) => container_output_node_id(self.project, *owner).map(|node_id| {
-                NodeEditorEditableWire::OutputBinding {
-                    owner: *owner,
-                    node_id,
-                }
-            }),
-            _ => None,
-        };
+        let context_target =
+            match &edit {
+                Some(NodeEdit::Disconnect { from, to }) => self
+                    .project
+                    .connections
+                    .iter()
+                    .find(|connection| connection.from == *from && connection.to == *to)
+                    .map(|connection| NodeEditorEditableWire::ProjectConnection {
+                        connection_id: connection.id,
+                    }),
+                Some(NodeEdit::SetOutputNode {
+                    owner,
+                    node_id: None,
+                }) => container_output_node_id(self.project, *owner, PortDataType::Image).map(
+                    |node_id| NodeEditorEditableWire::OutputBinding {
+                        owner: *owner,
+                        node_id,
+                        data_type: PortDataType::Image,
+                    },
+                ),
+                Some(NodeEdit::SetAudioOutputNode {
+                    owner,
+                    node_id: None,
+                }) => container_output_node_id(self.project, *owner, PortDataType::Audio).map(
+                    |node_id| NodeEditorEditableWire::OutputBinding {
+                        owner: *owner,
+                        node_id,
+                        data_type: PortDataType::Audio,
+                    },
+                ),
+                _ => None,
+            };
         if let Some(target) = context_target {
             *self.wire_context_request = Some(target);
             return;

@@ -1,3 +1,4 @@
+mod container_outputs;
 mod gesture;
 mod hit;
 mod menu;
@@ -9,7 +10,7 @@ pub(in crate::ui::panels::node_editor) use gesture::{
     overview_wire_graph_points, wire_interactions, WireInteractionFrame,
 };
 #[cfg(test)]
-pub(in crate::ui::panels::node_editor) use hit::{cubic_bezier_point, segments_intersect};
+pub(in crate::ui::panels::node_editor) use hit::cubic_bezier_point;
 pub(in crate::ui::panels::node_editor) use hit::{
     editable_wire_is_current, editable_wire_qa_value, editable_wire_sort_key,
     editable_wire_stable_key, knife_segment_hits_edge, rendered_edge_at_position,

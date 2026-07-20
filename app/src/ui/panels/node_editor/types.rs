@@ -76,7 +76,7 @@ pub(super) enum GraphItem {
 pub(super) enum PortAnchorKind {
     ExternalInputs,
     InternalMetadata,
-    ImageSink,
+    OutputSinks,
     ExternalOutputs,
 }
 
@@ -153,7 +153,7 @@ impl ContainerVisual {
         match kind {
             PortAnchorKind::ExternalInputs => egui::pos2(rect.left() - 7.0, left_row_y),
             PortAnchorKind::InternalMetadata => egui::pos2(rect.left() + 7.0, left_row_y),
-            PortAnchorKind::ImageSink => egui::pos2(rect.right() - 32.0, right_row_y),
+            PortAnchorKind::OutputSinks => egui::pos2(rect.right() - 32.0, right_row_y),
             PortAnchorKind::ExternalOutputs => egui::pos2(rect.right(), right_row_y),
         }
     }
@@ -214,7 +214,7 @@ mod tests {
             for (anchor, index) in [
                 (PortAnchorKind::InternalMetadata, 0),
                 (PortAnchorKind::InternalMetadata, 5),
-                (PortAnchorKind::ImageSink, 0),
+                (PortAnchorKind::OutputSinks, 0),
                 (PortAnchorKind::ExternalOutputs, 0),
             ] {
                 let hit = visual.unit_scale_port_hit_rect(anchor, index);
@@ -225,7 +225,7 @@ mod tests {
                 );
             }
             assert!(!visual
-                .unit_scale_port_hit_rect(PortAnchorKind::ImageSink, 0)
+                .unit_scale_port_hit_rect(PortAnchorKind::OutputSinks, 0)
                 .intersects(visual.unit_scale_port_hit_rect(PortAnchorKind::ExternalOutputs, 0,)));
         }
     }
@@ -241,6 +241,12 @@ mod tests {
         assert!(image.top() >= frame.top());
         assert!(audio.bottom() <= frame.top() + CONTAINER_HEADER_HEIGHT);
         assert_eq!(audio.center().y - image.center().y, 24.0);
+
+        let image_sink = visual.unit_scale_port_hit_rect(PortAnchorKind::OutputSinks, 0);
+        let audio_sink = visual.unit_scale_port_hit_rect(PortAnchorKind::OutputSinks, 1);
+        assert!(!image_sink.intersects(audio_sink));
+        assert!(!image_sink.intersects(image));
+        assert!(!audio_sink.intersects(audio));
     }
 
     #[test]

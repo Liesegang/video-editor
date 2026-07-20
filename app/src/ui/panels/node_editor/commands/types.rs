@@ -48,6 +48,10 @@ pub(in crate::ui::panels::node_editor) enum NodeEdit {
         owner: PortOwner,
         node_id: Option<Uuid>,
     },
+    SetAudioOutputNode {
+        owner: PortOwner,
+        node_id: Option<Uuid>,
+    },
     Delete {
         owner: PortOwner,
     },

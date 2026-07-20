@@ -270,28 +270,28 @@ pub(in crate::ui::panels::node_editor) fn paint_container_foreground(
                 pin_color(definition.data_type).gamma_multiply(if inactive { 0.45 } else { 0.9 }),
             );
         }
-        for (index, definition) in canonical_pin_definitions(
-            project,
-            container.owner,
-            PortDirection::Output,
-            PortSide::Right,
-        )
-        .iter()
-        .enumerate()
-        {
-            painter.text(
-                egui::pos2(
-                    rect.right() - 42.0,
-                    rect.top()
-                        + CONTAINER_RIGHT_PORT_Y
-                        + index as f32 * CONTAINER_RIGHT_PORT_ROW_HEIGHT,
-                ),
-                egui::Align2::RIGHT_CENTER,
-                definition.name.to_uppercase(),
-                egui::FontId::proportional(10.0),
-                pin_color(definition.data_type).gamma_multiply(if inactive { 0.45 } else { 0.9 }),
-            );
-        }
+    }
+    for (index, definition) in canonical_pin_definitions(
+        project,
+        container.owner,
+        PortDirection::Output,
+        PortSide::Right,
+    )
+    .iter()
+    .enumerate()
+    {
+        painter.text(
+            egui::pos2(
+                rect.right() - 42.0,
+                rect.top()
+                    + CONTAINER_RIGHT_PORT_Y
+                    + index as f32 * CONTAINER_RIGHT_PORT_ROW_HEIGHT,
+            ),
+            egui::Align2::RIGHT_CENTER,
+            definition.name.to_uppercase(),
+            egui::FontId::proportional(10.0),
+            pin_color(definition.data_type).gamma_multiply(if inactive { 0.45 } else { 0.9 }),
+        );
     }
 
     if let PortOwner::Clip(clip_id) = container.owner {

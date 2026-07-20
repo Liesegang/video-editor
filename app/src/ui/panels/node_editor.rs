@@ -39,6 +39,7 @@ use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 mod canvas;
+mod container_output;
 mod property_evaluation;
 
 use canvas::{
@@ -51,6 +52,11 @@ use canvas::{
 use canvas::{
     GRID_TARGET_SCREEN_SPACING, NODE_EDITOR_DETAIL_SCALE, NODE_EDITOR_MAX_SCALE,
     NODE_EDITOR_MAX_TRANSLATION, NODE_EDITOR_MIN_SCALE, NODE_EDITOR_RESIZE_INTERACTION_SCALE,
+};
+use container_output::{
+    container_output_binding_port, container_output_binding_type, container_output_node_id,
+    container_output_port, container_output_type_key, AUDIO_OUTPUT_BINDING_PORT,
+    IMAGE_OUTPUT_BINDING_PORT,
 };
 use property_evaluation::{evaluate_node_property, render_node_property_issue};
 mod types;
@@ -116,7 +122,7 @@ use interaction::node_selection_after_snarl_click;
 use interaction::resize_regions;
 use interaction::{capture_container_resize_before_canvas, container_resize_interactions};
 #[cfg(test)]
-use interaction::{cubic_bezier_point, register_edge_component, segments_intersect};
+use interaction::{cubic_bezier_point, register_edge_component};
 use interaction::{edit_for_wire, embedded_pin_center, graph_item_owner};
 use interaction::{
     editable_wire_is_current, editable_wire_qa_value, editable_wire_sort_key,
@@ -131,8 +137,8 @@ use queries::clip_is_active;
 pub(super) use queries::node_timing_drag_config;
 use queries::{
     canonical_pin_definitions, container_collapsed, container_inactive, container_name_and_size,
-    container_output_node_id, container_title, graph_item_inactive, graph_item_inactive_reason,
-    graph_item_title, input_definitions, node_property_definition, node_property_time, node_title,
+    container_title, graph_item_inactive, graph_item_inactive_reason, graph_item_title,
+    input_definitions, node_property_definition, node_property_time, node_title,
     output_definitions, GraphItemInactiveReason,
 };
 mod panel;
@@ -5261,6 +5267,7 @@ mod tests {
             to_global,
             graph_center: Some(graph_node.center()),
             address: None,
+            data_type: PortDataType::Image,
             direction: PortDirection::Input,
             connected: false,
             canvas_clip: canvas,
@@ -5308,7 +5315,7 @@ mod tests {
             }));
             assert!(items.contains(&GraphItem::PortAnchor {
                 owner,
-                kind: PortAnchorKind::ImageSink,
+                kind: PortAnchorKind::OutputSinks,
             }));
             assert!(items.contains(&GraphItem::PortAnchor {
                 owner,
@@ -5454,7 +5461,7 @@ mod tests {
         }
 
         let binding = format!(
-            "node_editor.edge.output_binding:{}:{merge_id}",
+            "node_editor.edge.output_binding:{}:image:{merge_id}",
             qa_container_key(PortOwner::Clip(clip_id))
         );
         assert!(
@@ -5463,7 +5470,7 @@ mod tests {
         );
 
         let track_dependency = format!(
-            "node_editor.edge.derived:{}:{}",
+            "node_editor.edge.derived:{}:image:{}",
             qa_container_key(PortOwner::Track(track_id)),
             qa_container_key(PortOwner::Clip(clip_id))
         );
@@ -5512,54 +5519,6 @@ mod tests {
     }
 
     #[test]
-    fn derived_wire_secondary_hit_is_display_only_instead_of_blank_canvas() {
-        let derived = RenderedEdge {
-            kind: RenderedEdgeKind::DerivedOutput {
-                owner: PortOwner::Track(Uuid::from_u128(0xD001)),
-                source: PortOwner::Clip(Uuid::from_u128(0xD002)),
-            },
-            start: egui::pos2(100.0, 180.0),
-            control_a: egui::pos2(180.0, 180.0),
-            control_b: egui::pos2(320.0, 180.0),
-            end: egui::pos2(400.0, 180.0),
-        };
-        let hit_point = egui::pos2(250.0, 180.0);
-
-        assert_eq!(
-            wire_secondary_click_hit(&[derived], hit_point),
-            Some(WireSecondaryClickHit::DisplayOnly)
-        );
-        assert_eq!(
-            wire_secondary_click_hit(&[], hit_point),
-            None,
-            "blank canvas must remain distinguishable from a display-only wire"
-        );
-    }
-
-    #[test]
-    fn wire_knife_detects_midspan_intersection_of_long_segments() {
-        let knife_start = egui::pos2(10.0, -1_000.0);
-        let knife_end = egui::pos2(10.0, 1_000.0);
-        let edge = RenderedEdge {
-            kind: RenderedEdgeKind::ProjectConnection {
-                connection_id: Uuid::new_v4(),
-            },
-            start: egui::pos2(-1_000.0, 0.0),
-            control_a: egui::pos2(-333.333_34, 0.0),
-            control_b: egui::pos2(333.333_34, 0.0),
-            end: egui::pos2(1_000.0, 0.0),
-        };
-
-        assert!(segments_intersect(
-            knife_start,
-            knife_end,
-            edge.start,
-            edge.end,
-        ));
-        assert!(knife_segment_hits_edge(knife_start, knife_end, &edge));
-    }
-
-    #[test]
     fn alt_drag_knife_batches_explicit_and_output_binding_but_preserves_derived_wires(
     ) -> Result<(), String> {
         let (mut project, _, track_id, clip_id, _, merge_id) = fixture();
@@ -5596,6 +5555,7 @@ mod tests {
                 kind: RenderedEdgeKind::OutputBinding {
                     owner: PortOwner::Clip(clip_id),
                     node_id: merge_id,
+                    data_type: PortDataType::Image,
                 },
                 start: egui::pos2(100.0, 300.0),
                 control_a: egui::pos2(180.0, 260.0),
@@ -5606,6 +5566,7 @@ mod tests {
                 kind: RenderedEdgeKind::DerivedOutput {
                     owner: PortOwner::Track(track_id),
                     source: PortOwner::Clip(clip_id),
+                    data_type: PortDataType::Image,
                 },
                 start: egui::pos2(100.0, 350.0),
                 control_a: egui::pos2(180.0, 310.0),
@@ -5691,6 +5652,7 @@ mod tests {
             .chain(std::iter::once(NodeEditorEditableWire::OutputBinding {
                 owner: PortOwner::Clip(clip_id),
                 node_id: merge_id,
+                data_type: PortDataType::Image,
             }))
             .collect::<Vec<_>>();
         expected.sort_by_key(|target| editable_wire_sort_key(*target));

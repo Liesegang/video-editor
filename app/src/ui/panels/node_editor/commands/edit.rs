@@ -1,6 +1,6 @@
 use crate::action::HistoryManager;
 use crate::state::context_types::NodeEditorState;
-use library::model::project::PortOwner;
+use library::model::project::{PortDataType, PortOwner};
 use library::model::Project;
 use std::sync::{Arc, RwLock};
 
@@ -108,20 +108,10 @@ pub(in crate::ui::panels::node_editor) fn apply_edit(
             composition_id,
         } => insert_node_on_connection(project, connection_id, *node, position, composition_id),
         NodeEdit::SetOutputNode { owner, node_id } => {
-            let Some(container) = container_for_output_owner(owner) else {
-                return false;
-            };
-            let before = container_output_node_id(project, owner);
-            if before == node_id {
-                return false;
-            }
-            match project.set_output_node(container, node_id) {
-                Ok(()) => true,
-                Err(error) => {
-                    log::warn!("Cannot set container output node: {error}");
-                    false
-                }
-            }
+            apply_container_output_node(project, owner, node_id, PortDataType::Image)
+        }
+        NodeEdit::SetAudioOutputNode { owner, node_id } => {
+            apply_container_output_node(project, owner, node_id, PortDataType::Audio)
         }
         NodeEdit::Delete { owner } => match owner {
             PortOwner::Node(id) => project.remove_node(id).is_some(),
@@ -217,6 +207,32 @@ pub(in crate::ui::panels::node_editor) fn apply_edit(
                 .is_some_and(|node| node.update_property_or_keyframe(&key, time, value, None)),
             PortOwner::Composition(_) | PortOwner::Track(_) => false,
         },
+    }
+}
+
+fn apply_container_output_node(
+    project: &mut Project,
+    owner: PortOwner,
+    node_id: Option<uuid::Uuid>,
+    data_type: PortDataType,
+) -> bool {
+    let Some(container) = container_for_output_owner(owner) else {
+        return false;
+    };
+    if container_output_node_id(project, owner, data_type) == node_id {
+        return false;
+    }
+    let result = match data_type {
+        PortDataType::Image => project.set_output_node(container, node_id),
+        PortDataType::Audio => project.set_audio_output_node(container, node_id),
+        _ => return false,
+    };
+    match result {
+        Ok(()) => true,
+        Err(error) => {
+            log::warn!("Cannot set {data_type:?} container output node: {error}");
+            false
+        }
     }
 }
 

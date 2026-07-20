@@ -84,7 +84,7 @@ pub(in crate::ui::panels::node_editor) fn qa_port_id(
             let role = match kind {
                 PortAnchorKind::ExternalInputs => "external_input",
                 PortAnchorKind::InternalMetadata => "internal_output",
-                PortAnchorKind::ImageSink => "image_sink",
+                PortAnchorKind::OutputSinks => "output_sink",
                 PortAnchorKind::ExternalOutputs => "external_output",
             };
             format!(

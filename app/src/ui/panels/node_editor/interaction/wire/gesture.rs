@@ -8,6 +8,8 @@ use library::model::Project;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use super::model::edit_for_port_addresses;
+
 use crate::ui::panels::node_editor::{
     editable_wire_qa_value, editable_wire_sort_key, knife_segment_hits_edge,
     node_editor_port_interactions_enabled, qa_container_key, rendered_edge_at_position,
@@ -327,12 +329,9 @@ pub(in crate::ui::panels::node_editor) fn wire_interactions(
                 frame.canvas_clip,
             )
         });
-        return target.map_or_else(Vec::new, |to| {
-            vec![QueuedNodeEdit::Atomic(NodeEdit::Connect {
-                from: gesture.from,
-                to,
-            })]
-        });
+        return target
+            .and_then(|to| edit_for_port_addresses(frame.project, gesture.from, to, true))
+            .map_or_else(Vec::new, |edit| vec![QueuedNodeEdit::Atomic(edit)]);
     }
     if state.normal_wire_drag_active {
         if escape_pressed || !primary_down {

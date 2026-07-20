@@ -3,7 +3,7 @@ use crate::ui::widgets::searchable_context_menu::{
     searchable_popup_placement, show_searchable_items_with_qa,
 };
 use eframe::egui;
-use library::model::project::PortOwner;
+use library::model::project::{PortDataType, PortOwner};
 use library::model::Project;
 use library::plugin::PluginManager;
 use uuid::Uuid;
@@ -24,8 +24,15 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
     to_global: egui::emath::TSTransform,
 ) -> Option<QueuedNodeEdit> {
     let target = state.wire_context_menu.as_ref()?.target;
-    if let NodeEditorEditableWire::OutputBinding { owner, node_id } = target {
-        return show_output_binding_wire_context_menu(ui, state, project, owner, node_id);
+    if let NodeEditorEditableWire::OutputBinding {
+        owner,
+        node_id,
+        data_type,
+    } = target
+    {
+        return show_output_binding_wire_context_menu(
+            ui, state, project, owner, node_id, data_type,
+        );
     }
     let context = state.wire_context_menu.as_mut()?;
     let NodeEditorEditableWire::ProjectConnection { connection_id } = context.target else {
@@ -329,8 +336,13 @@ fn show_output_binding_wire_context_menu(
     project: &Project,
     owner: PortOwner,
     node_id: Uuid,
+    data_type: PortDataType,
 ) -> Option<QueuedNodeEdit> {
-    let target = NodeEditorEditableWire::OutputBinding { owner, node_id };
+    let target = NodeEditorEditableWire::OutputBinding {
+        owner,
+        node_id,
+        data_type,
+    };
     if !editable_wire_is_current(project, target) {
         state.wire_context_menu = None;
         return None;
@@ -347,7 +359,10 @@ fn show_output_binding_wire_context_menu(
         .show(ui.ctx(), |ui| {
             egui::Frame::menu(ui.style()).show(ui, |ui| {
                 ui.set_min_width(240.0);
-                non_selectable_label(ui, "Container Output Binding")
+                let output_type =
+                    crate::ui::panels::node_editor::container_output_type_key(data_type)
+                        .unwrap_or("unsupported");
+                non_selectable_label(ui, format!("{output_type} Container Output Binding"))
                     .on_hover_text("This authored wire selects the Node rendered by the container");
                 let delete = ui
                     .button("Delete Wire")
@@ -362,6 +377,7 @@ fn show_output_binding_wire_context_menu(
                         "kind": "output_binding",
                         "owner": qa_container_key(owner),
                         "node_id": node_id,
+                        "output_type": output_type,
                     })),
                 );
                 if delete.clicked() {
@@ -381,6 +397,7 @@ fn show_output_binding_wire_context_menu(
             "kind": "output_binding",
             "owner": qa_container_key(owner),
             "node_id": node_id,
+            "output_type": crate::ui::panels::node_editor::container_output_type_key(data_type),
             "mode": "commands",
             "editable": true,
         })),
