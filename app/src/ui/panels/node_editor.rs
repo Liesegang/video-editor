@@ -7264,18 +7264,18 @@ mod tests {
             .is_some_and(|(clip, before)| {
                 clip.ui_position[0] < before[0] && clip.ui_position[1] < before[1]
             }));
-        assert!(project
-            .get_track(track_id)
-            .zip(track_before)
-            .is_some_and(|(track, before)| {
-                track.ui_position[0] <= before[0] && track.ui_position[1] <= before[1]
-            }));
-        assert!(project
-            .get_composition(composition_id)
-            .zip(composition_before)
-            .is_some_and(|(composition, before)| {
-                composition.ui_position[0] <= before[0] && composition.ui_position[1] <= before[1]
-            }));
+        assert_eq!(
+            project.get_track(track_id).map(|track| track.ui_position),
+            track_before,
+            "the reduced port rail leaves enough track content space to contain the grown clip"
+        );
+        assert_eq!(
+            project
+                .get_composition(composition_id)
+                .map(|composition| composition.ui_position),
+            composition_before,
+            "the composition must not drift when its content already contains the track"
+        );
 
         let Some(clip) = project.get_clip(clip_id) else {
             return;
