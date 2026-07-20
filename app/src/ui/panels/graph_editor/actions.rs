@@ -188,12 +188,11 @@ pub fn finish_pending_move(
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "graph actions need stable composition/track/entity identity plus model, UI, and history services for one atomic edit"
+    reason = "graph actions need stable composition/entity identity plus model, UI, and history services for one atomic edit"
 )]
 pub fn process_action(
     action: Action,
     comp_id: Uuid,
-    track_id: Uuid,
     entity_id: Uuid,
     project_service: &EditorService,
     project: &Arc<RwLock<Project>>,
@@ -328,19 +327,14 @@ pub fn process_action(
                 if property.evaluator != "keyframe" {
                     return None;
                 }
-                property.keyframe_by_id(keyframe_id)
+                property
+                    .keyframe_by_id(keyframe_id)
+                    .map(|keyframe| (keyframe, PropertyOwner::Node(entity_id)))
             });
-            if let Some(keyframe) = keyframe {
-                let owner = project.read().ok().and_then(|project| {
-                    project
-                        .get_node(entity_id)
-                        .map(|_| PropertyOwner::Node(entity_id))
-                });
+            if let Some((keyframe, owner)) = keyframe {
                 editor_context.keyframe_dialog.is_open = true;
-                editor_context.keyframe_dialog.track_id = Some(track_id);
-                editor_context.keyframe_dialog.entity_id = Some(entity_id);
                 editor_context.keyframe_dialog.property_name = name;
-                editor_context.keyframe_dialog.owner = owner;
+                editor_context.keyframe_dialog.owner = Some(owner);
                 editor_context.keyframe_dialog.property_key = property_key;
                 editor_context.keyframe_dialog.keyframe_id = Some(keyframe_id);
                 editor_context.keyframe_dialog.component = match component {
@@ -522,7 +516,6 @@ mod tests {
         process_action(
             Action::MoveBatch(movement(2.2, 2.0)),
             composition_id,
-            track_id,
             node_id,
             &service,
             &project,
@@ -532,7 +525,6 @@ mod tests {
         process_action(
             Action::MoveBatch(movement(2.4, 4.0)),
             composition_id,
-            track_id,
             node_id,
             &service,
             &project,
@@ -563,7 +555,6 @@ mod tests {
         process_action(
             Action::FinishMove,
             composition_id,
-            track_id,
             node_id,
             &service,
             &project,
@@ -574,7 +565,6 @@ mod tests {
         process_action(
             Action::FinishMove,
             composition_id,
-            track_id,
             node_id,
             &service,
             &project,
@@ -606,7 +596,6 @@ mod tests {
                 },
             ]),
             composition_id,
-            track_id,
             node_id,
             &service,
             &project,
@@ -618,7 +607,6 @@ mod tests {
         process_action(
             Action::FinishMove,
             composition_id,
-            track_id,
             node_id,
             &service,
             &project,

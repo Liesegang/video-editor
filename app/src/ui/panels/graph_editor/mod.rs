@@ -94,15 +94,15 @@ pub fn graph_editor_panel(
         return;
     };
 
-    let (entity_id, track_id) = {
+    let entity_id = {
         let Ok(project) = project.read() else {
             return;
         };
-        let Some(track_id) = selected_node_track(&project, selected_node_id, comp_id) else {
+        if !node_belongs_to_composition(&project, selected_node_id, comp_id) {
             ui.label("Select a Node to edit its keyframes.");
             return;
-        };
-        (selected_node_id, track_id)
+        }
+        selected_node_id
     };
     if editor_context.graph_editor.active_entity_id != Some(entity_id) {
         actions::finish_pending_move(editor_context, project, history_manager);
@@ -353,7 +353,6 @@ pub fn graph_editor_panel(
         actions::process_action(
             action,
             comp_id,
-            track_id,
             entity_id,
             project_service,
             project,
@@ -367,23 +366,28 @@ fn graph_node_selection(target: Option<SelectionTarget>) -> Option<uuid::Uuid> {
     target.and_then(SelectionTarget::node_id)
 }
 
-fn selected_node_track(
+fn node_belongs_to_composition(
     project: &Project,
     node_id: uuid::Uuid,
     comp_id: uuid::Uuid,
-) -> Option<uuid::Uuid> {
-    project.get_node(node_id)?;
-    match project.find_node_container(node_id)? {
-        NodeContainer::Composition(id) if id == comp_id => Some(uuid::Uuid::nil()),
+) -> bool {
+    if project.get_node(node_id).is_none() {
+        return false;
+    }
+    let Some(container) = project.find_node_container(node_id) else {
+        return false;
+    };
+    match container {
+        NodeContainer::Composition(id) => id == comp_id,
         NodeContainer::Track(track_id)
             if project.find_composition_for_track(track_id) == Some(comp_id) =>
         {
-            Some(track_id)
+            true
         }
         NodeContainer::Clip(clip_id) => project
             .find_track_for_clip(clip_id)
-            .filter(|track_id| project.find_composition_for_track(*track_id) == Some(comp_id)),
-        NodeContainer::Composition(_) | NodeContainer::Track(_) => None,
+            .is_some_and(|track_id| project.find_composition_for_track(track_id) == Some(comp_id)),
+        NodeContainer::Track(_) => false,
     }
 }
 
