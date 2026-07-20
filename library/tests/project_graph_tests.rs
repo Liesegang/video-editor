@@ -2477,6 +2477,46 @@ fn disabled_and_out_of_range_nodes_never_expose_preview_source_identity() -> Res
 }
 
 #[test]
+fn disabled_node_derived_timing_outputs_are_no_output() -> Result<()> {
+    let (mut project, _composition_id, track_id) = project_with_composition();
+    let clip_id = add_clip(&mut project, track_id, "derived timing")?;
+    let timing_source = plugin_operation_node(
+        "derived context",
+        "utility",
+        "dev.example.derived-context",
+        "context.read.v1",
+        vec![graph_output(FPS_PORT, "FPS", PortDataType::Number)],
+    );
+    let timing_source_id = add_node(&mut project, NodeContainer::Clip(clip_id), timing_source)?;
+    let visual_id = add_node(
+        &mut project,
+        NodeContainer::Clip(clip_id),
+        solid_node("derived timing consumer"),
+    )?;
+    project.connect_ports(
+        address(PortOwner::Node(timing_source_id), FPS_PORT),
+        address(PortOwner::Node(visual_id), "opacity"),
+    )?;
+    project
+        .set_output_node(NodeContainer::Clip(clip_id), Some(visual_id))
+        .map_err(|error| anyhow!(error))?;
+
+    assert_eq!(
+        object_source_ids(&frame(&project, 0)?.items),
+        vec![visual_id]
+    );
+    project
+        .get_node_mut(timing_source_id)
+        .context("derived timing source must exist")?
+        .enabled = false;
+    assert!(
+        frame(&project, 0)?.items.is_empty(),
+        "a disabled Node must not leak inherited FPS as a produced value"
+    );
+    Ok(())
+}
+
+#[test]
 fn composition_duration_gates_direct_composition_and_track_nodes() -> Result<()> {
     let (mut project, composition_id, track_id) = project_with_composition();
     let composition_node_id = add_node(

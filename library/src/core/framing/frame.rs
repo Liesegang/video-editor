@@ -1222,6 +1222,18 @@ impl<'a> FrameEvaluator<'a> {
         global_time: f64,
         path: &mut HashSet<PortOwner>,
     ) -> EvalResult<PropertyValue> {
+        let source_node = if let PortOwner::Node(node_id) = source.owner {
+            let node = self
+                .project
+                .get_node(node_id)
+                .ok_or_else(|| missing_error(source.owner))?;
+            if !node.enabled {
+                return Ok(EvalOutput::NoOutput);
+            }
+            Some(node)
+        } else {
+            None
+        };
         let definition = self
             .project
             .port_definition(source, PortDirection::Output)
@@ -1232,10 +1244,7 @@ impl<'a> FrameEvaluator<'a> {
             )));
         }
         if let PortOwner::Node(node_id) = source.owner
-            && matches!(
-                self.project.get_node(node_id).map(Node::content),
-                Some(NodeContent::Value(_))
-            )
+            && matches!(source_node.map(Node::content), Some(NodeContent::Value(_)))
         {
             return self.evaluate_value_node_output(node_id, &source.port, global_time, path);
         }
