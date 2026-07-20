@@ -7,7 +7,9 @@ use crate::state::context_types::{
     NodeEditorWireGesture, NodeEditorWireKnifeGesture, SelectionTarget,
 };
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
-use crate::ui::widgets::searchable_context_menu::{show_searchable_items_with_qa, SearchableItem};
+use crate::ui::widgets::searchable_context_menu::{
+    searchable_popup_placement, show_searchable_items_with_qa, SearchableItem,
+};
 use eframe::egui::{self, Color32};
 use egui_snarl::{
     ui::{
@@ -7615,14 +7617,17 @@ fn show_wire_context_menu(
     let authored_blend_available = connection_supports_authored_blend(project, &connection);
     let position = context.position;
     let graph_position = to_global.inverse() * position;
+    let popup =
+        searchable_popup_placement(position, egui::vec2(320.0, 348.0), ui.ctx().content_rect());
     let mut edit = None;
     let mut should_close = false;
     let response = egui::Area::new(egui::Id::new(("node_wire_context_menu", connection_id)))
         .order(egui::Order::Foreground)
-        .fixed_pos(position)
+        .fixed_pos(popup.position)
         .show(ui.ctx(), |ui| {
             egui::Frame::menu(ui.style()).show(ui, |ui| {
-                ui.set_min_width(240.0);
+                ui.set_width(popup.width);
+                ui.set_max_height(popup.max_height);
                 if context.inserting {
                     let items = wire_splice_menu_items(project, connection_id, plugin_manager);
                     if items.is_empty() {
@@ -8175,13 +8180,15 @@ fn handle_context_menu(
     if let Some(context) = state {
         let position = context.position;
         let graph_position = from_global * position;
+        let popup =
+            searchable_popup_placement(position, egui::vec2(320.0, 348.0), ui.ctx().content_rect());
         let response = egui::Area::new(egui::Id::new("node_ctx_menu"))
-            .fixed_pos(position)
+            .fixed_pos(popup.position)
             .show(ui.ctx(), |ui| {
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
                     let plugin_manager = frame.project_service.get_plugin_manager();
-                    ui.set_min_width(260.0);
-                    ui.set_max_width(320.0);
+                    ui.set_width(popup.width);
+                    ui.set_max_height(popup.max_height);
                     let items = node_create_menu_items(plugin_manager.as_ref());
                     let menu_id = format!("node_editor_add_menu:{}", context.open_time.to_bits());
                     if let Some(request) = show_searchable_items_with_qa(
