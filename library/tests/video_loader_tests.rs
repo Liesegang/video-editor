@@ -1,3 +1,4 @@
+use anyhow::{Context, Result, anyhow, bail};
 use library::LibraryError;
 use library::cache::CacheManager;
 use library::plugin::loaders::ffmpeg_video::{FfmpegVideoLoader, VideoReader};
@@ -24,37 +25,44 @@ fn get_media_fixture_path(filename: &str) -> PathBuf {
 struct TestDirectory(PathBuf);
 
 impl TestDirectory {
-    fn new() -> Self {
+    fn new() -> Result<Self> {
         let path = std::env::temp_dir().join(format!("ruvie-video-loader-{}", Uuid::new_v4()));
-        fs::create_dir(&path).unwrap();
-        Self(path)
+        fs::create_dir(&path)?;
+        Ok(Self(path))
     }
 }
 
 impl Drop for TestDirectory {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        if let Err(error) = fs::remove_dir_all(&self.0) {
+            eprintln!("failed to remove video-loader test directory: {error}");
+        }
+    }
+}
+
+fn require_error<T, E>(result: std::result::Result<T, E>, message: &str) -> Result<E> {
+    match result {
+        Ok(_) => bail!("{message}"),
+        Err(error) => Ok(error),
     }
 }
 
 #[test]
-fn test_video_reader_creation() {
+fn test_video_reader_creation() -> Result<()> {
     let path = get_test_file_path("test.mp4");
     println!("Test file path: {:?}", path);
     assert!(path.exists(), "Test file test.mp4 does not exist");
 
-    let reader = VideoReader::new(path.to_str().unwrap());
-    assert!(
-        reader.is_ok(),
-        "Failed to create VideoReader: {:?}",
-        reader.err()
-    );
+    VideoReader::new(path.to_str().context("test video path must be UTF-8")?)
+        .context("failed to create VideoReader")?;
+    Ok(())
 }
 
 #[test]
-fn test_video_reader_metadata() {
+fn test_video_reader_metadata() -> Result<()> {
     let path = get_test_file_path("test.mp4");
-    let reader = VideoReader::new(path.to_str().unwrap()).expect("Failed to create VideoReader");
+    let reader = VideoReader::new(path.to_str().context("test video path must be UTF-8")?)
+        .context("failed to create VideoReader")?;
 
     // Check FPS
     let fps = reader.get_fps();
@@ -71,44 +79,43 @@ fn test_video_reader_metadata() {
     // Check Duration
     let duration = reader.get_duration();
     println!("Duration: {:?}", duration);
-    assert!(duration.is_some());
-    assert!(duration.unwrap() > 0.0);
+    assert!(duration.context("video duration must be present")? > 0.0);
     assert_eq!(reader.get_stream_index(), 0);
     assert_eq!(reader.get_stream_time_base(), (1, 24));
     assert_eq!(reader.get_frame_count(), Some(14_315));
+    Ok(())
 }
 
 #[test]
-fn test_video_reader_decode_frame() {
+fn test_video_reader_decode_frame() -> Result<()> {
     let path = get_test_file_path("test.mp4");
-    let mut reader =
-        VideoReader::new(path.to_str().unwrap()).expect("Failed to create VideoReader");
+    let mut reader = VideoReader::new(path.to_str().context("test video path must be UTF-8")?)
+        .context("failed to create VideoReader")?;
 
     // Decode frame 0
-    let frame0 = reader.decode_frame(0);
-    assert!(frame0.is_ok(), "Failed to decode frame 0");
-    let img0 = frame0.unwrap();
+    let img0 = reader.decode_frame(0).context("failed to decode frame 0")?;
     assert_eq!(img0.width, reader.get_dimensions().0);
     assert_eq!(img0.height, reader.get_dimensions().1);
     assert!(!img0.data.is_empty());
 
     // Decode frame 30 (1 sec in)
-    let frame30 = reader.decode_frame(30);
-    assert!(frame30.is_ok(), "Failed to decode frame 30");
-    let img30 = frame30.unwrap();
+    let img30 = reader
+        .decode_frame(30)
+        .context("failed to decode frame 30")?;
     assert_eq!(img30.width, reader.get_dimensions().0);
     assert!(!img30.data.is_empty());
+    Ok(())
 }
 
 #[test]
-fn late_random_access_seeks_near_the_requested_frame_and_reuses_decoder_state() {
+fn late_random_access_seeks_near_the_requested_frame_and_reuses_decoder_state() -> Result<()> {
     let path = get_test_file_path("test.mp4");
-    let path = path.to_str().unwrap();
-    let mut direct_reader = VideoReader::new(path).expect("Failed to create VideoReader");
+    let path = path.to_str().context("test video path must be UTF-8")?;
+    let mut direct_reader = VideoReader::new(path).context("failed to create VideoReader")?;
     let fps = direct_reader.get_fps();
     let total_frames = direct_reader
         .get_frame_count()
-        .expect("fixture has an authoritative frame count");
+        .context("fixture has an authoritative frame count")?;
     let target = total_frames.saturating_sub((fps * 5.0).ceil() as u64);
     assert!(
         target > (fps * 60.0) as u64,
@@ -117,7 +124,7 @@ fn late_random_access_seeks_near_the_requested_frame_and_reuses_decoder_state() 
 
     let direct = direct_reader
         .decode_frame(target)
-        .expect("late random-access decode should succeed");
+        .context("late random-access decode should succeed")?;
     let random_access_stats = direct_reader.last_decode_stats();
     println!("late frame {target}: {random_access_stats:?}");
     let maximum_reasonable_preroll = (fps.ceil() as u64) * 4;
@@ -135,7 +142,7 @@ fn late_random_access_seeks_near_the_requested_frame_and_reuses_decoder_state() 
     for random_target in [target - 2_000, target - 400, target - 4_000] {
         direct_reader
             .decode_frame(random_target)
-            .expect("random tail frame should decode after a bounded seek");
+            .context("random tail frame should decode after a bounded seek")?;
         let stats = direct_reader.last_decode_stats();
         assert_eq!(stats.seek_count, 1);
         assert_eq!(stats.target_pts, random_target as i64);
@@ -148,13 +155,13 @@ fn late_random_access_seeks_near_the_requested_frame_and_reuses_decoder_state() 
         assert!(stats.video_packets_read <= maximum_reasonable_preroll * 2);
     }
 
-    let mut sequential_reader = VideoReader::new(path).expect("Failed to create VideoReader");
+    let mut sequential_reader = VideoReader::new(path).context("failed to create VideoReader")?;
     sequential_reader
         .decode_frame(target - 1)
-        .expect("neighbor frame should decode");
+        .context("neighbor frame should decode")?;
     let through_reused_state = sequential_reader
         .decode_frame(target)
-        .expect("sequential late frame should decode");
+        .context("sequential late frame should decode")?;
     let sequential_stats = sequential_reader.last_decode_stats();
     assert_eq!(
         sequential_stats.seek_count, 0,
@@ -166,21 +173,22 @@ fn late_random_access_seeks_near_the_requested_frame_and_reuses_decoder_state() 
     for sequential_target in target + 1..=target + 4 {
         sequential_reader
             .decode_frame(sequential_target)
-            .expect("continuous tail access should keep advancing one decoder");
+            .context("continuous tail access should keep advancing one decoder")?;
         assert_eq!(sequential_reader.last_decode_stats().seek_count, 0);
     }
+    Ok(())
 }
 
 #[test]
-fn video_loader_reuses_a_thread_safe_reader() {
+fn video_loader_reuses_a_thread_safe_reader() -> Result<()> {
     let path = get_test_file_path("test.mp4")
         .to_string_lossy()
         .into_owned();
-    let probe = VideoReader::new(&path).expect("Failed to create VideoReader");
+    let probe = VideoReader::new(&path).context("failed to create VideoReader")?;
     let fps = probe.get_fps();
     let total_frames = probe
         .get_frame_count()
-        .expect("fixture has an authoritative frame count");
+        .context("fixture has an authoritative frame count")?;
     let target = total_frames.saturating_sub((fps * 5.0).ceil() as u64);
 
     let loader = Arc::new(FfmpegVideoLoader::new());
@@ -207,8 +215,8 @@ fn video_loader_reuses_a_thread_safe_reader() {
     for worker in workers {
         let response = worker
             .join()
-            .expect("loader worker panicked")
-            .expect("concurrent frame decode failed");
+            .map_err(|_| anyhow!("loader worker panicked"))?
+            .context("concurrent frame decode failed")?;
         assert!(response.image.width > 0);
         assert!(response.image.height > 0);
     }
@@ -217,17 +225,18 @@ fn video_loader_reuses_a_thread_safe_reader() {
         1,
         "requests for one path/stream should share one stateful decoder"
     );
+    Ok(())
 }
 
 #[test]
-fn reader_cache_is_bounded_and_file_replacement_never_returns_a_stale_frame() {
-    let directory = TestDirectory::new();
+fn reader_cache_is_bounded_and_file_replacement_never_returns_a_stale_frame() -> Result<()> {
+    let directory = TestDirectory::new()?;
     let loader = FfmpegVideoLoader::with_reader_capacity(2);
     let cache = CacheManager::new();
 
     for index in 0..3 {
         let path = directory.0.join(format!("copy-{index}.mp4"));
-        fs::copy(get_media_fixture_path("h264_24.mp4"), &path).unwrap();
+        fs::copy(get_media_fixture_path("h264_24.mp4"), &path)?;
         loader
             .load(
                 &LoadRequest::VideoFrame {
@@ -239,13 +248,13 @@ fn reader_cache_is_bounded_and_file_replacement_never_returns_a_stale_frame() {
                 },
                 &cache,
             )
-            .unwrap();
+            .context("copied video fixture must decode")?;
     }
     assert_eq!(loader.reader_capacity(), 2);
     assert_eq!(loader.cached_reader_count(), 2);
 
     let replaceable = directory.0.join("replaceable.mkv");
-    fs::copy(get_media_fixture_path("multistream.mkv"), &replaceable).unwrap();
+    fs::copy(get_media_fixture_path("multistream.mkv"), &replaceable)?;
     let request = || LoadRequest::VideoFrame {
         path: replaceable.to_string_lossy().into_owned(),
         source_time: 0.0,
@@ -253,24 +262,26 @@ fn reader_cache_is_bounded_and_file_replacement_never_returns_a_stale_frame() {
         input_color_space: None,
         output_color_space: None,
     };
-    let original = loader.load(&request(), &cache).unwrap().image;
+    let original = loader.load(&request(), &cache)?.image;
     assert_eq!((original.width, original.height), (8, 6));
 
-    fs::write(&replaceable, b"not a media file").unwrap();
-    let error = loader
-        .load(&request(), &cache)
-        .expect_err("a changed, invalid file must not return the old cached frame");
+    fs::write(&replaceable, b"not a media file")?;
+    let error = require_error(
+        loader.load(&request(), &cache),
+        "a changed, invalid file must not return the old cached frame",
+    )?;
     assert!(matches!(error, LoadPluginError::Failed(_)));
 
-    fs::copy(get_media_fixture_path("vp9_odd.webm"), &replaceable).unwrap();
-    let replacement = loader.load(&request(), &cache).unwrap().image;
+    fs::copy(get_media_fixture_path("vp9_odd.webm"), &replaceable)?;
+    let replacement = loader.load(&request(), &cache)?.image;
     assert_eq!((replacement.width, replacement.height), (9, 7));
     assert_ne!(original.data, replacement.data);
     assert!(loader.cached_reader_count() <= loader.reader_capacity());
+    Ok(())
 }
 
 #[test]
-fn default_plugin_manager_loads_video_frames() {
+fn default_plugin_manager_loads_video_frames() -> Result<()> {
     let path = get_test_file_path("test.mp4");
     let manager = PluginManager::default();
     assert!(
@@ -291,30 +302,36 @@ fn default_plugin_manager_loads_video_frames() {
             },
             &library::cache::CacheManager::new(),
         )
-        .expect("default PluginManager should decode a video frame");
+        .context("default PluginManager should decode a video frame")?;
     assert!(response.image.width > 0);
     assert!(response.image.height > 0);
+    Ok(())
 }
 
 #[test]
-fn first_last_and_out_of_range_frames_have_distinct_results() {
+fn first_last_and_out_of_range_frames_have_distinct_results() -> Result<()> {
     let path = get_test_file_path("test.mp4")
         .to_string_lossy()
         .into_owned();
-    let mut reader = VideoReader::new(&path).expect("Failed to create VideoReader");
-    let frame_count = reader.get_frame_count().expect("fixture frame count");
-    let duration = reader.get_duration().expect("fixture stream duration");
+    let mut reader = VideoReader::new(&path).context("failed to create VideoReader")?;
+    let frame_count = reader
+        .get_frame_count()
+        .context("fixture frame count must be present")?;
+    let duration = reader
+        .get_duration()
+        .context("fixture stream duration must be present")?;
     let fps = reader.get_fps();
 
-    reader.decode_frame(0).expect("first frame must decode");
+    reader.decode_frame(0).context("first frame must decode")?;
     reader
         .decode_frame(frame_count - 1)
-        .expect("last valid frame must decode");
+        .context("last valid frame must decode")?;
 
     for source_time in [duration, duration + 1.0 / fps] {
-        let error = reader
-            .decode_at_time(source_time)
-            .expect_err("the stream end and later timestamps are outside the half-open range");
+        let error = require_error(
+            reader.decode_at_time(source_time),
+            "the stream end and later timestamps are outside the half-open range",
+        )?;
         assert!(matches!(
             error,
             LibraryError::VideoTimestampOutOfRange {
@@ -329,9 +346,10 @@ fn first_last_and_out_of_range_frames_have_distinct_results() {
         assert_eq!(stats.frames_decoded, 0);
     }
 
-    let error = reader
-        .decode_frame(frame_count)
-        .expect_err("frame_count is outside the valid half-open range");
+    let error = require_error(
+        reader.decode_frame(frame_count),
+        "frame_count is outside the valid half-open range",
+    )?;
     assert!(matches!(
         error,
         library::LibraryError::VideoFrameOutOfRange {
@@ -344,8 +362,8 @@ fn first_last_and_out_of_range_frames_have_distinct_results() {
 
     let manager = PluginManager::default();
     for source_time in [duration, duration + 1.0 / fps] {
-        let error = manager
-            .load_resource(
+        let error = require_error(
+            manager.load_resource(
                 &LoadRequest::VideoFrame {
                     path: path.clone(),
                     source_time,
@@ -354,13 +372,15 @@ fn first_last_and_out_of_range_frames_have_distinct_results() {
                     output_color_space: None,
                 },
                 &CacheManager::new(),
-            )
-            .expect_err("manager must preserve loader out-of-range errors");
+            ),
+            "manager must preserve loader out-of-range errors",
+        )?;
         assert!(matches!(
             error,
             LibraryError::VideoTimestampOutOfRange { .. }
         ));
     }
+    Ok(())
 }
 
 struct ClaimingFailureLoader;
@@ -412,11 +432,11 @@ impl LoadPlugin for ClaimingFailureLoader {
 }
 
 #[test]
-fn manager_preserves_a_claimed_decode_failure_instead_of_reporting_no_plugin() {
+fn manager_preserves_a_claimed_decode_failure_instead_of_reporting_no_plugin() -> Result<()> {
     let manager = PluginManager::new();
     manager.register_load_plugin(Arc::new(ClaimingFailureLoader));
-    let error = manager
-        .load_resource(
+    let error = require_error(
+        manager.load_resource(
             &LoadRequest::VideoFrame {
                 path: "claimed.mp4".to_string(),
                 source_time: 42.0,
@@ -425,8 +445,9 @@ fn manager_preserves_a_claimed_decode_failure_instead_of_reporting_no_plugin() {
                 output_color_space: None,
             },
             &CacheManager::new(),
-        )
-        .expect_err("a loader-owned decode failure must remain an error");
+        ),
+        "a loader-owned decode failure must remain an error",
+    )?;
     let message = error.to_string();
     assert!(matches!(
         error,
@@ -438,6 +459,7 @@ fn manager_preserves_a_claimed_decode_failure_instead_of_reporting_no_plugin() {
     ));
     assert!(message.contains("synthetic valid-frame decode failure"));
     assert!(!message.contains("No compatible load plugin"));
+    Ok(())
 }
 
 #[test]
@@ -454,7 +476,7 @@ fn loaders_report_unsupported_separately_from_failures() {
 }
 
 #[test]
-fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() {
+fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() -> Result<()> {
     use library::core::framing::FrameEvaluator;
     use library::editor::project_service::MediaNodeRequest;
     use library::model::asset::{Asset, AssetKind};
@@ -489,7 +511,7 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() {
     let clip = Clip::new("video clip", 0.0, source_duration);
     let clip_id = clip.id;
     project.add_clip(clip);
-    project.attach_clip_to_track(track_id, clip_id).unwrap();
+    project.attach_clip_to_track(track_id, clip_id)?;
     let node = support::media_node_for_canvas(
         "video",
         MediaNodeRequest::Video {
@@ -508,10 +530,10 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() {
     project.add_node(node);
     project
         .attach_node_to_container(NodeContainer::Clip(clip_id), node_id)
-        .unwrap();
+        .map_err(|error| anyhow!(error))?;
     project
         .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))
-        .unwrap();
+        .map_err(|error| anyhow!(error))?;
 
     let plugin_manager = Arc::new(PluginManager::default());
     let late_composition_frame = 17_893;
@@ -521,8 +543,7 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() {
         plugin_manager.get_property_evaluators(),
         Arc::clone(&plugin_manager),
     )
-    .evaluate(late_composition_frame, 1.0, None)
-    .unwrap();
+    .evaluate(late_composition_frame, 1.0, None)?;
 
     fn video_request(item: &FrameItem) -> Option<(f64, Option<usize>)> {
         match item {
@@ -542,11 +563,11 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() {
         .items
         .iter()
         .find_map(video_request)
-        .expect("late timeline time must produce a video frame");
+        .context("late timeline time must produce a video frame")?;
     assert!((request.0 - late_composition_frame as f64 / 30.0).abs() < 1.0e-9);
     assert_eq!(request.1, Some(0));
 
-    let renderer = SkiaRenderer::new(16, 16, Color::black(), false, None, None).unwrap();
+    let renderer = SkiaRenderer::new(16, 16, Color::black(), false, None, None)?;
     let mut render_service = RenderService::new(
         renderer,
         Arc::clone(&plugin_manager),
@@ -554,26 +575,29 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() {
     );
     render_service
         .render_from_frame_info(&frame)
-        .expect("UI-equivalent late frame must render through PluginManager");
+        .context("UI-equivalent late frame must render through PluginManager")?;
 
     // Extending a Clip beyond the source does not silently clamp or ask the
     // loader for a fabricated ordinal. The media node becomes NoOutput at the
     // source duration's half-open end.
-    project.get_clip_mut(clip_id).unwrap().duration = OrderedFloat(source_duration + 1.0);
+    project
+        .get_clip_mut(clip_id)
+        .context("video Clip must exist")?
+        .duration = OrderedFloat(source_duration + 1.0);
     let out_of_range_frame = FrameEvaluator::new(
         &project,
         &project.compositions[0],
         plugin_manager.get_property_evaluators(),
         Arc::clone(&plugin_manager),
     )
-    .evaluate(17_894, 1.0, None)
-    .unwrap();
+    .evaluate(17_894, 1.0, None)?;
     assert!(
         out_of_range_frame.items.is_empty(),
         "timeline time past the source must become NoOutput"
     );
     render_service
         .render_from_frame_info(&out_of_range_frame)
-        .expect("NoOutput outside the source range renders harmlessly");
+        .context("NoOutput outside the source range renders harmlessly")?;
+    Ok(())
 }
 mod support;
