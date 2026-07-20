@@ -3103,13 +3103,7 @@ mod tests {
         let rendered_merge = rects
             .get(&format!("node_editor.node:{merge_id}"))
             .expect("rendered Merge card");
-        assert!(
-            rendered_merge.width() <= estimated.x * rendered_transform.scaling + 1.0,
-            "rendered Merge width {} exceeds estimate {} at scale {}",
-            rendered_merge.width(),
-            estimated.x,
-            rendered_transform.scaling,
-        );
+        assert!(rendered_merge.width() <= estimated.x * rendered_transform.scaling + 1.0);
         assert!(rendered_merge.height() <= estimated.y * rendered_transform.scaling + 1.0);
         let port_rects = [
             qa_port_id(
@@ -3224,9 +3218,6 @@ mod tests {
                         .selected_text(blend_mode_label(*selected_blend))
                         .width(178.0)
                         .show_ui(ui, |ui| {
-                            // The complete catalog is covered independently;
-                            // two choices keep this geometry harness focused on
-                            // real popup clipping and coordinate interaction.
                             for blend_mode in [BlendMode::Normal, BlendMode::Overlay] {
                                 let selected = blend_mode == *selected_blend;
                                 let option = ui.add_enabled(

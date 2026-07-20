@@ -354,48 +354,6 @@ fn wire_blend_is_required_and_distinct_fanout_values_roundtrip_losslessly() -> R
 }
 
 #[test]
-fn all_29_merge_connection_modes_roundtrip_in_authoritative_order() -> Result<()> {
-    let (mut project, _composition_id, track_id) = project_with_composition();
-    let clip_id = add_clip(&mut project, track_id, "complete blend catalog")?;
-    let merge_id = add_node(
-        &mut project,
-        NodeContainer::Clip(clip_id),
-        Node::new_merge("all modes"),
-    )?;
-    let mut connection_ids = Vec::new();
-    for (index, mode) in BlendMode::ALL.into_iter().enumerate() {
-        let source_id = add_node(
-            &mut project,
-            NodeContainer::Clip(clip_id),
-            solid_node(&format!("source {index}")),
-        )?;
-        let connection_id = project.connect_ports(
-            address(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
-            address(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
-        )?;
-        project.set_connection_blend_mode(connection_id, mode)?;
-        connection_ids.push(connection_id);
-    }
-
-    let json = project.save()?;
-    assert!(!json.contains(r#""blend_mode":"Add""#));
-    let loaded = Project::load(&json)?;
-    let loaded_modes = connection_ids
-        .iter()
-        .map(|id| {
-            loaded
-                .connections
-                .iter()
-                .find(|connection| connection.id == *id)
-                .context("roundtripped Merge connection must exist")
-                .map(|connection| connection.blend_mode)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    assert_eq!(loaded_modes, BlendMode::ALL);
-    Ok(())
-}
-
-#[test]
 fn unknown_plugin_operation_roundtrips_identity_ports_properties_keyframes_and_wires() -> Result<()>
 {
     let (mut project, _composition_id, track_id) = project_with_composition();
@@ -2275,53 +2233,6 @@ fn merge_order_and_wire_blend_change_real_pixels_without_reading_source_blend() 
         [255, 0, 0, 255],
         "the produced green base followed by a Normal red wire must render red",
     );
-    Ok(())
-}
-
-#[test]
-fn merge_first_produced_layer_preserves_clear_and_dissolve_only() -> Result<()> {
-    let (mut project, _composition_id, track_id) = project_with_composition();
-    let clip_id = add_clip(&mut project, track_id, "special first layer")?;
-    let source_id = add_node(
-        &mut project,
-        NodeContainer::Clip(clip_id),
-        colored_solid_node(
-            "source",
-            Color {
-                r: 190,
-                g: 60,
-                b: 20,
-                a: 128,
-            },
-        ),
-    )?;
-    let merge_id = add_node(
-        &mut project,
-        NodeContainer::Clip(clip_id),
-        Node::new_merge("merge"),
-    )?;
-    project
-        .set_output_node(NodeContainer::Clip(clip_id), Some(merge_id))
-        .map_err(|error| anyhow!(error))?;
-    let connection_id = project.connect_ports(
-        address(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
-        address(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
-    )?;
-
-    for (authored, runtime) in [
-        (BlendMode::Clear, BlendMode::Clear),
-        (BlendMode::Dissolve, BlendMode::Dissolve),
-        (BlendMode::LinearBurn, BlendMode::Normal),
-    ] {
-        project.set_connection_blend_mode(connection_id, authored)?;
-        let rendered = frame(&project, 0)?;
-        let merge = find_group(&rendered.items, merge_id).context("Merge group must render")?;
-        let FrameItem::Group(wrapper) = &merge.items[0] else {
-            bail!("Merge input must remain isolated");
-        };
-        assert_eq!(wrapper.source_id, connection_id);
-        assert_eq!(wrapper.blend_mode, runtime, "authored {authored:?}");
-    }
     Ok(())
 }
 

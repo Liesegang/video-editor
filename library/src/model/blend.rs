@@ -183,6 +183,15 @@ impl BlendMode {
     pub const fn can_optimize_empty_backdrop_to_normal(self) -> bool {
         !matches!(self, Self::Dissolve | Self::Clear)
     }
+
+    /// Resolve the runtime mode without mutating the authored connection.
+    pub const fn effective_over_empty_backdrop(self, backdrop_is_empty: bool) -> Self {
+        if backdrop_is_empty && self.can_optimize_empty_backdrop_to_normal() {
+            Self::Normal
+        } else {
+            self
+        }
+    }
 }
 
 #[cfg(test)]
@@ -223,5 +232,18 @@ mod tests {
             serde_json::to_string(&BlendMode::LinearDodge).unwrap(),
             r#""LinearDodge""#
         );
+    }
+
+    #[test]
+    fn only_clear_and_dissolve_retain_authored_semantics_over_empty_backdrop() {
+        for mode in BlendMode::ALL {
+            let expected = if matches!(mode, BlendMode::Clear | BlendMode::Dissolve) {
+                mode
+            } else {
+                BlendMode::Normal
+            };
+            assert_eq!(mode.effective_over_empty_backdrop(true), expected);
+            assert_eq!(mode.effective_over_empty_backdrop(false), mode);
+        }
     }
 }

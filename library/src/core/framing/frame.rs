@@ -867,15 +867,9 @@ impl<'a> FrameEvaluator<'a> {
                 EvalOutput::NoOutput => continue,
             };
             neutralize_root_blend(&mut source);
-            let blend_mode = if items.is_empty()
-                && connection
-                    .blend_mode
-                    .can_optimize_empty_backdrop_to_normal()
-            {
-                crate::model::BlendMode::Normal
-            } else {
-                connection.blend_mode
-            };
+            let blend_mode = connection
+                .blend_mode
+                .effective_over_empty_backdrop(items.is_empty());
             items.push(FrameItem::Group(FrameGroup {
                 source_id: connection.id,
                 kind: FrameGroupKind::ConnectedImage,

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use skia_safe::{
-    BlendMode as SkBlendMode, Blender, Data, Image as SkImage, Paint, RuntimeEffect,
+    BlendMode as SkBlendMode, Blender, Canvas, Data, Image as SkImage, Paint, Rect, RuntimeEffect,
     SamplingOptions, Shader, runtime_effect::ChildPtr,
 };
 
@@ -65,6 +65,37 @@ impl BlendRuntime {
         }
         let blender = self.custom_blender(mode)?;
         paint.set_blender(blender);
+        Ok(())
+    }
+
+    pub(super) fn draw_image(
+        &mut self,
+        canvas: &Canvas,
+        image: &SkImage,
+        sampling: SamplingOptions,
+        identity: bool,
+        opacity: f32,
+        mode: BlendMode,
+    ) -> Result<(), LibraryError> {
+        let mut paint = Paint::default();
+        paint.set_anti_alias(true);
+        if mode == BlendMode::Dissolve {
+            paint.set_shader(self.dissolve_shader(image, sampling, opacity)?);
+            paint.set_blend_mode(SkBlendMode::SrcOver);
+            canvas.draw_rect(
+                Rect::from_wh(image.width() as f32, image.height() as f32),
+                &paint,
+            );
+        } else {
+            paint.set_alpha_f(opacity.clamp(0.0, 1.0));
+            self.configure_paint(&mut paint, mode)?;
+            if identity {
+                // Pixel-aligned transient layers already have target resolution.
+                canvas.draw_image(image, (0, 0), Some(&paint));
+            } else {
+                canvas.draw_image_with_sampling_options(image, (0, 0), sampling, Some(&paint));
+            }
+        }
         Ok(())
     }
 

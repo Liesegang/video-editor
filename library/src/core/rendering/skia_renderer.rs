@@ -23,7 +23,7 @@ use skia_safe::trim_path_effect::Mode;
 
 use skia_safe::{
     AlphaType, Canvas, Color as SkColor, ColorType, CubicResampler, ISize, ImageInfo, Matrix,
-    Paint, PaintStyle, Point, Rect, SamplingOptions, Surface,
+    Paint, PaintStyle, Point, SamplingOptions, Surface,
 };
 
 pub struct SkiaRenderer {
@@ -828,29 +828,13 @@ impl Renderer for SkiaRenderer {
         };
 
         let matrix = build_transform_matrix(transform);
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
         let identity = *transform == Affine2D::IDENTITY;
         let sampling = if identity {
             SamplingOptions::default()
         } else {
             SamplingOptions::from(CubicResampler::mitchell())
         };
-        let dissolve = if blend_mode == crate::model::BlendMode::Dissolve {
-            let shader = self.blend_runtime.dissolve_shader(
-                &src_image,
-                sampling,
-                opacity.clamp(0.0, 1.0) as f32,
-            )?;
-            paint.set_shader(shader);
-            paint.set_blend_mode(skia_safe::BlendMode::SrcOver);
-            true
-        } else {
-            paint.set_alpha_f(opacity.clamp(0.0, 1.0) as f32);
-            self.blend_runtime.configure_paint(&mut paint, blend_mode)?;
-            false
-        };
-
+        let blend_runtime = &mut self.blend_runtime;
         let canvas: &Canvas = if let Some(group) = self.group_surfaces.last_mut() {
             group.surface.canvas()
         } else {
@@ -859,21 +843,14 @@ impl Renderer for SkiaRenderer {
 
         canvas.save();
         canvas.concat(&matrix);
-
-        if dissolve {
-            canvas.draw_rect(
-                Rect::from_wh(src_image.width() as f32, src_image.height() as f32),
-                &paint,
-            );
-        } else if identity {
-            // Pixel-aligned transient layers already have final-target
-            // resolution. Filtering an identity copy would soften the same
-            // edge once per isolated Node/Clip/Track container.
-            canvas.draw_image(&src_image, (0, 0), Some(&paint));
-        } else {
-            canvas.draw_image_with_sampling_options(&src_image, (0, 0), sampling, Some(&paint));
-        }
-
+        blend_runtime.draw_image(
+            canvas,
+            &src_image,
+            sampling,
+            identity,
+            opacity.clamp(0.0, 1.0) as f32,
+            blend_mode,
+        )?;
         canvas.restore();
 
         Ok(())
