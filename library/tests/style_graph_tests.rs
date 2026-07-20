@@ -335,7 +335,7 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
     let text = manager
         .create_text_graph("hello", "Arial", WIDTH, HEIGHT)
         .context("create Text graph")?;
-    assert_eq!(text.nodes.len(), 2);
+    assert_eq!(text.nodes.len(), 3);
     let text_consumer = text
         .nodes
         .iter()
@@ -351,13 +351,29 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
         .iter()
         .find(|node| operation_component(node) == Some("fill"))
         .context("Text graph has no Fill operation")?;
+    let transform = text
+        .nodes
+        .iter()
+        .find(|node| operation_component(node) == Some("transform"))
+        .context("Text graph has no Transform operation")?;
     assert_eq!(text_consumer.ui_position, [0.0, 0.0]);
-    assert_eq!(fill.ui_position, [360.0, 0.0]);
+    assert_eq!(transform.ui_position, [320.0, 0.0]);
+    assert_eq!(fill.ui_position, [640.0, 0.0]);
     assert_eq!(text.output_node_id, Some(fill.id));
-    assert_eq!(text.connections.len(), 1);
-    assert_eq!(text.connections[0].order, 0);
-    assert_eq!(text.connections[0].from.port, SHAPE_OUTPUT_PORT);
-    assert_eq!(text.connections[0].to.port, SHAPE_INPUT_PORT);
+    assert_eq!(text.connections.len(), 2);
+    assert!(
+        text.connections
+            .iter()
+            .all(|connection| connection.order == 0)
+    );
+    assert!(text.connections.iter().any(|connection| {
+        connection.from == PortAddress::new(PortOwner::Node(text_consumer.id), SHAPE_OUTPUT_PORT)
+            && connection.to == PortAddress::new(PortOwner::Node(transform.id), SHAPE_INPUT_PORT)
+    }));
+    assert!(text.connections.iter().any(|connection| {
+        connection.from == PortAddress::new(PortOwner::Node(transform.id), SHAPE_OUTPUT_PORT)
+            && connection.to == PortAddress::new(PortOwner::Node(fill.id), SHAPE_INPUT_PORT)
+    }));
 
     let shape = manager
         .create_shape_graph("M0 0 L10 0 L10 10 Z", WIDTH, HEIGHT, 10, 10)
@@ -373,14 +389,21 @@ fn graph_factories_have_stable_orders_positions_and_no_embedded_style_authority(
         })
         .context("Shape graph has no Shape source")?;
     assert_eq!(shape_consumer.ui_position, [0.0, 110.0]);
+    let transform = shape
+        .nodes
+        .iter()
+        .find(|node| operation_component(node) == Some("transform"))
+        .context("Shape graph has no Transform operation")?;
+    assert_eq!(transform.ui_position, [320.0, 110.0]);
     let merge = shape
         .nodes
         .iter()
         .find(|node| matches!(node.content(), NodeContent::Merge))
         .context("Shape graph has no Merge operation")?;
     assert_eq!(shape.output_node_id, Some(merge.id));
-    assert_eq!(shape.nodes.len(), 4);
-    assert_eq!(shape.connections.len(), 4);
+    assert_eq!(merge.ui_position, [960.0, 110.0]);
+    assert_eq!(shape.nodes.len(), 5);
+    assert_eq!(shape.connections.len(), 5);
     let mut ordered = shape
         .connections
         .iter()
@@ -810,11 +833,17 @@ fn inactive_clip_style_plugin_is_not_evaluated() -> AnyResult<()> {
         .iter()
         .position(|node| operation_component(node) == Some("fill"))
         .context("Text graph has no Fill operation")?;
+    let old_fill_id = graph.nodes[old_fill].id;
     let counting = plugins.create_style_operation_node("counting")?;
     let counting_id = counting.id;
     graph.nodes[old_fill] = counting;
     graph.output_node_id = Some(counting_id);
-    graph.connections[0].to = PortAddress::new(PortOwner::Node(counting_id), SHAPE_INPUT_PORT);
+    graph
+        .connections
+        .iter_mut()
+        .find(|connection| connection.to.owner == PortOwner::Node(old_fill_id))
+        .context("Text graph has no connection to Fill")?
+        .to = PortAddress::new(PortOwner::Node(counting_id), SHAPE_INPUT_PORT);
     let project = project_with_graph(graph, 5.0, 2.0)?;
 
     assert!(frame(&project, &plugins, 0)?.items.is_empty());

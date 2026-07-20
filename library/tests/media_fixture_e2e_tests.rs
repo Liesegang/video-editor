@@ -208,28 +208,45 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> Result<(Project, Mixed
         8,
     );
     set_declared_property(&mut text, "size", PropertyValue::Number(OrderedFloat(5.0)))?;
+    let mut transform = plugin_manager.create_transform_operation_node()?;
     set_declared_property(
-        &mut text,
+        &mut transform,
         "position",
         PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(1.0),
             y: OrderedFloat(5.0),
         }),
     )?;
+    set_declared_property(
+        &mut transform,
+        "anchor",
+        PropertyValue::Vec2(Vec2 {
+            x: OrderedFloat(6.0),
+            y: OrderedFloat(4.0),
+        }),
+    )?;
     let fill = plugin_manager.create_style_operation_node("fill")?;
     let text_id = text.id;
+    let transform_id = transform.id;
     let fill_id = fill.id;
     add_clip_graph(
         &mut project,
         text_track_id,
         "text clip",
         NodeGraphBundle::new(
-            vec![text, fill],
-            vec![ProjectConnection::new(
-                PortAddress::new(PortOwner::Node(text_id), SHAPE_OUTPUT_PORT),
-                PortAddress::new(PortOwner::Node(fill_id), SHAPE_INPUT_PORT),
-                0,
-            )],
+            vec![text, transform, fill],
+            vec![
+                ProjectConnection::new(
+                    PortAddress::new(PortOwner::Node(text_id), SHAPE_OUTPUT_PORT),
+                    PortAddress::new(PortOwner::Node(transform_id), SHAPE_INPUT_PORT),
+                    0,
+                ),
+                ProjectConnection::new(
+                    PortAddress::new(PortOwner::Node(transform_id), SHAPE_OUTPUT_PORT),
+                    PortAddress::new(PortOwner::Node(fill_id), SHAPE_INPUT_PORT),
+                    0,
+                ),
+            ],
             Some(fill_id),
         ),
     )?;

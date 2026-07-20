@@ -76,8 +76,12 @@ fn base_node(name: &str, request: GeneratorNodeRequest) -> Result<Node> {
         u64::from(WIDTH),
         u64::from(HEIGHT),
     );
-    set(&mut node, "position", vec2(8.0, 8.0))?;
-    set(&mut node, "anchor", vec2(0.0, 0.0))?;
+    // Image-valued generators still own their raster transform. Text/Shape
+    // intentionally do not; project_with_shape_graph authors a root Transform.
+    if node.properties().get("position").is_some() {
+        set(&mut node, "position", vec2(8.0, 8.0))?;
+        set(&mut node, "anchor", vec2(0.0, 0.0))?;
+    }
     Ok(node)
 }
 
@@ -147,10 +151,14 @@ fn project_with_shape_graph(
     project.add_clip(clip);
     project.attach_clip_to_track(track_id, clip_id)?;
 
+    let mut root_transform = PluginManager::default().create_transform_operation_node()?;
+    set(&mut root_transform, "position", vec2(8.0, 8.0))?;
+    set(&mut root_transform, "anchor", vec2(0.0, 0.0))?;
+
     let mut nodes = vec![source];
     let mut connections = Vec::new();
     let mut shape_output_id = source_id;
-    for operation in shape_operations {
+    for operation in std::iter::once(root_transform).chain(shape_operations) {
         connections.push(ProjectConnection::new(
             PortAddress::new(PortOwner::Node(shape_output_id), SHAPE_OUTPUT_PORT),
             PortAddress::new(PortOwner::Node(operation.id), SHAPE_INPUT_PORT),
@@ -190,6 +198,21 @@ fn project_with_shape_graph(
         NodeGraphBundle::new(nodes, connections, Some(output_id)),
     )?;
     Ok((project, source_id))
+}
+
+fn transform_node_id(project: &Project) -> Result<Uuid> {
+    project
+        .nodes
+        .values()
+        .find_map(|node| match node.content() {
+            NodeContent::PluginOperation(operation)
+                if operation.category == library::plugin::TRANSFORM_CATEGORY =>
+            {
+                Some(node.id)
+            }
+            _ => None,
+        })
+        .context("Shape graph must contain a root Transform")
 }
 
 fn project_with_image_node(node: Node) -> Result<(Project, Uuid)> {
@@ -396,13 +419,19 @@ fn decorator(plugins: &PluginManager, target: &str) -> Result<Node> {
 #[test]
 fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
-    let mut node = text_node("TEXT")?;
-    set(&mut node, "position", vec2(14.0, 11.0))?;
-    set(&mut node, "scale", vec2(90.0, 110.0))?;
-    set(&mut node, "rotation", 4.0.into())?;
-    set(&mut node, "opacity", 80.0.into())?;
-    let (project, node_id) =
-        project_with_shape_graph(node, Vec::new(), default_text_styles(&plugins)?)?;
+    let node = text_node("TEXT")?;
+    let mut styles = default_text_styles(&plugins)?;
+    for style in &mut styles {
+        set(style, "opacity", 0.8.into())?;
+    }
+    let (mut project, node_id) = project_with_shape_graph(node, Vec::new(), styles)?;
+    let transform_id = transform_node_id(&project)?;
+    let transform_node = project
+        .get_node_mut(transform_id)
+        .context("Text root Transform must exist")?;
+    set(transform_node, "position", vec2(14.0, 11.0))?;
+    set(transform_node, "scale", vec2(90.0, 110.0))?;
+    set(transform_node, "rotation", 4.0.into())?;
 
     let frame = evaluate(&project, 0, &plugins)?;
     let FrameContent::Text {
@@ -426,7 +455,14 @@ fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() -> Re
     assert_eq!((transform.position.x, transform.position.y), (14.0, 11.0));
     assert_eq!((transform.scale.x, transform.scale.y), (0.9, 1.1));
     assert_eq!(transform.rotation, 4.0);
-    assert_eq!(transform.opacity, 0.8);
+    assert_eq!(
+        transform.opacity, 1.0,
+        "base alpha must not live on Transform"
+    );
+    let DrawStyle::Fill { ref color, .. } = styles[0].style else {
+        bail!("first Style branch must remain Fill");
+    };
+    assert_eq!(color.a, 204, "static opacity must be evaluated by Style");
 
     let standard = preview(&project, 0, &plugins)?;
     assert!(
@@ -459,8 +495,8 @@ fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() -> Re
     let mut moved = project.clone();
     set(
         moved
-            .get_node_mut(node_id)
-            .context("moved text Node must exist")?,
+            .get_node_mut(transform_id)
+            .context("moved Text root Transform must exist")?,
         "position",
         vec2(30.0, 16.0),
     )?;
@@ -492,16 +528,13 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
         },
     )?;
     set(&mut node, "path", PropertyValue::String(path.to_string()))?;
-    set(&mut node, "position", vec2(22.0, 18.0))?;
-    set(&mut node, "rotation", 8.0.into())?;
-    set(&mut node, "opacity", 90.0.into())?;
     set(
         &mut node,
         "path_effect",
         PropertyValue::String("Corner".to_string()),
     )?;
     set(&mut node, "path_effect_radius", 5.0.into())?;
-    let styles = vec![
+    let mut styles = vec![
         fill(
             &plugins,
             Color {
@@ -523,7 +556,16 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
             "5 3",
         )?,
     ];
-    let (project, node_id) = project_with_shape_graph(node, Vec::new(), styles)?;
+    for style in &mut styles {
+        set(style, "opacity", 0.9.into())?;
+    }
+    let (mut project, node_id) = project_with_shape_graph(node, Vec::new(), styles)?;
+    let transform_id = transform_node_id(&project)?;
+    let transform_node = project
+        .get_node_mut(transform_id)
+        .context("Shape root Transform must exist")?;
+    set(transform_node, "position", vec2(22.0, 18.0))?;
+    set(transform_node, "rotation", 8.0.into())?;
 
     let frame = evaluate(&project, 0, &plugins)?;
     let FrameContent::Shape {
@@ -569,8 +611,8 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
     let mut moved = project.clone();
     set(
         moved
-            .get_node_mut(node_id)
-            .context("shape Node must exist for position edit")?,
+            .get_node_mut(transform_id)
+            .context("Shape root Transform must exist for position edit")?,
         "position",
         vec2(44.0, 28.0),
     )?;
