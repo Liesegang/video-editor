@@ -5,14 +5,14 @@ pub mod track_list;
 pub mod utils;
 
 use egui::Ui;
-use library::EditorService;
 use library::model::project::Project;
+use library::EditorService;
 use std::sync::{Arc, RwLock};
 
 use crate::command::CommandRegistry;
 use crate::{action::HistoryManager, state::context::EditorContext};
 
-use clip_area::{ClipAreaContext, show_clip_area};
+use clip_area::{show_clip_area, ClipAreaContext};
 // Re-export functions for easier access
 pub use controls::show_timeline_controls;
 pub use ruler::show_timeline_ruler;

@@ -4,10 +4,10 @@ use uuid::Uuid;
 use crate::model::ui_types::{GizmoHandle, TimelineDisplayMode, Vec2Def};
 use crate::model::vector::VectorEditorState;
 
-use library::PropertyOwner;
 use library::animation::EasingFunction; // Added import
 use library::model::project::{PortAddress, PortOwner};
 use library::model::property::KeyframeId;
+use library::PropertyOwner;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum KeyframeValueComponent {
