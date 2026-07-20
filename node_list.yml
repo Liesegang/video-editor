@@ -333,14 +333,85 @@ Transform:
   outputs:
     - name: image
       type: Image
-Composite:
+Merge:
   category: Compositing
-  description: Blend N images with individual blend modes
+  description: Composite variadic Image inputs in physical wire order from back to front
   inputs:
-    - name: layers
+    - name: images
       type: List<Image>
-    - name: blend_modes
-      type: List<BlendMode>
+      variadic: true
+      connection_metadata:
+        blend_mode:
+          type: BlendMode
+          default: Normal
+          ownership: connection
+          description: Each incoming Image wire owns one independently reorderable blend mode
+          variants: &blend_mode_variants
+            - Normal
+            - Dissolve
+            - Behind
+            - Clear
+            - Darken
+            - Multiply
+            - ColorBurn
+            - LinearBurn
+            - DarkerColor
+            - Lighten
+            - Screen
+            - ColorDodge
+            - LinearDodge
+            - LighterColor
+            - Overlay
+            - SoftLight
+            - HardLight
+            - VividLight
+            - LinearLight
+            - PinLight
+            - HardMix
+            - Difference
+            - Exclusion
+            - Subtract
+            - Divide
+            - Hue
+            - Saturation
+            - Color
+            - Luminosity
+          option_groups: &blend_mode_option_groups
+            Normal:
+              - { variant: Normal, label: Normal }
+              - { variant: Dissolve, label: Dissolve }
+              - { variant: Behind, label: Behind }
+              - { variant: Clear, label: Clear }
+            Darken:
+              - { variant: Darken, label: Darken }
+              - { variant: Multiply, label: Multiply }
+              - { variant: ColorBurn, label: Color Burn }
+              - { variant: LinearBurn, label: Linear Burn }
+              - { variant: DarkerColor, label: Darker Color }
+            Lighten:
+              - { variant: Lighten, label: Lighten }
+              - { variant: Screen, label: Screen }
+              - { variant: ColorDodge, label: Color Dodge }
+              - { variant: LinearDodge, label: Linear Dodge (Add) }
+              - { variant: LighterColor, label: Lighter Color }
+            Contrast:
+              - { variant: Overlay, label: Overlay }
+              - { variant: SoftLight, label: Soft Light }
+              - { variant: HardLight, label: Hard Light }
+              - { variant: VividLight, label: Vivid Light }
+              - { variant: LinearLight, label: Linear Light }
+              - { variant: PinLight, label: Pin Light }
+              - { variant: HardMix, label: Hard Mix }
+            Comparative:
+              - { variant: Difference, label: Difference }
+              - { variant: Exclusion, label: Exclusion }
+              - { variant: Subtract, label: Subtract }
+              - { variant: Divide, label: Divide }
+            HSL:
+              - { variant: Hue, label: Hue }
+              - { variant: Saturation, label: Saturation }
+              - { variant: Color, label: Color }
+              - { variant: Luminosity, label: Luminosity }
   outputs:
     - name: image
       type: Image
@@ -1107,8 +1178,9 @@ Fill Style:
     - name: opacity
       type: Scalar
     - name: blend_mode
-      type: Enum
-      options: [Normal, Multiply, Screen, Overlay, Add]
+      type: BlendMode
+      variants: *blend_mode_variants
+      option_groups: *blend_mode_option_groups
   outputs:
     - name: style
       type: Style
