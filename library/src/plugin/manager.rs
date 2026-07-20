@@ -1400,7 +1400,12 @@ mod tests {
                 "effector" => manager.create_effector_operation_node(&component_id),
                 "decorator" => manager.create_decorator_operation_node(&component_id),
                 "style" => manager.create_style_operation_node(&component_id),
-                _ => unreachable!("test enumerates known operation categories"),
+                unknown => {
+                    failures.push(format!(
+                        "operation contract uses unknown category {unknown} for {component_id}"
+                    ));
+                    continue;
+                }
             };
             match result {
                 Ok(node) => {
