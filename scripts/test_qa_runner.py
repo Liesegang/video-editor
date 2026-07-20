@@ -396,8 +396,15 @@ class QaRunnerTests(unittest.TestCase):
                 "node-wire",
                 "node-wire-selection",
                 "preview",
+                "transform-preview",
             ],
         )
+        transform = next(
+            item
+            for item in RUNNER.suite_specs("full")
+            if item.name == "transform-preview"
+        )
+        self.assertEqual(transform.fixture, "transform_preview_e2e")
         with self.assertRaises(ValueError):
             RUNNER.suite_specs("unknown")
 

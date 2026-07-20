@@ -14,8 +14,18 @@ use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+mod transform_preview;
+
+#[cfg(test)]
+use transform_preview::{
+    E2E_AMBIGUOUS_CLIP_ID, E2E_AMBIGUOUS_FILL_A_ID, E2E_AMBIGUOUS_FILL_B_ID,
+    E2E_AMBIGUOUS_MERGE_ID, E2E_AMBIGUOUS_SHAPE_A_ID, E2E_AMBIGUOUS_SHAPE_B_ID,
+    E2E_AMBIGUOUS_TRANSFORM_A_ID, E2E_AMBIGUOUS_TRANSFORM_B_ID,
+};
+
 pub const QA_FIXTURE_ENV: &str = "RUVIE_QA_FIXTURE";
 pub const NODE_EDITOR_E2E_FIXTURE: &str = "node_editor_e2e";
+pub const TRANSFORM_PREVIEW_E2E_FIXTURE: &str = "transform_preview_e2e";
 
 pub const E2E_COMPOSITION_ID: Uuid = Uuid::from_u128(0x100);
 pub const E2E_TRACK_A_ID: Uuid = Uuid::from_u128(0x201);
@@ -69,9 +79,13 @@ fn install_named(
     name: &str,
     plugin_manager: &Arc<PluginManager>,
 ) -> Result<FixtureInfo, String> {
-    if name != NODE_EDITOR_E2E_FIXTURE {
+    if !matches!(
+        name,
+        NODE_EDITOR_E2E_FIXTURE | TRANSFORM_PREVIEW_E2E_FIXTURE
+    ) {
         return Err(format!("unknown {QA_FIXTURE_ENV} value {name:?}"));
     }
+    let include_transform_ambiguity = name == TRANSFORM_PREVIEW_E2E_FIXTURE;
     let factory = ProjectService::new(Arc::clone(project), Arc::clone(plugin_manager));
     let mut project = project
         .write()
@@ -446,6 +460,10 @@ fn install_named(
             .map_err(|error| format!("cannot connect QA time metadata: {error}"))?;
     }
 
+    if include_transform_ambiguity {
+        transform_preview::install(&mut project, &factory, plugin_manager)?;
+    }
+
     let connection_errors = project.validate_connections();
     if !connection_errors.is_empty() {
         return Err(format!(
@@ -562,6 +580,13 @@ mod tests {
         let project = Arc::new(RwLock::new(Project::new("empty")));
         let plugin_manager = Arc::new(PluginManager::default());
         let info = install_named(&project, NODE_EDITOR_E2E_FIXTURE, &plugin_manager).unwrap();
+        (project, plugin_manager, info)
+    }
+
+    fn installed_transform_fixture() -> (Arc<RwLock<Project>>, Arc<PluginManager>, FixtureInfo) {
+        let project = Arc::new(RwLock::new(Project::new("empty")));
+        let plugin_manager = Arc::new(PluginManager::default());
+        let info = install_named(&project, TRANSFORM_PREVIEW_E2E_FIXTURE, &plugin_manager).unwrap();
         (project, plugin_manager, info)
     }
 
@@ -815,5 +840,89 @@ mod tests {
 
         assert_eq!(read.connections.len(), 28);
         assert!(read.validate_connections().is_empty());
+    }
+
+    #[test]
+    fn transform_preview_fixture_has_two_independent_clip_spatial_roots() {
+        let (project, plugin_manager, _info) = installed_transform_fixture();
+        let read = project.read().unwrap();
+        assert_eq!(
+            read.get_track(E2E_TRACK_B_ID).unwrap().clip_ids,
+            vec![E2E_CLIP_B1_ID, E2E_AMBIGUOUS_CLIP_ID]
+        );
+        let clip = read.get_clip(E2E_AMBIGUOUS_CLIP_ID).unwrap();
+        assert_eq!(
+            clip.node_ids,
+            vec![
+                E2E_AMBIGUOUS_SHAPE_A_ID,
+                E2E_AMBIGUOUS_TRANSFORM_A_ID,
+                E2E_AMBIGUOUS_FILL_A_ID,
+                E2E_AMBIGUOUS_SHAPE_B_ID,
+                E2E_AMBIGUOUS_TRANSFORM_B_ID,
+                E2E_AMBIGUOUS_FILL_B_ID,
+                E2E_AMBIGUOUS_MERGE_ID,
+            ]
+        );
+        assert_eq!(clip.output_node_id, Some(E2E_AMBIGUOUS_MERGE_ID));
+        for transform_id in [E2E_AMBIGUOUS_TRANSFORM_A_ID, E2E_AMBIGUOUS_TRANSFORM_B_ID] {
+            assert_operation(
+                &read,
+                &plugin_manager,
+                transform_id,
+                "transform",
+                "transform",
+            );
+        }
+        for (shape, transform, fill) in [
+            (
+                E2E_AMBIGUOUS_SHAPE_A_ID,
+                E2E_AMBIGUOUS_TRANSFORM_A_ID,
+                E2E_AMBIGUOUS_FILL_A_ID,
+            ),
+            (
+                E2E_AMBIGUOUS_SHAPE_B_ID,
+                E2E_AMBIGUOUS_TRANSFORM_B_ID,
+                E2E_AMBIGUOUS_FILL_B_ID,
+            ),
+        ] {
+            assert_connection(
+                &read,
+                PortOwner::Node(shape),
+                SHAPE_OUTPUT_PORT,
+                PortOwner::Node(transform),
+                SHAPE_INPUT_PORT,
+                0,
+            );
+            assert_connection(
+                &read,
+                PortOwner::Node(transform),
+                SHAPE_OUTPUT_PORT,
+                PortOwner::Node(fill),
+                SHAPE_INPUT_PORT,
+                0,
+            );
+            assert_connection(
+                &read,
+                PortOwner::Node(fill),
+                IMAGE_OUTPUT_PORT,
+                PortOwner::Node(E2E_AMBIGUOUS_MERGE_ID),
+                MERGE_IMAGES_PORT,
+                if fill == E2E_AMBIGUOUS_FILL_A_ID {
+                    0
+                } else {
+                    1
+                },
+            );
+        }
+        assert_connection(
+            &read,
+            PortOwner::Clip(E2E_AMBIGUOUS_CLIP_ID),
+            IMAGE_OUTPUT_PORT,
+            PortOwner::Node(E2E_MERGE_ID),
+            MERGE_IMAGES_PORT,
+            3,
+        );
+        assert!(read.validate_connections().is_empty());
+        assert!(read.validate_containment().is_empty());
     }
 }

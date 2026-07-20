@@ -40,6 +40,7 @@ class SuiteSpec:
     script: str
     arguments: tuple[str, ...] = ()
     suite_owns_capture: bool = False
+    fixture: str = FIXTURE_NAME
 
 
 def prepare_suite_directory(suite_dir: pathlib.Path) -> None:
@@ -81,6 +82,11 @@ def suite_specs(mode: str) -> tuple[SuiteSpec, ...]:
             SuiteSpec("node-wire", "qa-e2e.py", ("--suite", "node-wire")),
             SuiteSpec("node-wire-selection", "qa-wire-selection-e2e.py"),
             SuiteSpec("preview", "qa-preview-e2e.py"),
+            SuiteSpec(
+                "transform-preview",
+                "qa-transform-preview-e2e.py",
+                fixture="transform_preview_e2e",
+            ),
         )
     raise ValueError("unknown QA mode: {}".format(mode))
 
@@ -339,7 +345,7 @@ def run_one_suite(
     environment = os.environ.copy()
     environment["RUVIE_QA_PORT"] = "0"
     environment["RUVIE_QA_PORT_FILE"] = str(endpoint_path.resolve())
-    environment["RUVIE_QA_FIXTURE"] = FIXTURE_NAME
+    environment["RUVIE_QA_FIXTURE"] = spec.fixture
     environment["RUVIE_QA_RUN_ID"] = run_identity
     started = time.monotonic()
     app_process = None
