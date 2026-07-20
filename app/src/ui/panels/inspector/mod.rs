@@ -721,7 +721,9 @@ fn semantic_visual_sources(nodes: &[Node]) -> Vec<&Node> {
         .filter(|node| {
             matches!(
                 node.content(),
-                NodeContent::Media(_) | NodeContent::Generator(_) | NodeContent::Reference(_)
+                NodeContent::Media(_)
+                    | NodeContent::Generator(_)
+                    | NodeContent::CompositionInstance(_)
             )
         })
         .collect()
@@ -1245,7 +1247,7 @@ fn source_kind(node: &Node) -> &'static str {
         NodeContent::Generator(GeneratorContent::Shape) => "Shape",
         NodeContent::Generator(GeneratorContent::Solid) => "Solid",
         NodeContent::Generator(GeneratorContent::SkSL) => "Shader",
-        NodeContent::Reference(_) => "Reference",
+        NodeContent::CompositionInstance(_) => "Composition Instance",
         NodeContent::PluginOperation(operation) => match operation.category.as_str() {
             TRANSFORM_CATEGORY => "Transform",
             "decorator" => "Decorator",
@@ -1733,7 +1735,7 @@ fn node_display_type(node: &Node) -> String {
             GeneratorContent::Solid => "Solid".to_string(),
             GeneratorContent::SkSL => "SkSL Shader".to_string(),
         },
-        NodeContent::Reference(_) => "Reference".to_string(),
+        NodeContent::CompositionInstance(_) => "Composition Instance".to_string(),
         NodeContent::PluginOperation(operation)
             if operation.category.as_str() == TRANSFORM_CATEGORY =>
         {

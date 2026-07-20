@@ -365,6 +365,23 @@ pub enum ProjectGraphError {
     TrackNotFound(Uuid),
     #[error("composition {0} does not exist")]
     CompositionNotFound(Uuid),
+    #[error("composition instance node {node_id} targets missing composition {composition_id}")]
+    CompositionInstanceTargetNotFound { node_id: Uuid, composition_id: Uuid },
+    #[error(
+        "composition instance node {node_id} must be directly contained by a clip, found {container:?}"
+    )]
+    CompositionInstanceOutsideClip {
+        node_id: Uuid,
+        container: NodeContainer,
+    },
+    #[error(
+        "composition instance node {node_id} creates a cycle from composition {containing_composition_id} to {target_composition_id}"
+    )]
+    CompositionInstanceCycle {
+        node_id: Uuid,
+        containing_composition_id: Uuid,
+        target_composition_id: Uuid,
+    },
     #[error("track {track_id} is not a top-level child of composition {composition_id}")]
     TrackNotInComposition {
         track_id: Uuid,
@@ -1237,13 +1254,13 @@ impl Project {
         for node_id in composition.node_ids.clone() {
             self.remove_node(node_id);
         }
-        let references = self
+        let instances = self
             .nodes
             .values()
-            .filter(|node| matches!(node.content(), NodeContent::Reference(reference) if reference.target_id == composition_id))
+            .filter(|node| matches!(node.content(), NodeContent::CompositionInstance(instance) if instance.composition_id == composition_id))
             .map(|node| node.id)
             .collect::<Vec<_>>();
-        for node_id in references {
+        for node_id in instances {
             self.remove_node(node_id);
         }
         self.connections.retain(|connection| {

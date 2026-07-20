@@ -1,14 +1,15 @@
+use super::property_evaluation::{AudioPropertyContext, volume_at};
 use super::*;
 use crate::model::project::{
-    AUDIO_OUTPUT_PORT, PortAddress, PortDefinition, PortExposure, PortSide,
+    AUDIO_OUTPUT_PORT, PortAddress, PortDataType, PortDefinition, PortExposure, PortOwner, PortSide,
 };
 use crate::model::property::{Property, PropertyMap, PropertyValue};
-use crate::model::{MediaContent, NodeContainer, Track};
+use crate::model::{Clip, MediaContent, NodeContainer, Track};
 use ordered_float::OrderedFloat;
 use std::path::PathBuf;
 
 #[derive(Default)]
-struct TestAudioFiles(Vec<PathBuf>);
+pub(super) struct TestAudioFiles(Vec<PathBuf>);
 
 impl TestAudioFiles {
     fn create(&mut self) -> String {
@@ -30,7 +31,7 @@ impl Drop for TestAudioFiles {
     }
 }
 
-fn add_audio_node(
+pub(super) fn add_audio_node(
     project: &mut Project,
     cache_manager: &CacheManager,
     files: &mut TestAudioFiles,
@@ -105,7 +106,11 @@ fn set_volume(properties: &mut PropertyMap, volume: f64) {
     );
 }
 
-fn attach_audio_output(project: &mut Project, container: NodeContainer, node_id: uuid::Uuid) {
+pub(super) fn attach_audio_output(
+    project: &mut Project,
+    container: NodeContainer,
+    node_id: uuid::Uuid,
+) {
     project
         .attach_node_to_container(container, node_id)
         .unwrap();
@@ -272,7 +277,8 @@ fn assert_disabled_media_contract(scope: TestNodeScope) {
         expected
     );
 
-    let requests = audio_window_requests_for_composition(&project, composition, 0, 4, 4);
+    let requests =
+        audio_window_requests_for_composition(&project, composition, 0, 4, 4, &plugin_manager);
     let requested_sources = requests
         .iter()
         .map(|request| (request.source.path.clone(), request.source.stream_index))
@@ -307,7 +313,10 @@ fn assert_disabled_media_contract(scope: TestNodeScope) {
         vec![0.0; 4],
         "a disabled Node bound to Audio must be NoOutput"
     );
-    assert!(audio_window_requests_for_composition(&project, composition, 0, 4, 4).is_empty());
+    assert!(
+        audio_window_requests_for_composition(&project, composition, 0, 4, 4, &plugin_manager,)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -590,7 +599,17 @@ fn unsupported_audio_plugin_operation_is_no_output_instead_of_implicit_passthrou
         ),
         vec![0.0; 4]
     );
-    assert!(audio_window_requests_for_composition(&project, composition, 0, 4, 4).is_empty());
+    assert!(
+        audio_window_requests_for_composition(
+            &project,
+            composition,
+            0,
+            4,
+            4,
+            &PluginManager::default(),
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -642,6 +661,7 @@ fn source_window_uses_clip_local_time_and_explicit_audio_stream() {
         399,
         5,
         4,
+        &PluginManager::default(),
     );
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].source.stream_index, Some(2));
@@ -699,5 +719,15 @@ fn composition_range_is_half_open_for_direct_and_scheduled_audio() {
         &PluginManager::default(),
     );
     assert_eq!(mixed, vec![1.0, 1.0, 0.0, 0.0]);
-    assert!(audio_window_requests_for_composition(&project, composition, 4, 4, 4).is_empty());
+    assert!(
+        audio_window_requests_for_composition(
+            &project,
+            composition,
+            4,
+            4,
+            4,
+            &PluginManager::default(),
+        )
+        .is_empty()
+    );
 }

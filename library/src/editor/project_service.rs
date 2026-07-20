@@ -13,7 +13,7 @@ use crate::model::property::{
     PropertyValue,
 };
 use crate::model::{
-    Clip, GeneratorContent, MediaContent, Node, NodeContent, ReferenceContent, Track,
+    Clip, CompositionInstanceContent, GeneratorContent, MediaContent, Node, NodeContent, Track,
 };
 use crate::plugin::PluginManager;
 use crate::plugin::entity_converter::measure_text_size;
@@ -524,7 +524,7 @@ impl ProjectManager {
 
     pub fn create_audio_clip(
         &self,
-        reference_id: Uuid,
+        asset_id: Uuid,
         file_path: &str,
         start_time: f64,
         duration: f64,
@@ -555,7 +555,7 @@ impl ProjectManager {
         let node = self.create_media_node(
             "Audio",
             MediaNodeRequest::Audio {
-                asset_id: reference_id,
+                asset_id,
                 audio_stream_index: None,
                 file_path: file_path.to_string(),
             },
@@ -574,7 +574,7 @@ impl ProjectManager {
     )]
     pub fn create_video_clip(
         &self,
-        reference_id: Uuid, // Required for Media
+        asset_id: Uuid,
         file_path: &str,
         start_time: f64,
         duration: f64,
@@ -583,7 +583,7 @@ impl ProjectManager {
         canvas_width: u32,
         canvas_height: u32,
     ) -> Result<ClipBundle, LibraryError> {
-        // Calculate media dimensions (placeholder or fetch from asset if available via reference_id? For now just use defaults or props)
+        // Calculate media dimensions (placeholder or fetch from the Asset when available).
         // Ideally we fetch asset metadata, but avoiding async or lock here if possible. ProjectService usually has asset info.
         let media_width = canvas_width as u64; // Fallback
         let media_height = canvas_height as u64;
@@ -612,7 +612,7 @@ impl ProjectManager {
         let node = self.create_media_node(
             "Video",
             MediaNodeRequest::Video {
-                asset_id: reference_id,
+                asset_id,
                 file_path: file_path.to_string(),
                 stream_index: None,
                 audio_stream_index: None,
@@ -628,7 +628,7 @@ impl ProjectManager {
 
     pub fn create_image_clip(
         &self,
-        reference_id: Uuid,
+        asset_id: Uuid,
         file_path: &str,
         start_time: f64,
         duration: f64,
@@ -638,7 +638,7 @@ impl ProjectManager {
         let node = self.create_media_node(
             "Image",
             MediaNodeRequest::Image {
-                asset_id: reference_id,
+                asset_id,
                 file_path: file_path.to_string(),
             },
             u64::from(canvas_width),
@@ -714,21 +714,18 @@ impl ProjectManager {
         ))
     }
 
-    pub fn create_reference_clip(
+    pub fn create_composition_instance_clip(
         &self,
-        target_node_id: Uuid,
+        composition_id: Uuid,
         start_time: f64,
         duration: f64,
     ) -> Result<ClipBundle, LibraryError> {
-        let node = Node::new_reference(
-            "Reference",
-            ReferenceContent {
-                target_id: target_node_id,
-                sync_global_time: false,
-            },
+        let node = Node::new_composition_instance(
+            "Composition Instance",
+            CompositionInstanceContent { composition_id },
         );
-        Ok(ClipBundle::with_image_node(
-            Clip::new("Reference Clip", start_time, duration),
+        Ok(ClipBundle::with_av_node(
+            Clip::new("Composition Instance Clip", start_time, duration),
             node,
         ))
     }

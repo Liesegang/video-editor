@@ -1,6 +1,6 @@
 use crate::error::LibraryError;
 use crate::model::project::{Composition, Project};
-use crate::model::{NodeContent, ReferenceContent};
+use crate::model::{CompositionInstanceContent, NodeContent};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -100,8 +100,9 @@ impl CompositionHandler {
             for node in proj.nodes.values() {
                 if matches!(
                     node.content(),
-                    NodeContent::Reference(ReferenceContent { target_id, .. })
-                        if *target_id == comp_id
+                    NodeContent::CompositionInstance(CompositionInstanceContent {
+                        composition_id,
+                    }) if *composition_id == comp_id
                 ) {
                     return true;
                 }

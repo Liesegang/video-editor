@@ -72,7 +72,7 @@ pub(in crate::ui::panels::node_editor) fn node_palette(
             header: Color32::from_rgb(45, 77, 117),
             accent: Color32::from_rgb(100, 170, 243),
         },
-        Some(NodeContent::Reference(_)) => NodePalette {
+        Some(NodeContent::CompositionInstance(_)) => NodePalette {
             body: Color32::from_rgb(38, 36, 49),
             header: Color32::from_rgb(74, 63, 111),
             accent: Color32::from_rgb(162, 139, 232),
@@ -121,8 +121,8 @@ pub(in crate::ui::panels::node_editor) fn node_icon(
                 Some(AssetKind::Other) | None => NodeEditorIcon::new(icons::FILE, "Media asset"),
             }
         }
-        Some(NodeContent::Reference(_)) => {
-            NodeEditorIcon::new(icons::ARROW_SQUARE_OUT, "Reference")
+        Some(NodeContent::CompositionInstance(_)) => {
+            NodeEditorIcon::new(icons::ARROW_SQUARE_OUT, "Composition Instance")
         }
         Some(NodeContent::PluginOperation(operation)) => match operation.category.as_str() {
             "style" => NodeEditorIcon::new(icons::PALETTE, "Style operation"),

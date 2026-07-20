@@ -197,7 +197,7 @@ fn semantic_source_kind(node: &Node) -> &'static str {
         NodeContent::Generator(library::model::GeneratorContent::Shape) => "Shape",
         NodeContent::Generator(library::model::GeneratorContent::SkSL) => "Shader",
         NodeContent::Generator(library::model::GeneratorContent::Solid) => "Solid",
-        NodeContent::Reference(_) => "Reference",
+        NodeContent::CompositionInstance(_) => "Composition Instance",
         NodeContent::PluginOperation(_) | NodeContent::Merge => "Result",
         NodeContent::Value(_) => "Value",
     }
@@ -240,7 +240,9 @@ fn get_clip_color(source: Option<&Node>, project: &Project) -> (u8, u8, u8) {
         },
         Some(NodeContent::PluginOperation(_)) => (180, 110, 210),
         Some(NodeContent::Value(_)) => (90, 180, 200),
-        Some(NodeContent::Reference(_)) | Some(NodeContent::Merge) | None => (150, 150, 150),
+        Some(NodeContent::CompositionInstance(_)) | Some(NodeContent::Merge) | None => {
+            (150, 150, 150)
+        }
     }
 }
 

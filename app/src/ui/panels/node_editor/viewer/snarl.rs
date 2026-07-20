@@ -209,8 +209,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 }
                 if coordinate_double_clicked {
                     if let Some(node) = self.project.get_node(project_node_id) {
-                        if let NodeContent::Reference(reference) = node.content() {
-                            *self.pending_navigation = Some(reference.target_id);
+                        if let NodeContent::CompositionInstance(instance) = node.content() {
+                            *self.pending_navigation = Some(instance.composition_id);
                         }
                     }
                 }
@@ -671,7 +671,9 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         );
                     });
                 }
-                NodeContent::Media(_) | NodeContent::Reference(_) | NodeContent::Merge => {}
+                NodeContent::Media(_)
+                | NodeContent::CompositionInstance(_)
+                | NodeContent::Merge => {}
             }
         });
     }

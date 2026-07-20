@@ -712,7 +712,7 @@ mod tests {
             &project,
             &project.compositions[0],
             plugin_manager.get_property_evaluators(),
-            Arc::clone(&plugin_manager),
+            plugin_manager.as_ref(),
         )
         .evaluate(
             0,
@@ -752,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn referenced_composition_is_composited_as_one_image_output() {
+    fn composition_instance_is_composited_as_one_image_output() {
         let mut project = Project::new("composition output test");
         let (mut parent, parent_track) = Composition::new("parent", 1, 1, 30.0, 1.0);
         parent.background_color = Color::black();
@@ -788,26 +788,25 @@ mod tests {
         project
             .attach_clip_to_track(parent_track_id, clip_id)
             .unwrap();
-        let mut reference = Node::new_reference(
+        let mut instance = Node::new_composition_instance(
             "nested instance",
-            crate::model::ReferenceContent {
-                target_id: nested_id,
-                sync_global_time: false,
+            crate::model::CompositionInstanceContent {
+                composition_id: nested_id,
             },
         );
-        let mut persisted = serde_json::to_value(&reference).unwrap();
+        let mut persisted = serde_json::to_value(&instance).unwrap();
         persisted["properties"]["opacity"] = serde_json::to_value(Property::constant(
             PropertyValue::Number(OrderedFloat(50.0)),
         ))
         .unwrap();
-        reference = serde_json::from_value(persisted).unwrap();
-        let reference_id = reference.id;
-        project.add_node(reference);
+        instance = serde_json::from_value(persisted).unwrap();
+        let instance_id = instance.id;
+        project.add_node(instance);
         project
-            .attach_node_to_container(NodeContainer::Clip(clip_id), reference_id)
+            .attach_node_to_container(NodeContainer::Clip(clip_id), instance_id)
             .unwrap();
         project
-            .set_output_node(NodeContainer::Clip(clip_id), Some(reference_id))
+            .set_output_node(NodeContainer::Clip(clip_id), Some(instance_id))
             .unwrap();
 
         let plugin_manager = Arc::new(PluginManager::default());
@@ -815,7 +814,7 @@ mod tests {
             &project,
             &project.compositions[0],
             plugin_manager.get_property_evaluators(),
-            Arc::clone(&plugin_manager),
+            plugin_manager.as_ref(),
         )
         .evaluate(0, 1.0, None)
         .unwrap();
@@ -848,7 +847,7 @@ mod tests {
             &project,
             &project.compositions[0],
             plugin_manager.get_property_evaluators(),
-            Arc::clone(&plugin_manager),
+            plugin_manager.as_ref(),
         )
         .evaluate(0, 1.0, None)
         .unwrap();
@@ -948,7 +947,7 @@ mod tests {
                 project,
                 &project.compositions[0],
                 plugin_manager.get_property_evaluators(),
-                Arc::clone(&plugin_manager),
+                plugin_manager.as_ref(),
             )
             .evaluate(0, 1.0, None)
             .unwrap();

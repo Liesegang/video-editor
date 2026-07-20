@@ -372,6 +372,7 @@ impl AudioService {
                 start_frame,
                 frame_count,
                 sample_rate,
+                self.plugin_manager.as_ref(),
             )
         };
         let mut keys = HashSet::new();

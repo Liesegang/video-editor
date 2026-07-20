@@ -8,8 +8,8 @@ mod python_expression;
 pub mod vector;
 
 pub use node::{
-    BlendMode, Clip, GeneratorContent, MediaContent, Node, NodeContent, PluginOperationContent,
-    ReferenceContent, Track, ValueContent,
+    BlendMode, Clip, CompositionInstanceContent, GeneratorContent, MediaContent, Node, NodeContent,
+    PluginOperationContent, Track, ValueContent,
 };
 pub use project::asset::{self, Asset, AssetKind};
 pub use project::property;

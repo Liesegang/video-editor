@@ -38,7 +38,7 @@ fn resolve_node_edit_target(
         return OwnerEditTargetResolution::Unavailable;
     }
 
-    // A contained Node can also reach the Composition through Reference or
+    // A contained Node can also reach the Composition through a Composition Instance or
     // Merge fan-out. Prefer its one direct container branch, identified by
     // the authoritative Track/Clip prefix. Multiple direct branches remain
     // ambiguous; path length or render order must never choose between them.
@@ -253,10 +253,10 @@ mod tests {
     }
 
     #[test]
-    fn node_selection_prefers_one_direct_container_branch_over_references() {
+    fn node_selection_prefers_one_direct_container_branch_over_composition_instances() {
         let track_id = Uuid::new_v4();
         let clip_id = Uuid::new_v4();
-        let reference_clip_id = Uuid::new_v4();
+        let instance_clip_id = Uuid::new_v4();
         let content_id = Uuid::new_v4();
         let spatial_id = Uuid::new_v4();
         let mut direct = visual(
@@ -266,15 +266,15 @@ mod tests {
             Uuid::new_v4(),
         );
         direct.instance_path = vec![track_id, clip_id, content_id, spatial_id];
-        let mut reference = visual(
+        let mut instance = visual(
             SelectionTarget::Clip(clip_id),
             content_id,
             spatial_id,
             Uuid::new_v4(),
         );
-        reference.instance_path = vec![
+        instance.instance_path = vec![
             track_id,
-            reference_clip_id,
+            instance_clip_id,
             Uuid::new_v4(),
             clip_id,
             content_id,
@@ -286,21 +286,21 @@ mod tests {
         project.add_node(direct.spatial_layers[0].node.clone());
         let mut track = library::model::Track::new("track");
         track.id = track_id;
-        track.clip_ids = vec![clip_id, reference_clip_id];
+        track.clip_ids = vec![clip_id, instance_clip_id];
         project.add_track(track);
         let mut owner = library::model::Clip::new("owner", 0.0, 1.0);
         owner.id = clip_id;
         owner.node_ids = vec![content_id, spatial_id];
         project.add_clip(owner);
-        let mut reference_owner = library::model::Clip::new("reference", 0.0, 1.0);
-        reference_owner.id = reference_clip_id;
-        project.add_clip(reference_owner);
+        let mut instance_owner = library::model::Clip::new("composition instance", 0.0, 1.0);
+        instance_owner.id = instance_clip_id;
+        project.add_clip(instance_owner);
 
-        let visuals = vec![reference, direct];
+        let visuals = vec![instance, direct];
         let OwnerEditTargetResolution::Resolved(target) =
             resolve_primary_edit_target(&project, &visuals, SelectionTarget::Node(spatial_id))
         else {
-            panic!("one direct branch must beat its referenced projection");
+            panic!("one direct branch must beat its composition-instance projection");
         };
         assert_eq!(target.instance_path, visuals[1].instance_path);
 

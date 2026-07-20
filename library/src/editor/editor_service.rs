@@ -241,7 +241,7 @@ impl EditorService {
 
     pub fn create_audio_clip(
         &self,
-        reference_id: Uuid,
+        asset_id: Uuid,
         file_path: &str,
         start_time: f64,
         duration: f64,
@@ -249,7 +249,7 @@ impl EditorService {
         speed: f64,
     ) -> Result<ClipBundle, LibraryError> {
         self.project_manager.create_audio_clip(
-            reference_id,
+            asset_id,
             file_path,
             start_time,
             duration,
@@ -264,7 +264,7 @@ impl EditorService {
     )]
     pub fn create_video_clip(
         &self,
-        reference_id: Uuid,
+        asset_id: Uuid,
         file_path: &str,
         start_time: f64,
         duration: f64,
@@ -274,7 +274,7 @@ impl EditorService {
         canvas_height: u32,
     ) -> Result<ClipBundle, LibraryError> {
         self.project_manager.create_video_clip(
-            reference_id,
+            asset_id,
             file_path,
             start_time,
             duration,
@@ -291,7 +291,7 @@ impl EditorService {
     )]
     pub fn create_image_clip(
         &self,
-        reference_id: Uuid,
+        asset_id: Uuid,
         file_path: &str,
         start_time: f64,
         duration: f64,
@@ -300,7 +300,7 @@ impl EditorService {
         _fps: f64,
     ) -> Result<ClipBundle, LibraryError> {
         self.project_manager.create_image_clip(
-            reference_id,
+            asset_id,
             file_path,
             start_time,
             duration,
@@ -348,14 +348,14 @@ impl EditorService {
             .create_sksl_clip(start_time, duration, canvas_width, canvas_height)
     }
 
-    pub fn create_reference_clip(
+    pub fn create_composition_instance_clip(
         &self,
-        target_node_id: Uuid,
+        composition_id: Uuid,
         start_time: f64,
         duration: f64,
     ) -> Result<ClipBundle, LibraryError> {
         self.project_manager
-            .create_reference_clip(target_node_id, start_time, duration)
+            .create_composition_instance_clip(composition_id, start_time, duration)
     }
 
     pub fn add_composition(

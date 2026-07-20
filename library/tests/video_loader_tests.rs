@@ -541,7 +541,7 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() -> Result<
         &project,
         &project.compositions[0],
         plugin_manager.get_property_evaluators(),
-        Arc::clone(&plugin_manager),
+        plugin_manager.as_ref(),
     )
     .evaluate(late_composition_frame, 1.0, None)?;
 
@@ -588,7 +588,7 @@ fn ui_frame_evaluator_and_render_service_decode_the_real_late_frame() -> Result<
         &project,
         &project.compositions[0],
         plugin_manager.get_property_evaluators(),
-        Arc::clone(&plugin_manager),
+        plugin_manager.as_ref(),
     )
     .evaluate(17_894, 1.0, None)?;
     assert!(

@@ -20,7 +20,7 @@ use library::model::project::{
 };
 use library::model::property::{Keyframe, Property, PropertyValue};
 use library::model::{
-    Asset, AssetKind, BlendMode, Clip, Node, NodeContent, ReferenceContent, Track,
+    Asset, AssetKind, BlendMode, Clip, CompositionInstanceContent, Node, NodeContent, Track,
 };
 use library::plugin::PluginManager;
 use library::rendering::renderer::RenderOutput;
@@ -1494,40 +1494,34 @@ fn cross_track_image_connection_preserves_containment_and_internal_metadata_cann
         NodeContainer::Clip(first_clip),
         solid_node("source"),
     )?;
-    let reference_id = add_node(
+    let transform_id = add_node(
         &mut project,
         NodeContainer::Clip(second_clip),
-        Node::new_reference(
-            "reference",
-            ReferenceContent {
-                target_id: composition_id,
-                sync_global_time: false,
-            },
-        ),
+        PluginManager::default().create_image_transform_operation_node()?,
     )?;
 
     project.connect_ports(
         address(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
-        address(PortOwner::Node(reference_id), IMAGE_INPUT_PORT),
+        address(PortOwner::Node(transform_id), IMAGE_INPUT_PORT),
     )?;
     assert_eq!(
         project.find_node_container(source_id),
         Some(NodeContainer::Clip(first_clip))
     );
     assert_eq!(
-        project.find_node_container(reference_id),
+        project.find_node_container(transform_id),
         Some(NodeContainer::Clip(second_clip))
     );
 
     let escaped = project.connect_ports(
         address(PortOwner::Composition(composition_id), TIME_PORT),
-        address(PortOwner::Node(reference_id), TIME_PORT),
+        address(PortOwner::Node(transform_id), TIME_PORT),
     );
     assert_eq!(
         escaped,
         Err(ProjectGraphError::InternalPortEscapesContainer {
             source_owner: PortOwner::Composition(composition_id),
-            target_owner: PortOwner::Node(reference_id),
+            target_owner: PortOwner::Node(transform_id),
         })
     );
     Ok(())
@@ -1535,7 +1529,7 @@ fn cross_track_image_connection_preserves_containment_and_internal_metadata_cann
 
 #[test]
 fn single_inputs_replace_while_variadic_inputs_reorder_disconnect_and_roundtrip() -> Result<()> {
-    let (mut project, composition_id, track_id) = project_with_composition();
+    let (mut project, _composition_id, track_id) = project_with_composition();
     let clip_id = add_clip(&mut project, track_id, "clip")?;
     let first_id = add_node(
         &mut project,
@@ -1547,16 +1541,10 @@ fn single_inputs_replace_while_variadic_inputs_reorder_disconnect_and_roundtrip(
         NodeContainer::Clip(clip_id),
         solid_node("second"),
     )?;
-    let reference_id = add_node(
+    let transform_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new_reference(
-            "single",
-            ReferenceContent {
-                target_id: composition_id,
-                sync_global_time: false,
-            },
-        ),
+        PluginManager::default().create_image_transform_operation_node()?,
     )?;
     let merge_id = add_node(
         &mut project,
@@ -1564,7 +1552,7 @@ fn single_inputs_replace_while_variadic_inputs_reorder_disconnect_and_roundtrip(
         Node::new_merge("merge"),
     )?;
 
-    let single_target = address(PortOwner::Node(reference_id), IMAGE_INPUT_PORT);
+    let single_target = address(PortOwner::Node(transform_id), IMAGE_INPUT_PORT);
     let first_single = project.connect_ports(
         address(PortOwner::Node(first_id), IMAGE_OUTPUT_PORT),
         single_target.clone(),
@@ -2249,7 +2237,7 @@ fn merge_order_and_wire_blend_change_real_pixels_without_reading_source_blend() 
 }
 
 #[test]
-fn reference_materializes_an_empty_nested_composition_as_its_opaque_background() -> Result<()> {
+fn composition_instance_materializes_an_empty_target_as_its_opaque_background() -> Result<()> {
     let (mut project, _parent_id, parent_track_id) = project_with_composition();
     let (mut nested, nested_track) = Composition::new("empty nested", 640, 360, 24.0, 2.0);
     let nested_background = Color {
@@ -2263,20 +2251,19 @@ fn reference_materializes_an_empty_nested_composition_as_its_opaque_background()
     project.add_track(nested_track);
     project.add_composition(nested);
 
-    let clip_id = add_clip(&mut project, parent_track_id, "reference clip")?;
-    let reference_id = add_node(
+    let clip_id = add_clip(&mut project, parent_track_id, "composition instance clip")?;
+    let instance_id = add_node(
         &mut project,
         NodeContainer::Clip(clip_id),
-        Node::new_reference(
-            "empty composition reference",
-            ReferenceContent {
-                target_id: nested_id,
-                sync_global_time: false,
+        Node::new_composition_instance(
+            "empty composition instance",
+            CompositionInstanceContent {
+                composition_id: nested_id,
             },
         ),
     )?;
     project
-        .set_output_node(NodeContainer::Clip(clip_id), Some(reference_id))
+        .set_output_node(NodeContainer::Clip(clip_id), Some(instance_id))
         .map_err(|error| anyhow!(error))?;
 
     let rendered = frame(&project, 0)?;
@@ -2534,7 +2521,7 @@ fn composition_duration_gates_direct_composition_and_track_nodes() -> Result<()>
 }
 
 #[test]
-fn nested_reference_does_not_materialize_target_background_after_its_duration() -> Result<()> {
+fn composition_instance_does_not_materialize_target_background_after_its_duration() -> Result<()> {
     let (mut project, parent_id, parent_track_id) = project_with_composition();
     let parent_background = Color {
         r: 7,
@@ -2566,20 +2553,26 @@ fn nested_reference_does_not_materialize_target_background_after_its_duration() 
         .set_output_node(NodeContainer::Composition(target_id), Some(target_node_id))
         .map_err(|error| anyhow!(error))?;
 
-    let reference = Node::new_reference(
-        "short target reference",
-        ReferenceContent {
-            target_id,
-            sync_global_time: true,
+    let instance_clip = Clip::new("short target placement", 0.0, 10.0);
+    let instance_clip_id = instance_clip.id;
+    project.add_clip(instance_clip);
+    project.attach_clip_to_track(parent_track_id, instance_clip_id)?;
+    let instance = Node::new_composition_instance(
+        "short target instance",
+        CompositionInstanceContent {
+            composition_id: target_id,
         },
     );
-    let reference_id = add_node(
+    let instance_id = add_node(
         &mut project,
-        NodeContainer::Composition(parent_id),
-        reference,
+        NodeContainer::Clip(instance_clip_id),
+        instance,
     )?;
     project
-        .set_output_node(NodeContainer::Composition(parent_id), Some(reference_id))
+        .set_output_node(NodeContainer::Clip(instance_clip_id), Some(instance_id))
+        .map_err(|error| anyhow!(error))?;
+    project
+        .set_audio_output_node(NodeContainer::Clip(instance_clip_id), Some(instance_id))
         .map_err(|error| anyhow!(error))?;
 
     assert!(
@@ -2601,10 +2594,10 @@ fn nested_reference_does_not_materialize_target_background_after_its_duration() 
     let merge_id = add_node(
         &mut project,
         NodeContainer::Composition(parent_id),
-        Node::new_merge("reference and sibling"),
+        Node::new_merge("composition instance and sibling"),
     )?;
     project.connect_ports(
-        address(PortOwner::Node(reference_id), IMAGE_OUTPUT_PORT),
+        address(PortOwner::Node(instance_id), IMAGE_OUTPUT_PORT),
         address(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
     )?;
     project.connect_ports(
@@ -2623,32 +2616,31 @@ fn nested_reference_does_not_materialize_target_background_after_its_duration() 
     project
         .set_output_node(NodeContainer::Composition(parent_id), None)
         .map_err(|error| anyhow!(error))?;
-    let local_clip = Clip::new("local reference", 5.0, 2.0);
+    let local_clip = Clip::new("local composition instance", 5.0, 2.0);
     let local_clip_id = local_clip.id;
     project.add_clip(local_clip);
     project.attach_clip_to_track(parent_track_id, local_clip_id)?;
-    let local_reference = Node::new_reference(
-        "local short target reference",
-        ReferenceContent {
-            target_id,
-            sync_global_time: false,
+    let local_instance = Node::new_composition_instance(
+        "local short target instance",
+        CompositionInstanceContent {
+            composition_id: target_id,
         },
     );
-    let local_reference_id = add_node(
+    let local_instance_id = add_node(
         &mut project,
         NodeContainer::Clip(local_clip_id),
-        local_reference,
+        local_instance,
     )?;
     project
-        .set_output_node(NodeContainer::Clip(local_clip_id), Some(local_reference_id))
+        .set_output_node(NodeContainer::Clip(local_clip_id), Some(local_instance_id))
         .map_err(|error| anyhow!(error))?;
     assert!(
         object_source_ids(&frame(&project, 179)?.items).contains(&target_node_id),
-        "an unsynced Reference must use Clip-local time before the target duration"
+        "an unsynced Composition Instance must use Clip-local time before the target duration"
     );
     assert!(
         frame(&project, 180)?.items.is_empty(),
-        "an unsynced Reference must become NoOutput at the target's local duration boundary"
+        "an unsynced Composition Instance must become NoOutput at the target's local duration boundary"
     );
     Ok(())
 }

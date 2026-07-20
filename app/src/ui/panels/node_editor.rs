@@ -720,11 +720,10 @@ fn create_composition_node(project: &mut Project, position: egui::Pos2, comp_id:
     candidate.add_track(root);
     candidate.add_composition(composition);
 
-    let mut node = Node::new_reference(
+    let mut node = Node::new_composition_instance(
         "Container",
-        library::model::ReferenceContent {
-            target_id: nested_id,
-            sync_global_time: false,
+        library::model::CompositionInstanceContent {
+            composition_id: nested_id,
         },
     );
     node.ui_position = [position.x, position.y];

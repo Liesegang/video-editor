@@ -8,7 +8,7 @@ use super::property_ops::{PropertyOwner, set_property_attribute as set_property_
 use crate::error::LibraryError;
 use crate::model::project::{NodeContainer, NodeGraphBundle, Project};
 use crate::model::property::PropertyValue;
-use crate::model::{Clip, Node, NodeContent, ReferenceContent};
+use crate::model::{Clip, CompositionInstanceContent, Node, NodeContent};
 
 /// A detached Clip graph prepared by the factory methods on ProjectManager.
 /// It is inserted into Project atomically by `add_clip_to_track`.
@@ -108,11 +108,13 @@ impl ClipHandler {
                     node.id
                 )));
             }
-            if let NodeContent::Reference(ReferenceContent { target_id, .. }) = node.content()
-                && !Self::validate_recursion(&project, *target_id, composition_id)
+            if let NodeContent::CompositionInstance(CompositionInstanceContent {
+                composition_id: target_composition_id,
+            }) = node.content()
+                && !Self::validate_recursion(&project, *target_composition_id, composition_id)
             {
                 return Err(LibraryError::Project(
-                    "Cannot add composition: circular reference detected".to_string(),
+                    "Cannot add composition: composition instance cycle detected".to_string(),
                 ));
             }
         }
@@ -304,15 +306,15 @@ impl ClipHandler {
             }
 
             for node_id in node_ids {
-                let Some(NodeContent::Reference(reference)) =
+                let Some(NodeContent::CompositionInstance(instance)) =
                     project.get_node(node_id).map(Node::content)
                 else {
                     continue;
                 };
-                if reference.target_id == parent_id {
+                if instance.composition_id == parent_id {
                     return false;
                 }
-                compositions.push(reference.target_id);
+                compositions.push(instance.composition_id);
             }
         }
         true
@@ -534,28 +536,27 @@ mod tests {
             .attach_track_to_composition(child_id, child_second_track_id)
             .unwrap();
 
-        let reference_node = Node::new_reference(
-            "reference to parent",
-            ReferenceContent {
-                target_id: parent_id,
-                sync_global_time: false,
+        let instance_node = Node::new_composition_instance(
+            "instance of parent",
+            CompositionInstanceContent {
+                composition_id: parent_id,
             },
         );
-        let reference_id = reference_node.id;
-        let mut reference_clip = Clip::new("reference", 0.0, 10.0);
-        let reference_clip_id = reference_clip.id;
-        reference_clip.node_ids.push(reference_id);
-        reference_clip.output_node_id = Some(reference_id);
-        project.add_node(reference_node);
-        project.add_clip(reference_clip);
+        let instance_id = instance_node.id;
+        let mut instance_clip = Clip::new("composition instance", 0.0, 10.0);
+        let instance_clip_id = instance_clip.id;
+        instance_clip.node_ids.push(instance_id);
+        instance_clip.output_node_id = Some(instance_id);
+        project.add_node(instance_node);
+        project.add_clip(instance_clip);
         project
-            .attach_node_to_container(NodeContainer::Clip(reference_clip_id), reference_id)
+            .attach_node_to_container(NodeContainer::Clip(instance_clip_id), instance_id)
             .unwrap();
         project
-            .set_output_node(NodeContainer::Clip(reference_clip_id), Some(reference_id))
+            .set_output_node(NodeContainer::Clip(instance_clip_id), Some(instance_id))
             .unwrap();
         project
-            .attach_clip_to_track(child_second_track_id, reference_clip_id)
+            .attach_clip_to_track(child_second_track_id, instance_clip_id)
             .unwrap();
 
         assert!(!ClipHandler::validate_recursion(

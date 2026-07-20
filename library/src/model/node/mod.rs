@@ -196,7 +196,7 @@ pub enum BlendMode {
     Overlay,
 }
 
-/// A leaf graph node. It owns media/generator/reference behavior and render
+/// A leaf graph node. It owns media/generator/composition-instance behavior and render
 /// properties, but never timeline timing or containment.
 ///
 /// Generic construction is intentionally unavailable: native Generators need
@@ -276,9 +276,13 @@ impl Node {
         ))
     }
 
-    /// Creates a composition/reference source.
-    pub fn new_reference(name: &str, content: ReferenceContent) -> Self {
-        Self::with_properties(name, NodeContent::Reference(content), PropertyMap::new())
+    /// Creates a placement of one top-level Composition definition.
+    pub fn new_composition_instance(name: &str, content: CompositionInstanceContent) -> Self {
+        Self::with_properties(
+            name,
+            NodeContent::CompositionInstance(content),
+            PropertyMap::new(),
+        )
     }
 
     /// Completion point for descriptor-backed Plugin operations. The property
@@ -525,7 +529,7 @@ impl Node {
 pub enum NodeContent {
     Media(MediaContent),
     Generator(GeneratorContent),
-    Reference(ReferenceContent),
+    CompositionInstance(CompositionInstanceContent),
     /// A plugin-defined graph operation whose authored state is entirely
     /// represented by this stable identity, its persisted port contract, and
     /// [`Node::properties`]. Loading and validating a Project never requires
@@ -665,9 +669,12 @@ pub enum GeneratorContent {
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub struct ReferenceContent {
-    pub target_id: Uuid,
-    pub sync_global_time: bool,
+#[serde(deny_unknown_fields)]
+pub struct CompositionInstanceContent {
+    /// Stable identity of the top-level Composition definition evaluated by
+    /// this placement. Timing and transforms remain owned by the containing
+    /// Clip/Node; the referenced definition is never nested or reparented.
+    pub composition_id: Uuid,
 }
 
 #[cfg(test)]

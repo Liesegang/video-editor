@@ -27,54 +27,17 @@ use crate::plugin::{
 };
 use crate::util::timing::ScopedTimer;
 
+mod composition_instances;
 mod property_evaluation;
+mod scope;
 
-#[derive(Clone, Copy, Debug)]
-struct EvaluationScope {
-    time: f64,
-    fps: f64,
-    duration: f64,
-    width: u64,
-    height: u64,
-}
-
-impl EvaluationScope {
-    fn value(self, port: &str) -> Option<PropertyValue> {
-        match port {
-            TIME_PORT => Some(PropertyValue::Number(OrderedFloat(self.time))),
-            FRAME_PORT => Some(PropertyValue::Integer(frame_at_time(self.time, self.fps))),
-            FPS_PORT => Some(PropertyValue::Number(OrderedFloat(self.fps))),
-            DURATION_PORT => Some(PropertyValue::Number(OrderedFloat(self.duration))),
-            RESOLUTION_PORT => Some(PropertyValue::Vec2(Vec2 {
-                x: OrderedFloat(self.width as f64),
-                y: OrderedFloat(self.height as f64),
-            })),
-            _ => None,
-        }
-    }
-
-    fn as_inputs(self) -> HashMap<String, EvalOutput<PropertyValue>> {
-        [
-            TIME_PORT,
-            FRAME_PORT,
-            FPS_PORT,
-            DURATION_PORT,
-            RESOLUTION_PORT,
-        ]
-        .into_iter()
-        .filter_map(|port| {
-            self.value(port)
-                .map(|value| (port.to_string(), EvalOutput::Produced(value)))
-        })
-        .collect()
-    }
-}
+use scope::EvaluationScope;
 
 pub struct FrameEvaluator<'a> {
     project: &'a Project,
     composition: &'a Composition,
     property_evaluators: Arc<PropertyEvaluatorRegistry>,
-    plugin_manager: Arc<PluginManager>,
+    plugin_manager: &'a PluginManager,
 }
 
 impl<'a> FrameEvaluator<'a> {
@@ -82,7 +45,7 @@ impl<'a> FrameEvaluator<'a> {
         project: &'a Project,
         composition: &'a Composition,
         property_evaluators: Arc<PropertyEvaluatorRegistry>,
-        plugin_manager: Arc<PluginManager>,
+        plugin_manager: &'a PluginManager,
     ) -> Self {
         Self {
             project,
@@ -320,8 +283,8 @@ impl<'a> FrameEvaluator<'a> {
             return Ok(EvalOutput::NoOutput);
         }
         let item = match node.content() {
-            NodeContent::Reference(reference) => {
-                self.collect_reference(node, reference, scope, global_time, path, &inputs)?
+            NodeContent::CompositionInstance(instance) => {
+                self.collect_composition_instance(node, instance, scope, path, &inputs)?
             }
             NodeContent::Merge => self.collect_merge(node, scope, global_time, path, &inputs)?,
             NodeContent::Value(_) => EvalOutput::NoOutput,
@@ -850,83 +813,6 @@ impl<'a> FrameEvaluator<'a> {
         self.evaluate_shape_output(&connection.from, global_time, path)
     }
 
-    fn collect_reference(
-        &self,
-        node: &Node,
-        reference: &crate::model::ReferenceContent,
-        scope: EvaluationScope,
-        global_time: f64,
-        path: &mut HashSet<PortOwner>,
-        inputs: &ResolvedNodeInputs,
-    ) -> EvalResult<FrameItem> {
-        let owner = PortOwner::Node(node.id);
-        let input = PortAddress::new(owner, IMAGE_INPUT_PORT);
-        let (mut item, width, height) = match self.single_connection_to(&input)? {
-            EvalOutput::Produced(connection) => {
-                let item =
-                    match self.collect_owner_output(connection.from.owner, global_time, path)? {
-                        EvalOutput::Produced(item) => item,
-                        EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-                    };
-                let source_scope = match self.scope_for_owner(
-                    connection.from.owner,
-                    global_time,
-                    &mut HashSet::new(),
-                )? {
-                    EvalOutput::Produced(scope) => scope,
-                    EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-                };
-                (item, source_scope.width, source_scope.height)
-            }
-            EvalOutput::NoOutput => {
-                // Only the absence of a connection enables Reference fallback.
-                let target = self
-                    .project
-                    .get_composition(reference.target_id)
-                    .ok_or_else(|| missing_error(PortOwner::Composition(reference.target_id)))?;
-                let target_time = if reference.sync_global_time {
-                    global_time
-                } else {
-                    scope.time
-                };
-                let item = match self.collect_owner_output(
-                    PortOwner::Composition(target.id),
-                    target_time,
-                    path,
-                )? {
-                    EvalOutput::Produced(item) => item,
-                    EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-                };
-                let target_scope = match self.scope_for_owner(
-                    PortOwner::Composition(target.id),
-                    target_time,
-                    &mut HashSet::new(),
-                )? {
-                    EvalOutput::Produced(scope) => scope,
-                    EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-                };
-                (item, target_scope.width, target_scope.height)
-            }
-        };
-        neutralize_root_blend(&mut item);
-        let composition = self
-            .composition_for_owner(owner)
-            .ok_or_else(|| missing_error(owner))?;
-        let context = self.context(composition, Some(inputs));
-        Ok(EvalOutput::Produced(FrameItem::Group(FrameGroup {
-            source_id: node.id,
-            kind: FrameGroupKind::ConnectedImage,
-            width,
-            height,
-            background_color: transparent(),
-            transform: context.build_transform(node.properties(), scope.time),
-            blend_mode: node.blend_mode,
-            effect_time: OrderedFloat(scope.time),
-            effects: Vec::new(),
-            items: vec![item],
-        })))
-    }
-
     fn collect_merge(
         &self,
         node: &Node,
@@ -1106,7 +992,7 @@ impl<'a> FrameEvaluator<'a> {
                 GeneratorContent::Solid => "solid",
                 GeneratorContent::SkSL => "sksl",
             },
-            NodeContent::Reference(_) => "reference",
+            NodeContent::CompositionInstance(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::PluginOperation(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::Value(_) => return Ok(EvalOutput::NoOutput),
             NodeContent::Merge => "merge",
@@ -1188,150 +1074,6 @@ impl<'a> FrameEvaluator<'a> {
         Ok(values)
     }
 
-    fn scope_for_node(&self, node_id: Uuid, global_time: f64) -> EvalResult<EvaluationScope> {
-        self.scope_for_owner(PortOwner::Node(node_id), global_time, &mut HashSet::new())
-    }
-
-    fn scope_for_owner(
-        &self,
-        owner: PortOwner,
-        global_time: f64,
-        path: &mut HashSet<PortOwner>,
-    ) -> EvalResult<EvaluationScope> {
-        if !path.insert(owner) {
-            return Err(cycle_error(owner));
-        }
-        let result = (|| {
-            let mut scope = match owner {
-                PortOwner::Composition(id) => {
-                    let composition = self
-                        .project
-                        .get_composition(id)
-                        .ok_or_else(|| missing_error(owner))?;
-                    // Composition activity uses its authored half-open
-                    // timeline range before any explicit Time input remaps
-                    // the evaluation scope. This keeps direct Composition and
-                    // Track Nodes, as well as nested References, inactive past
-                    // the same duration boundary used by export frame counts.
-                    if !global_time.is_finite()
-                        || global_time < 0.0
-                        || global_time >= composition.duration
-                    {
-                        return Ok(EvalOutput::NoOutput);
-                    }
-                    EvaluationScope {
-                        time: global_time,
-                        fps: composition.fps,
-                        duration: composition.duration,
-                        width: composition.width,
-                        height: composition.height,
-                    }
-                }
-                PortOwner::Track(id) => {
-                    let composition_id = self
-                        .project
-                        .find_composition_for_track(id)
-                        .ok_or_else(|| missing_error(owner))?;
-                    match self.scope_for_owner(
-                        PortOwner::Composition(composition_id),
-                        global_time,
-                        path,
-                    )? {
-                        EvalOutput::Produced(scope) => scope,
-                        EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-                    }
-                }
-                PortOwner::Clip(id) => {
-                    let clip = self
-                        .project
-                        .get_clip(id)
-                        .ok_or_else(|| missing_error(owner))?;
-                    let track_id = self
-                        .project
-                        .find_track_for_clip(id)
-                        .ok_or_else(|| missing_error(owner))?;
-                    let mut inherited = match self.scope_for_owner(
-                        PortOwner::Track(track_id),
-                        global_time,
-                        path,
-                    )? {
-                        EvalOutput::Produced(scope) => scope,
-                        EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-                    };
-                    // Clip activity is start-inclusive and end-exclusive. No Node,
-                    // shader, effect, media request, or value output is evaluated
-                    // while this test is false.
-                    if inherited.time < clip.start_time.into_inner()
-                        || inherited.time >= clip.end_time()
-                    {
-                        return Ok(EvalOutput::NoOutput);
-                    }
-                    inherited.duration = clip.duration.into_inner();
-                    match self.apply_metadata_inputs(owner, global_time, path, &mut inherited)? {
-                        EvalOutput::Produced(()) => {}
-                        EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-                    }
-                    inherited.time = clip.local_time(inherited.time);
-                    return Ok(EvalOutput::Produced(inherited));
-                }
-                PortOwner::Node(id) => {
-                    let container = self
-                        .project
-                        .find_node_container(id)
-                        .ok_or_else(|| missing_error(owner))?;
-                    let container_owner = match container {
-                        NodeContainer::Composition(id) => PortOwner::Composition(id),
-                        NodeContainer::Track(id) => PortOwner::Track(id),
-                        NodeContainer::Clip(id) => PortOwner::Clip(id),
-                    };
-                    match self.scope_for_owner(container_owner, global_time, path)? {
-                        EvalOutput::Produced(scope) => scope,
-                        EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-                    }
-                }
-            };
-            match self.apply_metadata_inputs(owner, global_time, path, &mut scope)? {
-                EvalOutput::Produced(()) => {}
-                EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-            }
-            Ok(EvalOutput::Produced(scope))
-        })();
-        path.remove(&owner);
-        result
-    }
-
-    fn apply_metadata_inputs(
-        &self,
-        owner: PortOwner,
-        global_time: f64,
-        path: &mut HashSet<PortOwner>,
-        scope: &mut EvaluationScope,
-    ) -> EvalResult<()> {
-        for port in [DURATION_PORT, RESOLUTION_PORT, TIME_PORT] {
-            let target = PortAddress::new(owner, port);
-            let connection = match self.single_connection_to(&target)? {
-                EvalOutput::Produced(connection) => connection,
-                EvalOutput::NoOutput => continue,
-            };
-            let value = match self.resolve_metadata_value(&connection.from, global_time, path)? {
-                EvalOutput::Produced(value) => value,
-                EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
-            };
-            match (port, value) {
-                (TIME_PORT, value) => {
-                    scope.time = required_number(value, port)?;
-                }
-                (DURATION_PORT, value) => scope.duration = required_number(value, port)?,
-                (RESOLUTION_PORT, PropertyValue::Vec2(value)) => {
-                    scope.width = value.x.into_inner().max(1.0) as u64;
-                    scope.height = value.y.into_inner().max(1.0) as u64;
-                }
-                _ => return Err(invalid_value(port)),
-            }
-        }
-        Ok(EvalOutput::Produced(()))
-    }
-
     fn resolve_metadata_value(
         &self,
         source: &PortAddress,
@@ -1354,10 +1096,31 @@ impl<'a> FrameEvaluator<'a> {
             .project
             .port_definition(source, PortDirection::Output)
             .ok_or_else(|| LibraryError::Validation(format!("Missing output port {source:?}")))?;
-        if definition.data_type == PortDataType::Image {
+        if matches!(
+            definition.data_type,
+            PortDataType::Image | PortDataType::Audio
+        ) {
             return Err(LibraryError::Validation(format!(
-                "Image port {source:?} cannot be resolved as a value"
+                "Typed media port {source:?} cannot be resolved as a value"
             )));
+        }
+        if let Some(NodeContent::CompositionInstance(instance)) = source_node.map(Node::content) {
+            return match self.composition_instance_target_scope(
+                source.owner.id(),
+                instance,
+                global_time,
+                path,
+            )? {
+                EvalOutput::Produced(scope) => scope
+                    .value(&source.port)
+                    .map(EvalOutput::Produced)
+                    .ok_or_else(|| {
+                        LibraryError::Validation(format!(
+                            "Unsupported Composition Instance metadata output {source:?}"
+                        ))
+                    }),
+                EvalOutput::NoOutput => Ok(EvalOutput::NoOutput),
+            };
         }
         if let PortOwner::Node(node_id) = source.owner
             && matches!(source_node.map(Node::content), Some(NodeContent::Value(_)))
@@ -1551,7 +1314,7 @@ impl<'a> FrameEvaluator<'a> {
             project: self.project,
             composition,
             property_evaluators: &self.property_evaluators,
-            plugin_manager: &self.plugin_manager,
+            plugin_manager: self.plugin_manager,
             resolved_inputs: inputs,
         }
     }
@@ -1622,7 +1385,7 @@ pub fn evaluate_composition_frame(
         project,
         composition,
         Arc::clone(property_evaluators),
-        Arc::clone(plugin_manager),
+        plugin_manager.as_ref(),
     )
     .evaluate(frame_number, render_scale, region)
 }
@@ -1664,9 +1427,12 @@ pub fn get_frame_from_project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::project::{Composition, FMOD_X_INPUT_PORT};
-    use crate::model::property::Property;
-    use crate::model::{Clip, Node};
+    use crate::model::project::{
+        Composition, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, FPS_PORT, FRAME_PORT,
+        RESOLUTION_PORT,
+    };
+    use crate::model::property::{Property, Vec2};
+    use crate::model::{Clip, CompositionInstanceContent, Node};
 
     fn evaluate_numeric_output(mut node: Node, left: f64, right: f64) -> EvalOutput<PropertyValue> {
         let mut project = Project::new("fmod semantics");
@@ -1706,7 +1472,7 @@ mod tests {
             &project,
             &project.compositions[0],
             plugin_manager.get_property_evaluators(),
-            plugin_manager,
+            plugin_manager.as_ref(),
         );
         evaluator
             .resolve_metadata_value(
@@ -1767,6 +1533,103 @@ mod tests {
     }
 
     #[test]
+    fn composition_instance_metadata_uses_the_explicitly_timed_target_scope() {
+        let mut project = Project::new("composition instance metadata");
+        let (target, target_track) = Composition::new("target", 640, 360, 24.0, 4.0);
+        let target_id = target.id;
+        project.add_track(target_track);
+        project.add_composition(target);
+        let (parent, parent_track) = Composition::new("parent", 320, 180, 30.0, 10.0);
+        let parent_id = parent.id;
+        let parent_track_id = parent_track.id;
+        project.add_track(parent_track);
+        project.add_composition(parent);
+
+        let mut clip = Clip::new("instance", 2.0, 2.0);
+        clip.trim_in = OrderedFloat(1.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project
+            .attach_clip_to_track(parent_track_id, clip_id)
+            .unwrap();
+        let instance = Node::new_composition_instance(
+            "instance",
+            CompositionInstanceContent {
+                composition_id: target_id,
+            },
+        );
+        let instance_id = instance.id;
+        project.add_node(instance);
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), instance_id)
+            .unwrap();
+        project
+            .set_output_node(NodeContainer::Clip(clip_id), Some(instance_id))
+            .unwrap();
+
+        let mut fmod = Node::new_fmod("one-second loop");
+        fmod.set_property(
+            FMOD_DIVISOR_INPUT_PORT.to_string(),
+            Property::expression(
+                "value".to_string(),
+                PropertyValue::Number(OrderedFloat(1.0)),
+            ),
+        )
+        .unwrap();
+        let fmod_id = fmod.id;
+        project.add_node(fmod);
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), fmod_id)
+            .unwrap();
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
+                PortAddress::new(PortOwner::Node(fmod_id), FMOD_X_INPUT_PORT),
+            )
+            .unwrap();
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Node(fmod_id), NUMBER_RESULT_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(instance_id), TIME_PORT),
+            )
+            .unwrap();
+        assert!(project.validate_connections().is_empty());
+
+        let plugin_manager = Arc::new(PluginManager::default());
+        let evaluator = FrameEvaluator::new(
+            &project,
+            project.get_composition(parent_id).unwrap(),
+            plugin_manager.get_property_evaluators(),
+            plugin_manager.as_ref(),
+        );
+        for (port, expected) in [
+            (TIME_PORT, PropertyValue::Number(OrderedFloat(0.5))),
+            (FRAME_PORT, PropertyValue::Integer(12)),
+            (FPS_PORT, PropertyValue::Number(OrderedFloat(24.0))),
+            (DURATION_PORT, PropertyValue::Number(OrderedFloat(4.0))),
+            (
+                RESOLUTION_PORT,
+                PropertyValue::Vec2(Vec2 {
+                    x: OrderedFloat(640.0),
+                    y: OrderedFloat(360.0),
+                }),
+            ),
+        ] {
+            assert_eq!(
+                evaluator
+                    .resolve_metadata_value(
+                        &PortAddress::new(PortOwner::Node(instance_id), port),
+                        2.5,
+                        &mut HashSet::new(),
+                    )
+                    .unwrap(),
+                EvalOutput::Produced(expected),
+                "Composition Instance {port} must describe its evaluated target scope"
+            );
+        }
+    }
+
+    #[test]
     fn value_resolver_detects_a_cycle_even_when_called_without_project_validation() {
         let mut project = Project::new("direct value resolver cycle");
         let (composition, track) = Composition::new("main", 32, 32, 30.0, 1.0);
@@ -1811,7 +1674,7 @@ mod tests {
             &project,
             &project.compositions[0],
             plugin_manager.get_property_evaluators(),
-            plugin_manager,
+            plugin_manager.as_ref(),
         );
         let error = evaluator
             .resolve_metadata_value(

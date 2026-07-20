@@ -64,10 +64,15 @@ fn evaluated_track_order(project: &Project, composition_id: Uuid) -> Result<Vec<
         .get_composition(composition_id)
         .context("Composition must exist for evaluation")?;
 
-    let items = FrameEvaluator::new(project, composition, property_evaluators, plugin_manager)
-        .evaluate(0, 1.0, None)?
-        .items
-        .into_iter();
+    let items = FrameEvaluator::new(
+        project,
+        composition,
+        property_evaluators,
+        plugin_manager.as_ref(),
+    )
+    .evaluate(0, 1.0, None)?
+    .items
+    .into_iter();
     items
         .map(|item| match item {
             FrameItem::Group(group) if group.kind == FrameGroupKind::Track => Ok(group.source_id),
