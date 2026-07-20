@@ -155,6 +155,46 @@ struct CategoryNode {
     children: BTreeMap<String, CategoryNode>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct SearchablePopupRects(Vec<Rect>);
+
+/// Return whether the current pointer click is outside both the caller-owned
+/// popup frame and every native category submenu rendered by this widget.
+///
+/// `id_source` must match the value passed to
+/// [`show_searchable_items_with_qa`]. Tracking exact submenu rectangles avoids
+/// treating an unrelated egui popup as part of this searchable menu.
+#[must_use]
+pub fn searchable_menu_click_is_outside(
+    ctx: &egui::Context,
+    id_source: &str,
+    root_rect: Rect,
+) -> bool {
+    let popup_rects = ctx.data(|data| {
+        data.get_temp::<SearchablePopupRects>(searchable_popup_rects_id(id_source))
+            .unwrap_or_default()
+    });
+    ctx.input(|input| input.pointer.interact_pos())
+        .is_some_and(|pointer| point_is_outside_searchable_menu(pointer, root_rect, &popup_rects.0))
+}
+
+fn searchable_popup_rects_id(id_source: &str) -> egui::Id {
+    egui::Id::new(("searchable_menu_popup_rects", id_source))
+}
+
+fn point_is_outside_searchable_menu(pointer: Pos2, root_rect: Rect, popup_rects: &[Rect]) -> bool {
+    !root_rect.contains(pointer) && popup_rects.iter().all(|rect| !rect.contains(pointer))
+}
+
+fn store_searchable_popup_rects(ctx: &egui::Context, id_source: &str, rects: Vec<Rect>) {
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            searchable_popup_rects_id(id_source),
+            SearchablePopupRects(rects),
+        );
+    });
+}
+
 /// Return the indices whose label or keyword matches every whitespace-separated
 /// query term. Matching is case-insensitive and preserves input order.
 pub fn filter_searchable_items<T>(items: &[SearchableItem<T>], query: &str) -> Vec<usize> {
@@ -252,6 +292,7 @@ pub fn show_searchable_items_with_qa<T: Clone>(
     }
 
     if ui.input(|input| input.key_pressed(Key::Escape)) {
+        store_searchable_popup_rects(ui.ctx(), id_source, Vec::new());
         ui.data_mut(|data| data.insert_temp(id, MenuState::default()));
         ui.close();
         return None;
@@ -306,6 +347,7 @@ pub fn show_searchable_items_with_qa<T: Clone>(
     };
 
     let mut clicked_selection = None;
+    let mut popup_rects = Vec::new();
     let scroll_to = state.take_scroll_request();
 
     let results_height = DEFAULT_SEARCHABLE_RESULTS_MAX_HEIGHT.min(ui.available_height().max(0.0));
@@ -316,9 +358,15 @@ pub fn show_searchable_items_with_qa<T: Clone>(
             MenuContents::Categories(root) if root.is_empty() => {
                 ui.label("No results");
             }
-            MenuContents::Categories(root) => {
-                render_category_node(ui, root, &[], items, qa_search_id, &mut clicked_selection)
-            }
+            MenuContents::Categories(root) => render_category_node(
+                ui,
+                root,
+                &[],
+                items,
+                qa_search_id,
+                &mut clicked_selection,
+                &mut popup_rects,
+            ),
             MenuContents::FlatSearch(displayed) if displayed.is_empty() => {
                 ui.label("No results");
             }
@@ -336,6 +384,7 @@ pub fn show_searchable_items_with_qa<T: Clone>(
                 }
             }
         });
+    store_searchable_popup_rects(ui.ctx(), id_source, popup_rects);
 
     let selection = clicked_selection.or(keyboard_selection).and_then(|index| {
         items
@@ -404,10 +453,12 @@ fn render_category_node<T>(
     items: &[SearchableItem<T>],
     qa_search_id: Option<&str>,
     clicked_selection: &mut Option<usize>,
+    popup_rects: &mut Vec<Rect>,
 ) {
     for (label, child) in &node.children {
         let mut child_path = path.to_vec();
         child_path.push(label.clone());
+        let mut popup_rect = None;
         let menu = ui.menu_button(label, |ui| {
             render_category_node(
                 ui,
@@ -416,8 +467,14 @@ fn render_category_node<T>(
                 items,
                 qa_search_id,
                 clicked_selection,
+                popup_rects,
             );
+            popup_rect = Some(ui.min_rect());
         });
+        popup_rects.extend(popup_rect.filter(|rect| rect.is_finite() && rect.is_positive()));
+        if menu.response.rect.is_finite() && menu.response.rect.is_positive() {
+            popup_rects.push(menu.response.rect);
+        }
         if let Some(qa_search_id) = qa_search_id {
             crate::qa::register_component_with_metadata(
                 format!("{qa_search_id}.category:{}", child_path.join("/")),
@@ -583,6 +640,28 @@ mod tests {
             menu_contents(&items, "defocus"),
             MenuContents::FlatSearch(vec![0])
         );
+    }
+
+    #[test]
+    fn outside_click_geometry_includes_native_submenu_rects_only() {
+        let root = Rect::from_min_max(Pos2::new(1_300.0, 502.0), Pos2::new(1_620.0, 664.0));
+        let submenu = Rect::from_min_max(Pos2::new(1_392.0, 649.0), Pos2::new(1_441.0, 751.0));
+
+        assert!(!point_is_outside_searchable_menu(
+            Pos2::new(1_325.0, 633.0),
+            root,
+            &[submenu],
+        ));
+        assert!(!point_is_outside_searchable_menu(
+            Pos2::new(1_416.0, 742.0),
+            root,
+            &[submenu],
+        ));
+        assert!(point_is_outside_searchable_menu(
+            Pos2::new(1_000.0, 820.0),
+            root,
+            &[submenu],
+        ));
     }
 
     #[test]
