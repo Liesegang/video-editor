@@ -589,7 +589,7 @@ pub fn preview_panel(
                         && routing::exact_visual_for_edit_target(&gui_clips, target).is_some()
                 });
             if !has_matching_explicit_target {
-                match routing::resolve_primary_edit_target(&gui_clips, primary) {
+                match routing::resolve_primary_edit_target(&proj_read, &gui_clips, primary) {
                     clip::OwnerEditTargetResolution::Resolved(target) => {
                         editor_context.interaction.preview_edit_target = Some(target);
                     }

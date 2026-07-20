@@ -13,29 +13,53 @@ use super::clip::{
 /// that exact spatial Node reaches one rendered branch. Fan-out is ambiguous
 /// without an explicit Preview hit and therefore fails closed.
 pub(super) fn resolve_primary_edit_target(
+    project: &Project,
     visuals: &[PreviewClip],
     primary: SelectionTarget,
 ) -> OwnerEditTargetResolution {
     match primary {
-        SelectionTarget::Node(node_id) => resolve_node_edit_target(visuals, node_id),
+        SelectionTarget::Node(node_id) => resolve_node_edit_target(project, visuals, node_id),
         SelectionTarget::Clip(_) | SelectionTarget::Track(_) | SelectionTarget::Composition(_) => {
             resolve_owner_edit_target(visuals, primary)
         }
     }
 }
 
-fn resolve_node_edit_target(visuals: &[PreviewClip], node_id: Uuid) -> OwnerEditTargetResolution {
-    let mut matches = visuals
+fn resolve_node_edit_target(
+    project: &Project,
+    visuals: &[PreviewClip],
+    node_id: Uuid,
+) -> OwnerEditTargetResolution {
+    let matches = visuals
         .iter()
-        .filter(|visual| visual.spatial_layer(node_id).is_some());
-    let Some(visual) = matches.next() else {
+        .filter(|visual| visual.spatial_layer(node_id).is_some())
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
         return OwnerEditTargetResolution::Unavailable;
-    };
-    if matches.next().is_some() {
+    }
+
+    // A contained Node can also reach the Composition through Reference or
+    // Merge fan-out. Prefer its one direct container branch, identified by
+    // the authoritative Track/Clip prefix. Multiple direct branches remain
+    // ambiguous; path length or render order must never choose between them.
+    let direct_prefix = direct_container_prefix(project, node_id);
+    let direct = direct_prefix
+        .as_deref()
+        .map(|prefix| {
+            matches
+                .iter()
+                .copied()
+                .filter(|visual| visual.instance_path.starts_with(prefix))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let candidates = if direct.is_empty() { &matches } else { &direct };
+    if candidates.len() != 1 {
         return OwnerEditTargetResolution::Ambiguous {
             candidate_node_ids: vec![node_id],
         };
     }
+    let visual = candidates[0];
 
     OwnerEditTargetResolution::Resolved(PreviewEditTarget {
         owner: SelectionTarget::Node(node_id),
@@ -43,6 +67,19 @@ fn resolve_node_edit_target(visuals: &[PreviewClip], node_id: Uuid) -> OwnerEdit
         spatial_node_id: Some(node_id),
         instance_path: visual.instance_path.clone(),
     })
+}
+
+fn direct_container_prefix(project: &Project, node_id: Uuid) -> Option<Vec<Uuid>> {
+    match project.find_node_container(node_id)? {
+        library::model::NodeContainer::Clip(clip_id) => {
+            Some(vec![project.find_track_for_clip(clip_id)?, clip_id])
+        }
+        library::model::NodeContainer::Track(track_id) => Some(vec![track_id]),
+        // Composition-level Nodes do not currently get a wrapper ID in every
+        // evaluated path, so exact single-instance semantics remain the safe
+        // fallback until framing exposes that provenance uniformly.
+        library::model::NodeContainer::Composition(_) => None,
+    }
 }
 
 pub(super) fn exact_visual_for_edit_target<'a>(
@@ -172,9 +209,11 @@ mod tests {
             Uuid::new_v4(),
         )];
 
-        let OwnerEditTargetResolution::Resolved(target) =
-            resolve_primary_edit_target(&visuals, SelectionTarget::Node(spatial_id))
-        else {
+        let OwnerEditTargetResolution::Resolved(target) = resolve_primary_edit_target(
+            &Project::new("detached unique branch"),
+            &visuals,
+            SelectionTarget::Node(spatial_id),
+        ) else {
             panic!("one rendered Transform branch must resolve");
         };
         assert_eq!(target.owner, SelectionTarget::Node(spatial_id));
@@ -202,11 +241,91 @@ mod tests {
         ];
 
         assert_eq!(
-            resolve_primary_edit_target(&visuals, SelectionTarget::Node(spatial_id)),
+            resolve_primary_edit_target(
+                &Project::new("detached fan-out"),
+                &visuals,
+                SelectionTarget::Node(spatial_id),
+            ),
             OwnerEditTargetResolution::Ambiguous {
                 candidate_node_ids: vec![spatial_id]
             }
         );
+    }
+
+    #[test]
+    fn node_selection_prefers_one_direct_container_branch_over_references() {
+        let track_id = Uuid::new_v4();
+        let clip_id = Uuid::new_v4();
+        let reference_clip_id = Uuid::new_v4();
+        let content_id = Uuid::new_v4();
+        let spatial_id = Uuid::new_v4();
+        let mut direct = visual(
+            SelectionTarget::Clip(clip_id),
+            content_id,
+            spatial_id,
+            Uuid::new_v4(),
+        );
+        direct.instance_path = vec![track_id, clip_id, content_id, spatial_id];
+        let mut reference = visual(
+            SelectionTarget::Clip(clip_id),
+            content_id,
+            spatial_id,
+            Uuid::new_v4(),
+        );
+        reference.instance_path = vec![
+            track_id,
+            reference_clip_id,
+            Uuid::new_v4(),
+            clip_id,
+            content_id,
+            spatial_id,
+        ];
+
+        let mut project = Project::new("direct Node route");
+        project.add_node(direct.content_node.clone());
+        project.add_node(direct.spatial_layers[0].node.clone());
+        let mut track = library::model::Track::new("track");
+        track.id = track_id;
+        track.clip_ids = vec![clip_id, reference_clip_id];
+        project.add_track(track);
+        let mut owner = library::model::Clip::new("owner", 0.0, 1.0);
+        owner.id = clip_id;
+        owner.node_ids = vec![content_id, spatial_id];
+        project.add_clip(owner);
+        let mut reference_owner = library::model::Clip::new("reference", 0.0, 1.0);
+        reference_owner.id = reference_clip_id;
+        project.add_clip(reference_owner);
+
+        let visuals = vec![reference, direct];
+        let OwnerEditTargetResolution::Resolved(target) =
+            resolve_primary_edit_target(&project, &visuals, SelectionTarget::Node(spatial_id))
+        else {
+            panic!("one direct branch must beat its referenced projection");
+        };
+        assert_eq!(target.instance_path, visuals[1].instance_path);
+
+        let mut second_direct = visual(
+            SelectionTarget::Clip(clip_id),
+            content_id,
+            spatial_id,
+            Uuid::new_v4(),
+        );
+        second_direct.instance_path = vec![track_id, clip_id, Uuid::new_v4(), spatial_id];
+        let mut first_direct = visual(
+            SelectionTarget::Clip(clip_id),
+            content_id,
+            spatial_id,
+            Uuid::new_v4(),
+        );
+        first_direct.instance_path = vec![track_id, clip_id, content_id, spatial_id];
+        assert!(matches!(
+            resolve_primary_edit_target(
+                &project,
+                &[first_direct, second_direct],
+                SelectionTarget::Node(spatial_id),
+            ),
+            OwnerEditTargetResolution::Ambiguous { .. }
+        ));
     }
 
     #[test]

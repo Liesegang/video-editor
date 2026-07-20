@@ -173,6 +173,7 @@ def click_topmost_visual(client, spatial_node_id, content_node_id):
         for item in snapshot["components"]
         if item["id"].startswith("preview.visual.instance:")
         and item.get("visible") is True
+        and item.get("enabled") is True
     ]
     rect = canonical["rect_points"]
     chosen = None
@@ -447,6 +448,151 @@ def prove_ambiguous_owner_has_no_arbitrary_gizmo(client):
     }
 
 
+def node_editor_transform_selection_and_gizmo(client):
+    BASE.activate_dock_tab(
+        client,
+        "dock.tab:node_editor",
+        "Node Editor",
+        "direct Transform Node selection",
+    )
+    header_id = "node_editor.node_header:" + BASE.TEXT_TRANSFORM
+    BASE.reveal_node_editor_component(client, header_id)
+    before_selection = client.state()
+    client.click_component(header_id)
+    selected = client.wait_until(
+        "Node Editor Transform coordinate selection",
+        lambda: state
+        if BASE.selection_matches(
+            (state := client.state()), "node", BASE.TEXT_TRANSFORM
+        )
+        else None,
+    )
+    BASE.assert_exact_selection(
+        selected,
+        "node",
+        BASE.TEXT_TRANSFORM,
+        "Node Editor Transform selection",
+    )
+    assert_inspector_owner(
+        client,
+        "node",
+        BASE.TEXT_TRANSFORM,
+        "Node Editor Transform selection",
+    )
+    if (
+        selected["project"] != before_selection["project"]
+        or selected["history"] != before_selection["history"]
+    ):
+        raise QaFailure("Transform Node header selection mutated Project or history")
+
+    activate_preview_select(client, "direct Transform Node gizmo")
+
+    def exact_node_route():
+        state = client.state()
+        if not BASE.selection_matches(state, "node", BASE.TEXT_TRANSFORM):
+            return None
+        target = state["editor"]["preview"].get("edit_target") or {}
+        if not (
+            target.get("owner") == expected_owner("node", BASE.TEXT_TRANSFORM)
+            and target.get("content_node_id") == BASE.TEXT
+            and target.get("spatial_node_id") == BASE.TEXT_TRANSFORM
+            and target.get("instance_path")
+        ):
+            return None
+        return state
+
+    routed = client.wait_until("exact Transform Node Preview route", exact_node_route)
+    assert_preview_edit_target(
+        routed,
+        "node",
+        BASE.TEXT_TRANSFORM,
+        BASE.TEXT,
+        BASE.TEXT_TRANSFORM,
+        "Node Editor Transform selection",
+    )
+    gizmo_id = "preview.gizmo.handle:right"
+    _, gizmo = client.wait_component_settled(gizmo_id)
+    metadata = gizmo.get("metadata") or {}
+    if not (
+        gizmo.get("enabled") is True
+        and metadata.get("owner") == expected_owner("node", BASE.TEXT_TRANSFORM)
+        and metadata.get("content_node_id") == BASE.TEXT
+        and metadata.get("spatial_node_id") == BASE.TEXT_TRANSFORM
+        and metadata.get("handle") == "right"
+        and metadata.get("action") == "drag_preview_gizmo_handle"
+    ):
+        raise QaFailure("Transform Node selection did not expose an actionable exact gizmo")
+
+    before = client.wait_preview_settled("direct Transform Node gizmo baseline")
+    before_scale = BASE.property_value(
+        before["project"]["nodes"][BASE.TEXT_TRANSFORM], "scale"
+    )
+    client.drag_component_by(gizmo_id, 18.0, 0.0, steps=10)
+    edited = client.wait_project(
+        "direct Transform Node coordinate drag",
+        lambda project: BASE.property_value(
+            project["nodes"][BASE.TEXT_TRANSFORM], "scale"
+        )
+        != before_scale,
+    )
+    changed_properties = assert_only_transform_node_changed(
+        before["project"], edited["project"], BASE.TEXT_TRANSFORM
+    )
+    BASE.assert_history_delta(before, edited, 1, "direct Transform Node gizmo drag")
+    BASE.assert_exact_selection(
+        edited,
+        "node",
+        BASE.TEXT_TRANSFORM,
+        "direct Transform Node gizmo drag",
+    )
+    assert_inspector_owner(
+        client,
+        "node",
+        BASE.TEXT_TRANSFORM,
+        "direct Transform Node gizmo drag",
+    )
+    assert_preview_edit_target(
+        edited,
+        "node",
+        BASE.TEXT_TRANSFORM,
+        BASE.TEXT,
+        BASE.TEXT_TRANSFORM,
+        "direct Transform Node gizmo drag",
+    )
+    rendered = client.wait_preview_change(
+        before["editor"]["preview"]["pixel_hash"],
+        before["editor"]["preview"]["render_revision"],
+    )
+    restored = BASE.undo_project_edit(
+        client,
+        "direct Transform Node gizmo drag",
+        lambda project: project == before["project"],
+    )
+    BASE.assert_exact_selection(
+        restored,
+        "node",
+        BASE.TEXT_TRANSFORM,
+        "direct Transform Node gizmo Undo",
+    )
+    BASE.wait_preview_hash_after(
+        client,
+        before["editor"]["preview"]["pixel_hash"],
+        rendered["editor"]["preview"]["render_revision"],
+        "direct Transform Node gizmo Undo",
+    )
+    return {
+        "selection_frame": selected["frame"],
+        "route": routed["editor"]["preview"]["edit_target"],
+        "gizmo_rect_points": gizmo["rect_points"],
+        "gizmo_metadata": metadata,
+        "changed_properties": changed_properties,
+        "edited_frame": edited["frame"],
+        "render_revision_before": before["editor"]["preview"]["render_revision"],
+        "render_revision_after": rendered["editor"]["preview"]["render_revision"],
+        "restored_frame": restored["frame"],
+    }
+
+
 def node_editor_selection_and_repaint(client):
     BASE.activate_dock_tab(
         client, "dock.tab:node_editor", "Node Editor", "direct Node selection"
@@ -566,6 +712,7 @@ def run_suite(client):
     text_selection = select_text_from_preview(client)
     canonical_gizmo = timeline_select_and_drag_canonical_gizmo(client)
     ambiguity = prove_ambiguous_owner_has_no_arbitrary_gizmo(client)
+    node_transform = node_editor_transform_selection_and_gizmo(client)
     node_editor = node_editor_selection_and_repaint(client)
     final = client.state()
     if final["project"] != initial["project"]:
@@ -594,6 +741,7 @@ def run_suite(client):
         "preview_text_selection": text_selection,
         "timeline_canonical_gizmo": canonical_gizmo,
         "advanced_ambiguity": ambiguity,
+        "node_editor_transform_gizmo": node_transform,
         "node_editor_selection_repaint": node_editor,
         "final_frame": final["frame"],
         "final_selection": final["editor"]["selection"],
