@@ -249,9 +249,9 @@ fn handle_edit_command(action: CommandId, context: ActionContext) {
                 }
             };
             if removed {
-                context.editor_context.remove_selection(target);
                 let project = context.project_service.get_project();
                 let current_state = read_or_recover(project.as_ref()).clone();
+                context.editor_context.reconcile_selection(&current_state);
                 context.history_manager.push_project_state(current_state);
             }
         }
@@ -350,7 +350,13 @@ mod tests {
         );
         let mut dock_state = create_initial_dock_state();
 
-        editor_context.select_target(SelectionTarget::Node(shared_id));
+        editor_context.replace_selection(
+            [
+                SelectionTarget::Clip(shared_id),
+                SelectionTarget::Node(shared_id),
+            ],
+            Some(SelectionTarget::Node(shared_id)),
+        );
         handle_edit_command(
             CommandId::Delete,
             ActionContext {
@@ -367,6 +373,10 @@ mod tests {
             assert!(project.get_node(shared_id).is_none());
             assert!(project.get_clip(shared_id).is_some());
         }
+        assert_eq!(
+            editor_context.selection.targets(),
+            &[SelectionTarget::Clip(shared_id)]
+        );
 
         {
             let mut project = project
@@ -378,7 +388,13 @@ mod tests {
             project
                 .attach_node_to_container(NodeContainer::Composition(composition_id), shared_id)?;
         }
-        editor_context.select_target(SelectionTarget::Clip(shared_id));
+        editor_context.replace_selection(
+            [
+                SelectionTarget::Node(shared_id),
+                SelectionTarget::Clip(shared_id),
+            ],
+            Some(SelectionTarget::Clip(shared_id)),
+        );
         handle_edit_command(
             CommandId::Delete,
             ActionContext {
@@ -393,6 +409,10 @@ mod tests {
             .map_err(|error| std::io::Error::other(error.to_string()))?;
         assert!(project.get_clip(shared_id).is_none());
         assert!(project.get_node(shared_id).is_some());
+        assert_eq!(
+            editor_context.selection.targets(),
+            &[SelectionTarget::Node(shared_id)]
+        );
         Ok(())
     }
 }

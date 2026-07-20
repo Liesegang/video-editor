@@ -18,7 +18,6 @@ use crate::config;
 use crate::model::ui_types::Tab;
 use crate::shortcut::ShortcutManager;
 use crate::state::context::EditorContext;
-use crate::state::context_types::SelectionTarget;
 use crate::ui::command_palette::CommandPalette;
 use crate::ui::dialogs::composition_dialog::CompositionDialog;
 use crate::ui::dialogs::export_dialog::ExportDialog;
@@ -217,10 +216,9 @@ impl eframe::App for RuViEApp {
                             if self.editor_context.active_composition_id == Some(id) {
                                 self.editor_context.activate_composition(None);
                             }
-                            self.editor_context
-                                .remove_selection(SelectionTarget::Composition(id));
                             let project = self.project_service.get_project();
                             let current_state = read_or_recover(project.as_ref()).clone();
+                            self.editor_context.reconcile_selection(&current_state);
                             self.history_manager.push_project_state(current_state);
                         }
                     }
