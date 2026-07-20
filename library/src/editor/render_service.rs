@@ -661,7 +661,7 @@ mod tests {
 
         let mut second_track = Track::new("second");
         let second_track_id = second_track.id;
-        second_track.blend_mode = BlendMode::Add;
+        second_track.blend_mode = BlendMode::LinearDodge;
         second_track.properties.set(
             "opacity".into(),
             Property::constant(PropertyValue::Number(OrderedFloat(50.0))),
@@ -938,7 +938,7 @@ mod tests {
             )
             .unwrap();
         project
-            .set_connection_blend_mode(green_connection, BlendMode::Add)
+            .set_connection_blend_mode(green_connection, BlendMode::LinearDodge)
             .unwrap();
 
         let plugin_manager = Arc::new(PluginManager::default());

@@ -2329,7 +2329,7 @@ mod tests {
             )
             .unwrap();
         project
-            .set_connection_blend_mode(first_wire, BlendMode::Add)
+            .set_connection_blend_mode(first_wire, BlendMode::LinearDodge)
             .unwrap();
         project
             .set_connection_blend_mode(second_wire, BlendMode::Multiply)
@@ -2341,7 +2341,7 @@ mod tests {
                 .find(|connection| connection.id == first_wire)
                 .unwrap()
                 .blend_mode,
-            BlendMode::Add
+            BlendMode::LinearDodge
         );
         assert_eq!(
             project
@@ -2507,7 +2507,7 @@ mod tests {
             .unwrap()
             .id;
         project
-            .set_connection_blend_mode(moved_variadic, BlendMode::Add)
+            .set_connection_blend_mode(moved_variadic, BlendMode::LinearDodge)
             .unwrap();
         project
             .reconnect_connection(
@@ -2523,7 +2523,7 @@ mod tests {
                 .find(|connection| connection.id == moved_variadic)
                 .unwrap()
                 .blend_mode,
-            BlendMode::Add,
+            BlendMode::LinearDodge,
         );
         let orders = |project: &Project, target: &PortAddress| {
             let mut orders = project
@@ -2550,7 +2550,7 @@ mod tests {
             error,
             ProjectGraphError::ConnectionBlendRequiresMergeImagesInput {
                 connection_id,
-                blend_mode: BlendMode::Add,
+                blend_mode: BlendMode::LinearDodge,
                 ..
             } if connection_id == moved_variadic
         ));

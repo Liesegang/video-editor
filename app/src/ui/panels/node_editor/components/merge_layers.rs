@@ -11,33 +11,34 @@ use crate::ui::panels::node_editor::{
 };
 #[cfg(test)]
 use crate::ui::panels::node_editor::{capture_test_metadata, capture_test_rect};
+use crate::ui::widgets::searchable_context_menu::SearchableItem;
 
-pub(in crate::ui::panels::node_editor) const AUTHORED_BLEND_MODES: [BlendMode; 5] = [
-    BlendMode::Normal,
-    BlendMode::Add,
-    BlendMode::Multiply,
-    BlendMode::Screen,
-    BlendMode::Overlay,
-];
+const AUTHORED_BLEND_MODES: [BlendMode; 29] = BlendMode::ALL;
 
 pub(in crate::ui::panels::node_editor) fn blend_mode_label(blend_mode: BlendMode) -> &'static str {
-    match blend_mode {
-        BlendMode::Normal => "Normal",
-        BlendMode::Add => "Add",
-        BlendMode::Multiply => "Multiply",
-        BlendMode::Screen => "Screen",
-        BlendMode::Overlay => "Overlay",
-    }
+    blend_mode.label()
 }
 
 pub(in crate::ui::panels::node_editor) fn blend_mode_qa_key(blend_mode: BlendMode) -> &'static str {
-    match blend_mode {
-        BlendMode::Normal => "normal",
-        BlendMode::Add => "add",
-        BlendMode::Multiply => "multiply",
-        BlendMode::Screen => "screen",
-        BlendMode::Overlay => "overlay",
-    }
+    blend_mode.qa_key()
+}
+
+pub(in crate::ui::panels::node_editor) fn blend_mode_searchable_items(
+    selected: BlendMode,
+) -> Vec<SearchableItem<BlendMode>> {
+    AUTHORED_BLEND_MODES
+        .into_iter()
+        .map(|blend_mode| {
+            let mut item = SearchableItem::new(blend_mode.label(), blend_mode);
+            item.category = Some(blend_mode.group().label().to_string());
+            item.keywords = vec![
+                blend_mode.qa_key().to_string(),
+                blend_mode.group().qa_key().to_string(),
+            ];
+            item.enabled = blend_mode != selected;
+            item
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,7 +96,9 @@ impl MergeLayerRow {
             "order_semantics": "back_to_front",
             "blend_ownership": "connection",
             "control_lane": "merge_body",
-            "runtime_first_produced_may_be_normal": true,
+            "runtime_first_produced_may_be_normal": self
+                .authored_blend_mode
+                .can_optimize_empty_backdrop_to_normal(),
         });
         if let (Some(target), Some(serde_json::Value::Object(extra))) =
             (metadata.as_object_mut(), extra)
@@ -273,6 +276,7 @@ pub(in crate::ui::panels::node_editor) fn register_merge_layer_component(
     crate::qa::register_component_with_metadata(id, component_type, rect, enabled, Some(metadata));
 }
 
+#[cfg(test)]
 pub(in crate::ui::panels::node_editor) fn register_merge_layer_popup_component(
     id: String,
     component_type: &str,
@@ -375,4 +379,39 @@ pub(in crate::ui::panels::node_editor) fn wire_order_qa_metadata(
         "target_back_to_front_index": target_index,
         "authored_blend_mode": blend_mode_qa_key(connection.blend_mode),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::blend_mode_searchable_items;
+    use library::model::{BlendMode, BlendModeGroup};
+
+    #[test]
+    fn blend_search_catalog_is_complete_grouped_and_has_one_disabled_selection() {
+        let items = blend_mode_searchable_items(BlendMode::VividLight);
+        assert_eq!(items.len(), 29);
+        assert_eq!(
+            items.iter().map(|item| item.value).collect::<Vec<_>>(),
+            BlendMode::ALL
+        );
+        assert_eq!(items.iter().filter(|item| !item.enabled).count(), 1);
+        for group in BlendModeGroup::ALL {
+            assert!(items.iter().any(|item| {
+                item.category.as_deref() == Some(group.label())
+                    && item
+                        .keywords
+                        .iter()
+                        .any(|keyword| keyword == group.qa_key())
+            }));
+        }
+        let linear_dodge = items
+            .iter()
+            .find(|item| item.value == BlendMode::LinearDodge)
+            .unwrap();
+        assert_eq!(linear_dodge.label, "Linear Dodge (Add)");
+        assert!(linear_dodge
+            .keywords
+            .iter()
+            .any(|keyword| keyword == "linear_dodge"));
+    }
 }

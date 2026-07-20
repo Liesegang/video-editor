@@ -10,10 +10,11 @@ use library::plugin::PluginManager;
 use uuid::Uuid;
 
 use crate::ui::panels::node_editor::{
-    blend_mode_label, blend_mode_qa_key, connection_supports_authored_blend,
-    create_operation_node_for_request, editable_wire_is_current, editable_wire_stable_key,
-    non_selectable_label, qa_container_key, wire_order_menu_state, wire_order_qa_metadata,
-    wire_splice_menu_items, NodeEdit, QueuedNodeEdit, AUTHORED_BLEND_MODES,
+    blend_mode_label, blend_mode_qa_key, blend_mode_searchable_items,
+    connection_supports_authored_blend, create_operation_node_for_request,
+    editable_wire_is_current, editable_wire_stable_key, non_selectable_label, qa_container_key,
+    wire_order_menu_state, wire_order_qa_metadata, wire_splice_menu_items, NodeEdit,
+    QueuedNodeEdit,
 };
 
 pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
@@ -197,53 +198,45 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
                         Some(serde_json::json!({
                             "connection_id": connection_id,
                             "authored_blend_mode": blend_mode_qa_key(connection.blend_mode),
-                            "runtime_note": "The first produced Merge layer composites as Normal; the wire keeps its authored blend.",
+                            "runtime_note": "Only modes equivalent over an empty backdrop may render the first produced layer as Normal; Clear and Dissolve retain authored semantics.",
                         })),
                     );
-                    for blend_mode in AUTHORED_BLEND_MODES {
-                        let selected = blend_mode == connection.blend_mode;
-                        let blend = ui
-                            .add_enabled(
-                                !selected,
-                                egui::Button::selectable(
-                                    selected,
-                                    format!("Blend · {}", blend_mode_label(blend_mode)),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text(
-                                "Authored on this wire. The first produced runtime layer may composite as Normal.",
-                            );
-                        crate::qa::register_component_with_metadata(
-                            format!(
+                    let mut blend_items = blend_mode_searchable_items(connection.blend_mode);
+                    for item in &mut blend_items {
+                            let blend_mode = item.value;
+                            let selected = !item.enabled;
+                            item.qa_id = Some(format!(
                                 "node_editor.wire_menu.blend.{}:{connection_id}",
                                 blend_mode_qa_key(blend_mode)
-                            ),
-                            "node_editor_menu_item",
-                            blend.rect,
-                            blend.enabled(),
-                            Some(serde_json::json!({
+                            ));
+                            item.qa_metadata = Some(serde_json::json!({
                                 "action": "set_authored_blend",
                                 "connection_id": connection_id,
                                 "blend_mode": blend_mode_qa_key(blend_mode),
+                                "blend_group": blend_mode.group().qa_key(),
                                 "selected": selected,
-                                "runtime_first_produced_may_be_normal": true,
-                            })),
-                        );
-                        if blend.clicked() {
-                            edit = Some(QueuedNodeEdit::Atomic(
-                                NodeEdit::SetConnectionBlendMode {
-                                    connection_id,
-                                    blend_mode,
-                                },
-                            ));
-                            should_close = true;
-                        }
+                                "runtime_first_produced_may_be_normal": blend_mode
+                                    .can_optimize_empty_backdrop_to_normal(),
+                            }));
+                    }
+                    if let Some(blend_mode) = show_searchable_items_with_qa(
+                        ui,
+                        &format!("wire_blend_menu:{connection_id}"),
+                        Some(&format!(
+                            "node_editor.wire_menu.blend_search:{connection_id}"
+                        )),
+                        &blend_items,
+                    ) {
+                        edit = Some(QueuedNodeEdit::Atomic(NodeEdit::SetConnectionBlendMode {
+                            connection_id,
+                            blend_mode,
+                        }));
+                        should_close = true;
                     }
                     non_selectable_label(
                         ui,
                         egui::RichText::new(
-                            "Runtime: first produced Merge layer composites as Normal",
+                            "Runtime: Clear and Dissolve retain first-layer semantics",
                         )
                         .small()
                         .weak(),
@@ -309,7 +302,8 @@ pub(in crate::ui::panels::node_editor) fn show_wire_context_menu(
             "authored_blend": {
                 "available": authored_blend_available,
                 "mode": authored_blend_available.then(|| blend_mode_qa_key(connection.blend_mode)),
-                "runtime_first_produced_may_be_normal": authored_blend_available,
+                "runtime_first_produced_may_be_normal": authored_blend_available
+                    && connection.blend_mode.can_optimize_empty_backdrop_to_normal(),
             },
         })),
     );

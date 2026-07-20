@@ -6,6 +6,7 @@ use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
 use crate::model::frame::runtime_shape::{
     evaluate_text_element_transforms, transformed_text_element_bounds,
 };
+use crate::rendering::blend::BlendRuntime;
 use crate::rendering::renderer::{
     Affine2D, RenderOutput, Renderer, ShapeRasterRequest, TextRasterRequest, TextureInfo,
 };
@@ -22,7 +23,7 @@ use skia_safe::trim_path_effect::Mode;
 
 use skia_safe::{
     AlphaType, Canvas, Color as SkColor, ColorType, CubicResampler, ISize, ImageInfo, Matrix,
-    Paint, PaintStyle, Point, SamplingOptions, Surface,
+    Paint, PaintStyle, Point, Rect, SamplingOptions, Surface,
 };
 
 pub struct SkiaRenderer {
@@ -31,6 +32,7 @@ pub struct SkiaRenderer {
     background_color: Color,
     surface: Surface,
     group_surfaces: Vec<GroupSurface>,
+    blend_runtime: BlendRuntime,
     gpu_context: Option<GpuContext>,
     sharing_handle: Option<usize>,
     sharing_hwnd: Option<isize>,
@@ -234,6 +236,7 @@ impl SkiaRenderer {
             background_color,
             surface,
             group_surfaces: Vec::new(),
+            blend_runtime: BlendRuntime::new(),
             gpu_context,
             sharing_handle: None,
             sharing_hwnd: None,
@@ -796,16 +799,6 @@ fn apply_path_effects(path_effects: &[PathEffect], paint: &mut Paint) -> Result<
     Ok(())
 }
 
-fn to_skia_blend_mode(blend_mode: crate::model::BlendMode) -> skia_safe::BlendMode {
-    match blend_mode {
-        crate::model::BlendMode::Normal => skia_safe::BlendMode::SrcOver,
-        crate::model::BlendMode::Add => skia_safe::BlendMode::Plus,
-        crate::model::BlendMode::Multiply => skia_safe::BlendMode::Multiply,
-        crate::model::BlendMode::Screen => skia_safe::BlendMode::Screen,
-        crate::model::BlendMode::Overlay => skia_safe::BlendMode::Overlay,
-    }
-}
-
 impl Renderer for SkiaRenderer {
     fn draw_layer_affine_with_blend(
         &mut self,
@@ -834,30 +827,50 @@ impl Renderer for SkiaRenderer {
             }
         };
 
+        let matrix = build_transform_matrix(transform);
+        let mut paint = Paint::default();
+        paint.set_anti_alias(true);
+        let identity = *transform == Affine2D::IDENTITY;
+        let sampling = if identity {
+            SamplingOptions::default()
+        } else {
+            SamplingOptions::from(CubicResampler::mitchell())
+        };
+        let dissolve = if blend_mode == crate::model::BlendMode::Dissolve {
+            let shader = self.blend_runtime.dissolve_shader(
+                &src_image,
+                sampling,
+                opacity.clamp(0.0, 1.0) as f32,
+            )?;
+            paint.set_shader(shader);
+            paint.set_blend_mode(skia_safe::BlendMode::SrcOver);
+            true
+        } else {
+            paint.set_alpha_f(opacity.clamp(0.0, 1.0) as f32);
+            self.blend_runtime.configure_paint(&mut paint, blend_mode)?;
+            false
+        };
+
         let canvas: &Canvas = if let Some(group) = self.group_surfaces.last_mut() {
             group.surface.canvas()
         } else {
             self.surface.canvas()
         };
 
-        let matrix = build_transform_matrix(transform);
-
         canvas.save();
         canvas.concat(&matrix);
 
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_alpha_f(opacity.clamp(0.0, 1.0) as f32);
-        paint.set_blend_mode(to_skia_blend_mode(blend_mode));
-
-        if *transform == Affine2D::IDENTITY {
+        if dissolve {
+            canvas.draw_rect(
+                Rect::from_wh(src_image.width() as f32, src_image.height() as f32),
+                &paint,
+            );
+        } else if identity {
             // Pixel-aligned transient layers already have final-target
             // resolution. Filtering an identity copy would soften the same
             // edge once per isolated Node/Clip/Track container.
             canvas.draw_image(&src_image, (0, 0), Some(&paint));
         } else {
-            let cubic_resampler = CubicResampler::mitchell();
-            let sampling = SamplingOptions::from(cubic_resampler);
             canvas.draw_image_with_sampling_options(&src_image, (0, 0), sampling, Some(&paint));
         }
 

@@ -138,6 +138,10 @@ pub(in crate::ui::panels::node_editor) fn register_rendered_edges(
                 authored_blend_mode: authored_blend_available
                     .then(|| blend_mode_qa_key(connection.blend_mode)),
                 authored_blend_available,
+                runtime_first_produced_may_be_normal: authored_blend_available
+                    && connection
+                        .blend_mode
+                        .can_optimize_empty_backdrop_to_normal(),
             },
             &ports,
             canvas_clip,
@@ -425,7 +429,8 @@ pub(in crate::ui::panels::node_editor) fn register_edge_component(
             "layer_count": edge.layer_count,
             "authored_blend_mode": edge.authored_blend_mode,
             "authored_blend_available": edge.authored_blend_available,
-            "runtime_first_produced_may_be_normal": edge.authored_blend_available,
+            "runtime_first_produced_may_be_normal": edge
+                .runtime_first_produced_may_be_normal,
             "physical_variadic_endpoint": exact_connection_id.is_some(),
             "unclipped_rect": qa_rect_metadata(unclipped_bbox),
             "hit_point": {"x": midpoint.x, "y": midpoint.y},

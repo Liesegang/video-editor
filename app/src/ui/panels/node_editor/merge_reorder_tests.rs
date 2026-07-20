@@ -85,7 +85,7 @@ fn three_layer_fixture() -> (Project, Uuid, Uuid, [Uuid; 3], [Uuid; 3]) {
         }
     }
     assert!(project
-        .set_connection_blend_mode(connection_ids[0], BlendMode::Add)
+        .set_connection_blend_mode(connection_ids[0], BlendMode::LinearDodge)
         .is_ok());
     assert!(project
         .set_connection_blend_mode(connection_ids[1], BlendMode::Multiply)

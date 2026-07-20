@@ -1,3 +1,6 @@
+mod blend;
+#[cfg(test)]
+mod blend_tests;
 pub mod render_server;
 pub mod renderer;
 pub mod shader_utils;

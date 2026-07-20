@@ -124,6 +124,7 @@ pub(in crate::ui::panels::node_editor) struct EdgeComponent<'a> {
     pub(in crate::ui::panels::node_editor) physical_merge_target: bool,
     pub(in crate::ui::panels::node_editor) authored_blend_mode: Option<&'static str>,
     pub(in crate::ui::panels::node_editor) authored_blend_available: bool,
+    pub(in crate::ui::panels::node_editor) runtime_first_produced_may_be_normal: bool,
 }
 
 #[derive(Clone, Copy)]

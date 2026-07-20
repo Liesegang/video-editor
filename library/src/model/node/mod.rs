@@ -1,3 +1,4 @@
+use crate::model::blend::BlendMode;
 use crate::model::numeric::NumericBinaryOperation;
 use crate::model::project::connection::{
     FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, NUMBER_RESULT_OUTPUT_PORT, NUMERIC_A_INPUT_PORT,
@@ -185,16 +186,6 @@ static DIVIDE_VALUE_DESCRIPTOR: ValueOperationDescriptor = ValueOperationDescrip
     property_definitions: divide_property_definitions,
     port_definitions: basic_numeric_port_definitions,
 };
-
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
-pub enum BlendMode {
-    #[default]
-    Normal,
-    Add,
-    Multiply,
-    Screen,
-    Overlay,
-}
 
 /// A leaf graph node. It owns media/generator/composition-instance behavior and render
 /// properties, but never timeline timing or containment.

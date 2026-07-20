@@ -164,15 +164,15 @@ use commands::{
 };
 #[cfg(test)]
 use commands::{insert_node_on_connection, splice_existing_node_on_connection};
-#[cfg(test)]
-use components::WireOrderMenuState;
 use components::{
-    blend_mode_label, blend_mode_qa_key, connection_supports_authored_blend,
-    merge_images_target_node_id, merge_input_index_for_connection, merge_input_slots,
-    merge_layer_rows, register_merge_layer_component, register_merge_layer_popup_component,
-    wire_order_menu_state, wire_order_menu_states, wire_order_qa_metadata, MergeInputSlot,
-    MergeInputSlotRole, AUTHORED_BLEND_MODES,
+    blend_mode_label, blend_mode_qa_key, blend_mode_searchable_items,
+    connection_supports_authored_blend, merge_images_target_node_id,
+    merge_input_index_for_connection, merge_input_slots, merge_layer_rows,
+    register_merge_layer_component, wire_order_menu_state, wire_order_menu_states,
+    wire_order_qa_metadata, MergeInputSlot, MergeInputSlotRole,
 };
+#[cfg(test)]
+use components::{register_merge_layer_popup_component, WireOrderMenuState};
 use graph_build::{build_snarl, container_visual};
 use interaction::show_wire_context_menu;
 #[cfg(test)]
@@ -2967,7 +2967,7 @@ mod tests {
             &mut project,
             vec![QueuedNodeEdit::Atomic(NodeEdit::SetConnectionBlendMode {
                 connection_id: time_connection.id,
-                blend_mode: BlendMode::Add,
+                blend_mode: BlendMode::LinearDodge,
             })],
             &mut no_op_history,
             &mut state,
@@ -2991,7 +2991,7 @@ mod tests {
             .expect("fixture Merge connection")
             .id;
         project
-            .set_connection_blend_mode(first_connection_id, BlendMode::Add)
+            .set_connection_blend_mode(first_connection_id, BlendMode::LinearDodge)
             .expect("first wire Add");
 
         let mut middle = generator_node(
@@ -3066,7 +3066,7 @@ mod tests {
                     first_connection_id,
                     0,
                     0,
-                    BlendMode::Add,
+                    BlendMode::LinearDodge,
                     PortOwner::Node(solid_id),
                     "Node · Solid",
                 ),
@@ -3093,7 +3093,7 @@ mod tests {
         }));
 
         let estimated = estimated_node_size(&project, merge_id);
-        assert_eq!(estimated.x, 506.0);
+        assert_eq!(estimated.x, 518.0);
         assert_eq!(estimated.x, estimated_merge_node_width());
         assert_eq!(estimated_node_size(&project, solid_id).x, 462.0);
         assert_eq!(estimated_node_width(), 462.0);
@@ -3103,7 +3103,13 @@ mod tests {
         let rendered_merge = rects
             .get(&format!("node_editor.node:{merge_id}"))
             .expect("rendered Merge card");
-        assert!(rendered_merge.width() <= estimated.x * rendered_transform.scaling + 1.0);
+        assert!(
+            rendered_merge.width() <= estimated.x * rendered_transform.scaling + 1.0,
+            "rendered Merge width {} exceeds estimate {} at scale {}",
+            rendered_merge.width(),
+            estimated.x,
+            rendered_transform.scaling,
+        );
         assert!(rendered_merge.height() <= estimated.y * rendered_transform.scaling + 1.0);
         let port_rects = [
             qa_port_id(
@@ -3204,11 +3210,11 @@ mod tests {
             };
             drop(context.run(raw_input, |context| {
                 egui::Area::new(egui::Id::new("merge-popup-edge-test"))
-                    .fixed_pos(egui::pos2(80.0, 128.0))
+                    .fixed_pos(egui::pos2(80.0, 370.0))
                     .show(context, |ui| {
                         // This mimics a selector still inside the Node Editor at
-                        // its top edge. The ComboBox popup is a foreground Area
-                        // and is therefore allowed to extend above it.
+                        // its bottom edge. The ComboBox popup is a foreground
+                        // Area and is therefore allowed to extend above it.
                         ui.set_clip_rect(canvas_clip);
                         selector_rect = egui::ComboBox::from_id_salt((
                             "merge-popup-edge-combo",
@@ -3218,7 +3224,10 @@ mod tests {
                         .selected_text(blend_mode_label(*selected_blend))
                         .width(178.0)
                         .show_ui(ui, |ui| {
-                            for blend_mode in AUTHORED_BLEND_MODES {
+                            // The complete catalog is covered independently;
+                            // two choices keep this geometry harness focused on
+                            // real popup clipping and coordinate interaction.
+                            for blend_mode in [BlendMode::Normal, BlendMode::Overlay] {
                                 let selected = blend_mode == *selected_blend;
                                 let option = ui.add_enabled(
                                     !selected,
@@ -3259,7 +3268,7 @@ mod tests {
         let context = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 400.0));
         let canvas_clip =
-            egui::Rect::from_min_max(egui::pos2(20.0, 120.0), egui::pos2(420.0, 300.0));
+            egui::Rect::from_min_max(egui::pos2(20.0, 360.0), egui::pos2(420.0, 395.0));
         let merge_id = Uuid::from_u128(0xface);
         let connection_id = Uuid::from_u128(0xcafe);
         let option_id = format!("node_editor.merge_layer.blend.overlay:{merge_id}:{connection_id}");
@@ -4844,6 +4853,7 @@ mod tests {
                         physical_merge_target: false,
                         authored_blend_mode: None,
                         authored_blend_available: false,
+                        runtime_first_produced_may_be_normal: false,
                     },
                     &ports,
                     canvas,

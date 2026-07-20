@@ -867,7 +867,11 @@ impl<'a> FrameEvaluator<'a> {
                 EvalOutput::NoOutput => continue,
             };
             neutralize_root_blend(&mut source);
-            let blend_mode = if items.is_empty() {
+            let blend_mode = if items.is_empty()
+                && connection
+                    .blend_mode
+                    .can_optimize_empty_backdrop_to_normal()
+            {
                 crate::model::BlendMode::Normal
             } else {
                 connection.blend_mode

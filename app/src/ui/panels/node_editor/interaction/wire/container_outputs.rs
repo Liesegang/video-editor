@@ -127,6 +127,7 @@ fn register_typed_sources(
                 physical_merge_target: false,
                 authored_blend_mode: None,
                 authored_blend_available: false,
+                runtime_first_produced_may_be_normal: false,
             },
             ports,
             canvas_clip,

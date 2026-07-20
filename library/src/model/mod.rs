@@ -1,4 +1,5 @@
 pub mod animation;
+mod blend;
 pub mod frame;
 pub mod node;
 pub(crate) mod numeric;
@@ -7,8 +8,9 @@ pub mod project;
 mod python_expression;
 pub mod vector;
 
+pub use blend::{BlendMode, BlendModeGroup, BlendModeInfo};
 pub use node::{
-    BlendMode, Clip, CompositionInstanceContent, GeneratorContent, MediaContent, Node, NodeContent,
+    Clip, CompositionInstanceContent, GeneratorContent, MediaContent, Node, NodeContent,
     PluginOperationContent, Track, ValueContent,
 };
 pub use project::asset::{self, Asset, AssetKind};

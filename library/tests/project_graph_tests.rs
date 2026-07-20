@@ -312,7 +312,7 @@ fn wire_blend_is_required_and_distinct_fanout_values_roundtrip_losslessly() -> R
         source,
         address(PortOwner::Node(second_merge_id), MERGE_IMAGES_PORT),
     )?;
-    project.set_connection_blend_mode(first_wire, BlendMode::Add)?;
+    project.set_connection_blend_mode(first_wire, BlendMode::LinearDodge)?;
     project.set_connection_blend_mode(second_wire, BlendMode::Multiply)?;
 
     let json = project.save()?;
@@ -328,7 +328,7 @@ fn wire_blend_is_required_and_distinct_fanout_values_roundtrip_losslessly() -> R
             .as_str()
             .context("serialized blend mode must be a string")
     };
-    assert_eq!(serialized_blend(first_wire)?, "Add");
+    assert_eq!(serialized_blend(first_wire)?, "LinearDodge");
     assert_eq!(serialized_blend(second_wire)?, "Multiply");
     assert_eq!(Project::load(&json)?, project);
 
@@ -350,6 +350,48 @@ fn wire_blend_is_required_and_distinct_fanout_values_roundtrip_losslessly() -> R
         error.to_string().contains("missing field `blend_mode`"),
         "pre-v1 Projects with an old connection shape must be rejected explicitly: {error}",
     );
+    Ok(())
+}
+
+#[test]
+fn all_29_merge_connection_modes_roundtrip_in_authoritative_order() -> Result<()> {
+    let (mut project, _composition_id, track_id) = project_with_composition();
+    let clip_id = add_clip(&mut project, track_id, "complete blend catalog")?;
+    let merge_id = add_node(
+        &mut project,
+        NodeContainer::Clip(clip_id),
+        Node::new_merge("all modes"),
+    )?;
+    let mut connection_ids = Vec::new();
+    for (index, mode) in BlendMode::ALL.into_iter().enumerate() {
+        let source_id = add_node(
+            &mut project,
+            NodeContainer::Clip(clip_id),
+            solid_node(&format!("source {index}")),
+        )?;
+        let connection_id = project.connect_ports(
+            address(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+            address(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+        )?;
+        project.set_connection_blend_mode(connection_id, mode)?;
+        connection_ids.push(connection_id);
+    }
+
+    let json = project.save()?;
+    assert!(!json.contains(r#""blend_mode":"Add""#));
+    let loaded = Project::load(&json)?;
+    let loaded_modes = connection_ids
+        .iter()
+        .map(|id| {
+            loaded
+                .connections
+                .iter()
+                .find(|connection| connection.id == *id)
+                .context("roundtripped Merge connection must exist")
+                .map(|connection| connection.blend_mode)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(loaded_modes, BlendMode::ALL);
     Ok(())
 }
 
@@ -2237,6 +2279,53 @@ fn merge_order_and_wire_blend_change_real_pixels_without_reading_source_blend() 
 }
 
 #[test]
+fn merge_first_produced_layer_preserves_clear_and_dissolve_only() -> Result<()> {
+    let (mut project, _composition_id, track_id) = project_with_composition();
+    let clip_id = add_clip(&mut project, track_id, "special first layer")?;
+    let source_id = add_node(
+        &mut project,
+        NodeContainer::Clip(clip_id),
+        colored_solid_node(
+            "source",
+            Color {
+                r: 190,
+                g: 60,
+                b: 20,
+                a: 128,
+            },
+        ),
+    )?;
+    let merge_id = add_node(
+        &mut project,
+        NodeContainer::Clip(clip_id),
+        Node::new_merge("merge"),
+    )?;
+    project
+        .set_output_node(NodeContainer::Clip(clip_id), Some(merge_id))
+        .map_err(|error| anyhow!(error))?;
+    let connection_id = project.connect_ports(
+        address(PortOwner::Node(source_id), IMAGE_OUTPUT_PORT),
+        address(PortOwner::Node(merge_id), MERGE_IMAGES_PORT),
+    )?;
+
+    for (authored, runtime) in [
+        (BlendMode::Clear, BlendMode::Clear),
+        (BlendMode::Dissolve, BlendMode::Dissolve),
+        (BlendMode::LinearBurn, BlendMode::Normal),
+    ] {
+        project.set_connection_blend_mode(connection_id, authored)?;
+        let rendered = frame(&project, 0)?;
+        let merge = find_group(&rendered.items, merge_id).context("Merge group must render")?;
+        let FrameItem::Group(wrapper) = &merge.items[0] else {
+            bail!("Merge input must remain isolated");
+        };
+        assert_eq!(wrapper.source_id, connection_id);
+        assert_eq!(wrapper.blend_mode, runtime, "authored {authored:?}");
+    }
+    Ok(())
+}
+
+#[test]
 fn composition_instance_materializes_an_empty_target_as_its_opaque_background() -> Result<()> {
     let (mut project, _parent_id, parent_track_id) = project_with_composition();
     let (mut nested, nested_track) = Composition::new("empty nested", 640, 360, 24.0, 2.0);
@@ -2383,7 +2472,7 @@ fn merge_skips_a_disabled_first_input_and_normalizes_the_first_produced_wire_at_
         address(PortOwner::Clip(active_clip_id), IMAGE_OUTPUT_PORT),
         target,
     )?;
-    project.set_connection_blend_mode(inactive_connection_id, BlendMode::Add)?;
+    project.set_connection_blend_mode(inactive_connection_id, BlendMode::LinearDodge)?;
     project.set_connection_blend_mode(active_connection_id, BlendMode::Screen)?;
 
     let project_before_render = project.clone();
@@ -2412,7 +2501,7 @@ fn merge_skips_a_disabled_first_input_and_normalizes_the_first_produced_wire_at_
             .find(|connection| connection.id == inactive_connection_id)
             .context("inactive connection must exist")?
             .blend_mode,
-        BlendMode::Add,
+        BlendMode::LinearDodge,
     );
     assert_eq!(
         project
@@ -2745,7 +2834,11 @@ fn reverse_stored_duplicate_merge_project() -> Result<(Project, PortAddress, [Uu
     )?;
     let target = address(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
     let ids = [Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)];
-    let blends = [BlendMode::Add, BlendMode::Multiply, BlendMode::Screen];
+    let blends = [
+        BlendMode::LinearDodge,
+        BlendMode::Multiply,
+        BlendMode::Screen,
+    ];
     let mut connections = sources
         .into_iter()
         .zip(ids)

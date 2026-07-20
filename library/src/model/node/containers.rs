@@ -1,4 +1,4 @@
-use super::BlendMode;
+use crate::model::blend::BlendMode;
 use crate::model::project::property::{
     PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
 };
