@@ -191,7 +191,6 @@ use layout::{
     rects_are_closer_than,
 };
 type CreateAction = Box<dyn FnOnce(&mut Project) -> bool>;
-
 fn create_action_for_request(
     request: NodeCreateRequest,
     project_service: &EditorService,

@@ -41,6 +41,16 @@ pub(super) struct BlendRuntime {
     dissolve_effect: Option<RuntimeEffect>,
 }
 
+pub(super) fn with_restored_canvas<T, E>(
+    canvas: &Canvas,
+    draw: impl FnOnce(&Canvas) -> Result<T, E>,
+) -> Result<T, E> {
+    canvas.save();
+    let result = draw(canvas);
+    canvas.restore();
+    result
+}
+
 impl BlendRuntime {
     pub(super) fn new() -> Self {
         Self {
@@ -283,12 +293,13 @@ half4 main(half4 source_pm, half4 base_pm) {{
 
 #[cfg(test)]
 mod tests {
-    use super::{BlendRuntime, custom_formula, native_blend_mode};
+    use super::{BlendRuntime, custom_formula, native_blend_mode, with_restored_canvas};
     use crate::model::BlendMode;
-    use skia_safe::Paint;
+    use skia_safe::{Paint, surfaces};
 
     #[test]
-    fn every_non_dissolve_mode_has_exactly_one_paint_implementation() {
+    fn every_non_dissolve_mode_has_exactly_one_paint_implementation()
+    -> Result<(), crate::error::LibraryError> {
         let mut runtime = BlendRuntime::new();
         for mode in BlendMode::ALL {
             if mode == BlendMode::Dissolve {
@@ -298,10 +309,24 @@ mod tests {
                 native_blend_mode(mode).is_some(),
                 custom_formula(mode).is_some()
             );
-            runtime
-                .configure_paint(&mut Paint::default(), mode)
-                .unwrap();
+            runtime.configure_paint(&mut Paint::default(), mode)?;
         }
         assert_eq!(runtime.custom_blenders.len(), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn saved_canvas_is_restored_before_a_draw_error_propagates() -> Result<(), &'static str> {
+        let mut surface =
+            surfaces::raster_n32_premul((2, 2)).ok_or("test raster surface unavailable")?;
+        let canvas = surface.canvas();
+        let initial_save_count = canvas.save_count();
+        let result: Result<(), &'static str> = with_restored_canvas(canvas, |canvas| {
+            canvas.translate((7.0, 9.0));
+            Err("injected draw failure")
+        });
+        assert_eq!(result, Err("injected draw failure"));
+        assert_eq!(canvas.save_count(), initial_save_count);
+        Ok(())
     }
 }

@@ -2745,11 +2745,8 @@ fn reverse_stored_duplicate_merge_project() -> Result<(Project, PortAddress, [Uu
     )?;
     let target = address(PortOwner::Node(merge_id), MERGE_IMAGES_PORT);
     let ids = [Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)];
-    let blends = [
-        BlendMode::LinearDodge,
-        BlendMode::Multiply,
-        BlendMode::Screen,
-    ];
+    use BlendMode::{LinearDodge, Multiply, Screen};
+    let blends = [LinearDodge, Multiply, Screen];
     let mut connections = sources
         .into_iter()
         .zip(ids)
@@ -2776,7 +2773,6 @@ fn reorder_duplicate_variadic_orders_uses_uuid_visible_order_and_preserves_wires
     let persisted = project.save()?;
     let mut project = Project::load(&persisted)?;
     let original_connections = project.connections.clone();
-
     assert_eq!(
         project
             .connections

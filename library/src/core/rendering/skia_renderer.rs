@@ -6,7 +6,7 @@ use crate::model::frame::draw_type::{CapType, DrawStyle, JoinType, PathEffect};
 use crate::model::frame::runtime_shape::{
     evaluate_text_element_transforms, transformed_text_element_bounds,
 };
-use crate::rendering::blend::BlendRuntime;
+use crate::rendering::blend::{BlendRuntime, with_restored_canvas};
 use crate::rendering::renderer::{
     Affine2D, RenderOutput, Renderer, ShapeRasterRequest, TextRasterRequest, TextureInfo,
 };
@@ -841,17 +841,17 @@ impl Renderer for SkiaRenderer {
             self.surface.canvas()
         };
 
-        canvas.save();
-        canvas.concat(&matrix);
-        blend_runtime.draw_image(
-            canvas,
-            &src_image,
-            sampling,
-            identity,
-            opacity.clamp(0.0, 1.0) as f32,
-            blend_mode,
-        )?;
-        canvas.restore();
+        with_restored_canvas(canvas, |canvas| {
+            canvas.concat(&matrix);
+            blend_runtime.draw_image(
+                canvas,
+                &src_image,
+                sampling,
+                identity,
+                opacity.clamp(0.0, 1.0) as f32,
+                blend_mode,
+            )
+        })?;
 
         Ok(())
     }
