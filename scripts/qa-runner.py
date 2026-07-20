@@ -88,6 +88,7 @@ def suite_specs(mode: str) -> tuple[SuiteSpec, ...]:
             SuiteSpec("node-wire", "qa-e2e.py", ("--suite", "node-wire")),
             SuiteSpec("node-wire-selection", "qa-wire-selection-e2e.py"),
             SuiteSpec("preview", "qa-preview-e2e.py"),
+            SuiteSpec("preview-trackpad", "qa-preview-trackpad-e2e.py"),
             SuiteSpec(
                 "transform-preview",
                 "qa-transform-preview-e2e.py",

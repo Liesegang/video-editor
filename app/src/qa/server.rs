@@ -1,7 +1,7 @@
 use super::capture::{CaptureLookup, CapturePhase, CaptureRequestError, CaptureStore};
 use super::input::{
-    ActionPhase, ActionTracker, DragRequest, InputAction, InputCommand, KeyRequest, PointerRequest,
-    ScrollRequest, TextRequest,
+    ActionPhase, ActionTracker, DragRequest, InputAction, InputCommand, KeyRequest, PinchRequest,
+    PointerRequest, ScrollRequest, TextRequest,
 };
 use super::registry;
 use super::state::StateQuery;
@@ -498,6 +498,9 @@ fn route(
                 .map_err(|error| format!("invalid JSON body: {error}")),
             "/v1/input/scroll" => serde_json::from_slice::<ScrollRequest>(&request.body)
                 .map(InputAction::Scroll)
+                .map_err(|error| format!("invalid JSON body: {error}")),
+            "/v1/input/pinch" => serde_json::from_slice::<PinchRequest>(&request.body)
+                .map(InputAction::Pinch)
                 .map_err(|error| format!("invalid JSON body: {error}")),
             _ => return HttpResponse::json(404, json!({"error": "endpoint not found"})),
         }

@@ -142,6 +142,18 @@ pub fn snapshot(
                     "{:?}",
                     editor_context.interaction.preview_viewport.primary_gesture
                 ),
+                "is_moving_selected_entity": editor_context.interaction.is_moving_selected_entity,
+                "selection_drag_active": editor_context
+                    .interaction
+                    .preview_selection_drag_start
+                    .is_some(),
+                "body_drag_active": editor_context.interaction.body_drag_state.is_some(),
+                "gizmo_active": editor_context.interaction.gizmo_state.is_some(),
+                "vector_handle_active": editor_context
+                    .interaction
+                    .vector_editor_state
+                    .as_ref()
+                    .is_some_and(|state| state.selected_handle.is_some()),
                 "edit_target": editor_context.interaction.preview_edit_target.as_ref().map(|target| {
                     serde_json::json!({
                         "owner": target.owner,

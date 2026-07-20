@@ -167,6 +167,18 @@ pub struct ScrollRequest {
     pub modifiers: QaModifiers,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct PinchRequest {
+    pub x: f32,
+    pub y: f32,
+    /// Multiplicative native zoom factor (`1.0` means no change).
+    pub factor: f32,
+    #[serde(default)]
+    pub coordinate_space: CoordinateSpace,
+    #[serde(default)]
+    pub modifiers: QaModifiers,
+}
+
 #[derive(Clone, Debug)]
 pub enum InputAction {
     Move(PointerRequest),
@@ -178,6 +190,7 @@ pub enum InputAction {
     Key(KeyRequest),
     Text(TextRequest),
     Scroll(ScrollRequest),
+    Pinch(PinchRequest),
 }
 
 impl InputAction {
@@ -221,6 +234,15 @@ impl InputAction {
                 } else {
                     Err("scroll coordinates and deltas must be finite numbers")
                 }
+            }
+            Self::Pinch(request) => {
+                if !request.x.is_finite() || !request.y.is_finite() {
+                    return Err("pinch coordinates must be finite numbers");
+                }
+                if !request.factor.is_finite() || !(0.01..=100.0).contains(&request.factor) {
+                    return Err("pinch factor must be between 0.01 and 100");
+                }
+                Ok(())
             }
         }
     }
@@ -497,6 +519,20 @@ fn build_steps(command: InputCommand, pixels_per_point: f32) -> Vec<FrameStep> {
                         delta: egui::vec2(request.delta_x, request.delta_y),
                         modifiers: request.modifiers.into(),
                     },
+                ],
+                request.modifiers,
+            );
+        }
+        InputAction::Pinch(request) => {
+            let position = QaPoint {
+                x: request.x,
+                y: request.y,
+            }
+            .to_points(request.coordinate_space, pixels_per_point);
+            push(
+                vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::Zoom(request.factor),
                 ],
                 request.modifiers,
             );
@@ -895,5 +931,48 @@ mod tests {
         ));
         assert!(steps[0].modifiers.command);
         assert!(steps[0].final_step);
+    }
+
+    #[test]
+    fn pinch_moves_the_pointer_and_injects_a_real_zoom_event() {
+        let action = InputAction::Pinch(PinchRequest {
+            x: 80.0,
+            y: 60.0,
+            factor: 1.25,
+            coordinate_space: CoordinateSpace::Pixels,
+            modifiers: shift_command_modifiers(),
+        });
+        assert!(action.validate().is_ok());
+        let steps = build_steps(InputCommand { id: 13, action }, 2.0);
+        assert!(matches!(
+            steps[0].events.as_slice(),
+            [egui::Event::PointerMoved(pos), egui::Event::Zoom(factor)]
+                if *pos == egui::pos2(40.0, 30.0) && *factor == 1.25
+        ));
+        assert!(steps[0].modifiers.command);
+        assert!(steps[0].final_step);
+    }
+
+    #[test]
+    fn pinch_rejects_non_finite_coordinates_and_unbounded_factors() {
+        let request = |x, factor| {
+            InputAction::Pinch(PinchRequest {
+                x,
+                y: 60.0,
+                factor,
+                coordinate_space: CoordinateSpace::Points,
+                modifiers: QaModifiers::default(),
+            })
+        };
+        assert_eq!(
+            request(f32::NAN, 1.0).validate(),
+            Err("pinch coordinates must be finite numbers")
+        );
+        for factor in [f32::NAN, 0.0, 0.009, 100.1] {
+            assert_eq!(
+                request(80.0, factor).validate(),
+                Err("pinch factor must be between 0.01 and 100")
+            );
+        }
     }
 }
