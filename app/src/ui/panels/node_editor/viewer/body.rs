@@ -1,0 +1,650 @@
+use super::ProjectNodeViewer;
+use crate::ui::panels::node_editor::*;
+use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
+use eframe::egui::{self, Color32};
+use library::model::project::PortOwner;
+use library::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
+use ordered_float::OrderedFloat;
+use uuid::Uuid;
+
+impl ProjectNodeViewer<'_> {
+    pub(super) fn show_merge_layers(&mut self, merge_id: Uuid, ui: &mut egui::Ui) {
+        let rows = merge_layer_rows(self.project, merge_id);
+        let to_global = *self.to_global;
+        let canvas_clip = *self.canvas_clip;
+        let header = non_selectable_label(
+            ui,
+            egui::RichText::new("Layers · Back → Front")
+                .small()
+                .strong(),
+        )
+        .on_hover_text("Each row is one authored Merge input wire.");
+        register_merge_layer_component(
+            format!("node_editor.merge_layers.header:{merge_id}"),
+            "node_editor_merge_layers_header",
+            header.rect,
+            true,
+            to_global,
+            canvas_clip,
+            serde_json::json!({
+                "merge_id": merge_id,
+                "layer_count": rows.len(),
+                "order_semantics": "back_to_front",
+                "blend_ownership": "connection",
+            }),
+        );
+
+        if rows.is_empty() {
+            let empty = non_selectable_label(
+                ui,
+                egui::RichText::new("No image inputs")
+                    .small()
+                    .color(Color32::from_gray(135)),
+            );
+            register_merge_layer_component(
+                format!("node_editor.merge_layers.empty:{merge_id}"),
+                "node_editor_merge_layers_empty",
+                empty.rect,
+                false,
+                to_global,
+                canvas_clip,
+                serde_json::json!({
+                    "merge_id": merge_id,
+                    "layer_count": 0,
+                    "order_semantics": "back_to_front",
+                }),
+            );
+            return;
+        }
+
+        for row in rows {
+            let mut selected_blend = None;
+            let mut requested_order = None;
+            let row_response = egui::Frame::new()
+                .inner_margin(egui::Margin::symmetric(7, 5))
+                .corner_radius(5)
+                .fill(Color32::from_black_alpha(32))
+                .show(ui, |ui| {
+                    ui.set_width(216.0);
+                    ui.horizontal(|ui| {
+                        non_selectable_label(
+                            ui,
+                            egui::RichText::new(format!(
+                                "{} / {}",
+                                row.back_to_front_index + 1,
+                                row.layer_count
+                            ))
+                            .small()
+                            .strong(),
+                        )
+                        .on_hover_text("Layer position in Back → Front order");
+                        bounded_non_selectable_label(
+                            ui,
+                            row.source_label.clone(),
+                            158.0,
+                            egui::Align::LEFT,
+                        )
+                        .on_hover_text(format!(
+                            "{} output · {}",
+                            row.source_label, row.source.port
+                        ));
+                    });
+
+                    ui.horizontal(|ui| {
+                        let combo = ui.add_enabled_ui(row.authored_blend_available, |ui| {
+                            egui::ComboBox::from_id_salt((
+                                "merge_layer_authored_blend",
+                                merge_id,
+                                row.connection_id,
+                            ))
+                            .selected_text(format!(
+                                "Wire · {}",
+                                blend_mode_label(row.authored_blend_mode)
+                            ))
+                            .width(178.0)
+                            .show_ui(ui, |ui| {
+                                for blend_mode in AUTHORED_BLEND_MODES {
+                                    let selected = blend_mode == row.authored_blend_mode;
+                                    let option = ui
+                                        .add_enabled(
+                                            !selected,
+                                            egui::Button::selectable(
+                                                selected,
+                                                blend_mode_label(blend_mode),
+                                            )
+                                            .frame(false),
+                                        )
+                                        .on_hover_text(
+                                            "Authored on this input wire, not on the Merge Node.",
+                                        );
+                                    register_merge_layer_popup_component(
+                                        format!(
+                                            "node_editor.merge_layer.blend.{}:{merge_id}:{}",
+                                            blend_mode_qa_key(blend_mode),
+                                            row.connection_id
+                                        ),
+                                        "node_editor_merge_layer_blend_option",
+                                        option.rect,
+                                        option.enabled(),
+                                        ui.clip_rect(),
+                                        row.qa_metadata(Some(serde_json::json!({
+                                            "action": "set_authored_blend",
+                                            "blend_mode": blend_mode_qa_key(blend_mode),
+                                            "selected": selected,
+                                        }))),
+                                    );
+                                    if option.clicked() {
+                                        selected_blend = Some(blend_mode);
+                                        ui.close();
+                                    }
+                                }
+                            })
+                            .response
+                        });
+                        let combo_response = combo.inner;
+                        register_merge_layer_component(
+                            format!(
+                                "node_editor.merge_layer.blend_select:{merge_id}:{}",
+                                row.connection_id
+                            ),
+                            "node_editor_merge_layer_blend_select",
+                            combo_response.rect,
+                            combo_response.enabled(),
+                            to_global,
+                            canvas_clip,
+                            row.qa_metadata(Some(serde_json::json!({
+                                "action": "open_authored_blend",
+                            }))),
+                        );
+                    });
+
+                    ui.horizontal(|ui| {
+                        let back_index = row.back_to_front_index.checked_sub(1);
+                        let back = ui
+                            .add_enabled(back_index.is_some(), egui::Button::new("← Back"))
+                            .on_hover_text("Move this wire one layer toward the back");
+                        register_merge_layer_component(
+                            format!(
+                                "node_editor.merge_layer.order_back:{merge_id}:{}",
+                                row.connection_id
+                            ),
+                            "node_editor_merge_layer_order_button",
+                            back.rect,
+                            back.enabled(),
+                            to_global,
+                            canvas_clip,
+                            row.qa_metadata(Some(serde_json::json!({
+                                "action": "reorder",
+                                "direction": "back",
+                                "target_back_to_front_index": back_index,
+                            }))),
+                        );
+                        if back.clicked() {
+                            requested_order = back_index;
+                        }
+
+                        let front_index = (row.back_to_front_index + 1 < row.layer_count)
+                            .then_some(row.back_to_front_index + 1);
+                        let front = ui
+                            .add_enabled(front_index.is_some(), egui::Button::new("Front →"))
+                            .on_hover_text("Move this wire one layer toward the front");
+                        register_merge_layer_component(
+                            format!(
+                                "node_editor.merge_layer.order_front:{merge_id}:{}",
+                                row.connection_id
+                            ),
+                            "node_editor_merge_layer_order_button",
+                            front.rect,
+                            front.enabled(),
+                            to_global,
+                            canvas_clip,
+                            row.qa_metadata(Some(serde_json::json!({
+                                "action": "reorder",
+                                "direction": "front",
+                                "target_back_to_front_index": front_index,
+                            }))),
+                        );
+                        if front.clicked() {
+                            requested_order = front_index;
+                        }
+                    });
+                })
+                .response;
+
+            register_merge_layer_component(
+                format!("node_editor.merge_layer:{merge_id}:{}", row.connection_id),
+                "node_editor_merge_layer",
+                row_response.rect,
+                true,
+                to_global,
+                canvas_clip,
+                row.qa_metadata(None),
+            );
+            if let Some(blend_mode) = selected_blend {
+                self.edits
+                    .push(QueuedNodeEdit::Atomic(NodeEdit::SetConnectionBlendMode {
+                        connection_id: row.connection_id,
+                        blend_mode,
+                    }));
+            }
+            if let Some(new_order) = requested_order {
+                self.edits
+                    .push(QueuedNodeEdit::Atomic(NodeEdit::ReorderConnection {
+                        connection_id: row.connection_id,
+                        new_order: new_order as i64,
+                    }));
+            }
+        }
+
+        let runtime_note = non_selectable_label(
+            ui,
+            egui::RichText::new(
+                "Runtime: first produced layer composites as Normal; authored wire modes remain.",
+            )
+            .small()
+            .weak(),
+        );
+        register_merge_layer_component(
+            format!("node_editor.merge_layers.runtime_note:{merge_id}"),
+            "node_editor_merge_layers_runtime_note",
+            runtime_note.rect,
+            false,
+            to_global,
+            canvas_clip,
+            serde_json::json!({
+                "merge_id": merge_id,
+                "runtime_first_produced_may_be_normal": true,
+                "authored_blend_ownership": "connection",
+            }),
+        );
+    }
+
+    pub(super) fn queue_continuous_edit(
+        &mut self,
+        owner: PortOwner,
+        key: impl Into<String>,
+        edit: Option<NodeEdit>,
+        finished: bool,
+    ) {
+        if edit.is_none() && !finished {
+            return;
+        }
+        self.edits.push(QueuedNodeEdit::Continuous {
+            pending: NodeEditorPendingEdit {
+                owner,
+                key: key.into(),
+            },
+            edit,
+            finished,
+        });
+    }
+
+    pub(super) fn show_node_input_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        node_id: Uuid,
+        definition: &PinDefinition,
+        property_key: &str,
+        property_definition: Option<&PropertyDefinition>,
+        connected: bool,
+    ) {
+        let property_time = node_property_time(self.project, node_id, self.current_time);
+        let evaluated = self
+            .project
+            .get_node(node_id)
+            .and_then(|node| node.properties().get(property_key))
+            .map(|property| {
+                evaluate_node_property(
+                    self.project,
+                    self.plugin_manager,
+                    node_id,
+                    property,
+                    property_time,
+                )
+            });
+        let value = evaluated
+            .as_ref()
+            .and_then(|evaluated| evaluated.value().cloned());
+        let current_value_metadata = value
+            .as_ref()
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null);
+        let row = ui.horizontal(|ui| {
+            bounded_non_selectable_label(ui, definition.name.clone(), 72.0, egui::Align::LEFT);
+            if connected {
+                non_selectable_label(
+                    ui,
+                    egui::RichText::new("linked")
+                        .small()
+                        .color(Color32::from_gray(145)),
+                );
+                return None;
+            }
+            if let Some(issue) = evaluated.as_ref().and_then(|evaluated| evaluated.issue()) {
+                render_node_property_issue(ui, node_id, property_key, issue);
+            }
+            let Some(mut value) = value else {
+                non_selectable_label(
+                    ui,
+                    egui::RichText::new("—")
+                        .small()
+                        .color(Color32::from_gray(105)),
+                );
+                return None;
+            };
+            let (changed, continuous, finished, control_kind, response) = match &mut value {
+                PropertyValue::Number(number) => {
+                    let response = if let Some(config) =
+                        property_definition.and_then(FloatDragValueConfig::from_definition)
+                    {
+                        ui.add_sized([74.0, PORT_ROW_HEIGHT - 2.0], config.widget(&mut number.0))
+                    } else {
+                        ui.add_sized(
+                            [74.0, PORT_ROW_HEIGHT - 2.0],
+                            egui::DragValue::new(&mut number.0).speed(0.05),
+                        )
+                    };
+                    (
+                        response.changed(),
+                        true,
+                        continuous_response_finished(ui, &response),
+                        "float",
+                        response,
+                    )
+                }
+                PropertyValue::Integer(integer) => {
+                    let config = property_definition.and_then(|definition| {
+                        IntegerDragValueConfig::from_ui_type(definition.ui_type())
+                    });
+                    let response = if let Some(config) = config {
+                        ui.add_sized([74.0, PORT_ROW_HEIGHT - 2.0], config.widget(integer))
+                    } else {
+                        ui.add_sized([74.0, PORT_ROW_HEIGHT - 2.0], egui::DragValue::new(integer))
+                    };
+                    (
+                        response.changed(),
+                        true,
+                        continuous_response_finished(ui, &response),
+                        "integer",
+                        response,
+                    )
+                }
+                PropertyValue::String(text) => {
+                    if let Some(PropertyUiType::Dropdown { options }) =
+                        property_definition.map(PropertyDefinition::ui_type)
+                    {
+                        let before = text.clone();
+                        let response = egui::ComboBox::from_id_salt((node_id, property_key))
+                            .selected_text(text.as_str())
+                            .width(96.0)
+                            .show_ui(ui, |ui| {
+                                for option in options {
+                                    ui.selectable_value(text, option.clone(), option);
+                                }
+                            })
+                            .response;
+                        (
+                            before != *text,
+                            false,
+                            response.lost_focus(),
+                            "dropdown",
+                            response,
+                        )
+                    } else {
+                        let response = ui.add_sized(
+                            [96.0, PORT_ROW_HEIGHT - 2.0],
+                            egui::TextEdit::singleline(text).clip_text(true),
+                        );
+                        (
+                            response.changed(),
+                            true,
+                            continuous_response_finished(ui, &response),
+                            "text",
+                            response,
+                        )
+                    }
+                }
+                PropertyValue::Boolean(boolean) => {
+                    let response = ui.checkbox(boolean, "");
+                    (response.changed(), false, false, "boolean", response)
+                }
+                PropertyValue::Color(color) => {
+                    let mut edited =
+                        Color32::from_rgba_unmultiplied(color.r, color.g, color.b, color.a);
+                    let (response, popup_closed) = continuous_color_edit_button(ui, &mut edited);
+                    let changed = response.changed();
+                    if changed {
+                        color.r = edited.r();
+                        color.g = edited.g();
+                        color.b = edited.b();
+                        color.a = edited.a();
+                    }
+                    (
+                        changed,
+                        true,
+                        popup_closed || continuous_response_finished(ui, &response),
+                        "color",
+                        response,
+                    )
+                }
+                PropertyValue::Vec2(vec) => {
+                    let response = non_selectable_label(
+                        ui,
+                        format!("{:.1}, {:.1}", vec.x.into_inner(), vec.y.into_inner()),
+                    );
+                    (false, false, false, "vec2_readonly", response)
+                }
+                PropertyValue::Vec3(_)
+                | PropertyValue::Vec4(_)
+                | PropertyValue::Array(_)
+                | PropertyValue::Map(_) => {
+                    let response = non_selectable_label(
+                        ui,
+                        egui::RichText::new("complex")
+                            .small()
+                            .color(Color32::from_gray(125)),
+                    );
+                    (false, false, false, "complex_readonly", response)
+                }
+            };
+            let qa_value = serde_json::Value::from(&value);
+            let edit = changed.then(|| NodeEdit::SetProperty {
+                owner: PortOwner::Node(node_id),
+                key: property_key.to_string(),
+                time: property_time,
+                value,
+            });
+            if continuous {
+                self.queue_continuous_edit(PortOwner::Node(node_id), property_key, edit, finished);
+            } else if let Some(edit) = edit {
+                self.edits.push(QueuedNodeEdit::Atomic(edit));
+            }
+            Some((response, control_kind, qa_value))
+        });
+        let (response, control_kind, enabled, value) = match row.inner {
+            Some((response, control_kind, value)) => {
+                let enabled = response.enabled();
+                (response, control_kind, enabled, value)
+            }
+            None => (
+                row.response,
+                if connected { "linked" } else { "missing" },
+                false,
+                current_value_metadata,
+            ),
+        };
+        let component_id = format!("node_editor.property.node:{node_id}:{property_key}");
+        let unclipped_rect = *self.to_global * response.rect;
+        let rect = clipped_qa_rect(unclipped_rect, *self.canvas_clip);
+        #[cfg(test)]
+        capture_test_rect(&component_id, rect);
+        let operation_identity = self.project.get_node(node_id).and_then(|node| {
+            let NodeContent::PluginOperation(operation) = node.content() else {
+                return None;
+            };
+            Some(serde_json::json!({
+                "category": operation.category,
+                "component_id": operation.component_id,
+                "operation": operation.operation,
+            }))
+        });
+        crate::qa::register_component_with_metadata(
+            component_id,
+            "node_property_control",
+            rect,
+            enabled,
+            Some(serde_json::json!({
+                "node_id": node_id,
+                "property": property_key,
+                "port": definition.key,
+                "connected": connected,
+                "control_kind": control_kind,
+                "current_time": property_time,
+                "value": value,
+                "operation_identity": operation_identity,
+                "descriptor_available": property_definition.is_some(),
+                "definition": property_definition.map(
+                    crate::ui::panels::inspector::properties::property_definition_metadata
+                ),
+                "unclipped_rect": qa_rect_metadata(unclipped_rect),
+                "visible_in_canvas": rect.is_positive(),
+            })),
+        );
+    }
+
+    pub(super) fn show_container_body(&mut self, owner: PortOwner, ui: &mut egui::Ui) {
+        let Some((mut name, mut size)) = container_name_and_size(self.project, owner) else {
+            return;
+        };
+
+        ui.horizontal(|ui| {
+            property_label(ui, "Name");
+            let response = ui.add_sized(
+                [180.0, PORT_ROW_HEIGHT],
+                egui::TextEdit::singleline(&mut name),
+            );
+            let finished = continuous_response_finished(ui, &response);
+            let edit = response
+                .changed()
+                .then_some(NodeEdit::RenameContainer { owner, name });
+            self.queue_continuous_edit(owner, "$name", edit, finished);
+        });
+
+        if let PortOwner::Clip(clip_id) = owner {
+            let Some(clip) = self.project.get_clip(clip_id) else {
+                return;
+            };
+            let timing_controls = Clip::timing_property_definitions()
+                .iter()
+                .filter_map(|definition| {
+                    clip.timing_property_value(definition.name())
+                        .and_then(|value| value.get_as::<f64>())
+                        .map(|value| (definition, value))
+                })
+                .collect::<Vec<_>>();
+            for (definition, value) in timing_controls {
+                let mut edited = value;
+                ui.horizontal(|ui| {
+                    property_label(ui, definition.label());
+                    let Some(config) = node_timing_drag_config(definition) else {
+                        log::error!(
+                            "Clip timing property {} is missing Float drag metadata",
+                            definition.name()
+                        );
+                        return;
+                    };
+                    let response = ui.add_sized(
+                        [INLINE_CONTROL_WIDTH, PORT_ROW_HEIGHT],
+                        config.widget(&mut edited),
+                    );
+                    let finished = continuous_response_finished(ui, &response);
+                    let edit = response.changed().then(|| NodeEdit::SetProperty {
+                        owner,
+                        key: definition.name().to_string(),
+                        time: self.current_time,
+                        value: PropertyValue::Number(OrderedFloat(edited)),
+                    });
+                    self.queue_continuous_edit(owner, definition.name(), edit, finished);
+                });
+            }
+        }
+        ui.horizontal(|ui| {
+            property_label(ui, "Size");
+            let width_response = ui.add(
+                egui::DragValue::new(&mut size[0])
+                    .speed(1.0)
+                    .range(MIN_CONTAINER_SIZE.x..=8192.0)
+                    .suffix(" w"),
+            );
+            let height_response = ui.add(
+                egui::DragValue::new(&mut size[1])
+                    .speed(1.0)
+                    .range(MIN_CONTAINER_SIZE.y..=8192.0)
+                    .suffix(" h"),
+            );
+            let resized = || NodeEdit::ResizeContainer {
+                owner,
+                size: [
+                    size[0].max(MIN_CONTAINER_SIZE.x),
+                    size[1].max(MIN_CONTAINER_SIZE.y),
+                ],
+            };
+            self.queue_continuous_edit(
+                owner,
+                "$size.width",
+                width_response.changed().then(&resized),
+                continuous_response_finished(ui, &width_response),
+            );
+            self.queue_continuous_edit(
+                owner,
+                "$size.height",
+                height_response.changed().then(resized),
+                continuous_response_finished(ui, &height_response),
+            );
+        });
+    }
+
+    pub(super) fn edit_string_property(
+        &mut self,
+        ui: &mut egui::Ui,
+        node_id: Uuid,
+        node: &Node,
+        key: &str,
+        label: &str,
+        fallback: &str,
+    ) {
+        let property_time = node_property_time(self.project, node_id, self.current_time);
+        let evaluated = node.properties().get(key).map(|property| {
+            evaluate_node_property(
+                self.project,
+                self.plugin_manager,
+                node_id,
+                property,
+                property_time,
+            )
+        });
+        let mut value = evaluated
+            .as_ref()
+            .and_then(|evaluated| evaluated.value())
+            .and_then(|value| value.get_as::<String>())
+            .unwrap_or_else(|| fallback.to_string());
+        ui.horizontal(|ui| {
+            property_label(ui, label);
+            if let Some(issue) = evaluated.as_ref().and_then(|evaluated| evaluated.issue()) {
+                render_node_property_issue(ui, node_id, key, issue);
+            }
+            let response = ui.add_sized(
+                [INLINE_CONTROL_WIDTH, PORT_ROW_HEIGHT],
+                egui::TextEdit::singleline(&mut value),
+            );
+            let finished = continuous_response_finished(ui, &response);
+            let edit = response.changed().then(|| NodeEdit::SetProperty {
+                owner: PortOwner::Node(node_id),
+                key: key.to_string(),
+                time: property_time,
+                value: PropertyValue::String(value),
+            });
+            self.queue_continuous_edit(PortOwner::Node(node_id), key.to_string(), edit, finished);
+        });
+    }
+}
