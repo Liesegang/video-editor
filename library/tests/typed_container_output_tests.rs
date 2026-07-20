@@ -10,7 +10,7 @@ use library::plugin::PluginManager;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-fn project_with_clip() -> (Project, Uuid, Uuid, Uuid) {
+fn project_with_clip() -> Result<(Project, Uuid, Uuid, Uuid)> {
     let mut project = Project::new("typed outputs");
     let (composition, track) = Composition::new("main", 64, 64, 24.0, 2.0);
     let composition_id = composition.id;
@@ -20,10 +20,8 @@ fn project_with_clip() -> (Project, Uuid, Uuid, Uuid) {
     let clip = Clip::new("media", 0.0, 2.0);
     let clip_id = clip.id;
     project.add_clip(clip);
-    project
-        .attach_clip_to_track(track_id, clip_id)
-        .expect("fresh Clip must attach");
-    (project, composition_id, track_id, clip_id)
+    project.attach_clip_to_track(track_id, clip_id)?;
+    Ok((project, composition_id, track_id, clip_id))
 }
 
 fn media_node(manager: &ProjectManager, asset: &Asset) -> Result<Node> {
@@ -51,7 +49,7 @@ fn media_node(manager: &ProjectManager, asset: &Asset) -> Result<Node> {
 }
 
 fn typed_media_project() -> Result<(Project, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid)> {
-    let (mut project, composition_id, track_id, clip_id) = project_with_clip();
+    let (mut project, composition_id, track_id, clip_id) = project_with_clip()?;
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
         Arc::new(PluginManager::default()),
@@ -174,7 +172,7 @@ fn bindings_reject_cross_typed_media_and_video_can_bind_both() -> Result<()> {
 
 #[test]
 fn missing_asset_media_has_no_typed_output_to_masquerade_as() -> Result<()> {
-    let (mut project, _, _, clip_id) = project_with_clip();
+    let (mut project, _, _, clip_id) = project_with_clip()?;
     let manager = ProjectManager::new(
         Arc::new(RwLock::new(Project::new("factory"))),
         Arc::new(PluginManager::default()),
@@ -236,7 +234,7 @@ fn detach_and_reparent_clear_source_bindings_and_preserve_destination_bindings()
 
 #[test]
 fn audio_bindings_are_required_pre_v1_serialized_state() -> Result<()> {
-    let (project, composition_id, track_id, clip_id) = project_with_clip();
+    let (project, composition_id, track_id, clip_id) = project_with_clip()?;
     let encoded = project.save()?;
     let decoded = Project::load(&encoded)?;
     assert_eq!(decoded, project);
