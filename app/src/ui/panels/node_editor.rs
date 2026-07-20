@@ -412,6 +412,8 @@ impl SnarlPin for QaPin {
 thread_local! {
     static TEST_RENDER_RECTS: std::cell::RefCell<HashMap<String, egui::Rect>> =
         std::cell::RefCell::new(HashMap::new());
+    static TEST_RENDER_METADATA: std::cell::RefCell<HashMap<String, serde_json::Value>> =
+        std::cell::RefCell::new(HashMap::new());
 }
 
 #[cfg(test)]
@@ -422,8 +424,18 @@ fn capture_test_rect(id: &str, rect: egui::Rect) {
 }
 
 #[cfg(test)]
+fn capture_test_metadata(id: &str, metadata: &serde_json::Value) {
+    TEST_RENDER_METADATA.with(|entries| {
+        entries
+            .borrow_mut()
+            .insert(id.to_string(), metadata.clone());
+    });
+}
+
+#[cfg(test)]
 fn reset_test_rects() {
     TEST_RENDER_RECTS.with(|rects| rects.borrow_mut().clear());
+    TEST_RENDER_METADATA.with(|entries| entries.borrow_mut().clear());
 }
 
 #[cfg(test)]
@@ -434,6 +446,11 @@ fn test_rect(id: &str) -> Option<egui::Rect> {
 #[cfg(test)]
 fn test_rects() -> HashMap<String, egui::Rect> {
     TEST_RENDER_RECTS.with(|rects| rects.borrow().clone())
+}
+
+#[cfg(test)]
+fn test_metadata(id: &str) -> Option<serde_json::Value> {
+    TEST_RENDER_METADATA.with(|entries| entries.borrow().get(id).cloned())
 }
 
 #[derive(Debug)]
@@ -1571,7 +1588,7 @@ impl ProjectNodeViewer<'_> {
                                         "node_editor_merge_layer_blend_option",
                                         option.rect,
                                         option.enabled(),
-                                        canvas_clip,
+                                        ui.clip_rect(),
                                         row.qa_metadata(Some(serde_json::json!({
                                             "action": "set_authored_blend",
                                             "blend_mode": blend_mode_qa_key(blend_mode),
@@ -7458,14 +7475,15 @@ fn register_merge_layer_popup_component(
     component_type: &str,
     screen_rect: egui::Rect,
     enabled: bool,
-    canvas_clip: egui::Rect,
+    popup_clip: egui::Rect,
     mut metadata: serde_json::Value,
 ) {
-    let rect = clipped_qa_rect(screen_rect, canvas_clip);
+    let rect = clipped_qa_rect(screen_rect, popup_clip);
     if let Some(metadata) = metadata.as_object_mut() {
         metadata.insert("unclipped_rect".to_string(), qa_rect_metadata(screen_rect));
+        metadata.insert("popup_clip_rect".to_string(), qa_rect_metadata(popup_clip));
         metadata.insert(
-            "visible_in_canvas".to_string(),
+            "visible_in_popup".to_string(),
             serde_json::Value::Bool(rect.is_positive()),
         );
         metadata.insert(
@@ -7474,7 +7492,10 @@ fn register_merge_layer_popup_component(
         );
     }
     #[cfg(test)]
-    capture_test_rect(&id, rect);
+    {
+        capture_test_rect(&id, rect);
+        capture_test_metadata(&id, &metadata);
+    }
     crate::qa::register_component_with_metadata(id, component_type, rect, enabled, Some(metadata));
 }
 
@@ -10888,6 +10909,170 @@ mod tests {
         assert!(rects
             .get(&format!("node_editor.merge_layers.empty:{merge_id}"))
             .is_some_and(egui::Rect::is_positive));
+    }
+
+    #[test]
+    fn merge_blend_popup_qa_uses_foreground_clip_and_real_screen_coordinate_click() {
+        fn pointer_button(position: egui::Pos2, pressed: bool) -> egui::Event {
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }
+        }
+
+        #[allow(
+            clippy::too_many_arguments,
+            reason = "the egui frame harness keeps screen, canvas, input and authored state explicit"
+        )]
+        fn render_frame(
+            context: &egui::Context,
+            screen: egui::Rect,
+            canvas_clip: egui::Rect,
+            events: Vec<egui::Event>,
+            time: f64,
+            merge_id: Uuid,
+            connection_id: Uuid,
+            selected_blend: &mut BlendMode,
+        ) -> egui::Rect {
+            let mut selector_rect = egui::Rect::NOTHING;
+            reset_test_rects();
+            let raw_input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                time: Some(time),
+                ..Default::default()
+            };
+            drop(context.run(raw_input, |context| {
+                egui::Area::new(egui::Id::new("merge-popup-edge-test"))
+                    .fixed_pos(egui::pos2(80.0, 128.0))
+                    .show(context, |ui| {
+                        // This mimics a selector still inside the Node Editor at
+                        // its top edge. The ComboBox popup is a foreground Area
+                        // and is therefore allowed to extend above it.
+                        ui.set_clip_rect(canvas_clip);
+                        selector_rect = egui::ComboBox::from_id_salt((
+                            "merge-popup-edge-combo",
+                            merge_id,
+                            connection_id,
+                        ))
+                        .selected_text(blend_mode_label(*selected_blend))
+                        .width(178.0)
+                        .show_ui(ui, |ui| {
+                            for blend_mode in AUTHORED_BLEND_MODES {
+                                let selected = blend_mode == *selected_blend;
+                                let option = ui.add_enabled(
+                                    !selected,
+                                    egui::Button::selectable(
+                                        selected,
+                                        blend_mode_label(blend_mode),
+                                    )
+                                    .frame(false),
+                                );
+                                register_merge_layer_popup_component(
+                                    format!(
+                                        "node_editor.merge_layer.blend.{}:{merge_id}:{connection_id}",
+                                        blend_mode_qa_key(blend_mode)
+                                    ),
+                                    "node_editor_merge_layer_blend_option",
+                                    option.rect,
+                                    option.enabled(),
+                                    ui.clip_rect(),
+                                    serde_json::json!({
+                                        "merge_id": merge_id,
+                                        "connection_id": connection_id,
+                                        "blend_mode": blend_mode_qa_key(blend_mode),
+                                    }),
+                                );
+                                if option.clicked() {
+                                    *selected_blend = blend_mode;
+                                    ui.close();
+                                }
+                            }
+                        })
+                        .response
+                        .rect;
+                    });
+            }));
+            selector_rect
+        }
+
+        let context = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 400.0));
+        let canvas_clip =
+            egui::Rect::from_min_max(egui::pos2(20.0, 120.0), egui::pos2(420.0, 300.0));
+        let merge_id = Uuid::from_u128(0xface);
+        let connection_id = Uuid::from_u128(0xcafe);
+        let option_id = format!("node_editor.merge_layer.blend.overlay:{merge_id}:{connection_id}");
+        let mut selected_blend = BlendMode::Normal;
+        let mut frame = 0_u64;
+        let mut run = |events, selected_blend: &mut BlendMode| {
+            frame += 1;
+            render_frame(
+                &context,
+                screen,
+                canvas_clip,
+                events,
+                frame as f64 / 60.0,
+                merge_id,
+                connection_id,
+                selected_blend,
+            )
+        };
+
+        let mut selector = egui::Rect::NOTHING;
+        for _ in 0..3 {
+            selector = run(Vec::new(), &mut selected_blend);
+        }
+        assert!(
+            canvas_clip.contains(selector.center()),
+            "selector {selector:?} must be inside canvas {canvas_clip:?}"
+        );
+        selector = run(
+            vec![egui::Event::PointerMoved(selector.center())],
+            &mut selected_blend,
+        );
+        selector = run(
+            vec![pointer_button(selector.center(), true)],
+            &mut selected_blend,
+        );
+        let selector_after_open = run(
+            vec![pointer_button(selector.center(), false)],
+            &mut selected_blend,
+        );
+
+        let option = test_rect(&option_id).expect("foreground popup option is registered");
+        let metadata = test_metadata(&option_id).expect("popup QA metadata is registered");
+        assert!(option.is_positive());
+        assert!(screen.contains(option.center()));
+        assert!(
+            option.center().y < canvas_clip.top(),
+            "foreground option {option:?} from selector {selector_after_open:?} must extend above canvas {canvas_clip:?}"
+        );
+        assert_eq!(metadata["coordinate_space"], "screen_points");
+        assert_eq!(metadata["visible_in_popup"], true);
+        assert!(metadata["popup_clip_rect"]["min_y"]
+            .as_f64()
+            .is_some_and(|min_y| min_y < f64::from(canvas_clip.top())));
+
+        // Use a freshly rendered option rectangle for each pointer lifecycle
+        // step, matching the loopback QA bridge's real-coordinate contract.
+        let _ = run(
+            vec![egui::Event::PointerMoved(option.center())],
+            &mut selected_blend,
+        );
+        let option = test_rect(&option_id).expect("popup remains open after pointer move");
+        let _ = run(
+            vec![pointer_button(option.center(), true)],
+            &mut selected_blend,
+        );
+        let option = test_rect(&option_id).expect("popup remains open after pointer press");
+        let _ = run(
+            vec![pointer_button(option.center(), false)],
+            &mut selected_blend,
+        );
+        assert_eq!(selected_blend, BlendMode::Overlay);
     }
 
     #[test]
