@@ -1,7 +1,10 @@
+#[path = "effector_graph_tests/graph_support.rs"]
+mod graph_support;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
-use anyhow::{Context, Result as AnyResult, anyhow, bail, ensure};
+use anyhow::{Context, Result as AnyResult, anyhow, bail};
 use library::animation::EasingFunction;
 use library::cache::CacheManager;
 use library::core::ensemble::effectors::OpacityMode;
@@ -19,7 +22,7 @@ use library::model::frame::runtime_shape::{
 use library::model::project::{
     Composition, EvalOutput, MERGE_IMAGES_PORT, NodeContainer, NodeGraphBundle, PortAddress,
     PortDataType, PortDefinition, PortDirection, PortExposure, PortMultiplicity, PortOwner,
-    PortSide, Project, ProjectConnection, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
+    PortSide, Project, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use library::model::property::{
     Keyframe, Property, PropertyDefinition, PropertyMap, PropertyValue, Vec2,
@@ -28,12 +31,14 @@ use library::model::{BlendMode, Clip, Node, NodeContent};
 use library::plugin::{
     EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, EffectorPlugin, FrameEvaluationContext,
     OperationDescriptor, OperationDescriptorError, Plugin, PluginManager, ResolvedNodeInputs,
-    TRANSFORM_CATEGORY, property_port_key, property_ui_type_to_port_data_type,
+    property_port_key, property_ui_type_to_port_data_type,
 };
 use library::rendering::renderer::{Affine2D, RenderOutput};
 use library::{RenderService, SkiaRenderer};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
+
+use graph_support::{insert_effector_chain, root_transform_id};
 
 const WIDTH: u64 = 128;
 const HEIGHT: u64 = 80;
@@ -45,102 +50,6 @@ fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
             .is_ok(),
         "operation descriptor must initialize {key}"
     );
-}
-
-fn shape_wire(from: Uuid, to: Uuid) -> ProjectConnection {
-    ProjectConnection::new(
-        PortAddress::new(PortOwner::Node(from), SHAPE_OUTPUT_PORT),
-        PortAddress::new(PortOwner::Node(to), SHAPE_INPUT_PORT),
-        0,
-    )
-}
-
-fn insert_effector_chain(graph: &mut NodeGraphBundle, effector_ids: &[Uuid]) -> AnyResult<()> {
-    let source_id = graph
-        .nodes
-        .iter()
-        .find(|node| {
-            matches!(
-                node.content(),
-                NodeContent::Generator(
-                    library::model::GeneratorContent::Text
-                        | library::model::GeneratorContent::Shape
-                )
-            )
-        })
-        .context("graph has no Shape source")?
-        .id;
-    let mut terminal_id = source_id;
-    loop {
-        let outgoing = graph
-            .connections
-            .iter()
-            .filter(|connection| {
-                connection.from == PortAddress::new(PortOwner::Node(terminal_id), SHAPE_OUTPUT_PORT)
-                    && connection.to.port == SHAPE_INPUT_PORT
-            })
-            .collect::<Vec<_>>();
-        let [connection] = outgoing.as_slice() else {
-            break;
-        };
-        let PortOwner::Node(next_id) = connection.to.owner else {
-            break;
-        };
-        let next_produces_shape = graph.nodes.iter().any(|node| {
-            node.id == next_id
-                && matches!(
-                    node.content(),
-                    NodeContent::PluginOperation(operation)
-                        if operation.declared_ports.iter().any(|port| {
-                            port.key == SHAPE_OUTPUT_PORT
-                                && port.direction == PortDirection::Output
-                                && port.data_type == PortDataType::Shape
-                        })
-                )
-        });
-        if !next_produces_shape {
-            break;
-        }
-        terminal_id = next_id;
-    }
-
-    let mut targets = Vec::new();
-    graph.connections.retain(|connection| {
-        let is_shape_fanout = connection.from
-            == PortAddress::new(PortOwner::Node(terminal_id), SHAPE_OUTPUT_PORT)
-            && connection.to.port == SHAPE_INPUT_PORT;
-        if is_shape_fanout {
-            targets.push(connection.to.clone());
-        }
-        !is_shape_fanout
-    });
-    ensure!(!targets.is_empty(), "factory must expose a Shape consumer");
-    let mut upstream = terminal_id;
-    for effector_id in effector_ids {
-        graph.connections.push(shape_wire(upstream, *effector_id));
-        upstream = *effector_id;
-    }
-    for target in targets {
-        graph.connections.push(ProjectConnection::new(
-            PortAddress::new(PortOwner::Node(upstream), SHAPE_OUTPUT_PORT),
-            target,
-            0,
-        ));
-    }
-    Ok(())
-}
-
-fn root_transform_id(graph: &NodeGraphBundle) -> AnyResult<Uuid> {
-    graph
-        .nodes
-        .iter()
-        .find_map(|node| match node.content() {
-            NodeContent::PluginOperation(operation) if operation.category == TRANSFORM_CATEGORY => {
-                Some(node.id)
-            }
-            _ => None,
-        })
-        .context("factory graph has no root Transform")
 }
 
 fn setup_project() -> (Project, Uuid, Uuid) {
