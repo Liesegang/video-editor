@@ -1092,6 +1092,17 @@ impl<'a> FrameEvaluator<'a> {
                         .project
                         .get_composition(id)
                         .ok_or_else(|| missing_error(owner))?;
+                    // Composition activity uses its authored half-open
+                    // timeline range before any explicit Time input remaps
+                    // the evaluation scope. This keeps direct Composition and
+                    // Track Nodes, as well as nested References, inactive past
+                    // the same duration boundary used by export frame counts.
+                    if !global_time.is_finite()
+                        || global_time < 0.0
+                        || global_time >= composition.duration
+                    {
+                        return Ok(EvalOutput::NoOutput);
+                    }
                     EvaluationScope {
                         time: global_time,
                         fps: composition.fps,
