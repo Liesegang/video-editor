@@ -117,7 +117,7 @@ impl VideoReader {
         file_path: &str,
         stream_index: Option<usize>,
     ) -> Result<Self, LibraryError> {
-        ffmpeg::init()?;
+        initialize_ffmpeg()?;
 
         let input_context = ffmpeg::format::input(&file_path)?;
         let input = if let Some(idx) = stream_index {
@@ -960,39 +960,67 @@ impl Plugin for FfmpegVideoLoader {
     }
 }
 
-fn registered_ffmpeg_demuxer_extensions() -> &'static HashSet<String> {
-    static EXTENSIONS: OnceLock<HashSet<String>> = OnceLock::new();
-    EXTENSIONS.get_or_init(|| {
-        let mut extensions = HashSet::new();
-        let mut opaque: *mut c_void = std::ptr::null_mut();
-        loop {
-            // SAFETY: `opaque` starts null and is passed back only to
-            // `av_demuxer_iterate`, as required by the FFmpeg iterator API.
-            // The returned registry entry is static and is read before the
-            // next iteration call.
-            let input_format = unsafe { ffmpeg::ffi::av_demuxer_iterate(&mut opaque) };
-            if input_format.is_null() {
-                break;
-            }
-            // SAFETY: A non-null entry returned by `av_demuxer_iterate` points
-            // to a registered `AVInputFormat` for the lifetime of libavformat.
-            let extension_list = unsafe { (*input_format).extensions };
-            if extension_list.is_null() {
-                continue;
-            }
-            // SAFETY: `AVInputFormat.extensions` is either null or a
-            // null-terminated, comma-separated string owned by libavformat.
-            let extension_list = unsafe { CStr::from_ptr(extension_list) }.to_string_lossy();
-            extensions.extend(
-                extension_list
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|extension| !extension.is_empty())
-                    .map(str::to_ascii_lowercase),
-            );
+struct FfmpegRuntime {
+    initialization: Result<(), ffmpeg::Error>,
+    demuxer_extensions: HashSet<String>,
+}
+
+fn collect_registered_ffmpeg_demuxer_extensions() -> HashSet<String> {
+    let mut extensions = HashSet::new();
+    let mut opaque: *mut c_void = std::ptr::null_mut();
+    loop {
+        // SAFETY: `opaque` starts null and is passed back only to
+        // `av_demuxer_iterate`, as required by the FFmpeg iterator API. The
+        // process-wide runtime initializer serializes this registry walk with
+        // FFmpeg's one initialization call.
+        let input_format = unsafe { ffmpeg::ffi::av_demuxer_iterate(&mut opaque) };
+        if input_format.is_null() {
+            break;
         }
-        extensions
+        // SAFETY: A non-null entry returned by `av_demuxer_iterate` points to
+        // a registered `AVInputFormat` for the lifetime of libavformat.
+        let extension_list = unsafe { (*input_format).extensions };
+        if extension_list.is_null() {
+            continue;
+        }
+        // SAFETY: `AVInputFormat.extensions` is either null or a
+        // null-terminated, comma-separated string owned by libavformat.
+        let extension_list = unsafe { CStr::from_ptr(extension_list) }.to_string_lossy();
+        extensions.extend(
+            extension_list
+                .split(',')
+                .map(str::trim)
+                .filter(|extension| !extension.is_empty())
+                .map(str::to_ascii_lowercase),
+        );
+    }
+    extensions
+}
+
+fn ffmpeg_runtime() -> &'static FfmpegRuntime {
+    static RUNTIME: OnceLock<FfmpegRuntime> = OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        #[cfg(test)]
+        FFMPEG_INITIALIZER_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let initialization = ffmpeg::init();
+        let demuxer_extensions = collect_registered_ffmpeg_demuxer_extensions();
+        FfmpegRuntime {
+            initialization,
+            demuxer_extensions,
+        }
     })
+}
+
+#[cfg(test)]
+static FFMPEG_INITIALIZER_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+fn initialize_ffmpeg() -> Result<(), LibraryError> {
+    ffmpeg_runtime().initialization.map_err(LibraryError::from)
+}
+
+fn registered_ffmpeg_demuxer_extensions() -> &'static HashSet<String> {
+    &ffmpeg_runtime().demuxer_extensions
 }
 
 fn has_registered_ffmpeg_media_extension(path: &str) -> bool {
@@ -1014,7 +1042,7 @@ fn classify_ffmpeg_probe_failure(path: &str, error: LibraryError) -> LoadPluginE
 }
 
 fn initialize_ffmpeg_for_path(path: &str) -> LoadPluginResult<()> {
-    ffmpeg::init().map_err(|error| classify_ffmpeg_probe_failure(path, error.into()))
+    initialize_ffmpeg().map_err(|error| classify_ffmpeg_probe_failure(path, error))
 }
 
 impl LoadPlugin for FfmpegVideoLoader {
@@ -1078,6 +1106,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn concurrent_open_load_and_initialization_call_ffmpeg_initializer_once()
+    -> Result<(), Box<dyn std::error::Error>> {
+        const WORKER_COUNT: usize = 12;
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test_data/e2e_media/h264_24.mp4")
+            .to_string_lossy()
+            .into_owned();
+        let loader = Arc::new(FfmpegVideoLoader::new());
+        let barrier = Arc::new(std::sync::Barrier::new(WORKER_COUNT));
+
+        std::thread::scope(|scope| -> Result<(), Box<dyn std::error::Error>> {
+            let workers = (0..WORKER_COUNT)
+                .map(|worker_index| {
+                    let loader = Arc::clone(&loader);
+                    let barrier = Arc::clone(&barrier);
+                    let path = path.clone();
+                    scope.spawn(move || -> LoadPluginResult<()> {
+                        barrier.wait();
+                        for rotation in 0..3 {
+                            match (worker_index + rotation) % 3 {
+                                0 => initialize_ffmpeg().map_err(LoadPluginError::from)?,
+                                1 => {
+                                    let metadata = loader.open(&path)?;
+                                    assert!(metadata.iter().any(|stream| {
+                                        stream.kind == crate::model::asset::AssetKind::Video
+                                    }));
+                                }
+                                _ => {
+                                    let loaded = loader.load(
+                                        &LoadRequest::VideoFrame {
+                                            path: path.clone(),
+                                            source_time: 0.0,
+                                            stream_index: None,
+                                            input_color_space: None,
+                                            output_color_space: None,
+                                        },
+                                        &CacheManager::new(),
+                                    )?;
+                                    assert!(loaded.image.width > 0);
+                                    assert!(loaded.image.height > 0);
+                                }
+                            }
+                        }
+                        assert!(registered_ffmpeg_demuxer_extensions().contains("mp4"));
+                        Ok(())
+                    })
+                })
+                .collect::<Vec<_>>();
+            for worker in workers {
+                worker
+                    .join()
+                    .map_err(|_| std::io::Error::other("FFmpeg stress worker panicked"))??;
+            }
+            Ok(())
+        })?;
+
+        assert_eq!(
+            FFMPEG_INITIALIZER_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "every FFmpeg entry point must share the process-wide initializer"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn missing_and_non_monotonic_timestamps_are_repaired_monotonically() {
         let mut normalizer = TimestampNormalizer::new(10);
         normalizer.reset(100);
@@ -1098,7 +1191,7 @@ mod tests {
     #[test]
     fn demuxer_registry_claims_a_format_missing_from_the_replaced_legacy_table()
     -> Result<(), Box<dyn std::error::Error>> {
-        ffmpeg::init()?;
+        initialize_ffmpeg()?;
         assert!(
             registered_ffmpeg_demuxer_extensions().contains("nut"),
             "the linked FFmpeg registry must expose its standard NUT demuxer"
