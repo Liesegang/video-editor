@@ -2,6 +2,7 @@ use super::ProjectNodeViewer;
 use crate::ui::panels::node_editor::*;
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 use eframe::egui::{self, Color32};
+use egui_phosphor::regular as icons;
 use library::model::project::PortOwner;
 use library::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use ordered_float::OrderedFloat;
@@ -14,7 +15,7 @@ impl ProjectNodeViewer<'_> {
         let canvas_clip = *self.canvas_clip;
         let header = non_selectable_label(
             ui,
-            egui::RichText::new("Layers · Back → Front")
+            egui::RichText::new(format!("Layers · Back {} Front", icons::ARROW_RIGHT))
                 .small()
                 .strong(),
         )
@@ -77,7 +78,7 @@ impl ProjectNodeViewer<'_> {
                             .small()
                             .strong(),
                         )
-                        .on_hover_text("Layer position in Back → Front order");
+                        .on_hover_text("Layer position in Back to Front order");
                         bounded_non_selectable_label(
                             ui,
                             row.source_label.clone(),
@@ -161,7 +162,10 @@ impl ProjectNodeViewer<'_> {
                     ui.horizontal(|ui| {
                         let back_index = row.back_to_front_index.checked_sub(1);
                         let back = ui
-                            .add_enabled(back_index.is_some(), egui::Button::new("← Back"))
+                            .add_enabled(
+                                back_index.is_some(),
+                                egui::Button::new(format!("{} Back", icons::ARROW_LEFT)),
+                            )
                             .on_hover_text("Move this wire one layer toward the back");
                         register_merge_layer_component(
                             format!(
@@ -186,7 +190,10 @@ impl ProjectNodeViewer<'_> {
                         let front_index = (row.back_to_front_index + 1 < row.layer_count)
                             .then_some(row.back_to_front_index + 1);
                         let front = ui
-                            .add_enabled(front_index.is_some(), egui::Button::new("Front →"))
+                            .add_enabled(
+                                front_index.is_some(),
+                                egui::Button::new(format!("Front {}", icons::ARROW_RIGHT)),
+                            )
                             .on_hover_text("Move this wire one layer toward the front");
                         register_merge_layer_component(
                             format!(
@@ -326,10 +333,11 @@ impl ProjectNodeViewer<'_> {
             let Some(mut value) = value else {
                 non_selectable_label(
                     ui,
-                    egui::RichText::new("—")
+                    egui::RichText::new(icons::MINUS)
                         .small()
                         .color(Color32::from_gray(105)),
-                );
+                )
+                .on_hover_text("No value");
                 return None;
             };
             let (changed, continuous, finished, control_kind, response) = match &mut value {

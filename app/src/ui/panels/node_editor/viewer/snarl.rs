@@ -2,6 +2,7 @@ use super::ProjectNodeViewer;
 use crate::state::context_types::NodeEditorEditableWire;
 use crate::ui::panels::node_editor::*;
 use eframe::egui::{self, Color32};
+use egui_phosphor::regular as icons;
 use egui_snarl::{
     ui::{BackgroundPattern, NodeLayout, SnarlPin, SnarlStyle, SnarlViewer},
     InPin, OutPin, Snarl,
@@ -118,30 +119,34 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
         match item {
             GraphItem::Node(project_node_id) => {
                 let palette = node_palette(self.project, project_node_id);
+                let inactive = graph_item_inactive(
+                    self.project,
+                    GraphItem::Node(project_node_id),
+                    self.current_time,
+                );
                 ui.set_min_width(NODE_HEADER_WIDTH);
                 let response = if node_editor_details_visible(self.to_global.scaling) {
                     ui.horizontal(|ui| {
+                        let icon = node_icon(self.project, project_node_id);
                         non_selectable_label(
                             ui,
-                            egui::RichText::new(node_icon(self.project, project_node_id))
+                            egui::RichText::new(icon.glyph)
                                 .color(palette.accent)
                                 .strong(),
-                        );
+                        )
+                        .on_hover_text(icon.label);
                         bounded_strong_non_selectable_label(
                             ui,
                             node_title(self.project, project_node_id),
                             NODE_HEADER_WIDTH - 48.0,
                         );
-                        let status = if graph_item_inactive(
-                            self.project,
-                            GraphItem::Node(project_node_id),
-                            self.current_time,
-                        ) {
-                            "○"
+                        let (status, status_label) = if inactive {
+                            (icons::CIRCLE_DASHED, "Node has no output")
                         } else {
-                            "●"
+                            (icons::CHECK_CIRCLE, "Node is active")
                         };
-                        non_selectable_label(ui, egui::RichText::new(status).color(palette.accent));
+                        non_selectable_label(ui, egui::RichText::new(status).color(palette.accent))
+                            .on_hover_text(status_label);
                     })
                     .response
                 } else {
@@ -209,18 +214,46 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 ui.set_min_width(header_width);
                 let response = if node_editor_details_visible(self.to_global.scaling) {
                     ui.horizontal(|ui| {
-                        if ui
-                            .small_button(if collapsed { "▸" } else { "▾" })
-                            .on_hover_text(if collapsed { "Expand" } else { "Collapse" })
-                            .clicked()
-                        {
+                        let (toggle_icon, toggle_label, toggle_action) = if collapsed {
+                            (icons::CARET_RIGHT, "Expand container", "expand")
+                        } else {
+                            (icons::CARET_DOWN, "Collapse container", "collapse")
+                        };
+                        let toggle = ui.small_button(toggle_icon).on_hover_text(toggle_label);
+                        let unclipped_toggle_rect = *self.to_global * toggle.rect;
+                        let toggle_rect = clipped_qa_rect(unclipped_toggle_rect, *self.canvas_clip);
+                        let coordinate_clicked = ui.input(|input| {
+                            input.pointer.primary_clicked()
+                                && input
+                                    .pointer
+                                    .interact_pos()
+                                    .is_some_and(|position| toggle_rect.contains(position))
+                        });
+                        let toggle_id =
+                            format!("node_editor.container_toggle.{}", qa_container_key(owner));
+                        #[cfg(test)]
+                        capture_test_rect(&toggle_id, toggle_rect);
+                        crate::qa::register_component_with_metadata(
+                            toggle_id,
+                            "node_container_toggle",
+                            toggle_rect,
+                            toggle.enabled(),
+                            Some(serde_json::json!({
+                                "owner": qa_container_key(owner),
+                                "collapsed": collapsed,
+                                "action": toggle_action,
+                                "icon": toggle_label,
+                                "unclipped_rect": qa_rect_metadata(unclipped_toggle_rect),
+                                "visible_in_canvas": toggle_rect.is_positive(),
+                            })),
+                        );
+                        if toggle.clicked() || coordinate_clicked {
                             self.edits
                                 .push(QueuedNodeEdit::Atomic(NodeEdit::ToggleContainer { owner }));
                         }
-                        non_selectable_label(
-                            ui,
-                            egui::RichText::new(container_icon(owner)).strong(),
-                        );
+                        let icon = container_icon(owner);
+                        non_selectable_label(ui, egui::RichText::new(icon.glyph).strong())
+                            .on_hover_text(icon.label);
                         strong_non_selectable_label(ui, container_title(self.project, owner));
                     })
                     .response

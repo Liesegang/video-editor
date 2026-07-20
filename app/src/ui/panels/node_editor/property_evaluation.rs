@@ -1,4 +1,5 @@
 use egui::{Color32, RichText, Ui};
+use egui_phosphor::regular as icons;
 use library::model::project::PortOwner;
 use library::model::property::{Property, PropertyValue};
 use library::model::Project;
@@ -116,7 +117,11 @@ pub(super) fn render_node_property_issue(
     } else {
         Color32::from_rgb(235, 95, 95)
     };
-    let marker = if issue.recovered { "⚠" } else { "×" };
+    let marker = if issue.recovered {
+        icons::WARNING
+    } else {
+        icons::X_CIRCLE
+    };
     let response = ui
         .add(
             egui::Label::new(RichText::new(marker).color(color).strong())

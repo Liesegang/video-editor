@@ -2052,13 +2052,45 @@ mod tests {
             let node_id = node.id;
             project.add_node(node);
             assert_eq!(value_operation_label(value), value.label());
-            assert_eq!(node_icon(&project, node_id), value.symbol());
+            let icon = node_icon(&project, node_id);
+            assert_eq!(
+                icon.glyph,
+                match value {
+                    ValueContent::Fmod => egui_phosphor::regular::PERCENT,
+                    ValueContent::Add => egui_phosphor::regular::PLUS,
+                    ValueContent::Subtract => egui_phosphor::regular::MINUS,
+                    ValueContent::Multiply => egui_phosphor::regular::X,
+                    ValueContent::Divide => egui_phosphor::regular::DIVIDE,
+                }
+            );
+            assert!(icon.label.starts_with(value.label()));
             let palette = node_palette(&project, node_id);
             assert_eq!(palette.body, Color32::from_rgb(28, 41, 46));
             assert_eq!(palette.header, Color32::from_rgb(39, 83, 95));
             assert_eq!(palette.accent, Color32::from_rgb(91, 197, 218));
             assert_eq!(estimated_node_size(&project, node_id).y, 220.0);
         }
+    }
+
+    #[test]
+    fn container_chrome_uses_bundled_phosphor_icons() {
+        let id = Uuid::new_v4();
+        assert_eq!(
+            container_icon(PortOwner::Composition(id)).glyph,
+            egui_phosphor::regular::PROJECTOR_SCREEN
+        );
+        assert_eq!(
+            container_icon(PortOwner::Track(id)).glyph,
+            egui_phosphor::regular::STACK
+        );
+        assert_eq!(
+            container_icon(PortOwner::Clip(id)).glyph,
+            egui_phosphor::regular::FILM_STRIP
+        );
+        assert_eq!(
+            container_icon(PortOwner::Node(id)).glyph,
+            egui_phosphor::regular::CIRCLE
+        );
     }
 
     #[test]
