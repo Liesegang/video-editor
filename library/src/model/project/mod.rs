@@ -301,6 +301,14 @@ struct ContainerNodeState {
     audio_output_node_id: Option<Uuid>,
 }
 
+#[derive(Clone, Copy)]
+struct ContainerView<'a> {
+    container: NodeContainer,
+    node_ids: &'a [Uuid],
+    image_output_node_id: Option<Uuid>,
+    audio_output_node_id: Option<Uuid>,
+}
+
 /// A side-effect-free Project integrity diagnostic. The adjacent JSON
 /// representation is part of the QA API contract: `code` is stable and all
 /// variant fields remain available as structured `context`.
@@ -963,20 +971,18 @@ impl Project {
         let containment_backup = self
             .container_views()
             .into_iter()
-            .filter(|(candidate, ids, image_output, audio_output)| {
-                *candidate == container
-                    || ids.contains(&node_id)
-                    || *image_output == Some(node_id)
-                    || *audio_output == Some(node_id)
+            .filter(|view| {
+                view.container == container
+                    || view.node_ids.contains(&node_id)
+                    || view.image_output_node_id == Some(node_id)
+                    || view.audio_output_node_id == Some(node_id)
             })
-            .map(
-                |(candidate, ids, output_node_id, audio_output_node_id)| ContainerNodeState {
-                    container: candidate,
-                    node_ids: ids.clone(),
-                    output_node_id,
-                    audio_output_node_id,
-                },
-            )
+            .map(|view| ContainerNodeState {
+                container: view.container,
+                node_ids: view.node_ids.to_vec(),
+                output_node_id: view.image_output_node_id,
+                audio_output_node_id: view.audio_output_node_id,
+            })
             .collect::<Vec<_>>();
 
         self.detach_node(node_id);
@@ -1149,23 +1155,26 @@ impl Project {
         }
 
         let mut owners = HashMap::new();
-        for (container, ids, image_output, audio_output) in self.container_views() {
-            for node_id in ids {
+        for view in self.container_views() {
+            for node_id in view.node_ids {
                 if !self.nodes.contains_key(node_id) {
                     errors.push(ProjectGraphError::NodeNotFound(*node_id));
                 }
-                if let Some(previous) = owners.insert(*node_id, container) {
+                if let Some(previous) = owners.insert(*node_id, view.container) {
                     errors.push(ProjectGraphError::NodeAlreadyContained {
                         node_id: *node_id,
                         container: previous,
                     });
                 }
             }
-            for output_node_id in [image_output, audio_output].into_iter().flatten() {
-                if !ids.contains(&output_node_id) {
+            for output_node_id in [view.image_output_node_id, view.audio_output_node_id]
+                .into_iter()
+                .flatten()
+            {
+                if !view.node_ids.contains(&output_node_id) {
                     errors.push(ProjectGraphError::OutputNodeOutsideContainer {
                         node_id: output_node_id,
-                        container,
+                        container: view.container,
                     });
                 }
             }
@@ -1344,32 +1353,26 @@ impl Project {
         }
     }
 
-    fn container_views(&self) -> Vec<(NodeContainer, &Vec<Uuid>, Option<Uuid>, Option<Uuid>)> {
+    fn container_views(&self) -> Vec<ContainerView<'_>> {
         self.compositions
             .iter()
-            .map(|item| {
-                (
-                    NodeContainer::Composition(item.id),
-                    &item.node_ids,
-                    item.output_node_id,
-                    item.audio_output_node_id,
-                )
+            .map(|item| ContainerView {
+                container: NodeContainer::Composition(item.id),
+                node_ids: &item.node_ids,
+                image_output_node_id: item.output_node_id,
+                audio_output_node_id: item.audio_output_node_id,
             })
-            .chain(self.tracks.values().map(|item| {
-                (
-                    NodeContainer::Track(item.id),
-                    &item.node_ids,
-                    item.output_node_id,
-                    item.audio_output_node_id,
-                )
+            .chain(self.tracks.values().map(|item| ContainerView {
+                container: NodeContainer::Track(item.id),
+                node_ids: &item.node_ids,
+                image_output_node_id: item.output_node_id,
+                audio_output_node_id: item.audio_output_node_id,
             }))
-            .chain(self.clips.values().map(|item| {
-                (
-                    NodeContainer::Clip(item.id),
-                    &item.node_ids,
-                    item.output_node_id,
-                    item.audio_output_node_id,
-                )
+            .chain(self.clips.values().map(|item| ContainerView {
+                container: NodeContainer::Clip(item.id),
+                node_ids: &item.node_ids,
+                image_output_node_id: item.output_node_id,
+                audio_output_node_id: item.audio_output_node_id,
             }))
             .collect()
     }
