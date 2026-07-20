@@ -9,13 +9,13 @@ use library::framing::get_frame_from_project;
 use library::model::asset::{Asset, AssetKind};
 use library::model::frame::entity::{FrameContent, FrameGroup, FrameItem, FrameObject};
 use library::model::project::{
-    Composition, EvalOutput, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT,
-    MERGE_IMAGES_PORT, NodeContainer, PERIOD_INPUT_PORT, PortAddress, PortDataType, PortDirection,
-    PortExposure, PortOwner, Project, ProjectGraphError, TIME_PORT, VALUE_INPUT_PORT,
-    VALUE_OUTPUT_PORT,
+    Composition, EvalOutput, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, FPS_PORT, FRAME_PORT,
+    IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT, NUMBER_RESULT_OUTPUT_PORT,
+    NodeContainer, PortAddress, PortDataType, PortDirection, PortExposure, PortOwner, Project,
+    ProjectGraphError, TIME_PORT,
 };
 use library::model::property::{Keyframe, Property, PropertyValue};
-use library::model::{Clip, Node, NodeContent, TIME_MODULO_PERIOD_PROPERTY, ValueContent};
+use library::model::{Clip, Node, NodeContent, ValueContent};
 use library::plugin::PluginManager;
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
@@ -27,7 +27,7 @@ const FPS: f64 = 10.0;
 struct TimeGraphFixture {
     project: Project,
     clip_id: Uuid,
-    modulo_id: Uuid,
+    fmod_id: Uuid,
     media_id: Uuid,
 }
 
@@ -55,8 +55,8 @@ fn time_graph_fixture(
     let asset_id = asset.id;
     project.assets.push(asset);
 
-    let modulo = Node::new_time_modulo("Time Modulo");
-    let modulo_id = modulo.id;
+    let fmod = Node::new_fmod("Fmod");
+    let fmod_id = fmod.id;
     let media = media_node_for_canvas(
         "Video",
         MediaNodeRequest::Video {
@@ -71,7 +71,7 @@ fn time_graph_fixture(
         180,
     );
     let media_id = media.id;
-    for node in [modulo, media] {
+    for node in [fmod, media] {
         let id = node.id;
         project.add_node(node);
         project.attach_node_to_container(NodeContainer::Clip(clip_id), id)?;
@@ -79,11 +79,11 @@ fn time_graph_fixture(
     if wire_value {
         project.connect_ports(
             PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
-            PortAddress::new(PortOwner::Node(modulo_id), VALUE_INPUT_PORT),
+            PortAddress::new(PortOwner::Node(fmod_id), FMOD_X_INPUT_PORT),
         )?;
     }
     project.connect_ports(
-        PortAddress::new(PortOwner::Node(modulo_id), VALUE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(fmod_id), NUMBER_RESULT_OUTPUT_PORT),
         PortAddress::new(PortOwner::Node(media_id), TIME_PORT),
     )?;
     project.set_output_node(NodeContainer::Clip(clip_id), Some(media_id))?;
@@ -92,7 +92,7 @@ fn time_graph_fixture(
     Ok(TimeGraphFixture {
         project,
         clip_id,
-        modulo_id,
+        fmod_id,
         media_id,
     })
 }
@@ -192,7 +192,7 @@ fn operation_and_merge_paths_use_the_same_source_node_time_remap() -> Result<()>
         PortAddress::new(PortOwner::Node(effect_id), IMAGE_INPUT_PORT),
     )?;
     fixture.project.connect_ports(
-        PortAddress::new(PortOwner::Node(fixture.modulo_id), VALUE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(fixture.fmod_id), NUMBER_RESULT_OUTPUT_PORT),
         PortAddress::new(PortOwner::Node(effect_id), TIME_PORT),
     )?;
     fixture.project.connect_ports(
@@ -224,7 +224,7 @@ fn operation_and_merge_paths_use_the_same_source_node_time_remap() -> Result<()>
 fn scalar_result_can_drive_a_number_property_and_a_time_input() -> Result<()> {
     let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
     fixture.project.connect_ports(
-        PortAddress::new(PortOwner::Node(fixture.modulo_id), VALUE_OUTPUT_PORT),
+        PortAddress::new(PortOwner::Node(fixture.fmod_id), NUMBER_RESULT_OUTPUT_PORT),
         PortAddress::new(PortOwner::Node(fixture.media_id), "opacity"),
     )?;
 
@@ -239,40 +239,40 @@ fn scalar_result_can_drive_a_number_property_and_a_time_input() -> Result<()> {
 }
 
 #[test]
-fn a_period_wire_overrides_the_authored_period_property() -> Result<()> {
+fn a_divisor_wire_overrides_the_authored_divisor_property() -> Result<()> {
     let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
     fixture.project.connect_ports(
         PortAddress::new(PortOwner::Clip(fixture.clip_id), FPS_PORT),
-        PortAddress::new(PortOwner::Node(fixture.modulo_id), PERIOD_INPUT_PORT),
+        PortAddress::new(PortOwner::Node(fixture.fmod_id), FMOD_DIVISOR_INPUT_PORT),
     )?;
 
-    // FPS=10 overrides the authored period=1, so 2.5 remains 2.5.
+    // FPS=10 overrides the authored divisor=1, so 2.5 remains 2.5.
     assert_close(
         video_time(&evaluate(&fixture.project, 25)?)
-            .context("period override frame must contain Video time")?,
+            .context("divisor override frame must contain Video time")?,
         2.5,
     );
     Ok(())
 }
 
 #[test]
-fn missing_invalid_and_disabled_modulo_inputs_produce_no_output() -> Result<()> {
+fn missing_invalid_and_disabled_fmod_inputs_produce_no_output() -> Result<()> {
     let mut cases = Vec::new();
 
     cases.push(("missing value", time_graph_fixture(0.0, 0.0, 1.0, false)?));
-    for (label, period) in [
-        ("zero period", 0.0),
-        ("negative period", -1.0),
-        ("non-finite period", f64::NAN),
+    for (label, divisor) in [
+        ("zero divisor", 0.0),
+        ("negative zero divisor", -0.0),
+        ("non-finite divisor", f64::NAN),
     ] {
         let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
         fixture
             .project
-            .get_node_mut(fixture.modulo_id)
-            .context("Time Modulo Node must exist")?
+            .get_node_mut(fixture.fmod_id)
+            .context("Fmod Node must exist")?
             .set_property(
-                TIME_MODULO_PERIOD_PROPERTY.to_string(),
-                Property::constant(PropertyValue::Number(OrderedFloat(period))),
+                FMOD_DIVISOR_INPUT_PORT.to_string(),
+                Property::constant(PropertyValue::Number(OrderedFloat(divisor))),
             )
             .map_err(|error| anyhow!(error))?;
         cases.push((label, fixture));
@@ -280,8 +280,8 @@ fn missing_invalid_and_disabled_modulo_inputs_produce_no_output() -> Result<()> 
     let mut disabled = time_graph_fixture(0.0, 0.0, 1.0, true)?;
     disabled
         .project
-        .get_node_mut(disabled.modulo_id)
-        .context("disabled Time Modulo Node must exist")?
+        .get_node_mut(disabled.fmod_id)
+        .context("disabled Fmod Node must exist")?
         .enabled = false;
     cases.push(("disabled", disabled));
 
@@ -295,22 +295,22 @@ fn missing_invalid_and_disabled_modulo_inputs_produce_no_output() -> Result<()> 
 }
 
 #[test]
-fn missing_authored_period_produces_no_output_instead_of_a_default() -> Result<()> {
+fn missing_authored_divisor_produces_no_output_instead_of_a_default() -> Result<()> {
     let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
     let node = fixture
         .project
-        .get_node(fixture.modulo_id)
-        .context("Time Modulo Node must exist")?;
+        .get_node(fixture.fmod_id)
+        .context("Fmod Node must exist")?;
     let mut json = serde_json::to_value(node)?;
     json["properties"]
         .as_object_mut()
         .context("serialized properties must be an object")?
-        .remove(TIME_MODULO_PERIOD_PROPERTY);
-    let without_period: Node = serde_json::from_value(json)?;
+        .remove(FMOD_DIVISOR_INPUT_PORT);
+    let without_divisor: Node = serde_json::from_value(json)?;
     *fixture
         .project
-        .get_node_mut(fixture.modulo_id)
-        .context("Time Modulo Node must remain mutable")? = without_period;
+        .get_node_mut(fixture.fmod_id)
+        .context("Fmod Node must remain mutable")? = without_divisor;
 
     assert!(video_time(&evaluate(&fixture.project, 5)?).is_none());
     Ok(())
@@ -321,7 +321,7 @@ fn clip_local_time_is_computed_before_the_explicit_node_remap() -> Result<()> {
     let fixture = time_graph_fixture(2.0, 0.25, 2.0, true)?;
 
     // Clip-local time = (3.6 - 2.0) * 2.0 + 0.25 = 3.45, followed by
-    // the Media Node's explicit modulo remap = 0.45.
+    // the Media Node's explicit fmod remap = 0.45.
     assert_close(
         video_time(&evaluate(&fixture.project, 36)?)
             .context("local-time frame must contain Video time")?,
@@ -331,57 +331,40 @@ fn clip_local_time_is_computed_before_the_explicit_node_remap() -> Result<()> {
 }
 
 #[test]
-fn modulo_wraps_negative_time_into_the_positive_loop_interval() -> Result<()> {
-    let fixture = time_graph_fixture(0.0, -2.0, 1.0, true)?;
-
-    // The Clip supplies -1.5 at global t=0.5. rem_euclid gives the loop-safe
-    // [0, period) result rather than the negative remainder produced by `%`.
-    assert_close(
-        video_time(&evaluate(&fixture.project, 5)?)
-            .context("negative-time frame must contain Video time")?,
-        0.5,
-    );
-    Ok(())
-}
-
-#[test]
-fn time_modulo_factory_ports_and_roundtrip_are_authoritative() -> Result<()> {
+fn fmod_factory_descriptor_ports_and_roundtrip_are_authoritative() -> Result<()> {
     let fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
     let node = fixture
         .project
-        .get_node(fixture.modulo_id)
-        .context("Time Modulo Node must exist")?;
-    assert_eq!(
-        node.content(),
-        &NodeContent::Value(ValueContent::TimeModulo)
-    );
+        .get_node(fixture.fmod_id)
+        .context("Fmod Node must exist")?;
+    assert_eq!(node.content(), &NodeContent::Value(ValueContent::Fmod));
     assert_eq!(
         node.properties()
-            .get(TIME_MODULO_PERIOD_PROPERTY)
+            .get(FMOD_DIVISOR_INPUT_PORT)
             .and_then(Property::value),
         Some(&PropertyValue::Number(OrderedFloat(1.0)))
     );
-    let period_definition = ValueContent::TimeModulo.property_definitions()[0].clone();
+    let divisor_definition = ValueContent::Fmod.property_definitions()[0].clone();
+    assert_eq!(divisor_definition.name(), FMOD_DIVISOR_INPUT_PORT);
     assert!(
-        period_definition
+        divisor_definition
             .validate_value(&PropertyValue::Number(OrderedFloat(0.0)))
-            .is_err(),
-        "the authored-property UI contract must not permit an evaluation-invalid zero period"
+            .is_ok()
     );
 
     let ports = fixture
         .project
-        .port_definitions(PortOwner::Node(fixture.modulo_id));
+        .port_definitions(PortOwner::Node(fixture.fmod_id));
     for (key, direction) in [
-        (VALUE_INPUT_PORT, PortDirection::Input),
-        (PERIOD_INPUT_PORT, PortDirection::Input),
-        (VALUE_OUTPUT_PORT, PortDirection::Output),
+        (FMOD_X_INPUT_PORT, PortDirection::Input),
+        (FMOD_DIVISOR_INPUT_PORT, PortDirection::Input),
+        (NUMBER_RESULT_OUTPUT_PORT, PortDirection::Output),
     ] {
         let port = ports
             .iter()
             .find(|port| port.key == key && port.direction == direction)
             .with_context(|| format!("{key} {direction:?} port must exist"))?;
-        assert_eq!(port.data_type, PortDataType::Number);
+        assert_eq!(port.data_type, PortDataType::Numeric);
         assert_eq!(port.exposure, PortExposure::Graph);
     }
     assert!(ports.iter().all(|port| port.key != TIME_PORT));
@@ -389,7 +372,7 @@ fn time_modulo_factory_ports_and_roundtrip_are_authoritative() -> Result<()> {
     let loaded = Project::load(&fixture.project.save()?)?;
     assert_eq!(loaded, fixture.project);
     assert_eq!(
-        loaded.port_definitions(PortOwner::Node(fixture.modulo_id)),
+        loaded.port_definitions(PortOwner::Node(fixture.fmod_id)),
         ports
     );
     Ok(())
@@ -427,8 +410,8 @@ fn scalar_connections_keep_cycle_validation() -> Result<()> {
     let mut fixture = time_graph_fixture(0.0, 0.0, 1.0, true)?;
     assert!(matches!(
         fixture.project.connect_ports(
-            PortAddress::new(PortOwner::Node(fixture.modulo_id), VALUE_OUTPUT_PORT),
-            PortAddress::new(PortOwner::Node(fixture.modulo_id), VALUE_INPUT_PORT),
+            PortAddress::new(PortOwner::Node(fixture.fmod_id), NUMBER_RESULT_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(fixture.fmod_id), FMOD_X_INPUT_PORT),
         ),
         Err(ProjectGraphError::ConnectionCycle { .. })
     ));

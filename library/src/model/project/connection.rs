@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-use crate::model::{BlendMode, GeneratorContent, NodeContent, ValueContent};
+use crate::model::{BlendMode, GeneratorContent, NodeContent};
 
 use super::{NodeContainer, Project, ProjectGraphError};
 
@@ -16,9 +16,9 @@ pub const FRAME_PORT: &str = "frame";
 pub const FPS_PORT: &str = "fps";
 pub const DURATION_PORT: &str = "duration";
 pub const RESOLUTION_PORT: &str = "resolution";
-pub const VALUE_INPUT_PORT: &str = "value";
-pub const PERIOD_INPUT_PORT: &str = "period";
-pub const VALUE_OUTPUT_PORT: &str = "result";
+pub const FMOD_X_INPUT_PORT: &str = "x";
+pub const FMOD_DIVISOR_INPUT_PORT: &str = "divisor";
+pub const NUMBER_RESULT_OUTPUT_PORT: &str = "result";
 
 /// The normal result of evaluating a graph port. `NoOutput` is not an error
 /// and is deliberately distinct from transparent pixels, zero, false, and
@@ -181,6 +181,9 @@ pub enum PortDataType {
     /// which is only an authored scalar SVG path string.
     Shape,
     Audio,
+    /// A scalar or 2D/3D/4D floating-point graph value. Integer sources are
+    /// promoted to a scalar. Runtime values keep their concrete dimension.
+    Numeric,
     Number,
     Integer,
     Boolean,
@@ -198,6 +201,16 @@ impl PortDataType {
             || source == Self::Any
             || self == source
             || (self == Self::Number && source == Self::Integer)
+            || ((self == Self::Numeric || source == Self::Numeric)
+                && self.is_numeric_family()
+                && source.is_numeric_family())
+    }
+
+    fn is_numeric_family(self) -> bool {
+        matches!(
+            self,
+            Self::Numeric | Self::Number | Self::Integer | Self::Vec2 | Self::Vec3 | Self::Vec4
+        )
     }
 }
 
@@ -401,19 +414,9 @@ fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
             include_property_inputs = false;
             ports.extend(operation.declared_ports.iter().cloned());
         }
-        NodeContent::Value(ValueContent::TimeModulo) => {
+        NodeContent::Value(value) => {
             include_property_inputs = false;
-            ports.extend([
-                PortDefinition::input(VALUE_INPUT_PORT, "Value", PortDataType::Number),
-                PortDefinition::input(PERIOD_INPUT_PORT, "Period", PortDataType::Number),
-                PortDefinition::output(
-                    VALUE_OUTPUT_PORT,
-                    "Result",
-                    PortDataType::Number,
-                    PortSide::Right,
-                    PortExposure::Graph,
-                ),
-            ]);
+            ports.extend(value.port_definitions().iter().cloned());
         }
         NodeContent::Merge => {
             ports.push(time_input());
@@ -424,7 +427,13 @@ fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
         }
     }
     if include_property_inputs {
-        for (key, property) in node.properties().iter() {
+        let mut properties = node.properties().iter().collect::<Vec<_>>();
+        properties.sort_by(|(left, _), (right, _)| {
+            canonical_common_property_rank(left)
+                .cmp(&canonical_common_property_rank(right))
+                .then_with(|| left.cmp(right))
+        });
+        for (key, property) in properties {
             if ports
                 .iter()
                 .any(|port| port.key == *key && port.direction == PortDirection::Input)
@@ -442,7 +451,54 @@ fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
             ));
         }
     }
-    ports
+    canonicalize_node_ports(node, ports)
+}
+
+fn canonicalize_node_ports(
+    node: &crate::model::Node,
+    ports: Vec<PortDefinition>,
+) -> Vec<PortDefinition> {
+    let mut indexed = ports.into_iter().enumerate().collect::<Vec<_>>();
+    indexed.sort_by(|(left_index, left), (right_index, right)| {
+        let left_rank = canonical_node_port_rank(node, left);
+        let right_rank = canonical_node_port_rank(node, right);
+        left_rank
+            .cmp(&right_rank)
+            .then_with(|| left_index.cmp(right_index))
+    });
+    indexed.into_iter().map(|(_, port)| port).collect()
+}
+
+fn canonical_common_property_rank(name: &str) -> u8 {
+    match name {
+        "position" => 0,
+        "rotation" => 1,
+        "scale" => 2,
+        "anchor" => 3,
+        _ => 4,
+    }
+}
+
+/// One model-side ordering contract consumed by every Node view. Port order
+/// is presentation metadata only; addresses and graph evaluation are keyed.
+fn canonical_node_port_rank(node: &crate::model::Node, port: &PortDefinition) -> u8 {
+    if port.direction == PortDirection::Output {
+        return 4;
+    }
+    if port.key == TIME_PORT {
+        return 0;
+    }
+    if matches!(
+        port.key.as_str(),
+        IMAGE_INPUT_PORT | SHAPE_INPUT_PORT | MERGE_IMAGES_PORT | FMOD_X_INPUT_PORT
+    ) {
+        return 1;
+    }
+    let property_name = port.key.strip_prefix("property:").unwrap_or(&port.key);
+    if node.properties().get(property_name).is_some() {
+        return 3;
+    }
+    2
 }
 
 fn property_value_data_type(value: &crate::model::property::PropertyValue) -> PortDataType {
@@ -1471,6 +1527,22 @@ mod tests {
     use crate::model::{Clip, Node, ReferenceContent};
     use crate::plugin::PluginManager;
 
+    #[test]
+    fn numeric_union_accepts_each_concrete_numeric_type_in_both_directions() {
+        for concrete in [
+            PortDataType::Integer,
+            PortDataType::Number,
+            PortDataType::Vec2,
+            PortDataType::Vec3,
+            PortDataType::Vec4,
+        ] {
+            assert!(PortDataType::Numeric.accepts(concrete));
+            assert!(concrete.accepts(PortDataType::Numeric));
+        }
+        assert!(!PortDataType::Numeric.accepts(PortDataType::Color));
+        assert!(!PortDataType::Image.accepts(PortDataType::Numeric));
+    }
+
     fn add_node(project: &mut Project, container: NodeContainer, name: &str) -> Uuid {
         let node = Node::new_merge(name);
         let node_id = node.id;
@@ -1514,6 +1586,95 @@ mod tests {
         let clip_id = clip.id;
         project.add_clip(clip);
         (project, clip_id)
+    }
+
+    #[test]
+    fn canonical_node_port_order_is_stable_and_does_not_mutate_graph_semantics()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut project = Project::new("port order");
+        let (composition, track) = Composition::new("main", 640, 360, 30.0, 5.0);
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let clip = Clip::new("port order", 0.0, 5.0);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id)?;
+        let container = NodeContainer::Clip(clip_id);
+        let plugins = PluginManager::default();
+        let shape_id = attach_authored_node(
+            &mut project,
+            container,
+            test_generator_node(
+                "Shape",
+                GeneratorNodeRequest::Shape {
+                    path: "M 0 0 H 10 V 10 Z".to_string(),
+                },
+            ),
+        )?;
+        let style = plugins.create_style_operation_node("fill")?;
+        let NodeContent::PluginOperation(operation) = style.content() else {
+            return Err("Fill factory did not produce a PluginOperation".into());
+        };
+        let persisted_order = operation
+            .declared_ports
+            .iter()
+            .map(|port| port.key.clone())
+            .collect::<Vec<_>>();
+        let style_id = attach_authored_node(&mut project, container, style)?;
+
+        assert_eq!(
+            project
+                .port_definitions(PortOwner::Node(style_id))
+                .into_iter()
+                .map(|port| port.key)
+                .collect::<Vec<_>>(),
+            vec![
+                TIME_PORT,
+                SHAPE_INPUT_PORT,
+                "property:color",
+                "property:opacity",
+                "property:offset",
+                IMAGE_OUTPUT_PORT,
+            ]
+        );
+        let NodeContent::PluginOperation(operation) = project.get_node(style_id).unwrap().content()
+        else {
+            return Err("persisted Fill Node changed content kind".into());
+        };
+        assert_eq!(
+            operation
+                .declared_ports
+                .iter()
+                .map(|port| port.key.clone())
+                .collect::<Vec<_>>(),
+            persisted_order,
+            "derived display ordering must not rewrite persisted plugin ports"
+        );
+
+        project.connect_ports(
+            PortAddress::new(PortOwner::Node(shape_id), SHAPE_OUTPUT_PORT),
+            PortAddress::new(PortOwner::Node(style_id), SHAPE_INPUT_PORT),
+        )?;
+        let validation_errors = project.validate_connections();
+        assert!(validation_errors.is_empty(), "{validation_errors:#?}");
+
+        let fmod = Node::new_fmod("Fmod");
+        let fmod_id = attach_authored_node(&mut project, container, fmod)?;
+        assert_eq!(
+            project
+                .port_definitions(PortOwner::Node(fmod_id))
+                .into_iter()
+                .map(|port| port.key)
+                .collect::<Vec<_>>(),
+            vec![
+                FMOD_X_INPUT_PORT,
+                FMOD_DIVISOR_INPUT_PORT,
+                NUMBER_RESULT_OUTPUT_PORT,
+            ],
+            "Fmod is generic and must not gain an implicit Time port"
+        );
+        Ok(())
     }
 
     #[test]

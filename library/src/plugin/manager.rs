@@ -1301,8 +1301,8 @@ mod tests {
             &mut failures,
         );
         check_definitions(
-            "native Time Modulo",
-            crate::model::ValueContent::TimeModulo.property_definitions(),
+            "native Fmod",
+            crate::model::ValueContent::Fmod.property_definitions(),
             &mut failures,
         );
         let mut operation_contracts = Vec::<(&'static str, String, usize)>::new();

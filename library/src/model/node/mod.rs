@@ -1,4 +1,8 @@
-use crate::model::project::connection::PortDefinition;
+use crate::model::numeric::NumericBinaryOperation;
+use crate::model::project::connection::{
+    FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT, NUMBER_RESULT_OUTPUT_PORT, PortDataType,
+    PortDefinition, PortExposure, PortSide,
+};
 use crate::model::project::property::{
     Property, PropertyDefinition, PropertyMap, PropertyUiType, PropertyValue,
 };
@@ -11,7 +15,6 @@ pub const CLIP_START_TIME_PROPERTY: &str = "start_time";
 pub const CLIP_DURATION_PROPERTY: &str = "duration";
 pub const CLIP_TRIM_IN_PROPERTY: &str = "trim_in";
 pub const CLIP_TIME_STRETCH_PROPERTY: &str = "time_stretch";
-pub const TIME_MODULO_PERIOD_PROPERTY: &str = "period";
 
 static CLIP_TIMING_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 4]> = LazyLock::new(|| {
     [
@@ -70,20 +73,34 @@ static CLIP_TIMING_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 4]> = Laz
     ]
 });
 
-static TIME_MODULO_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> = LazyLock::new(|| {
+static FMOD_PROPERTY_DEFINITIONS: LazyLock<[PropertyDefinition; 1]> = LazyLock::new(|| {
     [PropertyDefinition::new(
-        TIME_MODULO_PERIOD_PROPERTY,
+        FMOD_DIVISOR_INPUT_PORT,
         PropertyUiType::Float {
-            min: 0.001,
-            max: 86_400.0,
-            step: 0.001,
-            suffix: " s".to_string(),
-            min_hard_limit: true,
+            min: -1_000_000.0,
+            max: 1_000_000.0,
+            step: 0.01,
+            suffix: String::new(),
+            min_hard_limit: false,
             max_hard_limit: false,
         },
-        "Period",
+        "Divisor",
         PropertyValue::Number(OrderedFloat(1.0)),
     )]
+});
+
+static FMOD_PORT_DEFINITIONS: LazyLock<[PortDefinition; 3]> = LazyLock::new(|| {
+    [
+        PortDefinition::input(FMOD_X_INPUT_PORT, "X", PortDataType::Numeric),
+        PortDefinition::input(FMOD_DIVISOR_INPUT_PORT, "Divisor", PortDataType::Numeric),
+        PortDefinition::output(
+            NUMBER_RESULT_OUTPUT_PORT,
+            "Result",
+            PortDataType::Numeric,
+            PortSide::Right,
+            PortExposure::Graph,
+        ),
+    ]
 });
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
@@ -500,14 +517,13 @@ impl Node {
         Ok(())
     }
 
-    /// Creates a native scalar node for explicit timeline-time remapping.
+    /// Creates a generic native floating-point remainder Node.
     ///
-    /// The dividend is deliberately not implicit: callers must wire a Number
-    /// source (normally a container's internal Time output) to the `value`
-    /// input. The authored period is initialized in the authoritative
-    /// [`PropertyMap`] by this constructor.
-    pub fn new_time_modulo(name: &str) -> Self {
-        let content = ValueContent::TimeModulo;
+    /// `x` is deliberately not implicit: a timeline loop is authored by
+    /// wiring a container's Time output to `x`. `divisor` remains a normal,
+    /// wire-overridable numeric property initialized to `1.0`.
+    pub fn new_fmod(name: &str) -> Self {
+        let content = ValueContent::Fmod;
         Self::with_properties(
             name,
             NodeContent::Value(content),
@@ -588,7 +604,7 @@ pub enum NodeContent {
     /// [`Node::properties`]. Loading and validating a Project never requires
     /// the referenced plugin to be installed.
     PluginOperation(PluginOperationContent),
-    /// Native, typed scalar operations. Inputs and outputs remain canonical
+    /// Native, typed numeric operations. Inputs and outputs remain canonical
     /// Project ports; this variant does not introduce a parallel value model.
     Value(ValueContent),
     /// Ordered variadic image compositor. Input ordering lives on canonical
@@ -598,18 +614,55 @@ pub enum NodeContent {
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ValueContent {
-    /// Floating-point remainder used for explicit looping/time remapping.
-    /// The `value` input is required and `period` may be wired or read from
-    /// [`Node::properties`]. Invalid inputs produce graph `NoOutput`.
-    TimeModulo,
+    /// Generic component-wise floating-point remainder. The required `x`
+    /// input and wire-overridable `divisor` accept scalar and 2D/3D/4D
+    /// numeric values. Invalid inputs produce graph `NoOutput`; no Time input
+    /// or timeline behavior is implicit.
+    Fmod,
 }
 
 impl ValueContent {
-    /// Canonical authored-property metadata for this native scalar operation.
+    pub(crate) fn numeric_operation(self) -> NumericBinaryOperation {
+        match self {
+            Self::Fmod => NumericBinaryOperation::Fmod,
+        }
+    }
+
+    pub fn primary_input(self) -> &'static str {
+        match self {
+            Self::Fmod => FMOD_X_INPUT_PORT,
+        }
+    }
+
+    pub fn secondary_input(self) -> &'static str {
+        match self {
+            Self::Fmod => FMOD_DIVISOR_INPUT_PORT,
+        }
+    }
+
+    /// Canonical authored-property metadata for this native numeric operation.
     /// Factories and inspectors consume this same definition list.
     pub fn property_definitions(self) -> &'static [PropertyDefinition] {
         match self {
-            Self::TimeModulo => TIME_MODULO_PROPERTY_DEFINITIONS.as_slice(),
+            Self::Fmod => FMOD_PROPERTY_DEFINITIONS.as_slice(),
+        }
+    }
+
+    /// Canonical graph ports for this native numeric operation.
+    pub fn port_definitions(self) -> &'static [PortDefinition] {
+        match self {
+            Self::Fmod => FMOD_PORT_DEFINITIONS.as_slice(),
+        }
+    }
+
+    /// Declares the primary input that a future bypass state should route to
+    /// each output. This is operation metadata only; it deliberately does not
+    /// add or reinterpret authored Node state.
+    pub fn bypass_input_for_output(self, output: &str) -> Option<&'static str> {
+        if output == NUMBER_RESULT_OUTPUT_PORT {
+            Some(self.primary_input())
+        } else {
+            None
         }
     }
 }
@@ -761,8 +814,17 @@ mod tests {
     }
 
     #[test]
+    fn pre_v1_time_modulo_json_has_no_fmod_alias() -> Result<(), serde_json::Error> {
+        let mut legacy = serde_json::to_value(Node::new_fmod("legacy value kind"))?;
+        legacy["content"]["data"] = serde_json::Value::String("TimeModulo".to_string());
+        let error = serde_json::from_value::<Node>(legacy).unwrap_err();
+        assert!(error.to_string().contains("unknown variant `TimeModulo`"));
+        Ok(())
+    }
+
+    #[test]
     fn authored_edits_cannot_extend_a_factory_property_contract() {
-        let mut node = Node::new_time_modulo("sealed property contract");
+        let mut node = Node::new_fmod("sealed property contract");
         let unknown = Property::constant(PropertyValue::Number(OrderedFloat(2.0)));
 
         assert!(node.set_property("unknown".to_string(), unknown).is_err());
@@ -782,6 +844,10 @@ mod tests {
             .is_none()
         );
         assert!(node.properties().get("unknown").is_none());
-        assert!(node.properties().get(TIME_MODULO_PERIOD_PROPERTY).is_some());
+        assert!(node.properties().get(FMOD_DIVISOR_INPUT_PORT).is_some());
+        assert_eq!(
+            ValueContent::Fmod.bypass_input_for_output(NUMBER_RESULT_OUTPUT_PORT),
+            Some(FMOD_X_INPUT_PORT)
+        );
     }
 }

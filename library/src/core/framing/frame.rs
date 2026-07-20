@@ -9,16 +9,15 @@ use crate::model::frame::color::Color;
 use crate::model::frame::entity::{FrameGroup, FrameGroupKind, FrameItem, FrameObject};
 use crate::model::frame::frame::{FrameInfo, Region};
 use crate::model::frame::runtime_shape::RuntimeShape;
+use crate::model::numeric::evaluate_numeric_binary;
 use crate::model::project::{
     Composition, DURATION_PORT, EvalOutput, EvalResult, FPS_PORT, FRAME_PORT, IMAGE_INPUT_PORT,
-    MERGE_IMAGES_PORT, NodeContainer, PERIOD_INPUT_PORT, PortAddress, PortDataType, PortDirection,
-    PortMultiplicity, PortOwner, Project, ProjectConnection, RESOLUTION_PORT, SHAPE_INPUT_PORT,
-    SHAPE_OUTPUT_PORT, TIME_PORT, VALUE_INPUT_PORT, VALUE_OUTPUT_PORT,
+    MERGE_IMAGES_PORT, NUMBER_RESULT_OUTPUT_PORT, NodeContainer, PortAddress, PortDataType,
+    PortDirection, PortMultiplicity, PortOwner, Project, ProjectConnection, RESOLUTION_PORT,
+    SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
 };
 use crate::model::property::{PropertyValue, Vec2};
-use crate::model::{
-    GeneratorContent, Node, NodeContent, TIME_MODULO_PERIOD_PROPERTY, ValueContent,
-};
+use crate::model::{GeneratorContent, Node, NodeContent, ValueContent};
 use crate::plugin::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
     EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, FrameEvaluationContext, PluginManager,
@@ -1287,7 +1286,7 @@ impl<'a> FrameEvaluator<'a> {
         if !node.enabled {
             return Ok(EvalOutput::NoOutput);
         }
-        if output_port != VALUE_OUTPUT_PORT {
+        if output_port != NUMBER_RESULT_OUTPUT_PORT {
             return Err(LibraryError::Validation(format!(
                 "Unsupported value output port {owner:?}.{output_port}"
             )));
@@ -1300,8 +1299,8 @@ impl<'a> FrameEvaluator<'a> {
             return Err(cycle_error(owner));
         }
         let result = match node.content() {
-            NodeContent::Value(ValueContent::TimeModulo) => {
-                self.evaluate_time_modulo(node, scope, global_time, path)
+            NodeContent::Value(value) => {
+                self.evaluate_numeric_binary_node(node, *value, scope, global_time, path)
             }
             _ => Ok(EvalOutput::NoOutput),
         };
@@ -1309,50 +1308,40 @@ impl<'a> FrameEvaluator<'a> {
         result
     }
 
-    fn evaluate_time_modulo(
+    fn evaluate_numeric_binary_node(
         &self,
         node: &Node,
+        value: ValueContent,
         scope: EvaluationScope,
         global_time: f64,
         path: &mut HashSet<PortOwner>,
     ) -> EvalResult<PropertyValue> {
-        let value = match self.resolve_value_input(
+        let left = match self.resolve_value_input(
             node,
-            VALUE_INPUT_PORT,
+            value.primary_input(),
             None,
             scope,
             global_time,
             path,
         )? {
-            EvalOutput::Produced(value) => match value.get_as::<f64>() {
-                Some(value) if value.is_finite() => value,
-                _ => return Ok(EvalOutput::NoOutput),
-            },
+            EvalOutput::Produced(value) => value,
             EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
-        let period = match self.resolve_value_input(
+        let right = match self.resolve_value_input(
             node,
-            PERIOD_INPUT_PORT,
-            Some(TIME_MODULO_PERIOD_PROPERTY),
+            value.secondary_input(),
+            Some(value.secondary_input()),
             scope,
             global_time,
             path,
         )? {
-            EvalOutput::Produced(period) => match period.get_as::<f64>() {
-                Some(period) if period.is_finite() && period > 0.0 => period,
-                _ => return Ok(EvalOutput::NoOutput),
-            },
+            EvalOutput::Produced(value) => value,
             EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
         };
-        // Looping is the primary use case, so negative authored/remapped time
-        // wraps into the same stable half-open interval as positive time.
-        let result = value.rem_euclid(period);
-        if !result.is_finite() {
-            return Ok(EvalOutput::NoOutput);
-        }
-        Ok(EvalOutput::Produced(PropertyValue::Number(OrderedFloat(
-            result,
-        ))))
+        Ok(
+            evaluate_numeric_binary(value.numeric_operation(), &left, &right)
+                .map_or(EvalOutput::NoOutput, EvalOutput::Produced),
+        )
     }
 
     fn resolve_value_input(
@@ -1560,8 +1549,81 @@ pub fn get_frame_from_project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::project::Composition;
+    use crate::model::project::{Composition, FMOD_DIVISOR_INPUT_PORT, FMOD_X_INPUT_PORT};
+    use crate::model::property::Property;
     use crate::model::{Clip, Node};
+
+    fn evaluate_fmod_output(x: f64, divisor: f64) -> EvalOutput<PropertyValue> {
+        let mut project = Project::new("fmod semantics");
+        let (composition, track) = Composition::new("main", 32, 32, 30.0, 2.0);
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
+        let mut clip = Clip::new("clip", 0.0, 1.0);
+        clip.trim_in = OrderedFloat(x - 0.5);
+        let clip_id = clip.id;
+        project.add_clip(clip);
+        project.attach_clip_to_track(track_id, clip_id).unwrap();
+
+        let mut fmod = Node::new_fmod("Fmod");
+        fmod.set_property(
+            FMOD_DIVISOR_INPUT_PORT.to_string(),
+            Property::constant(PropertyValue::Number(OrderedFloat(divisor))),
+        )
+        .unwrap();
+        let fmod_id = fmod.id;
+        project.add_node(fmod);
+        project
+            .attach_node_to_container(NodeContainer::Clip(clip_id), fmod_id)
+            .unwrap();
+        project
+            .connect_ports(
+                PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
+                PortAddress::new(PortOwner::Node(fmod_id), FMOD_X_INPUT_PORT),
+            )
+            .unwrap();
+
+        let plugin_manager = Arc::new(PluginManager::default());
+        let evaluator = FrameEvaluator::new(
+            &project,
+            &project.compositions[0],
+            plugin_manager.get_property_evaluators(),
+            plugin_manager,
+        );
+        evaluator
+            .resolve_metadata_value(
+                &PortAddress::new(PortOwner::Node(fmod_id), NUMBER_RESULT_OUTPUT_PORT),
+                0.5,
+                &mut HashSet::new(),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn fmod_uses_rust_remainder_sign_semantics_for_all_sign_pairs() {
+        for (x, divisor, expected) in [
+            (5.5, 2.0, 1.5),
+            (5.5, -2.0, 1.5),
+            (-5.5, 2.0, -1.5),
+            (-5.5, -2.0, -1.5),
+        ] {
+            assert_eq!(
+                evaluate_fmod_output(x, divisor),
+                EvalOutput::Produced(PropertyValue::Number(OrderedFloat(expected))),
+                "{x} % {divisor} must match Rust/C fmod semantics"
+            );
+        }
+    }
+
+    #[test]
+    fn fmod_non_finite_inputs_and_zero_divisors_produce_no_output() {
+        for x in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(evaluate_fmod_output(x, 2.0), EvalOutput::NoOutput);
+        }
+        for divisor in [0.0, -0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(evaluate_fmod_output(5.5, divisor), EvalOutput::NoOutput);
+        }
+    }
 
     #[test]
     fn value_resolver_detects_a_cycle_even_when_called_without_project_validation() {
@@ -1575,9 +1637,9 @@ mod tests {
         project.add_clip(clip);
         project.attach_clip_to_track(track_id, clip_id).unwrap();
 
-        let first = Node::new_time_modulo("first");
+        let first = Node::new_fmod("first");
         let first_id = first.id;
-        let second = Node::new_time_modulo("second");
+        let second = Node::new_fmod("second");
         let second_id = second.id;
         for node in [first, second] {
             let id = node.id;
@@ -1591,13 +1653,13 @@ mod tests {
         // normal Project::connect_ports rejects either self/cyclic edge first.
         project.connections.extend([
             ProjectConnection::new(
-                PortAddress::new(PortOwner::Node(second_id), VALUE_OUTPUT_PORT),
-                PortAddress::new(PortOwner::Node(first_id), VALUE_INPUT_PORT),
+                PortAddress::new(PortOwner::Node(second_id), NUMBER_RESULT_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(first_id), FMOD_X_INPUT_PORT),
                 0,
             ),
             ProjectConnection::new(
-                PortAddress::new(PortOwner::Node(first_id), VALUE_OUTPUT_PORT),
-                PortAddress::new(PortOwner::Node(second_id), VALUE_INPUT_PORT),
+                PortAddress::new(PortOwner::Node(first_id), NUMBER_RESULT_OUTPUT_PORT),
+                PortAddress::new(PortOwner::Node(second_id), FMOD_X_INPUT_PORT),
                 0,
             ),
         ]);
@@ -1612,7 +1674,7 @@ mod tests {
         );
         let error = evaluator
             .resolve_metadata_value(
-                &PortAddress::new(PortOwner::Node(first_id), VALUE_OUTPUT_PORT),
+                &PortAddress::new(PortOwner::Node(first_id), NUMBER_RESULT_OUTPUT_PORT),
                 0.0,
                 &mut HashSet::new(),
             )
