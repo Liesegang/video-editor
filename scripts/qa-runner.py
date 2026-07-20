@@ -43,6 +43,22 @@ class SuiteSpec:
     fixture: str = FIXTURE_NAME
 
 
+def blend_suite_specs() -> tuple[SuiteSpec, ...]:
+    return tuple(
+        SuiteSpec(
+            "blend-modes-{}".format(shard),
+            "qa-blend-modes-e2e.py",
+            ("--shard", shard),
+        )
+        for shard in (
+            "normal-darken",
+            "lighten",
+            "contrast",
+            "comparative-hsl",
+        )
+    )
+
+
 def prepare_suite_directory(suite_dir: pathlib.Path) -> None:
     """Remove evidence that could make a reused artifact directory pass stale."""
     suite_dir.mkdir(parents=True, exist_ok=True)
@@ -71,6 +87,8 @@ def suite_specs(mode: str) -> tuple[SuiteSpec, ...]:
                 suite_owns_capture=True,
             ),
         )
+    if mode == "blend":
+        return blend_suite_specs()
     if mode == "full":
         return (
             SuiteSpec("all", "qa-e2e.py", ("--suite", "all")),
@@ -80,7 +98,7 @@ def suite_specs(mode: str) -> tuple[SuiteSpec, ...]:
             SuiteSpec("node-editor", "qa-node-editor-e2e.py"),
             SuiteSpec("node-reparent", "qa-reparent-e2e.py"),
             SuiteSpec("merge-reorder", "qa-merge-reorder-e2e.py"),
-            SuiteSpec("blend-modes", "qa-blend-modes-e2e.py"),
+            *blend_suite_specs(),
             SuiteSpec(
                 "composition-drop",
                 "qa-composition-drop-e2e.py",
@@ -496,13 +514,33 @@ def write_summary(
     mode: str,
     build: dict,
     results: list[dict],
+    jobs_requested: int = 1,
+    jobs_used=None,
+    suite_wall_seconds=None,
 ) -> dict:
     results = sorted(results, key=lambda item: item["name"])
+    jobs_used = min(jobs_requested, len(results)) if jobs_used is None else jobs_used
+    sum_suite_seconds = round(
+        sum(float(result.get("duration_seconds", 0.0)) for result in results), 3
+    )
+    if suite_wall_seconds is None:
+        suite_wall_seconds = sum_suite_seconds
+    suite_wall_seconds = round(suite_wall_seconds, 3)
+    parallel_speedup = (
+        round(sum_suite_seconds / suite_wall_seconds, 3)
+        if suite_wall_seconds > 0.0
+        else None
+    )
     summary = {
         "ok": build.get("ok") is True and aggregate_ok(results),
         "mode": mode,
         "artifact_root": str(artifact_root.resolve()),
         "build": build,
+        "jobs_requested": jobs_requested,
+        "jobs_used": jobs_used,
+        "suite_wall_seconds": suite_wall_seconds,
+        "sum_suite_seconds": sum_suite_seconds,
+        "parallel_speedup": parallel_speedup,
         "suites": results,
     }
     artifact_root.mkdir(parents=True, exist_ok=True)
@@ -512,6 +550,13 @@ def write_summary(
     lines = [
         "QA mode: {}".format(mode),
         "Build: {}".format("PASS" if build.get("ok") else "FAIL"),
+        "Suites: {:.3f}s wall / {:.3f}s summed, jobs {}/{}, speedup {}".format(
+            suite_wall_seconds,
+            sum_suite_seconds,
+            jobs_used,
+            jobs_requested,
+            "n/a" if parallel_speedup is None else "{:.3f}x".format(parallel_speedup),
+        ),
     ]
     for result in results:
         line = "{}: {} ({:.3f}s)".format(
@@ -540,15 +585,23 @@ def write_summary(
     return summary
 
 
+def positive_jobs(value):
+    jobs = int(value)
+    if jobs < 1:
+        raise argparse.ArgumentTypeError("jobs must be at least 1")
+    return jobs
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("smoke", "full"), default="smoke")
+    parser.add_argument("--mode", choices=("smoke", "blend", "full"), default="smoke")
     parser.add_argument("--artifact-dir", default=None)
     parser.add_argument("--app-binary", default=None)
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--build-timeout", type=float, default=900.0)
     parser.add_argument("--health-timeout", type=float, default=45.0)
     parser.add_argument("--suite-timeout", type=float, default=None)
+    parser.add_argument("--jobs", type=positive_jobs, default=4)
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args(argv)
 
@@ -617,13 +670,25 @@ def main(argv=None) -> int:
                 }
             )
         if not build["ok"]:
-            summary = write_summary(artifact_root, args.mode, build, [])
+            summary = write_summary(
+                artifact_root,
+                args.mode,
+                build,
+                [],
+                jobs_requested=args.jobs,
+                jobs_used=0,
+                suite_wall_seconds=0.0,
+            )
             print(json.dumps(summary, ensure_ascii=False, indent=2))
             return 1
 
         specs = suite_specs(args.mode)
         suite_timeout = args.suite_timeout or (120.0 if args.mode == "smoke" else 480.0)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(specs)) as executor:
+        jobs_used = min(args.jobs, len(specs))
+        suites_started = time.monotonic()
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=jobs_used
+        ) as executor:
             futures = [
                 executor.submit(
                     run_one_suite,
@@ -637,7 +702,16 @@ def main(argv=None) -> int:
                 for spec in specs
             ]
             results = [future.result() for future in futures]
-        summary = write_summary(artifact_root, args.mode, build, results)
+        suite_wall_seconds = time.monotonic() - suites_started
+        summary = write_summary(
+            artifact_root,
+            args.mode,
+            build,
+            results,
+            jobs_requested=args.jobs,
+            jobs_used=jobs_used,
+            suite_wall_seconds=suite_wall_seconds,
+        )
         print((artifact_root / "summary.txt").read_text(encoding="utf-8"), end="")
         print("Artifacts: {}".format(artifact_root.resolve()))
         return 0 if summary["ok"] else 1

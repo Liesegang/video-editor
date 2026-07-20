@@ -435,7 +435,10 @@ class QaRunnerTests(unittest.TestCase):
                 "node-editor",
                 "node-reparent",
                 "merge-reorder",
-                "blend-modes",
+                "blend-modes-normal-darken",
+                "blend-modes-lighten",
+                "blend-modes-contrast",
+                "blend-modes-comparative-hsl",
                 "composition-drop",
                 "node-wire",
                 "node-wire-selection",
@@ -457,8 +460,29 @@ class QaRunnerTests(unittest.TestCase):
             if item.name == "composition-drop"
         )
         self.assertEqual(composition_drop.fixture, "composition_drop_e2e")
+        self.assertEqual(
+            [item.name for item in RUNNER.suite_specs("blend")],
+            [
+                "blend-modes-normal-darken",
+                "blend-modes-lighten",
+                "blend-modes-contrast",
+                "blend-modes-comparative-hsl",
+            ],
+        )
+        self.assertTrue(
+            all(
+                item.script == "qa-blend-modes-e2e.py"
+                for item in RUNNER.suite_specs("blend")
+            )
+        )
         with self.assertRaises(ValueError):
             RUNNER.suite_specs("unknown")
+
+    def test_runner_bounds_parallelism_with_a_positive_jobs_argument(self):
+        self.assertEqual(RUNNER.parse_args([]).jobs, 4)
+        self.assertEqual(RUNNER.parse_args(["--jobs", "2"]).jobs, 2)
+        with self.assertRaises(SystemExit):
+            RUNNER.parse_args(["--jobs", "0"])
 
     def test_blend_suite_covers_every_catalog_mode_group_and_masks_only_target_blend(self):
         expected_catalog = (
@@ -494,6 +518,14 @@ class QaRunnerTests(unittest.TestCase):
         )
         self.assertEqual(BLEND.CATALOG, expected_catalog)
         self.assertEqual(BLEND.MODES, expected_catalog[2:] + expected_catalog[:2])
+        sharded = [
+            mode
+            for shard in BLEND.MODE_SHARDS.values()
+            for mode in shard
+        ]
+        self.assertEqual(len(sharded), 29)
+        self.assertEqual(set(sharded), set(expected_catalog))
+        self.assertEqual(len(set(sharded)), 29)
         self.assertEqual(len({item[0] for item in BLEND.MODES}), 29)
         self.assertEqual(len({item[1] for item in BLEND.MODES}), 29)
         self.assertEqual(
@@ -565,11 +597,20 @@ class QaRunnerTests(unittest.TestCase):
                 "full",
                 {"ok": True},
                 [result],
+                jobs_requested=4,
+                jobs_used=1,
+                suite_wall_seconds=0.75,
             )
             self.assertFalse(summary["ok"])
+            self.assertEqual(summary["jobs_requested"], 4)
+            self.assertEqual(summary["jobs_used"], 1)
+            self.assertEqual(summary["suite_wall_seconds"], 0.75)
+            self.assertEqual(summary["sum_suite_seconds"], 1.25)
+            self.assertAlmostEqual(summary["parallel_speedup"], 1.667, places=3)
             text = (root / "summary.txt").read_text(encoding="utf-8")
             self.assertIn("timeline: FAIL", text)
             self.assertIn("coordinate drag failed", text)
+            self.assertIn("0.750s wall / 1.250s summed, jobs 1/4", text)
             self.assertNotIn("All suites passed", text)
 
     def test_process_group_cleanup_terminates_a_live_process(self):
