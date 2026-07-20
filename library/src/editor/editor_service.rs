@@ -578,13 +578,8 @@ impl EditorService {
         value: PropertyValue,
         easing: Option<crate::animation::EasingFunction>,
     ) -> Result<(), LibraryError> {
-        self.project_manager.update_property_or_keyframe(
-            owner,
-            property_key,
-            time,
-            value,
-            easing,
-        )
+        self.project_manager
+            .update_property_or_keyframe(owner, property_key, time, value, easing)
     }
 
     pub fn update_keyframe_by_id(

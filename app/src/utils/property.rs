@@ -1,6 +1,6 @@
+use library::model::property::PropertyValue;
 use library::EditorService as ProjectService;
 use library::PropertyOwner;
-use library::model::property::PropertyValue;
 use uuid::Uuid;
 
 fn node_local_time(service: &ProjectService, node_id: Uuid, global_time: f64) -> f64 {

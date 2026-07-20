@@ -1,7 +1,7 @@
 use egui::Ui;
+use library::model::project::Project;
 use library::ClipBundle;
 use library::EditorService as ProjectService;
-use library::model::project::Project;
 use std::sync::{Arc, RwLock};
 
 use crate::utils::lock::read_or_recover;

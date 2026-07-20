@@ -243,8 +243,8 @@ impl EditorContext {
 #[cfg(test)]
 mod tests {
     use super::EditorContext;
-    use library::model::Clip;
     use library::model::project::{Composition, Project};
+    use library::model::Clip;
 
     #[test]
     fn project_replacement_removes_stale_selection_and_edit_state() {
