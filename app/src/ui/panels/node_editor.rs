@@ -15043,7 +15043,9 @@ mod tests {
 
     #[test]
     fn real_egui_capture_selects_the_top_overlapping_node_for_a_multi_drag() {
-        let (mut project, composition_id, track_id, clip_id, _, _) = fixture();
+        let (mut project, composition_id, track_id, clip_id, solid_id, merge_id) = fixture();
+        assert!(project.remove_node(solid_id).is_some());
+        assert!(project.remove_node(merge_id).is_some());
         if let Some(clip) = project.get_clip_mut(clip_id) {
             clip.ui_size = [1_300.0, 760.0];
         }
@@ -15155,11 +15157,8 @@ mod tests {
         let upper_rect = test_rect(&format!("node_editor.node:{upper_id}"));
         assert!(lower_rect.is_some_and(|rect| rect.is_positive()));
         assert!(upper_rect.is_some_and(|rect| rect.is_positive()));
-        let upper_header = test_rect(&format!("node_editor.node_header:{upper_id}"));
-        assert!(upper_header.is_some_and(|rect| rect.is_positive()));
-        let Some(upper_header) = upper_header else {
-            return;
-        };
+        assert!(test_rect(&format!("node_editor.node_header:{upper_id}"))
+            .is_some_and(|rect| rect.is_positive()));
         let Some(persistent_snarl_id) = persistent_snarl_id else {
             return;
         };
@@ -15219,6 +15218,37 @@ mod tests {
             selected.contains(&upper_snarl_id),
             "upper selection missing from {selected:?}"
         );
+        // A newly visible body changes Snarl's measured Node width while its
+        // open animation settles. Coordinate input must use geometry from a
+        // settled frame, just like the HTTP QA client does.
+        let mut previous_upper_header = None;
+        let mut stable_header_frames = 0;
+        let mut settled_upper_header = None;
+        for _ in 0..30 {
+            render_frame(
+                &project,
+                &mut snarl,
+                frame,
+                Vec::new(),
+                egui::Modifiers::NONE,
+            );
+            frame += 1;
+            let current = test_rect(&format!("node_editor.node_header:{upper_id}"));
+            if current.is_some_and(|rect| rect.is_positive()) && current == previous_upper_header {
+                stable_header_frames += 1;
+                if stable_header_frames >= 2 {
+                    settled_upper_header = current;
+                    break;
+                }
+            } else {
+                stable_header_frames = 0;
+            }
+            previous_upper_header = current;
+        }
+        let Some(upper_header) = settled_upper_header else {
+            panic!("Merge header geometry did not settle before coordinate input");
+        };
+        assert!(upper_header.is_positive());
         let upper_header_center = upper_header.center();
         let command = egui::Modifiers {
             command: true,
@@ -15269,6 +15299,12 @@ mod tests {
         assert_eq!(typed_primary, Some(SelectionTarget::Node(lower_id)));
 
         // Restore the group for the overlapping multi-drag assertion below.
+        let upper_header = test_rect(&format!("node_editor.node_header:{upper_id}"));
+        assert!(upper_header.is_some_and(|rect| rect.is_positive()));
+        let Some(upper_header) = upper_header else {
+            return;
+        };
+        let upper_header_center = upper_header.center();
         for events in [
             vec![egui::Event::PointerMoved(upper_header_center)],
             vec![egui::Event::PointerButton {
