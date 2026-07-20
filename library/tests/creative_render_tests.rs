@@ -1,5 +1,6 @@
 mod support;
 
+use anyhow::{Context, Result, anyhow, bail};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -32,9 +33,9 @@ const WIDTH: u32 = 128;
 const HEIGHT: u32 = 80;
 const FPS: f64 = 10.0;
 
-fn set(node: &mut Node, key: &str, value: PropertyValue) {
+fn set(node: &mut Node, key: &str, value: PropertyValue) -> Result<()> {
     node.set_property(key.to_string(), Property::constant(value))
-        .expect("factory initializes the test property");
+        .map_err(|error| anyhow!(error))
 }
 
 fn vec2(x: f64, y: f64) -> PropertyValue {
@@ -48,25 +49,25 @@ fn rgba(r: u8, g: u8, b: u8) -> PropertyValue {
     PropertyValue::Color(Color { r, g, b, a: 255 })
 }
 
-fn fill(plugins: &PluginManager, color: Color) -> Node {
-    let mut node = plugins.create_style_operation_node("fill").unwrap();
-    set(&mut node, "color", PropertyValue::Color(color));
-    node
+fn fill(plugins: &PluginManager, color: Color) -> Result<Node> {
+    let mut node = plugins.create_style_operation_node("fill")?;
+    set(&mut node, "color", PropertyValue::Color(color))?;
+    Ok(node)
 }
 
-fn stroke(plugins: &PluginManager, color: Color, width: f64, dash_array: &str) -> Node {
-    let mut node = plugins.create_style_operation_node("stroke").unwrap();
-    set(&mut node, "color", PropertyValue::Color(color));
-    set(&mut node, "width", width.into());
+fn stroke(plugins: &PluginManager, color: Color, width: f64, dash_array: &str) -> Result<Node> {
+    let mut node = plugins.create_style_operation_node("stroke")?;
+    set(&mut node, "color", PropertyValue::Color(color))?;
+    set(&mut node, "width", width.into())?;
     set(
         &mut node,
         "dash_array",
         PropertyValue::String(dash_array.to_string()),
-    );
-    node
+    )?;
+    Ok(node)
 }
 
-fn base_node(name: &str, request: GeneratorNodeRequest) -> Node {
+fn base_node(name: &str, request: GeneratorNodeRequest) -> Result<Node> {
     let mut node = generator_node_for_canvas(
         name,
         request,
@@ -75,31 +76,31 @@ fn base_node(name: &str, request: GeneratorNodeRequest) -> Node {
         u64::from(WIDTH),
         u64::from(HEIGHT),
     );
-    set(&mut node, "position", vec2(8.0, 8.0));
-    set(&mut node, "anchor", vec2(0.0, 0.0));
-    node
+    set(&mut node, "position", vec2(8.0, 8.0))?;
+    set(&mut node, "anchor", vec2(0.0, 0.0))?;
+    Ok(node)
 }
 
-fn text_node(text: &str) -> Node {
+fn text_node(text: &str) -> Result<Node> {
     let mut node = base_node(
         "text",
         GeneratorNodeRequest::Text {
             text: text.to_string(),
             font: "Arial".to_string(),
         },
-    );
-    set(&mut node, "text", PropertyValue::String(text.to_string()));
+    )?;
+    set(&mut node, "text", PropertyValue::String(text.to_string()))?;
     set(
         &mut node,
         "font_family",
         PropertyValue::String("Arial".to_string()),
-    );
-    set(&mut node, "size", 30.0.into());
-    node
+    )?;
+    set(&mut node, "size", 30.0.into())?;
+    Ok(node)
 }
 
-fn default_text_styles(plugins: &PluginManager) -> Vec<Node> {
-    vec![
+fn default_text_styles(plugins: &PluginManager) -> Result<Vec<Node>> {
+    Ok(vec![
         fill(
             plugins,
             Color {
@@ -108,7 +109,7 @@ fn default_text_styles(plugins: &PluginManager) -> Vec<Node> {
                 b: 20,
                 a: 255,
             },
-        ),
+        )?,
         stroke(
             plugins,
             Color {
@@ -119,15 +120,15 @@ fn default_text_styles(plugins: &PluginManager) -> Vec<Node> {
             },
             2.0,
             "5 2",
-        ),
-    ]
+        )?,
+    ])
 }
 
 fn project_with_shape_graph(
     source: Node,
     shape_operations: Vec<Node>,
     styles: Vec<Node>,
-) -> (Project, Uuid) {
+) -> Result<(Project, Uuid)> {
     assert!(
         !styles.is_empty(),
         "Shape graphs need an explicit Style boundary"
@@ -144,7 +145,7 @@ fn project_with_shape_graph(
     project.add_track(track);
     project.add_composition(composition);
     project.add_clip(clip);
-    project.attach_clip_to_track(track_id, clip_id).unwrap();
+    project.attach_clip_to_track(track_id, clip_id)?;
 
     let mut nodes = vec![source];
     let mut connections = Vec::new();
@@ -184,16 +185,14 @@ fn project_with_shape_graph(
         nodes.push(merge);
         merge_id
     };
-    project
-        .insert_node_graph(
-            NodeContainer::Clip(clip_id),
-            NodeGraphBundle::new(nodes, connections, Some(output_id)),
-        )
-        .unwrap();
-    (project, source_id)
+    project.insert_node_graph(
+        NodeContainer::Clip(clip_id),
+        NodeGraphBundle::new(nodes, connections, Some(output_id)),
+    )?;
+    Ok((project, source_id))
 }
 
-fn project_with_image_node(node: Node) -> (Project, Uuid) {
+fn project_with_image_node(node: Node) -> Result<(Project, Uuid)> {
     let mut project = Project::new("creative render e2e");
     let (mut composition, track) =
         Composition::new("main", u64::from(WIDTH), u64::from(HEIGHT), FPS, 2.0);
@@ -205,22 +204,20 @@ fn project_with_image_node(node: Node) -> (Project, Uuid) {
     project.add_track(track);
     project.add_composition(composition);
     project.add_clip(clip);
-    project.attach_clip_to_track(track_id, clip_id).unwrap();
-    project
-        .insert_node_graph(
-            NodeContainer::Clip(clip_id),
-            NodeGraphBundle::with_output_node(node),
-        )
-        .unwrap();
-    (project, node_id)
+    project.attach_clip_to_track(track_id, clip_id)?;
+    project.insert_node_graph(
+        NodeContainer::Clip(clip_id),
+        NodeGraphBundle::with_output_node(node),
+    )?;
+    Ok((project, node_id))
 }
 
 fn evaluate(
     project: &Project,
     frame_number: u64,
     plugins: &Arc<PluginManager>,
-) -> Result<FrameInfo, library::LibraryError> {
-    get_frame_from_project(
+) -> Result<FrameInfo> {
+    Ok(get_frame_from_project(
         project,
         0,
         frame_number,
@@ -228,14 +225,10 @@ fn evaluate(
         None,
         &plugins.get_property_evaluators(),
         plugins,
-    )
+    )?)
 }
 
-fn preview(
-    project: &Project,
-    frame_number: u64,
-    plugins: &Arc<PluginManager>,
-) -> Result<Image, library::LibraryError> {
+fn preview(project: &Project, frame_number: u64, plugins: &Arc<PluginManager>) -> Result<Image> {
     let frame = evaluate(project, frame_number, plugins)?;
     let renderer = SkiaRenderer::new(
         frame.width as u32,
@@ -249,7 +242,7 @@ fn preview(
         RenderService::new(renderer, Arc::clone(plugins), Arc::new(CacheManager::new()));
     match service.render_from_frame_info(&frame)? {
         RenderOutput::Image(image) => Ok(image),
-        RenderOutput::Texture(_) => panic!("CPU renderer unexpectedly returned a texture"),
+        RenderOutput::Texture(_) => bail!("CPU renderer unexpectedly returned a texture"),
     }
 }
 
@@ -304,16 +297,18 @@ fn colored_centroid(image: &Image) -> Option<(f64, f64)> {
 struct TempDirectory(PathBuf);
 
 impl TempDirectory {
-    fn new() -> Self {
+    fn new() -> Result<Self> {
         let path = std::env::temp_dir().join(format!("creative-render-{}", Uuid::new_v4()));
-        fs::create_dir(&path).unwrap();
-        Self(path)
+        fs::create_dir(&path)?;
+        Ok(Self(path))
     }
 }
 
 impl Drop for TempDirectory {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        if let Err(error) = fs::remove_dir_all(&self.0) {
+            eprintln!("failed to remove creative render temp directory: {error}");
+        }
     }
 }
 
@@ -321,12 +316,12 @@ fn assert_preview_matches_export(
     project: &Project,
     frame_number: u64,
     plugins: &Arc<PluginManager>,
-) {
-    let expected = preview(project, frame_number, plugins).unwrap();
-    let directory = TempDirectory::new();
+) -> Result<()> {
+    let expected = preview(project, frame_number, plugins)?;
+    let directory = TempDirectory::new()?;
     let stem = directory.0.join("frame");
-    let model = ProjectModel::new(Arc::new(project.clone()), 0).unwrap();
-    let renderer = SkiaRenderer::new(WIDTH, HEIGHT, Color::black(), false, None, None).unwrap();
+    let model = ProjectModel::new(Arc::new(project.clone()), 0)?;
+    let renderer = SkiaRenderer::new(WIDTH, HEIGHT, Color::black(), false, None, None)?;
     let mut render_service =
         RenderService::new(renderer, Arc::clone(plugins), Arc::new(CacheManager::new()));
     let mut exporter = ExportService::new(
@@ -335,75 +330,81 @@ fn assert_preview_matches_export(
         Arc::new(ExportSettings::for_dimensions(WIDTH, HEIGHT, FPS)),
         1,
     );
-    exporter
-        .render_range(
-            &mut render_service,
-            &model,
-            frame_number..frame_number + 1,
-            stem.to_str().unwrap(),
-        )
-        .unwrap();
-    exporter.shutdown().unwrap();
+    let stem = stem
+        .to_str()
+        .context("temporary export path must be UTF-8")?;
+    let render_result = exporter.render_range(
+        &mut render_service,
+        &model,
+        frame_number..frame_number + 1,
+        stem,
+    );
+    let shutdown_result = exporter.shutdown();
+    render_result.context("PNG export must render the requested frame")?;
+    shutdown_result.context("PNG exporter must shut down cleanly")?;
 
-    let path = format!("{}_{frame_number:03}.png", stem.to_string_lossy());
+    let path = format!("{stem}_{frame_number:03}.png");
     let exported = NativeImageLoader::new()
-        .load(&LoadRequest::Image { path }, &CacheManager::new())
-        .unwrap()
+        .load(&LoadRequest::Image { path }, &CacheManager::new())?
         .image;
     assert_eq!((exported.width, exported.height), (WIDTH, HEIGHT));
     assert_eq!(exported.data, expected.data);
+    Ok(())
 }
 
-fn assert_round_trip(project: &Project, frame_number: u64, plugins: &Arc<PluginManager>) {
-    let json = project.save().unwrap();
+fn assert_round_trip(
+    project: &Project,
+    frame_number: u64,
+    plugins: &Arc<PluginManager>,
+) -> Result<()> {
+    let json = project.save()?;
     assert!(!json.contains("schema_version"));
-    let loaded = Project::load(&json).unwrap();
+    let loaded = Project::load(&json)?;
     assert_eq!(
-        evaluate(project, frame_number, plugins).unwrap().items,
-        evaluate(&loaded, frame_number, plugins).unwrap().items
+        evaluate(project, frame_number, plugins)?.items,
+        evaluate(&loaded, frame_number, plugins)?.items
     );
     assert_eq!(
-        preview(project, frame_number, plugins).unwrap().data,
-        preview(&loaded, frame_number, plugins).unwrap().data
+        preview(project, frame_number, plugins)?.data,
+        preview(&loaded, frame_number, plugins)?.data
     );
+    Ok(())
 }
 
-fn effector(plugins: &PluginManager, kind: &str) -> Node {
-    plugins.create_effector_operation_node(kind).unwrap()
+fn effector(plugins: &PluginManager, kind: &str) -> Result<Node> {
+    Ok(plugins.create_effector_operation_node(kind)?)
 }
 
-fn decorator(plugins: &PluginManager, target: &str) -> Node {
-    let mut node = plugins
-        .create_decorator_operation_node("backplate")
-        .unwrap();
+fn decorator(plugins: &PluginManager, target: &str) -> Result<Node> {
+    let mut node = plugins.create_decorator_operation_node("backplate")?;
     set(
         &mut node,
         "target",
         PropertyValue::String(target.to_string()),
-    );
+    )?;
     set(
         &mut node,
         "shape",
         PropertyValue::String("RoundRect".to_string()),
-    );
-    set(&mut node, "color", rgba(20, 170, 60));
-    set(&mut node, "padding", 2.0.into());
-    set(&mut node, "radius", 3.0.into());
-    node
+    )?;
+    set(&mut node, "color", rgba(20, 170, 60))?;
+    set(&mut node, "padding", 2.0.into())?;
+    set(&mut node, "radius", 3.0.into())?;
+    Ok(node)
 }
 
 #[test]
-fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() {
+fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
-    let mut node = text_node("TEXT");
-    set(&mut node, "position", vec2(14.0, 11.0));
-    set(&mut node, "scale", vec2(90.0, 110.0));
-    set(&mut node, "rotation", 4.0.into());
-    set(&mut node, "opacity", 80.0.into());
+    let mut node = text_node("TEXT")?;
+    set(&mut node, "position", vec2(14.0, 11.0))?;
+    set(&mut node, "scale", vec2(90.0, 110.0))?;
+    set(&mut node, "rotation", 4.0.into())?;
+    set(&mut node, "opacity", 80.0.into())?;
     let (project, node_id) =
-        project_with_shape_graph(node, Vec::new(), default_text_styles(&plugins));
+        project_with_shape_graph(node, Vec::new(), default_text_styles(&plugins)?)?;
 
-    let frame = evaluate(&project, 0, &plugins).unwrap();
+    let frame = evaluate(&project, 0, &plugins)?;
     let FrameContent::Text {
         text,
         font,
@@ -412,9 +413,9 @@ fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() {
         ensemble,
         transform,
         ..
-    } = first_content(&frame.items).unwrap()
+    } = first_content(&frame.items).context("text frame content must exist")?
     else {
-        panic!("text converter did not produce FrameContent::Text");
+        bail!("text converter did not produce FrameContent::Text");
     };
     assert_eq!(text, "TEXT");
     assert_eq!(font, "Arial");
@@ -427,7 +428,7 @@ fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() {
     assert_eq!(transform.rotation, 4.0);
     assert_eq!(transform.opacity, 0.8);
 
-    let standard = preview(&project, 0, &plugins).unwrap();
+    let standard = preview(&project, 0, &plugins)?;
     assert!(
         dominant_pixels(&standard, 0) > 10,
         "fill pixels disappeared"
@@ -438,11 +439,14 @@ fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() {
     );
 
     let (ensemble_project, _) = project_with_shape_graph(
-        project.get_node(node_id).unwrap().clone(),
-        vec![effector(&plugins, "transform")],
-        default_text_styles(&plugins),
-    );
-    let ensemble_image = preview(&ensemble_project, 0, &plugins).unwrap();
+        project
+            .get_node(node_id)
+            .context("text source Node must exist")?
+            .clone(),
+        vec![effector(&plugins, "transform")?],
+        default_text_styles(&plugins)?,
+    )?;
+    let ensemble_image = preview(&ensemble_project, 0, &plugins)?;
     assert!(
         dominant_pixels(&ensemble_image, 0) > 10,
         "enabling Ensemble discarded the Fill style"
@@ -454,20 +458,31 @@ fn text_converter_styles_transform_round_trip_and_export_are_real_pixels() {
 
     let mut moved = project.clone();
     set(
-        moved.get_node_mut(node_id).unwrap(),
+        moved
+            .get_node_mut(node_id)
+            .context("moved text Node must exist")?,
         "position",
         vec2(30.0, 16.0),
-    );
-    let moved_image = preview(&moved, 0, &plugins).unwrap();
+    )?;
+    let moved_image = preview(&moved, 0, &plugins)?;
     assert_ne!(hash(&standard), hash(&moved_image));
-    assert!(colored_centroid(&moved_image).unwrap().0 > colored_centroid(&standard).unwrap().0);
+    assert!(
+        colored_centroid(&moved_image)
+            .context("moved text must have colored pixels")?
+            .0
+            > colored_centroid(&standard)
+                .context("standard text must have colored pixels")?
+                .0
+    );
 
-    assert_round_trip(&ensemble_project, 0, &plugins);
-    assert_preview_matches_export(&project, 0, &plugins);
+    assert_round_trip(&ensemble_project, 0, &plugins)?;
+    assert_preview_matches_export(&project, 0, &plugins)?;
+    Ok(())
 }
 
 #[test]
-fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_explicit() {
+fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_explicit() -> Result<()>
+{
     let plugins = Arc::new(PluginManager::default());
     let path = "M 0 0 L 42 0 L 42 27 L 0 27 Z";
     let mut node = base_node(
@@ -475,17 +490,17 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
         GeneratorNodeRequest::Shape {
             path: path.to_string(),
         },
-    );
-    set(&mut node, "path", PropertyValue::String(path.to_string()));
-    set(&mut node, "position", vec2(22.0, 18.0));
-    set(&mut node, "rotation", 8.0.into());
-    set(&mut node, "opacity", 90.0.into());
+    )?;
+    set(&mut node, "path", PropertyValue::String(path.to_string()))?;
+    set(&mut node, "position", vec2(22.0, 18.0))?;
+    set(&mut node, "rotation", 8.0.into())?;
+    set(&mut node, "opacity", 90.0.into())?;
     set(
         &mut node,
         "path_effect",
         PropertyValue::String("Corner".to_string()),
-    );
-    set(&mut node, "path_effect_radius", 5.0.into());
+    )?;
+    set(&mut node, "path_effect_radius", 5.0.into())?;
     let styles = vec![
         fill(
             &plugins,
@@ -495,7 +510,7 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
                 b: 40,
                 a: 255,
             },
-        ),
+        )?,
         stroke(
             &plugins,
             Color {
@@ -506,20 +521,20 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
             },
             4.0,
             "5 3",
-        ),
+        )?,
     ];
-    let (project, node_id) = project_with_shape_graph(node, Vec::new(), styles);
+    let (project, node_id) = project_with_shape_graph(node, Vec::new(), styles)?;
 
-    let frame = evaluate(&project, 0, &plugins).unwrap();
+    let frame = evaluate(&project, 0, &plugins)?;
     let FrameContent::Shape {
         path: converted_path,
         styles,
         path_effects,
         transform,
         ..
-    } = first_content(&frame.items).unwrap()
+    } = first_content(&frame.items).context("shape frame content must exist")?
     else {
-        panic!("shape converter did not produce FrameContent::Shape");
+        bail!("shape converter did not produce FrameContent::Shape");
     };
     assert_eq!(converted_path, path);
     assert_eq!(styles.len(), 1);
@@ -527,7 +542,7 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
     assert_eq!((transform.position.x, transform.position.y), (22.0, 18.0));
     assert_eq!(transform.rotation, 8.0);
 
-    let rendered = preview(&project, 0, &plugins).unwrap();
+    let rendered = preview(&project, 0, &plugins)?;
     assert!(
         dominant_pixels(&rendered, 1) > 100,
         "shape Fill was not rendered"
@@ -539,45 +554,52 @@ fn shape_converter_fill_stroke_path_effect_transform_and_invalid_paths_are_expli
 
     let mut no_effect = project.clone();
     set(
-        no_effect.get_node_mut(node_id).unwrap(),
+        no_effect
+            .get_node_mut(node_id)
+            .context("shape Node must exist for path-effect edit")?,
         "path_effect",
         PropertyValue::String("None".to_string()),
-    );
+    )?;
     assert_ne!(
         hash(&rendered),
-        hash(&preview(&no_effect, 0, &plugins).unwrap()),
+        hash(&preview(&no_effect, 0, &plugins)?),
         "Corner path effect did not change pixels"
     );
 
     let mut moved = project.clone();
     set(
-        moved.get_node_mut(node_id).unwrap(),
+        moved
+            .get_node_mut(node_id)
+            .context("shape Node must exist for position edit")?,
         "position",
         vec2(44.0, 28.0),
-    );
-    let moved = preview(&moved, 0, &plugins).unwrap();
-    let original_center = colored_centroid(&rendered).unwrap();
-    let moved_center = colored_centroid(&moved).unwrap();
+    )?;
+    let moved = preview(&moved, 0, &plugins)?;
+    let original_center = colored_centroid(&rendered).context("shape must render pixels")?;
+    let moved_center = colored_centroid(&moved).context("moved shape must render pixels")?;
     assert!(moved_center.0 > original_center.0 + 10.0);
     assert!(moved_center.1 > original_center.1 + 4.0);
 
     for malformed in ["", "this is not SVG path data"] {
         let mut invalid = project.clone();
         set(
-            invalid.get_node_mut(node_id).unwrap(),
+            invalid
+                .get_node_mut(node_id)
+                .context("shape Node must exist for malformed path edit")?,
             "path",
             PropertyValue::String(malformed.to_string()),
-        );
-        assert!(evaluate(&invalid, 0, &plugins).unwrap().items.is_empty());
-        assert_eq!(light_sum(&preview(&invalid, 0, &plugins).unwrap()), 0);
+        )?;
+        assert!(evaluate(&invalid, 0, &plugins)?.items.is_empty());
+        assert_eq!(light_sum(&preview(&invalid, 0, &plugins)?), 0);
     }
 
-    assert_round_trip(&project, 0, &plugins);
-    assert_preview_matches_export(&project, 0, &plugins);
+    assert_round_trip(&project, 0, &plugins)?;
+    assert_preview_matches_export(&project, 0, &plugins)?;
+    Ok(())
 }
 
 #[test]
-fn sksl_converter_uses_runtime_time_and_matches_png_export() {
+fn sksl_converter_uses_runtime_time_and_matches_png_export() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let shader = r#"
 half4 main(float2 fragCoord) {
@@ -591,33 +613,33 @@ half4 main(float2 fragCoord) {
         GeneratorNodeRequest::SkSL {
             shader: shader.to_string(),
         },
-    );
+    )?;
     set(
         &mut node,
         "shader",
         PropertyValue::String(shader.to_string()),
-    );
-    set(&mut node, "width", 96.0.into());
-    set(&mut node, "height", 54.0.into());
-    set(&mut node, "position", vec2(10.0, 9.0));
-    let (project, _) = project_with_image_node(node);
+    )?;
+    set(&mut node, "width", 96.0.into())?;
+    set(&mut node, "height", 54.0.into())?;
+    set(&mut node, "position", vec2(10.0, 9.0))?;
+    let (project, _) = project_with_image_node(node)?;
 
-    let frame = evaluate(&project, 0, &plugins).unwrap();
+    let frame = evaluate(&project, 0, &plugins)?;
     let FrameContent::SkSL {
         shader: converted,
         resolution,
         transform,
         ..
-    } = first_content(&frame.items).unwrap()
+    } = first_content(&frame.items).context("SkSL frame content must exist")?
     else {
-        panic!("SkSL converter did not produce FrameContent::SkSL");
+        bail!("SkSL converter did not produce FrameContent::SkSL");
     };
     assert_eq!(converted, shader);
     assert_eq!(*resolution, (96.0, 54.0));
     assert_eq!((transform.position.x, transform.position.y), (10.0, 9.0));
 
-    let first = preview(&project, 0, &plugins).unwrap();
-    let late = preview(&project, 9, &plugins).unwrap();
+    let first = preview(&project, 0, &plugins)?;
+    let late = preview(&project, 9, &plugins)?;
     assert!(light_sum(&first) > 0);
     assert_ne!(
         hash(&first),
@@ -625,39 +647,40 @@ half4 main(float2 fragCoord) {
         "iTime did not reach the real SkSL renderer"
     );
 
-    assert_round_trip(&project, 9, &plugins);
-    assert_preview_matches_export(&project, 9, &plugins);
+    assert_round_trip(&project, 9, &plugins)?;
+    assert_preview_matches_export(&project, 9, &plugins)?;
+    Ok(())
 }
 
 #[test]
-fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
+fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
-    let source = text_node("ABCD");
-    let mut step = effector(&plugins, "step_delay");
-    set(&mut step, "delay", 0.2.into());
-    set(&mut step, "duration", 0.2.into());
-    set(&mut step, "from_opacity", 0.0.into());
-    set(&mut step, "to_opacity", 100.0.into());
+    let source = text_node("ABCD")?;
+    let mut step = effector(&plugins, "step_delay")?;
+    set(&mut step, "delay", 0.2.into())?;
+    set(&mut step, "duration", 0.2.into())?;
+    set(&mut step, "from_opacity", 0.0.into())?;
+    set(&mut step, "to_opacity", 100.0.into())?;
     set(
         &mut step,
         "target",
         PropertyValue::String("Block".to_string()),
-    );
+    )?;
     let step_id = step.id;
     let (project, node_id) = project_with_shape_graph(
         source.clone(),
         vec![step.clone()],
-        default_text_styles(&plugins),
-    );
+        default_text_styles(&plugins)?,
+    )?;
 
-    let frame = evaluate(&project, 4, &plugins).unwrap();
+    let frame = evaluate(&project, 4, &plugins)?;
     let FrameContent::Text {
         ensemble: Some(ensemble),
         styles,
         ..
-    } = first_content(&frame.items).unwrap()
+    } = first_content(&frame.items).context("ensemble text frame content must exist")?
     else {
-        panic!("the explicit Shape Effector did not produce EnsembleData");
+        bail!("the explicit Shape Effector did not produce EnsembleData");
     };
     assert_eq!(styles.len(), 1);
     assert_eq!(ensemble.effector_configs.len(), 1);
@@ -669,7 +692,7 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
         target,
     } = ensemble.effector_configs[0]
     else {
-        panic!("StepDelay plugin produced the wrong config variant");
+        bail!("StepDelay plugin produced the wrong config variant");
     };
     assert!((delay_per_element - 0.2).abs() < f32::EPSILON);
     assert!((duration - 0.2).abs() < f32::EPSILON);
@@ -677,31 +700,31 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
     assert_eq!(to_opacity, 100.0);
     assert_eq!(target, EffectorTarget::Block);
 
-    let start = preview(&project, 0, &plugins).unwrap();
-    let middle = preview(&project, 4, &plugins).unwrap();
-    let end = preview(&project, 10, &plugins).unwrap();
+    let start = preview(&project, 0, &plugins)?;
+    let middle = preview(&project, 4, &plugins)?;
+    let end = preview(&project, 10, &plugins)?;
     assert_eq!(light_sum(&start), 0);
     assert!(light_sum(&middle) > light_sum(&start));
     assert!(light_sum(&end) > light_sum(&middle));
 
-    let mut random = effector(&plugins, "randomize");
-    set(&mut random, "seed", 7.0.into());
-    set(&mut random, "translate_range", 4.0.into());
-    set(&mut random, "rotate_range", 8.0.into());
-    set(&mut random, "scale_range", 0.35.into());
+    let mut random = effector(&plugins, "randomize")?;
+    set(&mut random, "seed", 7.0.into())?;
+    set(&mut random, "translate_range", 4.0.into())?;
+    set(&mut random, "rotate_range", 8.0.into())?;
+    set(&mut random, "scale_range", 0.35.into())?;
     set(
         &mut random,
         "target",
         PropertyValue::String("Char".to_string()),
-    );
+    )?;
     let random_id = random.id;
     let (randomized, _) = project_with_shape_graph(
         source.clone(),
         vec![step.clone(), random.clone()],
-        default_text_styles(&plugins),
-    );
-    let random_a = preview(&randomized, 10, &plugins).unwrap();
-    let random_b = preview(&randomized, 10, &plugins).unwrap();
+        default_text_styles(&plugins)?,
+    )?;
+    let random_a = preview(&randomized, 10, &plugins)?;
+    let random_b = preview(&randomized, 10, &plugins)?;
     assert_eq!(
         random_a.data, random_b.data,
         "fixed seed was not deterministic"
@@ -714,35 +737,39 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
 
     let mut changed_seed = randomized.clone();
     set(
-        changed_seed.get_node_mut(random_id).unwrap(),
+        changed_seed
+            .get_node_mut(random_id)
+            .context("Randomize operation Node must exist")?,
         "seed",
         8.0.into(),
-    );
+    )?;
     assert_ne!(
         hash(&random_a),
-        hash(&preview(&changed_seed, 10, &plugins).unwrap()),
+        hash(&preview(&changed_seed, 10, &plugins)?),
         "changing Randomize seed did not change the rendered characters"
     );
 
     let mut scale_random = random;
-    set(&mut scale_random, "translate_range", 0.0.into());
-    set(&mut scale_random, "rotate_range", 0.0.into());
+    set(&mut scale_random, "translate_range", 0.0.into())?;
+    set(&mut scale_random, "rotate_range", 0.0.into())?;
     let (scale_only, _) = project_with_shape_graph(
         source,
         vec![step, scale_random],
-        default_text_styles(&plugins),
-    );
+        default_text_styles(&plugins)?,
+    )?;
     assert_ne!(
         hash(&end),
-        hash(&preview(&scale_only, 10, &plugins).unwrap()),
+        hash(&preview(&scale_only, 10, &plugins)?),
         "Randomize scale_range was ignored"
     );
 
     let shared = Arc::new(RwLock::new(project.clone()));
     let service = ProjectService::new(Arc::clone(&shared), Arc::clone(&plugins));
-    service.add_effector(node_id, "opacity").unwrap();
-    service.add_decorator(node_id, "backplate").unwrap();
-    let locked = shared.read().unwrap();
+    service.add_effector(node_id, "opacity")?;
+    service.add_decorator(node_id, "backplate")?;
+    let locked = shared
+        .read()
+        .map_err(|error| anyhow!("project lock poisoned: {error}"))?;
     assert!(locked.get_node(node_id).is_some());
     let opacity_node = locked
         .nodes
@@ -754,7 +781,7 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
                     if operation.category == "effector" && operation.component_id == "opacity"
             )
         })
-        .expect("add_effector must author a standalone operation Node");
+        .context("add_effector must author a standalone operation Node")?;
     assert!(locked.connections.iter().any(|connection| {
         connection.from == PortAddress::new(PortOwner::Node(step_id), SHAPE_OUTPUT_PORT)
             && connection.to == PortAddress::new(PortOwner::Node(opacity_node.id), SHAPE_INPUT_PORT)
@@ -769,7 +796,7 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
                     if operation.category == "decorator" && operation.component_id == "backplate"
             )
         })
-        .expect("add_decorator must author a standalone operation Node");
+        .context("add_decorator must author a standalone operation Node")?;
     assert!(locked.connections.iter().any(|connection| {
         connection.from == PortAddress::new(PortOwner::Node(opacity_node.id), SHAPE_OUTPUT_PORT)
             && connection.to
@@ -777,25 +804,26 @@ fn ensemble_step_delay_randomize_and_independent_crud_use_one_runtime_path() {
     }));
     drop(locked);
 
-    assert_round_trip(&randomized, 10, &plugins);
-    assert_preview_matches_export(&project, 10, &plugins);
+    assert_round_trip(&randomized, 10, &plugins)?;
+    assert_preview_matches_export(&project, 10, &plugins)?;
+    Ok(())
 }
 
 #[test]
-fn multiline_backplates_cover_char_line_block_and_follow_transforms() {
+fn multiline_backplates_cover_char_line_block_and_follow_transforms() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
     let mut hashes = Vec::new();
     for target in ["Char", "Line", "Block"] {
-        let node = text_node("A\nBBB");
+        let node = text_node("A\nBBB")?;
         let (project, _) = project_with_shape_graph(
             node,
-            vec![decorator(&plugins, target)],
-            default_text_styles(&plugins),
-        );
-        let rendered = preview(&project, 0, &plugins).unwrap();
+            vec![decorator(&plugins, target)?],
+            default_text_styles(&plugins)?,
+        )?;
+        let rendered = preview(&project, 0, &plugins)?;
         assert!(dominant_pixels(&rendered, 1) > 20);
         hashes.push(hash(&rendered));
-        assert_round_trip(&project, 0, &plugins);
+        assert_round_trip(&project, 0, &plugins)?;
     }
     hashes.sort_unstable();
     hashes.dedup();
@@ -806,58 +834,60 @@ fn multiline_backplates_cover_char_line_block_and_follow_transforms() {
     );
 
     for target in ["Line", "Block"] {
-        let base = text_node("A\nBBB");
-        let backplate = decorator(&plugins, target);
+        let base = text_node("A\nBBB")?;
+        let backplate = decorator(&plugins, target)?;
         let (base_project, _) = project_with_shape_graph(
             base.clone(),
             vec![backplate.clone()],
-            vec![fill(&plugins, Color::black())],
-        );
-        let base_image = preview(&base_project, 0, &plugins).unwrap();
+            vec![fill(&plugins, Color::black())?],
+        )?;
+        let base_image = preview(&base_project, 0, &plugins)?;
 
-        let mut transform = effector(&plugins, "transform");
-        set(&mut transform, "tx", 24.0.into());
-        set(&mut transform, "ty", 5.0.into());
-        set(&mut transform, "rotation", 6.0.into());
+        let mut transform = effector(&plugins, "transform")?;
+        set(&mut transform, "tx", 24.0.into())?;
+        set(&mut transform, "ty", 5.0.into())?;
+        set(&mut transform, "rotation", 6.0.into())?;
         let (moved, _) = project_with_shape_graph(
             base,
             vec![backplate, transform],
-            vec![fill(&plugins, Color::black())],
-        );
-        let moved_image = preview(&moved, 0, &plugins).unwrap();
-        let base_center = colored_centroid(&base_image).unwrap();
-        let moved_center = colored_centroid(&moved_image).unwrap();
+            vec![fill(&plugins, Color::black())?],
+        )?;
+        let moved_image = preview(&moved, 0, &plugins)?;
+        let base_center = colored_centroid(&base_image).context("base text must render pixels")?;
+        let moved_center =
+            colored_centroid(&moved_image).context("moved text must render pixels")?;
         assert!(
             moved_center.0 > base_center.0 + 15.0,
             "{target} backplate did not follow the effector transform"
         );
         assert_ne!(hash(&base_image), hash(&moved_image));
     }
+    Ok(())
 }
 
 #[test]
-fn effector_block_line_and_char_targets_are_distinct_in_multiline_pixels() {
+fn effector_block_line_and_char_targets_are_distinct_in_multiline_pixels() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
-    let render_target = |target: &str| {
-        let node = text_node("AB\nCD");
-        let mut step = effector(&plugins, "step_delay");
-        set(&mut step, "delay", 0.3.into());
-        set(&mut step, "duration", 0.1.into());
-        set(&mut step, "from_opacity", 0.0.into());
-        set(&mut step, "to_opacity", 100.0.into());
+    let render_target = |target: &str| -> Result<Image> {
+        let node = text_node("AB\nCD")?;
+        let mut step = effector(&plugins, "step_delay")?;
+        set(&mut step, "delay", 0.3.into())?;
+        set(&mut step, "duration", 0.1.into())?;
+        set(&mut step, "from_opacity", 0.0.into())?;
+        set(&mut step, "to_opacity", 100.0.into())?;
         set(
             &mut step,
             "target",
             PropertyValue::String(target.to_string()),
-        );
+        )?;
         let (project, _) =
-            project_with_shape_graph(node, vec![step], default_text_styles(&plugins));
-        preview(&project, 2, &plugins).unwrap()
+            project_with_shape_graph(node, vec![step], default_text_styles(&plugins)?)?;
+        preview(&project, 2, &plugins)
     };
 
-    let block = render_target("Block");
-    let line = render_target("Line");
-    let character = render_target("Char");
+    let block = render_target("Block")?;
+    let line = render_target("Line")?;
+    let character = render_target("Char")?;
     assert!(light_sum(&block) > 0);
     assert!(
         light_sum(&line) > light_sum(&block),
@@ -869,29 +899,25 @@ fn effector_block_line_and_char_targets_are_distinct_in_multiline_pixels() {
     );
     assert_ne!(hash(&block), hash(&line));
     assert_ne!(hash(&line), hash(&character));
+    Ok(())
 }
 
 #[test]
-fn empty_text_is_safe_missing_text_is_validation_and_parts_is_render_error() {
+fn empty_text_is_safe_missing_text_is_validation_and_parts_is_render_error() -> Result<()> {
     let plugins = Arc::new(PluginManager::default());
-    let empty_node = text_node("");
+    let empty_node = text_node("")?;
     let (empty_project, _) =
-        project_with_shape_graph(empty_node, Vec::new(), default_text_styles(&plugins));
-    let empty = preview(&empty_project, 0, &plugins).unwrap();
+        project_with_shape_graph(empty_node, Vec::new(), default_text_styles(&plugins)?)?;
+    let empty = preview(&empty_project, 0, &plugins)?;
     assert_eq!(light_sum(&empty), 0);
 
-    let complete_node = text_node("missing");
-    let mut missing_json = serde_json::to_value(complete_node).unwrap();
+    let complete_node = text_node("missing")?;
+    let mut missing_json = serde_json::to_value(complete_node)?;
     missing_json["properties"] = serde_json::json!({});
-    let missing_node: Node = serde_json::from_value(missing_json).unwrap();
+    let missing_node: Node = serde_json::from_value(missing_json)?;
     let (missing_project, _) =
-        project_with_shape_graph(missing_node, Vec::new(), default_text_styles(&plugins));
-    assert!(
-        evaluate(&missing_project, 0, &plugins)
-            .unwrap()
-            .items
-            .is_empty()
-    );
+        project_with_shape_graph(missing_node, Vec::new(), default_text_styles(&plugins)?)?;
+    assert!(evaluate(&missing_project, 0, &plugins)?.items.is_empty());
 
     let styles = vec![StyleConfig {
         id: Uuid::new_v4(),
@@ -911,18 +937,19 @@ fn empty_text_is_safe_missing_text_is_validation_and_parts_is_render_error() {
         decorator_configs: Vec::new(),
         patches: Default::default(),
     };
-    let mut renderer = SkiaRenderer::new(WIDTH, HEIGHT, Color::black(), false, None, None).unwrap();
-    let error = renderer
-        .rasterize_text_layer(TextRasterRequest {
-            text: "A",
-            size: 30.0,
-            font_name: "Arial",
-            styles: &styles,
-            ensemble: Some(&ensemble),
-            transform: Affine2D::IDENTITY,
-            current_time: 0.0,
-        })
-        .unwrap_err();
+    let mut renderer = SkiaRenderer::new(WIDTH, HEIGHT, Color::black(), false, None, None)?;
+    let error = match renderer.rasterize_text_layer(TextRasterRequest {
+        text: "A",
+        size: 30.0,
+        font_name: "Arial",
+        styles: &styles,
+        ensemble: Some(&ensemble),
+        transform: Affine2D::IDENTITY,
+        current_time: 0.0,
+    }) {
+        Ok(_) => bail!("Parts effector unexpectedly rasterized"),
+        Err(error) => error,
+    };
     assert!(error.to_string().contains("EffectorTarget::Parts"));
 
     let decorator_parts = EnsembleData {
@@ -937,16 +964,18 @@ fn empty_text_is_safe_missing_text_is_validation_and_parts_is_render_error() {
         }],
         patches: Default::default(),
     };
-    let error = renderer
-        .rasterize_text_layer(TextRasterRequest {
-            text: "A",
-            size: 30.0,
-            font_name: "Arial",
-            styles: &styles,
-            ensemble: Some(&decorator_parts),
-            transform: Affine2D::IDENTITY,
-            current_time: 0.0,
-        })
-        .unwrap_err();
+    let error = match renderer.rasterize_text_layer(TextRasterRequest {
+        text: "A",
+        size: 30.0,
+        font_name: "Arial",
+        styles: &styles,
+        ensemble: Some(&decorator_parts),
+        transform: Affine2D::IDENTITY,
+        current_time: 0.0,
+    }) {
+        Ok(_) => bail!("Parts backplate unexpectedly rasterized"),
+        Err(error) => error,
+    };
     assert!(error.to_string().contains("BackplateTarget::Parts"));
+    Ok(())
 }
