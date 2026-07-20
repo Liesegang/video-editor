@@ -71,3 +71,28 @@ pub fn media_node_for_canvas(
     );
     result.unwrap_or_else(|_| Node::new_merge("invalid Media test fallback"))
 }
+
+#[allow(
+    dead_code,
+    reason = "each integration-test crate compiles this shared helper independently"
+)]
+pub fn channel_energy(samples: &[f32], channel: usize) -> f32 {
+    samples
+        .chunks_exact(2)
+        .map(|frame| frame[channel] * frame[channel])
+        .sum::<f32>()
+        / (samples.len() / 2).max(1) as f32
+}
+
+#[allow(
+    dead_code,
+    reason = "each integration-test crate compiles this shared helper independently"
+)]
+pub fn positive_zero_crossings(samples: &[f32], channel: usize) -> usize {
+    samples
+        .chunks_exact(2)
+        .map(|frame| frame[channel])
+        .zip(samples.chunks_exact(2).skip(1).map(|frame| frame[channel]))
+        .filter(|(before, after)| *before <= 0.0 && *after > 0.0)
+        .count()
+}

@@ -24,10 +24,16 @@ use crate::{
 };
 
 pub mod action_handler;
+mod evaluation;
 pub mod properties;
+mod property_inference;
 
 use action_handler::ActionContext;
+use evaluation::{evaluate_property_map, render_evaluation_issues};
 use properties::{render_property_rows, PropertyRenderContext};
+use property_inference::inferred_property_definitions;
+#[cfg(test)]
+use property_inference::property_label;
 
 #[derive(Clone, Debug)]
 #[allow(
@@ -173,10 +179,10 @@ fn inspector_panel_content(
         return;
     };
 
-    let fps = project_service
+    let (fps, resolution) = project_service
         .get_composition(composition_id)
-        .map(|composition| composition.fps)
-        .unwrap_or(60.0);
+        .map(|composition| (composition.fps, (composition.width, composition.height)))
+        .unwrap_or((60.0, (1920, 1080)));
     let global_time = editor_context.timeline.current_time as f64;
     let mut needs_refresh = false;
 
@@ -209,6 +215,7 @@ fn inspector_panel_content(
                 None,
                 global_time,
                 fps,
+                resolution,
                 project_service,
                 history_manager,
                 editor_context,
@@ -241,6 +248,7 @@ fn inspector_panel_content(
                 Some(track.id),
                 global_time,
                 fps,
+                resolution,
                 project_service,
                 history_manager,
                 editor_context,
@@ -295,6 +303,7 @@ fn inspector_panel_content(
                     clip_definitions,
                     local_time,
                     fps,
+                    resolution,
                     &mut needs_refresh,
                 );
             }
@@ -311,6 +320,7 @@ fn inspector_panel_content(
                 track_id,
                 local_time,
                 fps,
+                resolution,
                 project_service,
                 history_manager,
                 editor_context,
@@ -341,6 +351,7 @@ fn inspector_panel_content(
                 track_id,
                 evaluation_time,
                 fps,
+                resolution,
                 project_service,
                 history_manager,
                 editor_context,
@@ -491,6 +502,7 @@ fn render_semantic_graph_facade(
     track_id: Option<Uuid>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     project_service: &mut EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
@@ -544,6 +556,7 @@ fn render_semantic_graph_facade(
                     track_id,
                     current_time,
                     fps,
+                    resolution,
                     project_service,
                     history_manager,
                     editor_context,
@@ -580,6 +593,7 @@ fn render_semantic_graph_facade(
         track_id,
         current_time,
         fps,
+        resolution,
         project_service,
         history_manager,
         editor_context,
@@ -615,6 +629,7 @@ fn render_semantic_graph_facade(
             track_id,
             current_time,
             fps,
+            resolution,
             project_service,
             history_manager,
             editor_context,
@@ -648,6 +663,7 @@ fn render_semantic_graph_facade(
             track_id,
             current_time,
             fps,
+            resolution,
             project_service,
             history_manager,
             editor_context,
@@ -665,6 +681,7 @@ fn render_semantic_graph_facade(
         track_id,
         current_time,
         fps,
+        resolution,
         project_service,
         history_manager,
         editor_context,
@@ -741,6 +758,7 @@ fn render_value_category(
     track_id: Option<Uuid>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     project_service: &mut EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
@@ -812,6 +830,7 @@ fn render_value_category(
                     track_id,
                     current_time,
                     fps,
+                    resolution,
                     project_service,
                     history_manager,
                     editor_context,
@@ -853,6 +872,7 @@ fn render_operation_category(
     track_id: Option<Uuid>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     project_service: &mut EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
@@ -925,6 +945,7 @@ fn render_operation_category(
                     track_id,
                     current_time,
                     fps,
+                    resolution,
                     project_service,
                     history_manager,
                     editor_context,
@@ -970,6 +991,7 @@ fn render_merge_category(
     track_id: Option<Uuid>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     project_service: &mut EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
@@ -1045,6 +1067,7 @@ fn render_merge_category(
                     track_id,
                     current_time,
                     fps,
+                    resolution,
                     project_service,
                     history_manager,
                     editor_context,
@@ -1244,6 +1267,7 @@ fn render_node(
     track_id: Option<Uuid>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     project_service: &mut EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
@@ -1261,6 +1285,7 @@ fn render_node(
         track_id,
         current_time,
         fps,
+        resolution,
         project_service,
         history_manager,
         editor_context,
@@ -1284,6 +1309,7 @@ fn render_node_properties(
     track_id: Option<Uuid>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     project_service: &mut EditorService,
     history_manager: &mut HistoryManager,
     editor_context: &mut EditorContext,
@@ -1322,6 +1348,7 @@ fn render_node_properties(
             definitions,
             current_time,
             fps,
+            resolution,
             needs_refresh,
         );
     }
@@ -1376,12 +1403,18 @@ fn render_property_map(
     definitions: Vec<PropertyDefinition>,
     current_time: f64,
     fps: f64,
+    resolution: (u64, u64),
     needs_refresh: &mut bool,
 ) {
     struct Chunk {
         in_grid: bool,
         definitions: Vec<PropertyDefinition>,
     }
+
+    let qa_scope = qa_owner_scope(owner);
+    let evaluated =
+        evaluate_property_map(project_service, properties, current_time, fps, resolution);
+    render_evaluation_issues(ui, &qa_scope, evaluated.issues());
 
     let mut chunks = Vec::new();
     let mut grid_definitions = Vec::new();
@@ -1413,7 +1446,7 @@ fn render_property_map(
             available_fonts: &editor_context.available_fonts,
             in_grid: chunk.in_grid,
             current_time,
-            qa_scope: qa_owner_scope(owner),
+            qa_scope: qa_scope.clone(),
         };
         let actions = if chunk.in_grid {
             let mut actions = Vec::new();
@@ -1423,16 +1456,7 @@ fn render_property_map(
                     actions = render_property_rows(
                         ui,
                         &chunk.definitions,
-                        |name| {
-                            properties.get(name).map(|property| {
-                                project_service.evaluate_property_value(
-                                    property,
-                                    properties,
-                                    current_time,
-                                    fps,
-                                )
-                            })
-                        },
+                        |name| evaluated.value(name).cloned(),
                         |name| properties.get(name).cloned(),
                         &context,
                     );
@@ -1443,16 +1467,7 @@ fn render_property_map(
             render_property_rows(
                 ui,
                 &chunk.definitions,
-                |name| {
-                    properties.get(name).map(|property| {
-                        project_service.evaluate_property_value(
-                            property,
-                            properties,
-                            current_time,
-                            fps,
-                        )
-                    })
-                },
+                |name| evaluated.value(name).cloned(),
                 |name| properties.get(name).cloned(),
                 &context,
             )
@@ -1723,78 +1738,6 @@ fn node_display_type(node: &Node) -> String {
         NodeContent::Value(ValueContent::TimeModulo) => "Time Modulo".to_string(),
         NodeContent::Merge => "Merge".to_string(),
     }
-}
-
-fn inferred_property_definitions(
-    properties: &PropertyMap,
-    current_time: f64,
-) -> Vec<PropertyDefinition> {
-    let mut entries: Vec<_> = properties.iter().collect();
-    entries.sort_by_key(|(name, _)| *name);
-    entries
-        .into_iter()
-        .filter_map(|(name, property)| {
-            let value = property.evaluate_at(current_time);
-            let ui_type = match &value {
-                PropertyValue::Number(_) => PropertyUiType::Float {
-                    min: -1_000_000.0,
-                    max: 1_000_000.0,
-                    step: 0.1,
-                    suffix: String::new(),
-                    min_hard_limit: false,
-                    max_hard_limit: false,
-                },
-                PropertyValue::Integer(_) => PropertyUiType::Integer {
-                    min: i64::MIN,
-                    max: i64::MAX,
-                    suffix: String::new(),
-                    min_hard_limit: false,
-                    max_hard_limit: false,
-                },
-                PropertyValue::String(text) => {
-                    if text.contains('\n')
-                        || matches!(name.as_str(), "text" | "path" | "shader" | "code")
-                    {
-                        PropertyUiType::MultilineText
-                    } else {
-                        PropertyUiType::Text
-                    }
-                }
-                PropertyValue::Boolean(_) => PropertyUiType::Bool,
-                PropertyValue::Vec2(_) => PropertyUiType::Vec2 {
-                    suffix: String::new(),
-                },
-                PropertyValue::Vec3(_) => PropertyUiType::Vec3 {
-                    suffix: String::new(),
-                },
-                PropertyValue::Vec4(_) => PropertyUiType::Vec4 {
-                    suffix: String::new(),
-                },
-                PropertyValue::Color(_) => PropertyUiType::Color,
-                PropertyValue::Array(_) | PropertyValue::Map(_) => return None,
-            };
-            Some(PropertyDefinition::new(
-                name,
-                ui_type,
-                &property_label(name),
-                value,
-            ))
-        })
-        .collect()
-}
-
-fn property_label(name: &str) -> String {
-    name.split('_')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut characters = part.chars();
-            match characters.next() {
-                Some(first) => first.to_uppercase().chain(characters).collect::<String>(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn is_clip_timing_property(name: &str) -> bool {
@@ -2374,7 +2317,7 @@ mod tests {
                 assert_eq!(
                     node.properties()
                         .get(definition.name())
-                        .map(|property| property.evaluate_at(0.0)),
+                        .and_then(|property| property.evaluate_at(0.0).ok()),
                     Some(definition.default_value().clone()),
                     "{component_id}.{} must be initialized by its descriptor factory",
                     definition.name(),

@@ -8,6 +8,7 @@ use crate::core::audio::mixer::{
 };
 use crate::core::cache::CacheManager;
 use crate::model::project::Project;
+use crate::plugin::PluginManager;
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -30,6 +31,7 @@ pub struct AudioService {
     project: Arc<RwLock<Project>>,
     audio_engine: Rc<AudioEngine>,
     cache_manager: Arc<CacheManager>,
+    plugin_manager: Arc<PluginManager>,
     active_composition_id: Mutex<Option<Uuid>>,
     generation: Arc<AtomicU64>,
     pending: Arc<Mutex<HashSet<PendingAudioLoad>>>,
@@ -44,11 +46,13 @@ impl AudioService {
         project: Arc<RwLock<Project>>,
         audio_engine: Rc<AudioEngine>,
         cache_manager: Arc<CacheManager>,
+        plugin_manager: Arc<PluginManager>,
     ) -> Self {
         Self {
             project,
             audio_engine,
             cache_manager,
+            plugin_manager,
             // Selection is supplied explicitly by the view layer. An absent
             // selection is mute, never an implicit compositions[0] fallback.
             active_composition_id: Mutex::new(None),
@@ -226,6 +230,7 @@ impl AudioService {
             frames,
             sample_rate,
             u32::from(channels),
+            self.plugin_manager.as_ref(),
         )
     }
 
@@ -292,6 +297,7 @@ impl AudioService {
             frames,
             sample_rate,
             channels,
+            self.plugin_manager.as_ref(),
         )
     }
 

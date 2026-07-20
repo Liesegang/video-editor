@@ -327,6 +327,7 @@ pub fn graph_editor_panel(
                     project_service,
                     &mut actions,
                     composition.fps,
+                    (composition.width, composition.height),
                 );
 
                 drawing::draw_playhead(

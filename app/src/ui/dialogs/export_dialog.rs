@@ -715,6 +715,7 @@ impl ExportDialog {
                     frames,
                     sample_rate,
                     2,
+                    plugin_manager.as_ref(),
                 );
 
                 if !audio_data.is_empty() {

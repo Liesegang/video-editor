@@ -38,6 +38,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
 
 mod canvas;
+mod property_evaluation;
 
 use canvas::{
     adaptive_grid_spacing, node_editor_canvas_metadata, node_editor_details_visible,
@@ -50,6 +51,7 @@ use canvas::{
     GRID_TARGET_SCREEN_SPACING, NODE_EDITOR_DETAIL_SCALE, NODE_EDITOR_MAX_SCALE,
     NODE_EDITOR_MAX_TRANSLATION, NODE_EDITOR_MIN_SCALE, NODE_EDITOR_RESIZE_INTERACTION_SCALE,
 };
+use property_evaluation::{evaluate_node_property, render_node_property_issue};
 const CONTAINER_HEADER_HEIGHT: f32 = 64.0;
 const CONTAINER_CONTROL_OFFSET: egui::Vec2 = egui::vec2(14.0, 10.0);
 const CONTAINER_PORT_Y: f32 = 86.0;
@@ -1009,14 +1011,19 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 NodeContent::Generator(GeneratorContent::Solid) => {
                     let property_time =
                         node_property_time(self.project, project_node_id, self.current_time);
-                    let color = node
-                        .properties()
-                        .get("color")
-                        .and_then(|property| {
-                            property
-                                .evaluate_at(property_time)
-                                .get_as::<library::model::frame::color::Color>()
-                        })
+                    let evaluated = node.properties().get("color").map(|property| {
+                        evaluate_node_property(
+                            self.project,
+                            self.plugin_manager,
+                            project_node_id,
+                            property,
+                            property_time,
+                        )
+                    });
+                    let color = evaluated
+                        .as_ref()
+                        .and_then(|evaluated| evaluated.value())
+                        .and_then(|value| value.get_as::<library::model::frame::color::Color>())
                         .unwrap_or(library::model::frame::color::Color {
                             r: 255,
                             g: 255,
@@ -1027,6 +1034,11 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                         Color32::from_rgba_unmultiplied(color.r, color.g, color.b, color.a);
                     ui.horizontal(|ui| {
                         property_label(ui, "Color");
+                        if let Some(issue) =
+                            evaluated.as_ref().and_then(|evaluated| evaluated.issue())
+                        {
+                            render_node_property_issue(ui, project_node_id, "color", issue);
+                        }
                         let (response, popup_closed) =
                             continuous_color_edit_button(ui, &mut edited);
                         let finished = popup_closed || continuous_response_finished(ui, &response);
@@ -1667,11 +1679,22 @@ impl ProjectNodeViewer<'_> {
         connected: bool,
     ) {
         let property_time = node_property_time(self.project, node_id, self.current_time);
-        let value = self
+        let evaluated = self
             .project
             .get_node(node_id)
             .and_then(|node| node.properties().get(property_key))
-            .map(|property| property.evaluate_at(property_time));
+            .map(|property| {
+                evaluate_node_property(
+                    self.project,
+                    self.plugin_manager,
+                    node_id,
+                    property,
+                    property_time,
+                )
+            });
+        let value = evaluated
+            .as_ref()
+            .and_then(|evaluated| evaluated.value().cloned());
         let current_value_metadata = value
             .as_ref()
             .map(serde_json::Value::from)
@@ -1686,6 +1709,9 @@ impl ProjectNodeViewer<'_> {
                         .color(Color32::from_gray(145)),
                 );
                 return None;
+            }
+            if let Some(issue) = evaluated.as_ref().and_then(|evaluated| evaluated.issue()) {
+                render_node_property_issue(ui, node_id, property_key, issue);
             }
             let Some(mut value) = value else {
                 non_selectable_label(
@@ -1978,13 +2004,25 @@ impl ProjectNodeViewer<'_> {
         fallback: &str,
     ) {
         let property_time = node_property_time(self.project, node_id, self.current_time);
-        let mut value = node
-            .properties()
-            .get(key)
-            .and_then(|property| property.evaluate_at(property_time).get_as::<String>())
+        let evaluated = node.properties().get(key).map(|property| {
+            evaluate_node_property(
+                self.project,
+                self.plugin_manager,
+                node_id,
+                property,
+                property_time,
+            )
+        });
+        let mut value = evaluated
+            .as_ref()
+            .and_then(|evaluated| evaluated.value())
+            .and_then(|value| value.get_as::<String>())
             .unwrap_or_else(|| fallback.to_string());
         ui.horizontal(|ui| {
             property_label(ui, label);
+            if let Some(issue) = evaluated.as_ref().and_then(|evaluated| evaluated.issue()) {
+                render_node_property_issue(ui, node_id, key, issue);
+            }
             let response = ui.add_sized(
                 [INLINE_CONTROL_WIDTH, PORT_ROW_HEIGHT],
                 egui::TextEdit::singleline(&mut value),
@@ -12181,7 +12219,7 @@ mod tests {
                 assert_eq!(
                     node.properties()
                         .get(definition.name())
-                        .map(|property| property.evaluate_at(0.0)),
+                        .and_then(|property| property.evaluate_at(0.0).ok()),
                     Some(definition.default_value().clone()),
                     "{component_id}.{} was not initialized by its descriptor factory",
                     definition.name(),
@@ -12193,7 +12231,7 @@ mod tests {
             transform
                 .properties()
                 .get("target")
-                .map(|property| property.evaluate_at(0.0)),
+                .and_then(|property| property.evaluate_at(0.0).ok()),
             Some(PropertyValue::String("Block".to_string()))
         );
         let opacity = plugins.create_effector_operation_node("opacity").unwrap();
@@ -12201,14 +12239,14 @@ mod tests {
             opacity
                 .properties()
                 .get("mode")
-                .map(|property| property.evaluate_at(0.0)),
+                .and_then(|property| property.evaluate_at(0.0).ok()),
             Some(PropertyValue::String("Set".to_string()))
         );
         assert_eq!(
             opacity
                 .properties()
                 .get("target")
-                .map(|property| property.evaluate_at(0.0)),
+                .and_then(|property| property.evaluate_at(0.0).ok()),
             Some(PropertyValue::String("Block".to_string()))
         );
     }
@@ -13531,7 +13569,8 @@ mod tests {
                 .properties()
                 .get("opacity")
                 .unwrap()
-                .evaluate_at(node_property_time(&project, solid_id, global_time)),
+                .evaluate_at(node_property_time(&project, solid_id, global_time))
+                .unwrap(),
             PropertyValue::Number(OrderedFloat(42.5))
         );
 
@@ -13551,7 +13590,9 @@ mod tests {
             .get("opacity")
             .unwrap();
         assert_eq!(
-            clip_node_property.evaluate_at(inspector_and_renderer_time),
+            clip_node_property
+                .evaluate_at(inspector_and_renderer_time)
+                .unwrap(),
             PropertyValue::Number(OrderedFloat(91.0))
         );
         assert!(clip_node_property.has_keyframe_at(inspector_and_renderer_time, 0.001));
@@ -13594,7 +13635,7 @@ mod tests {
             .unwrap();
         assert!(root_property.has_keyframe_at(global_time, 0.001));
         assert_eq!(
-            root_property.evaluate_at(global_time),
+            root_property.evaluate_at(global_time).unwrap(),
             PropertyValue::Number(OrderedFloat(55.0))
         );
     }

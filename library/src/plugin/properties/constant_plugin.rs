@@ -1,8 +1,6 @@
 use super::super::{Plugin, PropertyPlugin};
 use crate::model::property::{Property, PropertyValue};
-use crate::plugin::{EvaluationContext, PropertyEvaluator};
-use log::warn;
-use ordered_float::OrderedFloat;
+use crate::plugin::{EvaluationContext, PropertyEvaluationError, PropertyEvaluator};
 use std::sync::Arc;
 
 #[derive(Default)]
@@ -41,10 +39,14 @@ impl PropertyPlugin for ConstantPropertyPlugin {
 pub struct ConstantEvaluator;
 
 impl PropertyEvaluator for ConstantEvaluator {
-    fn evaluate(&self, property: &Property, _time: f64, _ctx: &EvaluationContext) -> PropertyValue {
-        property.value().cloned().unwrap_or_else(|| {
-            warn!("Constant evaluator missing 'value'; using 0");
-            PropertyValue::Number(OrderedFloat(0.0))
+    fn evaluate(
+        &self,
+        property: &Property,
+        _time: f64,
+        _ctx: &EvaluationContext,
+    ) -> Result<PropertyValue, PropertyEvaluationError> {
+        property.value().cloned().ok_or_else(|| {
+            PropertyEvaluationError::new("constant", "property has no authored value")
         })
     }
 }

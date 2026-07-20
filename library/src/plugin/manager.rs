@@ -1439,9 +1439,9 @@ mod tests {
             _property: &Property,
             _time: f64,
             _context: &crate::plugin::EvaluationContext,
-        ) -> PropertyValue {
+        ) -> Result<PropertyValue, crate::plugin::PropertyEvaluationError> {
             let value = self.evaluations.fetch_add(1, Ordering::SeqCst) + 1;
-            PropertyValue::Number(OrderedFloat(value as f64))
+            Ok(PropertyValue::Number(OrderedFloat(value as f64)))
         }
     }
 

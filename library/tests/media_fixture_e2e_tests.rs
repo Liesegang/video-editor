@@ -33,7 +33,9 @@ use ordered_float::OrderedFloat;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use support::{generator_node_for_canvas, media_node_for_canvas};
+use support::{
+    channel_energy, generator_node_for_canvas, media_node_for_canvas, positive_zero_crossings,
+};
 
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -633,23 +635,6 @@ fn dedicated_audio_loader_decodes_the_tiny_mp3_as_interleaved_stereo() -> Result
     Ok(())
 }
 
-fn channel_energy(samples: &[f32], channel: usize) -> f32 {
-    samples
-        .chunks_exact(2)
-        .map(|frame| frame[channel] * frame[channel])
-        .sum::<f32>()
-        / (samples.len() / 2).max(1) as f32
-}
-
-fn positive_zero_crossings(samples: &[f32], channel: usize) -> usize {
-    samples
-        .chunks_exact(2)
-        .map(|frame| frame[channel])
-        .zip(samples.chunks_exact(2).skip(1).map(|frame| frame[channel]))
-        .filter(|(before, after)| *before <= 0.0 && *after > 0.0)
-        .count()
-}
-
 #[test]
 fn explicit_global_audio_stream_ordinals_decode_distinct_signals() -> Result<()> {
     let path = fixture("multi_audio.mkv");
@@ -734,6 +719,7 @@ fn cold_render_survives_high_stretch_with_a_two_chunk_cache() -> Result<()> {
         .map_err(|error| anyhow!(error))?;
 
     let cache = CacheManager::with_audio_chunk_capacity(2);
+    let plugin_manager = PluginManager::default();
     let rendered = render_samples(
         &project.assets,
         &project,
@@ -745,6 +731,7 @@ fn cold_render_survives_high_stretch_with_a_two_chunk_cache() -> Result<()> {
         10_000,
         8_000,
         2,
+        &plugin_manager,
     );
 
     assert_eq!(rendered.len(), 20_000);
@@ -855,6 +842,7 @@ fn assert_nonzero_mix(
         (sample_rate / 4) as usize,
         sample_rate,
         2,
+        service.get_plugin_manager().as_ref(),
     );
     assert!(
         mixed.iter().any(|sample| sample.abs() > 0.001),

@@ -5,7 +5,9 @@ use crate::model::frame::runtime_shape::RuntimeShape;
 use crate::model::frame::transform::{Position, Scale, Transform};
 use crate::model::project::{Composition, EvalOutput};
 use crate::model::property::{PropertyMap, PropertyValue, Vec2};
-use crate::plugin::{EvaluationContext, PluginManager, PropertyEvaluatorRegistry};
+use crate::plugin::{
+    EvaluationContext, PluginManager, PropertyEvaluationError, PropertyEvaluatorRegistry,
+};
 use std::collections::HashMap;
 
 mod image;
@@ -107,9 +109,11 @@ impl<'a> FrameEvaluationContext<'a> {
                 log::debug!("Input {key} produced NoOutput");
                 None
             }
-            None => props
-                .get(key)
-                .map(|property| self.evaluate_property_value(property, props, time)),
+            None => props.get(key).and_then(|property| {
+                self.evaluate_property_value(property, props, time)
+                    .inspect_err(|error| log::error!("{error}"))
+                    .ok()
+            }),
         }
     }
 
@@ -118,11 +122,12 @@ impl<'a> FrameEvaluationContext<'a> {
         property: &crate::model::property::Property,
         properties: &PropertyMap,
         time: f64,
-    ) -> PropertyValue {
-        let ctx = EvaluationContext {
-            property_map: properties,
-            fps: self.evaluation_fps(),
-        };
+    ) -> Result<PropertyValue, PropertyEvaluationError> {
+        let ctx = EvaluationContext::new(
+            properties,
+            self.evaluation_fps(),
+            self.evaluation_resolution(),
+        );
         self.property_evaluators.evaluate(property, time, &ctx)
     }
 

@@ -23,7 +23,10 @@ pub mod styles;
 
 // Re-export from submodules
 pub use entity_converter::{EntityConverterPlugin, FrameEvaluationContext, ResolvedNodeInputs};
-pub use evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
+pub use evaluator::{
+    EvaluationContext, PropertyEvaluationDiagnostic, PropertyEvaluationError,
+    PropertyEvaluationOutcome, PropertyEvaluator, PropertyEvaluatorRegistry,
+};
 pub use manager::{PluginInfo, PluginManager};
 pub(crate) use operation::OperationNodeParts;
 pub use operation::{

@@ -8,6 +8,7 @@ use library::model::property::{
 };
 use ordered_float::OrderedFloat;
 
+use super::evaluation::{evaluate_property_map, render_evaluation_issues};
 use crate::ui::widgets::property_drag_value::{FloatDragValueConfig, IntegerDragValueConfig};
 
 pub struct PropertyRenderContext<'a> {
@@ -847,6 +848,7 @@ pub(crate) fn property_definition_metadata(definition: &PropertyDefinition) -> s
 // Helper to standardise Grid + Property Evaluation loop
 #[allow(
     dead_code,
+    clippy::too_many_arguments,
     reason = "retained only for the legacy embedded extension renderers while Timeline Inspector uses operation Nodes"
 )]
 pub fn render_inspector_properties_grid(
@@ -857,8 +859,17 @@ pub fn render_inspector_properties_grid(
     project_service: &library::EditorService,
     context: &PropertyRenderContext,
     fps: f64,
+    resolution: (u64, u64),
 ) -> Vec<PropertyAction> {
     let mut pending_actions = Vec::new();
+    let evaluated = evaluate_property_map(
+        project_service,
+        properties,
+        context.current_time,
+        fps,
+        resolution,
+    );
+    render_evaluation_issues(ui, &context.qa_scope, evaluated.issues());
 
     egui::Grid::new(id).striped(true).show(ui, |ui| {
         // Force in_grid to true for this component
@@ -870,16 +881,7 @@ pub fn render_inspector_properties_grid(
         let actions = render_property_rows(
             ui,
             definitions,
-            |name| {
-                properties.get(name).map(|p| {
-                    project_service.evaluate_property_value(
-                        p,
-                        properties,
-                        context.current_time,
-                        fps,
-                    )
-                })
-            },
+            |name| evaluated.value(name).cloned(),
             |name| properties.get(name).cloned(),
             &grid_context,
         );
@@ -998,7 +1000,7 @@ mod tests {
                         actions.extend(render_property_rows(
                             ui,
                             std::slice::from_ref(&definition),
-                            |_| Some(property.evaluate_at(0.0)),
+                            |_| property.evaluate_at(0.0).ok(),
                             |_| Some(property.clone()),
                             &render_context,
                         ));
@@ -1047,7 +1049,7 @@ mod tests {
                         actions.extend(render_property_rows(
                             ui,
                             std::slice::from_ref(&definition),
-                            |_| Some(property.evaluate_at(0.0)),
+                            |_| property.evaluate_at(0.0).ok(),
                             |_| Some(property.clone()),
                             &render_context,
                         ));
