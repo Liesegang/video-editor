@@ -104,7 +104,7 @@ fn mix_samples_with_policy(
         (composition.width, composition.height),
     );
 
-    for node_id in routed_audio_media_nodes(project, composition.id) {
+    for node_id in routed_audio_media_nodes(project, PortOwner::Composition(composition.id)) {
         mix_routed_media_node(
             project,
             node_id,
@@ -197,12 +197,15 @@ fn mix_routed_media_node(
     }
 }
 
-fn routed_audio_media_nodes(project: &Project, composition_id: uuid::Uuid) -> Vec<uuid::Uuid> {
+/// Resolve enabled Media leaves through the same canonical typed Audio routes
+/// used by preview playback and export. Unsupported PluginOperation outputs
+/// intentionally remain NoOutput instead of becoming implicit pass-throughs.
+pub(crate) fn routed_audio_media_nodes(project: &Project, owner: PortOwner) -> Vec<uuid::Uuid> {
     let mut nodes = Vec::new();
     let mut emitted = HashSet::new();
     collect_routed_audio_media_nodes(
         project,
-        PortOwner::Composition(composition_id),
+        owner,
         &mut HashSet::new(),
         &mut emitted,
         &mut nodes,
@@ -452,7 +455,7 @@ pub fn audio_window_requests_for_composition(
         return Vec::new();
     }
     let mut requests = HashSet::new();
-    for node_id in routed_audio_media_nodes(project, composition.id) {
+    for node_id in routed_audio_media_nodes(project, PortOwner::Composition(composition.id)) {
         let clip = clip_for_node(project, node_id);
         collect_node_windows(
             project,
