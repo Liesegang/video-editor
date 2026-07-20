@@ -188,8 +188,27 @@ pub fn snapshot(
                         }),
                     }),
                 "wire_gesture": editor_context.node_editor_state.wire_gesture.as_ref().map(|gesture| {
+                    let (connection_id, target) = match gesture.wire {
+                        NodeEditorEditableWire::ProjectConnection { connection_id } => (
+                            Some(connection_id),
+                            serde_json::json!({
+                                "kind": "explicit",
+                                "connection_id": connection_id,
+                            }),
+                        ),
+                        NodeEditorEditableWire::OutputBinding { owner, node_id, data_type } => (
+                            None,
+                            serde_json::json!({
+                                "kind": "output_binding",
+                                "owner": owner,
+                                "node_id": node_id,
+                                "output_type": format!("{data_type:?}").to_lowercase(),
+                            }),
+                        ),
+                    };
                     serde_json::json!({
-                        "connection_id": gesture.connection_id,
+                        "connection_id": connection_id,
+                        "target": target,
                         "kind": format!("{:?}", gesture.kind),
                         "start": {"x": gesture.start.x, "y": gesture.start.y},
                         "current": {"x": gesture.current.x, "y": gesture.current.y},

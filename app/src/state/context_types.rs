@@ -710,7 +710,11 @@ pub enum NodeEditorWireDragKind {
 
 #[derive(Clone, Debug)]
 pub struct NodeEditorWireGesture {
-    pub connection_id: Uuid,
+    /// Stable authored identity for the complete physical gesture. Explicit
+    /// connections retain their UUID; container output bindings retain owner,
+    /// current source, and Image/Audio type so the two bindings can never be
+    /// confused while an endpoint is being moved.
+    pub wire: NodeEditorEditableWire,
     pub kind: NodeEditorWireDragKind,
     pub start: egui::Pos2,
     pub current: egui::Pos2,
