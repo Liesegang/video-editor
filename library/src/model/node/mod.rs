@@ -142,6 +142,106 @@ static BASIC_NUMERIC_PORT_DEFINITIONS: LazyLock<[PortDefinition; 3]> = LazyLock:
     ]
 });
 
+fn fmod_property_definitions() -> &'static [PropertyDefinition] {
+    FMOD_PROPERTY_DEFINITIONS.as_slice()
+}
+
+fn add_property_definitions() -> &'static [PropertyDefinition] {
+    ADD_PROPERTY_DEFINITIONS.as_slice()
+}
+
+fn subtract_property_definitions() -> &'static [PropertyDefinition] {
+    SUBTRACT_PROPERTY_DEFINITIONS.as_slice()
+}
+
+fn multiply_property_definitions() -> &'static [PropertyDefinition] {
+    MULTIPLY_PROPERTY_DEFINITIONS.as_slice()
+}
+
+fn divide_property_definitions() -> &'static [PropertyDefinition] {
+    DIVIDE_PROPERTY_DEFINITIONS.as_slice()
+}
+
+fn fmod_port_definitions() -> &'static [PortDefinition] {
+    FMOD_PORT_DEFINITIONS.as_slice()
+}
+
+fn basic_numeric_port_definitions() -> &'static [PortDefinition] {
+    BASIC_NUMERIC_PORT_DEFINITIONS.as_slice()
+}
+
+struct ValueOperationDescriptor {
+    operation_key: &'static str,
+    label: &'static str,
+    symbol: &'static str,
+    operation: NumericBinaryOperation,
+    primary_input: &'static str,
+    secondary_input: &'static str,
+    result_output: &'static str,
+    property_definitions: fn() -> &'static [PropertyDefinition],
+    port_definitions: fn() -> &'static [PortDefinition],
+}
+
+static FMOD_VALUE_DESCRIPTOR: ValueOperationDescriptor = ValueOperationDescriptor {
+    operation_key: "fmod",
+    label: "Fmod",
+    symbol: "%",
+    operation: NumericBinaryOperation::Fmod,
+    primary_input: FMOD_X_INPUT_PORT,
+    secondary_input: FMOD_DIVISOR_INPUT_PORT,
+    result_output: NUMBER_RESULT_OUTPUT_PORT,
+    property_definitions: fmod_property_definitions,
+    port_definitions: fmod_port_definitions,
+};
+
+static ADD_VALUE_DESCRIPTOR: ValueOperationDescriptor = ValueOperationDescriptor {
+    operation_key: "add",
+    label: "Add",
+    symbol: "+",
+    operation: NumericBinaryOperation::Add,
+    primary_input: NUMERIC_A_INPUT_PORT,
+    secondary_input: NUMERIC_B_INPUT_PORT,
+    result_output: NUMBER_RESULT_OUTPUT_PORT,
+    property_definitions: add_property_definitions,
+    port_definitions: basic_numeric_port_definitions,
+};
+
+static SUBTRACT_VALUE_DESCRIPTOR: ValueOperationDescriptor = ValueOperationDescriptor {
+    operation_key: "subtract",
+    label: "Subtract",
+    symbol: "−",
+    operation: NumericBinaryOperation::Subtract,
+    primary_input: NUMERIC_A_INPUT_PORT,
+    secondary_input: NUMERIC_B_INPUT_PORT,
+    result_output: NUMBER_RESULT_OUTPUT_PORT,
+    property_definitions: subtract_property_definitions,
+    port_definitions: basic_numeric_port_definitions,
+};
+
+static MULTIPLY_VALUE_DESCRIPTOR: ValueOperationDescriptor = ValueOperationDescriptor {
+    operation_key: "multiply",
+    label: "Multiply",
+    symbol: "×",
+    operation: NumericBinaryOperation::Multiply,
+    primary_input: NUMERIC_A_INPUT_PORT,
+    secondary_input: NUMERIC_B_INPUT_PORT,
+    result_output: NUMBER_RESULT_OUTPUT_PORT,
+    property_definitions: multiply_property_definitions,
+    port_definitions: basic_numeric_port_definitions,
+};
+
+static DIVIDE_VALUE_DESCRIPTOR: ValueOperationDescriptor = ValueOperationDescriptor {
+    operation_key: "divide",
+    label: "Divide",
+    symbol: "÷",
+    operation: NumericBinaryOperation::Divide,
+    primary_input: NUMERIC_A_INPUT_PORT,
+    secondary_input: NUMERIC_B_INPUT_PORT,
+    result_output: NUMBER_RESULT_OUTPUT_PORT,
+    property_definitions: divide_property_definitions,
+    port_definitions: basic_numeric_port_definitions,
+};
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum BlendMode {
     #[default]
@@ -562,26 +662,27 @@ impl Node {
     /// wiring a container's Time output to `x`. `divisor` remains a normal,
     /// wire-overridable numeric property initialized to `1.0`.
     pub fn new_fmod(name: &str) -> Self {
-        Self::new_numeric(name, ValueContent::Fmod)
+        Self::new_value(name, ValueContent::Fmod)
     }
 
     pub fn new_add(name: &str) -> Self {
-        Self::new_numeric(name, ValueContent::Add)
+        Self::new_value(name, ValueContent::Add)
     }
 
     pub fn new_subtract(name: &str) -> Self {
-        Self::new_numeric(name, ValueContent::Subtract)
+        Self::new_value(name, ValueContent::Subtract)
     }
 
     pub fn new_multiply(name: &str) -> Self {
-        Self::new_numeric(name, ValueContent::Multiply)
+        Self::new_value(name, ValueContent::Multiply)
     }
 
     pub fn new_divide(name: &str) -> Self {
-        Self::new_numeric(name, ValueContent::Divide)
+        Self::new_value(name, ValueContent::Divide)
     }
 
-    fn new_numeric(name: &str, content: ValueContent) -> Self {
+    /// Creates one of the native descriptor-backed numeric operations.
+    pub fn new_value(name: &str, content: ValueContent) -> Self {
         Self::with_properties(
             name,
             NodeContent::Value(content),
@@ -684,58 +785,67 @@ pub enum ValueContent {
 }
 
 impl ValueContent {
-    pub(crate) fn numeric_operation(self) -> NumericBinaryOperation {
+    pub const ALL: [Self; 5] = [
+        Self::Fmod,
+        Self::Add,
+        Self::Subtract,
+        Self::Multiply,
+        Self::Divide,
+    ];
+
+    fn descriptor(self) -> &'static ValueOperationDescriptor {
         match self {
-            Self::Fmod => NumericBinaryOperation::Fmod,
-            Self::Add => NumericBinaryOperation::Add,
-            Self::Subtract => NumericBinaryOperation::Subtract,
-            Self::Multiply => NumericBinaryOperation::Multiply,
-            Self::Divide => NumericBinaryOperation::Divide,
+            Self::Fmod => &FMOD_VALUE_DESCRIPTOR,
+            Self::Add => &ADD_VALUE_DESCRIPTOR,
+            Self::Subtract => &SUBTRACT_VALUE_DESCRIPTOR,
+            Self::Multiply => &MULTIPLY_VALUE_DESCRIPTOR,
+            Self::Divide => &DIVIDE_VALUE_DESCRIPTOR,
         }
+    }
+
+    /// Stable semantic identity used by menus, diagnostics, and automation.
+    pub fn operation_key(self) -> &'static str {
+        self.descriptor().operation_key
+    }
+
+    pub fn label(self) -> &'static str {
+        self.descriptor().label
+    }
+
+    pub fn symbol(self) -> &'static str {
+        self.descriptor().symbol
+    }
+
+    pub(crate) fn numeric_operation(self) -> NumericBinaryOperation {
+        self.descriptor().operation
     }
 
     pub fn primary_input(self) -> &'static str {
-        match self {
-            Self::Fmod => FMOD_X_INPUT_PORT,
-            Self::Add | Self::Subtract | Self::Multiply | Self::Divide => NUMERIC_A_INPUT_PORT,
-        }
+        self.descriptor().primary_input
     }
 
     pub fn secondary_input(self) -> &'static str {
-        match self {
-            Self::Fmod => FMOD_DIVISOR_INPUT_PORT,
-            Self::Add | Self::Subtract | Self::Multiply | Self::Divide => NUMERIC_B_INPUT_PORT,
-        }
+        self.descriptor().secondary_input
     }
 
     /// Canonical authored-property metadata for this native numeric operation.
     /// Factories and inspectors consume this same definition list.
     pub fn property_definitions(self) -> &'static [PropertyDefinition] {
-        match self {
-            Self::Fmod => FMOD_PROPERTY_DEFINITIONS.as_slice(),
-            Self::Add => ADD_PROPERTY_DEFINITIONS.as_slice(),
-            Self::Subtract => SUBTRACT_PROPERTY_DEFINITIONS.as_slice(),
-            Self::Multiply => MULTIPLY_PROPERTY_DEFINITIONS.as_slice(),
-            Self::Divide => DIVIDE_PROPERTY_DEFINITIONS.as_slice(),
-        }
+        (self.descriptor().property_definitions)()
     }
 
     /// Canonical graph ports for this native numeric operation.
     pub fn port_definitions(self) -> &'static [PortDefinition] {
-        match self {
-            Self::Fmod => FMOD_PORT_DEFINITIONS.as_slice(),
-            Self::Add | Self::Subtract | Self::Multiply | Self::Divide => {
-                BASIC_NUMERIC_PORT_DEFINITIONS.as_slice()
-            }
-        }
+        (self.descriptor().port_definitions)()
     }
 
     /// Declares the primary input that a future bypass state should route to
     /// each output. This is operation metadata only; it deliberately does not
     /// add or reinterpret authored Node state.
     pub fn bypass_input_for_output(self, output: &str) -> Option<&'static str> {
-        if output == NUMBER_RESULT_OUTPUT_PORT {
-            Some(self.primary_input())
+        let descriptor = self.descriptor();
+        if output == descriptor.result_output {
+            Some(descriptor.primary_input)
         } else {
             None
         }
@@ -957,6 +1067,47 @@ mod tests {
                 content.bypass_input_for_output(NUMBER_RESULT_OUTPUT_PORT),
                 Some(NUMERIC_A_INPUT_PORT)
             );
+        }
+    }
+
+    #[test]
+    fn every_native_value_has_one_complete_unique_descriptor_contract() {
+        let mut keys = std::collections::HashSet::new();
+        let mut labels = std::collections::HashSet::new();
+        let mut symbols = std::collections::HashSet::new();
+
+        assert_eq!(ValueContent::ALL.len(), 5);
+        for content in ValueContent::ALL {
+            assert!(keys.insert(content.operation_key()));
+            assert!(labels.insert(content.label()));
+            assert!(symbols.insert(content.symbol()));
+
+            let node = Node::new_value(content.label(), content);
+            assert_eq!(node.content(), &NodeContent::Value(content));
+            assert_eq!(
+                node.properties(),
+                &PropertyMap::from_definitions(content.property_definitions())
+            );
+
+            let ports = content.port_definitions();
+            assert_eq!(ports.len(), 3);
+            assert!(ports.iter().any(|port| {
+                port.direction == crate::model::project::PortDirection::Input
+                    && port.key == content.primary_input()
+            }));
+            assert!(ports.iter().any(|port| {
+                port.direction == crate::model::project::PortDirection::Input
+                    && port.key == content.secondary_input()
+            }));
+            assert!(ports.iter().any(|port| {
+                port.direction == crate::model::project::PortDirection::Output
+                    && port.key == NUMBER_RESULT_OUTPUT_PORT
+            }));
+            assert_eq!(
+                content.bypass_input_for_output(NUMBER_RESULT_OUTPUT_PORT),
+                Some(content.primary_input())
+            );
+            let _ = content.numeric_operation();
         }
     }
 }

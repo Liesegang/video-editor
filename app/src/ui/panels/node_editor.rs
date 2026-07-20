@@ -25,6 +25,7 @@ use library::model::project::{
 use library::model::property::{PropertyDefinition, PropertyUiType, PropertyValue};
 use library::model::{
     BlendMode, Clip, GeneratorContent, Node, NodeContainer, NodeContent, NodeGraphBundle, Project,
+    ValueContent,
 };
 use library::plugin::{
     property_name_from_port, PluginManager, DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY,
@@ -894,12 +895,8 @@ impl SnarlViewer<GraphItem> for ProjectNodeViewer<'_> {
                 let property_key = property_name_from_port(&definition.key)
                     .unwrap_or(&definition.key)
                     .to_string();
-                let property_definition = self.plugin_manager.and_then(|manager| {
-                    plugin_operation_property_definition(
-                        manager,
-                        self.project.get_node(node_id)?,
-                        &property_key,
-                    )
+                let property_definition = self.project.get_node(node_id).and_then(|node| {
+                    node_property_definition(self.plugin_manager, node, &property_key)
                 });
                 self.show_node_input_row(
                     ui,
@@ -2159,9 +2156,7 @@ struct NodePalette {
 const VALUE_NODE_CATEGORY_LABEL: &str = "Value";
 
 fn value_operation_label(value: library::model::ValueContent) -> &'static str {
-    match value {
-        library::model::ValueContent::TimeModulo => "Time Modulo",
-    }
+    value.label()
 }
 
 fn node_palette(project: &Project, node_id: Uuid) -> NodePalette {
@@ -2229,7 +2224,7 @@ fn node_icon(project: &Project, node_id: Uuid) -> &'static str {
             "decorator" => "⌁",
             _ => "P",
         },
-        Some(NodeContent::Value(_)) => "%",
+        Some(NodeContent::Value(value)) => value.symbol(),
         Some(NodeContent::Merge) => "⋈",
         None => "?",
     }
@@ -2405,7 +2400,9 @@ fn pin_color(data_type: PortDataType) -> Color32 {
         PortDataType::Audio => Color32::from_rgb(100, 200, 100),
         PortDataType::String => Color32::from_rgb(100, 220, 220),
         PortDataType::Path => Color32::from_rgb(100, 150, 255),
-        PortDataType::Number | PortDataType::Integer => Color32::from_rgb(255, 100, 100),
+        PortDataType::Numeric | PortDataType::Number | PortDataType::Integer => {
+            Color32::from_rgb(255, 100, 100)
+        }
         PortDataType::Color => Color32::from_rgb(220, 120, 220),
         PortDataType::Vec2 => Color32::from_rgb(120, 170, 255),
         PortDataType::Vec3 => Color32::from_rgb(105, 195, 235),
@@ -2604,25 +2601,30 @@ fn node_property_time(project: &Project, node_id: Uuid, global_time: f64) -> f64
         .map_or(global_time, |clip| clip.local_time(global_time))
 }
 
-fn plugin_operation_property_definition(
-    plugin_manager: &PluginManager,
+fn node_property_definition(
+    plugin_manager: Option<&PluginManager>,
     node: &Node,
     property_name: &str,
 ) -> Option<PropertyDefinition> {
-    let NodeContent::PluginOperation(operation) = node.content() else {
-        return None;
-    };
-    plugin_manager
-        .operation_descriptor(
-            &operation.category,
-            &operation.component_id,
-            &operation.operation,
-        )
-        .ok()?
-        .properties()
-        .iter()
-        .find(|definition| definition.name() == property_name)
-        .cloned()
+    match node.content() {
+        NodeContent::Value(value) => value
+            .property_definitions()
+            .iter()
+            .find(|definition| definition.name() == property_name)
+            .cloned(),
+        NodeContent::PluginOperation(operation) => plugin_manager?
+            .operation_descriptor(
+                &operation.category,
+                &operation.component_id,
+                &operation.operation,
+            )
+            .ok()?
+            .properties()
+            .iter()
+            .find(|definition| definition.name() == property_name)
+            .cloned(),
+        _ => None,
+    }
 }
 
 pub(super) fn node_timing_drag_config(
@@ -6985,7 +6987,7 @@ enum NodeCreateRequest {
     Solid,
     Shape,
     SkSL,
-    TimeModulo,
+    Value(ValueContent),
     Style(String),
     Effector(String),
     Decorator(String),
@@ -7003,7 +7005,7 @@ impl NodeCreateRequest {
             Self::Solid => "solid",
             Self::Shape => "shape",
             Self::SkSL => "sksl",
-            Self::TimeModulo => "time_modulo",
+            Self::Value(value) => value.operation_key(),
             Self::Style(_) => "style",
             Self::Effector(_) => "effector",
             Self::Decorator(_) => "decorator",
@@ -7131,13 +7133,24 @@ fn node_create_menu_items(
             "node_editor.menu.create.sksl",
             NodeCreateRequest::SkSL,
         ),
+    ];
+    items.extend(ValueContent::ALL.into_iter().map(|value| {
+        let keywords: &[&str] = match value {
+            ValueContent::Fmod => &["fmod", "modulo", "remainder", "loop", "value", "number"],
+            ValueContent::Add => &["add", "plus", "sum", "value", "number"],
+            ValueContent::Subtract => &["subtract", "minus", "difference", "value", "number"],
+            ValueContent::Multiply => &["multiply", "times", "product", "value", "number"],
+            ValueContent::Divide => &["divide", "quotient", "ratio", "value", "number"],
+        };
         node_create_menu_item(
-            "Time Modulo",
-            "Timing / Values",
-            ["time", "modulo", "loop", "remainder", "value", "number"],
-            "node_editor.menu.create.time_modulo",
-            NodeCreateRequest::TimeModulo,
-        ),
+            value.label(),
+            "Math / Values",
+            keywords.iter().copied(),
+            format!("node_editor.menu.create.value:{}", value.operation_key()),
+            NodeCreateRequest::Value(value),
+        )
+    }));
+    items.extend([
         node_create_menu_item(
             "Merge",
             "Compositing",
@@ -7166,7 +7179,7 @@ fn node_create_menu_items(
             "node_editor.menu.create.composition",
             NodeCreateRequest::Composition,
         ),
-    ];
+    ]);
 
     let mut styles = plugin_manager.get_available_styles();
     styles.sort();
@@ -7268,7 +7281,7 @@ fn create_operation_node_for_request(
             plugin_manager.create_effect_operation_node(effect_id)
         }
         NodeCreateRequest::Merge => return Some(Node::new_merge("Merge")),
-        NodeCreateRequest::TimeModulo => return Some(Node::new_time_modulo("Time Modulo")),
+        NodeCreateRequest::Value(value) => return Some(Node::new_value(value.label(), *value)),
         NodeCreateRequest::Text
         | NodeCreateRequest::Solid
         | NodeCreateRequest::Shape
@@ -8045,11 +8058,11 @@ fn create_action_for_request(
                 None
             }
         },
-        NodeCreateRequest::TimeModulo => Some(Box::new(move |project| {
+        NodeCreateRequest::Value(value) => Some(Box::new(move |project| {
             create_prebuilt_node(
                 project,
                 graph_position,
-                Node::new_time_modulo("Time Modulo"),
+                Node::new_value(value.label(), value),
                 comp_id,
             )
         })),
@@ -9733,8 +9746,8 @@ mod tests {
     use library::model::frame::draw_type::DrawStyle;
     use library::model::frame::entity::StyleConfig;
     use library::model::project::{
-        ProjectConnection, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT, MERGE_IMAGES_PORT,
-        SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT, VALUE_INPUT_PORT,
+        ProjectConnection, FMOD_X_INPUT_PORT, FRAME_PORT, IMAGE_INPUT_PORT, IMAGE_OUTPUT_PORT,
+        MERGE_IMAGES_PORT, SHAPE_INPUT_PORT, SHAPE_OUTPUT_PORT, TIME_PORT,
     };
     use library::model::property::{Keyframe, Property, PropertyMap};
     use library::model::Composition;
@@ -9831,39 +9844,46 @@ mod tests {
     }
 
     #[test]
-    fn time_modulo_has_explicit_value_node_presentation() {
+    fn native_values_have_explicit_operation_presentation() {
         let mut project = Project::new("value node presentation");
-        let node = Node::new_time_modulo("Time Modulo");
-        let node_id = node.id;
-        project.add_node(node);
-
         assert_eq!(VALUE_NODE_CATEGORY_LABEL, "Value");
-        assert_eq!(
-            value_operation_label(library::model::ValueContent::TimeModulo),
-            "Time Modulo"
-        );
-        assert_eq!(node_icon(&project, node_id), "%");
-        let palette = node_palette(&project, node_id);
-        assert_eq!(palette.body, Color32::from_rgb(28, 41, 46));
-        assert_eq!(palette.header, Color32::from_rgb(39, 83, 95));
-        assert_eq!(palette.accent, Color32::from_rgb(91, 197, 218));
-        assert_eq!(estimated_node_size(&project, node_id).y, 220.0);
+        for value in ValueContent::ALL {
+            let node = Node::new_value(value.label(), value);
+            let node_id = node.id;
+            project.add_node(node);
+            assert_eq!(value_operation_label(value), value.label());
+            assert_eq!(node_icon(&project, node_id), value.symbol());
+            let palette = node_palette(&project, node_id);
+            assert_eq!(palette.body, Color32::from_rgb(28, 41, 46));
+            assert_eq!(palette.header, Color32::from_rgb(39, 83, 95));
+            assert_eq!(palette.accent, Color32::from_rgb(91, 197, 218));
+            assert_eq!(estimated_node_size(&project, node_id).y, 220.0);
+        }
     }
 
     #[test]
-    fn time_modulo_add_item_creates_a_native_node_with_explicit_time_input_wiring() {
+    fn math_add_items_create_every_native_value_and_fmod_accepts_explicit_time() {
         let plugins = PluginManager::default();
         let items = node_create_menu_items(&plugins);
+        for value in ValueContent::ALL {
+            let item = items
+                .iter()
+                .find(|item| item.value == NodeCreateRequest::Value(value))
+                .expect("every native value is exposed by the shared Add catalog");
+            assert_eq!(item.label, value.label());
+            assert_eq!(item.category.as_deref(), Some("Math / Values"));
+            assert_eq!(
+                item.qa_id.as_deref(),
+                Some(format!("node_editor.menu.create.value:{}", value.operation_key()).as_str())
+            );
+            let node = create_operation_node_for_request(&item.value, &plugins)
+                .expect("native value request creates a Node");
+            assert_eq!(node.content(), &NodeContent::Value(value));
+        }
         let item = items
             .iter()
-            .find(|item| item.value == NodeCreateRequest::TimeModulo)
-            .expect("Time Modulo is exposed by the shared Add catalog");
-        assert_eq!(item.label, "Time Modulo");
-        assert_eq!(item.category.as_deref(), Some("Timing / Values"));
-        assert_eq!(
-            item.qa_id.as_deref(),
-            Some("node_editor.menu.create.time_modulo")
-        );
+            .find(|item| item.value == NodeCreateRequest::Value(ValueContent::Fmod))
+            .expect("Fmod is exposed by the shared Add catalog");
         let matches = crate::ui::widgets::searchable_context_menu::filter_searchable_items(
             &items,
             "loop value",
@@ -9889,22 +9909,22 @@ mod tests {
         let connection_id = project
             .connect_ports(
                 PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT),
-                PortAddress::new(PortOwner::Node(node_id), VALUE_INPUT_PORT),
+                PortAddress::new(PortOwner::Node(node_id), FMOD_X_INPUT_PORT),
             )
-            .expect("container Time connects explicitly to the value input");
+            .expect("container Time connects explicitly to Fmod.x");
         let connection = project
             .connections
             .iter()
             .find(|connection| connection.id == connection_id)
             .unwrap();
         assert_eq!(connection.from.port, TIME_PORT);
-        assert_eq!(connection.to.port, VALUE_INPUT_PORT);
+        assert_eq!(connection.to.port, FMOD_X_INPUT_PORT);
     }
 
     #[test]
     fn real_snarl_connected_output_fans_out_to_time_value_without_reconnect_or_pan() {
         let (mut project, composition_id, _, clip_id, _, _) = fixture();
-        let mut modulo = Node::new_time_modulo("Time Modulo");
+        let mut modulo = Node::new_fmod("Fmod");
         modulo.ui_position = [520.0, 620.0];
         let modulo_id = modulo.id;
         project.add_node(modulo);
@@ -9931,7 +9951,7 @@ mod tests {
         reset_test_rects();
 
         let source_address = PortAddress::new(PortOwner::Clip(clip_id), TIME_PORT);
-        let target_address = PortAddress::new(PortOwner::Node(modulo_id), VALUE_INPUT_PORT);
+        let target_address = PortAddress::new(PortOwner::Node(modulo_id), FMOD_X_INPUT_PORT);
         let source_key = RenderedPortKey {
             address: source_address.clone(),
             direction: PortDirection::Output,
@@ -10029,7 +10049,7 @@ mod tests {
                 &project,
                 Some(GraphItem::Node(modulo_id)),
                 "input",
-                VALUE_INPUT_PORT,
+                FMOD_X_INPUT_PORT,
             ))
             .expect("value input QA hit")
             .center(),
@@ -11966,7 +11986,7 @@ mod tests {
 
         let stroke = plugins.create_style_operation_node("stroke").unwrap();
         let stroke_id = stroke.id;
-        let width = plugin_operation_property_definition(&plugins, &stroke, "width")
+        let width = node_property_definition(Some(&plugins), &stroke, "width")
             .expect("runtime descriptor width metadata");
         assert!(matches!(
             width.ui_type(),
@@ -11978,7 +11998,7 @@ mod tests {
                 ..
             } if suffix == "px"
         ));
-        let join = plugin_operation_property_definition(&plugins, &stroke, "join")
+        let join = node_property_definition(Some(&plugins), &stroke, "join")
             .expect("runtime descriptor enum metadata");
         assert!(matches!(
             join.ui_type(),
@@ -12056,7 +12076,7 @@ mod tests {
         let effect = plugins.create_effect_operation_node("blur").unwrap();
         let source_id = source.id;
         let effect_id = effect.id;
-        let sigma_x = plugin_operation_property_definition(&plugins, &effect, "sigma_x")
+        let sigma_x = node_property_definition(Some(&plugins), &effect, "sigma_x")
             .expect("Blur numeric metadata");
         assert!(matches!(
             sigma_x.ui_type(),
@@ -12069,7 +12089,7 @@ mod tests {
                 max_hard_limit: false,
             } if suffix == "px"
         ));
-        let tile_mode = plugin_operation_property_definition(&plugins, &effect, "tile_mode")
+        let tile_mode = node_property_definition(Some(&plugins), &effect, "tile_mode")
             .expect("Blur enum metadata");
         assert!(matches!(
             tile_mode.ui_type(),
