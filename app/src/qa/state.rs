@@ -4,6 +4,7 @@ use crate::state::context::EditorContext;
 use crate::state::context_types::NodeEditorEditableWire;
 use egui_dock::DockState;
 use library::model::project::{NodeContainer, Project};
+use library::PropertyOwner;
 use serde_json::{json, Value};
 use std::sync::mpsc::SyncSender;
 
@@ -12,6 +13,13 @@ fn node_container_key(container: NodeContainer) -> String {
         NodeContainer::Composition(id) => format!("composition:{id}"),
         NodeContainer::Track(id) => format!("track:{id}"),
         NodeContainer::Clip(id) => format!("clip:{id}"),
+    }
+}
+
+fn property_owner_json(owner: PropertyOwner) -> Value {
+    match owner {
+        PropertyOwner::Node(id) => json!({"kind": "node", "id": id}),
+        PropertyOwner::Clip(id) => json!({"kind": "clip", "id": id}),
     }
 }
 
@@ -223,7 +231,7 @@ pub fn snapshot(
             },
             "keyframe_dialog": {
                 "is_open": editor_context.keyframe_dialog.is_open,
-                "entity_id": editor_context.keyframe_dialog.entity_id,
+                "owner": editor_context.keyframe_dialog.owner.map(property_owner_json),
                 "property": editor_context.keyframe_dialog.property_key,
                 "keyframe_id": editor_context.keyframe_dialog.keyframe_id,
                 "global_time": editor_context.keyframe_dialog.time,
@@ -262,6 +270,7 @@ mod tests {
         let shared_id = uuid::Uuid::new_v4();
         context.add_selection(SelectionTarget::Clip(shared_id));
         context.add_selection(SelectionTarget::Node(shared_id));
+        context.keyframe_dialog.owner = Some(PropertyOwner::Node(shared_id));
 
         let mut history = HistoryManager::new();
         history.push_project_state(project.clone());
@@ -290,6 +299,10 @@ mod tests {
         );
         assert_eq!(
             value["editor"]["selection"]["primary"],
+            json!({"kind": "node", "id": shared_id})
+        );
+        assert_eq!(
+            value["editor"]["keyframe_dialog"]["owner"],
             json!({"kind": "node", "id": shared_id})
         );
         assert_eq!(

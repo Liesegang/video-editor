@@ -55,8 +55,6 @@ pub(crate) struct KeyframeDialogTransaction {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct KeyframeDialogState {
     pub is_open: bool,
-    pub track_id: Option<Uuid>,
-    pub entity_id: Option<Uuid>,
     pub property_name: String,
     #[serde(skip)]
     pub owner: Option<PropertyOwner>,
@@ -96,8 +94,6 @@ impl Default for KeyframeDialogState {
     fn default() -> Self {
         Self {
             is_open: false,
-            track_id: None,
-            entity_id: None,
             property_name: String::new(),
             owner: None,
             property_key: String::new(),

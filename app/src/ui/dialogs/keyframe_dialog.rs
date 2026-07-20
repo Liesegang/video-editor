@@ -20,6 +20,13 @@ struct PreparedKeyframeDialogUpdate {
     update: KeyframeUpdate,
 }
 
+fn property_owner_metadata(owner: library::PropertyOwner) -> serde_json::Value {
+    match owner {
+        library::PropertyOwner::Node(id) => serde_json::json!({"kind": "node", "id": id}),
+        library::PropertyOwner::Clip(id) => serde_json::json!({"kind": "clip", "id": id}),
+    }
+}
+
 fn prepare_keyframe_dialog_update(
     project: &Project,
     state: &KeyframeDialogState,
@@ -196,7 +203,7 @@ pub fn show_keyframe_dialog(
                         time_response.enabled(),
                         Some(serde_json::json!({
                             "global_time": state.time,
-                            "entity_id": state.entity_id,
+                            "owner": state.owner.map(property_owner_metadata),
                             "property": state.property_key,
                         })),
                     );
@@ -486,8 +493,6 @@ mod tests {
 
         let state = KeyframeDialogState {
             is_open: true,
-            track_id: None,
-            entity_id: Some(node_id),
             property_name: "node:position.x".to_string(),
             owner: Some(library::PropertyOwner::Node(node_id)),
             property_key: "position".to_string(),
@@ -541,7 +546,6 @@ mod tests {
         history.push_project_state(initial.clone());
         let mut state = KeyframeDialogState {
             is_open: true,
-            entity_id: Some(node_id),
             property_name: "node:opacity".to_string(),
             owner: Some(library::PropertyOwner::Node(node_id)),
             property_key: "opacity".to_string(),
