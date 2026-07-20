@@ -1,11 +1,29 @@
 use eframe::egui;
 
+/// How wheel and trackpad navigation is interpreted inside a viewport.
+///
+/// Keep this explicit per panel: Timeline and Graph use axis/modifier based
+/// navigation, while Preview follows the native trackpad convention of
+/// two-dimensional scrolling plus a separate pinch gesture.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ViewportInputPolicy {
+    /// Unmodified wheel input pans, Shift pans X, Ctrl/Cmd zooms X, and
+    /// Ctrl/Cmd+Shift zooms Y.
+    #[default]
+    AxisModifiers,
+    /// Any wheel direction changes X and Y zoom uniformly.
+    UniformWheel,
+    /// Smooth two-axis scrolling pans and native pinch/Ctrl-wheel zooms
+    /// uniformly around the pointer.
+    Trackpad,
+}
+
 pub struct ViewportConfig {
     pub allow_pan_x: bool,
     pub allow_pan_y: bool,
     pub allow_zoom_x: bool,
     pub allow_zoom_y: bool,
-    pub zoom_uniform: bool, // If true, all zoom ops affect X&Y uniformly
+    pub input_policy: ViewportInputPolicy,
     pub min_zoom: f32,
     pub max_zoom: f32,
 }
@@ -17,7 +35,7 @@ impl Default for ViewportConfig {
             allow_pan_y: true,
             allow_zoom_x: true,
             allow_zoom_y: true,
-            zoom_uniform: false,
+            input_policy: ViewportInputPolicy::default(),
             min_zoom: 0.01,
             max_zoom: 1000.0,
         }
@@ -160,8 +178,39 @@ impl<'a> ViewportController<'a> {
             }
         }
 
-        // --- 3. Wheel Zoom / Scroll ---
+        // --- 3. Wheel / Trackpad navigation ---
         if self.ui.rect_contains_pointer(rect) {
+            if self.config.input_policy == ViewportInputPolicy::Trackpad {
+                // `zoom_delta` contains native `Event::Zoom` gestures and
+                // Ctrl/Cmd-wheel zoom. egui deliberately excludes the latter
+                // from `smooth_scroll_delta`, so reading both cannot apply the
+                // same wheel event as a zoom and a pan. A real trackpad may
+                // still report independent pan and pinch deltas in one frame;
+                // both are useful and are applied in that order.
+                let (zoom_delta, pan_delta, pointer_pos) = self.ui.input(|input| {
+                    (
+                        input.zoom_delta(),
+                        input.smooth_scroll_delta,
+                        input.pointer.hover_pos().unwrap_or(rect.center()),
+                    )
+                });
+                let local_pivot = pointer_pos - rect.min;
+                let local_pivot = egui::pos2(local_pivot.x, local_pivot.y);
+
+                if zoom_delta.is_finite() && zoom_delta > 0.0 && zoom_delta != 1.0 {
+                    self.apply_zoom_at(state, local_pivot, egui::Vec2::splat(zoom_delta));
+                    changed = true;
+                }
+                if pan_delta != egui::Vec2::ZERO {
+                    // InputState deltas describe content movement, while
+                    // ViewportState stores a camera/scroll offset.
+                    self.apply_pan(state, -pan_delta);
+                    changed = true;
+                }
+
+                return (changed, response);
+            }
+
             let scroll_delta = self.ui.input(|i| i.raw_scroll_delta);
             // egui scroll delta: Y is vertical scroll. X is horizontal.
             // Usually Y is dominant on simple mouse wheels.
@@ -187,8 +236,8 @@ impl<'a> ViewportController<'a> {
                 let local_pivot =
                     egui::pos2(pointer_pos.x - rect.min.x, pointer_pos.y - rect.min.y);
 
-                if self.config.zoom_uniform {
-                    // --- PREVIEW MODE (Always Uniform Zoom) ---
+                if self.config.input_policy == ViewportInputPolicy::UniformWheel {
+                    // --- ALWAYS UNIFORM WHEEL ZOOM ---
                     // Any scroll = Zoom
                     let delta = if scroll_delta.y != 0.0 {
                         scroll_delta.y
@@ -198,7 +247,7 @@ impl<'a> ViewportController<'a> {
                     let zoom_factor = if delta > 0.0 { 1.1 } else { 0.9 };
                     self.apply_zoom_at(state, local_pivot, egui::vec2(zoom_factor, zoom_factor));
                 } else {
-                    // --- TIMELINE / GRAPH MODE ---
+                    // --- AXIS / MODIFIER MODE ---
                     // Default: Scroll Y
                     // Shift: Scroll X
                     // Ctrl: Zoom X
@@ -400,5 +449,238 @@ impl<'a> ViewportController<'a> {
 
         state.set_zoom(new_zoom);
         state.set_pan(egui::vec2(new_pan_x, new_pan_y));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VIEWPORT: egui::Rect =
+        egui::Rect::from_min_max(egui::pos2(20.0, 30.0), egui::pos2(300.0, 230.0));
+
+    #[derive(Clone, Copy, Debug)]
+    struct TestViewportState {
+        pan: egui::Vec2,
+        zoom: egui::Vec2,
+    }
+
+    impl ViewportState for TestViewportState {
+        fn get_pan(&self) -> egui::Vec2 {
+            self.pan
+        }
+
+        fn set_pan(&mut self, pan: egui::Vec2) {
+            self.pan = pan;
+        }
+
+        fn get_zoom(&self) -> egui::Vec2 {
+            self.zoom
+        }
+
+        fn set_zoom(&mut self, zoom: egui::Vec2) {
+            self.zoom = zoom;
+        }
+    }
+
+    fn run_frame(
+        context: &egui::Context,
+        state: &mut TestViewportState,
+        policy: ViewportInputPolicy,
+        frame: usize,
+        modifiers: egui::Modifiers,
+        events: Vec<egui::Event>,
+    ) -> bool {
+        let mut changed = false;
+        drop(context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(360.0, 280.0),
+                )),
+                time: Some(frame as f64 / 60.0),
+                modifiers,
+                events,
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    let mut handled_hand_tool_drag = false;
+                    let mut controller = ViewportController::new(
+                        ui,
+                        ui.make_persistent_id("viewport-policy-test"),
+                        None,
+                    )
+                    .with_config(ViewportConfig {
+                        input_policy: policy,
+                        ..Default::default()
+                    });
+                    changed = controller
+                        .interact_with_rect(VIEWPORT, state, &mut handled_hand_tool_drag)
+                        .0;
+                });
+            },
+        ));
+        changed
+    }
+
+    fn warm_pointer(context: &egui::Context, state: &mut TestViewportState, point: egui::Pos2) {
+        assert!(!run_frame(
+            context,
+            state,
+            ViewportInputPolicy::Trackpad,
+            0,
+            egui::Modifiers::NONE,
+            vec![egui::Event::PointerMoved(point)],
+        ));
+    }
+
+    fn assert_near(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() <= 1.0e-4,
+            "{actual} was not near {expected}"
+        );
+    }
+
+    #[test]
+    fn trackpad_policy_pans_both_axes_and_pinches_around_pointer() {
+        let context = egui::Context::default();
+        let pointer = egui::pos2(140.0, 120.0);
+        let pivot = pointer - VIEWPORT.min;
+        let mut state = TestViewportState {
+            pan: egui::vec2(12.0, -8.0),
+            zoom: egui::Vec2::splat(2.0),
+        };
+        warm_pointer(&context, &mut state, pointer);
+
+        assert!(run_frame(
+            &context,
+            &mut state,
+            ViewportInputPolicy::Trackpad,
+            1,
+            egui::Modifiers::NONE,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(4.0, -3.0),
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ));
+        assert_eq!(state.pan, egui::vec2(8.0, -5.0));
+        assert_eq!(state.zoom, egui::Vec2::splat(2.0));
+
+        let world_before = (pivot + state.pan) / state.zoom;
+        assert!(run_frame(
+            &context,
+            &mut state,
+            ViewportInputPolicy::Trackpad,
+            2,
+            egui::Modifiers::NONE,
+            vec![egui::Event::Zoom(1.5)],
+        ));
+        assert_eq!(state.zoom, egui::Vec2::splat(3.0));
+        let world_after = (pivot + state.pan) / state.zoom;
+        assert_near(world_after.x, world_before.x);
+        assert_near(world_after.y, world_before.y);
+    }
+
+    #[test]
+    fn trackpad_policy_applies_independent_pinch_and_pan_without_double_counting() {
+        let context = egui::Context::default();
+        let pointer = egui::pos2(140.0, 120.0);
+        let pivot = pointer - VIEWPORT.min;
+        let mut state = TestViewportState {
+            pan: egui::vec2(10.0, 20.0),
+            zoom: egui::Vec2::splat(1.0),
+        };
+        warm_pointer(&context, &mut state, pointer);
+
+        let pan_delta = egui::vec2(2.0, 3.0);
+        let factor = 1.25;
+        assert!(run_frame(
+            &context,
+            &mut state,
+            ViewportInputPolicy::Trackpad,
+            1,
+            egui::Modifiers::NONE,
+            vec![
+                egui::Event::Zoom(factor),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: pan_delta,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        ));
+        let zoomed_pan = (pivot + egui::vec2(10.0, 20.0)) * factor - pivot;
+        assert_near(state.pan.x, zoomed_pan.x - pan_delta.x);
+        assert_near(state.pan.y, zoomed_pan.y - pan_delta.y);
+        assert_eq!(state.zoom, egui::Vec2::splat(factor));
+
+        let command = egui::Modifiers::COMMAND;
+        let pan_before = state.pan;
+        let zoom_before = state.zoom;
+        assert!(run_frame(
+            &context,
+            &mut state,
+            ViewportInputPolicy::Trackpad,
+            2,
+            command,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 4.0),
+                modifiers: command,
+            }],
+        ));
+        assert!(state.zoom.x > zoom_before.x);
+        let ratio = state.zoom / zoom_before;
+        let zoom_only_pan = (pivot + pan_before) * ratio - pivot;
+        assert_near(state.pan.x, zoom_only_pan.x);
+        assert_near(state.pan.y, zoom_only_pan.y);
+    }
+
+    #[test]
+    fn legacy_axis_and_uniform_wheel_policies_keep_their_navigation_contracts() {
+        let pointer = egui::pos2(140.0, 120.0);
+
+        let axis_context = egui::Context::default();
+        let mut axis_state = TestViewportState {
+            pan: egui::Vec2::ZERO,
+            zoom: egui::Vec2::ONE,
+        };
+        warm_pointer(&axis_context, &mut axis_state, pointer);
+        assert!(run_frame(
+            &axis_context,
+            &mut axis_state,
+            ViewportInputPolicy::AxisModifiers,
+            1,
+            egui::Modifiers::NONE,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(4.0, -3.0),
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ));
+        assert_eq!(axis_state.pan, egui::vec2(-4.0, 3.0));
+        assert_eq!(axis_state.zoom, egui::Vec2::ONE);
+
+        let uniform_context = egui::Context::default();
+        let mut uniform_state = TestViewportState {
+            pan: egui::Vec2::ZERO,
+            zoom: egui::Vec2::ONE,
+        };
+        warm_pointer(&uniform_context, &mut uniform_state, pointer);
+        assert!(run_frame(
+            &uniform_context,
+            &mut uniform_state,
+            ViewportInputPolicy::UniformWheel,
+            1,
+            egui::Modifiers::NONE,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 4.0),
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ));
+        assert_eq!(uniform_state.zoom, egui::Vec2::splat(1.1));
     }
 }

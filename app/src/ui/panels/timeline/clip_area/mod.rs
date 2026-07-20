@@ -9,7 +9,7 @@ use crate::{
 };
 
 use crate::command::{CommandId, CommandRegistry};
-use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportState};
+use crate::ui::viewport::{ViewportConfig, ViewportController, ViewportInputPolicy, ViewportState};
 
 mod background;
 pub mod clips;
@@ -170,7 +170,7 @@ pub(super) fn show_clip_area(
         hand_tool_key,
     )
     .with_config(ViewportConfig {
-        zoom_uniform: false,
+        input_policy: ViewportInputPolicy::AxisModifiers,
         allow_zoom_x: true,
         allow_zoom_y: true,
         allow_pan_x: true,
