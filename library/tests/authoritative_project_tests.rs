@@ -16,10 +16,26 @@ use std::sync::{Arc, RwLock};
 
 use support::generator_node_for_canvas;
 
+fn rewrite_persisted_node(node: &mut Node, update: impl FnOnce(&mut serde_json::Value)) {
+    let encoded = serde_json::to_value(&*node);
+    assert!(encoded.is_ok(), "test Node must serialize");
+    let mut encoded = encoded.unwrap_or(serde_json::Value::Null);
+    update(&mut encoded);
+
+    let decoded = serde_json::from_value(encoded);
+    assert!(decoded.is_ok(), "mutated test Node must deserialize");
+    if let Ok(decoded) = decoded {
+        *node = decoded;
+    }
+}
+
 fn insert_persisted_property(node: &mut Node, key: &str, property: Property) {
-    let mut encoded = serde_json::to_value(&*node).unwrap();
-    encoded["properties"][key] = serde_json::to_value(property).unwrap();
-    *node = serde_json::from_value(encoded).unwrap();
+    let encoded_property = serde_json::to_value(property);
+    assert!(encoded_property.is_ok(), "test Property must serialize");
+    let encoded_property = encoded_property.unwrap_or(serde_json::Value::Null);
+    rewrite_persisted_node(node, |encoded| {
+        encoded["properties"][key] = encoded_property;
+    });
 }
 
 fn project_with_solid() -> (Project, uuid::Uuid, uuid::Uuid) {
@@ -39,14 +55,17 @@ fn project_with_solid() -> (Project, uuid::Uuid, uuid::Uuid) {
         320,
         180,
     );
-    node.set_property(
-        "position".to_string(),
-        Property::constant(PropertyValue::Vec2(Vec2 {
-            x: OrderedFloat(10.0),
-            y: OrderedFloat(20.0),
-        })),
-    )
-    .expect("solid factory initializes position");
+    assert!(
+        node.set_property(
+            "position".to_string(),
+            Property::constant(PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(10.0),
+                y: OrderedFloat(20.0),
+            })),
+        )
+        .is_ok(),
+        "solid factory must initialize position"
+    );
     let node_id = node.id;
 
     project.add_track(track);
@@ -204,14 +223,16 @@ fn adoption_preserves_explicit_plugin_operation_nodes_unknown_to_this_binary() {
         (&mut decorator, "third_party.decorator.not_installed"),
         (&mut style, "third_party.style.not_installed"),
     ] {
-        let mut encoded = serde_json::to_value(&*node).unwrap();
-        encoded["content"]["data"]["component_id"] =
-            serde_json::Value::String(unavailable_id.to_string());
-        encoded["properties"]["future_vendor_value"] = serde_json::to_value(Property::constant(
-            PropertyValue::String("preserve exactly".to_string()),
-        ))
-        .unwrap();
-        *node = serde_json::from_value(encoded).unwrap();
+        let encoded_property = serde_json::to_value(Property::constant(PropertyValue::String(
+            "preserve exactly".to_string(),
+        )));
+        assert!(encoded_property.is_ok(), "test Property must serialize");
+        let encoded_property = encoded_property.unwrap_or(serde_json::Value::Null);
+        rewrite_persisted_node(node, |encoded| {
+            encoded["content"]["data"]["component_id"] =
+                serde_json::Value::String(unavailable_id.to_string());
+            encoded["properties"]["future_vendor_value"] = encoded_property;
+        });
     }
     let shape = generator_node_for_canvas(
         "shape source",

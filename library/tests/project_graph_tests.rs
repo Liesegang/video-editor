@@ -61,18 +61,37 @@ fn solid_node(name: &str) -> Node {
 
 fn colored_solid_node(name: &str, color: Color) -> Node {
     let mut node = solid_node(name);
-    node.set_property(
-        "color".to_string(),
-        Property::constant(PropertyValue::Color(color)),
-    )
-    .expect("solid factory initializes color");
+    assert!(
+        node.set_property(
+            "color".to_string(),
+            Property::constant(PropertyValue::Color(color)),
+        )
+        .is_ok(),
+        "solid factory must initialize color"
+    );
     node
 }
 
+fn rewrite_persisted_node(node: &mut Node, update: impl FnOnce(&mut serde_json::Value)) {
+    let encoded = serde_json::to_value(&*node);
+    assert!(encoded.is_ok(), "test Node must serialize");
+    let mut encoded = encoded.unwrap_or(serde_json::Value::Null);
+    update(&mut encoded);
+
+    let decoded = serde_json::from_value(encoded);
+    assert!(decoded.is_ok(), "mutated test Node must deserialize");
+    if let Ok(decoded) = decoded {
+        *node = decoded;
+    }
+}
+
 fn insert_persisted_property(node: &mut Node, key: &str, property: Property) {
-    let mut encoded = serde_json::to_value(&*node).unwrap();
-    encoded["properties"][key] = serde_json::to_value(property).unwrap();
-    *node = serde_json::from_value(encoded).unwrap();
+    let encoded_property = serde_json::to_value(property);
+    assert!(encoded_property.is_ok(), "test Property must serialize");
+    let encoded_property = encoded_property.unwrap_or(serde_json::Value::Null);
+    rewrite_persisted_node(node, |encoded| {
+        encoded["properties"][key] = encoded_property;
+    });
 }
 
 fn graph_output(key: &str, label: &str, data_type: PortDataType) -> PortDefinition {
@@ -86,17 +105,19 @@ fn plugin_operation_node(
     operation: &str,
     declared_ports: Vec<PortDefinition>,
 ) -> Node {
-    let mut persisted = serde_json::to_value(Node::new_merge(name)).unwrap();
-    persisted["content"] = serde_json::json!({
-        "type": "PluginOperation",
-        "data": {
-            "category": category,
-            "component_id": component_id,
-            "operation": operation,
-            "declared_ports": declared_ports,
-        }
+    let mut node = Node::new_merge(name);
+    rewrite_persisted_node(&mut node, |persisted| {
+        persisted["content"] = serde_json::json!({
+            "type": "PluginOperation",
+            "data": {
+                "category": category,
+                "component_id": component_id,
+                "operation": operation,
+                "declared_ports": declared_ports,
+            }
+        });
     });
-    serde_json::from_value(persisted).unwrap()
+    node
 }
 
 fn add_node(project: &mut Project, container: NodeContainer, node: Node) -> Uuid {
