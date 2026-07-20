@@ -34,6 +34,8 @@ skia-safe = { version = "0.91.0", features = ["gpu", "gl", "textlayout"] }
 log = "0.4.26"
 lru = "0.16.3"
 ordered-float = { version = "5.1.0", features = ["serde"] }
+rustpython-parser = { version = "0.4.0", default-features = false, features = ["location", "num-bigint"] }
+sha2 = "0.10"
 libloading = "0.9"
 glutin = "0.32.3"
 raw-window-handle = "0.6"
@@ -56,6 +58,3 @@ symphonia = { version = "0.5", features = ["all"] }
 rtrb = "0.3"
 anyhow = "1.0.103"
 unicode-segmentation = "1.12"
-
-[dev-dependencies]
-sha2 = "0.10"

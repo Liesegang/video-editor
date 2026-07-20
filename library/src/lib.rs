@@ -4,6 +4,9 @@ pub mod core;
 // Editor services - public API for GUI
 pub mod editor;
 
+// Restricted, deterministic Python expressions shared by properties and nodes.
+pub mod expression;
+
 // Data models (shared with GUI)
 pub mod model;
 
