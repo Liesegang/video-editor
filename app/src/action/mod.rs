@@ -250,6 +250,8 @@ mod tests {
         context.interaction.body_drag_state = Some(BodyDragState {
             start_mouse_pos: egui::Pos2::ZERO,
             original_positions: HashMap::new(),
+            preview_targets: Vec::new(),
+            has_changed: false,
         });
         context.interaction.preview_viewport.primary_gesture = PreviewPrimaryGesture::Content;
         context.node_editor_state.layout_changed_during_drag = true;

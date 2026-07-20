@@ -1,9 +1,13 @@
 use crate::state::context::EditorContext;
-use crate::state::context_types::{PreviewEditTarget, SelectionTarget};
+use crate::state::context_types::{PreviewBodyDragTarget, PreviewEditTarget, SelectionTarget};
 use crate::ui::panels::preview::{
     action::PreviewAction,
-    clip::{visual_for_selection, PreviewClip},
+    clip::{
+        resolve_owner_edit_target, visual_for_exact_instance, OwnerEditTargetResolution,
+        PreviewClip, PreviewSpatialLayer,
+    },
     gizmo,
+    routing::exact_visual_for_edit_target,
 };
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
 use library::model::property::{PropertyValue, Vec2};
@@ -102,10 +106,10 @@ impl<'a> PreviewInteractions<'a> {
                 .as_ref()
                 .filter(|target| self.editor_context.selection.primary() == Some(target.owner))
             {
-                if let Some(gc) = visual_for_selection(
+                if let Some(gc) = visual_for_exact_instance(
                     self.gui_clips,
                     edit_target.content_node_id,
-                    Some(edit_target.instance_path.as_slice()),
+                    edit_target.instance_path.as_slice(),
                 ) {
                     if matches!(
                         gc.content_node.content(),
@@ -145,6 +149,7 @@ impl<'a> PreviewInteractions<'a> {
 
                                     // Update property
                                     pending_actions.push(PreviewAction::UpdateProperty {
+                                        edit_target: edit_target.clone(),
                                         node_id: gc.content_id(),
                                         prop_name: "path".to_string(),
                                         time: self.editor_context.timeline.current_time as f64,
@@ -257,7 +262,14 @@ impl<'a> PreviewInteractions<'a> {
         if self.editor_context.interaction.body_drag_state.is_some()
             && self.ui.input(|i| i.pointer.any_released())
         {
-            if self.editor_context.interaction.is_moving_selected_entity {
+            if self.editor_context.interaction.is_moving_selected_entity
+                && self
+                    .editor_context
+                    .interaction
+                    .body_drag_state
+                    .as_ref()
+                    .is_some_and(|state| state.has_changed)
+            {
                 pending_actions.push(PreviewAction::CommitHistory);
             }
             self.editor_context.interaction.is_moving_selected_entity = false;
@@ -322,53 +334,24 @@ impl<'a> PreviewInteractions<'a> {
 
     fn init_drag_state(&mut self, pointer_pos: Option<Pos2>) {
         if let Some(pointer_pos) = pointer_pos {
-            let mut original_positions = std::collections::HashMap::new();
             let primary = self.editor_context.selection.primary();
-            for owner in self.editor_context.selection.targets() {
-                let explicit = if Some(*owner) == primary {
-                    self.editor_context
-                        .interaction
-                        .preview_edit_target
-                        .as_ref()
-                        .filter(|target| target.owner == *owner)
-                } else {
-                    None
-                };
-                let fallback = self
-                    .gui_clips
-                    .iter()
-                    .rev()
-                    .find(|visual| visual.owner_target == *owner)
-                    .map(PreviewClip::edit_target);
-                let target = explicit.cloned().or(fallback);
-                let Some(target) = target else {
-                    continue;
-                };
-                let lookup_id = target.spatial_node_id.unwrap_or(target.content_node_id);
-                if let Some(gc) = visual_for_selection(
-                    self.gui_clips,
-                    lookup_id,
-                    Some(target.instance_path.as_slice()),
-                ) {
-                    let Some(spatial_id) = target.spatial_node_id else {
-                        continue;
-                    };
-                    let Some(layer) = gc.spatial_layer(spatial_id) else {
-                        continue;
-                    };
-                    original_positions.insert(
-                        spatial_id,
-                        [
-                            layer.transform.position.x as f32,
-                            layer.transform.position.y as f32,
-                        ],
-                    );
-                }
+            let preview_targets = collect_preview_drag_targets(
+                self.gui_clips,
+                self.editor_context.selection.targets(),
+                primary,
+                self.editor_context.interaction.preview_edit_target.as_ref(),
+            );
+            if preview_targets.is_empty() {
+                self.editor_context.interaction.is_moving_selected_entity = false;
+                self.editor_context.interaction.body_drag_state = None;
+                return;
             }
             self.editor_context.interaction.body_drag_state =
                 Some(crate::state::context_types::BodyDragState {
                     start_mouse_pos: pointer_pos,
-                    original_positions,
+                    original_positions: std::collections::HashMap::new(),
+                    preview_targets,
+                    has_changed: false,
                 });
         }
     }
@@ -379,7 +362,7 @@ impl<'a> PreviewInteractions<'a> {
             if let Some(hit) = hovered_hit {
                 let id = hit.content_node_id;
                 let visual =
-                    visual_for_selection(self.gui_clips, id, Some(hit.instance_path.as_slice()));
+                    visual_for_exact_instance(self.gui_clips, id, hit.instance_path.as_slice());
                 let is_text = visual.is_some_and(|visual| {
                     matches!(
                         visual.content_node.content(),
@@ -449,47 +432,68 @@ impl<'a> PreviewInteractions<'a> {
     }
 
     fn handle_drag_move(
-        &self,
+        &mut self,
         pointer_pos: Option<Pos2>,
         pending_actions: &mut Vec<PreviewAction>,
     ) {
         let current_zoom = self.editor_context.view.zoom;
-        if let Some(drag_state) = &self.editor_context.interaction.body_drag_state {
-            if let Some(curr_mouse) = pointer_pos {
-                let screen_delta = curr_mouse - drag_state.start_mouse_pos;
-                let world_delta = screen_delta / current_zoom;
+        let Some(curr_mouse) = pointer_pos else {
+            return;
+        };
+        if !current_zoom.is_finite() || current_zoom.abs() <= f32::EPSILON {
+            return;
+        }
+        let Some(drag_state) = self.editor_context.interaction.body_drag_state.as_ref() else {
+            return;
+        };
+        let screen_delta = curr_mouse - drag_state.start_mouse_pos;
+        let world_delta = screen_delta / current_zoom;
+        let stored_targets = drag_state.preview_targets.clone();
+        let current_time = self.editor_context.timeline.current_time as f64;
+        let mut valid_targets = Vec::with_capacity(stored_targets.len());
+        let mut changed = false;
 
-                let current_time = self.editor_context.timeline.current_time as f64;
-
-                for (entity_id, orig_pos) in &drag_state.original_positions {
-                    let instance_path = self
-                        .editor_context
-                        .interaction
-                        .preview_edit_target
-                        .as_ref()
-                        .filter(|target| target.spatial_node_id == Some(*entity_id))
-                        .map(|target| target.instance_path.as_slice());
-                    let local_delta =
-                        visual_for_selection(self.gui_clips, *entity_id, instance_path)
-                            .and_then(|visual| visual.spatial_layer(*entity_id))
-                            .and_then(|layer| {
-                                inverse_map_vector(layer.parent_transform, world_delta)
-                            })
-                            .unwrap_or(world_delta);
-                    let new_x = orig_pos[0] as f64 + local_delta.x as f64;
-                    let new_y = orig_pos[1] as f64 + local_delta.y as f64;
-
-                    pending_actions.push(PreviewAction::UpdateProperty {
-                        node_id: *entity_id,
-                        prop_name: "position".to_string(),
-                        time: current_time,
-                        value: PropertyValue::Vec2(Vec2 {
-                            x: ordered_float::OrderedFloat(new_x),
-                            y: ordered_float::OrderedFloat(new_y),
-                        }),
-                    });
-                }
+        for target in stored_targets {
+            if !self
+                .editor_context
+                .selection
+                .contains(target.edit_target.owner)
+            {
+                continue;
             }
+            let Some(layer) = revalidate_preview_drag_target(self.gui_clips, &target) else {
+                continue;
+            };
+            let Some(local_delta) = inverse_map_vector(layer.parent_transform, world_delta) else {
+                // Once identity becomes invalid during a gesture, discard it;
+                // a later UUID reuse must not revive this drag route.
+                continue;
+            };
+            valid_targets.push(target.clone());
+            if local_delta == egui::Vec2::ZERO {
+                continue;
+            }
+            let Some(spatial_id) = target.edit_target.spatial_node_id else {
+                continue;
+            };
+            let new_x = target.original_position[0] as f64 + local_delta.x as f64;
+            let new_y = target.original_position[1] as f64 + local_delta.y as f64;
+            pending_actions.push(PreviewAction::UpdateProperty {
+                edit_target: target.edit_target.clone(),
+                node_id: spatial_id,
+                prop_name: "position".to_string(),
+                time: current_time,
+                value: PropertyValue::Vec2(Vec2 {
+                    x: ordered_float::OrderedFloat(new_x),
+                    y: ordered_float::OrderedFloat(new_y),
+                }),
+            });
+            changed = true;
+        }
+
+        if let Some(drag_state) = &mut self.editor_context.interaction.body_drag_state {
+            drag_state.preview_targets = valid_targets;
+            drag_state.has_changed |= changed;
         }
     }
 
@@ -590,15 +594,22 @@ impl<'a> PreviewInteractions<'a> {
             .as_ref()
             .filter(|target| target.content_node_id == entity_id)
             .filter(|target| self.editor_context.selection.contains(target.owner))?;
-        visual_for_selection(
+        visual_for_exact_instance(
             self.gui_clips,
             entity_id,
-            Some(edit_target.instance_path.as_slice()),
+            edit_target.instance_path.as_slice(),
         )
     }
 
     pub fn draw_text_overlay(&mut self, pending_actions: &mut Vec<PreviewAction>) {
         if let Some(id) = self.editor_context.interaction.editing_text_entity_id {
+            let edit_target = self
+                .editor_context
+                .interaction
+                .preview_edit_target
+                .as_ref()
+                .filter(|target| target.content_node_id == id)
+                .cloned();
             if let Some(gc) = self.selected_visual(id) {
                 let Some(corners) = self.get_clip_screen_corners(gc) else {
                     return;
@@ -644,12 +655,15 @@ impl<'a> PreviewInteractions<'a> {
                 if response.changed() {
                     self.editor_context.interaction.text_edit_buffer = text.clone();
 
-                    pending_actions.push(PreviewAction::UpdateProperty {
-                        node_id: id,
-                        prop_name: "text".to_string(),
-                        time: self.editor_context.timeline.current_time as f64,
-                        value: PropertyValue::String(text),
-                    });
+                    if let Some(edit_target) = edit_target {
+                        pending_actions.push(PreviewAction::UpdateProperty {
+                            edit_target,
+                            node_id: id,
+                            prop_name: "text".to_string(),
+                            time: self.editor_context.timeline.current_time as f64,
+                            value: PropertyValue::String(text),
+                        });
+                    }
                 }
 
                 let finish_edit = response.lost_focus()
@@ -666,18 +680,103 @@ impl<'a> PreviewInteractions<'a> {
     }
 }
 
+fn collect_preview_drag_targets(
+    visuals: &[PreviewClip],
+    owners: &[SelectionTarget],
+    primary: Option<SelectionTarget>,
+    explicit_primary: Option<&PreviewEditTarget>,
+) -> Vec<PreviewBodyDragTarget> {
+    owners
+        .iter()
+        .filter_map(|owner| {
+            let (target, requires_canonical_owner) = if Some(*owner) == primary {
+                (
+                    explicit_primary
+                        .filter(|target| target.owner == *owner)?
+                        .clone(),
+                    false,
+                )
+            } else {
+                let OwnerEditTargetResolution::Resolved(target) =
+                    resolve_owner_edit_target(visuals, *owner)
+                else {
+                    return None;
+                };
+                (target, true)
+            };
+            preview_drag_target(visuals, target, requires_canonical_owner)
+        })
+        .collect()
+}
+
+fn preview_drag_target(
+    visuals: &[PreviewClip],
+    edit_target: PreviewEditTarget,
+    requires_canonical_owner: bool,
+) -> Option<PreviewBodyDragTarget> {
+    let layer = validated_spatial_layer(visuals, &edit_target)?;
+    if requires_canonical_owner
+        && resolve_owner_edit_target(visuals, edit_target.owner)
+            != OwnerEditTargetResolution::Resolved(edit_target.clone())
+    {
+        return None;
+    }
+    if !is_invertible(layer.parent_transform) {
+        return None;
+    }
+    Some(PreviewBodyDragTarget {
+        edit_target,
+        original_position: [
+            layer.transform.position.x as f32,
+            layer.transform.position.y as f32,
+        ],
+        requires_canonical_owner,
+    })
+}
+
+fn revalidate_preview_drag_target<'a>(
+    visuals: &'a [PreviewClip],
+    target: &PreviewBodyDragTarget,
+) -> Option<&'a PreviewSpatialLayer> {
+    if target.requires_canonical_owner
+        && resolve_owner_edit_target(visuals, target.edit_target.owner)
+            != OwnerEditTargetResolution::Resolved(target.edit_target.clone())
+    {
+        return None;
+    }
+    validated_spatial_layer(visuals, &target.edit_target)
+}
+
+fn validated_spatial_layer<'a>(
+    visuals: &'a [PreviewClip],
+    target: &PreviewEditTarget,
+) -> Option<&'a PreviewSpatialLayer> {
+    let spatial_id = target.spatial_node_id?;
+    let visual = exact_visual_for_edit_target(visuals, target)?;
+    visual.spatial_layer(spatial_id)
+}
+
 fn inverse_map_vector(
     transform: library::rendering::renderer::Affine2D,
     vector: egui::Vec2,
 ) -> Option<egui::Vec2> {
     let determinant = transform.scale_x * transform.scale_y - transform.skew_x * transform.skew_y;
-    if determinant.abs() <= f64::EPSILON {
+    if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
         return None;
     }
-    Some(egui::vec2(
+    let mapped = egui::vec2(
         ((transform.scale_y * f64::from(vector.x) - transform.skew_x * f64::from(vector.y))
             / determinant) as f32,
         ((-transform.skew_y * f64::from(vector.x) + transform.scale_x * f64::from(vector.y))
             / determinant) as f32,
-    ))
+    );
+    mapped.is_finite().then_some(mapped)
 }
+
+fn is_invertible(transform: library::rendering::renderer::Affine2D) -> bool {
+    inverse_map_vector(transform, egui::Vec2::ZERO).is_some()
+}
+
+#[cfg(test)]
+#[path = "interaction_tests.rs"]
+mod tests;

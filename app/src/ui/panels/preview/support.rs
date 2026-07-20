@@ -8,7 +8,7 @@ use crate::state::context_types::{PreviewPrimaryGesture, PreviewViewportRuntimeS
 use crate::ui::viewport::ViewportState;
 use crate::{action::HistoryManager, state::context::EditorContext};
 
-use super::{action::PreviewAction, clip};
+use super::{action::PreviewAction, clip::PreviewClip, routing};
 
 pub(super) const PREVIEW_FIT_PADDING: f32 = 24.0;
 pub(super) const PREVIEW_MIN_ZOOM: f32 = 0.0001;
@@ -112,180 +112,6 @@ pub(super) fn preview_content_rect(
         viewport_rect.min + pan,
         screen_size,
     ))
-}
-
-pub(super) fn register_preview_qa_components(
-    preview_rect: egui::Rect,
-    composition: Option<(uuid::Uuid, u64, u64)>,
-    editor_context: &EditorContext,
-) {
-    if !crate::qa::is_enabled() {
-        return;
-    }
-
-    let preview_content = composition.and_then(|(composition_id, width, height)| {
-        preview_content_rect(
-            preview_rect,
-            editor_context.view.pan,
-            editor_context.view.zoom,
-            egui::vec2(width as f32, height as f32),
-        )
-        .map(|rect| (composition_id, width, height, rect))
-    });
-    crate::qa::register_component_with_metadata(
-        "preview.canvas",
-        "preview_canvas",
-        preview_rect,
-        true,
-        Some(serde_json::json!({
-            "pan": {"x": editor_context.view.pan.x, "y": editor_context.view.pan.y},
-            "zoom": editor_context.view.zoom,
-            "auto_fit": editor_context.interaction.preview_viewport.auto_fit,
-            "primary_gesture": format!(
-                "{:?}",
-                editor_context.interaction.preview_viewport.primary_gesture
-            ),
-            "composition_id": preview_content.map(|content| content.0),
-            "texture_width": editor_context.preview_texture_width,
-            "texture_height": editor_context.preview_texture_height,
-        })),
-    );
-    if let Some((composition_id, width, height, content_rect)) = preview_content {
-        crate::qa::register_component_with_metadata(
-            "preview.content",
-            "preview_composition_content",
-            content_rect,
-            true,
-            Some(serde_json::json!({
-                "composition_id": composition_id,
-                "canvas_width": width,
-                "canvas_height": height,
-                "pan": {"x": editor_context.view.pan.x, "y": editor_context.view.pan.y},
-                "zoom": editor_context.view.zoom,
-                "auto_fit": editor_context.interaction.preview_viewport.auto_fit,
-            })),
-        );
-    }
-}
-
-pub(super) fn register_preview_tool_component(
-    id: &str,
-    tool: &str,
-    response: &egui::Response,
-    selected: bool,
-) {
-    if !crate::qa::is_enabled() {
-        return;
-    }
-    crate::qa::register_component_with_metadata(
-        id,
-        "preview_tool",
-        response.rect,
-        response.enabled(),
-        Some(serde_json::json!({
-            "tool": tool,
-            "selected": selected,
-            "action": "activate_preview_tool",
-        })),
-    );
-}
-
-pub(super) fn preview_visual_screen_rect(
-    visual: &clip::PreviewClip,
-    to_screen: &impl Fn(egui::Pos2) -> egui::Pos2,
-) -> Option<egui::Rect> {
-    let (x, y, width, height) = visual.content_bounds?;
-    let mut screen_points = [egui::Pos2::ZERO; 4];
-    for (point, (local_x, local_y)) in screen_points.iter_mut().zip([
-        (x, y),
-        (x + width, y),
-        (x + width, y + height),
-        (x, y + height),
-    ]) {
-        let (world_x, world_y) = visual
-            .world_transform
-            .map_point(f64::from(local_x), f64::from(local_y));
-        *point = to_screen(egui::pos2(world_x as f32, world_y as f32));
-    }
-    let rect = egui::Rect::from_points(&screen_points);
-    rect.is_positive().then_some(rect)
-}
-
-pub(super) fn register_preview_visual_qa_components(
-    visuals: &[clip::PreviewClip],
-    viewport: egui::Rect,
-    to_screen: &impl Fn(egui::Pos2) -> egui::Pos2,
-) {
-    if !crate::qa::is_enabled() {
-        return;
-    }
-    let mut published_content = std::collections::HashSet::new();
-    let mut published_spatial = std::collections::HashSet::new();
-    for (instance_index, visual) in visuals.iter().enumerate().rev() {
-        let Some(unclipped_rect) = preview_visual_screen_rect(visual, to_screen) else {
-            continue;
-        };
-        let rect = unclipped_rect.intersect(viewport);
-        let editable_spatial_node_id = visual.editable_spatial_id();
-        let spatial_layers = visual
-            .spatial_layers
-            .iter()
-            .map(|layer| {
-                serde_json::json!({
-                    "node_id": layer.node.id,
-                    "kind": match layer.kind {
-                        clip::PreviewSpatialKind::Content => "content",
-                        clip::PreviewSpatialKind::ShapeTransform => "shape_transform",
-                        clip::PreviewSpatialKind::ImageTransform => "image_transform",
-                    },
-                    "editable": visual.spatial_layer(layer.node.id).is_some(),
-                })
-            })
-            .collect::<Vec<_>>();
-        let metadata = serde_json::json!({
-            "content_node_id": visual.content_id(),
-            "owner": visual.owner_target,
-            "spatial_node_id": visual.spatial_id(),
-            "editable_spatial_node_id": editable_spatial_node_id,
-            "spatial_layers": spatial_layers,
-            "instance_path": &visual.instance_path,
-            "instance_index": instance_index,
-            "unclipped_rect_points": {
-                "min_x": unclipped_rect.min.x,
-                "min_y": unclipped_rect.min.y,
-                "max_x": unclipped_rect.max.x,
-                "max_y": unclipped_rect.max.y,
-            },
-            "action": "select_or_drag_preview_visual",
-        });
-        crate::qa::register_component_with_metadata(
-            format!("preview.visual.instance:{instance_index}"),
-            "preview_visual_instance",
-            rect,
-            true,
-            Some(metadata.clone()),
-        );
-        if published_content.insert(visual.content_id()) {
-            crate::qa::register_component_with_metadata(
-                format!("preview.visual.content:{}", visual.content_id()),
-                "preview_content_visual",
-                rect,
-                true,
-                Some(metadata.clone()),
-            );
-        }
-        for layer in &visual.spatial_layers {
-            if published_spatial.insert(layer.node.id) {
-                crate::qa::register_component_with_metadata(
-                    format!("preview.visual.spatial:{}", layer.node.id),
-                    "preview_spatial_visual",
-                    rect,
-                    visual.spatial_layer(layer.node.id).is_some(),
-                    Some(metadata.clone()),
-                );
-            }
-        }
-    }
 }
 
 /// Keep the derived Preview camera fitted without putting presentation state
@@ -488,6 +314,16 @@ pub(super) fn preview_result_is_current(
     !frame_evaluation_failed && requested == Some(completed)
 }
 
+/// Geometry interaction follows the synchronous current request. The
+/// displayed frame is accepted only as pixel provenance and is deliberately
+/// never a fallback for hit testing against a newer Project.
+pub(super) fn preview_frame_for_interaction<'a>(
+    requested: Option<&'a library::model::frame::frame::FrameInfo>,
+    _displayed: Option<&library::model::frame::frame::FrameInfo>,
+) -> Option<&'a library::model::frame::frame::FrameInfo> {
+    requested
+}
+
 pub(super) fn preview_render_wait_requires_repaint(
     frame_evaluation_failed: bool,
     requested: bool,
@@ -498,20 +334,65 @@ pub(super) fn preview_render_wait_requires_repaint(
 
 pub(super) fn apply_preview_actions(
     actions: Vec<PreviewAction>,
+    current_visuals: &[PreviewClip],
     project_service: &EditorService,
     project: &Arc<RwLock<Project>>,
     history_manager: &mut HistoryManager,
 ) -> bool {
+    let had_updates = actions
+        .iter()
+        .any(|action| matches!(action, PreviewAction::UpdateProperty { .. }));
+    let validated_actions = if let Ok(current_project) = project.read() {
+        actions
+            .into_iter()
+            .map(|action| {
+                let valid = match &action {
+                    PreviewAction::UpdateProperty {
+                        edit_target,
+                        node_id,
+                        prop_name,
+                        ..
+                    } => routing::can_update_property(
+                        &current_project,
+                        current_visuals,
+                        edit_target,
+                        *node_id,
+                        prop_name,
+                    ),
+                    PreviewAction::CommitHistory => true,
+                };
+                (action, valid)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        actions
+            .into_iter()
+            .map(|action| {
+                let valid = matches!(action, PreviewAction::CommitHistory);
+                (action, valid)
+            })
+            .collect()
+    };
+
     let mut history_commit_requested = false;
     let mut changed = false;
-    for action in actions {
+    for (action, valid) in validated_actions {
         match action {
             PreviewAction::UpdateProperty {
+                edit_target,
                 node_id,
                 prop_name,
                 time,
                 value,
             } => {
+                if !valid {
+                    log::warn!(
+                        "Ignored stale Preview update for Node {node_id} property {prop_name} (owner {:?}, path {:?})",
+                        edit_target.owner,
+                        edit_target.instance_path
+                    );
+                    continue;
+                }
                 if let Err(error) = crate::utils::property::update_node_property(
                     project_service,
                     node_id,
@@ -527,7 +408,7 @@ pub(super) fn apply_preview_actions(
             PreviewAction::CommitHistory => history_commit_requested = true,
         }
     }
-    if history_commit_requested {
+    if history_commit_requested && (!had_updates || changed) {
         // A release-only frame is valid after updates from preceding drag
         // frames. HistoryManager deduplicates a true no-op (including a frame
         // with no evaluated visual source) instead of creating history-only

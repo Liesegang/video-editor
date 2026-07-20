@@ -661,6 +661,8 @@ mod tests {
         context.interaction.body_drag_state = Some(BodyDragState {
             start_mouse_pos: egui::Pos2::ZERO,
             original_positions: HashMap::new(),
+            preview_targets: Vec::new(),
+            has_changed: false,
         });
         let mut history = HistoryManager::new();
         history.push_project_state(original.clone());

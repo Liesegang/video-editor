@@ -1,6 +1,8 @@
 use crate::model::ui_types::GizmoHandle;
 use crate::state::context::EditorContext;
-use crate::ui::panels::preview::{action::PreviewAction, clip::PreviewClip};
+use crate::ui::panels::preview::{
+    action::PreviewAction, clip::PreviewClip, routing::exact_visual_for_edit_target,
+};
 use egui::{CursorIcon, Pos2, Rect, Sense, Ui, Vec2};
 use library::model::property::{PropertyValue, Vec2 as PropVec2};
 use library::rendering::renderer::Affine2D;
@@ -24,7 +26,7 @@ pub fn handle_gizmo_interaction(
         editor_context.interaction.gizmo_state = None;
         return false;
     };
-    let Some(state) = editor_context.interaction.gizmo_state.as_ref() else {
+    let Some(state) = editor_context.interaction.gizmo_state.as_ref().cloned() else {
         return false;
     };
     let (
@@ -55,38 +57,42 @@ pub fn handle_gizmo_interaction(
         state.original_height,
     );
 
+    let Some(spatial_edit_id) = edit_target.spatial_node_id else {
+        editor_context.interaction.gizmo_state = None;
+        return false;
+    };
+    let Some(visual) = exact_visual_for_edit_target(gui_clips, &edit_target) else {
+        editor_context.interaction.gizmo_state = None;
+        return true;
+    };
+    let Some(spatial_layer) = visual.spatial_layer(spatial_edit_id) else {
+        editor_context.interaction.gizmo_state = None;
+        return true;
+    };
+    if !is_invertible(spatial_layer.parent_transform) {
+        editor_context.interaction.gizmo_state = None;
+        return true;
+    }
+
     if ui.input(|input| input.pointer.any_released()) {
         editor_context.interaction.gizmo_state = None;
-        pending_actions.push(PreviewAction::CommitHistory);
+        if state.has_changed {
+            pending_actions.push(PreviewAction::CommitHistory);
+        }
         return true;
     }
 
     let Some(mouse_pos) = pointer_pos else {
         return true;
     };
-    let Some(visual) = crate::ui::panels::preview::clip::visual_for_selection(
-        gui_clips,
-        edit_target
-            .spatial_node_id
-            .unwrap_or(edit_target.content_node_id),
-        Some(edit_target.instance_path.as_slice()),
-    ) else {
-        return true;
-    };
-    let Some(spatial_edit_id) = edit_target.spatial_node_id else {
-        editor_context.interaction.gizmo_state = None;
-        return false;
-    };
-    let Some(spatial_layer) = visual.spatial_layer(spatial_edit_id) else {
-        editor_context.interaction.gizmo_state = None;
-        return false;
-    };
 
     let start_world = to_world(start_mouse_pos);
     let current_world = to_world(mouse_pos);
     let world_delta = current_world - start_world;
-    let delta =
-        inverse_map_vector(spatial_layer.parent_transform, world_delta).unwrap_or(world_delta);
+    let Some(delta) = inverse_map_vector(spatial_layer.parent_transform, world_delta) else {
+        editor_context.interaction.gizmo_state = None;
+        return true;
+    };
     let modifiers = ui.input(|input| input.modifiers);
     let keep_aspect_ratio = modifiers.shift;
     let center_scale = modifiers.alt;
@@ -161,30 +167,48 @@ pub fn handle_gizmo_interaction(
     }
 
     let current_time = editor_context.timeline.current_time as f64;
-    pending_actions.push(PreviewAction::UpdateProperty {
-        node_id: spatial_edit_id,
-        prop_name: "scale".to_string(),
-        time: current_time,
-        value: PropertyValue::Vec2(PropVec2 {
-            x: OrderedFloat(new_scale_x as f64),
-            y: OrderedFloat(new_scale_y as f64),
-        }),
-    });
-    pending_actions.push(PreviewAction::UpdateProperty {
-        node_id: spatial_edit_id,
-        prop_name: "position".to_string(),
-        time: current_time,
-        value: PropertyValue::Vec2(PropVec2 {
-            x: OrderedFloat(new_pos_x as f64),
-            y: OrderedFloat(new_pos_y as f64),
-        }),
-    });
-    pending_actions.push(PreviewAction::UpdateProperty {
-        node_id: spatial_edit_id,
-        prop_name: "rotation".to_string(),
-        time: current_time,
-        value: PropertyValue::Number(OrderedFloat(new_rotation as f64)),
-    });
+    let mut changed = false;
+    if new_scale_x != orig_sx || new_scale_y != orig_sy {
+        pending_actions.push(PreviewAction::UpdateProperty {
+            edit_target: edit_target.clone(),
+            node_id: spatial_edit_id,
+            prop_name: "scale".to_string(),
+            time: current_time,
+            value: PropertyValue::Vec2(PropVec2 {
+                x: OrderedFloat(new_scale_x as f64),
+                y: OrderedFloat(new_scale_y as f64),
+            }),
+        });
+        changed = true;
+    }
+    if new_pos_x != orig_pos[0] || new_pos_y != orig_pos[1] {
+        pending_actions.push(PreviewAction::UpdateProperty {
+            edit_target: edit_target.clone(),
+            node_id: spatial_edit_id,
+            prop_name: "position".to_string(),
+            time: current_time,
+            value: PropertyValue::Vec2(PropVec2 {
+                x: OrderedFloat(new_pos_x as f64),
+                y: OrderedFloat(new_pos_y as f64),
+            }),
+        });
+        changed = true;
+    }
+    if new_rotation != orig_rot {
+        pending_actions.push(PreviewAction::UpdateProperty {
+            edit_target: edit_target.clone(),
+            node_id: spatial_edit_id,
+            prop_name: "rotation".to_string(),
+            time: current_time,
+            value: PropertyValue::Number(OrderedFloat(new_rotation as f64)),
+        });
+        changed = true;
+    }
+    if changed {
+        if let Some(state) = &mut editor_context.interaction.gizmo_state {
+            state.has_changed = true;
+        }
+    }
     true
 }
 
@@ -223,13 +247,7 @@ pub fn draw_gizmo(
     else {
         return;
     };
-    let Some(visual) = crate::ui::panels::preview::clip::visual_for_selection(
-        gui_clips,
-        edit_target
-            .spatial_node_id
-            .unwrap_or(edit_target.content_node_id),
-        Some(edit_target.instance_path.as_slice()),
-    ) else {
+    let Some(visual) = exact_visual_for_edit_target(gui_clips, &edit_target) else {
         return;
     };
 
@@ -243,18 +261,21 @@ pub fn draw_gizmo(
     let Some(spatial_layer) = visual.spatial_layer(spatial_id) else {
         return;
     };
+    let spatial_interaction_enabled =
+        interaction_enabled && is_invertible(spatial_layer.parent_transform);
     if crate::qa::is_enabled() {
         crate::qa::register_component_with_metadata(
             "preview.gizmo.bounds",
             "preview_gizmo",
             Rect::from_points(&corners),
-            interaction_enabled,
+            false,
             Some(serde_json::json!({
                 "owner": edit_target.owner,
                 "content_node_id": edit_target.content_node_id,
                 "spatial_node_id": spatial_id,
                 "instance_path": &edit_target.instance_path,
-                "action": "transform_selected_preview_owner",
+                "action": "observe_selected_preview_bounds",
+                "handles_enabled": spatial_interaction_enabled,
             })),
         );
     }
@@ -292,7 +313,7 @@ pub fn draw_gizmo(
                 format!("preview.gizmo.handle:{handle_name}"),
                 "preview_gizmo_handle",
                 handle_rect,
-                interaction_enabled,
+                spatial_interaction_enabled,
                 Some(serde_json::json!({
                     "owner": edit_target.owner,
                     "content_node_id": edit_target.content_node_id,
@@ -303,7 +324,7 @@ pub fn draw_gizmo(
                 })),
             );
         }
-        if !interaction_enabled {
+        if !spatial_interaction_enabled {
             continue;
         }
         let response = ui.interact(handle_rect, ui.id().with(handle), Sense::drag());
@@ -314,9 +335,10 @@ pub fn draw_gizmo(
             let Some((_, _, width, height)) = visual.content_bounds else {
                 continue;
             };
-            let relative_visual = inverse_affine(spatial_layer.parent_transform)
-                .map(|inverse| inverse.compose(visual.world_transform))
-                .unwrap_or_else(|| Affine2D::from(&spatial_layer.transform));
+            let Some(inverse_parent) = inverse_affine(spatial_layer.parent_transform) else {
+                continue;
+            };
+            let relative_visual = inverse_parent.compose(visual.world_transform);
             let visual_scale_x =
                 relative_visual.scale_x.hypot(relative_visual.skew_y) as f32 * 100.0;
             let visual_scale_y =
@@ -347,6 +369,7 @@ pub fn draw_gizmo(
                     original_anchor_y: spatial_layer.transform.anchor.y as f32,
                     original_width: width,
                     original_height: height,
+                    has_changed: false,
                 });
         }
     }
@@ -400,34 +423,50 @@ fn draw_clip_box(
 
 fn inverse_map_vector(transform: Affine2D, vector: Vec2) -> Option<Vec2> {
     let determinant = transform.scale_x * transform.scale_y - transform.skew_x * transform.skew_y;
-    if determinant.abs() <= f64::EPSILON {
+    if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
         return None;
     }
-    Some(egui::vec2(
+    let mapped = egui::vec2(
         ((transform.scale_y * f64::from(vector.x) - transform.skew_x * f64::from(vector.y))
             / determinant) as f32,
         ((-transform.skew_y * f64::from(vector.x) + transform.scale_x * f64::from(vector.y))
             / determinant) as f32,
-    ))
+    );
+    mapped.is_finite().then_some(mapped)
 }
 
 fn inverse_affine(transform: Affine2D) -> Option<Affine2D> {
     let determinant = transform.scale_x * transform.scale_y - transform.skew_x * transform.skew_y;
-    if determinant.abs() <= f64::EPSILON {
+    if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
         return None;
     }
     let scale_x = transform.scale_y / determinant;
     let skew_x = -transform.skew_x / determinant;
     let skew_y = -transform.skew_y / determinant;
     let scale_y = transform.scale_x / determinant;
-    Some(Affine2D {
+    let inverse = Affine2D {
         scale_x,
         skew_x,
         translate_x: -(scale_x * transform.translate_x + skew_x * transform.translate_y),
         skew_y,
         scale_y,
         translate_y: -(skew_y * transform.translate_x + scale_y * transform.translate_y),
-    })
+    };
+    [
+        inverse.scale_x,
+        inverse.skew_x,
+        inverse.translate_x,
+        inverse.skew_y,
+        inverse.scale_y,
+        inverse.translate_y,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+    .then_some(inverse)
+}
+
+fn is_invertible(transform: Affine2D) -> bool {
+    inverse_affine(transform).is_some()
 }
 
 fn rotate_vec(vector: Vec2, angle_degrees: f32) -> Vec2 {
@@ -463,6 +502,76 @@ mod tests {
     use library::model::Node;
     use library::rendering::renderer::Affine2D;
     use uuid::Uuid;
+
+    fn transform_visual(parent_transform: Affine2D) -> PreviewClip {
+        let owner = SelectionTarget::Clip(Uuid::new_v4());
+        let content = library::plugin::PluginManager::default()
+            .create_image_transform_operation_node()
+            .expect("native Transform operation");
+        let spatial = library::plugin::PluginManager::default()
+            .create_image_transform_operation_node()
+            .expect("native Transform operation");
+        PreviewClip {
+            instance_path: vec![Uuid::new_v4(), content.id, spatial.id],
+            content_node: content,
+            spatial_layers: vec![PreviewSpatialLayer {
+                node: spatial,
+                kind: PreviewSpatialKind::ImageTransform,
+                transform: Transform::default(),
+                parent_transform,
+            }],
+            owner_target: owner,
+            transform: Transform::default(),
+            world_transform: Affine2D::IDENTITY,
+            content_bounds: Some((0.0, 0.0, 100.0, 100.0)),
+        }
+    }
+
+    fn armed_editor(visual: &PreviewClip) -> EditorContext {
+        let mut editor_context = EditorContext::new(Uuid::new_v4());
+        editor_context.select_target(visual.owner_target);
+        editor_context.interaction.preview_edit_target = Some(visual.edit_target());
+        editor_context.interaction.gizmo_state = Some(GizmoState {
+            start_mouse_pos: egui::pos2(10.0, 10.0),
+            active_handle: GizmoHandle::Right,
+            original_position: [0.0, 0.0],
+            original_scale_x: 100.0,
+            original_scale_y: 100.0,
+            original_rotation: 0.0,
+            original_visual_position: [0.0, 0.0],
+            original_visual_scale_x: 100.0,
+            original_visual_scale_y: 100.0,
+            original_visual_rotation: 0.0,
+            original_anchor_x: 0.0,
+            original_anchor_y: 0.0,
+            original_width: 100.0,
+            original_height: 100.0,
+            has_changed: false,
+        });
+        editor_context
+    }
+
+    fn run_gizmo(
+        editor_context: &mut EditorContext,
+        visuals: &[PreviewClip],
+    ) -> (bool, Vec<crate::ui::panels::preview::action::PreviewAction>) {
+        let context = egui::Context::default();
+        let mut pending_actions = Vec::new();
+        let mut handled = false;
+        drop(context.run(egui::RawInput::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                handled = handle_gizmo_interaction(
+                    ui,
+                    editor_context,
+                    visuals,
+                    Some(egui::pos2(20.0, 10.0)),
+                    |position| position,
+                    &mut pending_actions,
+                );
+            });
+        }));
+        (handled, pending_actions)
+    }
 
     #[test]
     fn clip_target_with_same_uuid_cannot_drive_node_gizmo() {
@@ -500,6 +609,7 @@ mod tests {
             original_anchor_y: 0.0,
             original_width: 100.0,
             original_height: 100.0,
+            has_changed: false,
         });
 
         let context = egui::Context::default();
@@ -525,5 +635,44 @@ mod tests {
             editor_context.selection.primary(),
             Some(SelectionTarget::Clip(shared_id))
         );
+    }
+
+    #[test]
+    fn singular_parent_cancels_gizmo_without_update_or_history() {
+        let visual = transform_visual(Affine2D {
+            scale_x: 0.0,
+            skew_x: 0.0,
+            translate_x: 0.0,
+            skew_y: 0.0,
+            scale_y: 1.0,
+            translate_y: 0.0,
+        });
+        let mut editor_context = armed_editor(&visual);
+
+        let (handled, pending_actions) =
+            run_gizmo(&mut editor_context, std::slice::from_ref(&visual));
+
+        assert!(handled);
+        assert!(pending_actions.is_empty());
+        assert!(editor_context.interaction.gizmo_state.is_none());
+    }
+
+    #[test]
+    fn stale_exact_gizmo_path_cannot_mutate_reused_node_id() {
+        let visual = transform_visual(Affine2D::IDENTITY);
+        let mut editor_context = armed_editor(&visual);
+        editor_context
+            .interaction
+            .preview_edit_target
+            .as_mut()
+            .expect("armed exact target")
+            .instance_path[0] = Uuid::new_v4();
+
+        let (handled, pending_actions) =
+            run_gizmo(&mut editor_context, std::slice::from_ref(&visual));
+
+        assert!(handled);
+        assert!(pending_actions.is_empty());
+        assert!(editor_context.interaction.gizmo_state.is_none());
     }
 }

@@ -138,6 +138,7 @@ pub fn visual_for_exact_instance<'a>(
 ///
 /// This is the intentional default for selection arriving from a panel that
 /// has no rendered branch identity, such as Timeline or Inspector.
+#[cfg(test)]
 pub fn topmost_visual_for_node(visuals: &[PreviewClip], node_id: Uuid) -> Option<&PreviewClip> {
     visuals
         .iter()
@@ -149,6 +150,7 @@ pub fn topmost_visual_for_node(visuals: &[PreviewClip], node_id: Uuid) -> Option
 ///
 /// `Some(path)` has exact-only semantics; only `None` opts into the documented
 /// top-most default.
+#[cfg(test)]
 pub fn visual_for_selection<'a>(
     visuals: &'a [PreviewClip],
     node_id: Uuid,
@@ -343,7 +345,7 @@ enum AuthoritativeOwner {
     Ambiguous,
 }
 
-fn visual_owner_target(
+pub(super) fn visual_owner_target(
     project: &Project,
     editable_spatial_id: Option<Uuid>,
     content_node_id: Uuid,

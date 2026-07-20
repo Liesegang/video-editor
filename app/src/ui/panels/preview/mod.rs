@@ -9,7 +9,9 @@ use library::RenderServer;
 use crate::command::{CommandId, CommandRegistry};
 #[cfg(test)]
 use crate::state::context_types::PreviewViewportRuntimeState;
-use crate::state::context_types::{PreviewPrimaryGesture, PreviewTool, SelectionTarget};
+#[cfg(test)]
+use crate::state::context_types::SelectionTarget;
+use crate::state::context_types::{PreviewPrimaryGesture, PreviewTool};
 use crate::ui::viewport::{ViewportConfig, ViewportController};
 use crate::{action::HistoryManager, state::context::EditorContext};
 
@@ -18,11 +20,14 @@ pub mod clip;
 mod gizmo;
 mod grid;
 mod interaction;
+mod qa;
+mod routing;
 mod support;
 pub mod vector_editor;
 
 #[cfg(test)]
 use action::PreviewAction;
+use qa::*;
 use support::*;
 
 pub fn preview_panel(
@@ -261,6 +266,7 @@ pub fn preview_panel(
 
     // Lock project once for reading state
     let mut pending_actions = Vec::new();
+    let mut current_interaction_visuals = Vec::new();
     let mut frame_evaluation_failed = false;
     let mut requested_frame_info = None;
     if let Ok(proj_read) = project.read() {
@@ -562,29 +568,28 @@ pub fn preview_panel(
             ui.painter().add(callback);
         }
 
-        let gui_clips = editor_context
-            .preview_frame_info
-            .as_ref()
-            .map(|frame| clip::from_evaluated_frame(&proj_read, frame))
-            .unwrap_or_default();
+        // Interaction geometry comes from the synchronous evaluation of the
+        // current Project request, never from a previously rendered frame.
+        // Pixels may finish asynchronously, but stale graph provenance must
+        // not be projected onto current Nodes for hit testing or mutation.
+        let gui_clips = preview_frame_for_interaction(
+            requested_frame_info.as_ref(),
+            editor_context.preview_frame_info.as_ref(),
+        )
+        .map(|frame| clip::from_evaluated_frame(&proj_read, frame))
+        .unwrap_or_default();
         let mut ambiguous_facade_candidates = None;
         if let Some(primary) = editor_context.selection.primary() {
-            let is_owner = !matches!(primary, SelectionTarget::Node(_));
             let has_matching_explicit_target = editor_context
                 .interaction
                 .preview_edit_target
                 .as_ref()
                 .is_some_and(|target| {
                     target.owner == primary
-                        && clip::visual_for_selection(
-                            &gui_clips,
-                            target.spatial_node_id.unwrap_or(target.content_node_id),
-                            Some(target.instance_path.as_slice()),
-                        )
-                        .is_some()
+                        && routing::exact_visual_for_edit_target(&gui_clips, target).is_some()
                 });
-            if is_owner && !has_matching_explicit_target {
-                match clip::resolve_owner_edit_target(&gui_clips, primary) {
+            if !has_matching_explicit_target {
+                match routing::resolve_primary_edit_target(&gui_clips, primary) {
                     clip::OwnerEditTargetResolution::Resolved(target) => {
                         editor_context.interaction.preview_edit_target = Some(target);
                     }
@@ -662,11 +667,8 @@ pub fn preview_panel(
                     .as_ref()
                     .filter(|target| editor_context.selection.primary() == Some(target.owner))
                 {
-                    if let Some(gc) = clip::visual_for_selection(
-                        &gui_clips,
-                        edit_target.content_node_id,
-                        Some(edit_target.instance_path.as_slice()),
-                    ) {
+                    if let Some(gc) = routing::exact_visual_for_edit_target(&gui_clips, edit_target)
+                    {
                         if let Some(path) = gc.content_node.properties().get_string("path") {
                             match crate::ui::panels::preview::vector_editor::svg_parser::parse_svg_path(&path) {
                                 Ok(path) => {
@@ -687,6 +689,7 @@ pub fn preview_panel(
                 }
             }
         }
+        current_interaction_visuals = gui_clips;
     } // End of project.read() scope
 
     // Nested gizmo/path widgets can be the first widgets to recognize a drag.
@@ -724,7 +727,13 @@ pub fn preview_panel(
     // before allocating JSON in normal, QA-disabled builds.
     register_preview_qa_components(preview_rect, current_composition_view, editor_context);
 
-    if apply_preview_actions(pending_actions, project_service, project, history_manager) {
+    if apply_preview_actions(
+        pending_actions,
+        &current_interaction_visuals,
+        project_service,
+        project,
+        history_manager,
+    ) {
         ui.ctx().request_repaint();
     }
 

@@ -231,14 +231,61 @@ mod render_tests {
             .insert_node_graph(NodeContainer::Clip(clip_id), graph)
             .unwrap();
         let project = Arc::new(RwLock::new(model));
-        let service =
-            EditorService::new(Arc::clone(&project), plugins, Arc::new(CacheManager::new()))
-                .unwrap();
+        let service = EditorService::new(
+            Arc::clone(&project),
+            plugins.clone(),
+            Arc::new(CacheManager::new()),
+        )
+        .unwrap();
+        let property_evaluators = plugins.get_property_evaluators();
+        let evaluated = library::framing::get_frame_from_project(
+            &project.read().unwrap(),
+            0,
+            0,
+            1.0,
+            None,
+            &property_evaluators,
+            &plugins,
+        )
+        .expect("fixture graph evaluates");
+        let visuals = clip::from_evaluated_frame(&project.read().unwrap(), &evaluated);
+        let edit_target = visuals
+            .iter()
+            .find(|visual| visual.spatial_id() == Some(transform_id))
+            .expect("Transform visual")
+            .edit_target();
         let mut history = HistoryManager::new();
         history.push_project_state(project.read().unwrap().clone());
 
+        let project_before_stale_write = project.read().unwrap().clone();
+        let history_before_stale_write = history.undo_depth();
+        let mut stale_target = edit_target.clone();
+        stale_target.instance_path.push(uuid::Uuid::new_v4());
+        assert!(!apply_preview_actions(
+            vec![
+                PreviewAction::UpdateProperty {
+                    edit_target: stale_target,
+                    node_id: transform_id,
+                    prop_name: "position".to_string(),
+                    time: 0.0,
+                    value: PropertyValue::Vec2(Vec2 {
+                        x: OrderedFloat(999.0),
+                        y: OrderedFloat(999.0),
+                    }),
+                },
+                PreviewAction::CommitHistory,
+            ],
+            &visuals,
+            &service,
+            &project,
+            &mut history,
+        ));
+        assert_eq!(*project.read().unwrap(), project_before_stale_write);
+        assert_eq!(history.undo_depth(), history_before_stale_write);
+
         assert!(!apply_preview_actions(
             vec![PreviewAction::CommitHistory],
+            &visuals,
             &service,
             &project,
             &mut history,
@@ -248,6 +295,7 @@ mod render_tests {
         assert!(apply_preview_actions(
             vec![
                 PreviewAction::UpdateProperty {
+                    edit_target,
                     node_id: transform_id,
                     prop_name: "position".to_string(),
                     time: 0.0,
@@ -258,6 +306,7 @@ mod render_tests {
                 },
                 PreviewAction::CommitHistory,
             ],
+            &visuals,
             &service,
             &project,
             &mut history,

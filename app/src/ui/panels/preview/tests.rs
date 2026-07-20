@@ -30,6 +30,12 @@ mod tests {
         assert!(!preview_render_wait_requires_repaint(false, true, true));
         assert!(!preview_render_wait_requires_repaint(false, false, false));
         assert!(!preview_render_wait_requires_repaint(true, true, false));
+
+        assert_eq!(
+            preview_frame_for_interaction(Some(&current), Some(&stale)),
+            Some(&current)
+        );
+        assert_eq!(preview_frame_for_interaction(None, Some(&stale)), None);
     }
 
     #[test]
@@ -551,6 +557,8 @@ mod tests {
         editor_context.interaction.body_drag_state = Some(BodyDragState {
             start_mouse_pos: egui::pos2(4.0, 5.0),
             original_positions: HashMap::from([(selected_id, [12.0, 34.0])]),
+            preview_targets: Vec::new(),
+            has_changed: false,
         });
         editor_context.interaction.gizmo_state = Some(GizmoState {
             start_mouse_pos: egui::pos2(4.0, 5.0),
@@ -567,6 +575,7 @@ mod tests {
             original_anchor_y: 0.0,
             original_width: 100.0,
             original_height: 100.0,
+            has_changed: false,
         });
         editor_context.interaction.vector_editor_state = Some(VectorEditorState {
             selected_handle: Some((0, HandleType::Vertex)),
@@ -765,8 +774,13 @@ mod tests {
 
         fn apply_actions(source: Node, actions: Vec<PreviewAction>) -> Node {
             let source_id = source.id;
+            let visual = transformed_visual(&source);
             let mut model = Project::new("transformed preview edit");
             model.add_node(source);
+            let mut owner = library::model::Clip::new("owner", 0.0, 1.0);
+            owner.id = source_id;
+            owner.node_ids.push(source_id);
+            model.add_clip(owner);
             let project = Arc::new(RwLock::new(model));
             let service = EditorService::new(
                 Arc::clone(&project),
@@ -776,7 +790,13 @@ mod tests {
             .unwrap();
             let mut history = HistoryManager::new();
             history.push_project_state(project.read().unwrap().clone());
-            apply_preview_actions(actions, &service, &project, &mut history);
+            apply_preview_actions(
+                actions,
+                std::slice::from_ref(&visual),
+                &service,
+                &project,
+                &mut history,
+            );
             let edited = project.read().unwrap().get_node(source_id).unwrap().clone();
             edited
         }
