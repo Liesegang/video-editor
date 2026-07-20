@@ -140,6 +140,9 @@ impl Project {
             PortOwner::Node(_) => return Vec::new(),
         };
         if let Some(output_node_id) = output_node_id {
+            if !self.container_directly_contains_node(owner, output_node_id) {
+                return Vec::new();
+            }
             return bound(output_node_id);
         }
 
@@ -188,5 +191,60 @@ impl Project {
         let address = PortAddress::new(owner, AUDIO_OUTPUT_PORT);
         self.port_definition(&address, PortDirection::Output)
             .is_some_and(|port| port.data_type == PortDataType::Audio)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Clip, Composition, Node};
+
+    #[test]
+    fn malformed_foreign_image_binding_is_no_output_after_deserialization() {
+        let mut project = Project::new("malformed foreign image binding");
+        let (composition, track) = Composition::new("Main", 64, 64, 24.0, 2.0);
+        let track_id = track.id;
+        project.add_track(track);
+        project.add_composition(composition);
+
+        let first_clip = Clip::new("First", 0.0, 1.0);
+        let first_clip_id = first_clip.id;
+        project.add_clip(first_clip);
+        project
+            .attach_clip_to_track(track_id, first_clip_id)
+            .unwrap();
+
+        let second_clip = Clip::new("Second", 1.0, 1.0);
+        let second_clip_id = second_clip.id;
+        project.add_clip(second_clip);
+        project
+            .attach_clip_to_track(track_id, second_clip_id)
+            .unwrap();
+
+        let foreign_node = Node::new_merge("Foreign Image");
+        let foreign_node_id = foreign_node.id;
+        project.add_node(foreign_node);
+        project
+            .attach_node_to_container(NodeContainer::Clip(second_clip_id), foreign_node_id)
+            .unwrap();
+
+        let mut persisted = serde_json::to_value(&project).unwrap();
+        let first = persisted["clips"]
+            .as_object_mut()
+            .unwrap()
+            .get_mut(&first_clip_id.to_string())
+            .unwrap();
+        first["output_node_id"] = serde_json::json!(foreign_node_id);
+
+        let malformed: Project = serde_json::from_value(persisted).unwrap();
+        assert_eq!(
+            malformed.find_node_container(foreign_node_id),
+            Some(NodeContainer::Clip(second_clip_id))
+        );
+        assert!(
+            malformed
+                .container_image_sources(PortOwner::Clip(first_clip_id))
+                .is_empty()
+        );
     }
 }
