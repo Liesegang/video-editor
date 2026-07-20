@@ -21,6 +21,7 @@ ROOT_LOCKFILE="${REPOSITORY_ROOT}/Cargo.lock"
 RUNTIME_PROPERTY_LOCKFILE="${REPOSITORY_ROOT}/plugins/random_property/Cargo.lock"
 QUALITY_GATE="${SCRIPT_DIR}/quality-gate.sh"
 RUST_FILE_SIZE_GATE="${SCRIPT_DIR}/check-rust-file-size.sh"
+RUST_FILE_SIZE_RATCHET="${SCRIPT_DIR}/check-rust-file-size-ratchet.sh"
 
 if [[ ! -f "${ROOT_LOCKFILE}" ]]; then
     echo "root Cargo.lock is required for reproducible quality gates" >&2
@@ -82,6 +83,7 @@ require_gate_command 'cargo test --workspace --all-targets --all-features --lock
 require_gate_command 'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked'
 require_gate_command 'RUSTDOCFLAGS="-D warnings" cargo test --workspace --all-features --doc --locked'
 require_gate_command '"${SCRIPT_DIR}/quality-gate-self-test.sh"'
+require_gate_command '"${SCRIPT_DIR}/check-rust-file-size-ratchet.sh"'
 require_gate_command '-u QUALITY_ADVISORY_EXCEPTION_FILE \'
 require_gate_command '-u QUALITY_AUDIT_VALIDATE_ONLY \'
 require_gate_command '-u QUALITY_TOOL_ROOT \'
@@ -124,6 +126,97 @@ if ! grep -Fq 'production-limit.rs: 1001 lines (limit 1000)' \
     cat "${TEST_LOG_DIR}/rust-file-size-default.log" >&2
     exit 1
 fi
+
+RUST_RATCHET_FIXTURE="${TEST_LOG_DIR}/rust-file-size-ratchet"
+mkdir -p "${RUST_RATCHET_FIXTURE}"
+git -C "${RUST_RATCHET_FIXTURE}" init -q
+git -C "${RUST_RATCHET_FIXTURE}" config user.email quality@example.invalid
+git -C "${RUST_RATCHET_FIXTURE}" config user.name 'Quality Gate'
+awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
+    > "${RUST_RATCHET_FIXTURE}/existing-oversized.rs"
+awk 'BEGIN { for (line = 1; line <= 3; line += 1) print "// line" }' \
+    > "${RUST_RATCHET_FIXTURE}/boundary.rs"
+: > "${RUST_RATCHET_FIXTURE}/empty.rs"
+git -C "${RUST_RATCHET_FIXTURE}" add -- '*.rs'
+git -C "${RUST_RATCHET_FIXTURE}" commit -qm baseline
+RUST_RATCHET_BASELINE="$(git -C "${RUST_RATCHET_FIXTURE}" rev-parse HEAD)"
+
+# An unavailable implicit integration base must fail closed rather than
+# silently comparing the branch with itself.
+if "${RUST_FILE_SIZE_RATCHET}" --root "${RUST_RATCHET_FIXTURE}" \
+    > "${TEST_LOG_DIR}/rust-file-size-ratchet-no-baseline.log" 2>&1; then
+    echo "Rust file size ratchet unexpectedly passed without a baseline" >&2
+    exit 1
+fi
+if ! grep -Fq 'Rust file size baseline is required' \
+    "${TEST_LOG_DIR}/rust-file-size-ratchet-no-baseline.log"; then
+    echo "missing Rust file size baseline failed for the wrong reason" >&2
+    cat "${TEST_LOG_DIR}/rust-file-size-ratchet-no-baseline.log" >&2
+    exit 1
+fi
+
+# Comparing with an unrelated or newer commit can hide branch regressions, so
+# only an actual ancestor may serve as the integration baseline.
+git -C "${RUST_RATCHET_FIXTURE}" checkout -qb unrelated
+echo '// unrelated history' > "${RUST_RATCHET_FIXTURE}/unrelated.rs"
+git -C "${RUST_RATCHET_FIXTURE}" add -- unrelated.rs
+git -C "${RUST_RATCHET_FIXTURE}" commit -qm unrelated
+RUST_RATCHET_UNRELATED="$(git -C "${RUST_RATCHET_FIXTURE}" rev-parse HEAD)"
+git -C "${RUST_RATCHET_FIXTURE}" checkout -q --detach "${RUST_RATCHET_BASELINE}"
+if "${RUST_FILE_SIZE_RATCHET}" --root "${RUST_RATCHET_FIXTURE}" \
+    --baseline-ref "${RUST_RATCHET_UNRELATED}" --max-lines 3 \
+    > "${TEST_LOG_DIR}/rust-file-size-ratchet-unrelated.log" 2>&1; then
+    echo "Rust file size ratchet unexpectedly accepted a non-ancestor baseline" >&2
+    exit 1
+fi
+if ! grep -Fq 'Rust file size baseline must be an ancestor of HEAD' \
+    "${TEST_LOG_DIR}/rust-file-size-ratchet-unrelated.log"; then
+    echo "non-ancestor Rust file size baseline failed for the wrong reason" >&2
+    cat "${TEST_LOG_DIR}/rust-file-size-ratchet-unrelated.log" >&2
+    exit 1
+fi
+
+# Existing debt may shrink or remain unchanged.
+awk 'BEGIN { for (line = 1; line <= 3; line += 1) print "// line" }' \
+    > "${RUST_RATCHET_FIXTURE}/existing-oversized.rs"
+"${RUST_FILE_SIZE_RATCHET}" --root "${RUST_RATCHET_FIXTURE}" \
+    --baseline-ref "${RUST_RATCHET_BASELINE}" --max-lines 3 \
+    > "${TEST_LOG_DIR}/rust-file-size-ratchet-pass.log"
+
+expect_ratchet_failure() {
+    local expected="$1"
+    local log_file="${TEST_LOG_DIR}/rust-file-size-ratchet-fail.log"
+    if "${RUST_FILE_SIZE_RATCHET}" --root "${RUST_RATCHET_FIXTURE}" \
+        --baseline-ref "${RUST_RATCHET_BASELINE}" --max-lines 3 \
+        >"${log_file}" 2>&1; then
+        echo "Rust file size regression unexpectedly passed" >&2
+        exit 1
+    fi
+    if ! grep -Fq "${expected}" "${log_file}"; then
+        echo "Rust file size ratchet failed for the wrong reason" >&2
+        cat "${log_file}" >&2
+        exit 1
+    fi
+}
+
+awk 'BEGIN { for (line = 1; line <= 5; line += 1) print "// line" }' \
+    > "${RUST_RATCHET_FIXTURE}/existing-oversized.rs"
+expect_ratchet_failure 'existing-oversized.rs: oversized file grew from 4 to 5 lines'
+git -C "${RUST_RATCHET_FIXTURE}" checkout -q -- existing-oversized.rs
+
+awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
+    > "${RUST_RATCHET_FIXTURE}/boundary.rs"
+expect_ratchet_failure 'boundary.rs: grew from 3 to 4 lines and now exceeds limit 3'
+git -C "${RUST_RATCHET_FIXTURE}" checkout -q -- boundary.rs
+
+awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
+    > "${RUST_RATCHET_FIXTURE}/empty.rs"
+expect_ratchet_failure 'empty.rs: grew from 0 to 4 lines and now exceeds limit 3'
+git -C "${RUST_RATCHET_FIXTURE}" checkout -q -- empty.rs
+
+awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
+    > "${RUST_RATCHET_FIXTURE}/new.rs"
+expect_ratchet_failure 'new.rs: new oversized file has 4 lines (limit 3)'
 
 # This also catches a stale lockfile after workspace manifests change.
 cargo metadata \
