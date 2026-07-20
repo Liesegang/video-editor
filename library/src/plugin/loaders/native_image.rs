@@ -182,9 +182,7 @@ mod tests {
         let streams = loader.open(&path_text)?;
         assert_eq!(streams.first().and_then(|stream| stream.width), Some(1));
         let loaded = loader.load(
-            &LoadRequest::Image {
-                path: path_text.clone(),
-            },
+            &LoadRequest::Image { path: path_text },
             &CacheManager::new(),
         )?;
         assert_eq!(loaded.image.data, [10, 20, 30, 255]);
