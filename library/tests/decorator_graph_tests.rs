@@ -34,7 +34,8 @@ const HEIGHT: u64 = 80;
 const FPS: f64 = 10.0;
 
 fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
-    node.set_property(key.to_string(), Property::constant(value));
+    node.set_property(key.to_string(), Property::constant(value))
+        .expect("operation descriptor initializes the test property");
 }
 
 fn shape_wire(from: Uuid, to: Uuid) -> ProjectConnection {
@@ -256,13 +257,15 @@ fn graph_order_keyframes_and_scalar_overrides_build_decorators_and_roundtrip() {
     let mut first = plugins
         .create_decorator_operation_node("backplate")
         .unwrap();
-    first.set_property(
-        "padding".into(),
-        Property::keyframe(vec![
-            Keyframe::new(0.0, 0.0.into(), EasingFunction::Linear),
-            Keyframe::new(1.0, 10.0.into(), EasingFunction::Linear),
-        ]),
-    );
+    first
+        .set_property(
+            "padding".into(),
+            Property::keyframe(vec![
+                Keyframe::new(0.0, 0.0.into(), EasingFunction::Linear),
+                Keyframe::new(1.0, 10.0.into(), EasingFunction::Linear),
+            ]),
+        )
+        .expect("backplate descriptor initializes padding");
     set_constant(&mut first, "target", PropertyValue::String("Char".into()));
     set_constant(
         &mut first,
@@ -531,11 +534,13 @@ fn graph_backplate_pixels_are_stable_across_project_roundtrip() {
         node.set_property(
             "target".into(),
             Property::constant(PropertyValue::String("Char".into())),
-        );
+        )
+        .expect("backplate descriptor initializes target");
         node.set_property(
             "shape".into(),
             Property::constant(PropertyValue::String("RoundRect".into())),
-        );
+        )
+        .expect("backplate descriptor initializes shape");
         node.set_property(
             "color".into(),
             Property::constant(PropertyValue::Color(Color {
@@ -544,9 +549,12 @@ fn graph_backplate_pixels_are_stable_across_project_roundtrip() {
                 b: 60,
                 a: 255,
             })),
-        );
-        node.set_property("padding".into(), Property::constant(3.0.into()));
-        node.set_property("radius".into(), Property::constant(2.0.into()));
+        )
+        .expect("backplate descriptor initializes color");
+        node.set_property("padding".into(), Property::constant(3.0.into()))
+            .expect("backplate descriptor initializes padding");
+        node.set_property("radius".into(), Property::constant(2.0.into()))
+            .expect("backplate descriptor initializes radius");
     };
 
     let mut graph = manager

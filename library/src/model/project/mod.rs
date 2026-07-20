@@ -1241,7 +1241,7 @@ impl Project {
         let references = self
             .nodes
             .values()
-            .filter(|node| matches!(&node.content, NodeContent::Reference(reference) if reference.target_id == composition_id))
+            .filter(|node| matches!(node.content(), NodeContent::Reference(reference) if reference.target_id == composition_id))
             .map(|node| node.id)
             .collect::<Vec<_>>();
         for node_id in references {

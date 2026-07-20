@@ -150,7 +150,7 @@ fn install_named(
     solid.set_property(
         "opacity".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
-    );
+    )?;
     let mut merge = Node::new_merge("QA Merge");
     merge.id = E2E_MERGE_ID;
     merge.ui_position = [2670.0, 300.0];
@@ -172,7 +172,7 @@ fn install_named(
         transform.set_property(
             name.to_string(),
             Property::constant(PropertyValue::Number(OrderedFloat(value))),
-        );
+        )?;
     }
     let mut opacity = operation_node(
         plugin_manager.create_effector_operation_node("opacity"),
@@ -183,7 +183,7 @@ fn install_named(
     opacity.set_property(
         "opacity".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
-    );
+    )?;
     let mut backplate = operation_node(
         plugin_manager.create_decorator_operation_node("backplate"),
         E2E_DECORATOR_BACKPLATE_ID,
@@ -193,11 +193,11 @@ fn install_named(
     backplate.set_property(
         "target".to_string(),
         Property::constant(PropertyValue::String("Block".to_string())),
-    );
+    )?;
     backplate.set_property(
         "shape".to_string(),
         Property::constant(PropertyValue::String("RoundRect".to_string())),
-    );
+    )?;
     backplate.set_property(
         "color".to_string(),
         Property::constant(PropertyValue::Color(Color {
@@ -206,15 +206,15 @@ fn install_named(
             b: 20,
             a: 210,
         })),
-    );
+    )?;
     backplate.set_property(
         "padding".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(8.0))),
-    );
+    )?;
     backplate.set_property(
         "radius".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(6.0))),
-    );
+    )?;
     let mut text_fill = operation_node(
         plugin_manager.create_style_operation_node("fill"),
         E2E_TEXT_FILL_ID,
@@ -229,7 +229,7 @@ fn install_named(
             b: 90,
             a: 255,
         })),
-    );
+    )?;
     let blur = operation_node(
         plugin_manager.create_effect_operation_node("blur"),
         E2E_BLUR_EFFECT_ID,
@@ -252,7 +252,7 @@ fn install_named(
             b: 122,
             a: 255,
         })),
-    );
+    )?;
     let mut shape_stroke = operation_node(
         plugin_manager.create_style_operation_node("stroke"),
         E2E_SHAPE_STROKE_ID,
@@ -267,11 +267,11 @@ fn install_named(
             b: 255,
             a: 255,
         })),
-    );
+    )?;
     shape_stroke.set_property(
         "width".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(4.0))),
-    );
+    )?;
     let mut shape_merge = Node::new_merge("QA Shape Merge");
     shape_merge.id = E2E_SHAPE_MERGE_ID;
     shape_merge.ui_position = [1050.0, 980.0];
@@ -446,15 +446,15 @@ fn text_node(factory: &ProjectService, id: Uuid, ui_position: [f32; 2]) -> Resul
             x: OrderedFloat(320.0),
             y: OrderedFloat(180.0),
         })),
-    );
+    )?;
     node.set_property(
         "opacity".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
-    );
+    )?;
     node.set_property(
         "size".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(64.0))),
-    );
+    )?;
     Ok(node)
 }
 
@@ -469,7 +469,7 @@ fn shape_node(factory: &ProjectService, id: Uuid, ui_position: [f32; 2]) -> Resu
     node.set_property(
         "opacity".to_string(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
-    );
+    )?;
     Ok(node)
 }
 

@@ -64,8 +64,15 @@ fn colored_solid_node(name: &str, color: Color) -> Node {
     node.set_property(
         "color".to_string(),
         Property::constant(PropertyValue::Color(color)),
-    );
+    )
+    .expect("solid factory initializes color");
     node
+}
+
+fn insert_persisted_property(node: &mut Node, key: &str, property: Property) {
+    let mut encoded = serde_json::to_value(&*node).unwrap();
+    encoded["properties"][key] = serde_json::to_value(property).unwrap();
+    *node = serde_json::from_value(encoded).unwrap();
 }
 
 fn graph_output(key: &str, label: &str, data_type: PortDataType) -> PortDefinition {
@@ -324,8 +331,9 @@ fn unknown_plugin_operation_roundtrips_identity_ports_properties_keyframes_and_w
             PortDataType::Shape,
         )],
     );
-    shape.set_property(
-        "strength".to_string(),
+    insert_persisted_property(
+        &mut shape,
+        "strength",
         Property::keyframe(vec![
             Keyframe::new(
                 0.0,
@@ -454,8 +462,9 @@ fn plugin_and_leaf_nodes_expose_only_declared_or_consumed_ports() {
         "shape.produce",
         declared_ports.clone(),
     );
-    operation.set_property(
-        "authored_but_not_connectable".to_string(),
+    insert_persisted_property(
+        &mut operation,
+        "authored_but_not_connectable",
         Property::constant(PropertyValue::Boolean(true)),
     );
     let operation_id = operation.id;
@@ -1724,7 +1733,8 @@ fn clip_is_the_only_timing_owner_and_metadata_connection_overrides_authored_prop
     node.set_property(
         "opacity".into(),
         Property::constant(PropertyValue::Number(OrderedFloat(100.0))),
-    );
+    )
+    .expect("video converter initializes opacity");
     let node_id = add_node(&mut project, NodeContainer::Clip(clip_id), node);
     project
         .set_output_node(NodeContainer::Clip(clip_id), Some(node_id))

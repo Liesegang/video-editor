@@ -246,7 +246,7 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
         node: &crate::model::Node,
         time: f64,
     ) -> Option<RuntimeShape> {
-        let props = &node.properties;
+        let props = node.properties();
         let path = evaluator.require_string(props, "path", time, "shape")?;
         let parsed = skia_safe::utils::parse_path::from_svg(&path)?;
         if parsed.is_empty() {
@@ -275,7 +275,7 @@ impl EntityConverterPlugin for ShapeEntityConverterPlugin {
         node: &crate::model::Node,
         time: f64,
     ) -> Option<(f32, f32, f32, f32)> {
-        let props = &node.properties;
+        let props = node.properties();
         let _comp_fps = evaluator.composition.fps;
 
         // Calculate evaluation time based on Node timeframe

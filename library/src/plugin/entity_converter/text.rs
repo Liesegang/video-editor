@@ -154,7 +154,7 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
         node: &crate::model::Node,
         time: f64,
     ) -> Option<RuntimeShape> {
-        let props = &node.properties;
+        let props = node.properties();
         let text = evaluator.require_string(props, "text", time, "text")?;
         let font = evaluator
             .optional_string(props, "font_family", time)
@@ -189,7 +189,7 @@ impl EntityConverterPlugin for TextEntityConverterPlugin {
         node: &crate::model::Node,
         time: f64,
     ) -> Option<(f32, f32, f32, f32)> {
-        let props = &node.properties;
+        let props = node.properties();
         let _comp_fps = evaluator.composition.fps;
 
         // Calculate evaluation time based on Node timeframe

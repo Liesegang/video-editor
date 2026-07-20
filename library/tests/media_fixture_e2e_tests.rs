@@ -142,10 +142,12 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> (Project, MixedMediaId
         8,
         6,
     );
-    image.set_property(
-        "opacity".into(),
-        constant(PropertyValue::Number(OrderedFloat(70.0))),
-    );
+    image
+        .set_property(
+            "opacity".into(),
+            constant(PropertyValue::Number(OrderedFloat(70.0))),
+        )
+        .expect("image converter initializes opacity");
     add_clip_node(&mut project, image_track_id, "image clip", image);
 
     let video_track = Track::new("video track");
@@ -175,10 +177,12 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> (Project, MixedMediaId
         12,
         8,
     );
-    video.set_property(
-        "opacity".into(),
-        constant(PropertyValue::Number(OrderedFloat(65.0))),
-    );
+    video
+        .set_property(
+            "opacity".into(),
+            constant(PropertyValue::Number(OrderedFloat(65.0))),
+        )
+        .expect("video converter initializes opacity");
     let (video_clip, video_node) = add_clip_node(&mut project, video_track_id, "video clip", video);
 
     let text_track = Track::new("text track");
@@ -201,14 +205,16 @@ fn mixed_media_project(plugin_manager: &PluginManager) -> (Project, MixedMediaId
     text.set_property(
         "size".into(),
         constant(PropertyValue::Number(OrderedFloat(5.0))),
-    );
+    )
+    .expect("text converter initializes size");
     text.set_property(
         "position".into(),
         constant(PropertyValue::Vec2(Vec2 {
             x: OrderedFloat(1.0),
             y: OrderedFloat(5.0),
         })),
-    );
+    )
+    .expect("text converter initializes position");
     let fill = plugin_manager.create_style_operation_node("fill").unwrap();
     let text_id = text.id;
     let fill_id = fill.id;
@@ -253,28 +259,36 @@ half4 main(float2 fragCoord) {
         12,
         8,
     );
-    shader.set_property(
-        "width".into(),
-        constant(PropertyValue::Number(OrderedFloat(3.0))),
-    );
-    shader.set_property(
-        "height".into(),
-        constant(PropertyValue::Number(OrderedFloat(3.0))),
-    );
-    shader.set_property(
-        "position".into(),
-        constant(PropertyValue::Vec2(Vec2 {
-            x: OrderedFloat(9.0),
-            y: OrderedFloat(5.0),
-        })),
-    );
-    shader.set_property(
-        "anchor".into(),
-        constant(PropertyValue::Vec2(Vec2 {
-            x: OrderedFloat(0.0),
-            y: OrderedFloat(0.0),
-        })),
-    );
+    shader
+        .set_property(
+            "width".into(),
+            constant(PropertyValue::Number(OrderedFloat(3.0))),
+        )
+        .expect("SkSL converter initializes width");
+    shader
+        .set_property(
+            "height".into(),
+            constant(PropertyValue::Number(OrderedFloat(3.0))),
+        )
+        .expect("SkSL converter initializes height");
+    shader
+        .set_property(
+            "position".into(),
+            constant(PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(9.0),
+                y: OrderedFloat(5.0),
+            })),
+        )
+        .expect("SkSL converter initializes position");
+    shader
+        .set_property(
+            "anchor".into(),
+            constant(PropertyValue::Vec2(Vec2 {
+                x: OrderedFloat(0.0),
+                y: OrderedFloat(0.0),
+            })),
+        )
+        .expect("SkSL converter initializes anchor");
     add_clip_node(&mut project, shader_track_id, "shader clip", shader);
 
     (
@@ -1069,10 +1083,14 @@ fn node_and_timeline_edits_share_one_model_and_update_the_next_preview() {
     let (mut project, ids) = mixed_media_project(&plugins);
     let initial = preview_frame(&project, 0, &plugins);
 
-    project.get_node_mut(ids.video_node).unwrap().set_property(
-        "opacity".into(),
-        constant(PropertyValue::Number(OrderedFloat(0.0))),
-    );
+    project
+        .get_node_mut(ids.video_node)
+        .unwrap()
+        .set_property(
+            "opacity".into(),
+            constant(PropertyValue::Number(OrderedFloat(0.0))),
+        )
+        .expect("video converter initializes opacity");
     let after_node_edit = preview_frame(&project, 0, &plugins);
     assert_ne!(rgba_hash(&initial), rgba_hash(&after_node_edit));
     assert_eq!(
@@ -1084,10 +1102,14 @@ fn node_and_timeline_edits_share_one_model_and_update_the_next_preview() {
         vec![ids.video_node]
     );
 
-    project.get_node_mut(ids.video_node).unwrap().set_property(
-        "opacity".into(),
-        constant(PropertyValue::Number(OrderedFloat(65.0))),
-    );
+    project
+        .get_node_mut(ids.video_node)
+        .unwrap()
+        .set_property(
+            "opacity".into(),
+            constant(PropertyValue::Number(OrderedFloat(65.0))),
+        )
+        .expect("video converter initializes opacity");
     let clip = project.get_clip_mut(ids.video_clip).unwrap();
     clip.start_time = OrderedFloat(1.0);
     clip.duration = OrderedFloat(2.0);

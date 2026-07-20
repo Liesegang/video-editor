@@ -21,13 +21,13 @@ impl Clip {
 impl Node {
     /// Returns the display color for the leaf Node's content kind.
     pub fn display_color(&self) -> (u8, u8, u8) {
-        match &self.content {
+        match self.content() {
             NodeContent::Media(_) => (100, 150, 255),
             NodeContent::Generator(generator) => match generator {
                 GeneratorContent::Text => (255, 200, 100),
                 GeneratorContent::Shape => (128, 128, 128),
                 GeneratorContent::Solid => self
-                    .properties
+                    .properties()
                     .get("color")
                     .and_then(|property| property.get_static_value())
                     .and_then(|value| match value {
@@ -46,12 +46,12 @@ impl Node {
 
     /// Reads a static leaf-Node property, falling back when absent or animated.
     pub fn get_property_float_or(&self, key: &str, default: f32) -> f32 {
-        self.properties.get_f32(key).unwrap_or(default)
+        self.properties().get_f32(key).unwrap_or(default)
     }
 
     /// Reads a static leaf-Node Vec2 property, falling back when absent or animated.
     pub fn get_property_vec2_or(&self, key: &str, default: [f32; 2]) -> [f32; 2] {
-        static_vec2_or(&self.properties, key, default)
+        static_vec2_or(self.properties(), key, default)
     }
 }
 

@@ -42,7 +42,8 @@ fn output_port(key: &str, data_type: PortDataType) -> PortDefinition {
 }
 
 fn set_constant(node: &mut Node, key: &str, value: PropertyValue) {
-    node.set_property(key.to_string(), Property::constant(value));
+    node.set_property(key.to_string(), Property::constant(value))
+        .expect("operation descriptor initializes the test property");
 }
 
 fn vec2(x: f64, y: f64) -> PropertyValue {
@@ -223,7 +224,8 @@ fn effect_chain_uses_wiring_order_and_evaluates_keyframes_and_scalar_overrides()
             Keyframe::new(0.0, 0.0.into(), EasingFunction::Linear),
             Keyframe::new(1.0, 10.0.into(), EasingFunction::Linear),
         ]),
-    );
+    )
+    .expect("blur descriptor initializes sigma_x");
     let source_id = source.id;
     let blur_id = blur.id;
     let dilate_id = dilate.id;

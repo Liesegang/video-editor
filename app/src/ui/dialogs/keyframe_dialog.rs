@@ -447,10 +447,13 @@ pub fn show_keyframe_dialog(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::generator_node;
     use library::animation::EasingFunction;
     use library::cache::CacheManager;
+    use library::editor::project_service::GeneratorNodeRequest;
+    use library::model::frame::color::Color;
     use library::model::property::{Keyframe, Property, Vec2};
-    use library::model::{Clip, Node};
+    use library::model::Clip;
     use library::plugin::PluginManager;
 
     #[test]
@@ -464,9 +467,15 @@ mod tests {
             EasingFunction::Linear,
         );
         let keyframe_id = keyframe.id;
-        let mut node = Node::new_merge("dialog");
+        let mut node = generator_node(
+            "dialog",
+            GeneratorNodeRequest::Solid {
+                color: Color::default(),
+            },
+        );
         let node_id = node.id;
-        node.set_property("position".to_string(), Property::keyframe(vec![keyframe]));
+        node.set_property("position".to_string(), Property::keyframe(vec![keyframe]))
+            .expect("solid factory initializes position");
         let mut clip = Clip::new("mapped", 4.0, 8.0);
         clip.trim_in = OrderedFloat(1.5);
         clip.time_stretch = OrderedFloat(0.5);
@@ -511,9 +520,15 @@ mod tests {
             EasingFunction::Linear,
         );
         let keyframe_id = keyframe.id;
-        let mut node = Node::new_merge("dialog history");
+        let mut node = generator_node(
+            "dialog history",
+            GeneratorNodeRequest::Solid {
+                color: Color::default(),
+            },
+        );
         let node_id = node.id;
-        node.set_property("amount".to_string(), Property::keyframe(vec![keyframe]));
+        node.set_property("opacity".to_string(), Property::keyframe(vec![keyframe]))
+            .expect("solid factory initializes opacity");
         let mut initial = Project::new("dialog history");
         initial.add_node(node);
         let project = Arc::new(RwLock::new(initial.clone()));
@@ -528,9 +543,9 @@ mod tests {
         let mut state = KeyframeDialogState {
             is_open: true,
             entity_id: Some(node_id),
-            property_name: "node:amount".to_string(),
+            property_name: "node:opacity".to_string(),
             owner: Some(library::PropertyOwner::Node(node_id)),
-            property_key: "amount".to_string(),
+            property_key: "opacity".to_string(),
             keyframe_id: Some(keyframe_id),
             time: 1.0,
             value: 10.0,
@@ -602,7 +617,7 @@ mod tests {
             .get_node(node_id)
             .unwrap()
             .properties()
-            .get("amount")
+            .get("opacity")
             .unwrap()
             .keyframe_by_id(keyframe_id)
             .unwrap();

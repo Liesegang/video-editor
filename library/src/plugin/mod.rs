@@ -25,6 +25,7 @@ pub mod styles;
 pub use entity_converter::{EntityConverterPlugin, FrameEvaluationContext, ResolvedNodeInputs};
 pub use evaluator::{EvaluationContext, PropertyEvaluator, PropertyEvaluatorRegistry};
 pub use manager::{PluginInfo, PluginManager};
+pub(crate) use operation::OperationNodeParts;
 pub use operation::{
     DECORATOR_APPLY_OPERATION, DECORATOR_CATEGORY, EFFECT_APPLY_OPERATION, EFFECT_CATEGORY,
     EFFECTOR_APPLY_OPERATION, EFFECTOR_CATEGORY, OperationDescriptor, OperationDescriptorError,

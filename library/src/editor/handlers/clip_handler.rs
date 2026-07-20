@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
-use super::property_ops::{PropertyOwner, property_map_mut};
+use super::property_ops::{PropertyOwner, set_property_attribute as set_property_attribute_value};
 use crate::error::LibraryError;
 use crate::model::project::{NodeContainer, NodeGraphBundle, Project};
 use crate::model::property::PropertyValue;
@@ -79,7 +79,7 @@ impl ClipHandler {
                     node.id
                 )));
             }
-            if let NodeContent::Reference(ReferenceContent { target_id, .. }) = &node.content
+            if let NodeContent::Reference(ReferenceContent { target_id, .. }) = node.content()
                 && !Self::validate_recursion(&project, *target_id, composition_id)
             {
                 return Err(LibraryError::Project(
@@ -262,7 +262,7 @@ impl ClipHandler {
 
             for node_id in node_ids {
                 let Some(NodeContent::Reference(reference)) =
-                    project.get_node(node_id).map(|node| &node.content)
+                    project.get_node(node_id).map(Node::content)
                 else {
                     continue;
                 };
@@ -355,14 +355,13 @@ impl ClipHandler {
         let mut project = project
             .write()
             .map_err(|_| LibraryError::Runtime("Lock Poisoned".to_string()))?;
-        let properties = property_map_mut(&mut project, owner)?;
-        let property = properties.get_mut(property_key).ok_or_else(|| {
-            LibraryError::Project(format!("Property {property_key} not found on {owner:?}"))
-        })?;
-        property
-            .properties
-            .insert(attribute_key.to_string(), attribute_value);
-        Ok(())
+        set_property_attribute_value(
+            &mut project,
+            owner,
+            property_key,
+            attribute_key.to_string(),
+            attribute_value,
+        )
     }
 }
 

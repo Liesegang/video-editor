@@ -287,7 +287,7 @@ fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
         )
     };
     let mut include_property_inputs = true;
-    match &node.content {
+    match node.content() {
         NodeContent::Generator(GeneratorContent::Text) => {
             ports.extend([
                 time_input(),
@@ -374,7 +374,7 @@ fn node_ports(node: &crate::model::Node) -> Vec<PortDefinition> {
         }
     }
     if include_property_inputs {
-        for (key, property) in node.properties.iter() {
+        for (key, property) in node.properties().iter() {
             if ports
                 .iter()
                 .any(|port| port.key == *key && port.direction == PortDirection::Input)
@@ -922,7 +922,7 @@ impl Project {
     fn validate_plugin_operation_contracts(&self) -> Vec<ProjectGraphError> {
         let mut errors = Vec::new();
         for node in self.nodes.values() {
-            let NodeContent::PluginOperation(operation) = &node.content else {
+            let NodeContent::PluginOperation(operation) = node.content() else {
                 continue;
             };
             for (field, value) in [
@@ -1053,7 +1053,7 @@ impl Project {
                 PortOwner::Node(node_id)
                     if self
                         .get_node(node_id)
-                        .is_some_and(|node| matches!(node.content, NodeContent::Merge))
+                        .is_some_and(|node| matches!(node.content(), NodeContent::Merge))
             )
             && self
                 .port_definition(&connection.to, PortDirection::Input)
@@ -1188,7 +1188,7 @@ impl Project {
             }
         }
         for node in self.nodes.values() {
-            let NodeContent::Reference(reference) = &node.content else {
+            let NodeContent::Reference(reference) = node.content() else {
                 continue;
             };
             let input = PortAddress::new(PortOwner::Node(node.id), IMAGE_INPUT_PORT);

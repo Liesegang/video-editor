@@ -755,10 +755,12 @@ mod tests {
                 sync_global_time: false,
             },
         );
-        reference.properties.set(
-            "opacity".into(),
-            Property::constant(PropertyValue::Number(OrderedFloat(50.0))),
-        );
+        let mut persisted = serde_json::to_value(&reference).unwrap();
+        persisted["properties"]["opacity"] = serde_json::to_value(Property::constant(
+            PropertyValue::Number(OrderedFloat(50.0)),
+        ))
+        .unwrap();
+        reference = serde_json::from_value(persisted).unwrap();
         let reference_id = reference.id;
         project.add_node(reference);
         project

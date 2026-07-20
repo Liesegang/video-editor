@@ -32,12 +32,12 @@ fn common_effector_operation_factory_materializes_all_known_defaults() {
     let mut encoded_node = serde_json::to_value(opacity).unwrap();
     encoded_node["content"]["data"]["component_id"] =
         serde_json::Value::String("not.installed".to_string());
-    let mut node: library::model::Node = serde_json::from_value(encoded_node).unwrap();
+    encoded_node["properties"]["private"] = serde_json::to_value(Property::constant(
+        PropertyValue::String("preserve".to_string()),
+    ))
+    .unwrap();
+    let node: library::model::Node = serde_json::from_value(encoded_node).unwrap();
     let node_id = node.id;
-    node.set_property(
-        "private".to_string(),
-        Property::constant(PropertyValue::String("preserve".to_string())),
-    );
 
     let mut project = Project::new("Service boundary");
     project.add_track(track);

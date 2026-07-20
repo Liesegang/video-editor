@@ -124,7 +124,7 @@ pub(super) fn handle_drag_and_drop(
                                                  if let (Some(w), Some(h)) = (asset.width, asset.height)
                                                 {
                                                     if let Some(node) = video_clip.primary_node_mut() {
-                                                        node.set_property(
+                                                        if let Err(error) = node.set_property(
                                                             "anchor".to_string(),
                                                             library::model::property::Property::constant(
                                                                 library::model::property::PropertyValue::Vec2(
@@ -134,7 +134,11 @@ pub(super) fn handle_drag_and_drop(
                                                                     },
                                                                 ),
                                                             ),
-                                                        );
+                                                        ) {
+                                                            log::error!(
+                                                                "Video factory omitted anchor property: {error}"
+                                                            );
+                                                        }
                                                     }
                                                 }
                                                 video_clip
@@ -155,7 +159,7 @@ pub(super) fn handle_drag_and_drop(
                                                 if let (Some(w), Some(h)) = (asset.width, asset.height)
                                                 {
                                                     if let Some(node) = image_clip.primary_node_mut() {
-                                                        node.set_property(
+                                                        if let Err(error) = node.set_property(
                                                             "anchor".to_string(),
                                                             library::model::property::Property::constant(
                                                                 library::model::property::PropertyValue::Vec2(
@@ -165,7 +169,11 @@ pub(super) fn handle_drag_and_drop(
                                                                     },
                                                                 ),
                                                             ),
-                                                        );
+                                                        ) {
+                                                            log::error!(
+                                                                "Image factory omitted anchor property: {error}"
+                                                            );
+                                                        }
                                                     }
                                                 }
                                                 image_clip

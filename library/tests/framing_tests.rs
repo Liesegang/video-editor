@@ -42,7 +42,8 @@ fn video_converter_preserves_clip_local_source_time_and_stream() {
         Property::constant(PropertyValue::String(
             "stale-path-is-not-used.mp4".to_string(),
         )),
-    );
+    )
+    .expect("media factory initializes file_path");
 
     let plugin_manager = Arc::new(library::plugin::PluginManager::new());
     let context = FrameEvaluationContext {

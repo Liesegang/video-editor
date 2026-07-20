@@ -281,7 +281,7 @@ impl<'a> FrameEvaluator<'a> {
         if !path.insert(owner) {
             return Err(cycle_error(owner));
         }
-        if let NodeContent::PluginOperation(operation) = &node.content {
+        if let NodeContent::PluginOperation(operation) = node.content() {
             let item = if operation.category == EFFECT_CATEGORY
                 && operation.operation == EFFECT_APPLY_OPERATION
             {
@@ -312,7 +312,7 @@ impl<'a> FrameEvaluator<'a> {
             path.remove(&owner);
             return Ok(EvalOutput::NoOutput);
         }
-        let item = match &node.content {
+        let item = match node.content() {
             NodeContent::Reference(reference) => {
                 self.collect_reference(node, reference, scope, global_time, path, &inputs)?
             }
@@ -395,7 +395,7 @@ impl<'a> FrameEvaluator<'a> {
         let Some(effect) = context.build_operation_effect(
             descriptor.component_id(),
             descriptor.properties(),
-            &node.properties,
+            node.properties(),
             scope.time,
         ) else {
             log::warn!(
@@ -497,7 +497,7 @@ impl<'a> FrameEvaluator<'a> {
             &context,
             descriptor.component_id(),
             node.id,
-            &node.properties,
+            node.properties(),
             scope.time,
         ) {
             EvalOutput::Produced(style) => style,
@@ -559,7 +559,7 @@ impl<'a> FrameEvaluator<'a> {
                 EvalOutput::Produced(scope) => scope,
                 EvalOutput::NoOutput => return Ok(EvalOutput::NoOutput),
             };
-            match &node.content {
+            match node.content() {
                 NodeContent::Generator(GeneratorContent::Text | GeneratorContent::Shape) => {
                     self.convert_shape_node(node, scope, global_time)
                 }
@@ -588,7 +588,7 @@ impl<'a> FrameEvaluator<'a> {
         scope: EvaluationScope,
         global_time: f64,
     ) -> EvalResult<RuntimeShape> {
-        let kind = match node.content {
+        let kind = match node.content() {
             NodeContent::Generator(GeneratorContent::Text) => "text",
             NodeContent::Generator(GeneratorContent::Shape) => "shape",
             _ => return Ok(EvalOutput::NoOutput),
@@ -646,7 +646,7 @@ impl<'a> FrameEvaluator<'a> {
             &context,
             &operation.component_id,
             node.id,
-            &node.properties,
+            node.properties(),
             scope.time,
         ) {
             EvalOutput::Produced(config) => config,
@@ -687,7 +687,7 @@ impl<'a> FrameEvaluator<'a> {
             &context,
             &operation.component_id,
             node.id,
-            &node.properties,
+            node.properties(),
             scope.time,
         ) {
             EvalOutput::Produced(config) => config,
@@ -803,7 +803,7 @@ impl<'a> FrameEvaluator<'a> {
             width,
             height,
             background_color: transparent(),
-            transform: context.build_transform(&node.properties, scope.time),
+            transform: context.build_transform(node.properties(), scope.time),
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),
@@ -896,7 +896,7 @@ impl<'a> FrameEvaluator<'a> {
             width: scope.width,
             height: scope.height,
             background_color: transparent(),
-            transform: context.build_transform(&node.properties, scope.time),
+            transform: context.build_transform(node.properties(), scope.time),
             blend_mode: node.blend_mode,
             effect_time: OrderedFloat(scope.time),
             effects: Vec::new(),
@@ -972,7 +972,7 @@ impl<'a> FrameEvaluator<'a> {
         let composition = self
             .composition_for_owner(owner)
             .ok_or_else(|| missing_error(owner))?;
-        let kind = match &node.content {
+        let kind = match node.content() {
             NodeContent::Media(media) => {
                 let asset = self.project.get_asset(media.asset_id).ok_or_else(|| {
                     LibraryError::Project(format!("Asset {} not found", media.asset_id))
@@ -1003,7 +1003,7 @@ impl<'a> FrameEvaluator<'a> {
             })?;
         let context = self.context(composition, Some(inputs));
         if kind == "video"
-            && let NodeContent::Media(media) = &node.content
+            && let NodeContent::Media(media) = node.content()
             && let Some(asset) = self.project.get_asset(media.asset_id)
             && (!scope.time.is_finite()
                 || scope.time < 0.0
@@ -1222,7 +1222,7 @@ impl<'a> FrameEvaluator<'a> {
         }
         if let PortOwner::Node(node_id) = source.owner
             && matches!(
-                self.project.get_node(node_id).map(|node| &node.content),
+                self.project.get_node(node_id).map(Node::content),
                 Some(NodeContent::Value(_))
             )
         {
@@ -1266,7 +1266,7 @@ impl<'a> FrameEvaluator<'a> {
         if !path.insert(owner) {
             return Err(cycle_error(owner));
         }
-        let result = match &node.content {
+        let result = match node.content() {
             NodeContent::Value(ValueContent::TimeModulo) => {
                 self.evaluate_time_modulo(node, scope, global_time, path)
             }
@@ -1340,7 +1340,7 @@ impl<'a> FrameEvaluator<'a> {
                 let Some(property_key) = property_fallback else {
                     return Ok(EvalOutput::NoOutput);
                 };
-                let Some(property) = node.properties.get(property_key) else {
+                let Some(property) = node.properties().get(property_key) else {
                     return Ok(EvalOutput::NoOutput);
                 };
                 let composition = self
@@ -1350,7 +1350,7 @@ impl<'a> FrameEvaluator<'a> {
                 let context = self.context(composition, Some(&inputs));
                 Ok(EvalOutput::Produced(context.evaluate_property_value(
                     property,
-                    &node.properties,
+                    node.properties(),
                     scope.time,
                 )))
             }
