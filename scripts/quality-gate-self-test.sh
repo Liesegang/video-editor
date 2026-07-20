@@ -20,6 +20,7 @@ trap cleanup EXIT
 ROOT_LOCKFILE="${REPOSITORY_ROOT}/Cargo.lock"
 RUNTIME_PROPERTY_LOCKFILE="${REPOSITORY_ROOT}/plugins/random_property/Cargo.lock"
 QUALITY_GATE="${SCRIPT_DIR}/quality-gate.sh"
+RUST_FILE_SIZE_GATE="${SCRIPT_DIR}/check-rust-file-size.sh"
 
 if [[ ! -f "${ROOT_LOCKFILE}" ]]; then
     echo "root Cargo.lock is required for reproducible quality gates" >&2
@@ -85,6 +86,44 @@ require_gate_command '-u QUALITY_ADVISORY_EXCEPTION_FILE \'
 require_gate_command '-u QUALITY_AUDIT_VALIDATE_ONLY \'
 require_gate_command '-u QUALITY_TOOL_ROOT \'
 require_gate_command '"${SCRIPT_DIR}/dependency-audit.sh"'
+
+RUST_SIZE_FIXTURE="${TEST_LOG_DIR}/rust-file-size"
+mkdir -p "${RUST_SIZE_FIXTURE}"
+awk 'BEGIN { for (line = 1; line <= 3; line += 1) print "// line" }' \
+    > "${RUST_SIZE_FIXTURE}/boundary.rs"
+"${RUST_FILE_SIZE_GATE}" --root "${RUST_SIZE_FIXTURE}" --max-lines 3 \
+    > "${TEST_LOG_DIR}/rust-file-size-pass.log"
+
+awk 'BEGIN { for (line = 1; line <= 4; line += 1) print "// line" }' \
+    > "${RUST_SIZE_FIXTURE}/too-large.rs"
+if "${RUST_FILE_SIZE_GATE}" \
+    --root "${RUST_SIZE_FIXTURE}" \
+    --max-lines 3 \
+    > "${TEST_LOG_DIR}/rust-file-size-fail.log" 2>&1; then
+    echo "oversized Rust file unexpectedly passed" >&2
+    exit 1
+fi
+if ! grep -Fq 'too-large.rs: 4 lines (limit 3)' \
+    "${TEST_LOG_DIR}/rust-file-size-fail.log"; then
+    echo "Rust file size fixture failed for the wrong reason" >&2
+    cat "${TEST_LOG_DIR}/rust-file-size-fail.log" >&2
+    exit 1
+fi
+rm -- "${RUST_SIZE_FIXTURE}/too-large.rs"
+
+awk 'BEGIN { for (line = 1; line <= 1001; line += 1) print "// line" }' \
+    > "${RUST_SIZE_FIXTURE}/production-limit.rs"
+if "${RUST_FILE_SIZE_GATE}" --root "${RUST_SIZE_FIXTURE}" \
+    > "${TEST_LOG_DIR}/rust-file-size-default.log" 2>&1; then
+    echo "default Rust file size limit unexpectedly accepted 1001 lines" >&2
+    exit 1
+fi
+if ! grep -Fq 'production-limit.rs: 1001 lines (limit 1000)' \
+    "${TEST_LOG_DIR}/rust-file-size-default.log"; then
+    echo "default Rust file size fixture failed for the wrong reason" >&2
+    cat "${TEST_LOG_DIR}/rust-file-size-default.log" >&2
+    exit 1
+fi
 
 # This also catches a stale lockfile after workspace manifests change.
 cargo metadata \
